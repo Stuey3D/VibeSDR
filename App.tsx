@@ -76,6 +76,11 @@ export type RootStackParamList = {
     initialFreq?:    number;
     initialMode?:    SDRMode;
     initialZoom?:    number;
+    // CarFM fork: this is the car FM-radio use (local USB dongle or rtl_tcp dev
+    // loop). Switches the MediaSession to the RDS->MediaMetadata mapping the
+    // ESP32 display expects (RT->title, PS->artist, freq->album) and defaults
+    // media ⏮/⏭ to stepping presets. Non-car SDR sessions leave it unset.
+    carFm?:          boolean;
   };
   // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
   // this device's USB dongle, with shared PIN + auto-discovery options.

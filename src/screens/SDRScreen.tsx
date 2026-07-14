@@ -121,6 +121,7 @@ import {
   exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, type UserBookmark,
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
+import { fmNowPlaying } from '../services/nowPlaying';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
@@ -1402,7 +1403,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
-  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('step');
+  // CarFM defaults to bookmark stepping so steering-wheel / ESP32 ⏮⏭ move
+  // between presets (spec §5b); a stored user choice below still overrides it.
+  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>(
+    route.params.carFm ? 'bookmark' : 'step');
   const mediaSkipRef = useRef(mediaSkip);
   useEffect(() => { mediaSkipRef.current = mediaSkip; }, [mediaSkip]);
   // Lock-screen ⏮⏭ step-tune for backends whose tuning lives in JS (OWRX/Kiwi):
@@ -3715,6 +3719,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     const hz = status.frequency;
     if (!hz) return;
     const t = setTimeout(() => {
+      // CarFM contract (spec §5b): on broadcast FM, map RDS the way the ESP32
+      // display expects — RadioText -> TITLE, station name (PS) -> ARTIST,
+      // frequency -> ALBUM. Gadgetbridge relays these three, so this branch is
+      // the whole system contract; the general SDR mapping below is bypassed.
+      if (route.params.carFm && status.mode === 'wfm') {
+        const np = fmNowPlaying({ ps: liveStation.name, rt: liveStation.text, freqHz: hz });
+        VibePowerModule?.setNowPlaying(np.title, np.artist);
+        VibePowerModule?.setNowPlayingAlbum?.(np.album);
+        VibePowerModule?.setArtwork(route.params.isTcp ? 'rtltcp' : 'local');
+        return;
+      }
       const trim = (v: number, dp: number) =>
         v.toFixed(dp).replace(/\.?0+$/, '');
       const fq = freqUnit === 'hz' ? `${Math.round(hz)} Hz`
@@ -3756,7 +3771,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 300);
     return () => clearTimeout(t);
   }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,
-      serverBookmarks, userBookmarks, liveStation.name]);
+      serverBookmarks, userBookmarks, liveStation.name, liveStation.text]);
 
   useEffect(() => () => {
     if (vtsDeferredBand.current) clearTimeout(vtsDeferredBand.current);

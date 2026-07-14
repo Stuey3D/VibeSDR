@@ -353,7 +353,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode: modeOverride ?? viewMode,
         serverType: 'ubersdr', isLocal: true, localPort: res.port,
-        localGen: newLocalSession(),
+        localGen: newLocalSession(), carFm: true,
       });
     } catch (e: any) {
       setConnecting(false);
@@ -461,7 +461,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
         serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
-        tcpHost: host, tcpPort: port, localGen: newLocalSession(),
+        tcpHost: host, tcpPort: port, localGen: newLocalSession(), carFm: true,
       });
     } catch (e: any) {
       setConnecting(false);

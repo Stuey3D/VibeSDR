@@ -26,6 +26,7 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       setNotch?:         (on: boolean) => void;
       sendAudioCommand:  (json: string) => void;
       setNowPlaying:     (title: string, artist: string) => void;
+      setNowPlayingAlbum?: (album: string) => void;   // CarFM: freq -> ALBUM (§5b)
       setArtwork:        (serverType: string) => void;
       setStationLogo?:   (url: string) => void;   // FM-DX: inlay station favicon on the art
       setMediaSkipMode:  (mode: 'step' | 'bookmark') => void;

@@ -1909,6 +1909,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mainHandler.post { updateMetadataSession(); updateNotification() }
     }
 
+    // CarFM: the album slot carries the tuned frequency (spec §5b, freq -> ALBUM)
+    // so the ESP32 display gets it alongside PS/RT. Empty restores the default.
+    private var npAlbum: String? = null
+
+    fun setNowPlayingAlbumNative(album: String) {
+        npAlbum = album.ifEmpty { null }
+        mainHandler.post { updateMetadataSession(); updateNotification() }
+    }
+
     /** Album art: VibeSDR icon with the server-type logo inset bottom-right
      *  (multi-server prep — type picks the overlay, "ubersdr" for now). */
     fun setArtworkNative(serverType: String) {
@@ -2025,7 +2034,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val b = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle())
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, nowPlayingArtist())
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "VibeSDR")
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, npAlbum ?: "VibeSDR")
         npArtwork?.let { b.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
         mediaSession?.setMetadata(b.build())
     }

@@ -188,6 +188,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setArtworkNative(serverType)
     }
 
+    // CarFM: frequency -> MediaMetadata ALBUM (spec §5b). Empty = "VibeSDR".
+    @ReactMethod
+    fun setNowPlayingAlbum(album: String) {
+        VibeStreamService.instance?.setNowPlayingAlbumNative(album)
+    }
+
     @ReactMethod
     fun setMediaSkipMode(mode: String) {
         VibeStreamService.instance?.skipMode = mode
