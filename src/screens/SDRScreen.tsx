@@ -26,6 +26,7 @@ import {
   NativeEventEmitter,
   NativeModules,
   Platform,
+  Pressable,
   Share,
   StatusBar,
   StyleSheet,
@@ -122,6 +123,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { fmNowPlaying } from '../services/nowPlaying';
+import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
@@ -723,6 +725,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
   const lastLiveLogoKey = useRef('');
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
+
+  // CarFM: the FM-only face covers the full SDR UI when active. "Advanced" lets
+  // the normal SDR UI (waterfall/decoders/all modes) back in without leaving.
+  const carFm = !!route.params.carFm;
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const fmFaceActive = carFm && !advancedOpen;
+  const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
 
   // DAB speed correction is remembered PER STATION (ensemble + programme), since
   // the chipmunk is per-service: you set ×0.67 on a bad station once and it
@@ -3834,6 +3843,52 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
+  // ── CarFM face wiring ─────────────────────────────────────────────────────
+  // Sample the (ref-based) audio SNR on a timer while the FM face is up, so the
+  // meter is reactive without re-rendering on every VibeSignal event.
+  useEffect(() => {
+    if (!fmFaceActive) return;
+    const t = setInterval(() => {
+      const v = audioSnrRef.current;
+      setFmSignalDb(Number.isFinite(v) ? v : null);
+    }, 500);
+    return () => clearInterval(t);
+  }, [fmFaceActive]);
+
+  // Presets = this-instance FM bookmarks (broadcast band), nearest-first.
+  const fmPresets = useMemo<CarFmPreset[]>(() => (
+    visibleBookmarks
+      .filter((b: UserBookmark) =>
+        b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))
+      .map((b: UserBookmark) => ({ name: b.name, frequency: b.frequency }))
+      .sort((a, b) => a.frequency - b.frequency)
+  ), [visibleBookmarks]);
+
+  // Tune by the broadcast-FM channel raster (200 kHz Region 2, else 100 kHz).
+  const onFmStep = useCallback((dir: 1 | -1) => {
+    const raster = ituRegion === 2 ? 200_000 : 100_000;
+    const cur = client.current?.getStatus().frequency ?? status.frequency;
+    onTuneHz(Math.round(cur / raster) * raster + dir * raster);
+  }, [ituRegion, status.frequency, onTuneHz]);
+
+  // Seek = jump to the previous/next preset (true signal-seek is a follow-up).
+  const onFmSeekPreset = useCallback((dir: 1 | -1) => {
+    if (fmPresets.length === 0) { onFmStep(dir); return; }
+    const cur = client.current?.getStatus().frequency ?? status.frequency;
+    const sorted = fmPresets;
+    let idx = sorted.findIndex((p) => p.frequency > cur + 1);      // next above
+    if (dir < 0) idx = idx <= 0 ? sorted.length - 1 : idx - 1;
+    else if (idx < 0) idx = 0;
+    onTuneHz(sorted[Math.max(0, Math.min(sorted.length - 1, idx))].frequency);
+  }, [fmPresets, status.frequency, onTuneHz, onFmStep]);
+
+  // Save the current station as a preset, named from RDS PS when we have it.
+  const onFmSavePreset = useCallback(() => {
+    const name = (liveStationRef.current || '').trim()
+      || `FM ${(status.frequency / 1e6).toFixed(1)}`;
+    onAddBookmark(name, false);
+  }, [status.frequency, onAddBookmark]);
+
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
   // the instance list. Fail-safe: always skippable; a target that can't be
@@ -4658,11 +4713,53 @@ export default function SDRScreen({ route, navigation }: Props) {
           authSuffix={route.params.authSuffix}
         />
       ) : null}
+
+      {/* CarFM: the FM-only face over the live pipeline. Opaque, so the SDR UI
+          and waterfall below are simply hidden while it's up (spec §5a). */}
+      {fmFaceActive ? (
+        <CarFmFace
+          freqHz={status.frequency}
+          stationName={liveStation.name}
+          radioText={liveStation.text}
+          stereo={fmStereo}
+          signalDb={fmSignalDb}
+          presets={fmPresets}
+          region2={ituRegion === 2}
+          onStep={onFmStep}
+          onSeekPreset={onFmSeekPreset}
+          onSelectPreset={onTuneHz}
+          onSavePreset={onFmSavePreset}
+          onEnterFreq={onFreqOpen}
+          onOpenAdvanced={() => setAdvancedOpen(true)}
+        />
+      ) : null}
+
+      {/* CarFM advanced view: a way back to the FM face (the full SDR UI shows) */}
+      {carFm && advancedOpen ? (
+        <Pressable
+          onPress={() => setAdvancedOpen(false)}
+          style={[styles.fmReturn, { top: insets.top + 8 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Back to FM radio"
+        >
+          <Text style={styles.fmReturnText}>◂ FM</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  fmReturn: {
+    position: 'absolute', left: 12, zIndex: 61,
+    backgroundColor: 'rgba(5,7,10,0.92)', borderWidth: 1,
+    borderColor: 'rgba(59,158,255,0.6)', borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 9,
+  },
+  fmReturnText: {
+    color: '#3B9EFF', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 15, fontWeight: '800', letterSpacing: 1,
+  },
   rotateBanner: {
     position: 'absolute', alignSelf: 'center', zIndex: 55,
     backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
