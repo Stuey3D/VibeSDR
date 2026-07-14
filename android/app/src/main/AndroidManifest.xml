@@ -8,6 +8,8 @@
   <!-- RTL-TCP server: connectedDevice FGS + wake lock (keep USB/TCP stream alive screen-off) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <!-- CarFM: auto-start with the ignition on a permanent head-unit install -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
@@ -58,6 +60,14 @@
       <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                  android:resource="@xml/device_filter"/>
     </activity>
+    <!-- CarFM: launch on boot so the app comes up with the ignition (spec §5c) -->
+    <receiver android:name=".BootReceiver" android:exported="true" android:enabled="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+      </intent-filter>
+    </receiver>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
     <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>

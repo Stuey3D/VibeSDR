@@ -94,6 +94,7 @@ import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/direc
 import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
 import { resolveVibeAuth } from '../services/vibeAuth';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
+import { getCarAutostart } from '../services/carMode';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
 // mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
@@ -186,6 +187,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // effects (declared above those callbacks) call it through this ref to avoid a
   // use-before-declaration cycle.
   const tryUsbLaunchRef = useRef<null | ((m?: typeof viewMode) => Promise<boolean>)>(null);
+  const tryCarAutostartRef = useRef<null | ((m?: typeof viewMode) => Promise<boolean>)>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,6 +227,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // the default-instance auto-connect below (which would otherwise win the
       // race and open the default server / leave us on the picker).
       if (!cancelled && await tryUsbLaunchRef.current?.(mode)) return;
+      // CarFM: a permanent install boots with the dongle already attached, so no
+      // USB_DEVICE_ATTACHED fires. If a dongle is present and autostart is on,
+      // connect it and drop into the FM face — the SDR screen restores the last
+      // station. Guarded like the default-instance connect below (link/watch).
+      if (!cancelled && !isDeepLinkActive() && !watchTargetPending.claimed
+          && !route.params?.noAutoConnect
+          && await tryCarAutostartRef.current?.(mode)) return;
       if (!cancelled) splashBridge.dismiss();
 
       // A default instance still auto-connects straight through — unless a
@@ -442,6 +451,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     return true;
   }, [connectLocal, navigation]);
   tryUsbLaunchRef.current = tryUsbLaunch;
+
+  // CarFM autostart: no attach intent (dongle was already plugged in at boot).
+  // If autostart is on and an RTL-SDR is present, connect straight to it with no
+  // prompt so the app comes up playing the last station. Returns true if claimed.
+  const tryCarAutostart = useCallback(async (modeArg?: typeof viewMode): Promise<boolean> => {
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.listDevices) return false;
+    if (!(await getCarAutostart())) return false;
+    let devs: unknown;
+    try { devs = await Local.listDevices(); } catch { return false; }
+    if (!Array.isArray(devs) || devs.length === 0) return false;   // no dongle → normal picker
+    splashBridge.dismiss();
+    await connectLocal(modeArg);
+    return true;
+  }, [connectLocal]);
+  tryCarAutostartRef.current = tryCarAutostart;
 
   // RTL-TCP: connect to an rtl_tcp server (host:port) over the network and run the
   // same on-device shim against it — no USB, so this also works on iOS. Reuses the
