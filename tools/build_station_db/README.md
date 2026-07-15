@@ -106,8 +106,10 @@ python3 station_explorer.py --cli --db stations.sqlite --lat 37.77 --lon -122.42
 python3 station_explorer.py --db stations.sqlite --pi 0x54C4     # decode a PI
 ```
 
-Like the builder, `--db` defaults to `stations.sqlite` in the current directory,
-so `build`/`sample` then `station_explorer.py` in the same folder just works.
+With no `--db`, it looks for `stations.sqlite` in the current directory, then
+next to the script itself, then the repo's `assets/db/stations.sqlite` — first
+one found wins. So `build`/`sample` then `station_explorer.py` in the same folder
+just works, and running it from inside the repo finds the bundled DB.
 
 ## Three-letter callsign table (separate task)
 

@@ -145,10 +145,24 @@ def identify_pi(db_path, pi):
     return cs, confident, note, station
 
 
-# Default to a stations.sqlite in the current directory, so a standalone copy of
-# this script (or one sitting next to a freshly built DB) just works. Use --db or
-# the GUI's Browse button to point at assets/db/stations.sqlite in the repo.
-DEFAULT_DB = "stations.sqlite"
+# Find a default stations.sqlite by looking, in order: the current directory,
+# this script's OWN directory (so a DB sitting next to the script is picked up),
+# then the repo's bundled location if we're running from inside the checkout.
+# First existing file wins; falls back to ./stations.sqlite (the GUI's Browse
+# button and --db always work too).
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_db() -> str:
+    candidates = [
+        os.path.join(os.getcwd(), "stations.sqlite"),
+        os.path.join(_SCRIPT_DIR, "stations.sqlite"),
+        os.path.normpath(os.path.join(_SCRIPT_DIR, "..", "..", "assets", "db", "stations.sqlite")),
+    ]
+    return next((c for c in candidates if os.path.isfile(c)), "stations.sqlite")
+
+
+DEFAULT_DB = _default_db()
 
 
 # ── self-check: the Python port must agree with the TS reference values ──────
