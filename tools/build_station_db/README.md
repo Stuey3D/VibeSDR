@@ -17,7 +17,14 @@ python3 build_station_db.py fetch      # download + unzip LMS files -> ./lms_fil
 python3 build_station_db.py inspect    # print each .dat's columns + a sample row
 python3 build_station_db.py build      # emit ../../assets/db/stations.sqlite
 python3 build_station_db.py self-test  # prove the pipeline with synthetic data
+python3 build_station_db.py sample     # emit a small SYNTHETIC db for emulator/UI dev
 ```
+
+`sample` writes ~12 obviously-fake stations (callsigns `KAMP`, `KBMP`, …, city
+"Sample City", snapshot `SAMPLE`) around a center (`--lat/--lon`, default San
+Francisco) so you can build the "Nearby" UI and exercise the query/ranking in the
+emulator **before** wrangling the real LMS download. Replace it with a real
+`build` (and bump `DB_ASSET_VERSION`) before shipping.
 
 Then **bump `DB_ASSET_VERSION` in `src/services/stationDb.ts`** so installed apps
 re-copy the new DB, and rebuild the app.

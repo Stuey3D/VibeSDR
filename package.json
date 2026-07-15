@@ -45,6 +45,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "test:backend": "node --no-warnings tools/tests/piCallsign.test.ts && node --no-warnings tools/tests/stationGeo.test.ts",
     "postinstall": "patch-package"
   },
   "private": true

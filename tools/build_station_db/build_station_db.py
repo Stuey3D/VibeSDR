@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import math
 import os
 import sqlite3
 import sys
@@ -309,6 +310,47 @@ def cmd_build(args):
           "app re-copies the new DB.")
 
 
+def cmd_sample(args):
+    """Emit a small SYNTHETIC stations.sqlite for emulator/UI dev before the real
+    LMS build. Clearly-fake callsigns + city, snapshot 'SAMPLE', a spread of
+    ERP/class/service/distance so ranking and the list UI are exercisable."""
+    lat0, lon0 = args.lat, args.lon
+    # (bearing°, distance km, freq MHz, service, class, ERP kW)
+    specs = [
+        (0, 8, 88.5, "FM", "C", 100.0), (45, 15, 90.7, "FM", "C1", 50.0),
+        (90, 25, 92.3, "FM", "B", 25.0), (135, 40, 94.1, "FM", "C", 100.0),
+        (180, 60, 95.9, "FM", "C", 100.0), (225, 12, 97.3, "FL", None, 0.1),
+        (270, 20, 98.7, "FX", None, 0.25), (315, 5, 100.1, "FM", "A", 6.0),
+        (30, 70, 101.5, "FM", "C", 98.0), (200, 33, 103.3, "FM", "C2", 15.0),
+        (110, 50, 104.9, "FX", None, 0.05), (300, 18, 106.7, "FM", "A", 3.5),
+    ][: args.count]
+    rows = []
+    for i, (brg, dist, freq, svc, cls, erp) in enumerate(specs):
+        b = math.radians(brg)
+        dlat = (dist * math.cos(b)) / 111.32
+        dlon = (dist * math.sin(b)) / (111.32 * max(0.01, math.cos(math.radians(lat0))))
+        cs = f"K{chr(65 + (i % 26))}MP"  # KAMP, KBMP, ... — obviously sample data
+        rows.append((cs, cs, freq, svc, cls, erp,
+                     round(lat0 + dlat, 6), round(lon0 + dlon, 6),
+                     "Sample City", "SA", 900000 + i))
+    if os.path.exists(args.out):
+        os.remove(args.out)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    db = sqlite3.connect(args.out)
+    db.executescript(SCHEMA)
+    db.executemany("INSERT INTO stations VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+    db.executemany("INSERT INTO meta(key,value) VALUES (?,?)", [
+        ("lms_snapshot_date", "SAMPLE"), ("schema_version", "1"),
+        ("row_count", str(len(rows))),
+    ])
+    db.commit()
+    print(f"Wrote {len(rows)} SAMPLE stations to {args.out} around "
+          f"({lat0}, {lon0}). integrity={db.execute('PRAGMA integrity_check').fetchone()[0]}")
+    db.close()
+    print("This is synthetic dev data — run `build` for the real FCC DB, and bump "
+          "DB_ASSET_VERSION in src/services/stationDb.ts.")
+
+
 def cmd_self_test(args):
     """Prove the transform/filter/emit with synthetic staging files (no FCC)."""
     import tempfile
@@ -360,14 +402,18 @@ def cmd_self_test(args):
 def main():
     p = argparse.ArgumentParser(description="Build stations.sqlite from FCC LMS files.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("fetch", "inspect", "build", "self-test"):
+    for name in ("fetch", "inspect", "build", "self-test", "sample"):
         sp = sub.add_parser(name)
         sp.add_argument("--lms-dir", default=DEFAULT_LMS_DIR)
         sp.add_argument("--out", default=DEFAULT_OUT)
         sp.add_argument("--snapshot", help="LMS snapshot date YYYY-MM-DD (default: today)")
+        if name == "sample":
+            sp.add_argument("--lat", type=float, default=37.7749, help="center latitude (default: SF)")
+            sp.add_argument("--lon", type=float, default=-122.4194, help="center longitude")
+            sp.add_argument("--count", type=int, default=12, help="number of sample stations")
     args = p.parse_args()
     {"fetch": cmd_fetch, "inspect": cmd_inspect, "build": cmd_build,
-     "self-test": cmd_self_test}[args.cmd](args)
+     "self-test": cmd_self_test, "sample": cmd_sample}[args.cmd](args)
 
 
 if __name__ == "__main__":
