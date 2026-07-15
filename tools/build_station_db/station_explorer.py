@@ -145,7 +145,10 @@ def identify_pi(db_path, pi):
     return cs, confident, note, station
 
 
-DEFAULT_DB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "db", "stations.sqlite"))
+# Default to a stations.sqlite in the current directory, so a standalone copy of
+# this script (or one sitting next to a freshly built DB) just works. Use --db or
+# the GUI's Browse button to point at assets/db/stations.sqlite in the repo.
+DEFAULT_DB = "stations.sqlite"
 
 
 # ── self-check: the Python port must agree with the TS reference values ──────
