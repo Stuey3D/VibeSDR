@@ -30,9 +30,13 @@ import zipfile
 from datetime import date, datetime
 from urllib.request import urlopen, Request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_LMS_DIR = os.path.join(HERE, "lms_files")
-DEFAULT_OUT = os.path.normpath(os.path.join(HERE, "..", "..", "assets", "db", "stations.sqlite"))
+# Outputs default to the CURRENT directory so this single-file script is safe to
+# run from anywhere (e.g. a copy in Downloads). In-repo, run it from assets/db/
+# or pass --out ../../assets/db/stations.sqlite to drop it where the app expects.
+DEFAULT_LMS_DIR = "lms_files"
+DEFAULT_OUT = "stations.sqlite"
+# Where the app loads the bundled DB from — printed as a reminder after a build.
+APP_DB_PATH = "assets/db/stations.sqlite"
 
 # LMS public database files (zip of pipe-delimited tables), updated each business
 # day. Confirm the current URL on the LMS Public Database page if this 404s:
@@ -129,6 +133,13 @@ def load_dat(path: str) -> tuple[list[str], list[dict]]:
     header = [h.strip() for h in rows[0]]
     out = [dict(zip(header, [c.strip() for c in r])) for r in rows[1:] if len(r) >= 1]
     return header, out
+
+
+def ensure_parent(path: str) -> None:
+    """Make the parent dir if the path has one (a bare filename in cwd has none)."""
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
 
 
 def callsign_base(cs: str) -> str:
@@ -274,7 +285,7 @@ def build(lms_dir: str, out_path: str, snapshot: str) -> dict:
 
     if os.path.exists(out_path):
         os.remove(out_path)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    ensure_parent(out_path)
     db = sqlite3.connect(out_path)
     db.executescript(SCHEMA)
     db.executemany(
@@ -306,8 +317,9 @@ def cmd_build(args):
     if rep["rows"] < 10000:
         print("  WARNING: far fewer FM rows than the ~20k expected — verify the "
               "join (run `inspect`).")
-    print("\nRemember: bump DB_ASSET_VERSION in src/services/stationDb.ts so the "
-          "app re-copies the new DB.")
+    print(f"\nNext: copy it to the app at {APP_DB_PATH} (or build with "
+          f"--out ../../{APP_DB_PATH}), then bump DB_ASSET_VERSION in "
+          f"src/services/stationDb.ts so the app re-copies the new DB.")
 
 
 def cmd_sample(args):
@@ -335,7 +347,7 @@ def cmd_sample(args):
                      "Sample City", "SA", 900000 + i))
     if os.path.exists(args.out):
         os.remove(args.out)
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    ensure_parent(args.out)
     db = sqlite3.connect(args.out)
     db.executescript(SCHEMA)
     db.executemany("INSERT INTO stations VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)

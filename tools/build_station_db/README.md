@@ -11,14 +11,23 @@ SQLite that ships in the APK.
 
 ## Run
 
+The script is self-contained — you can run it from anywhere (copy it out of the
+repo if you like). Outputs default to `stations.sqlite` **in the current
+directory**; pass `--out` to place it elsewhere.
+
 ```bash
-cd tools/build_station_db
 python3 build_station_db.py fetch      # download + unzip LMS files -> ./lms_files
 python3 build_station_db.py inspect    # print each .dat's columns + a sample row
-python3 build_station_db.py build      # emit ../../assets/db/stations.sqlite
+python3 build_station_db.py build      # emit ./stations.sqlite
 python3 build_station_db.py self-test  # prove the pipeline with synthetic data
 python3 build_station_db.py sample     # emit a small SYNTHETIC db for emulator/UI dev
+
+# to drop it straight where the app bundles it, run from that folder or use --out:
+python3 build_station_db.py build --out ../../assets/db/stations.sqlite
 ```
+
+The app loads the bundled DB from `assets/db/stations.sqlite`, so copy the built
+file there (the build prints this reminder).
 
 `sample` writes ~12 obviously-fake stations (callsigns `KAMP`, `KBMP`, …, city
 "Sample City", snapshot `SAMPLE`) around a center (`--lat/--lon`, default San
