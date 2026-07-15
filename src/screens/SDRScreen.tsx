@@ -124,6 +124,8 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { fmNowPlaying } from '../services/nowPlaying';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
+import { identifyByPi } from '../services/stationFinder';
+import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
@@ -732,6 +734,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const fmFaceActive = carFm && !advancedOpen;
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
+  // PI-derived station identity (addendum §6): RDS PI arrives in block 1 almost
+  // immediately, so we can name the station from the bundled DB before PS text
+  // assembles. A hint only — PS wins when present.
+  const [piIdentity, setPiIdentity] = useState<StationIdentity | null>(null);
 
   // DAB speed correction is remembered PER STATION (ensemble + programme), since
   // the chipmunk is per-service: you set ×0.67 on a bad station once and it
@@ -3855,6 +3861,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearInterval(t);
   }, [fmFaceActive]);
 
+  // Resolve station identity from the RDS PI (offline, via the bundled DB) so the
+  // FM face can name the station before PS arrives. Hex string -> int -> lookup.
+  useEffect(() => {
+    if (!carFm || status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
+    const pi = parseInt(liveStation.pi, 16);
+    if (!Number.isFinite(pi)) { setPiIdentity(null); return; }
+    let cancelled = false;
+    identifyByPi(pi, liveStation.name).then((id) => { if (!cancelled) setPiIdentity(id); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [carFm, status.mode, liveStation.pi, liveStation.name]);
+
+  // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
+  const fmCallsignHint = useMemo<string | undefined>(() => {
+    if (liveStation.name || !piIdentity?.callsign) return undefined;
+    const city = piIdentity.station?.city;
+    return city ? `${piIdentity.callsign} · ${city}` : piIdentity.callsign;
+  }, [liveStation.name, piIdentity]);
+
   // Presets = this-instance FM bookmarks (broadcast band), nearest-first.
   const fmPresets = useMemo<CarFmPreset[]>(() => (
     visibleBookmarks
@@ -4720,6 +4744,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <CarFmFace
           freqHz={status.frequency}
           stationName={liveStation.name}
+          callsignHint={fmCallsignHint}
           radioText={liveStation.text}
           stereo={fmStereo}
           signalDb={fmSignalDb}

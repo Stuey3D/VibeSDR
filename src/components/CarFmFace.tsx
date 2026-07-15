@@ -28,6 +28,7 @@ export interface CarFmPreset {
 export interface CarFmFaceProps {
   freqHz: number;
   stationName?: string;     // RDS PS
+  callsignHint?: string;    // PI-derived callsign (·city), shown only when PS absent
   radioText?: string;       // RDS RT
   stereo: boolean;
   signalDb: number | null;
@@ -145,7 +146,7 @@ function SignalMeter({ db }: { db: number | null }) {
 
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
-    freqHz, stationName, radioText, stereo, signalDb, presets, region2,
+    freqHz, stationName, callsignHint, radioText, stereo, signalDb, presets, region2,
     onStep, onSeekPreset, onSelectPreset, onSavePreset, onEnterFreq, onOpenAdvanced,
   } = props;
   const insets = useSafeAreaInsets();
@@ -197,8 +198,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
             <Text style={styles.unit}>MHz</Text>
           </View>
         </Pressable>
+        {/* PS wins; before it assembles, show the PI-derived callsign hint. */}
         <Text style={styles.station} numberOfLines={1}>
-          {ps || (inFmBand ? 'Tuning…' : '—')}
+          {ps || (callsignHint ? '' : (inFmBand ? 'Tuning…' : '—'))}
+          {!ps && callsignHint ? (
+            <Text style={styles.stationHint}>{callsignHint}</Text>
+          ) : null}
         </Text>
         <RadioTextTicker text={rt || 'Waiting for RadioText…'} />
       </View>
@@ -336,6 +341,7 @@ const styles = StyleSheet.create({
   },
   unit: { color: C.dim, fontSize: 26, fontWeight: '700', marginBottom: 18, marginLeft: 8 },
   station: { color: C.text, fontSize: 34, fontWeight: '700', marginTop: 4, maxWidth: '100%' },
+  stationHint: { color: C.dim, fontSize: 28, fontWeight: '600' },  // PI-derived, dimmer than PS
 
   rtWrap: { height: 26, marginTop: 8, alignSelf: 'stretch', overflow: 'hidden', justifyContent: 'center' },
   rtText: { color: C.dim, fontSize: 18, fontWeight: '600' },
