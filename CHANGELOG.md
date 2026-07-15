@@ -4,6 +4,67 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v9.0.1 — SSB was throwing away half the voice (2026-07-14)
+
+### Fixed — the bandwidth slider was lying to you
+
+Set SSB to 2.7 kHz, and you got about **1.4 kHz** of audio. It still sounded like
+speech — just muffled — which is why it went unnoticed for months. You only catch a
+bug like this by listening to another receiver on the same signal at the same moment.
+
+The channel filter was built around *half* the stated bandwidth. That is correct for
+AM and FM, where the signal sits either side of the carrier. It is wrong for SSB and
+CW, where the whole sideband lies on **one** side of it — so the filter was closing
+at half-width and taking the consonants with it.
+
+Measured against another receiver on the same 7.187 MHz signal, VibeSDR was **37 dB
+down across 2.0–2.7 kHz** — precisely the band that carries intelligibility. Below
+1 kHz the two matched almost exactly, which is why it sounded clear, but never quite
+*as* clear.
+
+It is fixed. Set 2.7 kHz and you get 2.7 kHz — and above the passband VibeSDR is now
+cleaner than the receiver we compared it against.
+
+### Faster — the radio uses 2–8× less CPU
+
+Benchmarking the engine on a Raspberry Pi turned up three inefficiencies, and fixing
+them makes VibeSDR dramatically lighter everywhere — most visibly on cheap phones,
+which is exactly where it matters:
+
+- **FM stereo now works on a 2019 budget phone that could never manage it before**,
+  without breaking up, *while simultaneously streaming to a browser over VibeServer*.
+  It was never a stereo bug. The DSP simply couldn't keep up, and now it can.
+- **FM broadcast** costs less than half what it did; on a low-end phone the whole
+  radio went from nearly three CPU cores' worth of work to one.
+- **SSB** costs about a quarter of what it did.
+- Turning the **sample rate down** used to make FM *more* expensive, not less. It
+  doesn't any more.
+
+Filters now run at the rate that suits them rather than the highest rate available —
+same sound out, a fraction of the work.
+
+### Fixed — VibeServer
+
+- **Stations learned from RDS were never saved.** Sit on a station long enough for
+  the receiver to learn its name and it appeared, then vanished on restart — it was
+  the one thing in the bookmark list that never got written to disk.
+- **…and the browser never noticed them anyway.** The web client asked the receiver
+  for its bookmarks once, when the page loaded. Learning a station takes about twenty
+  seconds, so the station you're actually listening to was *always* learned too late
+  to show up. It now keeps asking.
+- **Squelch no longer reports itself as a fault.** With squelch closed, the web client
+  flashed a red *"NO SOUND — IS THE TAB MUTED?"* and hid the S-meter — the one thing
+  you want to watch while waiting for a signal. Now it says, calmly, that the squelch
+  is on, and leaves the meter alone.
+- **The bandwidth slider** filled from the wrong end on the low side, showing the
+  bandwidth you *weren't* using.
+
+### Also
+
+The waterfall's band edges now follow the receiver's ITU region rather than yours.
+
+---
+
 ## v9.0.0 — The Apple Watch companion (2026-07-13)
 
 ### Added — VibeSDR on your wrist

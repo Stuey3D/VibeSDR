@@ -42,3 +42,15 @@ target_compile_options(vibedsp_rds_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_rds_dsp_tests test_rds_dsp.cpp ${DSP_SRC})
 target_include_directories(vibedsp_rds_dsp_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_rds_dsp_tests PRIVATE -O2 -Wall)
+
+# Adjacent-channel / alias rejection. The DDC cascade folds anything it fails to
+# attenuate straight into the audio, where no later filter can remove it. Guard it.
+add_executable(vibedsp_adjacent_tests test_adjacent.cpp ${DSP_SRC})
+target_include_directories(vibedsp_adjacent_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_adjacent_tests PRIVATE -O2 -Wall)
+
+# SSB passband: the Weaver sideband spans 0..bw, NOT +/-bw/2. Getting this wrong
+# halves the voice bandwidth and nobody notices until they A/B another receiver.
+add_executable(vibedsp_passband_tests test_passband.cpp ${DSP_SRC})
+target_include_directories(vibedsp_passband_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_passband_tests PRIVATE -O2 -Wall)

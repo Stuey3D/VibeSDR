@@ -229,11 +229,15 @@ html, body {
    off the edge of the screen. */
 #sig.fault { height: 1.6em; background: rgba(224,80,80,0.18); border: 1px solid var(--red); }
 #sig.fault #sigFill, #sig.fault #sigPeak { display: none; }
+/* Squelch closed is not a fault. Amber, steady, and the meter STAYS VISIBLE so you can
+   watch a signal climbing towards the threshold — which is the whole point of squelch. */
+#sig.squelched { border: 1px solid var(--amber); }
 #sigFault {
   display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
   color: var(--red); font-size: 0.75em; letter-spacing: 0.12em; white-space: nowrap;
   animation: recPulse 1.6s ease-in-out infinite;
 }
+#sigFault.info { color: var(--amber); animation: none; opacity: 0.85; }
 #sigFault.show { display: flex; }
 #sigFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
 #sigPeak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--peak-line); left: 0; }
@@ -278,6 +282,11 @@ html, body {
 #demod { display: flex; flex-direction: column; gap: 0.6em; }
 .bwRow { display: flex; align-items: center; gap: 0.6em; }
 .bwRow input[type=range] { flex: 1 1 auto; width: auto; min-width: 6em; }
+/* The low slider holds a MAGNITUDE and is mirrored, so its amber fill grows outward
+   from the carrier just like the high one — both oranges then mean "this much
+   bandwidth". Un-mirrored, a native range fills from its minimum, which on the low
+   side drew the bandwidth you were NOT using. See syncBw(). */
+#bwLo { transform: scaleX(-1); }
 .bwRow .val { color: var(--unit); font-size: 0.82em; min-width: 3.4em; font-variant-numeric: tabular-nums; }
 
 .stack { display: flex; flex-direction: column; gap: 0.6em; }

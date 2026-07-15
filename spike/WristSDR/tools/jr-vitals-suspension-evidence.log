@@ -1,0 +1,20 @@
+2026-07-13T23:27:42Z cpu=11.0% batt=95% fps=0.0 audio/s=0.0 audioLive=0 gap=2.1s
+2026-07-13T23:27:45Z · AUDIO now-playing registered
+2026-07-13T23:27:45Z · AUDIO engine started · out=<AVAudioFormat 0x1091217c0:  1 ch,  48000 Hz, Float32>
+2026-07-13T23:27:45Z · AUDIO route change (reason 1) → BluetoothA2DPOutput
+2026-07-13T23:27:45Z cpu=1.1% batt=95% fps=0.0 audio/s=0.0 audioLive=1 gap=2.5s
+2026-07-13T23:27:46Z cpu=8.7% batt=95% fps=0.0 audio/s=0.0 audioLive=1 gap=1.5s
+2026-07-13T23:27:48Z cpu=20.6% batt=95% fps=0.0 audio/s=12.0 audioLive=1 gap=2.0s
+2026-07-13T23:27:50Z cpu=21.3% batt=95% fps=0.0 audio/s=50.0 audioLive=1 gap=2.0s
+2026-07-13T23:27:52Z cpu=24.7% batt=95% fps=5.0 audio/s=50.0 audioLive=1 gap=2.0s
+2026-07-13T23:27:54Z cpu=22.6% batt=95% fps=4.0 audio/s=48.0 audioLive=1 gap=2.0s
+2026-07-13T23:27:56Z · SCENE → background (wrist down)
+2026-07-13T23:27:57Z cpu=8.2% batt=95% fps=4.0 audio/s=45.0 audioLive=1 gap=2.1s
+2026-07-13T23:28:10Z cpu=0.0% batt=95% fps=0.0 audio/s=0.0 audioLive=1 gap=13.9s
+2026-07-13T23:28:11Z · SCENE → active
+2026-07-13T23:28:11Z · AUDIO route change (reason 0) → Speaker
+2026-07-13T23:28:11Z · SCENE → active
+2026-07-13T23:28:12Z · AUDIO route change (reason 1) → BluetoothA2DPOutput
+2026-07-13T23:28:12Z cpu=11.6% batt=95% fps=0.0 audio/s=0.0 audioLive=1 gap=2.0s
+2026-07-13T23:28:14Z cpu=19.8% batt=95% fps=0.0 audio/s=0.0 audioLive=1 gap=2.0s
+2026-07-13T23:28:16Z cpu=15.3% batt=95% fps=0.0 audio/s=49.0 audioLive=1 gap=2.0s

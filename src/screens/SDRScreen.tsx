@@ -4013,7 +4013,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         // zone): the whole strip below the pill when controls show, else just
         // the home bar. Preserves swipe-up-to-minimise + menu Modals.
         bottomGuard={controlsHidden ? bottomInset : bottomInset + 8}
-        ituRegion={1}
+        // The drawn band segments must follow the RECEIVER's region like every
+        // other consumer of the plan (0 = not yet known → keep the R1 default,
+        // since WaterfallView's filter would otherwise drop every regional band).
+        ituRegion={ituRegion || 1}
         onPanDelta={onWfPanDelta}
         onZoomDelta={onWfZoomDelta}
         onTapTune={onWfTapTune}

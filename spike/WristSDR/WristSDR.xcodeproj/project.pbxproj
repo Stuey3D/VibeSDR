@@ -1,0 +1,296 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */; };
+		70EE588C003629B12094698A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C7CA3AAA59DBED958D0315 /* ContentView.swift */; };
+		A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43A131B3C936F106D8872A6 /* UberClient.swift */; };
+		5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FF50C437861299AAC27394 /* SignalProcessor.swift */; };
+		BACD927341B2F98BE72ADDD6 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */; };
+		CF6770252230AC24E8731FA1 /* OpusDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */; };
+		BDECEB72319CA3A97B96D106 /* WatchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA18D942D5BEDA2D586530E /* WatchAudio.swift */; };
+		427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */; };
+		90E549E2A30949199198FC09 /* Vitals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4C0C76743B617E12A64820 /* Vitals.swift */; };
+		69D646D0771B72D36CA66784 /* Viridis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F57836F2C7A9B1047326AF1 /* Viridis.swift */; };
+		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
+		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WristSDRApp.swift"; sourceTree = "<group>"; };
+		A5C7CA3AAA59DBED958D0315 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
+		D43A131B3C936F106D8872A6 /* UberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UberClient.swift"; sourceTree = "<group>"; };
+		69FF50C437861299AAC27394 /* SignalProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SignalProcessor.swift"; sourceTree = "<group>"; };
+		95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WaterfallBuffer.swift"; sourceTree = "<group>"; };
+		E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpusDecoder.swift"; sourceTree = "<group>"; };
+		DDA18D942D5BEDA2D586530E /* WatchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WatchAudio.swift"; sourceTree = "<group>"; };
+		95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AudioSocket.swift"; sourceTree = "<group>"; };
+		5C4C0C76743B617E12A64820 /* Vitals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Vitals.swift"; sourceTree = "<group>"; };
+		9F57836F2C7A9B1047326AF1 /* Viridis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viridis.swift"; sourceTree = "<group>"; };
+		925623A77CBA453D1DCBC89C /* Gzip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Gzip.swift"; sourceTree = "<group>"; };
+		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
+		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
+		C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WristSDR.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6E718DEFDC00C08E6BB49068 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		EDA6D6223944636B9C5B54AA = {
+			isa = PBXGroup;
+			children = (
+				E54ED815E4F7D7A7177E9F81 /* WristSDR */,
+				FBDC4F23F93125BBEEAE800C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E54ED815E4F7D7A7177E9F81 /* WristSDR */ = {
+			isa = PBXGroup;
+			children = (
+				37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */,
+				A5C7CA3AAA59DBED958D0315 /* ContentView.swift */,
+				D43A131B3C936F106D8872A6 /* UberClient.swift */,
+				69FF50C437861299AAC27394 /* SignalProcessor.swift */,
+				95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */,
+				E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */,
+				DDA18D942D5BEDA2D586530E /* WatchAudio.swift */,
+				95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */,
+				5C4C0C76743B617E12A64820 /* Vitals.swift */,
+				9F57836F2C7A9B1047326AF1 /* Viridis.swift */,
+				925623A77CBA453D1DCBC89C /* Gzip.swift */,
+				9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */,
+				1C35F1528A85321526664EFB /* Info.plist */,
+				FA1EA5780940B5B8F774A00E /* opus */,
+			);
+			path = "WristSDR";
+			sourceTree = "<group>";
+		};
+		FA1EA5780940B5B8F774A00E /* opus */ = {
+			isa = PBXGroup;
+			children = (
+				D2612D8B2F2F9E65D120DA64 /* libopus.a */,
+			);
+			path = opus;
+			sourceTree = "<group>";
+		};
+		FBDC4F23F93125BBEEAE800C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0E8A3AD980EC179856012B7E /* WristSDR */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A84914A248ECE76BE3466291;
+			buildPhases = (
+				D30B74E6013F892C432C9426 /* Sources */,
+				6E718DEFDC00C08E6BB49068 /* Frameworks */,
+				49114E07FF772345755937AC /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = "WristSDR";
+			productName = "WristSDR";
+			productReference = C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					0E8A3AD980EC179856012B7E = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = 3636BF9D9D120B7D481CC01A;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = EDA6D6223944636B9C5B54AA;
+			productRefGroup = FBDC4F23F93125BBEEAE800C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				0E8A3AD980EC179856012B7E /* WristSDR */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		49114E07FF772345755937AC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D30B74E6013F892C432C9426 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */,
+				70EE588C003629B12094698A /* ContentView.swift in Sources */,
+				A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */,
+				5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */,
+				BACD927341B2F98BE72ADDD6 /* WaterfallBuffer.swift in Sources */,
+				CF6770252230AC24E8731FA1 /* OpusDecoder.swift in Sources */,
+				BDECEB72319CA3A97B96D106 /* WatchAudio.swift in Sources */,
+				427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */,
+				90E549E2A30949199198FC09 /* Vitals.swift in Sources */,
+				69D646D0771B72D36CA66784 /* Viridis.swift in Sources */,
+				2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B7FA539DD3CEC2073ED82B7E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				SDKROOT = watchos;
+				/* arm64 ONLY. watchOS defaults to building arm64_32 as well (Series 4-8),
+				   and our libopus has no such slice — nor should it: JR targets Series 9+,
+				   which is exactly where Apple went 64-bit and where they are dropping the
+				   Ultra 1 in watchOS 27. The link error IS the product decision. */
+				ARCHS = arm64;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+				ONLY_ACTIVE_ARCH = YES;
+			};
+			name = Debug;
+		};
+		CF4B4BD803E13EDA9CAD0055 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				SDKROOT = watchos;
+				ARCHS = arm64;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F0C894AECE8BEC7608E4AC90 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6PV2X6THHM;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "WristSDR/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "WristSDR";
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.stuey3d.wristsdr";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "WristSDR/WristSDR-Bridging-Header.h";
+				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus/include/opus");
+				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus");
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		578FA19F61E97FCBC567CC3B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6PV2X6THHM;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "WristSDR/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "WristSDR";
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.stuey3d.wristsdr";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "WristSDR/WristSDR-Bridging-Header.h";
+				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus/include/opus");
+				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus");
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3636BF9D9D120B7D481CC01A = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B7FA539DD3CEC2073ED82B7E /* Debug */,
+				CF4B4BD803E13EDA9CAD0055 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A84914A248ECE76BE3466291 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F0C894AECE8BEC7608E4AC90 /* Debug */,
+				578FA19F61E97FCBC567CC3B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+}

@@ -31,9 +31,12 @@ void NCO::mix(const cf32* in, cf32* out, int n) {
 }
 
 // ── FIR low-pass design (windowed sinc, Hamming) ─────────────────────────--
-std::vector<float> designLowpass(double cutoff, double transition) {
-    // Tap count from transition width (Hamming ~ 3.3/BW), force odd for symmetry.
-    int n = (int)std::ceil(3.3 / std::max(transition, 1e-4));
+std::vector<float> designLowpass(double cutoff, double transition, bool deepStop) {
+    // Tap count from transition width (Hamming ~ 3.3/BW, Blackman ~ 5.5/BW), odd for
+    // symmetry. Blackman buys ~74 dB of stopband against Hamming's ~53 dB — which
+    // matters wherever what leaks through will FOLD into the audio and can't be
+    // removed later.
+    int n = (int)std::ceil((deepStop ? 5.5 : 3.3) / std::max(transition, 1e-4));
     if ((n & 1) == 0) ++n;
     if (n < 9) n = 9;
     std::vector<float> h(n);
@@ -43,7 +46,10 @@ std::vector<float> designLowpass(double cutoff, double transition) {
     for (int i = 0; i < n; ++i) {
         const double k = i - mid;
         double sinc = (k == 0.0) ? (wc / M_PI) : std::sin(wc * k) / (M_PI * k);
-        const double win = 0.54 - 0.46 * std::cos(2.0 * M_PI * i / (n - 1)); // Hamming
+        const double t = 2.0 * M_PI * i / (n - 1);
+        const double win = deepStop
+            ? (0.42 - 0.5 * std::cos(t) + 0.08 * std::cos(2.0 * t))   // Blackman ~74 dB
+            : (0.54 - 0.46 * std::cos(t));                            // Hamming  ~53 dB
         h[i] = (float)(sinc * win);
         sum += h[i];
     }

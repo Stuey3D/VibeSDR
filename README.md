@@ -132,7 +132,7 @@ The App Store build is the same source you see here. If you'd rather not pay, **
 
 > **📱 On iOS, the App Store is behind the releases here.** Apple review has been slow, so the store is still serving **v6.1** — which predates **VibeServer** (v8) and the **Apple Watch app** (v9). To run v9 on an iPhone today, sideload the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest); a **TestFlight build of v9 is on its way**, which will let you install it without re-signing anything.
 
-**Latest release: [v9.0.0 — The Apple Watch companion](https://github.com/Stuey3D/VibeSDR/releases/latest)** — the live waterfall on your wrist, tuned with the Digital Crown, with the phone locked in your pocket. Plus the fix for a waterfall that could freeze for good on mobile data and never come back.
+**Latest release: [v9.0.1 — SSB was throwing away half the voice](https://github.com/Stuey3D/VibeSDR/releases/latest)** — set 2.7 kHz, get 2.7 kHz. The channel filter had been closing at half its stated width, quietly muffling every SSB signal. Also: the radio now uses **2–8× less CPU**, so FM stereo works on phones that could never manage it before. (v9.0.0 put the live waterfall on your wrist — see the [Apple Watch](#on-the-wrist-apple-watch--new-in-v9) section.)
 
 ![VibeSDR web client](docs/screenshots/v8-web-client.png)
 *The VibeServer web client — served by an Android phone with an RTL-SDR, open in Safari at `vibesdr-moto-g35.local`.*

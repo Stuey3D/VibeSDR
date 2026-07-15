@@ -614,6 +614,10 @@ static void bmLearn(double hz, int pi, const std::string& psRaw) {
     b.manual = (it != g_bookmarks.end()) ? it->second.manual : false;
     g_bookmarks[key] = b;
     g_bmPending.erase(key);
+    // PERSIST. This was the one mutator that didn't — so a station you sat on for
+    // 20 seconds and genuinely learned lived in memory only, and died with the
+    // process. bmSaveLocked()'s own comment says it is "called on EVERY change".
+    bmSaveLocked();
 }
 
 /**
@@ -2098,7 +2102,13 @@ struct LocalSdrShim::Impl {
         // Capture sample rates this server offers (= the spectrum spans the client
         // may pick). These are the rates built into THIS server, so the client's
         // picker aligns with the server rather than a generic RTL-TCP list.
-        j += "],\"rates\":[3200000,2400000,1800000,1200000,960000]";
+        // NO 3.2 MSPS. The RTL2832U will happily ACCEPT the rate and then fail to
+        // sustain it: above ~2.56 MSPS the USB transfers can't keep up, so it drops
+        // samples and runs hot doing it. It looked like the biggest number in the
+        // list — it was the first entry — so it was the one a curious user reached
+        // for, and the dropped samples then read as a bad receiver rather than a bad
+        // setting. 2.56 is the real ceiling; offer that instead.
+        j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
         // A pinned rate is advertised so the client can HIDE its rate picker and say
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).

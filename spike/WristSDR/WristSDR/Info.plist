@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleDisplayName</key>
+	<string>WristSDR</string>
+	<key>CFBundleName</key>
+	<string>WristSDR</string>
+	<!-- WATCH-ONLY. There is no iPhone app to pair with, and watchOS demands you SAY so:
+	     without WKWatchOnly it insists on a WKCompanionAppBundleIdentifier and refuses the
+	     install outright. WKRunsIndependentlyOfCompanionApp is NOT the same thing — that
+	     one means "I have a companion, but I can run without it". This has no companion at
+	     all.
+
+	     (VibeSDR JR will be the OTHER case: bundled inside VibeSDR, so it keeps a companion
+	     identifier — but still runs independently of it, phone in a drawer.) -->
+	<key>WKApplication</key>
+	<true/>
+	<key>WKWatchOnly</key>
+	<true/>
+	<!-- WKBackgroundModes, NOT UIBackgroundModes.
+	     watchOS has its own key, and the iOS one is silently ignored — so the system never
+	     knew this was an audio app and suspended it the instant the wrist dropped. Sound
+	     for a few seconds, then nothing, which reads as an audio bug and is a plist bug.
+
+	     This is exactly the kind of thing the spike exists to find: JR needs it, and no
+	     amount of reasoning about AVAudioSession would ever have surfaced it. -->
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+</dict>
+</plist>

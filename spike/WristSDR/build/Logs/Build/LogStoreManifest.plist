@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>13</integer>
+	<key>logs</key>
+	<dict>
+		<key>1B0F254E-0835-4062-990D-6B23255EBB15</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>1B0F254E-0835-4062-990D-6B23255EBB15.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>E</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>1</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>7</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>WristSDR project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>WristSDR</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>timeStartedRecording</key>
+			<real>805677856.00942898</real>
+			<key>timeStoppedRecording</key>
+			<real>805677856.86526096</real>
+			<key>title</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>uniqueIdentifier</key>
+			<string>1B0F254E-0835-4062-990D-6B23255EBB15</string>
+		</dict>
+		<key>56CC53E8-90BE-4774-A97E-8AA0DC99093B</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>56CC53E8-90BE-4774-A97E-8AA0DC99093B.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>4</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>WristSDR project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>WristSDR</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>timeStartedRecording</key>
+			<real>805678008.30462205</real>
+			<key>timeStoppedRecording</key>
+			<real>805678011.26957202</real>
+			<key>title</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>uniqueIdentifier</key>
+			<string>56CC53E8-90BE-4774-A97E-8AA0DC99093B</string>
+		</dict>
+		<key>C1B6F96D-FFEA-4205-AAA4-D72CD6E3B821</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>C1B6F96D-FFEA-4205-AAA4-D72CD6E3B821.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>4</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>WristSDR project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>WristSDR</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>timeStartedRecording</key>
+			<real>805677869.91073895</real>
+			<key>timeStoppedRecording</key>
+			<real>805677872.70485401</real>
+			<key>title</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>uniqueIdentifier</key>
+			<string>C1B6F96D-FFEA-4205-AAA4-D72CD6E3B821</string>
+		</dict>
+		<key>F571447F-FA7C-4BDE-BD60-C1CA2A163D2E</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>F571447F-FA7C-4BDE-BD60-C1CA2A163D2E.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>4</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>WristSDR project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>WristSDR</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>timeStartedRecording</key>
+			<real>805677574.94854701</real>
+			<key>timeStoppedRecording</key>
+			<real>805677577.75029194</real>
+			<key>title</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>uniqueIdentifier</key>
+			<string>F571447F-FA7C-4BDE-BD60-C1CA2A163D2E</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

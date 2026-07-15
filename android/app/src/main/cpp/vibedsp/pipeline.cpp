@@ -37,20 +37,123 @@ void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
 void RxPipeline::rebuildAudio() {
     // Channel decimation: bring the IQ down to a manageable channel rate that
     // comfortably holds the demod bandwidth, then resample to exactly outRate.
-    // 1.5x covers the RF channel + (for WFM) the 60 kHz MPX while keeping the
-    // per-sample MPX/PLL/RDS work as cheap as possible — WFM at bwHz*3 (=600 kHz)
-    // was ~2x more CPU than needed and made audio choppy on budget phones. Narrow
-    // modes are unaffected (floored by outRate).
-    const double targetCh = std::max((double)outRate_, bwHz_ * 3.0);
+    // 1.5x covers the RF channel while keeping the per-sample MPX/PLL/RDS work as
+    // cheap as possible. Narrow modes are unaffected (floored by outRate).
+    //
+    // WFM needs a floor of its own: the MPX runs to 57 kHz (RDS) + sidebands, so
+    // the channel must hold ~120 kHz of Nyquist regardless of how narrow the user
+    // sets the RF bandwidth — otherwise RDS folds and stereo dies.
+    //
+    // This used to be bwHz*3, which cost 2-7x more CPU for no benefit. Worst at
+    // LOW sample rates: at 1.024 MSPS the target (540 kHz) exceeded fs/2, so
+    // floor(fs/target) came out as 1 — no decimation at all, and the entire MPX
+    // chain ran at the full 1.024 MSPS. That is why lowering the sample rate made
+    // WFM *more* expensive instead of less.
+    // The channel rate does NOT have to be the audio rate. It used to be floored at
+    // outRate_ (48 kHz) — but a 2.8 kHz SSB signal does not need a 48 kHz channel, and
+    // that floor was the single most expensive line in the engine.
+    //
+    // Why: SsbDemod's Weaver filters use a deliberately SHARP ~80 Hz transition to
+    // reject the wrong sideband, and tap count is 3.3/(transition/fs). At 48 kHz that
+    // is ~2000 taps — TWICE (I and Q). Filter cost then scales with fs SQUARED: more
+    // taps AND more samples through them. Dropping the channel to 12 kHz cuts it ~16x.
+    // The demodulated audio (<=3 kHz) is resampled up to 48 kHz afterwards as always,
+    // so nothing about the output changes.
+    //
+    // 12 kHz floor: enough for the widest narrow mode's audio plus filter transition
+    // room, and enough for CW's beat note. 3x bandwidth keeps AM/NFM comfortable.
+    double targetCh = std::max(bwHz_ * 3.0, 12000.0);
+    // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
+    // real channel regardless of the RF bandwidth the user picked.
+    if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
-    // Channel low-pass. The decimator filters at the INPUT rate, so cutoff is
-    // normalised to sampleRate: pass the demod bandwidth, but never exceed the
-    // post-decimation Nyquist (0.5/chDecim) or we alias.
-    const double cutoff = std::min(0.45 / chDecim_, (bwHz_ * 0.5) / sampleRate_);
-    const double trans  = std::max(cutoff * 0.5, 0.25 / chDecim_ - cutoff);
-    dec_  = std::make_unique<FirDecimator>(designLowpass(cutoff, std::max(trans, 1e-3)), chDecim_);
+    // ── Channel low-pass: a CASCADE, not one long filter ──────────────────────
+    //
+    // Tap count goes as 3.3/transition (designLowpass), and transition is normalised
+    // to the rate the filter RUNS AT. So the same real-world filter costs ~25x more
+    // taps at 2.4 MSPS than at 96 kHz. Decimating by 50 in ONE step therefore forced
+    // a ~750-tap filter at the full input rate — 36M complex MACs/sec, which was
+    // most of a core on a Pi 3 and a big slice of one on a budget phone.
+    //
+    // Instead, factor the decimation (50 -> 5x5x2) and give the early stages only
+    // the job they actually have: stop anything folding INTO the final channel. That
+    // is a hugely relaxed spec, so they cost ~9-17 taps each even though they run at
+    // the high rates. The narrow, expensive, selectivity-defining filter then runs
+    // LAST, at the lowest rate, where its taps are cheap.
+    //
+    // Same filter shape out, ~3x less work. Measured (tools/pi-bench, one user):
+    //   SSB @ 2.4 MSPS   4.4% -> 1.6% of a core     AM   1.8% -> 0.9%
+    // Channel half-width. For AM/FM the signal straddles the carrier, so it is bw/2.
+    // For SSB and CW it is NOT: the wanted sideband runs from the carrier out to the
+    // FULL bandwidth on one side (that is the premise SsbDemod's Weaver mixer is built
+    // on — it down-mixes by bw/2 to centre a sideband that spans 0..bw). Using bw/2
+    // here cut the sideband in half: for a 2.8 kHz SSB channel the filter closed at
+    // 1.4 kHz and took the consonants with it.
+    //
+    // This was masked for years: the old single-stage filter had a ~10.6 kHz transition
+    // and sloppily leaked 1.4-2.8 kHz back through. Tightening the filter did its job
+    // properly and made the missing top half of the voice audible — measured against
+    // an UberSDR recording of the same signal, we were 37 dB down over 2.0-2.7 kHz.
+    const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB ||
+                          mode_ == Mode::CW);
+    const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
+    // The absolute transition width the old single-stage design worked out to. Keep it
+    // identical so the audible filter shape does not change.
+    const double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);
+
+    decs_.clear();
+    std::vector<int> stages;
+    {   // Decimate HARD and EARLY. Each stage costs roughly (its output rate x taps),
+        // so the goal is to collapse the sample rate as fast as possible and do the
+        // remaining work cheaply. Prime factors are the wrong tool: a decimation of 64
+        // prime-factorises to SIX stages of 2, and a first stage of 2 barely reduces
+        // the rate — so the expensive high-rate samples get dragged through stage after
+        // stage. (Measured: that made NFM 40% dearer than doing nothing.) Greedily take
+        // the LARGEST composite factor up to 8 instead: 64 -> 8x8, 50 -> 5x5x2.
+        int d = chDecim_;
+        while (d > 1) {
+            int f = 1;
+            for (int p = 8; p >= 2; --p) if (d % p == 0) { f = p; break; }
+            if (f == 1) { stages.push_back(d); break; }   // awkward prime: one stage
+            stages.push_back(f);
+            d /= f;
+        }
+        if (stages.empty()) stages.push_back(1);   // chDecim_ == 1: a plain filter
+    }
+
+    double fs = sampleRate_;
+    for (size_t i = 0; i < stages.size(); ++i) {
+        const int D = stages[i];
+        const double fsOut = fs / D;
+        const bool last = (i + 1 == stages.size());
+
+        double cutoff, trans;
+        if (last) {
+            // The real channel filter: defines selectivity. Cheap here because fs is low.
+            cutoff = std::min(0.45 / D, chHalf / fs);
+            trans  = std::max(cutoff * 0.5, transHz / fs);
+        } else {
+            // Anti-alias only: protect the final channel from what folds at fsOut.
+            // Everything between chHalf and (fsOut - chHalf) is allowed to be ugly —
+            // a later stage will remove it — so the transition is enormous and the
+            // filter is tiny.
+            cutoff = chHalf / fs;
+            trans  = std::max((fsOut - chHalf) / fs - cutoff, cutoff * 0.5);
+        }
+        // DEEP STOPBAND on the last stage. Whatever it fails to attenuate folds
+        // straight into the audio and can never be removed afterwards — and the
+        // fold lands at (channel rate +/- passband), which for a 12 kHz channel is
+        // only ~10 kHz off tune. On a crowded band that neighbour can be 60 dB
+        // louder than the signal you are trying to hear, and Hamming's ~53 dB is
+        // not enough. Blackman's ~74 dB is, and the extra taps are nearly free at
+        // the slowest rate in the chain. THIS IS THE ADJACENT-CHANNEL REJECTION —
+        // see test_demod's alias-rejection case before touching it.
+        decs_.push_back(std::make_unique<FirDecimator>(
+            designLowpass(cutoff, std::max(trans, 1e-3), /*deepStop=*/last), D));
+        fs = fsOut;
+    }
 
     nco_.setFreq(offsetHz_ / sampleRate_);   // tune the channel to baseband
 
@@ -142,8 +245,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
         baseBuf_.resize(n);
         nco_.mix(iq, baseBuf_.data(), n);
 
-        chBuf_.resize(dec_->maxOut(n));
-        const int nc = dec_->process(baseBuf_.data(), n, chBuf_.data());
+        // Run the decimation cascade, ping-ponging between two buffers. Each stage
+        // drops the rate by its own factor; the last one is the channel filter.
+        int nc = n;
+        const cf32* src = baseBuf_.data();
+        for (auto& d : decs_) {
+            std::vector<cf32>& dst = (src == baseBuf_.data()) ? chBuf_ : baseBuf_;
+            dst.resize(d->maxOut(nc));
+            nc = d->process(src, nc, dst.data());
+            src = dst.data();
+        }
+        // Make sure the demods below always read from chBuf_, whichever buffer the
+        // cascade happened to land in (an even number of stages ends on baseBuf_).
+        if (src != chBuf_.data()) {
+            chBuf_.assign(src, src + nc);
+        }
 
         demodBuf_.resize(nc);
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
@@ -222,7 +338,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
 }
 
 void RxPipeline::stop() {
-    cfft_.reset(); dec_.reset(); am_.reset(); resamp_.reset();
+    cfft_.reset(); decs_.clear(); am_.reset(); resamp_.reset();
 }
 
 } // namespace vibedsp

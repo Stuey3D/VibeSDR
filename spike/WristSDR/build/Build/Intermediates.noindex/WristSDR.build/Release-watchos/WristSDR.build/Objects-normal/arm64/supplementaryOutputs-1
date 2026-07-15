@@ -1,0 +1,12 @@
+{
+  "/Users/stuey3d/VibeSDR/spike/WristSDR/WristSDR/WristSDRApp.swift" : {
+    "abi-baseline-json" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR.abi.json",
+    "const-values" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR-primary.swiftconstvalues",
+    "dependencies" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR-primary.d",
+    "diagnostics" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR-primary.dia",
+    "objc-header" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR-Swift.h",
+    "swiftdoc" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR.swiftdoc",
+    "swiftmodule" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR.swiftmodule",
+    "swiftsourceinfo" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/WristSDR.swiftsourceinfo"
+  }
+}

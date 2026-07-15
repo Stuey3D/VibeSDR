@@ -136,6 +136,10 @@ export class AudioPlayer {
   private closedByUs = false;
   private _volume = 1;
   private _muted = false;
+  /** Server-side squelch threshold, dB. <= -100 means OFF (matches the app's convention). */
+  private _squelchDb = -100;
+  set squelchDb(db: number) { this._squelchDb = db; }
+  get squelchActive() { return this._squelchDb > -100; }
 
   constructor(url: string, cb: AudioCallbacks = {}) {
     this.url = url;
@@ -378,14 +382,18 @@ export class AudioPlayer {
    * dead socket, our own mute, or (invisibly to us) SAFARI'S PER-TAB MUTE, which
    * no in-page control can override. Say which, rather than just going quiet.
    */
-  get health(): 'ok' | 'suspended' | 'no-stream' | 'muted' | 'silent' {
+  get health(): 'ok' | 'suspended' | 'no-stream' | 'muted' | 'squelched' | 'silent' {
     if (!this.ctx) return 'no-stream';
     if (this.suspended) return 'suspended';
     if (!this.streaming) return 'no-stream';
     if (this._muted) return 'muted';
-    // Frames arriving, context running, not muted — but nothing has been heard
-    // for a while. Most likely the browser is muting us at the tab level.
-    if (this.lastAudibleAt && performance.now() - this.lastAudibleAt > 5000) return 'silent';
+    // Frames arriving, context running, not muted — but nothing heard for a while.
+    // If squelch is ARMED, that is the squelch doing its job, not a fault. Only with
+    // squelch OFF is silence genuinely suspicious, and then a tab-level mute is the
+    // likeliest cause (and one no in-page control can override).
+    if (this.lastAudibleAt && performance.now() - this.lastAudibleAt > 5000) {
+      return this.squelchActive ? 'squelched' : 'silent';
+    }
     return 'ok';
   }
 

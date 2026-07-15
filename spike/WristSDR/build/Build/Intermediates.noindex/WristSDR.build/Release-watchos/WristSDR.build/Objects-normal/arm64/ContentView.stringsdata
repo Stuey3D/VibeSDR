@@ -1,0 +1,56 @@
+{
+  "source": "/Users/stuey3d/VibeSDR/spike/WristSDR/WristSDR/ContentView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "CROWN: ZOOM",
+        "location": {
+          "startingColumn": 29,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "CROWN: TUNE",
+        "location": {
+          "startingColumn": 45,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "10fps",
+        "location": {
+          "startingColumn": 44,
+          "startingLine": 86
+        }
+      },
+      {
+        "comment": "",
+        "key": "5fps",
+        "location": {
+          "startingColumn": 54,
+          "startingLine": 86
+        }
+      },
+      {
+        "comment": "",
+        "key": "AUDIO",
+        "location": {
+          "startingColumn": 14,
+          "startingLine": 137
+        }
+      },
+      {
+        "comment": "",
+        "key": "Volume: side-swipe → Control Centre.\nwatchOS has no in-app volume slider for SwiftUI.",
+        "location": {
+          "startingColumn": 14,
+          "startingLine": 144
+        }
+      }
+    ]
+  },
+  "version": 1
+}

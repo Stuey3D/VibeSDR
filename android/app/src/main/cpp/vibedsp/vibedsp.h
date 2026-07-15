@@ -108,7 +108,11 @@ private:
 // Windowed-sinc real low-pass. `cutoff` and `transition` are normalised
 // (cycles/sample). Returns unity-DC-gain taps. Used as the DDC anti-alias /
 // channel filter ahead of decimation, and reusable for audio shaping.
-std::vector<float> designLowpass(double cutoff, double transition);
+// `deepStop` swaps the Hamming window (~53 dB stopband) for a Blackman (~74 dB).
+// Costs ~1.7x the taps for the same transition. Worth it for the LAST decimation
+// stage: whatever it fails to attenuate FOLDS into the audio, and on a crowded band
+// a neighbour 10 kHz away can be 60 dB louder than the signal you actually want.
+std::vector<float> designLowpass(double cutoff, double transition, bool deepStop = false);
 
 // ── FIR decimator (complex) ──────────────────────────────────────────────--
 // Applies a real-tap low-pass to a complex stream and keeps every Dth sample.
@@ -437,7 +441,12 @@ private:
 
     // audio DDC chain
     NCO nco_;
-    std::unique_ptr<FirDecimator> dec_;
+    // Decimation CASCADE, not one filter. Filter cost scales with the rate it runs
+    // at, so decimating 50:1 in one step needs ~750 taps at the full input rate;
+    // split into 5x5x2 the early stages need only ~9-17 (they just stop aliases
+    // folding into the channel) and the narrow channel filter runs last, slowest,
+    // and cheapest. Same audio, ~3x less CPU. See rebuildAudio().
+    std::vector<std::unique_ptr<FirDecimator>> decs_;
     std::unique_ptr<AmDemod> am_;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;

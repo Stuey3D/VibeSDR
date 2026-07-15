@@ -23,7 +23,11 @@ const C = {
   abtn:   'rgba(255,229,102,0.55)',
 };
 
-const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000, 3200000];
+// 3.2 MSPS is gone: the RTL2832U accepts the rate but cannot sustain it — above
+// ~2.56 MSPS the USB transfers fall behind, so it drops samples and runs hot doing
+// it. Offering it only invited people to pick the biggest number and then blame the
+// receiver for the gaps. 2.56 is the real ceiling.
+const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000, 2560000];
 const DS_MODES: { label: string; value: number }[] = [
   { label: 'Off', value: 0 }, { label: 'I', value: 1 }, { label: 'Q', value: 2 },
 ];
