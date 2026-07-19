@@ -192,9 +192,16 @@ final class PhoneClient: ObservableObject, SDRClient {
       p.course = a.course;   p.squawk = a.squawk;    p.rssi = a.rssi
       p.distKm = a.distKm;   p.bearing = a.bearing
       // ☐ NO lat/lon: the phone sends distance + bearing, not position, so the ADS-B MAP has
-      //   nothing to plot in Companion — the list (sorted by distance) is unaffected. Either the
-      //   phone starts sending positions, or the map derives them from the receiver's own
-      //   coordinates plus distance/bearing. Not guessed at here.
+      //   nothing to plot in Companion. The list (sorted by distance) is unaffected.
+      //
+      // ★★ WHATEVER FIXES THIS, THE ORIGIN IS THE RECEIVER — NEVER THE WATCH (Stuart). Every
+      //    distance and bearing here is measured from the SDR's own site, so plotting them around
+      //    the wearer would put every aircraft somewhere it isn't, most wrongly when you are
+      //    furthest from the receiver — i.e. exactly when you are using a remote SDR. AircraftView
+      //    is already correct on this (it centres on `receiverLat`/`receiverLon` with no fallback);
+      //    the missing piece is that the phone does not SEND the receiver's position over WCSession
+      //    at all, so both stay nil in Companion. Add rx lat/lon to the protocol, then either send
+      //    positions or derive them from receiver + distance + bearing.
       return p
     }
   }
