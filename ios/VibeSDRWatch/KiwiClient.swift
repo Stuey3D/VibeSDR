@@ -131,10 +131,19 @@ final class KiwiClient: ObservableObject, SDRClient {
   }
 
   // ── Published surface the UI mirrors ──
-  @Published var frequency: Double = 9_600_000
-  @Published var mode = "am"
-  @Published var bwLow: Double = -4900
-  @Published var bwHigh: Double = 4900
+  /// First-visit tune. KiwiSDR publishes no default of its own — there is no `/api/description`
+  /// equivalent, so unlike UberSDR there is nothing to adopt and the CLIENT must choose.
+  ///
+  /// 14.074 MHz USB — 20m FT8 — because that is what the phone app opens on
+  /// (`UberSDRClient.connect(frequency = 14_074_000, mode: 'usb')`), and the two should not
+  /// disagree about where a fresh receiver starts. It is a deliberately BUSY frequency: on a
+  /// working receiver you land on the FT8 chorus and know instantly that audio and waterfall are
+  /// alive, which a quiet band cannot tell you. Only ever seen once per instance — from the second
+  /// visit onward TuneMemory restores where you actually left it.
+  @Published var frequency: Double = 14_074_000
+  @Published var mode = "usb"
+  @Published var bwLow: Double = 300      // = modeMap["usb"], kept in step by hand
+  @Published var bwHigh: Double = 2700
   @Published var signalLevel: Double = 0
   @Published var signalDb: Double = 0
   @Published var framesPerSec: Double = 0
