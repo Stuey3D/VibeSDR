@@ -27,6 +27,7 @@
 		AA000002000000000000F843 /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D843 /* InstancePickerView.swift */; };
 		AA000002000000000000F564 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D564 /* KiwiClient.swift */; };
 		AA000002000000000000FD30 /* LinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DD30 /* LinkManager.swift */; };
+		AA000002000000000000F945 /* ModeChooser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D945 /* ModeChooser.swift */; };
 		AA000002000000000000F238 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D238 /* NumpadView.swift */; };
 		AA000002000000000000F9E3 /* OpusDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D9E3 /* OpusDecoder.swift */; };
 		AA000002000000000000FAD1 /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DAD1 /* OwrxClient.swift */; };
@@ -115,6 +116,7 @@
 		AA000002000000000000D843 /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
 		AA000002000000000000D564 /* KiwiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KiwiClient.swift; sourceTree = "<group>"; };
 		AA000002000000000000DD30 /* LinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkManager.swift; sourceTree = "<group>"; };
+		AA000002000000000000D945 /* ModeChooser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeChooser.swift; sourceTree = "<group>"; };
 		AA000002000000000000D238 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumpadView.swift; sourceTree = "<group>"; };
 		AA000002000000000000D9E3 /* OpusDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpusDecoder.swift; sourceTree = "<group>"; };
 		AA000002000000000000DAD1 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 				AA000002000000000000D843 /* InstancePickerView.swift */,
 				AA000002000000000000D564 /* KiwiClient.swift */,
 				AA000002000000000000DD30 /* LinkManager.swift */,
+				AA000002000000000000D945 /* ModeChooser.swift */,
 				AA000002000000000000D238 /* NumpadView.swift */,
 				AA000002000000000000D9E3 /* OpusDecoder.swift */,
 				AA000002000000000000DAD1 /* OwrxClient.swift */,
@@ -614,6 +617,7 @@
 				AA000002000000000000F843 /* InstancePickerView.swift in Sources */,
 				AA000002000000000000F564 /* KiwiClient.swift in Sources */,
 				AA000002000000000000FD30 /* LinkManager.swift in Sources */,
+				AA000002000000000000F945 /* ModeChooser.swift in Sources */,
 				AA000002000000000000F238 /* NumpadView.swift in Sources */,
 				AA000002000000000000F9E3 /* OpusDecoder.swift in Sources */,
 				AA000002000000000000FAD1 /* OwrxClient.swift in Sources */,

@@ -22,9 +22,17 @@ import Combine
 ///   the house. WCSession is not a stopgap here, it is the only option.
 @MainActor
 final class PhoneClient: ObservableObject, SDRClient {
-  /// The WCSession transport. Its buffer is SpikeLink's, injected on construction, so the phone's
-  /// rows land in the same buffer the direct backends fill.
-  let link: WatchLink
+  /// The WCSession transport.
+  ///
+  /// ★ ALWAYS `WatchLink.shared`, never a fresh instance. `WCSession.default.delegate` is a SINGLE
+  ///   slot: whoever activates last silently owns it. Since the launch gate has to activate a
+  ///   session before any client exists (to find out whether the phone is even in use), a second
+  ///   WatchLink here would steal the delegate from it — or have it stolen — and the symptom would
+  ///   be messages simply vanishing, with both objects looking perfectly healthy.
+  ///
+  ///   One session, one delegate, one owner. We inject SpikeLink's waterfall into it instead, which
+  ///   is the only per-session state that differs.
+  let link = WatchLink.shared
 
   /// Volume arrives from the crown as an ABSOLUTE 0…1, but the phone protocol speaks in detents
   /// (`{"cmd":"vol","delta":n}`) because the phone owns the real level and mirrors back what it
@@ -34,7 +42,7 @@ final class PhoneClient: ObservableObject, SDRClient {
   private static let volumeDetents = 16.0
 
   init(waterfall: WaterfallBuffer) {
-    link = WatchLink(waterfall: waterfall)
+    link.waterfall = waterfall
   }
 
   // ── State the UI mirrors. All of it is the PHONE's, echoed over the link ──

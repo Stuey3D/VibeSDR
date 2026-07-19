@@ -127,6 +127,12 @@ func adsbTutorialTips() -> [TutorialTip] {
 struct VibeSDRJrApp: App {
   @StateObject private var link = SpikeLink()
   @StateObject private var favs = FavStore()
+  /// Launch gate: is the iPhone app actually in use? See PhonePresence for why this is a wait
+  /// rather than an instant answer.
+  @StateObject private var presence = PhonePresence()
+  /// Set once the user has chosen (or the gate chose for them), so the chooser is a LAUNCH
+  /// decision and cannot reappear when a session ends and drops back to the picker.
+  @State private var modePicked = false
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
   /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
   @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
@@ -137,7 +143,24 @@ struct VibeSDRJrApp: App {
       // NavigationStack so the numpad and control menu can be PUSHED, exactly as the
       // companion does — a sheet's mandatory header steals ~100pt on a watch.
       NavigationStack {
-        if link.serverName.isEmpty {
+        if !modePicked {
+          // Deciding, then (if the phone is shut) choosing. Both are launch-only states.
+          if !presence.settled {
+            ModeProbeView()
+              .task {
+                await presence.decide()
+                // Phone app open and in use → straight into Companion, no chooser. This is the
+                // common case for anyone who has just been using the phone app.
+                if presence.phoneActive { link.startPhoneControl(); modePicked = true }
+              }
+          } else {
+            ModeChooserView(
+              onCompanion: { link.startPhoneControl(); modePicked = true },
+              // Standalone lands on the servers screen — `serverName` stays empty, so the picker
+              // below is what shows next.
+              onStandalone: { modePicked = true })
+          }
+        } else if link.serverName.isEmpty {
           // Instance picker first — pick a server, THEN the receiver connects to it.
           InstancePickerView { server in
             link.start(url: server.url, host: server.host, type: server.serverType, name: server.name, pin: server.pin)
@@ -170,8 +193,14 @@ struct VibeSDRJrApp: App {
       }
       // First card on APP OPEN — the Return-to-App setting behind wrist-down listening. Then each screen
       // shows its own one-time tutorial on first connect (see ContentView/DabView/AircraftView).
-      .onAppear {
-        if !seenReturnTip { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showReturnTip = true } }
+      // ★ AFTER the mode decision, never over it. This used to fire 0.4s from onAppear, which put a
+      //   full-screen tip sheet straight on top of the launch gate and the chooser — you were asked
+      //   to choose a mode you could not see. Waiting for `modePicked` also puts the tip in its
+      //   right context: wrist-down listening is a STANDALONE concern, and in Companion mode the
+      //   audio is the phone's, so the advice does not even apply.
+      .onChange(of: modePicked) { _, picked in
+        guard picked, !seenReturnTip else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showReturnTip = true }
       }
       .sheet(isPresented: $showReturnTip) {
         ReturnToAppTip { seenReturnTip = true; showReturnTip = false }
