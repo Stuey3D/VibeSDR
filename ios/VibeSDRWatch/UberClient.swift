@@ -363,6 +363,10 @@ final class UberClient: ObservableObject {
       return
     }
 
+    // Real UberSDR: ask the receiver where IT wants us to start, unless we already have a saved
+    // tune for it. Costs one small GET before the session opens.
+    if !vibeRestored { await adoptServerDefaults() }
+
     status = "registering"
     if !(await postConnection()) {
       // DO NOT overwrite the reason. postConnection() already put the SERVER'S OWN words in
@@ -431,6 +435,46 @@ final class UberClient: ObservableObject {
       }
     }
     status = "live"
+  }
+
+  /// **Where the receiver wants you to start.** Every UberSDR publishes its operator's chosen
+  /// landing spot at `/api/description` as `default_frequency` + `default_mode`, and they differ
+  /// per site — 648 kHz AM on one, 7.1 MHz LSB on another, 14.1 MHz CWU on a third.
+  ///
+  /// ★ THIS IS THE ONLY SOURCE. Things that look like it and are NOT:
+  ///   - `centerFreq` in the spectrum `config` is the WINDOW CENTRE (15 MHz on a 0-30 MHz span).
+  ///     Adopting that is what put every first connection on 15 MHz.
+  ///   - The instances directory (`instances.ubersdr.org/api/instances`) does not carry it at all,
+  ///     and its `public_url` is bare — so the server list cannot tell us either.
+  ///   - The web client's `?freq=…&mode=…` URL is written by ITS OWN JavaScript after reading this
+  ///     same endpoint. The URL is a symptom, not the source.
+  ///
+  /// Bandwidth is deliberately NOT fetched: the operator publishes no passband, and the `bwl`/`bwh`
+  /// in those URLs are just the client's per-mode defaults — which `modeBW` already matches exactly
+  /// (lsb -2700/-50, am ±5000, cwu ±200, all verified against live servers).
+  ///
+  /// Best-effort throughout. A receiver that doesn't answer, answers slowly, or omits the fields
+  /// simply leaves our own default standing; none of that is worth failing a connection over.
+  private func adoptServerDefaults() async {
+    guard !isVibe, let url = URL(string: "https://\(host)/api/description") else { return }
+    var req = URLRequest(url: url)
+    req.timeoutInterval = 5
+    req.setValue("VibeSDR Jr/1.0 (watchOS)", forHTTPHeaderField: "User-Agent")
+    guard let (data, _) = try? await httpSession.data(for: req),
+          let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+    if let f = (j["default_frequency"] as? NSNumber)?.doubleValue, f > 0 {
+      frequency = f
+      viewCenterHz = f
+    }
+    if let m = (j["default_mode"] as? String)?.lowercased(), let bw = Self.modeBW[m] {
+      mode = m
+      bwLow = bw.low
+      bwHigh = bw.high
+    }
+    // Treat this as the adoption: the server has already told us its tune, so the first spectrum
+    // config must not then overwrite it with the window centre.
+    vibeAdopted = true
   }
 
   private var specOpened = false
