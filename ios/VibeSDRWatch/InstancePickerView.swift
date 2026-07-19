@@ -45,8 +45,11 @@ struct InstancePickerView: View {
   @EnvironmentObject var presence: PhonePresence
   @StateObject private var loc = LocationProvider()
   let onConnect: (SDRServer) -> Void
-  /// Switch to Companion mode. nil = this screen is not offering the choice.
-  var onCompanion: (() -> Void)? = nil
+  /// Which device the list below connects. The button at the top SHOWS this and toggles it —
+  /// it is a mode indicator, not a one-way door.
+  @Binding var mode: PickerMode
+  /// nil = no iPhone detected, so there is no choice to offer and no button at all.
+  var onToggleMode: (() -> Void)? = nil
 
   private static let amber = Color(red: 0xff/255, green: 0xaa/255, blue: 0x00/255)
   private static let cream = Color(red: 0xf5/255, green: 0xe6/255, blue: 0xc8/255)
@@ -65,10 +68,16 @@ struct InstancePickerView: View {
   var body: some View {
     List {
       modeToggleSection      // only when an iPhone is actually there — see below
-      discoveredSection      // your own local servers first — the fastest, highest-quality link
-      favouritesSection
-      directoriesSection
-      customSection
+      // The list follows the mode. In Companion the servers screen changes the PHONE's connection,
+      // so it shows the PHONE's servers; in Standalone it connects this watch directly.
+      if mode == .companion {
+        phoneServersSection
+      } else {
+        discoveredSection    // your own local servers first — the fastest, highest-quality link
+        favouritesSection
+        directoriesSection
+        customSection
+      }
     }
     .listStyle(.carousel)
     // The toggle must appear and disappear with the phone, so keep asking while this screen is up.
@@ -87,6 +96,51 @@ struct InstancePickerView: View {
     .sheet(item: $pinFor) { ad in vibePinSheet(ad) }
   }
 
+  // ── Companion: the PHONE's server list ───────────────────────────────────────────
+  /// ★ REGRESSION RESTORED. V9 could change the phone's server from the wrist (its `FavouritesList`
+  ///   / `ServersButton`), and the merge deleted those with the rest of the companion UI on the
+  ///   rule that "the spike wins every screen". That rule held for screens the spike HAD — it did
+  ///   not have this one, because a standalone receiver has no phone to redirect.
+  ///
+  ///   The transport survived the merge untouched: the phone still pushes its favourites (`favs`)
+  ///   and still accepts `cmd:inst`. Only the UI was missing, which is why the capability looked
+  ///   gone rather than broken.
+  ///
+  /// This is the phone's OWN list, not ours, and that is the point: in Companion the servers screen
+  /// changes the PHONE's connection, so it must offer what the PHONE can reach — including
+  /// backends Standalone cannot do at all.
+  @ViewBuilder private var phoneServersSection: some View {
+    let favs = WatchLink.shared.favourites
+    Section("ON YOUR IPHONE") {
+      if favs.isEmpty {
+        Text("No favourites yet.\n♥ a server in the iPhone app.")
+          .font(.system(size: 11)).foregroundStyle(Self.dim)
+      } else {
+        ForEach(favs) { f in
+          Button {
+            WatchLink.shared.selectInstance(f.url)
+            // `host` is only meaningful for a DIRECT connection; here the phone owns the socket and
+            // we never open one, so derive it best-effort rather than pretending to care.
+            onConnect(SDRServer(name: f.name, url: f.url,
+                                host: URL(string: f.url)?.host ?? f.url,
+                                serverType: ServerType(rawValue: f.type ?? "") ?? .ubersdr))
+          } label: {
+            HStack(spacing: 7) {
+              Image(systemName: "iphone").font(.system(size: 13)).foregroundStyle(.cyan)
+              VStack(alignment: .leading, spacing: 1) {
+                Text(f.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                if let t = f.type, !t.isEmpty {
+                  Text(t.uppercased()).font(.system(size: 9)).foregroundStyle(Self.dim)
+                }
+              }
+              Spacer(minLength: 0)
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ── Mode toggle ──────────────────────────────────────────────────────────────────
   /// ★ EXISTS ONLY WHEN AN IPHONE IS DETECTED. No iPhone, no button at all — not a greyed-out one.
   ///   A disabled control still says "this app has a mode you can't reach", which on a watch with
@@ -101,27 +155,37 @@ struct InstancePickerView: View {
   /// (the phone app keeps running and keeps its server, and on a shared receiver its slot) — that
   /// belongs where Companion is exited, not here.
   @ViewBuilder private var modeToggleSection: some View {
-    if let onCompanion, presence.phoneActive {
-      // ★ The list BELOW this button connects the WATCH directly (Standalone). The button switches
-      //   to driving the phone instead. Both were previously unlabelled, so the only visible
-      //   control said "Companion mode" and there appeared to be no way back — Standalone was
-      //   reachable the whole time, by picking a server, but nothing said so.
-      Section(footer: Text("Servers below connect this watch directly.")
-        .font(.system(size: 9)).foregroundStyle(Self.dim)) {
-        Button(action: onCompanion) {
+    if let onToggleMode, presence.phoneActive {
+      // ★ A STATE INDICATOR THAT TOGGLES, not a one-way door. It shows the mode you are IN, in that
+      //   mode's colour, and says which device the list below will connect. The first version was a
+      //   one-way "Companion mode" button, which made Standalone look unreachable — it wasn't, but
+      //   nothing said so, and a control that only ever goes one way reads as a door, not a switch.
+      //
+      //   Colour carries the meaning, consistently with the launch chooser: ORANGE = Standalone
+      //   (the watch is the radio), CYAN = Companion (the iPhone is).
+      Section {
+        Button(action: onToggleMode) {
           HStack(spacing: 7) {
-            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+            Image(systemName: mode == .companion ? "iphone.gen3.radiowaves.left.and.right"
+                                                 : "applewatch.radiowaves.left.and.right")
               .font(.system(size: 15))
-              .foregroundStyle(.cyan)
+              .foregroundStyle(mode.tint)
             VStack(alignment: .leading, spacing: 1) {
-              Text("Companion mode").font(.system(size: 13, weight: .semibold))
-              Text("control the iPhone app")
-                .font(.system(size: 10)).foregroundStyle(Self.dim)
+              Text(mode.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(mode.tint)
+              Text(mode.subtitle)
+                .font(.system(size: 9)).foregroundStyle(Self.dim)
+                .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
+            // Says "this is a switch" without spending width on a word.
+            Image(systemName: "arrow.left.arrow.right")
+              .font(.system(size: 10, weight: .semibold))
+              .foregroundStyle(Self.dim)
           }
         }
-        .listItemTint(.cyan.opacity(0.18))
+        .listItemTint(mode.tint.opacity(0.18))
       }
     }
   }

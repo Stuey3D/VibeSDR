@@ -133,6 +133,9 @@ struct VibeSDRJrApp: App {
   /// Set once the user has chosen (or the gate chose for them), so the chooser is a LAUNCH
   /// decision and cannot reappear when a session ends and drops back to the picker.
   @State private var modePicked = false
+  /// Which device the servers screen connects. Survives leaving a session, so coming back to the
+  /// picker keeps the mode you were in rather than silently reverting to Standalone.
+  @State private var pickerMode: PickerMode = .standalone
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
   /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
   @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
@@ -151,11 +154,15 @@ struct VibeSDRJrApp: App {
                 await presence.decide()
                 // Phone app open and in use → straight into Companion, no chooser. This is the
                 // common case for anyone who has just been using the phone app.
-                if presence.phoneActive { link.startPhoneControl(); modePicked = true }
+                if presence.phoneActive {
+                  pickerMode = .companion
+                  link.startPhoneControl()
+                  modePicked = true
+                }
               }
           } else {
             ModeChooserView(
-              onCompanion: { link.startPhoneControl(); modePicked = true },
+              onCompanion: { pickerMode = .companion; link.startPhoneControl(); modePicked = true },
               // Standalone lands on the servers screen — `serverName` stays empty, so the picker
               // below is what shows next.
               onStandalone: { modePicked = true })
@@ -164,9 +171,24 @@ struct VibeSDRJrApp: App {
           // Instance picker first — pick a server, THEN the receiver connects to it.
           InstancePickerView(
             onConnect: { server in
-              link.start(url: server.url, host: server.host, type: server.serverType, name: server.name, pin: server.pin)
+              if pickerMode == .companion {
+                // The PHONE connects; we just render what it sends. `selectInstance` (cmd:inst) has
+                // already gone out from the row itself — this only puts us into the mode so the
+                // waterfall has somewhere to land.
+                link.startPhoneControl()
+              } else {
+                link.start(url: server.url, host: server.host, type: server.serverType,
+                           name: server.name, pin: server.pin)
+              }
             },
-            onCompanion: { link.startPhoneControl() })
+            mode: $pickerMode,
+            // Switching mode does NOT connect anything — it changes what the list below means.
+            // Leaving Companion also has to tear the phone link down, or its rows keep landing in
+            // the buffer a direct session is about to start drawing into.
+            onToggleMode: {
+              pickerMode = pickerMode.toggled
+              if pickerMode == .standalone { WatchLink.shared.detach() }
+            })
           .environmentObject(favs)
           .environmentObject(presence)
         } else {

@@ -157,6 +157,20 @@ struct ModeChooserView: View {
   }
 }
 
+/// Which device the servers screen connects. Colour is the carrier of this distinction throughout
+/// Jr — orange the watch, cyan the iPhone — so the launch chooser and the mode toggle agree without
+/// anyone having to read the words twice.
+enum PickerMode {
+  case standalone, companion
+
+  var title: String { self == .companion ? "Companion" : "Standalone" }
+  var subtitle: String {
+    self == .companion ? "servers connect your iPhone" : "servers connect this watch"
+  }
+  var tint: Color { self == .companion ? .cyan : .orange }
+  var toggled: PickerMode { self == .companion ? .standalone : .companion }
+}
+
 /// One hop in the signal path. `speaker` marks the device the audio comes OUT of.
 struct PathNode: Identifiable {
   let id = UUID()

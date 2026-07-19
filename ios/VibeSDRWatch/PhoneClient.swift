@@ -145,10 +145,20 @@ final class PhoneClient: ObservableObject, SDRClient {
   func resumeSpectrum() { link.requestMissing() }
   func reconnectIfNeeded() { link.ping() }
 
-  /// No sockets of our own to close. `suspend` used to matter because the watch held the radio;
-  /// here the phone keeps streaming and we simply stop being asked to draw.
+  /// The phone keeps streaming while its screen is up; we simply stop being asked to draw.
   func suspend() {}
-  func goIdle() {}
+
+  /// ★ THIS WAS A NO-OP, AND THAT WAS THE BUG. The reasoning was "no sockets of our own to close" —
+  ///   true, and irrelevant. WCSession has no close: the delegate stays registered and the phone
+  ///   keeps sending, so after leaving Companion the phone's rows kept landing in the buffer the
+  ///   DIRECT client had started drawing into. Two writers, one buffer — the waterfall bounced and
+  ///   flickered.
+  ///
+  ///   Precedent, and it should have been the first thing checked: UberClient.goIdle() carries a
+  ///   `goingIdle` latch for the same reason — without it, its retry Tasks reopened sockets while
+  ///   the next server started on top (the "2nd server 93% hang"). A client being discarded has to
+  ///   stop DOING things; having nothing to close is not the same as having nothing to stop.
+  func goIdle() { link.detach() }
 
   // ── Not yet proxied. Each is a deliberate stub, not an oversight ──
   // Chat MUST route through the phone rather than opening a second connection — one server

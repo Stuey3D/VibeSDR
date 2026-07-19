@@ -262,6 +262,11 @@ final class SpikeLink: ObservableObject {
   func start(url: String, host: String, type: ServerType, name: String, pin: String = "") {
     serverName = name
     client?.goIdle()
+    // ★ Also detach the PHONE link, which may be running even though no PhoneClient exists: the
+    //   launch gate activates a WCSession purely to ask whether the phone is there. A user who then
+    //   picks Standalone would otherwise leave a 4s heartbeat pinging and the phone streaming rows
+    //   at a watch that is busy running its own receiver — competing for the same CPU and radio.
+    WatchLink.shared.detach()
     isPhoneControl = false
     everGotRow = false
     lastRowsPushed = 0

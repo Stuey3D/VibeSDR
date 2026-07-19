@@ -335,7 +335,32 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     }
   }
 
+  /// Is this link DRIVING a session? False = rows must not reach the shared buffer.
+  ///
+  /// ★ WCSession has no "close". The delegate stays registered, the phone keeps streaming while it
+  ///   thinks we are here, and rows keep arriving long after Companion mode has ended. Without a
+  ///   flag they land in whatever buffer we were last given — which after a mode switch is the one
+  ///   the DIRECT client is drawing into. Two writers, one buffer: the waterfall bounces and
+  ///   flickers as the two row sources interleave. Field-caught by Stuart, build 65.
+  private(set) var attached = false
+
+  /// Stop driving: no pings, no rate meter, no rows into the shared buffer.
+  ///
+  /// Called when Companion mode ends AND when Standalone starts — the launch gate activates a
+  /// session just to ask whether the phone is there, so a user who picks Standalone would
+  /// otherwise leave a heartbeat running and the phone streaming rows at a watch that is busy
+  /// running its own receiver.
+  func detach() {
+    attached = false
+    heartbeat?.invalidate(); heartbeat = nil
+    rowRateTimer?.invalidate(); rowRateTimer = nil
+    if rowsPerSec != 0 { rowsPerSec = 0 }
+    // Point somewhere harmless. A row already in flight cannot then paint over a live waterfall.
+    waterfall = WaterfallBuffer()
+  }
+
   func activate() {
+    attached = true
     startBatteryMonitor()
     guard WCSession.isSupported() else { return }
     let s = WCSession.default
@@ -687,6 +712,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   private func handleRow(_ data: Data) {
+    // Discarded link: drop before decoding. Same class of bug as the "2nd server 93% hang", where
+    // UberClient's retry Tasks kept reopening sockets while the NEXT server started on top of it —
+    // hence the goingIdle latch there. A client being replaced must stop doing work, whatever the
+    // medium; WCSession just makes it easier to forget, because there is no socket to close.
+    guard attached else { return }
     guard data.count > 2, data[data.startIndex] == 2 else { return }
     let count = Int(data[data.startIndex + 1])
     guard count > 0, data.count >= 2 + count * Self.blockSize else { return }
