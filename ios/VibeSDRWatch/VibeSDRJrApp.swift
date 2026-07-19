@@ -111,7 +111,7 @@ func adsbTutorialTips() -> [TutorialTip] {
   ]
 }
 
-/// WristSDR — the VibeSDR JR standalone wrist receiver.
+/// VibeSDR Jr — the standalone wrist receiver.
 ///
 /// A DIRECT UberSDR client running entirely on the watch: its own sockets, its own DSP,
 /// its own Opus decode, its own audio. No phone in the chain at any point.

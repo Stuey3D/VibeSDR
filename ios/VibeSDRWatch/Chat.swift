@@ -4,16 +4,25 @@ import WatchKit
 /// ONE saved identity, reused everywhere a chat/ident box exists — OWRX chat name, FM-DX chat name,
 /// KiwiSDR `SET ident_user=`. Set once (here or in the picker), auto-fills every backend so a wrist
 /// user is never "Anonymous". Shares the Kiwi ident key so the two can't drift apart.
+///
+/// ★ This IS how we identify to a server on a direct connection. The Kiwi/OWRX User-Agents cannot
+///   carry it — those are deliberately browser-shaped, because Kiwi classifies anything else as
+///   `ext_api` and time-limits or drops it (see KiwiClient.browserHeaders). So the operator's
+///   view of who we are comes from here, and from nowhere else.
 enum ChatIdentity {
   static let key = "vibe.kiwi.ident"
+  /// Shown to server operators when the user has not chosen a callsign. Names the PRODUCT, so a
+  /// Kiwi operator reading a user list sees a wrist client rather than an anonymous connection.
+  /// A user-set name always wins — this is only the fallback.
+  static let fallback = "VibeSDR Jr"
   static var name: String {
     get {
       let v = (UserDefaults.standard.string(forKey: key) ?? "").trimmingCharacters(in: .whitespaces)
-      return v.isEmpty ? "VibeSDR" : v
+      return v.isEmpty ? fallback : v
     }
     set {
       let v = newValue.trimmingCharacters(in: .whitespaces)
-      UserDefaults.standard.set(v.isEmpty ? "VibeSDR" : v, forKey: key)
+      UserDefaults.standard.set(v.isEmpty ? fallback : v, forKey: key)
     }
   }
 }
@@ -182,7 +191,7 @@ struct ChatSheet: View {
   private var nameEditor: some View {
     VStack(alignment: .leading, spacing: 3) {
       Text("CALLSIGN / CHAT NAME").font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.4))
-      TextField("VibeSDR", text: $callsign)
+      TextField(ChatIdentity.fallback, text: $callsign)
         .font(.system(size: 14)).autocorrectionDisabled().focused($editingName)
         .onChange(of: callsign) { _, v in ChatIdentity.name = v }
       Text("Used for every server's chat, so you're never Anonymous.")

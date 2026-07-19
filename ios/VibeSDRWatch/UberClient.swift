@@ -38,17 +38,19 @@ final class UberClient: ObservableObject {
   private var vibeAdopted = false      // adopted the server's tune on the first config yet?
   private var vibeRestored = false     // did we restore + assert a SAVED tune for this host?
 
-  /// Per-host tune memory (VibeServer only) — so it reopens where you left it, not the 648 kHz/AM default.
-  private var vibeStateKey: String { "vibe.tune.\(host)" }
+  /// Per-host tune memory — so an instance reopens where you left it, not on the 648 kHz/AM default.
+  /// ★ NO LONGER VibeServer-only: UberSDR gets it too (Stuart, 2026-07-19 — "same as the phone app").
+  ///   The behaviour and the 1s debounce come from `TuneMemory`, which mirrors the phone's
+  ///   `lsv_last_tune:<baseUrl>`; first visit still adopts the server's tune (see onSpectrumJSON).
+  private lazy var tuneMemory = TuneMemory(host: host, validMode: { Self.modeBW[$0] != nil })
   private func saveVibeState() {
-    guard isVibe, frequency > 0 else { return }
-    UserDefaults.standard.set(["f": frequency, "m": mode], forKey: vibeStateKey)
+    guard frequency > 0 else { return }
+    tuneMemory.note(frequency: frequency, mode: mode)
   }
   private func restoreVibeState() {
-    guard isVibe, let s = UserDefaults.standard.dictionary(forKey: vibeStateKey),
-          let f = s["f"] as? Double, f > 0 else { return }
-    frequency = f
-    if let m = s["m"] as? String { mode = m; if let bw = Self.modeBW[m] { bwLow = bw.low; bwHigh = bw.high } }
+    guard let t = tuneMemory.restore() else { return }
+    frequency = t.frequency
+    if let m = t.mode { mode = m; if let bw = Self.modeBW[m] { bwLow = bw.low; bwHigh = bw.high } }
     vibeRestored = true
   }
   /// Per-host RTL-SDR memory (VibeServer only) — gain/bias-T/AGC/ppm/rate/de-emphasis, so the dongle comes
@@ -349,8 +351,12 @@ final class UberClient: ObservableObject {
     // VibeServer: resolve the PIN handshake up front (GET /vibeserver/auth → nonce → HMAC), then open the
     // sockets with the auth suffix. No UberSDR /connection preflight — the shim answers that unconditionally
     // and doesn't need it. The nonce is a reusable 1-hour session credential shared by both WS.
+    // Reopen where we left this instance; with nothing saved we adopt the server's tune on config.
+    // Runs for UberSDR as well as VibeServer — the isVibe branch below returns early, so it has to
+    // happen before the split rather than inside it.
+    restoreVibeState()
+
     if isVibe {
-      restoreVibeState()          // reopen where we left it (per host); else adopt the server's tune on config
       status = "authenticating"
       if !(await resolveVibeAuth()) { return }   // status carries the reason (PIN wrong / locked / offline)
       openVibeSockets()
@@ -436,7 +442,10 @@ final class UberClient: ObservableObject {
     // The same headers the phone sends. It is not obvious that the server cares — but a
     // rejection with no reason and an unfamiliar User-Agent is not the moment to be
     // different for the sake of it.
-    req.setValue("VibeSDR/2.0 (watchOS; WristSDR spike)", forHTTPHeaderField: "User-Agent")
+    // ★ UberSDR is the one backend where we announce the PRODUCT rather than spoofing a
+    //   browser, so this string is what an operator actually sees. It said "WristSDR spike";
+    //   the spike is the product now, and it is called VibeSDR Jr.
+    req.setValue("VibeSDR Jr/1.0 (watchOS)", forHTTPHeaderField: "User-Agent")
     req.setValue("VibeSDR", forHTTPHeaderField: "X-Requested-With")
     req.httpBody = try? JSONSerialization.data(withJSONObject: ["user_session_id": uuid])
     do {
@@ -777,6 +786,10 @@ final class UberClient: ObservableObject {
       waterfall.push(row: first.row)
       specQueue.removeFirst()
       lastSpecPush = now
+      // A row reached the screen, so this tune is real and safe to remember. Marked HERE rather
+      // than at decode because that runs off the main actor — and because a row we never drew is
+      // not evidence the connection works.
+      tuneMemory.markProven()
     }
     // Refilling after a pause: rows are arriving but none has aged in yet, and we haven't
     // drawn for a moment. Say so.
@@ -827,13 +840,18 @@ final class UberClient: ObservableObject {
     // The server has confirmed the scale for the current subscription — rows may paint now.
     specConfigSeq = specSubscribeSeq
 
-    // ADOPT THE VIBESERVER'S CURRENT TUNE. Unlike real UberSDR (where the client drives the radio),
-    // VibeServer holds its OWN state — it's already tuned (e.g. 96.6 FM, set on the phone) and streaming
-    // that audio. So on the FIRST config we must MATCH the server, not force our 648 kHz/AM default onto
-    // it (which left the spectrum viewing off-band as a bouncing line while the audio played 96.6 FM).
-    // If we have a saved tune for this host we've already restored + asserted it in openVibeSockets, so
-    // skip. (Mode isn't in the shim config — it's restored from per-host memory when we have it.)
-    if isVibe, !vibeAdopted {
+    // ADOPT THE SERVER'S CURRENT TUNE ON FIRST CONFIG. VibeServer holds its OWN state — already
+    // tuned (e.g. 96.6 FM, set on the phone) and streaming that audio — so forcing our 648 kHz/AM
+    // default onto it left the spectrum off-band as a bouncing line while the audio played 96.6 FM.
+    //
+    // ★ Now applies to real UberSDR too (Stuart, 2026-07-19): "we start on the default frequency
+    //   and demodulator the server sends us to". There the client drives the radio, so the echoed
+    //   centre is usually our own — which makes adopting a no-op — but on a FIRST visit it is the
+    //   server's default, which is precisely the case we want to land on.
+    //
+    // If we have a saved tune for this host we've already restored it, so skip. (Mode isn't in the
+    // config — it comes from per-instance memory when we have it.)
+    if !vibeAdopted {
       vibeAdopted = true
       if !vibeRestored, centerHz > 0 {
         frequency = centerHz

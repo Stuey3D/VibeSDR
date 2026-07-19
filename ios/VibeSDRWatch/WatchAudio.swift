@@ -216,7 +216,7 @@ final class WatchAudio {
 
     MPNowPlayingInfoCenter.default().nowPlayingInfo = [
       MPMediaItemPropertyTitle: "648 kHz · AM",
-      MPMediaItemPropertyArtist: "WristSDR",
+      MPMediaItemPropertyArtist: "VibeSDR Jr",
       // LIVE. Not a track with a position — say so, or the system draws a scrubber for a
       // stream that cannot be scrubbed.
       MPNowPlayingInfoPropertyIsLiveStream: true,

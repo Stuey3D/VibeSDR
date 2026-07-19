@@ -34,12 +34,14 @@
 		AA000002000000000000FF87 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DF87 /* SDRDirectory.swift */; };
 		AA000002000000000000FC9C /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DC9C /* SignalProcessor.swift */; };
 		AA000002000000000000F246 /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D246 /* SpikeLink.swift */; };
+		AA000002000000000000F929 /* TuneMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D929 /* TuneMemory.swift */; };
 		AA000002000000000000FAEB /* UberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DAEB /* UberClient.swift */; };
 		AA000002000000000000F99B /* VibeMdns.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D99B /* VibeMdns.swift */; };
 		AA000002000000000000F7A4 /* VibeSDRJrApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D7A4 /* VibeSDRJrApp.swift */; };
 		AA000002000000000000F078 /* Vitals.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D078 /* Vitals.swift */; };
 		AA000002000000000000F05B /* VolumeControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D05B /* VolumeControl.swift */; };
 		AA000002000000000000F062 /* WatchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D062 /* WatchAudio.swift */; };
+		AA000002000000000000FD56 /* WatchLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DD56 /* WatchLink.swift */; };
 		AA000002000000000000FB65 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DB65 /* WaterfallBuffer.swift */; };
 		AA000002000000000000F28A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D28A /* Assets.xcassets */; };
 		AA000002000000000000FA58 /* logo_fmdx.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA58 /* logo_fmdx.png */; };
@@ -94,12 +96,14 @@
 		AA000002000000000000DF87 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		AA000002000000000000DC9C /* SignalProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalProcessor.swift; sourceTree = "<group>"; };
 		AA000002000000000000D246 /* SpikeLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeLink.swift; sourceTree = "<group>"; };
+		AA000002000000000000D929 /* TuneMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TuneMemory.swift; sourceTree = "<group>"; };
 		AA000002000000000000DAEB /* UberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UberClient.swift; sourceTree = "<group>"; };
 		AA000002000000000000D99B /* VibeMdns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeMdns.swift; sourceTree = "<group>"; };
 		AA000002000000000000D7A4 /* VibeSDRJrApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeSDRJrApp.swift; sourceTree = "<group>"; };
 		AA000002000000000000D078 /* Vitals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Vitals.swift; sourceTree = "<group>"; };
 		AA000002000000000000D05B /* VolumeControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeControl.swift; sourceTree = "<group>"; };
 		AA000002000000000000D062 /* WatchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAudio.swift; sourceTree = "<group>"; };
+		AA000002000000000000DD56 /* WatchLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLink.swift; sourceTree = "<group>"; };
 		AA000002000000000000DB65 /* WaterfallBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaterfallBuffer.swift; sourceTree = "<group>"; };
 		AA000002000000000000D28A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA000002000000000000DA58 /* logo_fmdx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logo_fmdx.png; sourceTree = "<group>"; };
@@ -196,12 +200,14 @@
 				AA000002000000000000DF87 /* SDRDirectory.swift */,
 				AA000002000000000000DC9C /* SignalProcessor.swift */,
 				AA000002000000000000D246 /* SpikeLink.swift */,
+				AA000002000000000000D929 /* TuneMemory.swift */,
 				AA000002000000000000DAEB /* UberClient.swift */,
 				AA000002000000000000D99B /* VibeMdns.swift */,
 				AA000002000000000000D7A4 /* VibeSDRJrApp.swift */,
 				AA000002000000000000D078 /* Vitals.swift */,
 				AA000002000000000000D05B /* VolumeControl.swift */,
 				AA000002000000000000D062 /* WatchAudio.swift */,
+				AA000002000000000000DD56 /* WatchLink.swift */,
 				AA000002000000000000DB65 /* WaterfallBuffer.swift */,
 				AA000002000000000000D28A /* Assets.xcassets */,
 				AA000002000000000000D7B5 /* Info.plist */,
@@ -619,12 +625,14 @@
 				AA000002000000000000FF87 /* SDRDirectory.swift in Sources */,
 				AA000002000000000000FC9C /* SignalProcessor.swift in Sources */,
 				AA000002000000000000F246 /* SpikeLink.swift in Sources */,
+				AA000002000000000000F929 /* TuneMemory.swift in Sources */,
 				AA000002000000000000FAEB /* UberClient.swift in Sources */,
 				AA000002000000000000F99B /* VibeMdns.swift in Sources */,
 				AA000002000000000000F7A4 /* VibeSDRJrApp.swift in Sources */,
 				AA000002000000000000F078 /* Vitals.swift in Sources */,
 				AA000002000000000000F05B /* VolumeControl.swift in Sources */,
 				AA000002000000000000F062 /* WatchAudio.swift in Sources */,
+				AA000002000000000000FD56 /* WatchLink.swift in Sources */,
 				AA000002000000000000FB65 /* WaterfallBuffer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

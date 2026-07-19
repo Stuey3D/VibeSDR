@@ -798,16 +798,5 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 }
 
-extension Color {
-  /// "#rrggbb" as sent by the phone's VFO colour picker.
-  init?(hex: String) {
-    var s = hex.trimmingCharacters(in: .whitespaces)
-    if s.hasPrefix("#") { s.removeFirst() }
-    guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
-    self.init(
-      red:   Double((v >> 16) & 0xff) / 255,
-      green: Double((v >>  8) & 0xff) / 255,
-      blue:  Double( v        & 0xff) / 255
-    )
-  }
-}
+// Color(hex:) used to live here. It now lives with the adapter in SpikeLink.swift, which the
+// ported views already rely on — two identical copies in one module is a redeclaration error.

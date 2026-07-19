@@ -75,7 +75,7 @@ OPUS_GROUP = P + "CC11"
 #    the one thing the companion contributes — and it becomes `PhoneClient: SDRClient`. It is
 #    kept on disk as the reference for that work but does not compile today, because it drove
 #    the companion UI, which no longer exists.
-NOT_YET_BUILT = {"WatchLink.swift"}
+NOT_YET_BUILT = set()
 
 WATCH_DIR = ROOT / "ios" / NAME
 SOURCES = sorted(p.name for p in WATCH_DIR.glob("*.swift") if p.name not in NOT_YET_BUILT)

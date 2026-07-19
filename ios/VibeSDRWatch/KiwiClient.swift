@@ -163,6 +163,10 @@ final class KiwiClient: ObservableObject, SDRClient {
   private var viewInit = false
   private var wfReady = false
   private let ident: String
+  /// Per-instance last-tune memory. See TuneMemory — writes are earned (a row must arrive first),
+  /// deletes are free (any refusal before a frame purges it), because a remembered frequency is
+  /// re-asserted on reconnect and a bad one would loop.
+  private let tuneMemory: TuneMemory
 
   // ── Sockets / audio / DSP ──
   // nonisolated so the BACKGROUND keepalive timer can send on them without hopping to main — a
@@ -193,7 +197,16 @@ final class KiwiClient: ObservableObject, SDRClient {
     let wantSecure = url.hasPrefix("https") || url.hasPrefix("wss")
     self.secure = wantSecure
     self.wsBase = "\(wantSecure ? "wss" : "ws")://\(u)"
-    self.ident = (UserDefaults.standard.string(forKey: "vibe.kiwi.ident") ?? "VibeSDR")
+    self.ident = (UserDefaults.standard.string(forKey: "vibe.kiwi.ident") ?? ChatIdentity.fallback)
+    // Per-instance tune memory, keyed on the socket base so it matches the picker's identity.
+    // Restored below rather than here so `frequency`/`mode` are already at their defaults —
+    // nothing saved means we keep them, which is the first-visit case.
+    self.tuneMemory = TuneMemory(host: self.wsBase, range: 1_000...Self.fullBW,
+                                 validMode: { Self.modeMap[$0] != nil })
+    if let t = self.tuneMemory.restore() {
+      self.frequency = t.frequency
+      if let m = t.mode { self.mode = m; if let p = Self.modeMap[m] { self.bwLow = p.lo; self.bwHigh = p.hi } }
+    }
     proc.autoContrast = 5
   }
 
@@ -234,6 +247,13 @@ final class KiwiClient: ObservableObject, SDRClient {
     errorShown = true
     lastError = msg
     status = "refused"
+    // ★ REFUSED BEFORE A SINGLE FRAME — so whatever tune we asserted may be the reason (a band this
+    //   server restricts, or a slot it will not give us). Forget it. A remembered frequency is
+    //   re-asserted on every reconnect, so keeping it here is how a connection loop starts: refused,
+    //   retry, assert the same poison, refused. Dropping back to the server's default costs the user
+    //   one re-tune and cannot loop.
+    //   Note this is already inside `!everFrame`, which IS the "never proved good" condition.
+    tuneMemory.purge()
     goIdle()
   }
 
@@ -484,6 +504,10 @@ final class KiwiClient: ObservableObject, SDRClient {
     while let first = specQueue.first, now - first.t >= spectrumDelay {
       waterfall.push(row: first.row)
       specQueue.removeFirst()
+      // A row reached the screen: the server accepted us at this tune, so it is safe to remember.
+      // Until this happens nothing is written — that is what stops a kick-inducing frequency being
+      // persisted and replayed into the same kick on every reconnect.
+      tuneMemory.markProven()
     }
   }
 
@@ -524,6 +548,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   private func sendDemodNow() {
     let m = Self.modeMap[mode] ?? Self.modeMap["am"]!
     sndSend("SET mod=\(m.mod) low_cut=\(Int(bwLow.rounded())) high_cut=\(Int(bwHigh.rounded())) freq=\(String(format: "%.3f", frequency / 1000))")
+    // The single funnel for every tune and mode change, so remembering here cannot miss one.
+    // Debounced inside TuneMemory, and held back entirely until a row has proved the connection.
+    tuneMemory.note(frequency: frequency, mode: mode)
   }
 
   private var lastZoomAt = 0.0, zoomPending = false, zoomScheduled = false
