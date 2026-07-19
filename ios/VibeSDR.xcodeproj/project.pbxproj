@@ -31,6 +31,7 @@
 		AA000002000000000000F9E3 /* OpusDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D9E3 /* OpusDecoder.swift */; };
 		AA000002000000000000FAD1 /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DAD1 /* OwrxClient.swift */; };
 		AA000002000000000000F827 /* OwrxSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D827 /* OwrxSocket.swift */; };
+		AA000002000000000000FEF8 /* PhoneClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DEF8 /* PhoneClient.swift */; };
 		AA000002000000000000FF87 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DF87 /* SDRDirectory.swift */; };
 		AA000002000000000000FC9C /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DC9C /* SignalProcessor.swift */; };
 		AA000002000000000000F246 /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D246 /* SpikeLink.swift */; };
@@ -53,6 +54,7 @@
 		348205C0D459110F2ED2BA3D /* libPods-VibeSDR.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BA976CDAEC029F7C8C1E8873 /* libPods-VibeSDR.a */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		59A08D71697B2308CF571DCA /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD80C701468F7B7CD5EBF40E /* ExpoModulesProvider.swift */; };
+		7B01B03721F0CFBC02CE6233 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 5E9EF05888A2A290F1181236 /* PrivacyInfo.xcprivacy */; };
 		A9F1D878FBB71E5FB735A713 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 5E9EF05888A2A290F1181236 /* PrivacyInfo.xcprivacy */; };
 		AA000001000000000000AAA3 /* VibePowerModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAA1 /* VibePowerModule.swift */; };
 		AA000001000000000000AAA4 /* VibePowerModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAA2 /* VibePowerModule.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
@@ -62,11 +64,35 @@
 		AA000001000000000000AAD4 /* logo_owrx.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAD2 /* logo_owrx.png */; };
 		AA000001000000000000AAF3 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAF1 /* FmdxMp3Decoder.swift */; };
 		AA000002000000000000EE13 /* VibeWatchModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE11 /* VibeWatchModule.swift */; };
-		AA000002000000000000EE33 /* WatchSpectrumForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */; };
 		AA000002000000000000EE14 /* VibeWatchModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE12 /* VibeWatchModule.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
+		AA000002000000000000EE33 /* WatchSpectrumForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AA000002000000000000CC0B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA000002000000000000CC01;
+			remoteInfo = VibeSDRWatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AA000002000000000000CC0A /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				AA000002000000000000CC0D /* VibeSDRWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		AA000002000000000000CC02 /* VibeSDRWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VibeSDRWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -93,6 +119,7 @@
 		AA000002000000000000D9E3 /* OpusDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpusDecoder.swift; sourceTree = "<group>"; };
 		AA000002000000000000DAD1 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
 		AA000002000000000000D827 /* OwrxSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxSocket.swift; sourceTree = "<group>"; };
+		AA000002000000000000DEF8 /* PhoneClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneClient.swift; sourceTree = "<group>"; };
 		AA000002000000000000DF87 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		AA000002000000000000DC9C /* SignalProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalProcessor.swift; sourceTree = "<group>"; };
 		AA000002000000000000D246 /* SpikeLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeLink.swift; sourceTree = "<group>"; };
@@ -126,8 +153,8 @@
 		AA000001000000000000AAD2 /* logo_owrx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = logo_owrx.png; path = VibeSDR/logo_owrx.png; sourceTree = "<group>"; };
 		AA000001000000000000AAF1 /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FmdxMp3Decoder.swift; path = VibeSDR/FmdxMp3Decoder.swift; sourceTree = "<group>"; };
 		AA000002000000000000EE11 /* VibeWatchModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeWatchModule.swift; path = VibeSDR/VibeWatchModule.swift; sourceTree = "<group>"; };
-		AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchSpectrumForwarder.swift; path = VibeSDR/WatchSpectrumForwarder.swift; sourceTree = "<group>"; };
 		AA000002000000000000EE12 /* VibeWatchModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibeWatchModule.m; path = VibeSDR/VibeWatchModule.m; sourceTree = "<group>"; };
+		AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchSpectrumForwarder.swift; path = VibeSDR/WatchSpectrumForwarder.swift; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = VibeSDR/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BA976CDAEC029F7C8C1E8873 /* libPods-VibeSDR.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-VibeSDR.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
@@ -157,20 +184,6 @@
 		};
 /* End PBXFrameworksBuildPhase section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		AA000002000000000000CC0A /* Embed Watch Content */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolderSpec = 16;
-			files = (
-				AA000002000000000000CC0D /* VibeSDRWatch.app in Embed Watch Content */,
-			);
-			name = "Embed Watch Content";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXGroup section */
 		AA000002000000000000CC03 /* VibeSDRWatch */ = {
 			isa = PBXGroup;
@@ -197,6 +210,7 @@
 				AA000002000000000000D9E3 /* OpusDecoder.swift */,
 				AA000002000000000000DAD1 /* OwrxClient.swift */,
 				AA000002000000000000D827 /* OwrxSocket.swift */,
+				AA000002000000000000DEF8 /* PhoneClient.swift */,
 				AA000002000000000000DF87 /* SDRDirectory.swift */,
 				AA000002000000000000DC9C /* SignalProcessor.swift */,
 				AA000002000000000000D246 /* SpikeLink.swift */,
@@ -383,24 +397,6 @@
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
-
-/* Begin PBXContainerItemProxy section */
-		AA000002000000000000CC0B /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = AA000002000000000000CC01;
-			remoteInfo = VibeSDRWatch;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXTargetDependency section */
-		AA000002000000000000CC0C /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = AA000002000000000000CC01 /* VibeSDRWatch */;
-			targetProxy = AA000002000000000000CC0B /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		83CBB9F71A601CBA00E9B192 /* Project object */ = {
@@ -622,6 +618,7 @@
 				AA000002000000000000F9E3 /* OpusDecoder.swift in Sources */,
 				AA000002000000000000FAD1 /* OwrxClient.swift in Sources */,
 				AA000002000000000000F827 /* OwrxSocket.swift in Sources */,
+				AA000002000000000000FEF8 /* PhoneClient.swift in Sources */,
 				AA000002000000000000FF87 /* SDRDirectory.swift in Sources */,
 				AA000002000000000000FC9C /* SignalProcessor.swift in Sources */,
 				AA000002000000000000F246 /* SpikeLink.swift in Sources */,
@@ -655,6 +652,14 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		AA000002000000000000CC0C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA000002000000000000CC01 /* VibeSDRWatch */;
+			targetProxy = AA000002000000000000CC0B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
 		AA000002000000000000CC08 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -663,7 +668,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
+				CURRENT_PROJECT_VERSION = 59;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -702,7 +707,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
+				CURRENT_PROJECT_VERSION = 59;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
@@ -742,7 +747,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
+				CURRENT_PROJECT_VERSION = 59;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -781,7 +786,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
+				CURRENT_PROJECT_VERSION = 59;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				INFOPLIST_FILE = VibeSDR/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
