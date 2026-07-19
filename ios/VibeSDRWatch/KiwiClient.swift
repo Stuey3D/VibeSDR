@@ -176,6 +176,10 @@ final class KiwiClient: ObservableObject, SDRClient {
   /// deletes are free (any refusal before a frame purges it), because a remembered frequency is
   /// re-asserted on reconnect and a bad one would loop.
   private let tuneMemory: TuneMemory
+  /// A saved tune was restored, so the server's `init.freq` must not overwrite it.
+  private var restoredFromMemory = false
+  /// `cfg` can arrive more than once; the landing spot is a first-connect decision only.
+  private var adoptedDefaults = false
 
   // ── Sockets / audio / DSP ──
   // nonisolated so the BACKGROUND keepalive timer can send on them without hopping to main — a
@@ -215,6 +219,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     if let t = self.tuneMemory.restore() {
       self.frequency = t.frequency
       if let m = t.mode { self.mode = m; if let p = Self.modeMap[m] { self.bwLow = p.lo; self.bwHigh = p.hi } }
+      self.restoredFromMemory = true
     }
     proc.autoContrast = 5
   }
@@ -248,6 +253,46 @@ final class KiwiClient: ObservableObject, SDRClient {
 
     audio.start { _, _ in }
     openSnd()
+  }
+
+  /// **Where this KiwiSDR's owner wants you to start.** Kiwi ships its whole public config to the
+  /// browser as a `cfg=<url-encoded JSON>` MSG token, and its own client reads the landing spot from
+  /// it (`kiwi_get_init_settings()` in openwebrx.js):
+  ///
+  ///     init_f = ext_get_cfg_param('init.freq', init_f)          // kHz
+  ///     init_mode = ext_get_cfg_param('init.mode', 'lsb')
+  ///     snd_send('SET mod='+ init_mode +' … freq='+ init_frequency)
+  ///
+  /// ★ `init.freq` IS IN kHz, not Hz — the official client works in kHz throughout
+  ///   (`i_freq_kHz = init_frequency - kiwi.freq_offset_kHz`). Reading it as Hz would land every
+  ///   connection at roughly DC and look like a tuning bug rather than a units bug.
+  ///
+  /// Only applied when we have nothing better: a remembered tune for this instance always wins, and
+  /// this runs once per session. When the server sets no default we keep OUR default rather than
+  /// Kiwi's own 7020 kHz LSB fallback — 14.074 MHz sits mid-HF, is amateur rather than broadcast
+  /// (so unlikely to be a band a Kiwi owner has blocked), and is busy enough to prove the receiver
+  /// is alive the moment it opens.
+  private func adoptServerDefaults(_ encoded: String) {
+    guard !adoptedDefaults, !restoredFromMemory else { return }
+    adoptedDefaults = true
+    guard let s = encoded.removingPercentEncoding,
+          let d = s.data(using: .utf8),
+          let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+          let ini = j["init"] as? [String: Any] else { return }
+
+    var changed = false
+    if let kHz = (ini["freq"] as? NSNumber)?.doubleValue, kHz > 0 {
+      let hz = kHz * 1000
+      if hz <= rxBw || rxBw == 0 { frequency = hz; viewCenter = hz; changed = true }
+    }
+    // Kiwi names a couple of modes differently from us: bare "cw" has no sideband, and its own UI
+    // treats that as CW-upper. Anything unrecognised is left alone rather than guessed at.
+    if var m = (ini["mode"] as? String)?.lowercased() {
+      if m == "cw" { m = "cwu" }
+      if let p = Self.modeMap[m] { mode = m; bwLow = p.lo; bwHigh = p.hi; changed = true }
+    }
+    // We already asserted our own default at handshake, so the server has to be told again.
+    if changed { sendDemod(); if viewInit { sendZoom() } }
   }
 
   /// Surface a refusal reason ONCE (badp/too_busy/handshake/timeout all funnel here).
@@ -433,6 +478,8 @@ final class KiwiClient: ObservableObject, SDRClient {
         rxBw = bw
         if !viewInit { viewCenter = bw / 2; viewBw = bw }
       }
+    case "cfg":
+      adoptServerDefaults(val)
     case "wf_setup":
       if !wfReady { wfReady = true; sendZoom() }
     case "audio_adpcm_state":
