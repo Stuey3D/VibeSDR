@@ -294,6 +294,38 @@ final class SpikeLink: ObservableObject {
     c.start()
   }
 
+  /// Enter COMPANION MODE — the iPhone owns the radio and we render the rows it sends.
+  ///
+  /// Deliberately shaped like `start(url:host:type:name:)` above, because from the UI's point of
+  /// view it IS the same operation: choose a source, build a client, let the same screens draw it.
+  /// Phone Control differs only in where rows come from (§1) — no server URL, because the phone
+  /// holds the server connection and the watch never opens one.
+  ///
+  /// ★ Does NOT reach for the phone. Whether the phone app is actually in use is a question about
+  ///   the freshness of its state frames (`lastStateAt`), never `WCSession.isReachable` — the watch
+  ///   can WAKE the iOS app in the background, so treating reachability as "open" would let us
+  ///   silently start a session the user never asked for (§"Phone app detected" means OPEN AND IN
+  ///   USE). Callers decide; this just enters the mode.
+  func startPhoneControl() {
+    client?.goIdle()
+    everGotRow = false
+    lastRowsPushed = 0
+    serverName = "iPhone"
+
+    let c = PhoneClient(waterfall: waterfall)
+    client = c
+    // Same cross-backend reset as start() — nothing from a direct session may linger into this one.
+    profiles = []; clients = 0; chatLog = []; chatActivity = 0
+    dabProgrammes = []; aircraft = []; fmdx = nil; stationName = ""
+    connectError = nil
+    frequency = c.frequency
+    mode = c.mode
+    updateBand()
+
+    if !booted { booted = true; startBatteryMonitor(); startPathMonitor() }
+    c.start()
+  }
+
   /// Back out to the instance picker (the menu's SERVERS tile). Drops the sockets/audio.
   func backToPicker() {
     client?.goIdle()

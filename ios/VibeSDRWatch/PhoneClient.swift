@@ -1,0 +1,107 @@
+import Foundation
+import Combine
+
+/// **Companion mode as an `SDRClient`** — the watch driven by the iPhone over WCSession.
+///
+/// This is the piece the whole merge turns on (`BRIEF-watch-app-merge.md` §1). The V9 companion
+/// looked like a second, incompatible app because it "rendered differently" — but it does not:
+///
+///   - `WaterfallBuffer.push(row:)` takes **finished rows**, not bins.
+///   - The direct backends do bins → `SignalProcessor` → row → push.
+///   - The phone sends rows it has ALREADY rendered, so this pushes at exactly the same point,
+///     skipping only the DSP stage.
+///
+/// So Phone Control is not a second renderer. It is a client that SOURCES rows from WCSession
+/// instead of computing them from IQ — which is why the entire spike UI works above it unchanged,
+/// and why the companion's own screens could be deleted outright rather than merged.
+///
+/// The transport is `WatchLink`, kept whole: it is field-proven in V9 and carries hard-won detail
+/// (row batching because `sendMessage` wedges at 16 calls/sec, crown-flush coalescing, optimistic
+/// tune/volume prediction). Rewriting it to "tidy" the merge would have thrown all of that away.
+/// ★ [[jr_transport_ws_two_modes]]: a watch↔phone WebSocket is architecturally impossible out of
+///   the house. WCSession is not a stopgap here, it is the only option.
+@MainActor
+final class PhoneClient: ObservableObject, SDRClient {
+  /// The WCSession transport. Its buffer is SpikeLink's, injected on construction, so the phone's
+  /// rows land in the same buffer the direct backends fill.
+  let link: WatchLink
+
+  /// Volume arrives from the crown as an ABSOLUTE 0…1, but the phone protocol speaks in detents
+  /// (`{"cmd":"vol","delta":n}`) because the phone owns the real level and mirrors back what it
+  /// actually applied — including changes made ON the phone. So we convert, and track what we last
+  /// sent to avoid re-sending the level the mirror just told us about.
+  private var lastVolumeSent: Double = 1.0
+  private static let volumeDetents = 16.0
+
+  init(waterfall: WaterfallBuffer) {
+    link = WatchLink(waterfall: waterfall)
+  }
+
+  // ── State the UI mirrors. All of it is the PHONE's, echoed over the link ──
+  var frequency: Double { link.frequency }
+  var mode: String { link.mode }
+  var displaySpanHz: Double { link.span }
+  var bwLow: Double { link.filtLo }
+  var bwHigh: Double { link.filtHi }
+  var signalLevel: Double { link.level }
+  var signalDb: Double { link.snr }
+  var rowsPushed: Int { link.rowsPushed }
+
+  /// The link has no frame-rate meter of its own; rows are paced by the phone. Reporting a made-up
+  /// number here would feed the link glyph a fiction, so report nothing and let `rowsPushed` and
+  /// `status` carry liveness instead.
+  var framesPerSec: Double { 0 }
+
+  /// ★ In Phone Control the node glyph must report the PHONE's link to the server, not the watch's
+  ///   — the phone owns that connection and the watch has no direct opinion about it (§2b).
+  ///   `why` is the phone's own plain-English reason, already sent in the state frame.
+  var status: String {
+    if !link.reachable { return "iPhone unreachable" }
+    return link.why
+  }
+
+  /// Refusals belong to the phone and are surfaced in its own status text, which `status` already
+  /// carries. A second channel here would let the two disagree.
+  var lastError: String? { nil }
+
+  func start() { link.activate() }
+
+  /// Nothing to drain: rows are pushed straight into the buffer as they arrive. The direct backends
+  /// hold a ~1s queue to line the spectrum up with their own audio cushion — here the AUDIO IS THE
+  /// PHONE'S, so the phone has already done that alignment. Re-delaying would double it.
+  func drainSpectrum(now: Double) {}
+
+  // ── Controls. Every one is a command TO the phone; none of it acts locally ──
+  // `step` is ignored: the phone owns the tuning step (set via `cmd:step` from the menu) so that a
+  // detent means the same thing on both screens. Honouring a local step would silently desync them.
+  func tune(delta: Int, step: Double) { link.tune(delta: delta) }
+  func tuneTo(_ hz: Double) { link.tune(toHz: hz) }
+  func zoom(delta: Int) { link.zoom(delta: delta) }
+  func setMode(_ m: String) { link.setMode(m) }
+
+  func setVolume(_ v: Double) {
+    let delta = Int(((v - lastVolumeSent) * Self.volumeDetents).rounded())
+    guard delta != 0 else { return }
+    lastVolumeSent = v
+    link.volume(delta: delta)
+  }
+
+  /// The phone owns its own filter edges per mode, and the link has no bandwidth command — changing
+  /// the mode is what moves them. Silently doing nothing is correct; pretending otherwise would put
+  /// the watch's idea of the passband out of step with the audio actually being sent.
+  func setBandwidth(_ low: Double, _ high: Double) {}
+
+  func resumeSpectrum() { link.requestMissing() }
+  func reconnectIfNeeded() { link.ping() }
+
+  /// No sockets of our own to close. `suspend` used to matter because the watch held the radio;
+  /// here the phone keeps streaming and we simply stop being asked to draw.
+  func suspend() {}
+  func goIdle() {}
+
+  // ── Not yet proxied. Each is a deliberate stub, not an oversight ──
+  // Chat MUST route through the phone rather than opening a second connection — one server
+  // connection, one participant, one history (§2c). That needs a read-watermark syncing both ways,
+  // which does not exist in the protocol yet, so chat stays off in this mode until it does.
+  var supportsChat: Bool { false }
+}

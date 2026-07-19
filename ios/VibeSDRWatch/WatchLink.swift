@@ -57,7 +57,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   static let shared = WatchLink()
 
   // Rendered state. The waterfall image is @Published so Canvas redraws on it.
-  @Published var waterfall  = WaterfallBuffer()
+  //
+  // ★ INJECTABLE since the merge. SpikeLink OWNS the waterfall buffer and hands the SAME one to
+  //   every backend, so the ported UI reads a single buffer no matter which client is driving.
+  //   PhoneClient passes SpikeLink's buffer in here; the phone's finished rows then land in
+  //   exactly the place UberClient's DSP output would have. That is the whole seam — see
+  //   BRIEF-watch-app-merge.md §1: the phone path skips the DSP stage and joins at the row.
+  @Published var waterfall: WaterfallBuffer
+  /// Rows actually pushed. PhoneClient surfaces this as `SDRClient.rowsPushed`, which is what
+  /// SpikeLink watches to decide whether a connection is alive.
+  @Published var rowsPushed = 0
   @Published var frequency  = 0.0
   @Published var span       = 0.0
   @Published var snr        = 0.0
@@ -305,7 +314,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   private var heartbeat: Timer?
 
-  override init() {
+  /// `waterfall` defaults to a private buffer so `WatchLink.shared` still stands alone; PhoneClient
+  /// injects SpikeLink's instead.
+  init(waterfall: WaterfallBuffer = WaterfallBuffer()) {
+    self.waterfall = waterfall
     super.init()
     if let raw = UserDefaults.standard.string(forKey: "vibe.displayUnit"),
        let u = DisplayUnit(rawValue: raw) {
@@ -644,7 +656,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      for r in rows { self.waterfall.push(row: r) }
+      for r in rows { self.waterfall.push(row: r); self.rowsPushed += 1 }
       self.lastRowAt = Date()
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }
