@@ -116,6 +116,10 @@ export class KiwiAdapter implements SDRBackend {
   private viewCenter = KIWI_FULL_BW / 2;
   private viewBw = KIWI_FULL_BW;
   private viewInit = false;
+  /** Caller had no remembered tune, so the receiver's own `init.freq`/`init.mode` may be adopted. */
+  private allowServerDefault = false;
+  /** `cfg` can arrive more than once; the landing spot is a first-connect decision only. */
+  private adoptedDefaults = false;
   private followVfo = true;               // VFO lock (true = view follows VFO)
 
   private audioStarted = false;
@@ -177,8 +181,11 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   // ── connect ────────────────────────────────────────────────────────────────
-  connect(frequency?: number, mode?: SDRMode): Promise<void> {
+  connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }): Promise<void> {
     this.fetchReceiverLon();
+    // Only ever true on a first visit — a remembered tune wins, so the screen leaves it unset then.
+    this.allowServerDefault = opts?.allowServerDefault === true;
+    this.adoptedDefaults = false;
     if (frequency) this.freq = frequency;
     if (mode) { this.mode = mode; const p = KIWI_MODE[mode]; this.bwLow = p.lo; this.bwHigh = p.hi; }
     this.started = true;
@@ -318,6 +325,41 @@ export class KiwiAdapter implements SDRBackend {
       case 'sample_rate': {
         const f = parseFloat(val);
         if (Number.isFinite(f) && f > 1000) this.trueAudioRate = f;
+        break;
+      }
+      // Where this KiwiSDR's owner wants you to start. Kiwi ships its whole public config to the
+      // browser as `cfg=<url-encoded JSON>`, and its OWN client reads the landing spot from it
+      // (kiwi_get_init_settings(), web/openwebrx/openwebrx.js):
+      //
+      //     init_f    = ext_get_cfg_param('init.freq', init_f)     // kHz, Kiwi's fallback 7020
+      //     init_mode = ext_get_cfg_param('init.mode', 'lsb')
+      //
+      // ★ init.freq IS IN kHz, not Hz — the Kiwi client works in kHz throughout. Reading it as Hz
+      //   lands every connection near DC and reads as a tuning bug rather than a units bug.
+      case 'cfg': {
+        if (!this.allowServerDefault || this.adoptedDefaults) break;
+        this.adoptedDefaults = true;
+        let ini: { freq?: unknown; mode?: unknown } | undefined;
+        try {
+          ini = (JSON.parse(decodeURIComponent(val)) as { init?: typeof ini }).init;
+        } catch { break; }
+        if (!ini) break;
+        let changed = false;
+        if (typeof ini.freq === 'number' && ini.freq > 0) {
+          const hz = Math.round(ini.freq * 1000);
+          if (!this.rxBw || hz <= this.rxBw) { this.freq = hz; this.viewCenter = hz; changed = true; }
+        }
+        // Kiwi's bare "cw" carries no sideband and its UI treats it as CW-upper. Anything we don't
+        // recognise is left alone rather than guessed at.
+        if (typeof ini.mode === 'string') {
+          const m = (ini.mode.toLowerCase() === 'cw' ? 'cwu' : ini.mode.toLowerCase()) as SDRMode;
+          if (m in KIWI_MODE) {
+            this.mode = m; this.bwLow = KIWI_MODE[m].lo; this.bwHigh = KIWI_MODE[m].hi; changed = true;
+          }
+        }
+        // We already asserted the caller's tune at handshake, so the server must be told again —
+        // and the screen, or the readout shows one frequency while the audio plays another.
+        if (changed) { this.sendDemod(); this.cb.onStatus(this.getStatus()); }
         break;
       }
       case 'bandwidth': {

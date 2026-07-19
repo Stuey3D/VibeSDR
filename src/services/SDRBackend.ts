@@ -138,7 +138,11 @@ export interface SDRBackend {
   /** Session id shared with the native audio engine. */
   readonly uuid: string;
 
-  connect(frequency?: number, mode?: SDRMode): Promise<void>;
+  /** `allowServerDefault` — the caller had NO remembered tune for this instance, so the backend
+   *  may land on the receiver's own published default instead of the frequency passed here.
+   *  Backends that publish no such thing (OWRX profiles, FM-DX) ignore it. Precedence is always
+   *  saved tune > server default > our default, so this is only ever set on a first visit. */
+  connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }): Promise<void>;
   destroy(): void;
   /** Pause-disconnect: close the connection but keep the native audio session
    *  (lock-screen card) intact. OWRX/Kiwi only; UberSDR uses pauseSpectrum. */

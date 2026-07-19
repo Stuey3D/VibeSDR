@@ -2302,6 +2302,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (cancelled || destroyed.current) return;
       let f = status.frequency;
       let m: SDRMode = status.mode;
+      // Did we actually RESTORE something? Not "was there a stored key" — corrupt or out-of-range
+      // data falls through to the default, and that case must still be allowed to take the
+      // receiver's own landing spot. Precedence: saved tune > server default > ours.
+      let restored = false;
       if (j) {
         try {
           const p = JSON.parse(j) as { frequency?: unknown; mode?: unknown };
@@ -2313,6 +2317,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const hiHz = isLocal ? 2_000_000_000 : MAX_HZ;
           if (typeof p.frequency === 'number' && p.frequency >= MIN_HZ && p.frequency <= hiHz) {
             f = Math.round(p.frequency);
+            restored = true;
           }
           if (typeof p.mode === 'string' && p.mode in MODE_BANDWIDTHS) m = p.mode as SDRMode;
         } catch {}
@@ -2329,7 +2334,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         deepLinkTuneApplied.current = true;
         const df = route.params.initialFreq;
         const dm = route.params.initialMode;
-        if (typeof df === 'number' && df >= MIN_HZ && df <= MAX_HZ) f = Math.round(df);
+        // A deep link is an EXPLICIT request for a frequency, so it outranks the receiver's default
+        // as well as the saved tune — someone followed a link to hear a specific thing.
+        if (typeof df === 'number' && df >= MIN_HZ && df <= MAX_HZ) { f = Math.round(df); restored = true; }
         if (typeof dm === 'string' && dm in MODE_BANDWIDTHS) m = dm as SDRMode;
       }
       const bw = MODE_BANDWIDTHS[m];
@@ -2341,12 +2348,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       setTuneLoaded(true);
       // A server crash/refused connection rejects this — swallow it (onDisconnect
       // drives the UI). An unhandled rejection here can escalate to a hard crash.
-      c.connect(f, m).catch(() => {});
+      c.connect(f, m, { allowServerDefault: !restored }).catch(() => {});
     }).catch(() => {
       if (cancelled || destroyed.current) return;
       lastTuneLoaded.current = true;
       setTuneLoaded(true);
-      c.connect(status.frequency, status.mode).catch(() => {});
+      // Storage failed, so we know nothing about this instance — the receiver's own default is a
+      // better answer than our hardcoded one.
+      c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
     });
     return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps

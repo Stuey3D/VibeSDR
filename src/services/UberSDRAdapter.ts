@@ -76,7 +76,7 @@ export class UberSDRAdapter implements SDRBackend {
     } catch {}
   }
 
-  connect(frequency?: number, mode?: SDRMode) { this.fetchReceiverLon(); return this.client.connect(frequency, mode); }
+  connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }) { this.fetchReceiverLon(); return this.client.connect(frequency, mode, opts); }
   destroy()                                   { this.client.destroy(); }
 
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) { this.client.tune(frequency, mode, opts); }

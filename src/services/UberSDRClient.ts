@@ -215,8 +215,50 @@ export class UberSDRClient {
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  async connect(frequency = 14_074_000, mode: SDRMode = 'usb') {
+  /** Where this receiver's OWNER wants you to start. Every UberSDR publishes it at
+   *  `/api/description` as `default_frequency` (Hz) + `default_mode`, and they differ per site —
+   *  648 kHz AM on one, 7.1 MHz LSB on another, 14.1 MHz CWU on a third.
+   *
+   *  ★ This is the ONLY source. Two things look like it and are not:
+   *    - the spectrum `config.centerFreq` is the WINDOW CENTRE (15 MHz on a 0-30 MHz span);
+   *    - the instances directory has no such field and its `public_url` is bare.
+   *    The web client's `?freq=…&mode=…` URL is written by its own JS from this same endpoint —
+   *    a symptom, not the source.
+   *
+   *  Best-effort: a slow, silent or incomplete answer just leaves the caller's tune standing. */
+  private async _serverDefault(): Promise<{ frequency?: number; mode?: SDRMode }> {
+    // Local hardware and the VibeServer shim publish no such endpoint, and their tune is per-device
+    // rather than operator-chosen. Skip rather than spend the timeout on a request that cannot
+    // succeed. (The watch guards the same case as `!isVibe`.)
+    if (this.isLocal) return {};
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 5000);
+      const r = await fetch(`${this.baseUrl}/api/description`, { signal: ctl.signal });
+      clearTimeout(t);
+      if (!r.ok) return {};
+      const j = await r.json() as { default_frequency?: unknown; default_mode?: unknown };
+      const out: { frequency?: number; mode?: SDRMode } = {};
+      if (typeof j.default_frequency === 'number' && j.default_frequency > 0) {
+        out.frequency = Math.round(j.default_frequency);
+      }
+      if (typeof j.default_mode === 'string' && j.default_mode.toLowerCase() in MODE_BANDWIDTHS) {
+        out.mode = j.default_mode.toLowerCase() as SDRMode;
+      }
+      return out;
+    } catch { return {}; }
+  }
+
+  async connect(frequency = 14_074_000, mode: SDRMode = 'usb', opts?: { allowServerDefault?: boolean }) {
     this.destroyed = false;
+    // No remembered tune for this instance, so ask the receiver where it wants us. Only ever on a
+    // first visit — a saved tune always wins and the screen does not set this flag then.
+    if (opts?.allowServerDefault) {
+      const d = await this._serverDefault();
+      if (this.destroyed) return;
+      if (d.frequency) frequency = d.frequency;
+      if (d.mode) mode = d.mode;
+    }
     this.status.frequency = frequency;
     this.status.mode = mode;
     // Mirror the server's per-mode bandwidth defaults for the CONNECT mode
@@ -225,6 +267,10 @@ export class UberSDRClient {
     // overwrote the screen's correct values (AM showing only one sideband).
     const cbw = MODE_BANDWIDTHS[mode];
     if (cbw) { this.status.bandwidthLow = cbw[0]; this.status.bandwidthHigh = cbw[1]; }
+    // The screen already set its own state from the tune it passed in, so if the receiver sent us
+    // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
+    // plays another.
+    if (opts?.allowServerDefault) this.callbacks.onStatus({ ...this.status });
 
     try {
       await this._checkConnection();
