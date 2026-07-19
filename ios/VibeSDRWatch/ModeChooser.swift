@@ -75,6 +75,37 @@ final class PhonePresence: ObservableObject {
 }
 
 extension PhonePresence {
+  /// Is the phone **actively running a server**, as opposed to merely being open?
+  ///
+  /// ★ THE TWO ARE DIFFERENT, and conflating them is the bug (Stuart, build 70): switching to
+  ///   Companion always landed on the servers list, even when the phone was sitting on a live
+  ///   waterfall. The rule he wants:
+  ///
+  ///     phone shut, or open with NO server   ->  servers list (there is nothing to show)
+  ///     phone open AND running a server      ->  straight into that view, no list in the way
+  ///
+  /// ROWS ARE THE PROOF. A `state` frame only says the phone is on its SDR screen — which it also
+  /// is while disconnected or failing. A row means a server is actually delivering a waterfall
+  /// right now, which is exactly the condition for dropping the user into it.
+  ///
+  /// ★ Note the order: `cmd:need` FIRST. Standalone told the phone to stop sending
+  ///   (`cmd:stop`), so without resuming we would be listening to a silence we caused ourselves
+  ///   and would always conclude "no server".
+  func probeSession() async -> Bool {
+    let link = WatchLink.shared
+    link.activate()
+    link.requestMissing()
+
+    let before = link.rowsPushed
+    let clock = ContinuousClock()
+    let start = clock.now
+    while clock.now - start < .milliseconds(2000) {
+      if link.rowsPushed > before { return true }
+      try? await Task.sleep(for: .milliseconds(100))
+    }
+    return false
+  }
+
   /// Keep `phoneActive` live while a screen that offers the mode toggle is on show.
   ///
   /// The toggle must EXIST only when an iPhone is actually there (§"the mode toggle"), and that can

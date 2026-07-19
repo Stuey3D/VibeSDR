@@ -136,6 +136,9 @@ struct VibeSDRJrApp: App {
   /// Which device the servers screen connects. Survives leaving a session, so coming back to the
   /// picker keeps the mode you were in rather than silently reverting to Standalone.
   @State private var pickerMode: PickerMode = .standalone
+  /// Asking the phone whether it has a live server, so we know whether to land on its waterfall or
+  /// on the servers list. Brief, and only when entering Companion.
+  @State private var probingSession = false
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
   /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
   @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
@@ -152,21 +155,32 @@ struct VibeSDRJrApp: App {
             ModeProbeView()
               .task {
                 await presence.decide()
-                // Phone app open and in use → straight into Companion, no chooser. This is the
-                // common case for anyone who has just been using the phone app.
+                // Phone app open and in use → Companion, no chooser. But OPEN is not the same as
+                // RUNNING A SERVER: if it has no live session there is no waterfall to show, so
+                // land on the servers list instead of an empty screen.
                 if presence.phoneActive {
                   pickerMode = .companion
-                  link.startPhoneControl()
                   modePicked = true
+                  if await presence.probeSession() { link.startPhoneControl() }
                 }
               }
           } else {
             ModeChooserView(
-              onCompanion: { pickerMode = .companion; link.startPhoneControl(); modePicked = true },
+              // Same rule from the chooser: straight to the phone's session if it has one,
+              // otherwise its servers list.
+              onCompanion: {
+                pickerMode = .companion
+                modePicked = true
+                Task { if await presence.probeSession() { link.startPhoneControl() } }
+              },
               // Standalone lands on the servers screen — `serverName` stays empty, so the picker
               // below is what shows next.
               onStandalone: { modePicked = true })
           }
+        } else if probingSession {
+          // Asking the phone whether it has a live server. Without this the toggle looks frozen for
+          // up to 2s, and then the screen changes on its own — which reads as a glitch.
+          ModeProbeView()
         } else if link.serverName.isEmpty {
           // Instance picker first — pick a server, THEN the receiver connects to it.
           InstancePickerView(
@@ -186,8 +200,23 @@ struct VibeSDRJrApp: App {
             // Leaving Companion also has to tear the phone link down, or its rows keep landing in
             // the buffer a direct session is about to start drawing into.
             onToggleMode: {
-              pickerMode = pickerMode.toggled
-              if pickerMode == .standalone { WatchLink.shared.detach() }
+              if pickerMode == .companion {
+                // -> Standalone. Stop the phone streaming at a watch that is about to run its own
+                //    receiver; the list below now connects us directly.
+                pickerMode = .standalone
+                WatchLink.shared.detach()
+                return
+              }
+              // -> Companion. If the phone is already running a server, go STRAIGHT to it: making
+              //    the user pick from a list to reach the session they can see on their phone is
+              //    the bug Stuart hit. Only when there is nothing to show do we stay on the list.
+              pickerMode = .companion
+              probingSession = true
+              Task {
+                let live = await presence.probeSession()
+                probingSession = false
+                if live { link.startPhoneControl() }
+              }
             })
           .environmentObject(favs)
           .environmentObject(presence)
