@@ -42,8 +42,11 @@ private func haversineKm(_ a: CLLocationCoordinate2D, _ blat: Double, _ blon: Do
 /// their protocol lands in the spike.
 struct InstancePickerView: View {
   @EnvironmentObject var favs: FavStore
+  @EnvironmentObject var presence: PhonePresence
   @StateObject private var loc = LocationProvider()
   let onConnect: (SDRServer) -> Void
+  /// Switch to Companion mode. nil = this screen is not offering the choice.
+  var onCompanion: (() -> Void)? = nil
 
   private static let amber = Color(red: 0xff/255, green: 0xaa/255, blue: 0x00/255)
   private static let cream = Color(red: 0xf5/255, green: 0xe6/255, blue: 0xc8/255)
@@ -61,12 +64,16 @@ struct InstancePickerView: View {
 
   var body: some View {
     List {
+      modeToggleSection      // only when an iPhone is actually there — see below
       discoveredSection      // your own local servers first — the fastest, highest-quality link
       favouritesSection
       directoriesSection
       customSection
     }
     .listStyle(.carousel)
+    // The toggle must appear and disappear with the phone, so keep asking while this screen is up.
+    .onAppear { presence.startPolling() }
+    .onDisappear { presence.stopPolling() }
     // PLAIN STRING, deliberately. The ViewBuilder form of navigationTitle lets you style the
     // text — but it also demotes it out of the LARGE left-aligned wordmark into the small
     // inline slot beside the clock. A coloured "Jr" is not worth losing the wordmark for.
@@ -78,6 +85,40 @@ struct InstancePickerView: View {
       favs.addCustom(name: name, url: url, type: type)
     } }
     .sheet(item: $pinFor) { ad in vibePinSheet(ad) }
+  }
+
+  // ── Mode toggle ──────────────────────────────────────────────────────────────────
+  /// ★ EXISTS ONLY WHEN AN IPHONE IS DETECTED. No iPhone, no button at all — not a greyed-out one.
+  ///   A disabled control still says "this app has a mode you can't reach", which on a watch with
+  ///   no phone in range is a puzzle rather than information.
+  ///
+  /// Reachable at any time, on purpose: running two receivers at once — the phone on one server and
+  /// the watch standalone on another — is a real thing people do, so switching cannot be a
+  /// launch-only decision.
+  ///
+  /// No warning on THIS direction. Nothing is running to interrupt: the picker only appears when
+  /// the watch has no session of its own. Leaving Companion is the direction that needs the warning
+  /// (the phone app keeps running and keeps its server, and on a shared receiver its slot) — that
+  /// belongs where Companion is exited, not here.
+  @ViewBuilder private var modeToggleSection: some View {
+    if let onCompanion, presence.phoneActive {
+      Section {
+        Button(action: onCompanion) {
+          HStack(spacing: 7) {
+            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+              .font(.system(size: 15))
+              .foregroundStyle(.cyan)
+            VStack(alignment: .leading, spacing: 1) {
+              Text("Companion mode").font(.system(size: 13, weight: .semibold))
+              Text("control the iPhone app")
+                .font(.system(size: 10)).foregroundStyle(Self.dim)
+            }
+            Spacer(minLength: 0)
+          }
+        }
+        .listItemTint(.cyan.opacity(0.18))
+      }
+    }
   }
 
   // ── Discovered VibeServers (mDNS `_vibesdr._tcp` on the LAN) ─────────────────────

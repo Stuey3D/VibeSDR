@@ -162,10 +162,13 @@ struct VibeSDRJrApp: App {
           }
         } else if link.serverName.isEmpty {
           // Instance picker first — pick a server, THEN the receiver connects to it.
-          InstancePickerView { server in
-            link.start(url: server.url, host: server.host, type: server.serverType, name: server.name, pin: server.pin)
-          }
+          InstancePickerView(
+            onConnect: { server in
+              link.start(url: server.url, host: server.host, type: server.serverType, name: server.name, pin: server.pin)
+            },
+            onCompanion: { link.startPhoneControl() })
           .environmentObject(favs)
+          .environmentObject(presence)
         } else {
           // Route by screen, like the companion: DAB is a service LIST, not a waterfall band.
           switch link.screen {

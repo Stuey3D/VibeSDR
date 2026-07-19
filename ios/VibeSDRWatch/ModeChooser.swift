@@ -14,9 +14,10 @@ import WatchConnectivity
 @MainActor
 final class PhonePresence: ObservableObject {
   /// A state frame arrived, so the phone app is genuinely OPEN AND IN USE.
-  @Published private(set) var phoneActive = false
+  @Published fileprivate(set) var phoneActive = false
   /// The wait is over — decided one way or the other.
   @Published private(set) var settled = false
+  fileprivate var poller: Task<Void, Never>?
 
   /// How long to listen before concluding the phone is shut.
   ///
@@ -31,22 +32,73 @@ final class PhonePresence: ObservableObject {
   ///   wrong. Chosen with Stuart, 2026-07-19.
   private static let window: Duration = .milliseconds(1500)
 
-  /// ★ NOT `WCSession.isReachable`. Reachability is true whenever the watch COULD reach the phone —
-  ///   and the watch can WAKE the iOS app in the background to make it so. Treating that as "the
-  ///   app is open" would mean the chooser essentially never appears, and choosing Companion would
-  ///   silently wake an app the user had deliberately closed. "In use" is evidenced by the phone
-  ///   actively SENDING, and nothing else. We never reach for it to find out.
+  /// ★ NOT `WCSession.isReachable`. Reachability is true whenever the watch COULD reach the phone,
+  ///   and it stays true for an app that is merely wakeable. Treating it as "open" would mean the
+  ///   chooser essentially never appeared.
+  ///
+  /// ★★ PASSIVE LISTENING DOES NOT WORK, and this is why the first attempt always showed the
+  ///    chooser (field-caught by Stuart on build 60). The phone sends `state` only from the SDR
+  ///    screen, and only when something CHANGES — mode/step, or throttled while the frequency is
+  ///    moving. A phone sitting open on a frequency, not being touched, sends nothing at all. So
+  ///    "no state frame in 1.5s" was never evidence of a closed app; it was the normal idle case.
+  ///
+  ///    So we ASK. The phone answers every ping with state — that handshake already exists
+  ///    precisely so the watch can tell "phone dead" from "phone fine, rows lost"
+  ///    (`SDRScreen.tsx`: "Answer EVERY ping with state").
+  ///
+  ///    Doesn't that violate "never wake the phone to find out if it was awake"? No — because of
+  ///    WHAT can answer. `sendState` is driven by the SDR screen's ping handler, which exists only
+  ///    while that screen is mounted and running. A terminated app woken in the background comes up
+  ///    without it and cannot reply, so the silence still reads as "not in use" and the chooser
+  ///    still appears. The REPLY is the evidence, not the delivery.
   func decide() async {
     let link = WatchLink.shared
     link.activate()
 
     let clock = ContinuousClock()
     let start = clock.now
+    // Activation is asynchronous; a ping fired before the session is up is simply dropped, so
+    // repeat it rather than gambling the whole decision on one shot landing at the right moment.
+    var nextPing = start
     while clock.now - start < Self.window {
-      if link.lastStateAt != nil { phoneActive = true; break }
+      // Rows count too: a phone streaming a waterfall at us is unambiguously in use, and on a busy
+      // link a row often lands before the state reply does.
+      if link.lastStateAt != nil || link.lastRowAt != nil { phoneActive = true; break }
+      if clock.now >= nextPing {
+        link.ping()
+        nextPing = clock.now.advanced(by: .milliseconds(500))
+      }
       try? await Task.sleep(for: .milliseconds(100))
     }
     settled = true
+  }
+}
+
+extension PhonePresence {
+  /// Keep `phoneActive` live while a screen that offers the mode toggle is on show.
+  ///
+  /// The toggle must EXIST only when an iPhone is actually there (§"the mode toggle"), and that can
+  /// change under us — the phone gets closed, or walks out of range in a pocket. So we re-ask on a
+  /// slow cadence rather than trusting the launch answer forever. Same evidence as `decide()`: a
+  /// reply, not a reachability flag.
+  func startPolling() {
+    guard poller == nil else { return }
+    poller = Task { [weak self] in
+      while !Task.isCancelled {
+        guard let self else { return }
+        let link = WatchLink.shared
+        let fresh = [link.lastStateAt, link.lastRowAt].compactMap { $0 }
+          .contains { Date().timeIntervalSince($0) < 8 }
+        if self.phoneActive != fresh { self.phoneActive = fresh }
+        link.ping()
+        try? await Task.sleep(for: .seconds(3))
+      }
+    }
+  }
+
+  func stopPolling() {
+    poller?.cancel()
+    poller = nil
   }
 }
 
