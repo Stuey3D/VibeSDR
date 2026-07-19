@@ -3,9 +3,9 @@
 
 WHY THIS EXISTS
     `expo prebuild` regenerates project.pbxproj from scratch and wipes hand-added targets.
-    Today that costs an afternoon of clicking in Xcode. After the watch-app merge that target
-    holds the ENTIRE Jr codebase (~32 Swift files + libopus) instead of a thin companion, so
-    the same accident becomes a day's work. This turns it back into `python3 tools/inject_watch_target.py`.
+    While the watch target was a thin companion that cost an afternoon in Xcode. It now holds
+    the ENTIRE Jr codebase — 32 Swift files, libopus, a bridging header — so the same accident
+    would cost a day. This turns it back into one command.
 
     It is the shipping-project counterpart of spike/WristSDR/tools/genproj.py, which proved the
     technique on the standalone spike. genproj.py's docstring says the spike was kept in its own
@@ -13,15 +13,15 @@ WHY THIS EXISTS
     separation has expired — but the risk has not, hence this.
 
 IDEMPOTENT
-    Strips every object owning a reserved id before re-inserting, so running it twice is a no-op
-    and running it on an already-good project is safe.
+    Strips every object in the reserved id space before re-inserting, so running it twice is a
+    no-op and stale entries from an earlier file list cannot survive.
 
-SCOPE
-    The watch TARGET only (ids AA000002…CC*/DA*). The phone-side WCSession native module
-    (AA000002…EE*, in the main app target) and the other hand-added iOS sources (AA000001…)
-    are also prebuild-fragile and want the same treatment — deliberately not done here, so this
-    can be proven against the shipping project one target at a time.
+RESERVED ID SPACE
+    AA000002000000000000 + CCxx (target structure), Dxxx (file refs), Fxxx (build files).
+    ★ EExx in the same prefix belongs to the PHONE-side WCSession module in the main app target
+      and is deliberately NOT touched — see reserved_re().
 """
+import hashlib
 import re
 import subprocess
 import sys
@@ -34,17 +34,20 @@ NAME = "VibeSDRWatch"
 BUNDLE = "com.vibesdr.app.watchkitapp"  # ★ MUST NOT CHANGE — users have this installed. A new
                                         # id ships a SECOND app instead of an update.
 TEAM = "6PV2X6THHM"
-DEPLOYMENT_TARGET = "10.0"
 
-# The main app target and project object we splice into. These ids come from Expo's own
-# template and have been stable across every prebuild so far; assert rather than assume.
+# ★ 26.0, not the companion's 10.0. Standalone needs modern watchOS, and libopus is arm64-only
+#   (Series 9+). Widening Phone Control back to Series 4-8 is a SEPARATE step: exclude Opus from
+#   an arm64_32 slice and gate the mode on capability. Until then the merged app is S9+ only,
+#   which is a REGRESSION in reach versus the shipped companion — deliberate, and temporary.
+DEPLOYMENT_TARGET = "26.0"
+ARCHS = "arm64"
+
+# Ids from Expo's own template. Stable across every prebuild so far; asserted, not assumed.
 APP_TARGET = "13B07F861A680F5B00A75B9A"
 PROJECT_OBJ = "83CBB9F71A601CBA00E9B192"
 APP_PRODUCT = "13B07F961A680F5B00A75B9A"  # VibeSDR.app, in the Products group
 APP_GROUP = "13B07FAE1A68108700A75B9A"    # the VibeSDR group, in the main group
 
-# ── Reserved ids. Hand-assigned rather than hashed so a regenerated project diffs cleanly
-#    against the hand-built one it replaces, and so the prefix stays greppable.
 P = "AA000002000000000000"
 TARGET = P + "CC01"
 PRODUCT_REF = P + "CC02"
@@ -59,54 +62,59 @@ PHASE_EMBED = P + "CC0A"
 PROXY = P + "CC0B"
 DEPENDENCY = P + "CC0C"
 EMBED_BUILD = P + "CC0D"
+OPUS_LIB_REF = P + "CC0E"
+OPUS_LIB_BUILD = P + "CC0F"
+LOGOS_GROUP = P + "CC10"
+OPUS_GROUP = P + "CC11"
 
-# Sources, in build order. `path` is relative to the VibeSDRWatch group.
-#   ★ After the merge this list becomes the spike's 32 files — that is the whole point of
-#     driving the target from a list rather than from Xcode's UI.
-SOURCES = [
-    ("VibeSDRWatchApp.swift", "DA01"),
-    ("ContentView.swift", "DA04"),
-    ("NumpadView.swift", "DA07"),
-    ("FmdxView.swift", "DA09"),
-    ("DabView.swift", "DA0A"),
-    ("AircraftView.swift", "DA0B"),
-    ("ControlMenu.swift", "DA08"),
-    ("WatchLink.swift", "DA02"),
-    ("CpuMeter.swift", "DA0C"),
-    ("WaterfallBuffer.swift", "DA03"),
-]
-RESOURCES = [("Assets.xcassets", "DA05", "folder.assetcatalog")]
-PLAIN = [("Info.plist", "DA06", "text.plist.xml")]  # in the group, not in a build phase
+# ── Sources: the whole of VibeSDR Jr. Discovered from disk rather than hand-listed, because the
+#    merged target IS the app now and a maintained list would drift the first time someone adds
+#    a file — the same class of breakage this script exists to prevent.
+#
+#    WatchLink.swift is DELIBERATELY EXCLUDED. It is the V9 companion's WCSession transport —
+#    the one thing the companion contributes — and it becomes `PhoneClient: SDRClient`. It is
+#    kept on disk as the reference for that work but does not compile today, because it drove
+#    the companion UI, which no longer exists.
+NOT_YET_BUILT = {"WatchLink.swift"}
 
-
-def build_file_id(ref):
-    """DA0x file ref → DA1x build-file id. Keeps the two visibly paired when grepping."""
-    return P + "DA1" + ref[3]
-
-
-def reserved_ids():
-    ids = {TARGET, PRODUCT_REF, SRC_GROUP, PHASE_SRC, PHASE_RES, PHASE_FRW, CFG_LIST,
-           CFG_DBG, CFG_REL, PHASE_EMBED, PROXY, DEPENDENCY, EMBED_BUILD}
-    for entry in SOURCES + RESOURCES + PLAIN:
-        ref = entry[1]
-        ids.add(P + ref)
-        ids.add(build_file_id(ref))
-    return ids
+WATCH_DIR = ROOT / "ios" / NAME
+SOURCES = sorted(p.name for p in WATCH_DIR.glob("*.swift") if p.name not in NOT_YET_BUILT)
+LOGOS = sorted(p.name for p in (WATCH_DIR / "Logos").glob("*.png"))
+RESOURCES = [("Assets.xcassets", "folder.assetcatalog", None)] + \
+            [(n, "image.png", "Logos") for n in LOGOS]
+PLAIN = [("Info.plist", "text.plist.xml", None),
+         (f"{NAME}-Bridging-Header.h", "sourcecode.c.h", None)]
 
 
-def strip(text, ids):
-    """Remove every object definition and every reference to `ids`.
+def fid(kind, name):
+    """Stable id from a name. Regenerating must not churn ids, or every diff is noise."""
+    return P + kind + hashlib.sha1(name.encode()).hexdigest()[:3].upper()
 
-    Brace-counted rather than regexed, because multi-line objects nest (buildSettings) and a
-    lazy regex would stop at the first inner `};` and silently corrupt the project.
+
+def ref_id(name):
+    return fid("D", name)
+
+
+def build_id(name):
+    return fid("F", name)
+
+
+def reserved_re():
+    """The id space this script owns. EExx (phone-side module) is excluded on purpose."""
+    return re.compile(P + r"(?:CC[0-9A-F]{2}|D[0-9A-F]{3}|F[0-9A-F]{3})\b")
+
+
+def strip(text):
+    """Remove every object definition and reference in the reserved space.
+
+    Brace-counted rather than regexed: objects nest (buildSettings), and a lazy regex would
+    stop at the first inner `};` and silently corrupt the project.
     """
-    out, lines, i = [], text.split("\n"), 0
-    id_re = re.compile("|".join(sorted(ids)))
+    out, lines, i, rx = [], text.split("\n"), 0, reserved_re()
     while i < len(lines):
         line = lines[i]
-        if id_re.search(line):
-            # A definition opens a block; a reference is a single line we simply drop.
-            if line.rstrip().endswith("{"):
+        if rx.search(line):
+            if line.rstrip().endswith("{"):  # a definition opens a block
                 depth = 0
                 while i < len(lines):
                     depth += lines[i].count("{") - lines[i].count("}")
@@ -114,7 +122,7 @@ def strip(text, ids):
                     if depth <= 0:
                         break
                 continue
-            i += 1
+            i += 1  # a bare reference is one line
             continue
         out.append(line)
         i += 1
@@ -122,36 +130,43 @@ def strip(text, ids):
 
 
 def after(text, anchor, addition):
-    """Insert `addition` immediately after the line containing `anchor`."""
-    idx = text.index(anchor)
-    eol = text.index("\n", idx) + 1
+    eol = text.index("\n", text.index(anchor)) + 1
     return text[:eol] + addition + text[eol:]
+
+
+def wire(text, obj_id, key, addition):
+    """Append a line to the `key = (...)` list inside object `obj_id`."""
+    seg = text.index(f"{key} = (", text.index(f"{obj_id} /* "))
+    close = text.index("\t\t\t);", seg)
+    return text[:close] + addition + "\n" + text[close:]
 
 
 def generate(text):
     T = "\t\t"
+    all_files = [(n, "sourcecode.swift", None) for n in SOURCES] + RESOURCES + PLAIN
 
     # ── PBXBuildFile
     bf = [f"{T}{EMBED_BUILD} /* {NAME}.app in Embed Watch Content */ = {{isa = PBXBuildFile; "
-          f"fileRef = {PRODUCT_REF} /* {NAME}.app */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};"]
-    for name, ref in SOURCES:
-        bf.append(f"{T}{build_file_id(ref)} /* {name} in Sources */ = {{isa = PBXBuildFile; "
-                  f"fileRef = {P}{ref} /* {name} */; }};")
-    for name, ref, _ in RESOURCES:
-        bf.append(f"{T}{build_file_id(ref)} /* {name} in Resources */ = {{isa = PBXBuildFile; "
-                  f"fileRef = {P}{ref} /* {name} */; }};")
+          f"fileRef = {PRODUCT_REF} /* {NAME}.app */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};",
+          f"{T}{OPUS_LIB_BUILD} /* libopus.a in Frameworks */ = {{isa = PBXBuildFile; "
+          f"fileRef = {OPUS_LIB_REF} /* libopus.a */; }};"]
+    for n in SOURCES:
+        bf.append(f"{T}{build_id(n)} /* {n} in Sources */ = {{isa = PBXBuildFile; "
+                  f"fileRef = {ref_id(n)} /* {n} */; }};")
+    for n, _, _ in RESOURCES:
+        bf.append(f"{T}{build_id(n)} /* {n} in Resources */ = {{isa = PBXBuildFile; "
+                  f"fileRef = {ref_id(n)} /* {n} */; }};")
     text = after(text, "/* Begin PBXBuildFile section */", "\n".join(bf) + "\n")
 
     # ── PBXFileReference
     fr = [f"{T}{PRODUCT_REF} /* {NAME}.app */ = {{isa = PBXFileReference; "
           f"explicitFileType = wrapper.application; includeInIndex = 0; path = {NAME}.app; "
-          f"sourceTree = BUILT_PRODUCTS_DIR; }};"]
-    for name, ref in SOURCES:
-        fr.append(f"{T}{P}{ref} /* {name} */ = {{isa = PBXFileReference; "
-                  f"lastKnownFileType = sourcecode.swift; path = {name}; sourceTree = \"<group>\"; }};")
-    for name, ref, kind in RESOURCES + PLAIN:
-        fr.append(f"{T}{P}{ref} /* {name} */ = {{isa = PBXFileReference; "
-                  f"lastKnownFileType = {kind}; path = {name}; sourceTree = \"<group>\"; }};")
+          f"sourceTree = BUILT_PRODUCTS_DIR; }};",
+          f"{T}{OPUS_LIB_REF} /* libopus.a */ = {{isa = PBXFileReference; "
+          f"lastKnownFileType = archive.ar; path = libopus.a; sourceTree = \"<group>\"; }};"]
+    for n, kind, _ in all_files:
+        fr.append(f"{T}{ref_id(n)} /* {n} */ = {{isa = PBXFileReference; "
+                  f"lastKnownFileType = {kind}; path = {n}; sourceTree = \"<group>\"; }};")
     text = after(text, "/* Begin PBXFileReference section */", "\n".join(fr) + "\n")
 
     # ── Embed Watch Content, on the MAIN app target. Without this the watch app builds but
@@ -168,30 +183,42 @@ def generate(text):
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
 """
-    if "/* Begin PBXCopyFilesBuildPhase section */" in text:
-        text = after(text, "/* Begin PBXCopyFilesBuildPhase section */", embed)
-    else:
-        text = after(text, "/* End PBXFrameworksBuildPhase section */",
-                     "\n/* Begin PBXCopyFilesBuildPhase section */\n" + embed
-                     + "/* End PBXCopyFilesBuildPhase section */\n")
+    text = section(text, "PBXCopyFilesBuildPhase", embed, "/* End PBXFrameworksBuildPhase section */")
 
-    # ── Group
-    children = "\n".join(f"\t\t\t\t{P}{ref} /* {name} */,"
-                         for name, ref in SOURCES) + "\n" + "\n".join(
-        f"\t\t\t\t{P}{ref} /* {name} */," for name, ref, _ in RESOURCES + PLAIN)
+    # ── Groups
+    top = [n for n, _, sub in all_files if sub is None]
+    children = "\n".join(f"\t\t\t\t{ref_id(n)} /* {n} */," for n in top)
     group = f"""{T}{SRC_GROUP} /* {NAME} */ = {{
 			isa = PBXGroup;
 			children = (
 {children}
+				{LOGOS_GROUP} /* Logos */,
+				{OPUS_GROUP} /* opus */,
 			);
 			path = {NAME};
+			sourceTree = "<group>";
+		}};
+{T}{LOGOS_GROUP} /* Logos */ = {{
+			isa = PBXGroup;
+			children = (
+{chr(10).join(f"				{ref_id(n)} /* {n} */," for n in LOGOS)}
+			);
+			path = Logos;
+			sourceTree = "<group>";
+		}};
+{T}{OPUS_GROUP} /* opus */ = {{
+			isa = PBXGroup;
+			children = (
+				{OPUS_LIB_REF} /* libopus.a */,
+			);
+			path = opus;
 			sourceTree = "<group>";
 		}};
 """
     text = after(text, "/* Begin PBXGroup section */", group)
 
     # ── Native target
-    target = f"""{T}{TARGET} /* {NAME} */ = {{
+    text = after(text, "/* Begin PBXNativeTarget section */", f"""{T}{TARGET} /* {NAME} */ = {{
 			isa = PBXNativeTarget;
 			buildConfigurationList = {CFG_LIST} /* Build configuration list for PBXNativeTarget "{NAME}" */;
 			buildPhases = (
@@ -208,42 +235,27 @@ def generate(text):
 			productReference = {PRODUCT_REF} /* {NAME}.app */;
 			productType = "com.apple.product-type.application";
 		}};
-"""
-    text = after(text, "/* Begin PBXNativeTarget section */", target)
+""")
 
     # ── Dependency, so building the app builds the watch app first
-    proxy = f"""{T}{PROXY} /* PBXContainerItemProxy */ = {{
+    text = section(text, "PBXContainerItemProxy", f"""{T}{PROXY} /* PBXContainerItemProxy */ = {{
 			isa = PBXContainerItemProxy;
 			containerPortal = {PROJECT_OBJ} /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = {TARGET};
 			remoteInfo = {NAME};
 		}};
-"""
-    dep = f"""{T}{DEPENDENCY} /* PBXTargetDependency */ = {{
+""", "/* End PBXNativeTarget section */")
+    text = section(text, "PBXTargetDependency", f"""{T}{DEPENDENCY} /* PBXTargetDependency */ = {{
 			isa = PBXTargetDependency;
 			target = {TARGET} /* {NAME} */;
 			targetProxy = {PROXY} /* PBXContainerItemProxy */;
 		}};
-"""
-    if "/* Begin PBXContainerItemProxy section */" in text:
-        text = after(text, "/* Begin PBXContainerItemProxy section */", proxy)
-    else:
-        text = after(text, "/* End PBXNativeTarget section */",
-                     "\n/* Begin PBXContainerItemProxy section */\n" + proxy
-                     + "/* End PBXContainerItemProxy section */\n")
-    if "/* Begin PBXTargetDependency section */" in text:
-        text = after(text, "/* Begin PBXTargetDependency section */", dep)
-    else:
-        text = after(text, "/* End PBXContainerItemProxy section */",
-                     "\n/* Begin PBXTargetDependency section */\n" + dep
-                     + "/* End PBXTargetDependency section */\n")
+""", "/* End PBXContainerItemProxy section */")
 
     # ── Build phases
-    src_files = "\n".join(f"\t\t\t\t{build_file_id(ref)} /* {name} in Sources */,"
-                          for name, ref in SOURCES)
-    res_files = "\n".join(f"\t\t\t\t{build_file_id(ref)} /* {name} in Resources */,"
-                          for name, ref, _ in RESOURCES)
+    src_files = "\n".join(f"\t\t\t\t{build_id(n)} /* {n} in Sources */," for n in SOURCES)
+    res_files = "\n".join(f"\t\t\t\t{build_id(n)} /* {n} in Resources */," for n, _, _ in RESOURCES)
     text = after(text, "/* Begin PBXSourcesBuildPhase section */", f"""{T}{PHASE_SRC} /* Sources */ = {{
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -266,14 +278,14 @@ def generate(text):
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				{OPUS_LIB_BUILD} /* libopus.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
 """)
 
-    # ── Build configurations. CURRENT_PROJECT_VERSION and MARKETING_VERSION are read from the
-    #    main app target rather than hardcoded, so a version bump can never leave the watch
-    #    behind — a mismatch there is rejected at submission.
+    # ── Build configurations. Versions are READ FROM the main app target rather than hardcoded,
+    #    so a version bump can never leave the watch behind — a mismatch is rejected at submission.
     version = re.search(r"CURRENT_PROJECT_VERSION = (\d+);", text).group(1)
     marketing = re.search(r"MARKETING_VERSION = ([\d.]+);", text).group(1)
 
@@ -281,18 +293,26 @@ def generate(text):
         return f"""{T}{cid} /* {name} */ = {{
 			isa = XCBuildConfiguration;
 			buildSettings = {{
+				ARCHS = {ARCHS};
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = {version};
 				DEVELOPMENT_TEAM = {TEAM};
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/{NAME}/opus/include/opus",
+				);
 				INFOPLIST_FILE = {NAME}/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(inherited)";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/{NAME}/opus",
+				);
 				MARKETING_VERSION = {marketing};
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
@@ -301,6 +321,7 @@ def generate(text):
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_OBJC_BRIDGING_HEADER = "{NAME}/{NAME}-Bridging-Header.h";
 {extra}				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = {DEPLOYMENT_TARGET};
@@ -310,7 +331,7 @@ def generate(text):
 """
     text = after(text, "/* Begin XCBuildConfiguration section */",
                  cfg(CFG_DBG, "Debug", '\t\t\t\tSWIFT_OPTIMIZATION_LEVEL = "-Onone";\n')
-                 + cfg(CFG_REL, "Release", ""))
+                 + cfg(CFG_REL, "Release", '\t\t\t\tSWIFT_COMPILATION_MODE = wholemodule;\n'))
     text = after(text, "/* Begin XCConfigurationList section */",
                  f"""{T}{CFG_LIST} /* Build configuration list for PBXNativeTarget "{NAME}" */ = {{
 			isa = XCConfigurationList;
@@ -323,15 +344,13 @@ def generate(text):
 		}};
 """)
 
-    # ── Wire into the main target: embed phase, dependency, products group, target list.
+    # ── Wire into the main target and the project
     text = wire(text, APP_TARGET, "buildPhases", f"\t\t\t\t{PHASE_EMBED} /* Embed Watch Content */,")
     text = wire(text, APP_TARGET, "dependencies", f"\t\t\t\t{DEPENDENCY} /* PBXTargetDependency */,")
-    # TargetAttributes. Xcode adds this itself the moment you open the project, so a missing
-    # entry produces a spurious diff on the next person's machine rather than a build failure.
-    text = insert_after_line(text, "TargetAttributes = {", f"""\t\t\t\t\t{TARGET} = {{
-						CreatedOnToolsVersion = 26.0;
-					}};""")
-
+    # Xcode writes TargetAttributes itself on first open; without it the next person gets a
+    # spurious diff rather than a build failure.
+    text = insert_after_line(text, "TargetAttributes = {",
+                             f"\t\t\t\t\t{TARGET} = {{\n\t\t\t\t\t\tCreatedOnToolsVersion = 26.0;\n\t\t\t\t\t}};")
     text = insert_after_line(text, f"{APP_PRODUCT} /* VibeSDR.app */,",
                              f"\t\t\t\t{PRODUCT_REF} /* {NAME}.app */,")
     text = insert_after_line(text, f"{APP_GROUP} /* VibeSDR */,",
@@ -341,18 +360,18 @@ def generate(text):
     return text
 
 
+def section(text, kind, body, fallback_anchor):
+    """Insert into an existing pbxproj section, creating it if prebuild left it out."""
+    begin = f"/* Begin {kind} section */"
+    if begin in text:
+        return after(text, begin, body)
+    return after(text, fallback_anchor,
+                 f"\n{begin}\n{body}/* End {kind} section */\n")
+
+
 def insert_after_line(text, anchor_line, addition):
-    idx = text.index(anchor_line)
-    eol = text.index("\n", idx) + 1
+    eol = text.index("\n", text.index(anchor_line)) + 1
     return text[:eol] + addition + "\n" + text[eol:]
-
-
-def wire(text, obj_id, key, addition):
-    """Append a line to the `key = (...)` list inside object `obj_id`."""
-    start = text.index(f"{obj_id} /* ")
-    seg = text.index(f"{key} = (", start)
-    close = text.index("\t\t\t);", seg)
-    return text[:close] + addition + "\n" + text[close:]
 
 
 def main():
@@ -361,10 +380,16 @@ def main():
         if anchor not in text:
             sys.exit(f"error: {what} id {anchor} not found — Expo's template ids have moved, "
                      f"update the constants at the top of this script")
-    out = generate(strip(text, reserved_ids()))
-    PBXPROJ.write_text(out)
-    print(f"injected {NAME} target ({len(SOURCES)} sources) into {PBXPROJ.relative_to(ROOT)}")
-    # Proof, not faith: the project must still parse and still list both targets.
+    ids = [ref_id(n) for n, _, _ in
+           [(s, None, None) for s in SOURCES] + RESOURCES + PLAIN]
+    if len(set(ids)) != len(ids):
+        sys.exit("error: hashed id collision — widen the hash slice in fid()")
+
+    PBXPROJ.write_text(generate(strip(text)))
+    print(f"injected {NAME}: {len(SOURCES)} sources, {len(RESOURCES)} resources, libopus")
+    if NOT_YET_BUILT:
+        print(f"  not built (by design): {', '.join(sorted(NOT_YET_BUILT))}")
+
     r = subprocess.run(["xcodebuild", "-list", "-project", str(PBXPROJ.parent)],
                        capture_output=True, text=True)
     if r.returncode != 0 or NAME not in r.stdout:

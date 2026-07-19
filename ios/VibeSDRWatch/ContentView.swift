@@ -49,6 +49,66 @@ enum LinkHint: Equatable {
   case indeterminate
 }
 
+/// Server-link health for the status glyph. Piggybacks on the hint machinery (below) so the
+/// pill and the glyph can never disagree — one set of thresholds, one debounce.
+enum LinkQuality {
+  case good, degraded, poor, down
+  /// Ordering for "take the worse of two signals" — see linkQuality.
+  var severity: Int {
+    switch self {
+    case .good: return 0; case .degraded: return 1; case .poor: return 2; case .down: return 3
+    }
+  }
+}
+
+/// The phone app's "instance" icon — three connected dots in a triangle — reproduced 1:1 as a
+/// Shape so the watch's link-quality glyph is pixel-identical to the phone's (no SF Symbol
+/// matches it). Geometry from SectionIcon.tsx (viewBox 0 0 24 24), scaled to the frame.
+struct InstanceNodes: Shape {
+  func path(in r: CGRect) -> Path {
+    let s = min(r.width, r.height) / 24
+    func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }
+    var p = Path()
+    p.move(to: P(8, 7));     p.addLine(to: P(16, 7))       // top edge
+    p.move(to: P(7.2, 8.7)); p.addLine(to: P(10.8, 16.3))  // left diagonal
+    p.move(to: P(16.8, 8.7)); p.addLine(to: P(13.2, 16.3)) // right diagonal
+    for c in [P(6, 7), P(18, 7), P(12, 18)] {              // nodes
+      p.addEllipse(in: CGRect(x: c.x - 2 * s, y: c.y - 2 * s, width: 4 * s, height: 4 * s))
+    }
+    return p
+  }
+}
+
+/// Owns the 20fps waterfall repaint clock in ITS OWN view, so bumping the frame counter
+/// invalidates only this Canvas — not the whole ContentView body (ticker, status glyphs, band
+/// row, hint logic), which previously rebuilt 20x/sec and was the CPU cost that grew with every
+/// piece of chrome added. The drawing itself stays on ContentView (it reads only `link`, a
+/// reference type) and is handed in as `draw`; this view just clocks the repaints.
+private struct WaterfallCanvas: View {
+  @Binding var crownMode: CrownMode
+  let crownUsedAt: Date
+  let idleTimeout: TimeInterval
+  let draw: (GraphicsContext, CGSize) -> Void
+
+  @State private var frame = 0
+  private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
+
+  var body: some View {
+    Canvas { ctx, size in
+      _ = frame                     // read so SwiftUI repaints on each tick
+      draw(ctx, size)
+    }
+    .ignoresSafeArea()
+    .onReceive(driver) { _ in
+      frame &+= 1
+      // Lapse back to TUNE once the crown has been left alone — on the clock we already run.
+      if crownMode != .tune, Date().timeIntervalSince(crownUsedAt) > idleTimeout {
+        crownMode = .tune
+      }
+    }
+  }
+}
+
 /// Spectrum screen: full-bleed waterfall with chrome FLOATING over it.
 ///
 /// Solid bars would cut the waterfall in two and steal height at both ends, and
@@ -62,7 +122,7 @@ enum LinkHint: Equatable {
 /// every standard watch app and cannot be moved or hidden, so a frequency ticker
 /// up there would collide with it.
 struct ContentView: View {
-  @EnvironmentObject var link: WatchLink
+  @EnvironmentObject var link: SpikeLink
 
   // Developer CPU comparison badge (companion vs standalone JR). Gated by
   // CpuMeter.enabled — turn OFF before any public release.
@@ -88,6 +148,9 @@ struct ContentView: View {
 
   /// First-run coach. Persisted, so it is shown ONCE — ever, not once per session.
   @AppStorage("coachSeenSDR") private var coachSeen = false
+  /// True while the first-run coach is on screen. Gates crown focus (see .focusable below) so the
+  /// crown scrolls the coach rather than tuning behind it.
+  private var coachUp: Bool { link.everGotRow && !coachSeen }
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
 
@@ -109,13 +172,43 @@ struct ContentView: View {
   /// ANY published change repainted BOTH. The clocks simply summed (12 + 25 + rows
   /// ≈ 45 redraws/sec of everything) and CPU rose. The decoupling was imaginary;
   /// only the cost was real. Doing it properly means giving each Canvas its own
-  /// View struct observing only what it needs — not worth it while 20fps looks fine.
-  @State private var frame = 0
+  /// View struct observing only what it needs — DONE: see `WaterfallCanvas`, which owns the
+  /// frame counter so the render clock no longer invalidates this whole body.
   @State private var showNumpad = false
   @State private var showMenu = false
   /// What the crown does. Explicit and persistent — never a timed-out HUD, because
   /// on a wrist you must always know what a turn is about to do.
   @State private var crownMode: CrownMode = .tune
+  @State private var bwDismissed = false   // heavy-server advisory dismissed for this occurrence
+  @AppStorage("seenSdrTutorial") private var seenSdrTut = false
+  @State private var showSdrTut = false
+  @State private var showChat = false
+  @State private var showHardware = false
+  /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
+  /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
+  @State private var suspendWork: DispatchWorkItem?
+  /// User-selectable wrist-down spectrum timeout (seconds; 0 = Off, keep it running). Set in
+  /// the ControlMenu; the same @AppStorage key drives both.
+  @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
+
+  // ── Control lock (Walkman-style hold) ─────────────────────────────────────────
+  /// When locked, the app ignores its OWN inputs — crown (tune/zoom), the long-press menu,
+  /// and the frequency tap — so an accidental wrist-nudge can't retune. The padlock stays
+  /// tappable to unlock. OS gestures (side button, crown-press-home) are deliberately NOT
+  /// blocked. Session-only (not persisted): a fresh launch is always unlocked.
+  @State private var locked = false
+  @State private var lockPill: String? = nil
+  @State private var lockPillWork: DispatchWorkItem?
+
+  private func toggleLock() {
+    locked.toggle()
+    WKInterfaceDevice.current().play(locked ? .stop : .click)
+    lockPill = locked ? "Controls locked" : "Controls unlocked"
+    lockPillWork?.cancel()
+    let work = DispatchWorkItem { withAnimation(.easeOut(duration: 0.3)) { lockPill = nil } }
+    lockPillWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
+  }
 
   /// How far you must turn for one step. watchOS's OWN sensitivity, not a divisor of
   /// our own: it changes how many detents a rotation produces, so the HAPTIC CLICKS
@@ -181,7 +274,7 @@ struct ContentView: View {
   ///
   /// So: any turn resets the clock, and the mode only lapses once you have genuinely
   /// left it alone. Generous, because a short timeout WOULD be the HUD we rejected.
-  private static let crownIdleTimeout: TimeInterval = 30
+  private static let crownIdleTimeout: TimeInterval = 15
 
 
 
@@ -189,13 +282,40 @@ struct ContentView: View {
     ZStack {
       Color.black.ignoresSafeArea()
 
-      if link.everGotRow { waterfall } else { placeholder }
+      if link.everGotRow {
+        // The Canvas + its 20fps repaint clock live in a DEDICATED child view now, so bumping
+        // the frame counter invalidates only the waterfall — NOT the whole ContentView body
+        // (ticker, status glyphs, band row, hint logic), which used to rebuild 20x/sec and was
+        // the CPU that kept climbing as chrome was added. The drawing stays here (it only reads
+        // `link`) and is passed in as a closure.
+        WaterfallCanvas(crownMode: $crownMode, crownUsedAt: crownUsedAt,
+                        idleTimeout: Self.crownIdleTimeout) { ctx, size in
+          drawWaterfall(ctx, size)
+        }
+      } else { placeholder }
 
-      // The watch's own battery, tucked in beside the clock. A live waterfall costs the
-      // watch ~34% of a core, and this is the one screen you'd leave running on a hilltop
-      // — so the number you'd reach for is on the screen you're already looking at.
-      // pointer-events off: it must never eat a tap meant for the waterfall.
-      topStrip
+      // STATUS CLUSTER — bottom-right, a vertical pill (method above quality) on its own scrim.
+      // Method = what the watch is connected THROUGH (iPhone relay / WiFi / cellular / none);
+      // quality = how well the server link is holding. See BRIEF-watch-status-glyphs.
+      // Vertical so it hugs the corner curve without clipping (same reason the readout centres).
+      // Hit-testing off: status chrome must never eat a waterfall tap.
+      VStack {
+        Spacer()
+        HStack {
+          Spacer()
+          VStack(spacing: 5) {
+            methodGlyph      // top: what we're connected THROUGH
+            qualityGlyph     // below: how WELL
+          }
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.white)   // method glyph white; quality glyph carries its own tint
+          .padding(.horizontal, 4).padding(.vertical, 5)
+          .background(Color.black.opacity(0.55), in: Capsule())
+          .padding(.trailing, 10).padding(.bottom, 20)   // clear the corner arc
+        }
+      }
+      .ignoresSafeArea()
+      .allowsHitTesting(false)
 
       // Developer CPU badge, top-left (clear of the clock/battery on the right).
       // Same measurement as the JR spike so companion vs standalone is directly
@@ -216,6 +336,46 @@ struct ContentView: View {
         .allowsHitTesting(false)
       }
 
+      // Shared chat + client-count glyph — top-left, exactly where the dev CPU badge sits and where the
+      // companion's FM-DX screen carries the same icon. Passive until a message lands, then it breathes;
+      // tap opens the chat sheet with the canned replies. Only on chat-capable backends (OWRX today).
+      if link.supportsChat {
+        VStack {
+          HStack {
+            ChatGlyph(clients: link.clients, activity: link.chatActivity) {
+              if !locked { showChat = true }
+            }
+            .padding(.leading, 6).padding(.top, 19)
+            Spacer()
+          }
+          Spacer()
+        }
+        .ignoresSafeArea()
+      }
+
+      // RTL-SDR hardware button — top-left (opposite the clock), VibeServer only. The client drives the
+      // physical dongle (gain/bias-T/AGC/PPM/sample-rate); its own button keeps the hold-menu uncluttered
+      // for the remote backends that have no hardware. (This corner is free on VibeServer — no chat glyph.)
+      if link.hasHardwareControls {
+        VStack {
+          HStack {
+            Button { if !locked { showHardware = true } } label: {
+              // Vertical antenna + radio waves — reads as "the radio", and stays right if we support other
+              // SDRs beyond RTL later (not an RTL-specific glyph).
+              Image(systemName: "antenna.radiowaves.left.and.right")
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(.cyan)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(Capsule().fill(.black.opacity(0.35)))
+                .contentShape(Capsule())
+            }.buttonStyle(.plain)
+            .padding(.leading, 6).padding(.top, 19)
+            Spacer()
+          }
+          Spacer()
+        }
+        .ignoresSafeArea()
+      }
+
       // DEGRADE, DON'T BLOCK.
       //
       // A frozen picture with a black box over it is the worst of both worlds: you
@@ -228,13 +388,8 @@ struct ContentView: View {
       // So: a brief gap gets a small WARNING PILL and the waterfall keeps rendering
       // whatever it's got. Only a genuinely dead link (or a phone that has told us
       // it's doing something else) gets the full overlay.
-      if let h = hint {
-        VStack {
-          hintPill(h)
-            .padding(.top, 46)      // clear of the clock
-          Spacer()
-        }
-      }
+      // (The hint pill has moved DOWN into the bottom stack, above the band row — see below —
+      // so it no longer covers the newest waterfall rows at the top.)
 
       if link.everGotRow, let msg = stalledMessage {
         VStack(spacing: 4) {
@@ -259,20 +414,131 @@ struct ContentView: View {
         // seconds old and nobody is reading it, so the label costs nothing — and it now
         // sits directly above the band-boundary marks it explains, which is where it
         // belonged all along.
-        bandLabel
-        ticker
-        Button { showNumpad = true } label: { readout }
+        // ALL transient pills stack HERE, just above the band-label pill — the one place chrome
+        // lives, over seconds-old waterfall rather than the newest rows you tune by. Lock/unlock
+        // confirmation on top, then the link-hint pill (was top-anchored), then the band row.
+        if let lockPill {
+          Text(lockPill)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 13).padding(.vertical, 7)
+            .background(.black.opacity(0.78), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
+            .padding(.bottom, 2)
+            .transition(.opacity)
+        }
+        // Heavy-server advisory — non-fatal, dismissible. Only appears on the phone relay with a
+        // cranked server (see SpikeLink.bandwidthWarning). Tap to dismiss; re-arms if it clears.
+        if let warn = link.bandwidthWarning, !bwDismissed {
+          Button { bwDismissed = true } label: {
+            HStack(alignment: .top, spacing: 5) {
+              Image(systemName: "wifi.exclamationmark").font(.system(size: 11, weight: .bold))
+              Text(warn).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.orange.opacity(0.9), in: RoundedRectangle(cornerRadius: 10))
+          }
+          .buttonStyle(.plain)
+          .padding(.bottom, 2)
+          .transition(.opacity)
+        }
+        // CONNECTION STATUS — same bottom pill stack as everything else. It used to live in an
+        // .overlay(alignment: .top), which runs straight through the SYSTEM CLOCK: watchOS owns
+        // that strip and there is no dodging it. Down here it sits above the band label with the
+        // other pills, and cannot foul anything the OS draws.
+        if let st = connectionStatus {
+          HStack(spacing: 4) {
+            if st.working {
+              ProgressView().progressViewStyle(.circular).scaleEffect(0.35).frame(width: 9, height: 9)
+            }
+            Text(st.text)
+              .font(.system(size: 10, weight: .semibold))
+              .lineLimit(2).multilineTextAlignment(.center)
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 8).padding(.vertical, 3)
+          .background((st.working ? Color.black.opacity(0.65) : Color.orange.opacity(0.9)),
+                      in: RoundedRectangle(cornerRadius: 9))
+          .padding(.horizontal, 6)
+          .padding(.bottom, 2)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(st.text)
+        }
+        if let h = hint { hintPill(h).padding(.bottom, 2) }
+        // Crown-mode pill — shows what the crown is doing when it's NOT plain tune (set by the
+        // Double-Tap cycle or the menu). Sits just above the band label.
+        if crownMode != .tune {
+          HStack(spacing: 4) {
+            Image(systemName: crownMode.glyph).font(.system(size: 10, weight: .semibold))
+            Text("Crown: \(crownMode.label)").font(.system(size: 11, weight: .semibold))
+          }
+          .foregroundStyle(.orange)
+          .padding(.horizontal, 8).padding(.vertical, 2)
+          .background(.black.opacity(0.55), in: Capsule())
+          .padding(.bottom, 2)
+        }
+        // Band label sits just above the frequency readout now — like the VTS label under the
+        // main app's waterfall. The ticker has moved UP into the axis strip between the
+        // spectrum and the waterfall (see `drawAxisStrip`), where the frequency scale belongs.
+        // The battery rides the SAME ROW, horizontal with its number inside — there's room even
+        // beside a long label like "AM Broadcast Band", and it keeps the corners clear.
+        HStack(spacing: 6) {
+          BatteryPill(level: link.battery)   // horizontal, number inside, own dark scrim
+          Spacer(minLength: 0)
+          bandLabel
+          Spacer(minLength: 0)
+          // Invisible battery-width balance on the right so the band LABEL sits dead-centre
+          // (aligned with the frequency readout below). The Spacers + full-width frame PIN the
+          // battery to the leading edge — without them the whole group hugged its content and
+          // centred, so a SHORT band label let the battery drift inward from the left.
+          BatteryPill(level: link.battery).hidden()
+        }
+        .frame(maxWidth: .infinity)
+        Button { if !locked { showNumpad = true } } label: { readout }
           .buttonStyle(.plain)
       }
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
+      // Re-arm the advisory dismiss once the warning clears (moved to wifi / server calmed down), so a
+      // fresh heavy-relay situation later can show it again.
+      .onChange(of: link.bandwidthWarning) { _, n in if n == nil { bwDismissed = false } }
 
-      if crownMode != .tune { crownOverlay }
+      if crownMode != .tune && !locked { crownOverlay }
+
+      // DOUBLE TAP (pinch) → cycle the crown mode Tune → Zoom → Volume. watchOS routes the
+      // double-pinch to the view's primary action; without one you get the "not applicable"
+      // wobble. Disabled while locked, so the gesture is ignored like every other control.
+      Button(action: cycleCrownMode) { Color.clear.frame(width: 1, height: 1) }
+        .buttonStyle(.plain)
+        .handGestureShortcut(.primaryAction)
+        .disabled(locked)
+        .allowsHitTesting(false)
+
+      // Control lock (Walkman hold): a floating padlock, bottom-left above the ticker. Always
+      // tappable — it's the one control that still works while locked.
+      VStack {
+        Spacer()
+        HStack {
+          Button(action: toggleLock) {
+            Image(systemName: locked ? "lock.fill" : "lock.open")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(locked ? .orange : .white.opacity(0.85))
+              .frame(width: 30, height: 30)
+              .background(Circle().fill(.black.opacity(0.55)))
+          }
+          .buttonStyle(.plain)
+          Spacer()
+        }
+        .padding(.leading, 8)
+        .padding(.bottom, 78)   // clear of the ticker/readout
+      }
+
 
       // THE COACH, once. Gated on everGotRow so it lands on a WORKING waterfall — a
       // tutorial over a black boot screen teaches you the app is broken. It also sits
       // ABOVE the crown overlay in the stack, so nothing can draw over it.
-      if link.everGotRow && !coachSeen {
+      if coachUp {
         CoachOverlay(
           title: "VibeSDR",
           items: [
@@ -295,6 +561,9 @@ struct ContentView: View {
         )
       }
     }
+    // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
+    // blocked / unreachable). Covers the screen so nobody sits waiting; one tap back to servers.
+    .overlay { if let err = link.connectError { refusalCard(err) } }
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
     // pad's own content began, pushing the bottom row clean off the screen (and
@@ -307,8 +576,32 @@ struct ContentView: View {
       ControlMenu { mode in crownMode = mode; crownUsedAt = Date() }
         .environmentObject(link)
     }
+    // First-use waterfall tutorial (once) — includes the OWRX Bluetooth-link warning on OWRX servers.
+    .onAppear { if !seenSdrTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showSdrTut = true } } }
+    .sheet(isPresented: $showSdrTut) {
+      TutorialSheet(title: "Using VibeSDR", tips: sdrTutorialTips(isOwrx: link.isOwrx), dismissLabel: "Start listening") {
+        seenSdrTut = true; showSdrTut = false
+      }
+    }
+    .sheet(isPresented: $showHardware) {
+      if let radio = link.vibe { NavigationStack { HardwareSheet(radio: radio) } }
+    }
+    .sheet(isPresented: $showChat) {
+      NavigationStack { ChatSheet().environmentObject(link) }
+    }
     .ignoresSafeArea()
-    .focusable(true)
+    // Non-focusable in volume mode so SwiftUI RELINQUISHES the crown entirely — otherwise this
+    // view keeps crown focus (even with crownFocused=false) and the hosted WKInterfaceVolumeControl
+    // can never receive it (the volume UI shows but the crown does nothing). Out of volume mode it
+    // owns the crown for tune/zoom/brightness/contrast as before.
+    // …and RELINQUISH IT FOR THE COACH TOO, for exactly the same reason. The overlay renders
+    // INSIDE this view, so while it is up the crown still belonged to tuning: turning it moved
+    // the VFO instead of scrolling the coach, and the detent haptics made it feel like it was
+    // doing something. Invisible on a 49mm Ultra where the coach fits — but on a 41mm the
+    // content is taller than the screen and the crown is the obvious way to reach "Got it".
+    // (Found on a 41mm simulator, 2026-07-19. Same shape as the v9.0.2 CONTINUE bug: a control
+    // you cannot reach on a small screen, on hardware nobody here owns.)
+    .focusable(crownMode != .volume && !coachUp)
     .focused($crownFocused)
     .digitalCrownRotation(
       $crown,
@@ -343,12 +636,12 @@ struct ContentView: View {
       //
       // Swallow the delta but KEEP tracking lastDetent, or the accumulated rotation
       // would be applied in one lump the moment the screen closes.
-      guard !showMenu && !showNumpad else { return }
+      guard !showMenu && !showNumpad && !locked else { return }
 
       switch crownMode {
       case .tune: link.tune(delta: delta)
       case .zoom: link.zoom(delta: delta)
-      case .volume: link.volume(delta: delta)
+      case .volume: break   // the native WKInterfaceVolumeControl owns the crown in volume mode
       case .brightness:
         wfBright = clamp(wfBright + Double(delta) * 0.04)
         link.waterfall.brightness = wfBright
@@ -357,8 +650,13 @@ struct ContentView: View {
         link.waterfall.contrast = wfContrast
       }
     }
-    // Long-press anywhere on the waterfall for the control grid.
+    // Volume mode hands the crown to the native WKInterfaceVolumeControl; releasing the
+    // SwiftUI focus lets that control become the sole crown consumer. Every other mode keeps
+    // the crown here for tuning/zoom/brightness/contrast.
+    .onChange(of: crownMode) { _, m in crownFocused = (m != .volume) }
+    // Long-press anywhere on the waterfall for the control grid. Suppressed while locked.
     .onLongPressGesture(minimumDuration: 0.45) {
+      guard !locked else { return }
       WKInterfaceDevice.current().play(.click)
       showMenu = true
     }
@@ -374,21 +672,52 @@ struct ContentView: View {
     .onChange(of: link.lastRowAt)   { _, _ in syncHint() }
     .onChange(of: link.lastStateAt) { _, _ in syncHint() }
     .onChange(of: scenePhase) { _, phase in
-      // YOU LEFT — the mode ends. This is the honest signal, and it's the case that
-      // actually bit: zoom, lower your wrist, come back later, and the crown was
-      // still zooming. A timeout is the backstop; this is the real trigger.
-      if phase != .active { crownMode = .tune; return }
+      // YOU LEFT — the mode ends, and the spike drops its spectrum socket (audio keeps
+      // playing in the background, which is the whole point of WKBackgroundModes=[audio]).
+      guard phase == .active else {
+        crownMode = .tune
+        // GRACE PERIOD, user-selectable (ControlMenu → WRIST DOWN). Don't drop the spectrum the
+        // instant the wrist falls — a quick glance away shouldn't cost a full reconnect on the
+        // way back. Off (0) keeps the waterfall running with the wrist down (costs battery);
+        // otherwise suspend after the chosen number of seconds. Audio plays throughout either
+        // way (WKBackgroundModes=[audio]); this only defers dropping the waterfall socket.
+        guard wristTimeout > 0 else { return }   // Off — never drop
+        let work = DispatchWorkItem { link.suspend() }
+        suspendWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wristTimeout, execute: work)
+        return
+      }
+      // Back up. If the suspend was still pending we never actually dropped the socket — just
+      // cancel it and carry on, no reconnect, no re-sync flash.
+      suspendWork?.cancel()
+      suspendWork = nil
       crownUsedAt = Date()
-      applyTone()          // the buffer is reset on wake — re-assert our settings
-      // Screen woke: the queued rows and the scroll clock are both stale. Draining
-      // them as usual fast-forwards through old data and then runs dry — the
-      // stutter you get for the first second after a wake. Start clean.
-      link.waterfall.reset()
-      // ANNOUNCE OURSELVES. The phone's WCSession.isReachable goes stale and it
-      // then refuses to send anything, while the crown still tunes — the downlink
-      // dies silently. A message from us is proof we're here, so say so rather
-      // than waiting for the user to turn the crown before rows start flowing.
+      applyTone()          // re-assert our settings (harmless if nothing was torn down)
+      if link.isBackground {
+        // We dropped ONLY the spectrum socket for wrist-down; the AUDIO socket kept the server
+        // session warm. So reopen JUST the spectrum — fast (no /connection re-POST), and the
+        // last frames stay on screen through the ~one-RTT reopen, so it reads as INSTANT like
+        // the phone. Crucially we do NOT also call reconnectIfNeeded() here: its guards
+        // (status=="live" + lastFrameAt>3s) are both true right after a suspend, so it would
+        // cancel BOTH sockets and do a full re-handshake — tearing down the socket we just
+        // reopened and blipping the audio. That redundant full reconnect WAS the slow resume.
+        link.waterfall.reset()   // clear the stale queue/scroll clock; KEEPS the pixels on screen
+        link.resume()
+      } else {
+        // No explicit suspend (a long park that may have killed the sockets) — only then is a
+        // full reconnect warranted, and it's guarded to a genuine death.
+        link.reconnectIfNeeded()
+      }
       link.ping()
+    }
+    // Row draining runs on the ALWAYS-MOUNTED root, NOT the waterfall Canvas. The Canvas
+    // only mounts once everGotRow is true — but everGotRow only flips when a row drains, so
+    // draining from inside the Canvas deadlocks on the placeholder ("Waiting for signal"
+    // forever). The companion never hit this: its data path (WCSession) set everGotRow
+    // independently of the render loop; ours drains on the render clock, so the tick has to
+    // live somewhere that runs before the first row.
+    .onReceive(driver) { _ in
+      link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
   }
 
@@ -412,50 +741,40 @@ struct ContentView: View {
   /// (Doing it properly would mean giving each Canvas its own View struct with only
   /// the state it needs, so SwiftUI can invalidate them independently. Worth it
   /// only if the trace's smoothness at 20fps proves inadequate — and it doesn't.)
-  private var waterfall: some View {
-    Canvas { ctx, size in
-      _ = frame        // read so SwiftUI must redraw; see `driver`
+  /// The waterfall Canvas's drawing, factored OUT of a `some View` computed property into a
+  /// plain method so the 20fps repaint clock can live in its own child view (`WaterfallCanvas`)
+  /// — see the note above. It reads only `link` (a reference type), so a captured closure over
+  /// it always paints live data. No `frame` here: the child's own @State drives the repaint.
+  private func drawWaterfall(_ ctx: GraphicsContext, _ size: CGSize) {
+    let wf = link.waterfall
+    let now = ProcessInfo.processInfo.systemUptime
+    wf.tickTrace(at: now)
+    wf.tickScroll(at: now)   // both every frame — smooth scroll
 
-      let wf = link.waterfall
-      wf.tick(at: ProcessInfo.processInfo.systemUptime)
+    // The spectrum gets a BAND of its own — the top third — and the waterfall takes the rest.
+    let specH = (size.height / 3).rounded()
+    // The frequency axis lives BETWEEN the spectrum and the waterfall (OWRX/SDR++ style): a thin
+    // dead-black strip carrying ticks, labels and a band-plan colour wash.
+    let tickerH: CGFloat = 18
+    let wfTop = specH + tickerH
 
-      // The spectrum gets a BAND of its own — the top third — and the waterfall
-      // takes the rest. A floating overlay was cheaper in pixels, but the trace has
-      // to be readable as a HEIGHT: squashed into a strip it is just another
-      // texture. The system clock sits in this band and reads as a label there.
-      let specH = (size.height / 3).rounded()
-
-      if let img = wf.makeImage() {
-        let rowPx = (size.height - specH) / Double(WaterfallBuffer.visible)
-        let p = wf.progress
-
-        // Newest row is index 0 (top) with one row of headroom above the visible
-        // edge. As p goes 0->1 the window walks from "newest not yet in" to "newest
-        // fully in at the top", exactly as the next row lands and resets p.
-        var wctx = ctx
-        wctx.clip(to: Path(CGRect(x: 0, y: specH,
-                                  width: size.width, height: size.height - specH)))
-        wctx.draw(
-          Image(decorative: img, scale: 1),
-          in: CGRect(x: 0, y: specH - (1 - p) * rowPx,
-                     width: size.width,
-                     height: rowPx * Double(WaterfallBuffer.height))
-        )
-      }
-
-      drawSpectrum(ctx, size, wf.specRow, peaks: wf.peakRow, height: specH)
-      drawVFO(ctx, size)   // through BOTH: the trace and its history stay aligned
+    if let img = wf.makeImage() {
+      let rowPx = (size.height - wfTop) / Double(WaterfallBuffer.visible)
+      let p = wf.progress
+      var wctx = ctx
+      wctx.clip(to: Path(CGRect(x: 0, y: wfTop,
+                                width: size.width, height: size.height - wfTop)))
+      wctx.draw(
+        Image(decorative: img, scale: 1),
+        in: CGRect(x: 0, y: wfTop - (1 - p) * rowPx,
+                   width: size.width,
+                   height: rowPx * Double(WaterfallBuffer.height))
+      )
     }
-    .ignoresSafeArea()
-    .onReceive(driver) { _ in
-      frame &+= 1
-      // Lapse back to TUNE once the crown has been left alone. Checked on the render
-      // clock we already run, rather than adding a timer of its own.
-      if crownMode != .tune,
-         Date().timeIntervalSince(crownUsedAt) > Self.crownIdleTimeout {
-        crownMode = .tune
-      }
-    }
+
+    drawSpectrum(ctx, size, wf.specRow, peaks: wf.peakRow, height: specH)
+    drawAxisStrip(ctx, size, top: specH, h: tickerH)
+    drawVFO(ctx, size)   // through ALL: the trace, the axis and its history stay aligned
   }
 
   /// A thin spectrum trace across the top.
@@ -577,12 +896,17 @@ struct ContentView: View {
     // waterfall and needs a darker ground under it than white ever did. (It read fine back
     // when two scrims were accidentally stacked — 0.55 over 0.62 is an effective 0.83 —
     // which is the clue that told us the number, not the shape, was what was carrying it.)
-    let cw = size.width * 0.47
-    let ch: CGFloat = 30
+    // A PILL AROUND THE CLOCK ONLY. The battery moved to the bottom-left, so the old half-width
+    // (0.47) scrim was mostly darkening empty space — the "massive shading" WFM signals exposed.
+    // Now it just hugs the clock digits (18→58.8pt from the right edge). The watchOS status glyphs
+    // (car mode, location, recording) live top-LEFT and are colourful enough to read on the
+    // waterfall unaided — and we can't know when one is shown, so we don't darken there.
+    let cw: CGFloat = 62
+    let ch: CGFloat = 26
     ctx.fill(
-      Path(roundedRect: CGRect(x: size.width - cw - 4, y: 11, width: cw, height: ch),
-           cornerRadius: 9),
-      with: .color(.black.opacity(0.75))
+      Path(roundedRect: CGRect(x: size.width - cw - 2, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
+           cornerRadius: ch / 2),
+      with: .color(.black.opacity(0.72))
     )
 
     // Hairline under the band, so the trace's baseline and the waterfall's top
@@ -647,7 +971,20 @@ struct ContentView: View {
   /// The meter sits next to the crown because that's the thing you're turning —
   /// your eye shouldn't have to cross the screen to see the effect of your finger.
   /// And the X goes opposite it so your hand isn't covering the way out.
+  /// Double-Tap handler: rotate the crown through Tune → Zoom → Volume. Same idle timeout as the
+  /// menu (crownUsedAt reset → the 30s lapse in the driver reverts to Tune). Ignored when locked.
+  private func cycleCrownMode() {
+    guard !locked else { return }
+    crownMode = crownMode.nextPrimary
+    crownUsedAt = Date()
+    WKInterfaceDevice.current().play(.click)
+  }
+
   private var crownOverlay: some View {
+    // Self-clocking at 12fps ONLY while this overlay is on screen (crownMode != .tune), so the
+    // exit-ring's 30s drain stays smooth now that the global frame clock no longer re-evaluates
+    // the whole body. Bounded to crown-use windows — nothing ticks when it's dismissed.
+    TimelineView(.periodic(from: .now, by: 1.0 / 12.0)) { _ in
     ZStack {
       // X on the edge OPPOSITE the crown, so your hand isn't over the way out.
       VStack {
@@ -661,16 +998,28 @@ struct ContentView: View {
       // Apple uses for its own volume indicator. A full-height bar with the glyph
       // stacked in a circle above it reads as furniture; this reads as an
       // indicator. The glyph sits inline to its left, unadorned.
-      HStack {
-        if crownOnRight { Spacer() }
-        HStack(spacing: 5) {
-          if crownOnRight { glyph; bar } else { bar; glyph }
+      if crownMode == .volume {
+        // NATIVE volume: hand the crown to WKInterfaceVolumeControl and show Apple's own
+        // volume UI hugging the crown edge. (Frame is a first pass — dial in on device.)
+        HStack {
+          if crownOnRight { Spacer() }
+          VolumeControl(focused: true)
+            .frame(width: 36, height: 130)
+          if !crownOnRight { Spacer() }
         }
-        if !crownOnRight { Spacer() }
+      } else {
+        // A FILLING RING with the mode glyph in the centre — matches the native volume
+        // control's round, clearly-visible fill (the old thin edge-bar was hard to see).
+        HStack {
+          if crownOnRight { Spacer() }
+          ring
+          if !crownOnRight { Spacer() }
+        }
       }
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 10)
+    }
   }
 
   /// The way out — wrapped in a COUNTDOWN RING showing the mode's remaining life.
@@ -706,22 +1055,28 @@ struct ContentView: View {
     return CGFloat(min(1, max(0, left / Self.crownIdleTimeout)))
   }
 
-  private var glyph: some View {
-    Image(systemName: crownMode == .volume && link.muted ? "speaker.slash.fill"
-                                                         : crownMode.glyph)
-      .font(.system(size: 15, weight: .semibold))
-      .foregroundStyle(meterTint)
-  }
+  /// Turned very recently → the ring "pops": it rests SMALL and springs up the instant you
+  /// operate it, exactly like the native volume indicator, then settles back.
+  private var ringActive: Bool { Date().timeIntervalSince(crownUsedAt) < 0.5 }
 
-  /// Short, edge-hugging, filling upward — the crown's own direction of travel.
-  private var bar: some View {
-    ZStack(alignment: .bottom) {
-      Capsule().fill(.white.opacity(0.22))
-      Capsule()
-        .fill(meterTint)
-        .frame(height: max(3, 74 * meterValue))
+  /// A FILLING RING with the mode glyph centred inside — the shape the native volume control
+  /// uses, and far more visible than the old hairline bar. Fills clockwise from the top by
+  /// meterValue (0…1); sits on the crown's edge, the thing you're turning. Sized to match the
+  /// native volume control (small at rest, pops on use).
+  private var ring: some View {
+    ZStack {
+      Circle().stroke(.white.opacity(0.20), lineWidth: 3.5)
+      Circle()
+        .trim(from: 0, to: max(0.001, min(1, meterValue)))
+        .stroke(meterTint, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+        .rotationEffect(.degrees(-90))
+      Image(systemName: crownMode.glyph)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(meterTint)
     }
-    .frame(width: 5, height: 74)
+    .frame(width: 40, height: 40)
+    .scaleEffect(ringActive ? 1.0 : 0.78)
+    .animation(.spring(response: 0.28, dampingFraction: 0.55), value: ringActive)
   }
 
   private var meterTint: Color {
@@ -768,6 +1123,66 @@ struct ContentView: View {
   /// perfectly good data because of it is not.
   ///
   /// This is the raw reading. `hint` is the debounced one that reaches the screen.
+  /// Server-link health for the status glyph — DERIVED from the same hint/gap signals as the
+  /// pill so the two can never disagree. NOT from `link.level`: that's the tuned station's RF
+  /// strength (the readout gradient), a different meter — a strong station on a dying link must
+  /// still show red.
+  private var linkQuality: LinkQuality {
+    if link.transport == .none { return .down }
+    if stalledMessage != nil { return .down }            // no server connection at all
+    let gapQ: LinkQuality
+    if hint == nil {
+      gapQ = .good                                        // healthy, rows fresh
+    } else {
+      let gap = link.lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
+      gapQ = gap > hintRowGap ? .poor : .degraded         // stopped vs jerky-but-flowing
+    }
+    // Take the WORSE of "are rows arriving on time" and "how much did we have to throttle to
+    // keep them arriving on time". Without this, Link Management doing its job would turn the
+    // glyph green on a link bad enough to need the emergency rung.
+    let throttleQ: LinkQuality = link.throttleRung >= 3 ? .poor
+                               : link.throttleRung == 2 ? .degraded
+                               : .good
+    return [gapQ, throttleQ].max(by: { $0.severity < $1.severity }) ?? gapQ
+  }
+
+  private func qualityTint(_ q: LinkQuality) -> Color {
+    switch q {
+    case .good:     return .green
+    case .degraded: return .yellow
+    case .poor:     return .red
+    case .down:     return .red
+    }
+  }
+
+  /// What the watch is connected THROUGH. `.other` (the iPhone relay) → iphone; see transportFor.
+  @ViewBuilder private var methodGlyph: some View {
+    switch link.transport {
+    case .iphone:   Image(systemName: "iphone")
+    case .wifi:     Image(systemName: "wifi")
+    case .cellular: Image(systemName: "antenna.radiowaves.left.and.right")
+    case .none:     Image(systemName: "xmark").foregroundStyle(.red)
+    }
+  }
+
+  /// How WELL the server link is holding — the phone app's instance triangle, tinted, X when down.
+  @ViewBuilder private var qualityGlyph: some View {
+    let q = linkQuality
+    Group {
+      if q == .down {
+        Image(systemName: "xmark").foregroundStyle(.red)
+      } else {
+        InstanceNodes()
+          .stroke(qualityTint(q),
+                  style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+          .frame(width: 15, height: 15)
+      }
+    }
+    // Breathe only while a warning pill is up — reuses the pill's own `pulse`, so glyph and pill
+    // are in lockstep: static when healthy, gently breathing whenever a warning is on screen.
+    .opacity(hint != nil ? pulse : 1)
+  }
+
   private var rawHint: LinkHint? {
     guard stalledMessage == nil else { return nil }   // the hard overlay owns it
     guard link.everGotRow else { return nil }         // a cold boot is not a fault
@@ -806,28 +1221,57 @@ struct ContentView: View {
       switch h {
       // "Reconnecting to server" — the circular-arrows glyph IS the universal
       // reconnecting sign, so it needs no marked link.
-      case .reconnecting:   return ["arrow.triangle.2.circlepath", "server.rack"]
+      // ("@instance" = the triangle-node server mark, not an SF Symbol — see the ForEach below.)
+      case .reconnecting:   return ["arrow.triangle.2.circlepath", "@instance"]
       // "Server link rough — spectrum erratic"
-      case .serverHop:      return ["server.rack", "wifi.exclamationmark", "iphone"]
+      case .serverHop:      return ["@instance", "wifi.exclamationmark", "iphone"]
       // "Watch link weak — spectrum erratic"
       case .wristHop:       return ["iphone", "wifi.exclamationmark", "applewatch"]
       // "Link rough" — nothing more is honestly known.
       case .indeterminate:  return ["wifi.exclamationmark"]
       }
     }()
+    // The glyph row says WHICH HOP is bad; the caption says WHAT IS HAPPENING. The diagram alone
+    // asked the user to decode it mid-glance — on a wrist, with the thing already going wrong.
+    let caption: String = {
+      switch h {
+      case .reconnecting:  return "Reconnecting…"
+      case .serverHop:     return "Server link rough"
+      case .wristHop:      return "Watch link weak"
+      case .indeterminate: return "Link rough"
+      }
+    }()
+    VStack(spacing: 1) {
     HStack(spacing: 3) {
       ForEach(Array(glyphs.enumerated()), id: \.offset) { _, g in
-        Image(systemName: g)
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white)
-          // The marked link pulses gently so it reads as a LIVE problem rather
-          // than a static badge. Opacity only — nothing per-frame or laid out.
-          .opacity(g == "wifi.exclamationmark" ? pulse : 1)
+        Group {
+          // The server is the triangle-node mark everywhere else in the app (status glyph,
+          // phone app instance icon) — no SF Symbol matches it, so draw the Shape instead of
+          // reaching for `server.rack` and having two different pictures of the same thing.
+          if g == "@instance" {
+            InstanceNodes()
+              .stroke(.white, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+              .frame(width: 12, height: 12)
+          } else {
+            Image(systemName: g)
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(.white)
+          }
+        }
+        // The marked link pulses gently so it reads as a LIVE problem rather
+        // than a static badge. Opacity only — nothing per-frame or laid out.
+        .opacity(g == "wifi.exclamationmark" ? pulse : 1)
       }
     }
-    .padding(.horizontal, 7)
+      Text(caption)
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(.white)
+        .lineLimit(1).minimumScaleFactor(0.8)
+    }
+    .padding(.horizontal, 8)
     .padding(.vertical, 3)
-    .background(.orange.opacity(0.85), in: Capsule())
+    // A capsule is for one line; two rows need corners that don't bow the text off the edges.
+    .background(.orange.opacity(0.85), in: RoundedRectangle(cornerRadius: 9))
     // VoiceOver gets the words the sighted user no longer needs.
     .accessibilityElement(children: .ignore)
     .accessibilityLabel({
@@ -849,6 +1293,8 @@ struct ContentView: View {
   /// Driven by the row and state clocks, so it needs no timer of its own.
   private func syncHint() {
     let now = Date()
+    // Same reason as stalledMessage: a deliberate power-save suspend is not a rough link.
+    if link.isBackground { hint = nil; shownSince = nil; return }
     guard let c = rawHint else {
       // Healthy again — but a pill that flashed up for 200ms is worse than none, so
       // hold it for its minimum read time before retiring it.
@@ -891,7 +1337,86 @@ struct ContentView: View {
   /// blank screen, and that ambiguity cost hours of chasing. The state channel keeps
   /// working in every one of those cases except the last (it's why the frequency kept
   /// updating), so it carries the reason with it.
+  /// THE CONNECTION, IN PLAIN ENGLISH.
+  ///
+  /// Connecting to an SDR server is a multi-step negotiation — authenticate, register the session,
+  /// open audio, then open the spectrum — and on a watch over Bluetooth it is not instant. With
+  /// nothing on screen but a still waterfall, a user cannot tell "working on it" from "broken", and
+  /// assumes broken. These are the same lines we used as developer diagnostics; they turned out to
+  /// be exactly what a user wants too, just not phrased for one. Like a page-load bar: the point is
+  /// not the detail, it is that something is visibly happening.
+  ///
+  /// `working` drives the styling — a step in progress is informational (white, with a spinner), a
+  /// refusal is a problem (orange). Everything reads as a warning if it is all one colour.
+  private var connectionStatus: (text: String, working: Bool)? {
+    let s = link.backendStatus
+    guard !s.isEmpty, s != "live", s != "idle" else { return nil }
+
+    // Live developer read-outs (OWRX's KB/s + fft + cpu line, secondary-decoder debug). Never
+    // user-facing — they are numbers for us, noise for everyone else.
+    if s.contains("KB/s") || s.contains("cpu:") || s.hasPrefix("sec=") { return nil }
+
+    switch s {
+    case "starting":              return ("Starting up…", true)
+    case "authenticating":        return ("Checking your PIN…", true)
+    case "registering":           return ("Registering with the server…", true)
+    case "connecting":            return ("Connecting to the server…", true)
+    case "reconnecting":          return ("Connection dropped — reconnecting…", true)
+    case "retrying (ws)…":        return ("Reconnecting…", true)
+    case "switching profile…":    return ("Switching profile…", true)
+    case "background · audio only": return ("Paused to save power · audio playing", true)
+    case "no wifi — using phone": return ("No Wi‑Fi — going through your iPhone", true)
+    case "refused":               return ("The server refused the connection", false)
+    case "can't reach server":    return ("Can't reach that server", false)
+    case "bad server URL":        return ("That server address doesn't look right", false)
+    case "not a VibeServer?":     return ("That doesn't look like a VibeServer", false)
+    case "no HTTP response":      return ("No answer from the server", false)
+    default: break
+    }
+    // SOCKET-LEVEL FAILURES. AudioSocket reports raw state ("kiwi-snd ws waiting: POSIXErrorCode
+    // (rawValue: 53): Software caused connection abort") — a stack trace in a status line. The
+    // errno IS the useful part, so translate it rather than dropping it.
+    if s.contains("ws waiting") || s.contains("POSIXErrorCode") {
+      let posix: [Int: String] = [
+        51: "The network is unreachable",
+        53: "The server dropped the connection",   // ECONNABORTED
+        54: "The server closed the connection",    // ECONNRESET
+        60: "The server stopped responding",       // ETIMEDOUT
+        61: "The server refused the connection",   // ECONNREFUSED
+        64: "The server is down",
+        65: "Can't reach the server",
+      ]
+      if let m = s.range(of: #"rawValue: (\d+)"#, options: .regularExpression),
+         let code = Int(s[m].replacingOccurrences(of: "rawValue: ", with: "")),
+         let msg = posix[code] {
+        return ("\(msg) — retrying…", true)
+      }
+      return ("Reconnecting to the server…", true)
+    }
+    if s.hasPrefix("retrying (fresh session)") { return ("Retrying with a fresh session…", true) }
+    if s.hasPrefix("reconnect ")               { return ("Reconnecting…", true) }
+    if s.hasPrefix("connection failed:")       { return ("Couldn't connect", false) }
+    // An HTTP refusal carries THE SERVER'S OWN WORDS after the colon. Keep them: that sentence is
+    // the only thing that tells a user whether they're banned, full, or simply mistyped something.
+    if s.hasPrefix("HTTP "), let r = s.split(separator: ":", maxSplits: 1).last {
+      return (r.trimmingCharacters(in: .whitespaces), false)
+    }
+    return (s, false)
+  }
+
   private var stalledMessage: (icon: String, text: String)? {
+    // ★ WE DID THAT ON PURPOSE. Wrist-down power saving drops the spectrum socket by design, so
+    // rows stop — and every stall path then reports a FAULT: a "link rough" pill, then a
+    // full-screen "Lost the server". Alarming the user about the app's own deliberate action is
+    // worse than saying nothing. Audio is still playing; the calm `connectionStatus` pill
+    // ("Paused to save power") carries it instead. (Found on-wrist 2026-07-19.)
+    if link.isBackground { return nil }
+    // A reconnect is NOT a hard fault on the standalone watch — the audio keeps playing and the
+    // spectrum socket is coming back. Let the soft "Reconnecting" pill (rawHint) own it instead
+    // of throwing up the black "spectrum stopped" box. (The companion's hard overlay is for a
+    // lost watch↔phone link, which doesn't exist here.)
+    if link.why == "reconnecting" { return nil }
+
     if !link.reachable {
       return ("iphone.slash", "Reconnecting to iPhone")
     }
@@ -917,7 +1442,7 @@ struct ContentView: View {
         return ("hourglass", "Starting VibeSDR…")
       case "pick":
         // No default instance — but there ARE favourites. The wrist can choose.
-        return ("server.rack", "Choose a server\nLong-press → Servers")
+        return ("@instance", "Choose a server\nLong-press → Servers")
       case "setup":
         // Nothing to connect to. Say so plainly rather than showing a dead screen.
         // ♥ is FAVOURITE. ★ is DEFAULT. Getting that backwards in the one message a
@@ -976,6 +1501,13 @@ struct ContentView: View {
     // normal, and until it has been quiet for a good while the warning pill (which
     // leaves the waterfall on screen) is the better answer.
     guard Date().timeIntervalSince(t) > 10 else { return nil }
+    // NAME THE RIGHT HOP. "Watch link lost" / "iPhone not responding" is COMPANION vocabulary —
+    // it describes the watch↔phone leg, which in the standalone spike DOES NOT EXIST: we hold our
+    // own sockets straight to the server (see SpikeLink.client). Blaming the watch for a server
+    // that dropped us sends the user to fix the one thing that was working.
+    if link.client != nil {
+      return ("exclamationmark.triangle", "Lost the server\nSpectrum stopped")
+    }
     return stateFresh
       ? ("exclamationmark.triangle", "Watch link lost\nSpectrum stopped")
       : ("iphone.slash", "iPhone not responding")
@@ -987,79 +1519,131 @@ struct ContentView: View {
   /// "Starting VibeSDR…", "Choose a server", "Open VibeSDR on iPhone and save a
   /// favourite". A boot is not an error, and a wrist that cries wolf on every launch
   /// teaches you to ignore it.
+  /// Full-screen refusal/timeout card — a connection that will never complete. One button back
+  /// to the picker so the user isn't stuck watching a dead "waiting for signal".
+  private func refusalCard(_ msg: String) -> some View {
+    ZStack {
+      Color.black.opacity(0.92).ignoresSafeArea()
+      VStack(spacing: 10) {
+        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+          .font(.title3).foregroundStyle(.orange)
+        Text("Couldn’t connect").font(.headline).foregroundStyle(.white)
+        Text(msg).font(.caption2).foregroundStyle(.secondary)
+          .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        Button { link.backToPicker() } label: {
+          Text("← Back to servers").font(.footnote.weight(.semibold))
+        }.tint(.orange).padding(.top, 2)
+      }
+      .padding(.horizontal, 14)
+    }
+  }
+
   private var placeholder: some View {
-    let msg = stalledMessage
+    // Prefer the LIVE step over "Waiting for signal": while a connection is still being negotiated,
+    // naming what's happening is the difference between "it's working on it" and "it's broken".
+    // ★ LIVE PROGRESS BEATS THE STALL MESSAGE. While we are actively reconnecting, "Lost the
+    // server" is both less accurate and less reassuring than naming the step we are on — and it
+    // is what the user stares at, so it must not be the pessimistic reading. `stalledMessage`
+    // still wins when nothing is in flight (no server chosen, phone not running, genuinely dead).
+    let working = connectionStatus.flatMap { $0.working ? $0.text : nil }
+    let msg = working.map { ("dot.radiowaves.left.and.right", $0) }
+      ?? stalledMessage
       ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")
                          : ("iphone.slash", "Open VibeSDR on iPhone"))
+    // Sits clear of the floating padlock (bottom-left, 78pt up). The message is CENTRED and
+    // wraps to more lines on a narrow screen, so on a 41mm it grew down into the lock. Lifting
+    // the message is right rather than moving the lock: the lock is the one control that still
+    // works while locked, so its position is load-bearing. (41mm simulator, 2026-07-19.)
     return VStack(spacing: 6) {
-      Image(systemName: msg.0)
-        .font(.title3)
-        .foregroundStyle(.secondary)
+      // "@instance" = the triangle-node server mark (see hintPill) — the server is that
+      // shape everywhere in the app, so it must not be a rack here.
+      if msg.0 == "@instance" {
+        InstanceNodes()
+          .stroke(.secondary, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+          .frame(width: 20, height: 20)
+      } else {
+        Image(systemName: msg.0)
+          .font(.title3)
+          .foregroundStyle(.secondary)
+      }
       Text(msg.1)
         .font(.caption2)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
     }
     .padding(.horizontal, 12)
+    .padding(.bottom, 44)
   }
 
   // ── Frequency ticker ───────────────────────────────────────────────────────
 
-  private var ticker: some View {
-    Canvas { ctx, size in
-      guard link.span > 0 else { return }
-      let lo = link.frequency - link.span / 2
-      let hi = link.frequency + link.span / 2
-      let stepHz = tickStep(span: link.span)
-      let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
+  /// THE FREQUENCY AXIS, drawn as a strip BETWEEN the spectrum and the waterfall.
+  ///
+  /// This is where "where exactly is the signal" gets answered — OWRX and SDR++ both put the
+  /// axis here for that reason. It is its OWN reserved dead-black band (nothing of the spectrum
+  /// or waterfall renders behind it), full-bleed edge to edge, carrying:
+  ///  - a band-plan colour WASH filling the strip (OWRX's coloured segments). The old code
+  ///    forbade a wash — but only because the ticker used to float OVER the waterfall, where a
+  ///    tint fought the trace. On dead black it reads cleanly and tells you the band at a glance.
+  ///  - ticks + frequency labels at their TRUE x, with NO edge clamp: a label at the edge clips
+  ///    at the bezel, exactly as the signal it sits over is already clipped off-screen.
+  ///  - band-boundary bars at true x, sliding off/in as you tune.
+  private func drawAxisStrip(_ ctx: GraphicsContext, _ size: CGSize, top: CGFloat, h: CGFloat) {
+    let y0 = top, y1 = top + h
 
-      var hz = (lo / stepHz).rounded(.up) * stepHz
-      while hz <= hi {
-        let px = x(hz)
-        ctx.stroke(
-          Path { $0.move(to: CGPoint(x: px, y: size.height - 4))
-                 $0.addLine(to: CGPoint(x: px, y: size.height)) },
-          with: .color(.white.opacity(0.5)),
-          lineWidth: 1
-        )
-        var label = ctx.resolve(
-          Text(tickLabel(hz, span: link.span))
-            .font(.system(size: 8, weight: .medium, design: .rounded))
-        )
-        label.shading = .color(.white.opacity(0.75))
-        let w = label.measure(in: size).width
-        // Don't let an edge label hang off the screen.
-        let cx = min(max(px, w / 2), size.width - w / 2)
-        ctx.draw(label, at: CGPoint(x: cx, y: 5), anchor: .center)
-        hz += stepHz
-      }
+    // Dead-black base — the strip is carved space, not a window onto the waterfall.
+    ctx.fill(Path(CGRect(x: 0, y: y0, width: size.width, height: h)), with: .color(.black))
 
-      // BAND BOUNDARIES — a MARK, not a wash.
-      //
-      // Tinting the whole strip was tried and it earns nothing: it is either too faint to
-      // notice or too strong to read the tick labels through, and either way it only tells
-      // you WHICH band you're in — which the label above already says, in words. A mark at
-      // the edge tells you something the label cannot: how far you are from leaving it.
-      // That is the thing you want to know while the crown is turning under your finger.
-      let edges = [link.bandLo, link.bandHi].filter { $0 > 0 && $0 > lo && $0 < hi }
-      let edgeCol = link.bandColor ?? .white
-      for e in edges {
-        let px = x(e)
-        // Full-height bar in the band's own colour, with a dark keyline either side so it
-        // survives a bright tick label landing on top of it.
-        ctx.fill(Path(CGRect(x: px - 2, y: 0, width: 4, height: size.height)),
-                 with: .color(.black.opacity(0.85)))
-        ctx.fill(Path(CGRect(x: px - 1, y: 0, width: 2, height: size.height)),
-                 with: .color(edgeCol))
-      }
+    guard link.span > 0 else {
+      // No span yet — still draw the hairline so the axis reads as a line.
+      ctx.stroke(
+        Path { $0.move(to: CGPoint(x: 0, y: y1)); $0.addLine(to: CGPoint(x: size.width, y: y1)) },
+        with: .color(.white.opacity(0.18)), lineWidth: 1)
+      return
     }
-    .frame(height: 14)
-    // 0.45 → 0.68. It sat at 0.45 while the band label DIRECTLY ABOVE IT sits at 0.62, and
-    // the difference is plainly visible on a bright waterfall: one reads, the other doesn't.
-    // A touch darker still than the label, because the tick text is 8pt against the band
-    // name's 10pt — the smaller the type, the more ground it needs under it.
-    .background(.black.opacity(0.68))
-    .clipShape(RoundedRectangle(cornerRadius: 4))
+    let lo = link.frequency - link.span / 2
+    let hi = link.frequency + link.span / 2
+    let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
+
+    // BAND-PLAN COLOUR WASH, PER SEGMENT. Each band paints only ITS OWN slice of the visible
+    // span, so a boundary shows as two colours meeting (40m red | 41m broadcast blue at
+    // 7.2 MHz) instead of the whole bar being one colour that flips as you cross. Drawn in plan
+    // order so a ham band (listed after the broadcast band it sits inside) paints on top and
+    // wins on overlap — the same "ham preferred" rule as the label. Gaps stay dead black.
+    for b in BandPlan.bands where b.hi > lo && b.lo < hi {
+      let x0 = max(0, x(max(b.lo, lo)))
+      let x1 = min(size.width, x(min(b.hi, hi)))
+      guard x1 > x0 else { continue }
+      // Vibrancy: 0.30 read far too subtle on the actual display (a screenshot flatters it).
+      // 0.62 makes the band segments clearly legible on the watch without drowning the ticks.
+      ctx.fill(Path(CGRect(x: x0, y: y0, width: x1 - x0, height: h)),
+               with: .color(b.color.opacity(0.62)))
+    }
+
+    // Hairline under the strip, so the axis and the waterfall's top edge don't bleed together.
+    // (The spectrum already draws one at y0, the strip's top.)
+    ctx.stroke(
+      Path { $0.move(to: CGPoint(x: 0, y: y1)); $0.addLine(to: CGPoint(x: size.width, y: y1)) },
+      with: .color(.white.opacity(0.18)), lineWidth: 1)
+
+    let stepHz = tickStep(span: link.span)
+    var hz = (lo / stepHz).rounded(.up) * stepHz
+    while hz <= hi {
+      let px = x(hz)
+      // Tick at the BOTTOM of the strip, against the waterfall row it labels.
+      ctx.stroke(
+        Path { $0.move(to: CGPoint(x: px, y: y1 - 4)); $0.addLine(to: CGPoint(x: px, y: y1)) },
+        with: .color(.white.opacity(0.6)), lineWidth: 1)
+      var label = ctx.resolve(
+        Text(tickLabel(hz, span: link.span))
+          .font(.system(size: 8, weight: .medium, design: .rounded)))
+      label.shading = .color(.white.opacity(0.85))
+      // True x — labels clip at the bezel, they are not pulled back inboard.
+      ctx.draw(label, at: CGPoint(x: px, y: y0 + (h - 4) / 2), anchor: .center)
+      hz += stepHz
+    }
+    // (Band-boundary bars removed: the colour WASH now tells you the band, so the old
+    // per-edge marker bars are redundant. bandLo/bandHi stay populated for later use.)
   }
 
   /// THE BAND, in words, in the strip beside the clock.
@@ -1071,9 +1655,13 @@ struct ContentView: View {
   ///
   /// Coloured by the band, so the label and the ticker underneath agree at a glance.
   private var bandLabel: some View {
-    Group {
-      if !link.bandName.isEmpty {
-        Text(link.bandName)
+    // Prefer a LIVE station name (RDS ps on FM broadcast) over the static band name — "BBC R2"
+    // beats "FM Broadcast Band" when we know it. Falls back to the band name off-station.
+    let station = link.stationName.trimmingCharacters(in: .whitespaces)
+    let label = station.isEmpty ? link.bandName : station
+    return Group {
+      if !label.isEmpty {
+        Text(label)
           // WHITE. It was drawn in the BAND'S colour, and that is a mistake this app has
           // a rule against: legibility comes from darkening, never from the accent. A
           // band-blue label 11pt tall on a dark strip is simply not readable — the colour
@@ -1208,12 +1796,14 @@ struct ContentView: View {
         // CW case; scaling costs nothing and is always readable at a glance.
         .lineLimit(1)
         .minimumScaleFactor(0.55)
+        .outlined()          // legible over the bright SNR bar when the screen dims
       // Whatever the phone's meter says — S-meter, dBFS, SNR or FM-DX's dBf. We
       // do not choose the metric here; see WatchLink.meter.
       Text(link.meter.isEmpty ? "—" : link.meter)
         .font(.system(size: 11, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white.opacity(0.9))
+        .outlined()
         .layoutPriority(-1)   // the frequency wins the space
     }
     .padding(.horizontal, 12)
@@ -1245,10 +1835,10 @@ struct ContentView: View {
   /// PRECISION FOLLOWS THE STEP: 3 decimals of MHz is 1kHz resolution, so on CW
   /// (1-10Hz steps) you literally could not see what you were tuning. The digits
   /// you get are the ones that can actually move.
-  private func formatFreq(_ hz: Double, step: Double, unit: WatchLink.DisplayUnit) -> String {
+  private func formatFreq(_ hz: Double, step: Double, unit: SpikeLink.DisplayUnit) -> String {
     if hz <= 0 { return "—" }
 
-    let resolved: WatchLink.DisplayUnit = {
+    let resolved: SpikeLink.DisplayUnit = {
       guard unit == .auto else { return unit }
       if hz >= 1_000_000 { return .mhz }
       if hz >= 1_000     { return .khz }
@@ -1298,5 +1888,17 @@ enum SignalGradient {
             .init(color: orange, location: 0.15),
             .init(color: amber, location: 0.45),
             .init(color: green, location: 1)]
+  }
+}
+
+extension View {
+  /// A crisp black outline (4-way offset shadows) so light digits stay legible over the bright
+  /// SNR bar — especially when the screen dims. Cheap: no blur, radius 0.
+  func outlined(_ color: Color = .black, _ w: CGFloat = 0.9) -> some View {
+    self
+      .shadow(color: color, radius: 0, x:  w, y: 0)
+      .shadow(color: color, radius: 0, x: -w, y: 0)
+      .shadow(color: color, radius: 0, x: 0, y:  w)
+      .shadow(color: color, radius: 0, x: 0, y: -w)
   }
 }
