@@ -7,22 +7,27 @@ prebuild` is documented to wipe exactly those. A throwaway measurement rig must 
 to damage the shipping app, so it lives somewhere it cannot reach.
 """
 import os, hashlib
+from pathlib import Path
 
 ROOT = "/Users/stuey3d/VibeSDR/spike/WristSDR"
 NAME = "WristSDR"
 BUNDLE = "com.stuey3d.wristsdr"
 TEAM = "6PV2X6THHM"
 
-SOURCES = [
-    "WristSDRApp.swift", "ContentView.swift", "UberClient.swift",
-    "SignalProcessor.swift", "WaterfallBuffer.swift", "OpusDecoder.swift",
-    "WatchAudio.swift", "AudioSocket.swift", "Vitals.swift", "Gzip.swift",
-    # The companion UI, ported and rewired to SpikeLink (the WatchLink-shaped adapter).
-    "SpikeLink.swift", "ControlMenu.swift", "NumpadView.swift", "CpuMeter.swift",
-    "VolumeControl.swift",   # native WKInterfaceVolumeControl bridge
-    "BandwidthView.swift",   # LSB/USB passband crown editor
-    "BandPlan.swift",        # HF band plan → ticker label + dividers
-]
+# ★ DISCOVERED FROM DISK, NOT LISTED.
+#
+# This was a hand-maintained list of 17 files. The spike grew to 32 and the list was never
+# updated — so running this script REPLACED a working project with one missing half the sources,
+# and the spike stopped building. Found on 2026-07-19 while verifying the spike could still be
+# rebuilt before deleting it from the watch: the verification itself broke it, and the project
+# file had to be restored from git.
+#
+# A generator whose input drifts from reality is worse than no generator, because it looks
+# authoritative. Same lesson as tools/inject_watch_target.py, which discovers its sources too.
+SOURCES = sorted(p.name for p in Path(ROOT, NAME).glob("*.swift"))
+if not SOURCES:
+    raise SystemExit(f"error: no Swift sources found in {Path(ROOT, NAME)} — refusing to write "
+                     f"an empty project over a working one")
 
 def uid(s):
     """Stable 24-hex ids — a regenerated project should be byte-identical, not churn."""
