@@ -693,6 +693,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   private var goingIdle = false
   func goIdle() {
     goingIdle = true
+    // Write any pending tune before the session dies with its debounce — leaving within a second of
+    // tuning must not lose where you were.
+    tuneMemory.flush()
     keepaliveSource?.cancel(); keepaliveSource = nil
     rateTimer?.invalidate(); rateTimer = nil
     connectTimer?.invalidate(); connectTimer = nil

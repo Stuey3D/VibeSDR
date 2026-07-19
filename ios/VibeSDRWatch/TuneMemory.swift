@@ -79,13 +79,26 @@ final class TuneMemory {
   func note(frequency: Double, mode: String) {
     guard loaded, range.contains(frequency) else { return }
     guard proven else { pending = (frequency, mode); return }
-    pending = nil
+    pending = (frequency, mode)
     saveTask?.cancel()
-    saveTask = Task { [key] in
+    saveTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: 1_000_000_000)      // 1s, matching the phone
       guard !Task.isCancelled else { return }
-      UserDefaults.standard.set(["f": frequency, "m": mode], forKey: key)
+      self?.flush()
     }
+  }
+
+  /// ★ Write any pending tune NOW. Call when a session ends.
+  ///
+  /// The 1s debounce dies with whatever is running it, so tuning and then immediately leaving the
+  /// server — or dropping the wrist — silently DISCARDED that tune: you came back to the previous
+  /// frequency, not the one you were actually on. On a watch that window is most of the session;
+  /// glancing at a frequency and leaving takes a couple of seconds.
+  func flush() {
+    guard let p = pending, proven else { return }
+    pending = nil
+    saveTask?.cancel()
+    UserDefaults.standard.set(["f": p.f, "m": p.m], forKey: key)
   }
 
   /// ★ The connection was refused. Drop the memory so the next attempt takes the server's default

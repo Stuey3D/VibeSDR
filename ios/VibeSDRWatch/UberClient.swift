@@ -647,6 +647,9 @@ final class UberClient: ObservableObject {
     // zero it here) reopen the sockets, so the old client keeps reconnecting and pegs the CPU while the
     // NEXT server starts on top of it (the "2nd server 93% hang"). Latch it and kill the once-only timers.
     goingIdle = true
+    // Write any pending tune before the session dies with its debounce — leaving within a second of
+    // tuning must not lose where you were.
+    tuneMemory.flush()
     rateTimer?.invalidate(); rateTimer = nil
     pathMonitor.cancel()
     specSock.cancel()

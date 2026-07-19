@@ -2462,17 +2462,40 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [connected]);
 
+  // The tune not yet written, held so it can be flushed WITHOUT waiting out the debounce.
+  const pendingTune = useRef<{ key: string; frequency: number; mode: SDRMode } | null>(null);
+  const flushTune = useCallback(() => {
+    const p = pendingTune.current;
+    if (!p) return;
+    pendingTune.current = null;
+    AsyncStorage.setItem(p.key, JSON.stringify({ frequency: p.frequency, mode: p.mode })).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (!lastTuneLoaded.current || !status.frequency) return;
-    const t = setTimeout(() => {
-      // Local hardware's baseUrl has a per-session port → use a stable PER-DEVICE
-      // key (usb / tcp:host:port) so the last tune restores and devices don't
-      // clobber each other (otherwise it reverts to the 14 MHz default).
-      AsyncStorage.setItem(isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl,
-        JSON.stringify({ frequency: status.frequency, mode: status.mode })).catch(() => {});
-    }, 1000);
+    // Local hardware's baseUrl has a per-session port → use a stable PER-DEVICE
+    // key (usb / tcp:host:port) so the last tune restores and devices don't
+    // clobber each other (otherwise it reverts to the 14 MHz default).
+    pendingTune.current = {
+      key: isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl,
+      frequency: status.frequency,
+      mode: status.mode,
+    };
+    const t = setTimeout(flushTune, 1000);
     return () => clearTimeout(t);
-  }, [status.frequency, status.mode, baseUrl]);
+  }, [status.frequency, status.mode, baseUrl, isLocal, localDeviceKey, flushTune]);
+
+  // ★ FLUSH ON THE WAY OUT. The debounce timer above is cleared by its own cleanup, so leaving the
+  //   screen — or backgrounding the app — within 1s of a tune used to DISCARD it silently: you
+  //   returned to the previous frequency, not the one you were actually on.
+  //
+  //   That is the exact case this feature exists for. Opening the app, checking a frequency and
+  //   closing it again is a matter of seconds, so the window where the debounce loses your tune is
+  //   the window people spend most of their time in.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s: string) => { if (s !== 'active') flushTune(); });
+    return () => { sub.remove(); flushTune(); };   // cleanup order: this runs after the debounce's
+  }, [flushTune]);
 
   useEffect(() => {
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
