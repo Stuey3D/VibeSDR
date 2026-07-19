@@ -351,7 +351,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// otherwise leave a heartbeat running and the phone streaming rows at a watch that is busy
   /// running its own receiver.
   func detach() {
+    // ★ TELL THE PHONE TO STOP. Dropping rows on arrival fixes the corruption but not the WASTE:
+    //   the phone judges "is a watch listening" from app reachability, so with Jr in the foreground
+    //   running its own receiver it would happily stream a waterfall nobody reads — spending phone
+    //   battery, and putting WCSession traffic on a radio the watch needs for its own sockets.
+    //   Sent BEFORE the latch drops, or the send would be suppressed by our own teardown.
+    send(["cmd": "stop"])
     attached = false
+    // `cmd:need` is what RESUMES the phone, and requestMissing() rate-limits itself to one every
+    // 3s. Toggle Standalone -> Companion quickly and that limiter would swallow the resume, leaving
+    // a mode with no waterfall and no error. Clear it here so the next entry always gets through.
+    lastNeedAt = .distantPast
     heartbeat?.invalidate(); heartbeat = nil
     rowRateTimer?.invalidate(); rowRateTimer = nil
     if rowsPerSec != 0 { rowsPerSec = 0 }

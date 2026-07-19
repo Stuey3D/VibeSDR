@@ -243,6 +243,10 @@ class WatchProvider {
   private lastLogo = '';   // what we WANT the watch to have
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
   private out = new Uint8Array(WATCH_BINS);
+  /** Does the watch actually want the waterfall? False while it is in Standalone mode, running its
+   *  own receiver. Defaults TRUE: a watch that has said nothing is a companion, which is what every
+   *  build before this one was. */
+  private rowsWanted = true;
   private emitter: NativeEventEmitter | null = null;
   /** LINK subs (reachability) — owned by the app, live for its whole life. */
   private subs: { remove(): void }[] = [];
@@ -402,7 +406,21 @@ class WatchProvider {
           // The watch is telling us it's missing something we only send ON CHANGE
           // (the palette LUT, the logo, the station memory). It knows; we don't.
           // Forget what we think it has.
-          case 'need': this.flushAll(); break;
+          // ★ The watch has gone STANDALONE — it is running its own receiver and is not reading our
+          //   waterfall. Reachability cannot tell us this: the watch app is still in the
+          //   foreground, so by every flag we had it looked like an attached companion. Without
+          //   being told, we stream a waterfall nobody reads — phone battery spent, and WCSession
+          //   traffic on the radio the watch needs for its OWN sockets.
+          //
+          //   Rows only. State, favourites and the rest are cheap, occasional, and still wanted:
+          //   the watch keeps showing the phone's link health, and its mode toggle only appears
+          //   while we are alive. Silence would look like a dead phone.
+          case 'stop': this.rowsWanted = false; break;
+          // 'need' is the watch saying "I have nothing" — which is exactly what entering Companion
+          // mode sends. That is the resume, and it is deliberately NOT 'ping': the watch pings
+          // while merely SHOWING the servers list, and that must not restart a stream it isn't
+          // going to draw.
+          case 'need': this.rowsWanted = true; this.flushAll(); break;
         }
       }),
     );
@@ -887,6 +905,8 @@ class WatchProvider {
   }
 
   private sendRow(row: Uint8Array, ctx: WatchFrameCtx) {
+    // The watch told us it is running its own receiver and isn't reading this (cmd:stop).
+    if (!this.rowsWanted) return;
     // A screen that no longer owns the watch must not talk to it. The outgoing SDR
     // screen stays mounted (and streaming) for a beat after the incoming one takes
     // over, and its rows would drag the wrist back to the waterfall.
