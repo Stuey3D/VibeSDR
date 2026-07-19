@@ -13,6 +13,7 @@ import SwiftUI
 enum ServerType: String, Codable, CaseIterable {
   case ubersdr, kiwi, owrx, fmdx, spyserver, rtltcp, vibeserver
 
+
   /// Display name for the by-type sort + row badge.
   var display: String {
     switch self {
@@ -33,6 +34,18 @@ enum ServerType: String, Codable, CaseIterable {
     }
   }
   /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
+  /// Can the WATCH receive this itself? RTL-TCP and SpyServer are raw-IQ protocols the watch has no
+  /// client for — the phone does.
+  ///
+  /// ★ THE FILTER FOLLOWS WHOEVER IS RECEIVING (Stuart, 2026-07-19). Standalone shows only what the
+  ///   watch can do; **Companion must NOT use this gate**, because there the PHONE is the receiver
+  ///   and the watch is only a remote. That is not mere consistency — it is how you start the
+  ///   phone's own RTL-SDR dongle from the wrist.
+  ///
+  /// ★★ A RENDER filter, never a STORE filter. The merged favourites hold everything either device
+  ///    knows about; the watch draws a subset. Pruning on the watch and syncing the pruned list
+  ///    back would delete the phone's own favourites — "the watch ate my favourites", the worst way
+  ///    a sync can fail.
   var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx || self == .fmdx || self == .vibeserver }
 }
 

@@ -68,16 +68,16 @@ struct InstancePickerView: View {
   var body: some View {
     List {
       modeToggleSection      // only when an iPhone is actually there — see below
-      // The list follows the mode. In Companion the servers screen changes the PHONE's connection,
-      // so it shows the PHONE's servers; in Standalone it connects this watch directly.
-      if mode == .companion {
-        phoneServersSection
-      } else {
-        discoveredSection    // your own local servers first — the fastest, highest-quality link
-        favouritesSection
-        directoriesSection
-        customSection
-      }
+      // ★ THE SAME FULL LIST IN BOTH MODES. Build 66 showed only the phone's favourites in
+      //   Companion, which made it look like a lesser screen — Stuart: "Companion mode doesn't have
+      //   the full server list like the watch does. Both need to have the exact same server lists."
+      //   What differs is only WHO CONNECTS: in Companion a tap redirects the PHONE (cmd:inst), in
+      //   Standalone it opens the watch's own sockets.
+      if mode == .companion { phoneServersSection }   // the phone's own, first — it is driving
+      discoveredSection      // your own local servers — the fastest, highest-quality link
+      favouritesSection
+      directoriesSection
+      customSection
     }
     .listStyle(.carousel)
     // The toggle must appear and disappear with the phone, so keep asking while this screen is up.
@@ -386,7 +386,9 @@ struct InstancePickerView: View {
     if let cc = s.countryCode { bits.append(cc) } else if !s.location.isEmpty { bits.append(s.location) }
     if let d = s.distance { bits.append("\(Int(d.rounded())) km") }
     if let sn = s.bestSnr { bits.append("SNR \(Int(sn.rounded()))") }
-    if !s.serverType.connectable { bits.append("· soon") }
+    // "soon" means the WATCH has no client for it — which is not true in Companion, where the
+    // phone connects and RTL-TCP/SpyServer work today.
+    if !s.serverType.connectable, mode != .companion { bits.append("· soon") }
     return bits.joined(separator: " · ")
   }
 
@@ -418,7 +420,14 @@ struct InstancePickerView: View {
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   private func connect(url: String, name: String, type: ServerType) {
-    guard type.connectable else { return }   // other protocols land as adapters are added
+    // In Companion the PHONE opens the socket, so the watch's own capability must not gate it —
+    // that is what makes the phone's RTL-SDR dongle reachable from the wrist. In Standalone the
+    // watch really cannot receive these, so the gate stands.
+    if mode == .companion {
+      WatchLink.shared.selectInstance(url)
+    } else {
+      guard type.connectable else { return }   // other protocols land as adapters are added
+    }
     let host = URL(string: url)?.host ?? url.replacingOccurrences(of: "https://", with: "")
       .replacingOccurrences(of: "http://", with: "").trimmedTrailingSlash
     favs.registerVisit(url)

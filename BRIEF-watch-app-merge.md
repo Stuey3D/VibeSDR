@@ -272,6 +272,49 @@ while apart, i.e. a genuine two-way merge:
 Pushing VibeServer PINs to a watch because a favourite synced is a security decision made on the
 user's behalf. Either leave PINs device-local, or make it an explicit opt-in — never a side effect.
 
+### ★★ THE SPEC, dictated 2026-07-19 (after Jr shipped to the wrist)
+
+Stuart, on seeing Companion mode showing only the phone's favourites:
+
+> *"Companion mode doesn't have the full server list like the watch does. Both need to have the
+> exact same server lists and favourites merged. If I favourite a server on the watch it merges it
+> to the phone; if I favourite it on the phone it favourites it on the watch. The only servers that
+> don't display on the watch that may be added as favourites on the iPhone are the unsupported ones
+> on the watch — RTL-TCP / SpyServer etc."*
+
+So:
+
+1. **One list, both devices, both modes.** Companion must show the SAME full directory list and
+   favourites as Standalone — not a reduced phone-favourites-only view (which is what build 66
+   shipped, and it is why this came up).
+2. **Favouriting is bidirectional and merges.** Watch → phone and phone → watch, not a copy in
+   either direction.
+3. **The only asymmetry is CAPABILITY**, and it is a display filter rather than a different list:
+   backends the watch cannot receive (RTL-TCP, SpyServer) can be favourited on the phone and simply
+   do not appear on the watch. They are still in the merged store — hiding them must not DELETE
+   them, or a watch sync would silently strip the phone's own favourites.
+
+★ **A filter, never a deletion.** The watch holds the full merged list and renders a subset. Any
+implementation that prunes on the watch and syncs the pruned list back destroys phone data — and
+would look like "the watch ate my favourites", which is the worst possible failure for a sync.
+
+### ★ RESOLVED — the filter follows WHOEVER IS RECEIVING (Stuart, 2026-07-19)
+
+§0 says Companion *"lists RTL-TCP and every backend the phone supports"*; the spec above says
+watch-unsupported backends don't display on the watch. Both are right, for different modes:
+
+| mode | who receives | list shows |
+|---|---|---|
+| **Standalone** | the watch | only what the WATCH can receive — RTL-TCP / SpyServer hidden |
+| **Companion** | the phone | everything the PHONE can receive — RTL-TCP / SpyServer INCLUDED |
+
+The rule is one sentence: **filter by the capabilities of the device doing the receiving.** So the
+filter is per-mode, not global, and it is a property of the RENDER — the merged store always holds
+everything either device knows about.
+
+★ This is also a feature, not just consistency: it is how you start the phone's own RTL-SDR dongle
+from the wrist. Hiding it in Companion would remove a thing the hardware can actually do.
+
 ### Why it argues for merging FIRST
 
 In Phone Control the WCSession pipe already exists, so sync is plumbing rather than new transport.
