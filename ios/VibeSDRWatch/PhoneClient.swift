@@ -160,6 +160,62 @@ final class PhoneClient: ObservableObject, SDRClient {
   ///   stop DOING things; having nothing to close is not the same as having nothing to stop.
   func goIdle() { link.detach() }
 
+  // ── THE PHONE'S CURRENT BACKEND, so the watch follows it off the waterfall ───────────────────
+  //
+  // ★ The spike routes screens off the CLIENT TYPE (`client is FmDxClient`), which can never be
+  //   true here — PhoneClient is the only client in Companion no matter what the phone is on. So
+  //   switching the phone to FM-DX changed the audio while the wrist sat on a FROZEN UberSDR
+  //   waterfall (Stuart, build 71). The phone was already sending everything needed; nothing was
+  //   reading it.
+  //
+  //   These types are the companion's and the spike's versions of the same thing, near
+  //   field-for-field. Mapping is mechanical — the alternative, teaching the spike's views to read
+  //   WatchLink's types, would fork every screen in the app.
+
+  var fmdxInfo: FmdxInfo? {
+    guard let f = link.fmdx else { return nil }
+    var i = FmdxInfo()
+    i.freq = f.freq;   i.users = f.users;  i.level = f.level; i.meter = f.meter
+    i.ps = f.ps;       i.rt = f.rt;        i.pi = f.pi;       i.pty = f.pty
+    i.stereo = f.stereo
+    i.rds = !f.ps.isEmpty || !f.pi.isEmpty   // the phone sends no rds flag; RDS content IS the flag
+    i.tx = f.tx;       i.city = f.city;    i.dist = f.dist;   i.rx = f.rx;  i.flag = f.flag
+    return i
+  }
+
+  /// The phone decodes ADS-B and sends finished aircraft; only the struct differs.
+  var aircraft: [Aircraft] {
+    link.aircraft.map { a in
+      var p = Aircraft(icao: a.icao)
+      p.flight = a.flight;   p.country = a.country;  p.ccode = a.ccode
+      p.altitude = a.altitude; p.speed = a.speed;    p.vspeed = a.vspeed
+      p.course = a.course;   p.squawk = a.squawk;    p.rssi = a.rssi
+      p.distKm = a.distKm;   p.bearing = a.bearing
+      // ☐ NO lat/lon: the phone sends distance + bearing, not position, so the ADS-B MAP has
+      //   nothing to plot in Companion — the list (sorted by distance) is unaffected. Either the
+      //   phone starts sending positions, or the map derives them from the receiver's own
+      //   coordinates plus distance/bearing. Not guessed at here.
+      return p
+    }
+  }
+
+  var dabProgrammes: [DabProgramme] {
+    (link.dab?.list ?? []).map { DabProgramme(id: $0.id, name: $0.name) }
+  }
+  var dabActiveId: Int { link.dab?.active ?? -1 }
+  var dabEnsembleName: String { link.dab?.ensemble ?? "" }
+  /// Selecting a service redirects the PHONE, exactly as tuning does.
+  func selectDabService(_ id: Int) { link.selectDab(id) }
+
+  /// The screen the PHONE is on, for SpikeLink's router. `isFmdx` is cleared by the arrival of any
+  /// spectrum row, so it cannot get stuck showing FM-DX after the phone returns to a waterfall.
+  var phoneScreen: SpikeLink.Screen {
+    if link.isFmdx || link.fmdx != nil { return .fmdx }
+    if let d = link.dab, !d.list.isEmpty { return .dab }
+    if !link.aircraft.isEmpty { return .adsb }
+    return .sdr
+  }
+
   // ── Not yet proxied. Each is a deliberate stub, not an oversight ──
   // Chat MUST route through the phone rather than opening a second connection — one server
   // connection, one participant, one history (§2c). That needs a read-watermark syncing both ways,

@@ -88,19 +88,34 @@ extension PhonePresence {
   /// is while disconnected or failing. A row means a server is actually delivering a waterfall
   /// right now, which is exactly the condition for dropping the user into it.
   ///
-  /// ★ Note the order: `cmd:need` FIRST. Standalone told the phone to stop sending
-  ///   (`cmd:stop`), so without resuming we would be listening to a silence we caused ourselves
-  ///   and would always conclude "no server".
+  /// ★ Order matters. Standalone told the phone to stop sending (`cmd:stop`), so without resuming
+  ///   we would be listening to a silence we caused ourselves and would always say "no server".
+  ///   `ping` wakes the phone's spectrum (its `onHello`), `need` resumes rows and reflushes.
+  ///
+  /// ★★ ROWS ARE NOT THE ONLY PROOF, and insisting on them was a bug (Stuart, build 71). With the
+  ///    phone LOCKED and playing in the background, its spectrum socket is closed for power — so
+  ///    there are no rows to catch, and waiting for one concluded "no server" on a phone sitting
+  ///    happily on a live one. Waking it takes a socket reopen and a first frame, which is longer
+  ///    than anyone wants to stare at a spinner.
+  ///
+  ///    So ask the phone instead: `why` IS the answer, and it already distinguishes the cases —
+  ///    'paused' (asleep for power), 'live', and 'reconnecting' all mean A SERVER IS THERE, while
+  ///    'idle' means nothing is feeding it. The wake still happens; we just stop making the user
+  ///    wait for its result before deciding.
   func probeSession() async -> Bool {
     let link = WatchLink.shared
     link.activate()
-    link.requestMissing()
+    link.ping()             // wakes a spectrum that was closed for power
+    link.requestMissing()   // resume rows + reflush what is only sent on change
 
+    let hasServer: Set<String> = ["live", "paused", "reconnecting"]
     let before = link.rowsPushed
     let clock = ContinuousClock()
     let start = clock.now
-    while clock.now - start < .milliseconds(2000) {
-      if link.rowsPushed > before { return true }
+    while clock.now - start < .milliseconds(2500) {
+      if link.rowsPushed > before { return true }        // definitive
+      if let t = link.lastStateAt, Date().timeIntervalSince(t) < 3,
+         hasServer.contains(link.why) { return true }    // the phone said so
       try? await Task.sleep(for: .milliseconds(100))
     }
     return false

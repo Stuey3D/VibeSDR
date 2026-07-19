@@ -420,7 +420,18 @@ class WatchProvider {
           // mode sends. That is the resume, and it is deliberately NOT 'ping': the watch pings
           // while merely SHOWING the servers list, and that must not restart a stream it isn't
           // going to draw.
-          case 'need': this.rowsWanted = true; this.flushAll(); break;
+          //
+          // ★ onHello() FIRST — it is what wakes the spectrum. When the phone is locked and playing
+          //   in the background we close the spectrum socket for power, and only 'ping' used to
+          //   reopen it. So a watch entering Companion sent 'need', got nothing (there was nothing
+          //   flowing to send), and concluded the phone had no server — when it was sitting on a
+          //   live one with the screen off. "I have nothing, send me everything" has to include
+          //   waking the source, or it is a request that cannot be satisfied.
+          case 'need':
+            handlers.onHello();
+            this.rowsWanted = true;
+            this.flushAll();
+            break;
         }
       }),
     );

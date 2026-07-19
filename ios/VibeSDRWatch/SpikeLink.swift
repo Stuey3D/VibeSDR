@@ -158,6 +158,12 @@ final class SpikeLink: ObservableObject {
   /// exactly as the companion routes it.
   enum Screen { case sdr, dab, adsb, fmdx }
   var screen: Screen {
+    // ★ COMPANION follows the PHONE's backend, not ours. The tests below route on the client TYPE,
+    //   which in Companion is always PhoneClient however the phone is tuned — so switching the
+    //   phone to FM-DX left the wrist on a frozen UberSDR waterfall while the audio changed
+    //   underneath it. The V9 companion had DAB, ADS-B and FM-DX screens driven by the phone's own
+    //   messages; the merge kept receiving them and stopped ROUTING on them.
+    if let phone = client as? PhoneClient { return phone.phoneScreen }
     if client is FmDxClient { return .fmdx }
     // Route on the ACTUAL demod — the source of truth. Using `!aircraft.isEmpty` too meant a reconnect
     // that landed back on FM still showed the ADS-B screen (stale list) over an FM demod.
