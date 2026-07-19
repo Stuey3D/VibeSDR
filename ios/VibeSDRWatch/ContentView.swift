@@ -1128,6 +1128,22 @@ struct ContentView: View {
   /// strength (the readout gradient), a different meter — a strong station on a dying link must
   /// still show red.
   private var linkQuality: LinkQuality {
+    // ★ COMPANION: this glyph reports the PHONE↔SERVER hop, scored by the PHONE (0=down…3=good).
+    //   The watch has no direct opinion about the server here and must not invent one from its own
+    //   row flow — that is the OTHER hop, and it has its own glyph now.
+    //
+    //   Note what must NOT happen first: the `transport == .none` test below. In Companion the
+    //   watch legitimately has no network path of its own — everything arrives over WCSession — so
+    //   that test painted BOTH glyphs red while the waterfall was drawing perfectly. Two red
+    //   crosses, one irrelevant cause. Field-caught by Stuart on build 64.
+    if link.isPhoneControl {
+      switch link.serverLink {
+      case 0:  return .down
+      case 1:  return .poor
+      case 2:  return .degraded
+      default: return .good
+      }
+    }
     if link.transport == .none { return .down }
     if stalledMessage != nil { return .down }            // no server connection at all
     let gapQ: LinkQuality
@@ -1157,11 +1173,25 @@ struct ContentView: View {
 
   /// What the watch is connected THROUGH. `.other` (the iPhone relay) → iphone; see transportFor.
   @ViewBuilder private var methodGlyph: some View {
-    switch link.transport {
-    case .iphone:   Image(systemName: "iphone")
-    case .wifi:     Image(systemName: "wifi")
-    case .cellular: Image(systemName: "antenna.radiowaves.left.and.right")
-    case .none:     Image(systemName: "xmark").foregroundStyle(.red)
+    // ★ COMPANION: this glyph GAINS COLOUR and changes meaning. It stops reporting how the watch
+    //   reaches the internet — irrelevant, the phone does that — and reports the WATCH↔PHONE hop,
+    //   which is a real failure point (a pocket, a wall, a flat phone) and had no indicator at all
+    //   until now. Together with the node glyph it localises the fault at a glance:
+    //     node red + iPhone green = the phone lost the server
+    //     node green + iPhone red = you have walked away from your phone
+    //
+    // ★ STANDALONE keeps it purely informational, uncoloured. There the node glyph already reports
+    //   the only hop there is, and colouring both would say the same thing twice — or disagree.
+    if link.isPhoneControl {
+      Image(systemName: "iphone")
+        .foregroundStyle(link.phoneHopHealthy == false ? .red : .green)
+    } else {
+      switch link.transport {
+      case .iphone:   Image(systemName: "iphone")
+      case .wifi:     Image(systemName: "wifi")
+      case .cellular: Image(systemName: "antenna.radiowaves.left.and.right")
+      case .none:     Image(systemName: "xmark").foregroundStyle(.red)
+      }
     }
   }
 

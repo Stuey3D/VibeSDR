@@ -55,10 +55,15 @@ final class PhoneClient: ObservableObject, SDRClient {
   var signalDb: Double { link.snr }
   var rowsPushed: Int { link.rowsPushed }
 
-  /// The link has no frame-rate meter of its own; rows are paced by the phone. Reporting a made-up
-  /// number here would feed the link glyph a fiction, so report nothing and let `rowsPushed` and
-  /// `status` carry liveness instead.
-  var framesPerSec: Double { 0 }
+  /// The MEASURED row rate off the link (WatchLink counts arrivals per second).
+  ///
+  /// ★ This was hardcoded to 0, on the reasoning that inventing a frame rate would feed the link
+  ///   glyph a fiction. That was backwards: SpikeLink derives the glyph FROM this
+  ///   (`framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)`), so 0 is not "no claim" — it is the claim
+  ///   that the link is dead, and it painted the node red as soon as one row had ever arrived.
+  ///   Measuring it means the glyph goes red when rows really stop and green when they really flow,
+  ///   which is the whole point of having it.
+  var framesPerSec: Double { link.rowsPerSec }
 
   /// ★ In Phone Control the node glyph must report the PHONE's link to the server, not the watch's
   ///   — the phone owns that connection and the watch has no direct opinion about it (§2b).
@@ -72,7 +77,45 @@ final class PhoneClient: ObservableObject, SDRClient {
   /// carries. A second channel here would let the two disagree.
   var lastError: String? { nil }
 
-  func start() { link.activate() }
+  // ── TWO HOPS, TWO GLYPHS (§2b) ───────────────────────────────────────────────────────────────
+  //
+  //   watch ──(A)── iPhone ──(B)── server
+  //
+  // Standalone has ONE hop and the node glyph reports it. Phone Control has TWO, and they fail
+  // independently, so each glyph must report its OWN hop or they cannot localise a fault:
+  //
+  //   node red + iPhone green  ->  the phone lost the server
+  //   node green + iPhone red  ->  you have walked away from your phone (or rows are being lost)
+  //
+  // Collapsing both into one number is what made tonight's missing waterfall opaque: the node
+  // glyph went red off the WATCH's row flow, which said nothing about whether the phone was still
+  // happily connected — and it was.
+
+  /// (B) phone ↔ SERVER — the PHONE's own reported link health, straight from its state frame.
+  /// The watch has no direct opinion about the server in this mode and must not invent one.
+  var phoneServerLink: Int { link.serverLink }
+
+  /// (A) watch ↔ PHONE. Rows flowing, or a recent state frame if the phone simply has nothing to
+  /// send (idle on a frequency, or a screen with no spectrum at all).
+  var phoneHopHealthy: Bool {
+    if link.rowsPerSec > 0 { return true }
+    if let t = link.lastStateAt, Date().timeIntervalSince(t) < 8 { return true }
+    return false
+  }
+
+  func start() {
+    link.activate()
+    // ★ ASK FOR EVERYTHING. The phone sends the palette LUT, favourites, station memory and
+    //   settings ON CHANGE only, and re-sends them when it sees a ping after an 8s gap — which in
+    //   V9 was guaranteed, because the first ping the phone ever saw WAS the watch app launching.
+    //
+    //   Jr broke that assumption: the launch gate starts pinging at app start to find out whether
+    //   the phone is even there, so by the time Companion mode is entered the phone has been
+    //   hearing pings for a while and the gap never opens. Entering the mode is precisely when we
+    //   have nothing, so say so outright (`cmd:need` -> flushAll) rather than relying on a silence
+    //   that no longer happens.
+    link.requestMissing()
+  }
 
   /// Nothing to drain: rows are pushed straight into the buffer as they arrive. The direct backends
   /// hold a ~1s queue to line the spectrum up with their own audio cushion — here the AUDIO IS THE

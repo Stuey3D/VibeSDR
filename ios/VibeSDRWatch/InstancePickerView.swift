@@ -102,7 +102,12 @@ struct InstancePickerView: View {
   /// belongs where Companion is exited, not here.
   @ViewBuilder private var modeToggleSection: some View {
     if let onCompanion, presence.phoneActive {
-      Section {
+      // ★ The list BELOW this button connects the WATCH directly (Standalone). The button switches
+      //   to driving the phone instead. Both were previously unlabelled, so the only visible
+      //   control said "Companion mode" and there appeared to be no way back — Standalone was
+      //   reachable the whole time, by picking a server, but nothing said so.
+      Section(footer: Text("Servers below connect this watch directly.")
+        .font(.system(size: 9)).foregroundStyle(Self.dim)) {
         Button(action: onCompanion) {
           HStack(spacing: 7) {
             Image(systemName: "iphone.gen3.radiowaves.left.and.right")

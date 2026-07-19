@@ -67,6 +67,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Rows actually pushed. PhoneClient surfaces this as `SDRClient.rowsPushed`, which is what
   /// SpikeLink watches to decide whether a connection is alive.
   @Published var rowsPushed = 0
+  /// Measured row rate, published so PhoneClient can report a REAL `framesPerSec`.
+  ///
+  /// ★ It has to be measured, not stubbed. SpikeLink derives the link glyph from it
+  ///   (`framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)`), so returning a hardcoded 0 does not
+  ///   "avoid asserting a rate" — it asserts the WORST one, and paints the link red the instant a
+  ///   single row has ever arrived. The glyph must be able to say healthy when the link IS healthy,
+  ///   or it stops meaning anything when it says the opposite.
+  @Published var rowsPerSec: Double = 0
+  private var rowRateCount = 0
+  private var rowRateTimer: Timer?
   @Published var frequency  = 0.0
   @Published var span       = 0.0
   @Published var snr        = 0.0
@@ -347,6 +357,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
     RunLoop.main.add(t, forMode: .common)
     heartbeat = t
+
+    // Row-rate meter, feeding PhoneClient.framesPerSec and through it the link glyph. .common mode
+    // for the same reason as the heartbeat: a default-mode timer stops while the crown is turning,
+    // which is exactly when you most want the glyph telling the truth.
+    rowRateTimer?.invalidate()
+    let r = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+      guard let self else { return }
+      let n = Double(self.rowRateCount)
+      self.rowRateCount = 0
+      if self.rowsPerSec != n { self.rowsPerSec = n }
+    }
+    RunLoop.main.add(r, forMode: .common)
+    rowRateTimer = r
   }
 
   // MARK: - Watch -> Phone
@@ -617,7 +640,23 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// row is silently dropped for being the wrong length.
   private static let meterBytes = 12
   /// One row's payload: 6 doubles + the meter field + the bins.
-  private static let blockSize = 8 * 6 + meterBytes + WaterfallBuffer.width
+  /// ★★ THE PHONE'S ROW WIDTH, WHICH IS NOT OURS. `watchProvider.ts` sends `WATCH_BINS = 128`
+  ///    bins per row and always has. The V9 companion's WaterfallBuffer was also 128, so the two
+  ///    agreed by coincidence of shared history and nothing enforced it.
+  ///
+  ///    The merge broke that silently. The spike's buffer is 256 wide (it does its own DSP and can
+  ///    afford the resolution), so after the merge this block size was computed at 256 and EVERY
+  ///    incoming batch failed the length guard below — dropped with no error, no log, the phone
+  ///    still rendering happily on its own screen. Uplink alive, downlink dead: tuning worked, the
+  ///    waterfall never appeared. Field-caught by Stuart on build 61, who read it correctly as
+  ///    "the decoded data sent from phone to watch".
+  ///
+  ///    So this MUST track the phone, not the local buffer — they are independent facts and only
+  ///    the wire one belongs here. The local buffer is now 128 again too, so `widen()` is a no-op
+  ///    in practice; it stays as the guard that turns a future disagreement into a stretched
+  ///    waterfall instead of a silently blank one.
+  private static let phoneRowWidth = 128
+  private static let blockSize = 8 * 6 + meterBytes + phoneRowWidth
 
   /// Rows arrive BATCHED — several in one message.
   ///
@@ -629,6 +668,24 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   ///
   /// Fewer, bigger messages. The jitter buffer already expects bursty arrivals, so a
   /// pair landing together is exactly what it was designed for.
+  /// Stretch the phone's row to the local buffer width.
+  ///
+  /// `WaterfallBuffer.push(row:)` DROPS anything that isn't exactly its width, silently — a blank
+  /// waterfall with a healthy frame count is precisely what that looks like, which is the trap this
+  /// whole path just fell into. So convert here, once, rather than hoping the two sides match.
+  ///
+  /// Nearest-neighbour on purpose. The phone already did the DSP and the decimation; interpolating
+  /// between its bins would invent detail it didn't send, smearing a carrier across pixels it never
+  /// occupied. Duplicating is honest about the real resolution — and identical to what V9 showed,
+  /// since its buffer was the phone's width to begin with.
+  private static func widen(_ row: [UInt8]) -> [UInt8] {
+    let w = WaterfallBuffer.width
+    guard row.count != w, !row.isEmpty else { return row }
+    var out = [UInt8](repeating: 0, count: w)
+    for i in 0..<w { out[i] = row[min(row.count - 1, i * row.count / w)] }
+    return out
+  }
+
   private func handleRow(_ data: Data) {
     guard data.count > 2, data[data.startIndex] == 2 else { return }
     let count = Int(data[data.startIndex + 1])
@@ -651,12 +708,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if !t.isEmpty { meterText = t }
 
       let rStart = mStart + Self.meterBytes
-      rows.append([UInt8](data[rStart..<(rStart + WaterfallBuffer.width)]))
+      rows.append(Self.widen([UInt8](data[rStart..<(rStart + Self.phoneRowWidth)])))
     }
 
     let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      for r in rows { self.waterfall.push(row: r); self.rowsPushed += 1 }
+      for r in rows { self.waterfall.push(row: r); self.rowsPushed += 1; self.rowRateCount += 1 }
       self.lastRowAt = Date()
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }

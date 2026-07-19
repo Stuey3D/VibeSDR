@@ -27,7 +27,18 @@ import SwiftUI
 final class WaterfallBuffer {
   /// MUST MATCH WATCH_BINS in watchProvider.ts — rows of any other length are
   /// dropped, so a mismatch shows as a blank waterfall.
-  static let width  = 256
+  /// ★ 128, NOT 256 — and this was settled empirically once already.
+  ///
+  /// The V9 companion went 128 -> 256 (`03dbd82d`) and straight back to 128 (`ee6c09dc`):
+  /// *"128-bin watch rows (was 256) — halves row bytes; visually unchanged."* Tried on the wrist,
+  /// judged indistinguishable, halved. The spike never got that memo — it was born at 256 and kept
+  /// it — so the merge silently reinstated a resolution that had already been rejected, and cost
+  /// real work for pixels nobody can see on a 41-49mm screen.
+  ///
+  /// It also restores the invariant the phone link depends on: the phone sends 128-bin rows
+  /// (`WATCH_BINS`), so buffer width and wire width agree again, which is exactly what they must
+  /// do (see WatchLink.phoneRowWidth for what happened when they didn't).
+  static let width  = 128
   /// One row of headroom beyond what's shown: the newest row lives just ABOVE the
   /// visible edge and slides down into view, which is what makes the scroll a
   /// glide rather than a step.

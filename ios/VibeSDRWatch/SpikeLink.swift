@@ -68,6 +68,13 @@ final class SpikeLink: ObservableObject {
   /// Derived from OUR OWN socket health: 3 while spectrum frames are flowing, 1 when they
   /// have stalled. There is no far (server↔phone) hop to score independently.
   @Published var serverLink = 3
+  /// (A) watch ↔ iPhone health, for the transport glyph. **nil in Standalone**, where there is no
+  /// phone hop to monitor and the node glyph already covers the only link there is — colouring both
+  /// would say the same thing twice, or disagree. Only Phone Control gives this glyph a colour.
+  @Published var phoneHopHealthy: Bool? = nil
+  /// Companion mode: the PHONE owns the radio and the server connection, and we render its rows.
+  /// Drives the two-glyph split (§2b) and everything else that must behave differently per mode.
+  @Published var isPhoneControl = false
   /// Waterfall rate rung Link Management has settled on: 1 = full, 2 = half, 3 = the emergency
   /// floor. Feeds the link glyph so a compensated-but-poor link never reads as green.
   @Published var throttleRung = 1
@@ -255,6 +262,7 @@ final class SpikeLink: ObservableObject {
   func start(url: String, host: String, type: ServerType, name: String, pin: String = "") {
     serverName = name
     client?.goIdle()
+    isPhoneControl = false
     everGotRow = false
     lastRowsPushed = 0
 
@@ -308,6 +316,7 @@ final class SpikeLink: ObservableObject {
   ///   USE). Callers decide; this just enters the mode.
   func startPhoneControl() {
     client?.goIdle()
+    isPhoneControl = true
     everGotRow = false
     lastRowsPushed = 0
     serverName = "iPhone"
@@ -330,6 +339,11 @@ final class SpikeLink: ObservableObject {
   func backToPicker() {
     client?.goIdle()
     serverName = ""
+    // Leaving a session means leaving its MODE. Without this, exiting Companion left
+    // isPhoneControl set, so the next Standalone session drew its glyphs against a phone hop that
+    // was no longer driving anything.
+    isPhoneControl = false
+    phoneHopHealthy = nil
   }
 
   /// Called from the ported ContentView's 20fps driver tick. Drains the audio-synced
@@ -385,8 +399,27 @@ final class SpikeLink: ObservableObject {
       if !everGotRow { everGotRow = true }
     }
 
-    // Our own socket-health score, standing in for the phone's link meter.
-    let sl = client.framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)
+    // ── The NODE glyph: health of the hop that reaches the SERVER ──
+    //
+    // ★ In Phone Control that hop is the PHONE's, not ours (§2b). The phone owns the server
+    //   connection; the watch has no direct opinion about it and must not manufacture one from its
+    //   own row flow. Doing that conflated the two hops into one number, so "rows aren't reaching
+    //   the wrist" and "the phone lost the server" were indistinguishable — and the watch↔phone
+    //   hop, the one that actually breaks, had no indicator of its own at all.
+    //
+    //   Split apart, the pair localises the fault at a glance: node red + iPhone green = the
+    //   server dropped; node green + iPhone red = you have walked away from your phone.
+    let sl: Int
+    if let phone = client as? PhoneClient {
+      sl = phone.phoneServerLink
+      let ok = phone.phoneHopHealthy
+      if phoneHopHealthy != ok { phoneHopHealthy = ok }
+    } else {
+      // Standalone: one hop, and it is ours. The transport glyph stays informational — coloured,
+      // it would say the same thing twice, or worse, disagree.
+      sl = client.framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)
+      if phoneHopHealthy != nil { phoneHopHealthy = nil }
+    }
     if serverLink != sl { serverLink = sl }
 
     // THROTTLE RUNG — how far Link Management has had to back off (1 = full rate).
