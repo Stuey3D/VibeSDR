@@ -20,51 +20,30 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>WKApplication</key>
-	<true/>
-	<!-- ★ THE CASE THE SPIKE PREDICTED. The spike is WKWatchOnly — no iPhone app exists to
-	     pair with. Jr is the OTHER case its own comment named: bundled INSIDE VibeSDR, so it
-	     keeps a companion identifier, but now runs independently of it, phone in a drawer.
-
-	     So WKWatchOnly must NOT be carried across (with a companion present it is wrong), and
-	     WKRunsIndependentlyOfCompanionApp flips false -> TRUE. False is what made the V9
-	     companion strictly a remote control; true is what makes Standalone possible at all. -->
-	<key>WKCompanionAppBundleIdentifier</key>
-	<string>com.vibesdr.app</string>
-	<key>WKRunsIndependentlyOfCompanionApp</key>
-	<true/>
-	<!-- ★ WKBackgroundModes, NOT UIBackgroundModes. watchOS has its own key and silently
-	     ignores the iOS one, so the system never learns this is an audio app and suspends it
-	     the instant the wrist drops: sound for a few seconds, then nothing. That reads as an
-	     audio bug and is a plist bug.
-
-	     The shipped V9 companion has NO background modes at all, which was harmless while the
-	     phone owned the audio. Standalone plays on the watch, so without this the merge would
-	     ship an "audio dies on wrist-drop" regression that looks nothing like its cause. -->
-	<key>WKBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
-	<!-- Cleartext HTTP/WS. KiwiSDR runs on plain ws://host:8073, the linkfanel Kiwi directory
-	     (rx.linkfanel.net) and the FM-DX directory (servers.fmdx.org) are plain http://, and
-	     OpenWebRX/rtl_tcp are often cleartext too. Without this, watchOS ATS silently blocks
-	     them all — the directory won't load and a connection hangs forever with no error.
-	     Matches the VibeSDR phone app (NSAllowsArbitraryLoads=true). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Your approximate location sorts the SDR server list by distance, nearest first. It stays on your watch.</string>
-	<!-- Local-network + Bonjour: discover VibeServers (your own phone serving its dongle) advertised on
-	     the LAN as _vibesdr._tcp. watchOS silently blocks NWBrowser for undeclared service types, and
-	     refuses LAN access without the usage string. -->
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Finds VibeSDR servers running on your local network so you can connect without typing an address.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_vibesdr._tcp</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Finds VibeSDR servers running on your local network so you can connect without typing an address.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Your approximate location sorts the SDR server list by distance, nearest first. It stays on your watch.</string>
+	<key>RCTNewArchEnabled</key>
+	<true/>
+	<key>WKApplication</key>
+	<true/>
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>com.vibesdr.app</string>
+	<key>WKRunsIndependentlyOfCompanionApp</key>
+	<true/>
 </dict>
 </plist>

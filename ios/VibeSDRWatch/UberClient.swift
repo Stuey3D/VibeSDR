@@ -840,18 +840,27 @@ final class UberClient: ObservableObject {
     // The server has confirmed the scale for the current subscription — rows may paint now.
     specConfigSeq = specSubscribeSeq
 
-    // ADOPT THE SERVER'S CURRENT TUNE ON FIRST CONFIG. VibeServer holds its OWN state — already
-    // tuned (e.g. 96.6 FM, set on the phone) and streaming that audio — so forcing our 648 kHz/AM
-    // default onto it left the spectrum off-band as a bouncing line while the audio played 96.6 FM.
+    // ADOPT THE VIBESERVER'S CURRENT TUNE. VibeServer holds its OWN state — it's already tuned
+    // (e.g. 96.6 FM, set on the phone) and streaming that audio. So on the FIRST config we must
+    // MATCH the server, not force our 648 kHz/AM default onto it (which left the spectrum viewing
+    // off-band as a bouncing line while the audio played 96.6 FM).
     //
-    // ★ Now applies to real UberSDR too (Stuart, 2026-07-19): "we start on the default frequency
-    //   and demodulator the server sends us to". There the client drives the radio, so the echoed
-    //   centre is usually our own — which makes adopting a no-op — but on a FIRST visit it is the
-    //   server's default, which is precisely the case we want to land on.
+    // ★★ isVibe IS LOAD-BEARING — DO NOT WIDEN THIS TO UberSDR. I did, on 2026-07-19, reasoning
+    //    that "start where the server puts us" should apply everywhere. It does not, because
+    //    `centerFreq` MEANS DIFFERENT THINGS on the two backends:
+    //      - VibeServer: the TUNED frequency (the shim owns the radio)   -> adopting is correct
+    //      - UberSDR:    the SPECTRUM WINDOW CENTRE (the client owns it) -> adopting is nonsense
+    //    On UberSDR's 0-30 MHz HF span that centre is 15 MHz, so every first connection landed on
+    //    15 MHz instead of the server's own default. Field-caught by Stuart within minutes.
     //
-    // If we have a saved tune for this host we've already restored it, so skip. (Mode isn't in the
-    // config — it comes from per-instance memory when we have it.)
-    if !vibeAdopted {
+    // ☐ STILL TO DO: UberSDR servers DO have a per-server default tune (Stuart's sends clients to
+    //   648 kHz; that is HIS setting, not a universal one — our hardcoded 648 default merely
+    //   coincides with it, which is exactly the kind of coincidence that hides a bug). We are not
+    //   reading it yet. Find the field that carries it and adopt THAT — never `centerFreq`.
+    //
+    // If we have a saved tune for this host we've already restored + asserted it in openVibeSockets,
+    // so skip. (Mode isn't in the shim config — it's restored from per-host memory when we have it.)
+    if isVibe, !vibeAdopted {
       vibeAdopted = true
       if !vibeRestored, centerHz > 0 {
         frequency = centerHz
