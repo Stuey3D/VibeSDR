@@ -267,6 +267,7 @@ final class SpikeLink: ObservableObject {
     //   picks Standalone would otherwise leave a 4s heartbeat pinging and the phone streaming rows
     //   at a watch that is busy running its own receiver — competing for the same CPU and radio.
     WatchLink.shared.detach()
+    applyPhoneWaterfallSettings()
     isPhoneControl = false
     everGotRow = false
     lastRowsPushed = 0
@@ -341,6 +342,41 @@ final class SpikeLink: ObservableObject {
   }
 
   /// Back out to the instance picker (the menu's SERVERS tile). Drops the sockets/audio.
+  /// Apply the PHONE's waterfall look to a Standalone session.
+  ///
+  /// ★ THE PHONE IS AUTHORITATIVE for everything waterfall/spectrum related (Stuart, 2026-07-19):
+  ///   palette, spatial smoothing, sharpness, peak hold — in BOTH modes, so the two devices show
+  ///   the same picture of the same signal. Same principle as the band plan: the phone computes,
+  ///   the watch mirrors, and the watch holds no second opinion.
+  ///
+  ///   Stuart spotted this working already and asked whether sync was live. It wasn't — it was a
+  ///   LEAK: `WatchLink` case "settings" writes straight into the buffer, which in Companion is
+  ///   ours, so entering Companion once repainted Standalone as a side effect. Right outcome,
+  ///   accidental mechanism: one-way, unreversible (the watch has no UI for smoothing or
+  ///   sharpness), and it only fired if you happened to visit Companion.
+  ///
+  ///   Now it is deliberate: the values are PERSISTED when the phone sends them and re-applied
+  ///   here on every Standalone start, so a session that never opens Companion still matches.
+  ///   Before any phone has ever been seen, the spike's own defaults stand.
+  ///
+  /// ★★ BRIGHTNESS AND CONTRAST ARE NOT HERE, on purpose. They are the watch-only controls and stay
+  ///    device-local: a level that reads fine on a big bright phone can be near-black on a wrist
+  ///    outdoors. That is a property of the screen, not the user's taste.
+  private func applyPhoneWaterfallSettings() {
+    let d = UserDefaults.standard
+    if let l = d.data(forKey: WatchLink.kLUT), l.count == 1024 {
+      waterfall.setLUT([UInt8](l))
+    } else {
+      waterfall.setLUT(Self.sonarGreenLUT)          // never met a phone yet
+    }
+    if d.object(forKey: WatchLink.kSmooth) != nil { waterfall.smoothing = d.double(forKey: WatchLink.kSmooth) }
+    if d.object(forKey: WatchLink.kSharp)  != nil { waterfall.sharpness = d.double(forKey: WatchLink.kSharp) }
+    if d.object(forKey: WatchLink.kPeak)   != nil {
+      peakHold = d.bool(forKey: WatchLink.kPeak)
+      waterfall.peakHold = peakHold
+    }
+  }
+
   func backToPicker() {
     client?.goIdle()
     serverName = ""

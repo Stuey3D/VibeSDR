@@ -335,6 +335,22 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     }
   }
 
+  // ── The phone's waterfall look, persisted so it survives without a phone attached ────────────
+  //
+  // ★ THE RULE (Stuart, 2026-07-19): everything waterfall/spectrum related SYNCS from the phone —
+  //   palette LUT, spatial smoothing, sharpness, peak hold — in both modes. The phone computes,
+  //   the watch mirrors, exactly as it already does for the band plan.
+  //
+  // ★★ THE ONE EXCEPTION: the watch-only BRIGHTNESS and CONTRAST controls stay device-local and
+  //    must never sync. They exist because a level that reads fine on a big bright phone can be
+  //    near-black on a wrist held at arm's length outdoors — that is a property of the SCREEN, not
+  //    of the user's taste, so mirroring them would defeat the reason they exist.
+  //    (`WaterfallBuffer` already keeps them in their own section; keep it that way.)
+  static let kLUT    = "vibe.wf.lut"
+  static let kSmooth = "vibe.wf.smoothing"
+  static let kSharp  = "vibe.wf.sharpness"
+  static let kPeak   = "vibe.wf.peakHold"
+
   /// Is this link DRIVING a session? False = rows must not reach the shared buffer.
   ///
   /// ★ WCSession has no "close". The delegate stays registered, the phone keeps streaming while it
@@ -880,15 +896,27 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // glass over nothing reads as a broken grey box.
       if let d = m[WK.image] as? Data { logo = d.isEmpty ? nil : d }
 
+    // ★ THE PHONE IS AUTHORITATIVE FOR HOW THE WATERFALL LOOKS, in BOTH modes (Stuart:
+    //   "spatial smoothing and peak hold need to match the phone"). Same principle as the palette
+    //   and the band plan — the phone computes, the watch mirrors — and the watch has no UI for
+    //   smoothing or sharpness at all, so there is no second opinion to reconcile.
+    //
+    //   PERSISTED, not just applied. These only arrive while a phone is attached, so without
+    //   saving them a Standalone session that never visited Companion would show whatever the
+    //   buffer happened to be left on. Saved here, re-applied by SpikeLink on every start.
     case "settings":
-      if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }
-      if let sm = m[WK.smooth] as? Double { waterfall.smoothing = sm }
+      let d = UserDefaults.standard
+      if let l = m[WK.lut] as? Data, l.count == 1024 {
+        waterfall.setLUT([UInt8](l)); d.set(l, forKey: Self.kLUT)
+      }
+      if let sm = m[WK.smooth] as? Double { waterfall.smoothing = sm; d.set(sm, forKey: Self.kSmooth) }
       if let nc = m[WK.needle] as? String, let c = Color(hex: nc) { needle = c }
       if let ni = m[WK.needleI] as? Double { needleI = ni }
-      if let sh = m[WK.sharp] as? Double { waterfall.sharpness = sh }
+      if let sh = m[WK.sharp] as? Double { waterfall.sharpness = sh; d.set(sh, forKey: Self.kSharp) }
       if let pk = m[WK.peak] as? Bool {
         peakHold = pk
         waterfall.peakHold = pk   // clears what's held when turned off
+        d.set(pk, forKey: Self.kPeak)
       }
 
     default:
