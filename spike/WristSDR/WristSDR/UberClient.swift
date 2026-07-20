@@ -893,7 +893,9 @@ final class UberClient: ObservableObject {
     // client re-sends on exactly this signal for exactly this reason.
     if binBandwidth != lastRateBinBw {
       lastRateBinBw = binBandwidth
-      if rateDivisor > 1 { sendRate() }
+      // Open at whatever rung Link Management starts on (middle, not full) — see LinkManager.init.
+      if rateDivisor != linkMgr.rung { rateDivisor = linkMgr.rung }   // didSet sends set_rate
+      else if rateDivisor > 1 { sendRate() }
     }
   }
   private var lastRateBinBw: Double = 0

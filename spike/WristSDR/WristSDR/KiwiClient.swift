@@ -190,6 +190,15 @@ final class KiwiClient: ObservableObject, SDRClient {
   ///   ladder still steps DOWN from there if the link is worse than that.
   nonisolated var topWfSpeed: Int { onRelay ? 3 : 4 }
 
+  /// The rate to ASK FOR RIGHT NOW: the controller's current rung, never above the relay cap.
+  /// At connect the controller starts mid-ladder, so this opens at 13 fps rather than 23.
+  ///
+  /// `nonisolated(unsafe)` and mirrored rather than read from `linkMgr` directly: the handshake and
+  /// the keepalive both run OFF the main actor, and hopping actors mid-handshake to ask a question
+  /// we already know the answer to is how a missed wf_speed becomes a stuck rate.
+  nonisolated(unsafe) private var wfSpeedMirror = 3
+  nonisolated var wfSpeedNow: Int { min(wfSpeedMirror, topWfSpeed) }
+
   // ── Sockets / audio / DSP ──
   // nonisolated so the BACKGROUND keepalive timer can send on them without hopping to main — a
   // main-actor hop would miss whenever the waterfall DSP stalls main, and a missed keepalive is
@@ -227,6 +236,12 @@ final class KiwiClient: ObservableObject, SDRClient {
 
   // ── Lifecycle ──
   func start() {
+    // ★ Sync the off-actor mirror to whatever rung the controller OPENED on, before the handshake
+    //   sends the first wf_speed. Without this the mirror's own default wins and a user who pinned
+    //   Full Rate (or Low Data) would silently get the adaptive mid-ladder rate instead — the
+    //   override would be honoured by every later step and by none of the first ones.
+    wfSpeedMirror = 5 - linkMgr.rung
+
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
@@ -366,7 +381,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.wfSend("SERVER DE CLIENT openwebrx.js W/F")
         self.wfSend("SET send_dB=1")
         self.wfSend("SET wf_comp=1")
-        self.wfSend("SET wf_speed=\(self.topWfSpeed)")
+        self.wfSend("SET wf_speed=\(self.wfSpeedNow)")
         self.wfSend("SET maxdb=-10 mindb=-110")
         self.sendZoom()
       }
@@ -587,7 +602,8 @@ final class KiwiClient: ObservableObject, SDRClient {
   /// interpolation will rescue that". 5 fps is the floor for both adaptation and Low Data.
   lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 3) { [weak self] rung, fps in
     // Never ABOVE the cap: on the relay rung 1 means 3 (med), not 4 (fast).
-    self?.wfSend("SET wf_speed=\(min(5 - rung, self?.topWfSpeed ?? 4))")
+    self?.wfSpeedMirror = 5 - rung
+    self?.wfSend("SET wf_speed=\(self?.wfSpeedNow ?? 3)")
     self?.waterfall.setExpectedRowRate(fps)
   }
   var adaptiveRung: Int { linkMgr.adaptiveRung }
@@ -631,7 +647,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     sendDemod()
   }
   func setBandwidth(_ low: Double, _ high: Double) { bwLow = low; bwHigh = high; sendDemod() }
-  func resumeSpectrum() { wfSend("SET wf_speed=\(topWfSpeed)") }
+  func resumeSpectrum() { wfSend("SET wf_speed=\(wfSpeedNow)") }
   func suspend() { wfSend("SET wf_speed=0"); specQueue.removeAll(); status = "background · audio only" }
   func reconnectIfNeeded() { /* Kiwi keepalive + socket retry handle this for now */ }
   private var goingIdle = false

@@ -64,14 +64,67 @@ final class LinkManager {
   /// Degrade fast, recover slow — asymmetric on purpose. A wrong step DOWN costs a little time
   /// resolution nobody notices; a wrong step UP costs a visible stutter.
   private static let degradeAfter = 3      // seconds below `starveRatio`
-  private static let recoverAfter = 20     // seconds above `healthyRatio`
+  private static let recoverAfter = 20     // seconds above `healthyRatio`, AFTER a real failure
+
+  /// ★ THE FIRST CLIMB IS NOT A RECOVERY, so it does not deserve the same caution.
+  ///
+  /// `recoverAfter` is 20s because stepping up after a genuine failure risks re-triggering it —
+  /// oscillation is worse than staying low. But at connect we have not failed; we are simply being
+  /// careful, and 20s of deliberately-throttled waterfall on a perfectly good link is a poor first
+  /// impression. Until the link has actually starved once, climb on a shorter probe.
+  ///
+  /// ★★ BUT NOT TOO SHORT — IT MUST OUTLAST THE CONNECT BURST (Stuart: "keep it long enough to ride
+  ///    the connection spike of data; once this settles bump it up"). Servers dump a backlog on
+  ///    connect, and MEASURED it is large: the same Kiwi read 22 KB/s over a window starting at
+  ///    connect and 4.5 KB/s once ~5s of settle was discarded. OWRX behaved the same way.
+  ///
+  ///    That burst is dangerous here precisely because it looks GOOD — frames arrive fast, the
+  ///    ratio is healthy, and a short probe would climb on the strength of data the link was never
+  ///    really carrying, arriving at full rate just as the burst ends. 8s clears the measured
+  ///    ~5s spike with margin, and the 5-sample average smooths what is left.
+  private static let firstClimbAfter = 8
+  /// Has this session ever genuinely starved? Distinguishes "cautious start" from "recovering".
+  private var everStarved = false
   private static let starveRatio  = 0.6
   private static let healthyRatio = 0.85
 
-  init(ladder: [Double], lowDataRung: Int, apply: @escaping (Int, Double) -> Void) {
+  /// ★★ START IN THE MIDDLE, EARN THE TOP (Stuart, 2026-07-20). Connection setup is the most
+  ///    fragile moment there is — handshake, buffers filling, DSP spinning up, audio starting —
+  ///    and asking for the MAXIMUM frame rate exactly then is what tips a marginal link over.
+  ///    Measured: a fast Kiwi pushes 18.9 KB/s at full rate against a Bluetooth ceiling that can
+  ///    be as low as 25 KB/s once audio is counted.
+  ///
+  ///    So open on the middle rung and climb only once the link has proved it can carry it. The
+  ///    cost is nearly nothing: the waterfall interpolates to a 20fps render clock regardless, so
+  ///    5fps still SCROLLS smoothly — what you briefly lose is time resolution, not fluidity.
+  ///
+  ///    It also makes the indicator honest from the first second: we open on two bars because we
+  ///    are genuinely throttled, and it goes green when we have earned it.
+  ///
+  /// `startRung` is clamped into the ladder; pass 1 for a backend that should open at full rate.
+  init(ladder: [Double], lowDataRung: Int, startRung: Int = 2,
+       apply: @escaping (Int, Double) -> Void) {
     self.ladder = ladder
     self.lowDataRung = min(max(1, lowDataRung), ladder.count)
     self.apply = apply
+    // ★★ THE USER'S CHOICE OUTRANKS THE CAUTIOUS START COMPLETELY (Stuart). Auto Link Management
+    //    off means FULL RATE FROM THE FIRST FRAME — someone who turned adaptation off did not ask
+    //    us to be careful on their behalf, and a "why is it slow at first" that they cannot switch
+    //    off is worse than the stutter it avoids. Low Data likewise opens on its pinned rung.
+    //    Only .adaptive gets the mid-ladder start.
+    switch Self.mode {
+    case .full:    self.rung = 1
+    case .lowData: self.rung = self.lowDataRung
+    case .adaptive:
+      // ★ NEVER OPEN ON THE BOTTOM RUNG: "we don't want everything looking garbage as that gives a
+      //   bad impression". The floor is for a link that has PROVED it cannot do better; arriving
+      //   there before a single frame has landed judges a good link by a bad one. Clamped to at
+      //   most one rung above the floor — the middle, on the 3-rung ladders we have.
+      self.rung = min(max(1, startRung), max(1, ladder.count - 1))
+    }
+    // adaptiveRung drives the link GLYPH, and a pinned rate is a preference, not a symptom — it
+    // must never light the indicator. Only the adaptive start shows as throttled, which it is.
+    self.adaptiveRung = (Self.mode == .adaptive) ? self.rung : 1
   }
 
   /// Call once a second with the observed frame rate. `settled` is false while a tune/zoom
@@ -105,12 +158,14 @@ final class LinkManager {
     if ratio < Self.starveRatio {
       starvedSecs += 1; healthySecs = 0
       if starvedSecs >= Self.degradeAfter, rung < ladder.count {
+        everStarved = true          // from here on, climbing back is a RECOVERY: be slow about it
         set(rung + 1, adaptive: true)
         starvedSecs = 0
       }
     } else if avgRatio >= Self.healthyRatio {
       healthySecs += 1; starvedSecs = 0
-      if healthySecs >= Self.recoverAfter, rung > 1 {
+      let needed = everStarved ? Self.recoverAfter : Self.firstClimbAfter
+      if healthySecs >= needed, rung > 1 {
         set(rung - 1, adaptive: true)
         healthySecs = 0
       }
