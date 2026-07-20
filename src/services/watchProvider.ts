@@ -123,6 +123,13 @@ const WATCH_BINS = 128;
 // 2026-07-20, off the saturating-link screenshot.)
 const MIN_ROW_MS = 200;
 
+/** While the crown is actively spinning (tune OR zoom), rows back off further so the
+ *  gesture's own commands — and the phone's server reconfiguration — own the link. A
+ *  spin lasts as long as fresh gestures keep landing inside this window; rows snap back
+ *  to MIN_ROW_MS the moment it stops. You aren't reading fine waterfall detail mid-spin. */
+const GESTURE_ROW_MS = 320;
+const GESTURE_ACTIVE_MS = 350;
+
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */
 const STATE_MS = 250;
@@ -211,6 +218,8 @@ class WatchProvider {
   private available = Platform.OS === 'ios' && !!Native;
   private reachable = false;
   private lastRowAt = 0;
+  /** Last tune/zoom crown command from the watch — rows back off while a spin is live. */
+  private lastGestureAt = 0;
   private lastStateAt = 0;
   private pendingState: { freq: number; mode: string; step: number } | null = null;
   /** Last state we were asked to send — so a meter update can reuse it rather than
@@ -397,11 +406,16 @@ class WatchProvider {
     this.cmdSubs.push(
       this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean }) => {
         switch (e.cmd) {
-          case 'tune': handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
+          case 'tune': this.lastGestureAt = Date.now(); handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
-          case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
+          // Zoom is a crown SPIN, same as tune: a burst of commands, each making the phone
+          // reconfigure the server's span. Rows keep the link busy exactly when it's needed
+          // for the gesture — and you can't read fine waterfall detail mid-zoom anyway. Stamp
+          // it so sendRow backs off to ~3fps until the spin settles. (Mirrors the native
+          // forwarder's lastRetuneAt throttle for the locked path.)
+          case 'zoom': this.lastGestureAt = Date.now(); handlers.onZoomDelta(Number(e.delta ?? 0)); break;
           case 'vol':  handlers.onVolumeDelta(Number(e.delta ?? 0)); break;
           case 'mute': handlers.onMute(e.val === true); break;
           case 'ping':
@@ -933,7 +947,9 @@ class WatchProvider {
     // over, and its rows would drag the wrist back to the waterfall.
     if (!this.owns('sdr')) return;
     const now = Date.now();
-    if (now - this.lastRowAt < MIN_ROW_MS) return; // coalesce: newest wins
+    // Mid-spin (tune/zoom): rows yield to the gesture. Otherwise the steady 5fps floor.
+    const gap = (now - this.lastGestureAt < GESTURE_ACTIVE_MS) ? GESTURE_ROW_MS : MIN_ROW_MS;
+    if (now - this.lastRowAt < gap) return; // coalesce: newest wins
     this.lastRowAt = now;
 
     if (this.colormap !== this.lastPalette) {

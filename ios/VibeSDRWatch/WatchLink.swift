@@ -506,7 +506,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   private func scheduleFlush() {
     guard !flushScheduled else { return }
     flushScheduled = true
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+    // 100ms, matching the UberSDR tune debounce the main app + Jr already use (UberClient
+    // sendTuneThrottled — 100ms is UberSDR's supported rate). The phone can only feed the
+    // SERVER at 1/100ms, so coalescing tighter than that just floods the watch→phone WC leg
+    // with tune commands that compete with the rows for the one Bluetooth radio — the tuning
+    // equivalent of the row-rate saturation. The readout stays instant either way: predictTune
+    // moves it locally, the send rate only governs how often the phone hears about it.
+    // Deltas ACCUMULATE across the window (pendingTune sums), so a longer window loses nothing.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
       self?.flushCrown()
     }
   }
