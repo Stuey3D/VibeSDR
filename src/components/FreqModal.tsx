@@ -46,6 +46,10 @@ interface FreqModalProps {
   vtsFreq?:   number | null;
   onVtsPrev?: () => void;
   onVtsNext?: () => void;
+  /** Live nearby-station lookup — a nice side-effect of the move: as you TYPE a frequency the
+   *  VTS row updates to the nearest station to the DRAFT value, before you've tuned. Falls back
+   *  to the tuned station (vtsName/vtsFreq) when the field is untouched. */
+  vtsLookup?: (hz: number) => { name: string; freq: number } | null;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -68,14 +72,24 @@ export default function FreqModal({
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
-  vtsName, vtsFreq, onVtsPrev, onVtsNext,
+  vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [unitState, setUnitState] = useState<Unit>('khz');
   const unit = unitProp ?? unitState;
   const [value, setValue] = useState('');
+  // Live VTS while typing (see vtsLookup). null → show the tuned station instead.
+  const [draftVts, setDraftVts] = useState<{ name: string; freq: number } | null>(null);
   const inputRef          = useRef<TextInput>(null);
+
+  // As the user types, resolve the nearest station to the DRAFT frequency.
+  const onChangeValue = (v: string) => {
+    setValue(v);
+    if (!vtsLookup) return;
+    const hz = fromDisplay(v, unit);
+    setDraftVts(hz > 0 ? vtsLookup(hz) : null);
+  };
   // Share presents the native iOS share sheet (UIActivityViewController). Doing
   // that while this Modal is on screen (or mid-dismiss) wedges iOS touch
   // handling, so on iOS we close first and fire the share from the Modal's
@@ -102,6 +116,7 @@ export default function FreqModal({
   useEffect(() => {
     if (visible) {
       setValue(toDisplay(currentHz, unit));
+      setDraftVts(null);   // start from the tuned station; typing takes over
       setTimeout(() => { inputRef.current?.focus(); }, 80);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -152,10 +167,12 @@ export default function FreqModal({
               </TouchableOpacity>
               <View style={st.vtsInfo}>
                 <Text style={[st.vtsName, { color: t.btnText, fontFamily: t.font }]} numberOfLines={1}>
-                  {vtsName || '—'}
+                  {(draftVts?.name ?? vtsName) || '—'}
                 </Text>
-                {vtsFreq != null && (
-                  <Text style={[st.vtsFreq, { color: dimText }]}>{(vtsFreq / 1_000_000).toFixed(3)} MHz</Text>
+                {(draftVts ? draftVts.freq : vtsFreq) != null && (
+                  <Text style={[st.vtsFreq, { color: dimText }]}>
+                    {((draftVts ? draftVts.freq : vtsFreq)! / 1_000_000).toFixed(3)} MHz
+                  </Text>
                 )}
               </View>
               <TouchableOpacity style={st.vtsArrow} onPress={onVtsNext} hitSlop={8}>
@@ -168,7 +185,7 @@ export default function FreqModal({
               ref={inputRef}
               style={[st.input, { color: t.freqColor, fontFamily: t.font }]}
               value={value}
-              onChangeText={setValue}
+              onChangeText={onChangeValue}
               keyboardType="decimal-pad"
               autoComplete="off"
               autoCorrect={false}

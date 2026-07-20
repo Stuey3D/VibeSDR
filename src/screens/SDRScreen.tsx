@@ -4839,6 +4839,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         vtsFreq={vtsMenuFreq}
         onVtsPrev={onVtsPrev}
         onVtsNext={onVtsNext}
+        vtsLookup={(hz) => { const n = findNearest(vtsBookmarks.current, hz); return n ? { name: n.name, freq: n.hz } : null; }}
       />
 
       {/* Chat drawer */}
