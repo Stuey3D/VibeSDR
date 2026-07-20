@@ -449,9 +449,28 @@ final class SpikeLink: ObservableObject {
   func suspend() { client?.suspend() }
 
   // ── Controls the ported views call ──────────────────────────────────────────
+  // Tuning COALESCES crown detents over 100ms rather than firing the client per detent.
+  // Stuart prefers the heavier, deliberate feel: the readout advances in step with the tune
+  // that actually happens, instead of predicting instantly per detent and then visibly
+  // JUMPING when the server echo corrects a guess. 100ms matches the server tune rate
+  // (UberClient sendTuneThrottled) and Buddy's crown coalesce, so the two apps feel the same.
+  private var pendingTune = 0
+  private var tuneFlushScheduled = false
+
   func tune(delta: Int) {
-    client?.tune(delta: delta, step: step)
-    frequency = client?.frequency ?? frequency
+    pendingTune += delta
+    guard !tuneFlushScheduled else { return }
+    tuneFlushScheduled = true
+    // asyncAfter, NOT Timer: while the crown turns the run loop is in TRACKING mode and a
+    // default-mode timer would never fire (see WatchLink.scheduleFlush for the full story).
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+      guard let self else { return }
+      self.tuneFlushScheduled = false
+      guard self.pendingTune != 0 else { return }
+      let d = self.pendingTune; self.pendingTune = 0
+      self.client?.tune(delta: d, step: self.step)
+      self.frequency = self.client?.frequency ?? self.frequency
+    }
   }
 
   func zoom(delta: Int) { client?.zoom(delta: delta) }
