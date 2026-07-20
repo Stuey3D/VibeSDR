@@ -591,10 +591,12 @@ struct ContentView: View {
       NavigationStack { ChatSheet().environmentObject(link) }
     }
     .ignoresSafeArea()
-    // Non-focusable in volume mode so SwiftUI RELINQUISHES the crown entirely — otherwise this
-    // view keeps crown focus (even with crownFocused=false) and the hosted WKInterfaceVolumeControl
-    // can never receive it (the volume UI shows but the crown does nothing). Out of volume mode it
-    // owns the crown for tune/zoom/brightness/contrast as before.
+    // ★★ BUDDY KEEPS THE CROWN IN VOLUME MODE. Jr makes this view non-focusable in volume mode so
+    //    SwiftUI relinquishes the crown to the hosted WKInterfaceVolumeControl — correct there,
+    //    fatal here: Buddy has NO native control to hand it to, so the crown was released to
+    //    nothing and volume mode got no rotation and no detents at all ("the crown doesn't even
+    //    click", Stuart, build 83). Buddy's crown IS the volume control — it sends cmd:vol to the
+    //    phone — so it must never let go.
     // …and RELINQUISH IT FOR THE COACH TOO, for exactly the same reason. The overlay renders
     // INSIDE this view, so while it is up the crown still belonged to tuning: turning it moved
     // the VFO instead of scrolling the coach, and the detent haptics made it feel like it was
@@ -602,7 +604,7 @@ struct ContentView: View {
     // content is taller than the screen and the crown is the obvious way to reach "Got it".
     // (Found on a 41mm simulator, 2026-07-19. Same shape as the v9.0.2 CONTINUE bug: a control
     // you cannot reach on a small screen, on hardware nobody here owns.)
-    .focusable(crownMode != .volume && !coachUp)
+    .focusable(!coachUp)
     .focused($crownFocused)
     .digitalCrownRotation(
       $crown,
