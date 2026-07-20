@@ -169,6 +169,12 @@ final class OwrxClient: ObservableObject, SDRClient {
   // delay for nothing. OWRX's heavy FFT firehose only sustains on the watch's OWN wifi/cellular (phone
   // off/away), and that's the OS's call, not ours. Kept as a lever but disabled; instrumentation stays.
   private var avoidRelayActive = false
+  /// Are we reaching the server through the paired iPhone's Bluetooth relay? Set by SpikeLink from
+  /// its own NWPathMonitor, BEFORE connecting. Decides the HD audio rate at handshake — see onText.
+  ///
+  /// `nonisolated(unsafe)` because the handshake is parsed off the main actor: it is written once
+  /// at construction and only read thereafter, so there is nothing to race.
+  nonisolated(unsafe) var onRelay = false
   private var preFrameSecs = 0
   private var linkIface = "?"       // which interface the socket actually came up on (wifi/cell/relay)
   nonisolated(unsafe) private var goingIdle = false
@@ -388,11 +394,27 @@ final class OwrxClient: ObservableObject, SDRClient {
   //    OWRX+ metadata/dial/secondary flood is parsed and dropped without ever touching the UI thread.
   nonisolated private func onText(_ data: String) {
     if data.hasPrefix("CLIENT DE SERVER") {
-      // 12 kHz for the narrow demods (output_rate) but keep the full 48 kHz HD channel (hd_output_rate)
-      // for WFM — broadcast FM needs the wide audio for hi-fi/stereo, and that's the whole point of the
-      // BC FM listening experience. The stall fix rides on the URLSession transport, not on starving the
-      // audio. If the watch still can't keep up under load, 24000 here halves the WFM decode as a fallback.
-      send(["type": "connectionproperties", "params": ["output_rate": 12000, "hd_output_rate": 48000]])
+      // 12 kHz for the narrow demods (output_rate); the HD channel (hd_output_rate) carries WFM and
+      // DAB, where broadcast FM wants the wide audio for hi-fi/stereo.
+      //
+      // ★★ HALVED ON THE PHONE RELAY, and this is the ONLY rate lever OWRX gives us. MEASURED against
+      //    Stuart's server (SDL National, 2026-07-20):
+      //
+      //      FFT / waterfall   18-53 KB/s  (9-26 fps, varies with server load)
+      //      audio 48k ADPCM   ~24 KB/s    (192 kbps — 48000 x 4 bits)
+      //      total             43-77 KB/s  against a Bluetooth ceiling of ~25-62 KB/s
+      //
+      //    ★ The waterfall cannot be throttled AT ALL: requesting `fft_fps`/`fft_size` in
+      //      connectionproperties does not merely get ignored — it KILLS the FFT stream outright
+      //      (0 frames, measured both with and without fft_size). So the audio is the only thing we
+      //      can give back, and at 48k it is a third of the whole budget.
+      //
+      //    24000 halves it to ~12 KB/s. That is audible on WFM stereo, which is why it is applied
+      //    ONLY on the relay — on the watch's own wifi/cellular there is headroom for the full rate
+      //    and no reason to degrade it.
+      let hdRate = onRelay ? 24000 : 48000
+      send(["type": "connectionproperties",
+            "params": ["output_rate": 12000, "hd_output_rate": hdRate]])
       send(["type": "dspcontrol", "action": "start"])
       Task { @MainActor in self.status = "connecting" }
       return

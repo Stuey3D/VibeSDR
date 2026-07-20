@@ -263,7 +263,11 @@ final class SpikeLink: ObservableObject {
     case .kiwi:
       c = KiwiClient(url: url, waterfall: waterfall)
     case .owrx:
-      c = OwrxClient(url: url, waterfall: waterfall)
+      let o = OwrxClient(url: url, waterfall: waterfall)
+      // Tell it which radio we are on BEFORE it connects: the HD audio rate is chosen at handshake
+      // and cannot be renegotiated afterwards.
+      o.onRelay = (transport == .iphone)
+      c = o
     case .fmdx:
       c = FmDxClient(url: url)
     case .vibeserver:
