@@ -6,6 +6,9 @@ import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
 import GainSlider from './GainSlider';
+import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
+
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -17,6 +20,49 @@ function fmtHz(hz: number) {
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
 const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
 const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
+
+// ── Decoder-settings helpers (moved with the decoders from MenuSheet §4.3) ──────
+function SubLabel({ label, small }: { label: string; small?: boolean }) {
+  return <Text style={[dst.subLabel, small && { fontSize: 9, opacity: 0.7 }]}>{label}</Text>;
+}
+function OptRow({ children }: { children: React.ReactNode }) {
+  return <View style={dst.optRow}>{children}</View>;
+}
+function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={[dst.seg, active && dst.segActive]} onPress={onPress} activeOpacity={0.7}>
+      <Text style={[dst.segText, active && dst.segTextActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: RttySettings) => void }) {
+  const presetKey = Object.entries(RTTY_PRESETS).find(([, p]) =>
+    p.shift === s.shift && p.baud === s.baud && p.encoding === s.encoding && p.inverted === s.inverted)?.[0] ?? '';
+  return (
+    <>
+      <SubLabel label="Preset" />
+      <OptRow>{([['ham', 'HAM'], ['weather', 'WX'], ['sitor-b', 'SITOR-B']] as const).map(([k, l]) => (
+        <SegBtn key={k} label={l} active={presetKey === k} onPress={() => onChange({ ...RTTY_PRESETS[k] })} />
+      ))}</OptRow>
+      <SubLabel label="Shift (Hz)" />
+      <OptRow>{[170, 200, 425, 450, 850].map(v => (
+        <SegBtn key={v} label={String(v)} active={s.shift === v} onPress={() => onChange({ ...s, shift: v })} />
+      ))}</OptRow>
+      <SubLabel label="Baud" />
+      <OptRow>{[45.45, 50, 75, 100].map(v => (
+        <SegBtn key={v} label={String(v)} active={s.baud === v} onPress={() => onChange({ ...s, baud: v })} />
+      ))}</OptRow>
+      <SubLabel label="Encoding" />
+      <OptRow>{(['ITA2', 'ASCII', 'CCIR476'] as const).map(v => (
+        <SegBtn key={v} label={v} active={s.encoding === v} onPress={() => onChange({ ...s, encoding: v })} />
+      ))}</OptRow>
+      <OptRow>
+        <SegBtn label={s.inverted ? 'INVERT: ON' : 'INVERT: OFF'} active={s.inverted}
+                onPress={() => onChange({ ...s, inverted: !s.inverted })} />
+      </OptRow>
+    </>
+  );
+}
 
 interface ModeSelectorProps {
   visible:  boolean;
@@ -44,11 +90,29 @@ interface ModeSelectorProps {
   // (UberSDR feeds only — hidden for OWRX/Kiwi/local); we just render the buttons.
   showServerMaps?: boolean;
   onServerMap?:    (kind: 'hfdl' | 'digi' | 'cw') => void;
+
+  // CLIENT DECODERS (relocated from MenuSheet §4.3). null = don't show (OWRX, or
+  // landscape on a non-tablet where the settings callout has no room). SDRScreen bundles
+  // the state so the interface stays small.
+  decoderControls?: {
+    decMode: string | null; decOn: boolean; isLocal: boolean;
+    onDecToggle: (m: DecId) => void;
+    rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
+    wefaxLpm?: number; onWefaxLpm?: (v: number) => void;
+  } | null;
+  // SERVER EXTENSIONS / DECODED SPOTS (relocated from MenuSheet §4.3). null = don't show.
+  spotsControls?: {
+    label: string; spotsKind: string | null;
+    onSpotsToggle: (k: 'digi' | 'cw') => void; onSpotsMap?: () => void;
+    showCwStt: boolean; showMap: boolean;
+    sttActive: boolean; sttSelected: boolean; onSttToggle: () => void;
+  } | null;
 }
 
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl,
   filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth,
-  showServerMaps = false, onServerMap }: ModeSelectorProps) {
+  showServerMaps = false, onServerMap,
+  decoderControls, spotsControls }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
@@ -214,6 +278,84 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </View>
         )}
 
+        {/* CLIENT DECODERS — relocated from MenuSheet (§4.3). Below the mode grid + passband:
+            a decoder rides on the demod you set above. Selecting one starts DecoderClient;
+            its settings drop into a callout beneath the row; tapping again tears it down. */}
+        {decoderControls && (
+          <View style={dst.decWrap}>
+            <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
+              CLIENT DECODERS
+            </Text>
+            <View style={st.grid}>
+              {(['rtty', 'navtex', 'wefax', 'sstv', 'morse'] as DecId[])
+                .filter(k => !(decoderControls.isLocal && k === 'morse')).map(k => {
+                const active = decoderControls.decMode === k && decoderControls.decOn;
+                const selected = decoderControls.decMode === k && !decoderControls.decOn;
+                return (
+                  <TouchableOpacity key={k}
+                    style={[st.btn, { borderColor: (active || selected) ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                            active && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                    onPress={() => decoderControls.onDecToggle(k)} activeOpacity={0.8}>
+                    <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (active || selected) ? DEC_COL : t.btnText }]}>
+                      {k.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
+              <View style={dst.callout}>
+                <RttySettingsRows s={decoderControls.rttySettings} onChange={decoderControls.onRttySettings} />
+              </View>
+            )}
+            {decoderControls.decMode === 'wefax' && (
+              <View style={dst.callout}>
+                <SubLabel label="LPM" />
+                <OptRow>{[60, 120, 240].map(v => (
+                  <SegBtn key={v} label={String(v)} active={decoderControls.wefaxLpm === v}
+                          onPress={() => decoderControls.onWefaxLpm?.(v)} />
+                ))}</OptRow>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* SERVER EXTENSIONS / DECODED SPOTS — relocated from MenuSheet (§4.3). */}
+        {spotsControls && (
+          <View style={dst.decWrap}>
+            <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
+              {spotsControls.label}
+            </Text>
+            <View style={st.grid}>
+              <TouchableOpacity style={[st.btn, { borderColor: spotsControls.spotsKind === 'digi' ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                                        spotsControls.spotsKind === 'digi' && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                onPress={() => spotsControls.onSpotsToggle('digi')} activeOpacity={0.8}>
+                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'digi' ? DEC_COL : t.btnText }]}>DIGITAL SPOTS</Text>
+              </TouchableOpacity>
+              {spotsControls.showCwStt && (
+                <TouchableOpacity style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                                          spotsControls.spotsKind === 'cw' && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                  onPress={() => spotsControls.onSpotsToggle('cw')} activeOpacity={0.8}>
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'cw' ? DEC_COL : t.btnText }]}>CW SPOTS</Text>
+                </TouchableOpacity>
+              )}
+              {spotsControls.showCwStt && (
+                <TouchableOpacity style={[st.btn, { borderColor: (spotsControls.sttActive || spotsControls.sttSelected) ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                                          spotsControls.sttActive && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                  onPress={spotsControls.onSttToggle} activeOpacity={0.8}>
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (spotsControls.sttActive || spotsControls.sttSelected) ? DEC_COL : t.btnText }]}>STT</Text>
+                </TouchableOpacity>
+              )}
+              {spotsControls.showMap && (
+                <TouchableOpacity style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+                  onPress={() => spotsControls.onSpotsMap?.()} activeOpacity={0.8}>
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+
         {/* SERVER MAPS — relocated from MenuSheet (§4.4). Same "what's on this signal"
             family as the decoders, so it belongs here. Each fires MapOverlay unchanged. */}
         {showServerMaps && onServerMap && (
@@ -281,4 +423,16 @@ const st = StyleSheet.create({
     borderRadius: 3, paddingVertical: 7, paddingHorizontal: 24,
   },
   closeBtnText: { fontSize: 11 },
+});
+
+// Decoder / spots section styles (moved with the decoders from MenuSheet §4.3).
+const dst = StyleSheet.create({
+  decWrap:      { marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)' },
+  callout:      { marginTop: 8, padding: 10, borderWidth: 1, borderColor: DEC_COL, borderRadius: 6, backgroundColor: 'rgba(80,220,100,0.06)' },
+  subLabel:     { color: 'rgba(255,255,255,0.55)', fontSize: 10, letterSpacing: 1, marginTop: 6, marginBottom: 3 },
+  optRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  seg:          { flexGrow: 1, minWidth: '18%', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', borderRadius: 3, paddingVertical: 7, alignItems: 'center' },
+  segActive:    { borderColor: DEC_COL, backgroundColor: 'rgba(80,220,100,0.14)' },
+  segText:      { color: 'rgba(255,255,255,0.6)', fontSize: 11, fontWeight: '600' },
+  segTextActive:{ color: DEC_COL },
 });

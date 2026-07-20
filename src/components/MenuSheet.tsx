@@ -1193,74 +1193,8 @@ export default function MenuSheet({
             {/* SERVER MAPS relocated to ModeSelector (§4.4) — same "what's on this
                signal" family as the decoders. */}
 
-            {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;
-                   settings for the selected mode appear underneath.
-                   Landscape: hidden — the decoder panel needs vertical space
-                   that landscape (esp. SE-class screens) doesn't have. Maps
-                   stay available; rotate to portrait for decoders.
-                   OWRX decodes server-side (results stream back), so the
-                   client-side decoders + UberSDR spot feeds are hidden for it —
-                   replaced by the OPENWEBRX map/files/admin below (Phase 1). ── */}
-            {(!isLandscape || isTablet) && serverType !== 'owrx' && (<>
-            <SectionLabel label="CLIENT DECODERS" icon="decoder" />
-            <BtnRow>
-              {(['rtty','navtex','wefax','sstv','morse'] as const).filter(k => !(isLocal && k === 'morse')).map(k => (
-                <Btn key={k} label={k.toUpperCase()}
-                  active={decMode === k && decOn}
-                  style={decMode === k && !decOn ? styles.btnSelected : undefined}
-                  onPress={() => onDecToggle?.(k)} />
-              ))}
-            </BtnRow>
-            {decMode === 'rtty' && rttySettings && onRttySettings && (
-              <View style={styles.subPanel}>
-                <RttySettingsRows s={rttySettings} onChange={onRttySettings} />
-              </View>
-            )}
-            {decMode === 'wefax' && (
-              <View style={styles.subPanel}>
-                <SubLabel label="LPM" />
-                <OptRow>{[60, 120, 240].map(v => (
-                  <SegBtn key={v} label={String(v)} active={wefaxLpm === v}
-                          onPress={() => onWefaxLpm?.(v)} />
-                ))}</OptRow>
-              </View>
-            )}
-            </>)}
-
-            {/* DECODED SPOTS / SERVER EXTENSIONS stays available in landscape (unlike
-                the client decoders above, which need portrait height) so the FT8 MAP
-                and Digital Spots are reachable in either orientation. */}
-            {serverType !== 'owrx' && (<>
-            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text. DIGITAL SPOTS is
-                   our ON-DEVICE FT8/FT4 decoder, so it works everywhere (local USB
-                   hardware AND Kiwi, which has no server feed). CW SPOTS (server CW
-                   skimmer) and STT (server speech-to-text) are real server features,
-                   so they're hidden for local hardware and Kiwi. ── */}
-            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} icon="spots" />
-            <BtnRow>
-              <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
-                   onPress={() => onSpotsToggle?.('digi')} />
-              {!isLocal && !isKiwi && (
-                <Btn label="CW SPOTS" active={spotsKind === 'cw'}
-                     onPress={() => onSpotsToggle?.('cw')} />
-              )}
-              {!isLocal && !isKiwi && (
-                <Btn label="STT" active={decMode === 'whisper' && decOn}
-                     style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
-                     onPress={() => onDecToggle?.('whisper')} />
-              )}
-              {/* On-device FT8 map (Local/Kiwi) — plots Digital Spots by their
-                  Maidenhead grid; distance/centre from the receiver position. */}
-              {(isLocal || isKiwi) && (
-                <Btn label="🗺 MAP" onPress={() => onSpotsMap?.()} />
-              )}
-            </BtnRow>
-            {spotsKind !== null && (
-              <View style={styles.subPanel}>
-                <SubLabel label="Filters in decoder panel header · tap a spot to tune" small />
-              </View>
-            )}
-            </>)}
+            {/* CLIENT DECODERS + SERVER EXTENSIONS / DECODED SPOTS relocated to ModeSelector
+               (§4.3) — a decoder rides on the demod, so it belongs in the demodulator menu. */}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
             <SectionLabel label="CONTROLS" icon="controls" />

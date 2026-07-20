@@ -194,6 +194,9 @@ export interface ControlsBarProps {
   signalMode?:   'snr' | 'smeter' | 'dbfs';
   /** WFM stereo pilot detected (local hardware) → "ST" badge on the mode pill. */
   fmStereo?:     boolean;
+  /** Active client decoder id (rtty/wefax/…) — composes the mode readout as
+   *  `<mode>: <decoder>` (e.g. USB: RTTY) so the running decoder is visible (§5.1). */
+  activeDecoder?: string | null;
   bottomInset:   number;
   onVfoDelta:    (px: number) => void;
   onBwDelta:     (px: number) => void;
@@ -873,7 +876,7 @@ const lnd = StyleSheet.create({
 function ControlsBar({
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
-  fmStereo = false,
+  fmStereo = false, activeDecoder = null,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
@@ -922,7 +925,10 @@ function ControlsBar({
   const RADIUS  = s.r(18);
 
   const shared = {
-    freqStr, unit, modeLabel: modeDisplay(mode), snrText, fmStereo,
+    freqStr, unit,
+    // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
+    modeLabel: modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
+    snrText, fmStereo,
     connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,

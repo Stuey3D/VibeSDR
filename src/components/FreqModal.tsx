@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Keyboard, KeyboardAvoidingView, Modal, Platform,
-  Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View,
+  Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
@@ -76,6 +76,8 @@ export default function FreqModal({
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
+  const { width: winW, height: winH } = useWindowDimensions();
+  const isLandscape = winW > winH;
   const [unitState, setUnitState] = useState<Unit>('khz');
   const unit = unitProp ?? unitState;
   const [value, setValue] = useState('');
@@ -100,9 +102,13 @@ export default function FreqModal({
   // pad the box up by it so it floats just above the keypad.
   const [kbHeight, setKbHeight] = useState(0);
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const show = Keyboard.addListener('keyboardDidShow', e => setKbHeight(e.endCoordinates.height));
-    const hide = Keyboard.addListener('keyboardDidHide', () => setKbHeight(0));
+    // Track on BOTH platforms now: landscape positions the modal a fixed gap above the
+    // MEASURED keyboard (iOS's auto-padding over-lifted it in landscape — clipped the top
+    // while leaving a gap below). iOS keyboardWillShow is smoother than DidShow.
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvt, e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener(hideEvt, () => setKbHeight(0));
     return () => { show.remove(); hide.remove(); };
   }, []);
 
@@ -148,11 +154,14 @@ export default function FreqModal({
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <KeyboardAvoidingView
-        // Android uses windowSoftInputMode=adjustResize (the window already
-        // shrinks above the keyboard) so no behavior here — adding one double-
-        // adjusts and makes the box bounce. iOS needs padding.
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={[st.center, { paddingBottom: 16 + kbHeight }]} pointerEvents="box-none"
+        // LANDSCAPE: position manually a small gap above the measured keyboard — iOS's
+        // auto-padding over-lifts a tall modal in landscape (clips the top, gap below).
+        // PORTRAIT: unchanged — iOS padding behavior; Android adjustResize already shrinks
+        // the window (adding behavior double-adjusts and bounces).
+        behavior={Platform.OS === 'ios' && !isLandscape ? 'padding' : undefined}
+        style={[st.center, {
+          paddingBottom: isLandscape ? kbHeight + 8 : 16 + (Platform.OS === 'android' ? kbHeight : 0),
+        }]} pointerEvents="box-none"
       >
         <View style={[st.modal, { borderColor: t.barBorder }]}>
           <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>

@@ -4445,6 +4445,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       >
         <ControlsBar
           readOnly={readOnly}
+          activeDecoder={activeDecoder}
           sessionLeft={sessionLeftMs == null ? null : {
             text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
             urgent: sessionLeftMs < 120_000,
@@ -4699,6 +4700,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClose={() => setModeSelOpen(false)}
         showServerMaps={(route.params.serverType ?? 'ubersdr') !== 'owrx' && !isLocal && !isKiwi}
         onServerMap={(k) => { setModeSelOpen(false); setMapKind(k); }}
+        decoderControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' && (!isLandscape || isTablet) ? {
+          decMode: selDecoder, decOn: activeDecoder !== null && activeDecoder === selDecoder, isLocal,
+          onDecToggle, rttySettings, onRttySettings, wefaxLpm, onWefaxLpm,
+        } : null}
+        spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
+          label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',
+          spotsKind, onSpotsToggle,
+          onSpotsMap: () => { setModeSelOpen(false); if (spotsKindRef.current !== 'digi') onSpotsToggle('digi'); setLocalMapOpen(true); },
+          showCwStt: !isLocal && !isKiwi, showMap: isLocal || isKiwi,
+          sttActive: selDecoder === 'whisper' && activeDecoder === 'whisper',
+          sttSelected: selDecoder === 'whisper' && activeDecoder !== 'whisper',
+          onSttToggle: () => onDecToggle('whisper'),
+        } : null}
       />
 
       {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
