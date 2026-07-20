@@ -131,13 +131,15 @@ struct BatteryPill: View {
               .padding(1)
           }
           Text("\(pct)")
-            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .font(.system(size: 9, weight: .bold, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(tint)
             .minimumScaleFactor(0.7)
             .lineLimit(1)
         }
-        .frame(width: 26, height: 13)
+        // Sized to sit level with the band-label pill on the same row — the font is clear, so
+        // even three digits stay legible. Not huge; just matched.
+        .frame(width: 30, height: 15)
         // The nub. Without it a rounded rectangle with a number in it is just a badge.
         RoundedRectangle(cornerRadius: 0.5)
           .fill(tint)
@@ -158,6 +160,56 @@ struct BatteryPill: View {
   }
 }
 
+/// The battery, drawn VERTICALLY, for the bottom-left corner of the spike screen.
+///
+/// The horizontal `BatteryPill` lived beside the clock; that spot fouls the watchOS system
+/// glyphs (driving car, location arrow, recording dot) which have no detect-and-dodge API. The
+/// ticker moving up to the axis strip freed the bottom-left corner, so the battery drops there —
+/// upright, on its OWN dark scrim, because down here it floats over the raw waterfall and white
+/// strokes/digits over a bright spectrum are simply not there without darkening behind them.
+struct BatteryPillV: View {
+  let level: Double
+  private var tint: Color { level <= 0.20 ? .red : .white.opacity(0.85) }
+
+  var body: some View {
+    if level < 0 {
+      EmptyView()
+    } else {
+      let pct = Int((level * 100).rounded())
+      VStack(spacing: 1.5) {
+        // The nub, on TOP now that the cell stands upright.
+        RoundedRectangle(cornerRadius: 0.5).fill(tint).frame(width: 4, height: 1.5)
+        ZStack {
+          RoundedRectangle(cornerRadius: 2.5).stroke(tint, lineWidth: 1)
+          // Fill from the BOTTOM, the way an upright cell reads.
+          GeometryReader { g in
+            RoundedRectangle(cornerRadius: 1.5)
+              .fill(tint.opacity(0.32))
+              .frame(height: max(0, (g.size.height - 2) * level))
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+              .padding(1)
+          }
+          // Percentage INSIDE the cell — below it, the digits ran into the watch's rounded
+          // corner and clipped. The cell is widened to 17pt so "100" fits upright.
+          Text("\(pct)")
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .minimumScaleFactor(0.6)
+            .lineLimit(1)
+        }
+        .frame(width: 17, height: 26)
+      }
+      // The scrim — darkening, never frosting, same rule as every other piece of chrome.
+      .padding(.horizontal, 4)
+      .padding(.vertical, 3)
+      .background(Color.black.opacity(0.55), in: Capsule())
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Watch battery \(pct) percent")
+    }
+  }
+}
+
 enum CrownMode: Equatable {
   case tune, zoom, brightness, contrast, volume
 
@@ -169,6 +221,16 @@ enum CrownMode: Equatable {
     case .contrast:   return "circle.lefthalf.filled"
     case .volume:     return "speaker.wave.2.fill"
     }
+  }
+  var label: String {
+    switch self {
+    case .tune: return "Tune"; case .zoom: return "Zoom"; case .volume: return "Volume"
+    case .brightness: return "Bright"; case .contrast: return "Contrast"
+    }
+  }
+  /// Double-Tap cycles just the three primary crown modes.
+  var nextPrimary: CrownMode {
+    switch self { case .tune: return .zoom; case .zoom: return .volume; default: return .tune }
   }
 }
 
@@ -240,8 +302,15 @@ struct ControlMenu: View {
   @State private var showModes = false
   @State private var showSteps = false
   @State private var showCrown = false
-  @State private var showFavs = false
+  @State private var showProfiles = false
+  private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
+  @State private var showWrist = false
+  @State private var showBw = false
+  @State private var showDab = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
+  /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
+  /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
+  @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
   /// WATCH-LOCAL waterfall offsets — the same keys ContentView drives. Mirrored here
   /// only so Reset can clear them.
   @AppStorage("wfBright")   private var wfBright   = 0.0
@@ -287,6 +356,24 @@ struct ControlMenu: View {
         .padding(.leading, 8)
 
         ScrollView {
+          // PROFILES — top of the menu, full width (OWRX only). Shows the active profile + listener
+          // count; opens the grouped picker. Switching is EXPLICIT (etiquette) — never automatic.
+          if !link.profiles.isEmpty {
+            Button { showProfiles = true } label: {
+              HStack(spacing: 8) {
+                Image(systemName: "dial.medium.fill").font(.system(size: 18)).foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                  Text("PROFILES").font(.system(size: 11, weight: .bold)).foregroundColor(.orange)
+                  Text("\(activeProfileName) · \(link.clients) listening").font(.system(size: 11)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+                }
+                Spacer(); Image(systemName: "chevron.right").foregroundColor(.white.opacity(0.4))
+              }
+              .padding(.horizontal, 10).padding(.vertical, 8)
+              .frame(maxWidth: .infinity)
+              .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain).padding(.bottom, 5)
+          }
           LazyVGrid(columns: cols, spacing: 5) {
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
@@ -323,12 +410,32 @@ struct ControlMenu: View {
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
+          // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
+          tile(name: "BW", value: bwLabel, h: h) { showBw = true }
+          // DAB — only on a DAB profile. Programme picker (OWRX plays nothing until a service is
+          // chosen; we auto-pick the first) + the speed-fix presets for the dablin chipmunk.
+          if link.mode == "dab" {
+            tile(name: "DAB", value: link.stationName.isEmpty ? "\(link.dabProgrammes.count) svc" : link.stationName, h: h) { showDab = true }
+          }
+          // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall
+          // running with the wrist down (costs power); the timed options drop it after N and
+          // reconnect on the way back.
+          tile(name: "WRIST DOWN", value: wristLabel, h: h) { showWrist = true }
 
-          // FAVOURITE INSTANCES. The watch can LAUNCH the phone app — but if there's
-          // no default instance the phone lands on the picker and the wrist is left
-          // looking at nothing. Bringing the whole directory over would be silly;
-          // bringing the handful you actually use is exactly right.
-          tile(icon: "server.rack", label: "Servers", h: h) { showFavs = true }
+          // (RTL-SDR hardware controls live on their OWN button top-left of the waterfall screen — see
+          // ContentView — so this grid stays uncluttered for the remote backends that have no dongle.)
+
+          // SERVERS — back to the instance picker to switch server (or manage favourites).
+          tile(icon: "antenna.radiowaves.left.and.right", label: "Servers", h: h) {
+            dismiss(); link.backToPicker()
+          }
+
+          // STOP — the ONLY in-app way to actually stop the audio. Background-audio mode keeps the app
+          // playing through a wrist-flick / crown press, so without this the only ways to silence it are
+          // force-quit or the Now Playing screen. Drops audio + sockets and lands back on the picker.
+          tile(icon: "stop.circle.fill", label: "Stop", h: h) {
+            dismiss(); link.backToPicker()
+          }
 
           // A WAY BACK. Brightness and contrast are watch-local, so a user who
           // cranks them until the waterfall is a white slab has no phone setting to
@@ -336,6 +443,11 @@ struct ControlMenu: View {
           // broke. Resets ONLY the watch's own offsets; the phone is untouched.
           resetTile(h: h)
         }
+
+        // ★ NO LINK MANAGEMENT TILE IN BUDDY. The ladder throttles OUR OWN waterfall socket to
+        //   keep a poor link flowing — Buddy has no socket, because the phone holds the server
+        //   connection and runs its own ladder. A second one here would change nothing.
+
         // Room to scroll the LAST row clear of the rounded corner — as content,
         // not as a bar. Control Centre lets its tiles run off the bottom edge and
         // simply keeps scrolling; a fixed bottom padding on the outer stack instead
@@ -356,20 +468,20 @@ struct ControlMenu: View {
     // that cannot be pressed is not worth the height it saves.
     .ignoresSafeArea(edges: .bottom)
     .toolbar(.hidden, for: .navigationBar)
-    .sheet(isPresented: $showFavs) {
-      FavouritesList(favs: link.favourites) { url in
-        link.selectInstance(url)
-        showFavs = false
-        dismiss()
-      }
-    }
     .sheet(isPresented: $showCrown) {
       CrownPicker(current: $crownSens) { showCrown = false; dismiss() }
+    }
+    .sheet(isPresented: $showProfiles) {
+      ProfileSheet { id in link.selectProfile(id); showProfiles = false; dismiss() }
+        .environmentObject(link)
     }
     .sheet(isPresented: $showModes) {
       PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
         link.setMode(m); showModes = false; dismiss()
       }
+    }
+    .sheet(isPresented: $showDab) {
+      DabSheet().environmentObject(link)
     }
     .sheet(isPresented: $showSteps) {
       PickerList(title: "Step",
@@ -381,6 +493,40 @@ struct ControlMenu: View {
         showSteps = false; dismiss()
       }
     }
+    .sheet(isPresented: $showWrist) {
+      PickerList(title: "Wrist down",
+                 items: Self.wristOptions.map(\.label),
+                 current: wristLabel) { label in
+        if let secs = Self.wristOptions.first(where: { $0.label == label })?.secs {
+          wristTimeout = secs
+        }
+        showWrist = false; dismiss()
+      }
+    }
+    .sheet(isPresented: $showBw) {
+      // ★ No passband editor in Buddy. It edits the FILTER, which belongs to whoever demodulates —
+      //   the phone — and the watch protocol has no bandwidth command. Changing the MODE moves the
+      //   edges, which is the control that does exist. An editor that silently did nothing would be
+      //   worse than its absence.
+      Text("Filter is set on the iPhone.")
+        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+        .multilineTextAlignment(.center).padding()
+    }
+  }
+
+  /// Total passband width in kHz, for the BW tile readout.
+  private var bwLabel: String {
+    let k = (link.filtHi - link.filtLo) / 1000
+    return k >= 10 ? String(format: "%.0fk", k) : String(format: "%.1fk", k)
+  }
+
+  /// Off (never drop) + the timed steps. Kept here so ContentView and the picker agree.
+  static let wristOptions: [(label: String, secs: Double)] = [
+    ("Off", 0), ("30s", 30), ("60s", 60), ("90s", 90), ("3m", 180), ("5m", 300),
+  ]
+  private var wristLabel: String {
+    ControlMenu.wristOptions.first(where: { $0.secs == wristTimeout })?.label
+      ?? "\(Int(wristTimeout))s"
   }
 
   /// A named setting: the control's name small on top, its current value big below.
@@ -430,7 +576,9 @@ struct ControlMenu: View {
   }
 
   // Mirrors sdrTypes.ts. Kept in the order the phone lists them.
-  static let modes = ["usb", "lsb", "am", "sam", "fm", "nfm", "cwu", "cwl"]
+  // FM (narrow) + WFM (wide), matching the phone. `nfm` was a second NARROW-FM entry (redundant
+  // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
+  static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl", "dab", "adsb"]
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already
@@ -477,74 +625,10 @@ struct ControlMenu: View {
   }
 }
 
-/// A WAY OUT, for every screen that has no long-press menu.
-///
-/// FM-DX, DAB and ADS-B are CARDS and LISTS, not control surfaces — there's nothing on
-/// them to zoom, step or demodulate, so none of them has a menu. Which meant that once
-/// the phone landed on one of those backends, the wrist had no way to reach another
-/// server: you had to take the phone out of your pocket, which is the one thing the
-/// watch exists to avoid.
-///
-/// A button, not an invented menu. It lives in the CLOCK'S BAND — watchOS reserves that
-/// strip whether we use it or not, so it costs no height — and it mirrors where the
-/// phone puts the same control.
-struct ServersButton: View {
-  @Binding var show: Bool
+// ★ The VibeServer HARDWARE sheet (gain, bias-T, AGC, ppm, rate) went with the direct clients:
+//   it wrote straight to the radio, which only worked because the WATCH owned the dongle. The
+//   phone owns it here and there is no remote command, so the sheet is ABSENT rather than inert.
 
-  var body: some View {
-    Button { show = true } label: {
-      // A SERVER, not a star. A star says "favourite" — which is what the list holds,
-      // not what the button DOES. The button switches receivers.
-      Image(systemName: "server.rack")
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(.white)
-        .frame(width: 28, height: 26)      // the TAP TARGET is the frame, not the glyph
-        .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.14)))
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-  }
-}
-
-/// The user's favourite instances, as a list. Tapping one switches the PHONE.
-struct FavouritesList: View {
-  let favs: [WatchLink.Favourite]
-  let onPick: (String) -> Void
-
-  var body: some View {
-    List {
-      if favs.isEmpty {
-        // Honest about WHY it's empty, and where to fix it. An empty list with no
-        // explanation reads as broken.
-        // ♥ = favourite, ★ = default. Say the right one: this is the only instruction
-        // a user with an empty list ever gets.
-        Text("No favourites yet.\n♥ a server on the iPhone.")
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: .infinity)
-      }
-      ForEach(favs) { f in
-        Button {
-          onPick(f.url)
-        } label: {
-          VStack(alignment: .leading, spacing: 1) {
-            Text(f.name.isEmpty ? f.url : f.name)
-              .font(.system(size: 15, weight: .semibold, design: .rounded))
-              .lineLimit(1)
-            if let t = f.type, !t.isEmpty {
-              Text(t.uppercased())
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(.cyan)
-            }
-          }
-        }
-        .buttonStyle(.plain)
-      }
-    }
-    .navigationTitle("Servers")
-  }
-}
 
 /// The crown-sensitivity picker. A list, like Step and Demod — you tap the thing you
 /// want, which is the right gesture on a surface your finger is already covering.
@@ -609,5 +693,97 @@ struct PickerList: View {
       }
     }
     .navigationTitle(title)
+  }
+}
+
+/// DAB controls — programme picker (services in the tuned ensemble) + the speed-fix presets that work
+/// around the dablin/OWRX "chipmunk" (a station whose sample rate the server misreads). Only reachable
+/// on a DAB profile. Speed presets mirror the phone's set (Off / ×0.67 / ×0.50 / ×0.33 / ×0.25).
+struct DabSheet: View {
+  @EnvironmentObject var link: WatchLink
+  @Environment(\.dismiss) private var dismiss
+  private let speeds: [(v: Double, l: String)] = [
+    (1, "Off"), (0.6667, "×0.67"), (0.5, "×0.50"), (0.3333, "×0.33"), (0.25, "×0.25"),
+  ]
+  var body: some View {
+    List {
+      Section("Speed fix") {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            ForEach(speeds, id: \.l) { o in
+              let active = abs(link.dabScale - o.v) < 0.001
+              Button { link.setDabScale(o.v) } label: {
+                Text(o.l).font(.system(size: 13, weight: .semibold))
+                  .padding(.horizontal, 10).padding(.vertical, 6)
+                  .background(active ? Color.orange : Color.white.opacity(0.12), in: Capsule())
+                  .foregroundColor(active ? .black : .white)
+              }.buttonStyle(.plain)
+            }
+          }
+        }
+      }
+      Section("Station") {
+        if link.dabProgrammes.isEmpty {
+          Text("Waiting for the ensemble…").font(.system(size: 12)).foregroundColor(.white.opacity(0.5))
+        }
+        ForEach(link.dabProgrammes) { p in
+          Button { link.selectDabService(p.id); dismiss() } label: {
+            HStack(spacing: 8) {
+              Text(p.name).font(.system(size: 14)).foregroundColor(p.name == link.stationName ? .green : .white).lineLimit(1)
+              Spacer()
+              if p.name == link.stationName { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)).foregroundColor(.green) }
+            }
+          }.buttonStyle(.plain)
+        }
+      }
+    }
+    .navigationTitle("DAB")
+  }
+}
+
+/// OWRX profile picker — grouped SDR → profiles, matching the phone. Active profile flagged; opens
+/// with a brief etiquette reminder (switching retunes the SHARED receiver for everyone here).
+struct ProfileSheet: View {
+  @EnvironmentObject var link: WatchLink
+  let onSelect: (String) -> Void
+
+  private var sdrs: [String] {
+    var seen = Set<String>(); var out = [String]()
+    for p in link.profiles where !seen.contains(p.sdrName) { seen.insert(p.sdrName); out.append(p.sdrName) }
+    return out
+  }
+
+  var body: some View {
+    // Open scrolled to the CURRENT profile (71-profile lists are painful to scroll from the top to
+    // reach the neighbour of the one you're on — the phone opens on the active one too).
+    ScrollViewReader { proxy in
+      List {
+        Section {
+          Text("⚠︎ Switching retunes this receiver for everyone (\(link.clients) listening). Please ask in chat first.")
+            .font(.system(size: 10.5)).foregroundColor(.orange).lineLimit(nil)
+        }
+        ForEach(sdrs, id: \.self) { sdr in
+          Section(sdr) {
+            ForEach(link.profiles.filter { $0.sdrName == sdr }) { p in
+              Button { onSelect(p.id) } label: {
+                HStack(spacing: 8) {
+                  Text(p.name).font(.system(size: 14)).foregroundColor(p.active ? .green : .white).lineLimit(1)
+                  Spacer()
+                  // In-use / active indicator (the profile we're currently on).
+                  if p.active { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)).foregroundColor(.green) }
+                }
+              }.buttonStyle(.plain)
+              .id(p.id)
+            }
+          }
+        }
+      }
+      .navigationTitle("Profiles")
+      .onAppear {
+        guard let active = link.profiles.first(where: { $0.active })?.id else { return }
+        // A tick after layout, else the List hasn't built its rows and scrollTo is a no-op.
+        DispatchQueue.main.async { proxy.scrollTo(active, anchor: .center) }
+      }
+    }
   }
 }

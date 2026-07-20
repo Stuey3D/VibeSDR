@@ -76,6 +76,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var mode       = ""
   @Published var step       = 0.0
   @Published var reachable  = false
+  /// Servers screen requested from the menu. NAVIGATION only — the phone keeps playing while you
+  /// browse, so this must never tear the link down (see WatchLinkCompat.backToPicker).
+  @Published var showServers = false
   @Published var everGotRow = false
 
   /// When a row last arrived. The watch used to know only two states — "iPhone not
