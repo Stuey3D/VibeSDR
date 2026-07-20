@@ -377,10 +377,17 @@ final class SpikeLink: ObservableObject {
     //    precisely when the link is failing. We were watching DEMAND through a window that only
     //    shows DELIVERY, and delivery is capped by the very thing we wanted to detect.
     //
-    //    So the number has to sit near the BOTTOM of the ceiling range, not the top: sustained
-    //    ~22 KB/s over the relay already means we are at the floor of what Bluetooth can carry.
+    //    ★ 40 KB/s (Stuart): warn while APPROACHING the ceiling, not once past it — a pill that
+    //      arrives with the disconnect is a bereavement notice, not a warning.
+    //
+    //      CAVEAT, and it decides whether this number is right: 40 only warns EARLY if this link's
+    //      ceiling is above 40. If a given relay tops out at ~35, the meter never reads 40 and we
+    //      are back to an unsatisfiable test. That is what `relayDropping` below is for — it cannot
+    //      miss, because it triggers on the event itself. If the drop warning keeps firing without
+    //      the heavy warning preceding it, this number is too high for that link and wants lowering
+    //      toward the low twenties.
     let kb = client.inboundKbPerSec
-    let relayHeavy = transport == .iphone && kb > 22
+    let relayHeavy = transport == .iphone && kb > 40
 
     // ★ AND THE RECONNECT ITSELF IS EVIDENCE. A reconnect while on the relay is the symptom the
     //   user actually experiences, and it needs no threshold to be believed — if we are dropping
@@ -395,12 +402,12 @@ final class SpikeLink: ObservableObject {
       if let st = relayHeavySince, relayDropping || now - st >= 4, bandwidthWarning == nil {
         bandwidthWarning = relayDropping
           ? "This server is too heavy for the phone link — it keeps dropping. Use the watch\u{2019}s own Wi-Fi."
-          : "Heavy server (~\(kb) KB/s) — may stutter over the phone. Best on the watch\u{2019}s own Wi-Fi."
+          : "Nearing the phone link\u{2019}s limit (~\(kb) KB/s) — may start dropping. Best on the watch\u{2019}s own Wi-Fi."
       }
     } else {
       relayHeavySince = nil
       // Hysteresis, so a server sitting right on the line cannot flicker the pill on and off.
-      if bandwidthWarning != nil, transport != .iphone || kb <= 16 { bandwidthWarning = nil }
+      if bandwidthWarning != nil, transport != .iphone || kb <= 30 { bandwidthWarning = nil }
     }
 
     // Surface a RECONNECT so the UI shows the "Reconnecting" pill, not the hard "link lost"
