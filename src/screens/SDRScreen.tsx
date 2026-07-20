@@ -4562,7 +4562,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDecToggle={onDecToggle}
         spotsKind={spotsKind}
         onSpotsToggle={onSpotsToggle}
-        onServerMap={(k) => { setMenuOpen(false); setMapKind(k); }}
         onSpotsMap={() => {
           setMenuOpen(false);
           // The map plots the live Digital Spots feed — start it if it isn't on.
@@ -4698,6 +4697,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onFilterBoth={onFilterBoth}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
+        showServerMaps={(route.params.serverType ?? 'ubersdr') !== 'owrx' && !isLocal && !isKiwi}
+        onServerMap={(k) => { setModeSelOpen(false); setMapKind(k); }}
       />
 
       {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
@@ -4834,6 +4835,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         sdrUsage={sdrUsage}
         clientCount={clientCount}
         onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
+        vtsName={vtsMenuName}
+        vtsFreq={vtsMenuFreq}
+        onVtsPrev={onVtsPrev}
+        onVtsNext={onVtsNext}
       />
 
       {/* Chat drawer */}

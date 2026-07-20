@@ -40,10 +40,15 @@ interface ModeSelectorProps {
   filterHigh?:   number;
   bwEdgeMax?:    number;   // per-edge half-width cap (Hz) for the active mode
   onFilterBoth?: (low: number, high: number) => void;
+  // SERVER MAPS (relocated from MenuSheet §4.4). SDRScreen computes the guard
+  // (UberSDR feeds only — hidden for OWRX/Kiwi/local); we just render the buttons.
+  showServerMaps?: boolean;
+  onServerMap?:    (kind: 'hfdl' | 'digi' | 'cw') => void;
 }
 
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl,
-  filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth }: ModeSelectorProps) {
+  filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth,
+  showServerMaps = false, onServerMap }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
@@ -209,6 +214,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </View>
         )}
 
+        {/* SERVER MAPS — relocated from MenuSheet (§4.4). Same "what's on this signal"
+            family as the decoders, so it belongs here. Each fires MapOverlay unchanged. */}
+        {showServerMaps && onServerMap && (
+          <View style={st.mapsWrap}>
+            <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
+              SERVER MAPS
+            </Text>
+            <View style={st.grid}>
+              {([['hfdl', '✈ HFDL'], ['digi', '📡 DIGITAL'], ['cw', '⊟ CW']] as const).map(([k, label]) => (
+                <TouchableOpacity key={k}
+                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+                  onPress={() => onServerMap(k)} activeOpacity={0.8}>
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
         <TouchableOpacity
           style={[st.closeBtn, { borderColor: t.btnBorder }]}
           onPress={onClose}
@@ -240,6 +264,7 @@ const st = StyleSheet.create({
     borderWidth: 1, borderRadius: 3, paddingHorizontal: 4, alignItems: 'center',
   },
   btnText:      { textAlign: 'center' },
+  mapsWrap:     { marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)' },
   moreWrap:     { marginTop: 12 },
   moreHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

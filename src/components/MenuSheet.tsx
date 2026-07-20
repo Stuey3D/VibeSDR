@@ -81,7 +81,6 @@ export interface MenuSheetProps {
   spotsKind?:      'digi'|'cw'|null;
   onSpotsToggle?:  (k: 'digi'|'cw') => void;
   /** Server map overlays (skin lsv-hfdl / lsv-digmap / lsv-cwmap). */
-  onServerMap?:    (k: 'hfdl'|'digi'|'cw') => void;
   /** Local/Kiwi: open the on-device-decoder FT8 spots map. */
   onSpotsMap?:     () => void;
   rttySettings?:   RttySettings;
@@ -491,7 +490,7 @@ export default function MenuSheet({
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   isFavourite = false, onToggleFavourite,
   decMode = null, decOn = false, onDecToggle,
-  spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
+  spotsKind = null, onSpotsToggle, onSpotsMap,
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
   vfoNeedle = '#ffffff', onVfoNeedle,
@@ -740,22 +739,8 @@ export default function MenuSheet({
               </View>
             </>)}
 
-            {/* ── NEARBY STATION ─────────────────────────────────── */}
-            <SectionLabel label="NEARBY STATION" icon="station" first={profiles.length === 0 && dabProgrammes.length === 0} />
-            <View style={styles.vtsRow}>
-              <TouchableOpacity style={styles.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
-                <Text style={styles.vtsArrowText}>◂</Text>
-              </TouchableOpacity>
-              <View style={styles.vtsInfo}>
-                <Text style={styles.vtsName} numberOfLines={1}>{vtsName || '—'}</Text>
-                {vtsFreq != null && (
-                  <Text style={styles.vtsFreq}>{(vtsFreq / 1_000_000).toFixed(3)} MHz</Text>
-                )}
-              </View>
-              <TouchableOpacity style={styles.vtsArrow} onPress={onVtsNext} hitSlop={8}>
-                <Text style={styles.vtsArrowText}>▸</Text>
-              </TouchableOpacity>
-            </View>
+            {/* NEARBY STATION / VTS skip relocated to FreqModal (§4.1) — it belongs with
+               the frequency you're tuning, not in settings. */}
 
             {/* Search bookmarks & band plan — tap a result to tune */}
             <View style={styles.searchWrap}>
@@ -1205,17 +1190,8 @@ export default function MenuSheet({
             {!dispSettingsOpen && !bookmarksOpen && (<>
 
 
-            {/* ── SERVER MAPS — UberSDR's per-feed Leaflet overlays (skin parity).
-                   OWRX has its own combined map (opened from the OPENWEBRX section
-                   below), so these UberSDR-specific feeds are hidden for it. ── */}
-            {serverType !== 'owrx' && !isLocal && !isKiwi && (<>
-              <SectionLabel label="SERVER MAPS" icon="maps" />
-              <BtnRow>
-                <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
-                <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
-                <Btn label="⊟ CW"       onPress={() => onServerMap?.('cw')} />
-              </BtnRow>
-            </>)}
+            {/* SERVER MAPS relocated to ModeSelector (§4.4) — same "what's on this
+               signal" family as the decoders. */}
 
             {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;
                    settings for the selected mode appear underneath.

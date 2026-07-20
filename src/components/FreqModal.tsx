@@ -38,6 +38,14 @@ interface FreqModalProps {
   sdrUsage?:        Record<string, { name: string; inUse: boolean; activeProfileId?: string }>;
   clientCount?:     number;
   onSelectProfile?: (id: string) => void;
+
+  /** VTS "nearby station" skip — relocated from MenuSheet (§4.1). Shown as a row above the
+   *  number: ◄ name ►. The always-on VTSBar is untouched. FM-DX disables skip (one shared
+   *  tuner) — SDRScreen omits the handlers there, so the guard travels with the row. */
+  vtsName?:   string;
+  vtsFreq?:   number | null;
+  onVtsPrev?: () => void;
+  onVtsNext?: () => void;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -60,6 +68,7 @@ export default function FreqModal({
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
+  vtsName, vtsFreq, onVtsPrev, onVtsNext,
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -134,6 +143,26 @@ export default function FreqModal({
           <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>
             FREQUENCY
           </Text>
+          {/* VTS nearby-station skip — relocated from MenuSheet (§4.1). Absent on FM-DX
+              (SDRScreen doesn't pass the handlers there — the shared-tuner guard travels). */}
+          {onVtsPrev && onVtsNext && (
+            <View style={st.vtsRow}>
+              <TouchableOpacity style={st.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
+                <Text style={[st.vtsArrowText, { color: t.freqColor }]}>◄</Text>
+              </TouchableOpacity>
+              <View style={st.vtsInfo}>
+                <Text style={[st.vtsName, { color: t.btnText, fontFamily: t.font }]} numberOfLines={1}>
+                  {vtsName || '—'}
+                </Text>
+                {vtsFreq != null && (
+                  <Text style={[st.vtsFreq, { color: dimText }]}>{(vtsFreq / 1_000_000).toFixed(3)} MHz</Text>
+                )}
+              </View>
+              <TouchableOpacity style={st.vtsArrow} onPress={onVtsNext} hitSlop={8}>
+                <Text style={[st.vtsArrowText, { color: t.freqColor }]}>►</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           <View style={[st.inputRow, { borderBottomColor: t.barBorder }]}>
             <TextInput
               ref={inputRef}
@@ -231,6 +260,12 @@ const st = StyleSheet.create({
   center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-end', alignItems: 'center' },
   modal:        { backgroundColor: 'rgba(8,6,1,0.97)', borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
   title:        { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
+  vtsRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  vtsArrow:     { paddingHorizontal: 8, paddingVertical: 2 },
+  vtsArrowText: { fontSize: 20, fontWeight: 'bold' },
+  vtsInfo:      { flex: 1, alignItems: 'center' },
+  vtsName:      { fontSize: 13, fontWeight: 'bold' },
+  vtsFreq:      { fontSize: 10, marginTop: 1 },
   inputRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 6, borderBottomWidth: 1, paddingBottom: 6, marginBottom: 8 },
   input:        { flex: 1, fontSize: 32, letterSpacing: 3, padding: 4, backgroundColor: 'transparent' },
   unitLabel:    { fontSize: 11, letterSpacing: 2, paddingBottom: 6 },
