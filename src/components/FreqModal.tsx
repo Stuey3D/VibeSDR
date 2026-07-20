@@ -1,12 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard, KeyboardAvoidingView, Modal, Platform,
   Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
+import { ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
 import ProfilePicker from './ProfilePicker';
+import StationLogo from './StationLogo';
+import {
+  searchStations, fmtFreq, fmtRange, grpAbbr,
+  type ServerBookmark, type ServerBand, type SearchResult,
+} from '../services/stations';
+import { type UserBookmark } from '../services/userBookmarks';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -50,6 +57,21 @@ interface FreqModalProps {
    *  VTS row updates to the nearest station to the DRAFT value, before you've tuned. Falls back
    *  to the tuned station (vtsName/vtsFreq) when the field is untouched. */
   vtsLookup?: (hz: number) => { name: string; freq: number } | null;
+
+  /** BOOKMARKS mode (relocated from MenuSheet §4.2). When these are supplied the card gains a
+   *  Tune | Bookmarks segmented header. All lifted verbatim from MenuSheet. */
+  currentMode?:      string;
+  onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean) => void;
+  searchBookmarks?:  ServerBookmark[];
+  searchBands?:      ServerBand[];
+  eibiEnabled?:      boolean;
+  onEibiToggle?:     (on: boolean) => void;
+  userBookmarks?:    UserBookmark[];
+  onAddBookmark?:    (name: string, allInstances: boolean) => void;
+  onDeleteBookmark?: (bm: UserBookmark) => void;
+  onExportBookmarks?: () => void;
+  onImportBookmarks?: (text: string, allInstances: boolean) => string;
+  onPickImportFile?:  (allInstances: boolean) => Promise<string>;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -73,7 +95,11 @@ export default function FreqModal({
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
   vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
+  currentMode = 'usb', onSearchTune, searchBookmarks = [], searchBands = [],
+  eibiEnabled = true, onEibiToggle, userBookmarks = [],
+  onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
 }: FreqModalProps) {
+  const hasBookmarks = !!onSearchTune;   // bookmarks mode available
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const { width: winW, height: winH } = useWindowDimensions();
@@ -84,6 +110,19 @@ export default function FreqModal({
   // Live VTS while typing (see vtsLookup). null → show the tuned station instead.
   const [draftVts, setDraftVts] = useState<{ name: string; freq: number } | null>(null);
   const inputRef          = useRef<TextInput>(null);
+
+  // ── Bookmarks mode (relocated from MenuSheet §4.2) ──────────────────────────
+  const [cardMode, setCardMode]         = useState<'tune' | 'bookmarks'>('tune');
+  const [searchQuery, setSearchQuery]   = useState('');
+  const [bmName, setBmName]             = useState('');
+  const [bmAll, setBmAll]               = useState(false);
+  const [bmImportOpen, setBmImportOpen] = useState(false);
+  const [bmImportText, setBmImportText] = useState('');
+  const [bmImportMsg, setBmImportMsg]   = useState('');
+  const searchResults = useMemo(
+    () => searchStations(searchBookmarks, searchBands, searchQuery),
+    [searchBookmarks, searchBands, searchQuery],
+  );
 
   // As the user types, resolve the nearest station to the DRAFT frequency.
   const onChangeValue = (v: string) => {
@@ -123,6 +162,7 @@ export default function FreqModal({
     if (visible) {
       setValue(toDisplay(currentHz, unit));
       setDraftVts(null);   // start from the tuned station; typing takes over
+      setCardMode('tune'); setSearchQuery(''); setBmImportOpen(false); setBmImportMsg('');
       setTimeout(() => { inputRef.current?.focus(); }, 80);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,9 +204,23 @@ export default function FreqModal({
         }]} pointerEvents="box-none"
       >
         <View style={[st.modal, { borderColor: t.barBorder }]}>
-          <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>
-            FREQUENCY
-          </Text>
+          {hasBookmarks ? (
+            <View style={st.segHeader}>
+              {(['tune', 'bookmarks'] as const).map(m => (
+                <TouchableOpacity key={m}
+                  style={[st.segTab, { borderBottomColor: cardMode === m ? t.freqColor : 'transparent' }]}
+                  onPress={() => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); }} activeOpacity={0.7}>
+                  <Text style={[st.segTabText, { fontFamily: t.font, color: cardMode === m ? t.freqColor : dimText }]}>
+                    {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>FREQUENCY</Text>
+          )}
+
+          {cardMode === 'tune' && (<>
           {/* VTS nearby-station skip — relocated from MenuSheet (§4.1). Absent on FM-DX
               (SDRScreen doesn't pass the handlers there — the shared-tuner guard travels). */}
           {onVtsPrev && onVtsNext && (
@@ -273,6 +327,93 @@ export default function FreqModal({
               </Text>
             </TouchableOpacity>
           </View>
+          </>)}
+
+          {/* BOOKMARKS mode — search + band plan, EiBi, add current, saved list, transfer.
+              Lifted verbatim from MenuSheet (§4.2). */}
+          {cardMode === 'bookmarks' && (
+            <ScrollView style={st.bmScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              <TextInput
+                style={[st.searchInput, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
+                value={searchQuery} onChangeText={setSearchQuery}
+                placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={dimText}
+                autoCorrect={false} autoCapitalize="none" spellCheck={false} clearButtonMode="while-editing" />
+              {searchQuery.trim().length > 0 && (searchResults.length === 0 ? (
+                <Text style={[st.bmMsg, { color: dimText }]}>No results for “{searchQuery.trim()}”</Text>
+              ) : (<>
+                <Text style={[st.bmHint, { color: dimText }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
+                {searchResults.map((r: SearchResult, i: number) => (
+                  <TouchableOpacity key={i} style={st.searchRow} activeOpacity={0.7}
+                    onPress={() => {
+                      setSearchQuery('');
+                      if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
+                      else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
+                      onClose();
+                    }}>
+                    <Text style={[st.searchFreq, { color: t.freqColor }]}>{r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}</Text>
+                    <Text style={[st.searchMode, { color: dimText }]}>{r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}</Text>
+                    {!r.isBand && r.bm?.name ? <StationLogo name={r.bm.name} itu={r.bm.itu} /> : null}
+                    <Text style={[st.searchName, { color: t.btnText }]} numberOfLines={1}>
+                      {!r.isBand && r.bm?.flag ? r.bm.flag + ' ' : ''}{r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </>))}
+
+              {onEibiToggle && (
+                <View style={st.bmToggleRow}>
+                  <Text style={[st.bmSub, { color: dimText, marginTop: 0 }]}>EiBi SCHEDULE</Text>
+                  <TouchableOpacity onPress={() => onEibiToggle(!eibiEnabled)} hitSlop={8}
+                    style={[st.bmToggle, { borderColor: eibiEnabled ? bdrBrt : bdrDim, backgroundColor: eibiEnabled ? t.btnActiveBg : 'transparent' }]}>
+                    <Text style={{ color: eibiEnabled ? t.btnActiveText : dimText, fontFamily: t.font, fontSize: 11 }}>{eibiEnabled ? 'ON' : 'OFF'}</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <Text style={[st.bmSub, { color: dimText }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
+              <TextInput style={[st.searchInput, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
+                value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={dimText} maxLength={60} autoCorrect={false} />
+              <View style={st.bmSegRow}>
+                <TouchableOpacity style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS INSTANCE</Text></TouchableOpacity>
+                <TouchableOpacity style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL INSTANCES</Text></TouchableOpacity>
+              </View>
+              <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
+                <Text style={[st.bmBtnText, { color: t.freqColor }]}>★ SAVE BOOKMARK</Text>
+              </TouchableOpacity>
+
+              <Text style={[st.bmSub, { color: dimText }]}>Saved ({userBookmarks.length})</Text>
+              {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
+              {userBookmarks.map((b: UserBookmark, i: number) => (
+                <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
+                  <TouchableOpacity style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode); onClose(); }}>
+                    <Text style={[st.bmName2, { color: t.freqColor }]} numberOfLines={1}>{b.name}</Text>
+                    <Text style={[st.bmFreq2, { color: dimText }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: dimText }]}>✕</Text></TouchableOpacity>
+                </View>
+              ))}
+
+              <Text style={[st.bmSub, { color: dimText }]}>Transfer</Text>
+              <View style={st.bmSegRow}>
+                <TouchableOpacity style={[st.bmSeg, { borderColor: bdrDim }]} onPress={onExportBookmarks}><Text style={[st.bmSegText, { color: dimText }]}>⇧ EXPORT JSON</Text></TouchableOpacity>
+                <TouchableOpacity style={[st.bmSeg, { borderColor: bmImportOpen ? bdrBrt : bdrDim }]} onPress={() => { setBmImportOpen(p => !p); setBmImportMsg(''); }}><Text style={[st.bmSegText, { color: bmImportOpen ? t.freqColor : dimText }]}>⇩ PASTE</Text></TouchableOpacity>
+              </View>
+              {onPickImportFile && (
+                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} onPress={async () => { const msg = await onPickImportFile(bmAll); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }}>
+                  <Text style={[st.bmBtnText, { color: dimText }]}>📁 IMPORT FILE (JSON / YAML)</Text>
+                </TouchableOpacity>
+              )}
+              {!!bmImportMsg && <Text style={[st.bmMsg, { color: dimText }]}>{bmImportMsg}</Text>}
+              {bmImportOpen && (<>
+                <TextInput style={[st.searchInput, st.bmImportBox, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
+                  value={bmImportText} onChangeText={setBmImportText} placeholder="Paste UberSDR bookmarks (JSON or YAML) here…" placeholderTextColor={dimText} autoCorrect={false} autoCapitalize="none" multiline />
+                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { const msg = onImportBookmarks?.(bmImportText, bmAll) ?? ''; setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
+                  <Text style={[st.bmBtnText, { color: t.freqColor }]}>CONFIRM IMPORT</Text>
+                </TouchableOpacity>
+              </>)}
+              <View style={{ height: 12 }} />
+            </ScrollView>
+          )}
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -302,4 +443,29 @@ const st = StyleSheet.create({
   profiles:     { marginBottom: 12 },
   cancelBtn:    { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center' },
   tuneBtn:      { flex: 2, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderRadius: 3, alignItems: 'center' },
+  // Bookmarks mode (§4.2)
+  segHeader:    { flexDirection: 'row', marginBottom: 12 },
+  segTab:       { flex: 1, alignItems: 'center', paddingVertical: 8, borderBottomWidth: 2 },
+  segTabText:   { fontSize: 12, letterSpacing: 2, fontWeight: '700' },
+  bmScroll:     { maxHeight: 340 },
+  searchInput:  { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, marginBottom: 8, backgroundColor: 'rgba(255,255,255,0.04)' },
+  bmImportBox:  { minHeight: 64, textAlignVertical: 'top' },
+  bmMsg:        { fontSize: 12, marginBottom: 8, fontStyle: 'italic' },
+  bmHint:       { fontSize: 10, letterSpacing: 1, marginBottom: 4 },
+  searchRow:    { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.10)' },
+  searchFreq:   { fontSize: 12, fontWeight: '700', minWidth: 70 },
+  searchMode:   { fontSize: 10, minWidth: 34 },
+  searchName:   { flex: 1, fontSize: 12 },
+  bmToggleRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 4 },
+  bmToggle:     { paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6, borderWidth: 1 },
+  bmSub:        { fontSize: 10, letterSpacing: 1, marginTop: 12, marginBottom: 5 },
+  bmSegRow:     { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  bmSeg:        { flex: 1, borderWidth: 1, borderRadius: 4, paddingVertical: 8, alignItems: 'center' },
+  bmSegText:    { fontSize: 11, fontWeight: '600' },
+  bmBtn:        { borderWidth: 1, borderRadius: 4, paddingVertical: 9, alignItems: 'center', marginBottom: 8 },
+  bmBtnText:    { fontSize: 12, fontWeight: '700' },
+  bmSaveRow:    { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.10)' },
+  bmName2:      { fontSize: 13, fontWeight: '600' },
+  bmFreq2:      { fontSize: 10, marginTop: 1 },
+  bmDel:        { fontSize: 16, paddingHorizontal: 6 },
 });

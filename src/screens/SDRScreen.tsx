@@ -4854,6 +4854,18 @@ export default function SDRScreen({ route, navigation }: Props) {
         onVtsPrev={onVtsPrev}
         onVtsNext={onVtsNext}
         vtsLookup={(hz) => { const n = findNearest(vtsBookmarks.current, hz); return n ? { name: n.name, freq: n.hz } : null; }}
+        currentMode={status.mode}
+        onSearchTune={onSearchTune}
+        searchBookmarks={searchBookmarks}
+        searchBands={searchBands}
+        eibiEnabled={eibiEnabled}
+        onEibiToggle={onEibiToggle}
+        userBookmarks={visibleBookmarks}
+        onAddBookmark={onAddBookmark}
+        onDeleteBookmark={onDeleteBookmark}
+        onExportBookmarks={onExportBookmarks}
+        onImportBookmarks={onImportBookmarks}
+        onPickImportFile={onPickImportFile}
       />
 
       {/* Chat drawer */}
