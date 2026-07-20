@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
@@ -114,6 +114,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   showServerMaps = false, onServerMap,
   decoderControls, spotsControls }: ModeSelectorProps) {
   const { theme: t } = useTheme();
+  const { height: winH } = useWindowDimensions();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
   const [bwSync, setBwSync] = useState(false);
@@ -161,6 +162,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
+        {/* Scrolls when the content (decoders + callout + extensions + maps) overflows on a
+            small screen (§7). Capped so big screens render static as before. */}
+        <ScrollView style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled">
         <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
           DEMODULATOR
         </Text>
@@ -287,8 +292,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               CLIENT DECODERS
             </Text>
             <View style={st.grid}>
-              {(['rtty', 'navtex', 'wefax', 'sstv', 'morse'] as DecId[])
-                .filter(k => !(decoderControls.isLocal && k === 'morse')).map(k => {
+              {/* No MORSE — the decoder was dropped (too heavy), so it's not offered. */}
+              {(['rtty', 'navtex', 'wefax', 'sstv'] as DecId[]).map(k => {
                 const active = decoderControls.decMode === k && decoderControls.decOn;
                 const selected = decoderControls.decMode === k && !decoderControls.decOn;
                 return (
@@ -381,6 +386,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         >
           <Text style={[st.closeBtnText, { fontFamily: t.font, color: t.btnText }]}>CLOSE</Text>
         </TouchableOpacity>
+        </ScrollView>
       </View>
     </Modal>
   );

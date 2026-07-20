@@ -1776,7 +1776,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper') => {
     if (activeDecRef.current === m) {
       closeDecoder();
-      setSelDecoder(m); // closeDecoder clears running state; keep selection
+      setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
     } else {
       stopSpots();
       setSelDecoder(m);

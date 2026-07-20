@@ -187,6 +187,10 @@ export default function FreqModal({
   const bdrDim   = isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)';
   const bdrBrt   = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(160,90,0,0.60)';
   const btnPadY  = isWhite ? 12 : 10;
+  // Bookmarks list cap (§6.4/§6.5): size to the space actually available above the keyboard, so a
+  // big phone (17PM) shows every button with no scroll, while small phones cap-and-scroll. Chrome =
+  // card padding + segmented header + top safe gap + the gap above the keyboard.
+  const bmMaxH = Math.max(160, winH - kbHeight - (isLandscape ? 96 : 150));
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
@@ -336,7 +340,7 @@ export default function FreqModal({
           {/* BOOKMARKS mode — search + band plan, EiBi, add current, saved list, transfer.
               Lifted verbatim from MenuSheet (§4.2). */}
           {cardMode === 'bookmarks' && (
-            <ScrollView style={st.bmScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+            <ScrollView style={{ maxHeight: bmMaxH }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
               <TextInput
                 style={[st.searchInput, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
                 value={searchQuery} onChangeText={setSearchQuery}
