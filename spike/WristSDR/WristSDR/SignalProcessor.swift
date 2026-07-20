@@ -26,6 +26,11 @@ final class SignalProcessor {
   private let noisePercentile: Double = 0.10
   private let minHistoryMs: Double = 2000   // noise-floor smoothing window
   private let maxHistoryMs: Double = 5000   // ceiling window — recovers faster
+  // Below this visible span the 10th-percentile floor is untrustworthy: zoomed into a busy
+  // band every bin is signal, the "floor" climbs into it, and the waterfall rides up to
+  // white. Past this we FREEZE the floor at its last wide-view value. Mirrors the JS
+  // signalProcessor.ts fix (FLOOR_FREEZE_SPAN_HZ) so Jr matches Buddy. Tunable.
+  private let floorFreezeSpanHz: Double = 25_000
   private let bandFlushFrac: Double = 0.4
 
   private var dbAvg: [Float] = []
@@ -42,6 +47,9 @@ final class SignalProcessor {
   private var maxHistory: [(v: Double, t: Double)] = []
   private(set) var actualMinDb: Double = -120
   private(set) var actualMaxDb: Double = -20
+  /// Last trustworthy (wide-view) noise-floor dB, held while zoomed in past
+  /// floorFreezeSpanHz. Cleared on every range flush so a band change re-learns.
+  private var frozenFloorDb: Double? = nil
   /// Signal readout, near-free from the auto-range pass: passband (centre-window) peak minus
   /// the noise floor. snrDb is the SNR in dB; level is that mapped to a 0…1 bar fill.
   private(set) var snrDb: Double = 0
@@ -59,6 +67,7 @@ final class SignalProcessor {
       tmp    = [Float](repeating: 0, count: n)
       outRow = [UInt8](repeating: 0, count: n)
       minHistory.removeAll(); maxHistory.removeAll()
+      frozenFloorDb = nil
     }
 
     // A big tune is a different band, and the old noise floor is a lie about it.
@@ -66,6 +75,7 @@ final class SignalProcessor {
        abs(centerHz - prevCenterHz) > bwHz * bandFlushFrac {
       dbAvg = bins
       minHistory.removeAll(); maxHistory.removeAll()
+      frozenFloorDb = nil   // new band → re-derive the floor (broadcast caveat)
     }
     if centerHz != 0 { prevCenterHz = centerHz }
 
@@ -94,15 +104,28 @@ final class SignalProcessor {
       let targetMin = (floorDb - rangeMargin).rounded(.down)
       let targetMax = (absoluteMax + rangeMargin).rounded(.up)
 
-      minHistory.append((targetMin, now))
-      while let f = minHistory.first, now - f.t > minHistoryMs { minHistory.removeFirst() }
+      // Ceiling ALWAYS tracks the strongest bin — a signal appearing as you zoom in
+      // must still set the top of the scale.
       maxHistory.append((targetMax, now))
       while let f = maxHistory.first, now - f.t > maxHistoryMs { maxHistory.removeFirst() }
-
-      let sumMin = minHistory.reduce(0.0) { $0 + $1.v }
       let sumMax = maxHistory.reduce(0.0) { $0 + $1.v }
-      actualMinDb = sumMin / Double(minHistory.count) + autoContrast
       actualMaxDb = sumMax / Double(maxHistory.count) - autoContrast
+
+      // FLOOR FREEZE. The 10th-percentile floor is only real NOISE when the view is wide
+      // enough to contain noise. Zoomed into a busy band it climbs into the signal and the
+      // waterfall washes to white. Past floorFreezeSpanHz hold the last wide-view floor;
+      // stop pushing signal-polluted mins so zooming back out recovers cleanly. Band change
+      // clears frozenFloorDb so tuning onto a broadcast re-derives. Mirrors signalProcessor.ts.
+      let floorTrust = !(bwHz > 0 && bwHz < floorFreezeSpanHz)
+      if floorTrust || frozenFloorDb == nil {
+        minHistory.append((targetMin, now))
+        while let f = minHistory.first, now - f.t > minHistoryMs { minHistory.removeFirst() }
+        let avgMin = minHistory.reduce(0.0) { $0 + $1.v } / Double(minHistory.count)
+        actualMinDb = avgMin + autoContrast
+        if floorTrust { frozenFloorDb = avgMin }
+      } else {
+        actualMinDb = frozenFloorDb! + autoContrast
+      }
     }
     // Never let the window collapse — a 2dB range makes noise look like signal.
     if actualMaxDb - actualMinDb < 10 {
