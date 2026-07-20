@@ -41,6 +41,11 @@ const RANGE_MARGIN         = 5;     // dB margin added beyond floor/ceiling
 const NOISE_PERCENTILE     = 0.10;  // 10th percentile = noise floor estimate
 const MIN_HISTORY_MS       = 2000;  // noise-floor smoothing window
 const MAX_HISTORY_MS       = 5000;  // ceiling smoothing window (faster recovery)
+// Below this visible span the 10th-percentile noise floor is untrustworthy: zoomed into a
+// busy band every bin is signal, so the "floor" climbs into the signal and the waterfall
+// rides up to white. Past this we FREEZE the floor at its last wide-view value. Tunable —
+// the auto-contrast is admittedly finnicky (m9psy). See the freeze block below.
+const FLOOR_FREEZE_SPAN_HZ = 25_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -111,6 +116,9 @@ export class SignalProcessor {
   // Auto-range state (UberSDR algorithm)
   private minHistory: Array<{ value: number; ts: number }> = [];
   private maxHistory: Array<{ value: number; ts: number }> = [];
+  // The last trustworthy (wide-view) noise-floor dB, held while zoomed in past
+  // FLOOR_FREEZE_SPAN_HZ. Cleared on every range flush so a band change re-learns.
+  private frozenFloorDb: number | null = null;
   private actualMinDb = -120;
   private actualMaxDb = -20;
   // 1dB histogram for the noise percentile — reused every frame. (The original
@@ -168,6 +176,7 @@ export class SignalProcessor {
       this.specSmooth.set(bins);
       this.minHistory = [];
       this.maxHistory = [];
+      this.frozenFloorDb = null;
     }
 
     // ── 0b. Flush on settings change ────────────────────────────────────────
@@ -176,6 +185,7 @@ export class SignalProcessor {
       this.dbAvg.set(bins);
       this.minHistory = [];
       this.maxHistory = [];
+      this.frozenFloorDb = null;
     }
 
     // ── 0c. Flush on band change (> 40% of visible bandwidth) ───────────────
@@ -186,6 +196,7 @@ export class SignalProcessor {
       this.peakLine = null;
       this.minHistory = [];
       this.maxHistory = [];
+      this.frozenFloorDb = null;   // new band → re-derive the floor (Stuart's broadcast caveat)
     }
     if (centerHz) this.prevCenterHz = centerHz;
 
@@ -220,19 +231,36 @@ export class SignalProcessor {
         const targetMin = Math.floor(floorDb - RANGE_MARGIN);
         const targetMax = Math.ceil(absoluteMax + RANGE_MARGIN);
 
+        // Ceiling ALWAYS tracks the strongest bin in view — a signal that appears
+        // as you zoom/tune in must still set the top of the scale.
         // In-place history prune (the .filter() pair allocated two arrays per
         // frame); entries are time-ordered so expired ones sit at the front.
-        const mins = this.minHistory, maxs = this.maxHistory;
-        mins.push({ value: targetMin, ts: now });
-        while (mins.length && now - mins[0].ts > MIN_HISTORY_MS) mins.shift();
+        const maxs = this.maxHistory;
         maxs.push({ value: targetMax, ts: now });
         while (maxs.length && now - maxs[0].ts > MAX_HISTORY_MS) maxs.shift();
-
-        let sumMin = 0; for (let i = 0; i < mins.length; i++) sumMin += mins[i].value;
         let sumMax = 0; for (let i = 0; i < maxs.length; i++) sumMax += maxs[i].value;
-
-        this.actualMinDb = sumMin / mins.length + s.autoContrast;
         this.actualMaxDb = sumMax / maxs.length - s.autoContrast;
+
+        // FLOOR FREEZE. The 10th-percentile floor is only a real NOISE floor when the
+        // view is wide enough to contain noise. Zoomed into a busy band, every visible
+        // bin is signal, the percentile climbs into it, and the whole waterfall rides up
+        // to white. Past FLOOR_FREEZE_SPAN_HZ we HOLD the last floor measured while a real
+        // floor was in view (frozenFloorDb), so dynamic range is preserved. A band change
+        // (0c) clears it, so tuning ONTO a strong broadcast re-derives instead of sitting
+        // on a stale low floor — Stuart's caveat. When frozen we also stop pushing the
+        // (signal-polluted) mins into history, so zooming back out recovers cleanly.
+        const floorTrust = !(bwHz > 0 && bwHz < FLOOR_FREEZE_SPAN_HZ);
+        if (floorTrust || this.frozenFloorDb === null) {
+          const mins = this.minHistory;
+          mins.push({ value: targetMin, ts: now });
+          while (mins.length && now - mins[0].ts > MIN_HISTORY_MS) mins.shift();
+          let sumMin = 0; for (let i = 0; i < mins.length; i++) sumMin += mins[i].value;
+          const avgMin = sumMin / mins.length;
+          this.actualMinDb = avgMin + s.autoContrast;
+          if (floorTrust) this.frozenFloorDb = avgMin;   // remember the trustworthy floor
+        } else {
+          this.actualMinDb = this.frozenFloorDb + s.autoContrast;
+        }
       }
     }
     // Guard: never collapse the window below 10 dB
