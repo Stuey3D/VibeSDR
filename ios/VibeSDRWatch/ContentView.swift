@@ -563,7 +563,11 @@ struct ContentView: View {
     }
     // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
     // blocked / unreachable). Covers the screen so nobody sits waiting; one tap back to servers.
-    .overlay { if let err = link.connectError { refusalCard(err) } }
+    // ★ ONE overlay, and its contents factored into a named property — an inline `if/else if`
+    //   here tipped this body past the type-checker's budget ("unable to type-check in reasonable
+    //   time"). The ORDER is the right precedence too: if the iPhone app has gone, a stale connect
+    //   error from before it went is not the thing to show.
+    .overlay { blockingCard }
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
     // pad's own content began, pushing the bottom row clean off the screen (and
@@ -1551,6 +1555,15 @@ struct ContentView: View {
   /// teaches you to ignore it.
   /// Full-screen refusal/timeout card — a connection that will never complete. One button back
   /// to the picker so the user isn't stuck watching a dead "waiting for signal".
+  /// Whichever full-screen card should own the display, or nothing.
+  @ViewBuilder private var blockingCard: some View {
+    if link.phoneAppGone {
+      PhoneGoneCard()
+    } else if let err = link.connectError {
+      refusalCard(err)
+    }
+  }
+
   private func refusalCard(_ msg: String) -> some View {
     ZStack {
       Color.black.opacity(0.92).ignoresSafeArea()
@@ -1930,5 +1943,45 @@ extension View {
       .shadow(color: color, radius: 0, x: -w, y: 0)
       .shadow(color: color, radius: 0, x: 0, y:  w)
       .shadow(color: color, radius: 0, x: 0, y: -w)
+  }
+}
+
+  /// ★ THE IPHONE APP IS CLOSED — and Buddy has STOPPED trying to wake it.
+  ///
+  /// The reason this is a card with buttons rather than an automatic retry: closing the phone app
+  /// is usually deliberate, and the commonest reason is a phone CALL. Buddy's heartbeat was
+  /// relaunching the app within seconds, restarting audio out of the phone's speaker mid-call
+  /// (Stuart, build 77). An app that argues with you about whether it should be running is worse
+  /// than one that waits to be asked.
+  ///
+  /// So: we stop pinging, say plainly what happened, and offer the two things a user could
+  /// actually want — bring it back, or leave it alone.
+struct PhoneGoneCard: View {
+  var body: some View {
+    ZStack {
+      Color.black.opacity(0.94).ignoresSafeArea()
+      VStack(spacing: 9) {
+        Image(systemName: "iphone.slash").font(.title3).foregroundStyle(.orange)
+        Text("iPhone app closed").font(.headline).foregroundStyle(.white)
+        Text("Buddy needs it running. Nothing has been reopened — you might be on a call.")
+          .font(.system(size: 11)).foregroundStyle(.white.opacity(0.65))
+          .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 8) {
+          Button {
+            WatchLink.shared.reopenPhoneApp()
+          } label: {
+            Text("Reopen").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity)
+          }.tint(.cyan)
+          Button {
+            // Leave it closed. Stays quiet until the user asks again — the app is still here, it
+            // simply stops reaching for a phone that was deliberately put away.
+            WatchLink.shared.detach()
+          } label: {
+            Text("Not now").font(.system(size: 13)).frame(maxWidth: .infinity)
+          }.tint(.gray)
+        }.padding(.top, 2)
+      }
+      .padding(.horizontal, 8)
+    }
   }
 }

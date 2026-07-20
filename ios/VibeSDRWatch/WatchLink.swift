@@ -359,6 +359,18 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   static let kSharp  = "vibe.wf.sharpness"
   static let kPeak   = "vibe.wf.peakHold"
 
+  /// ★★ THE IPHONE APP WENT AWAY — and we must STOP REACHING FOR IT.
+  ///
+  /// Every ping can RELAUNCH the iOS app (that is how `sendMessage` works, and it is why Buddy can
+  /// cold-boot the phone at all). Harmless at launch, which is Buddy's whole job. Actively hostile
+  /// afterwards: close the phone app to take a CALL and the 4s heartbeat boots it straight back up,
+  /// restarting audio out of the phone's speaker mid-conversation (Stuart, build 77).
+  ///
+  /// So a closure is a decision, and we respect it: the heartbeat stops, we send nothing, and the
+  /// user is asked whether to reopen. Waking an app somebody deliberately closed is not a recovery,
+  /// it is an argument.
+  @Published private(set) var phoneAppGone = false
+
   /// Is this link DRIVING a session? False = rows must not reach the shared buffer.
   ///
   /// ★ WCSession has no "close". The delegate stays registered, the phone keeps streaming while it
@@ -449,7 +461,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// crown. `.common` mode, NOT default: a default-mode timer STOPS FIRING while the run loop is
   /// tracking — i.e. exactly while you are turning the crown or touching the screen — so the
   /// phone's 10-second window would expire and it would stop sending rows mid-use.
+  /// User asked us to bring the phone app back. This is the ONE place a wake is allowed after a
+  /// closure, because the user just asked for it.
+  func reopenPhoneApp() {
+    phoneAppGone = false
+    beginDriving()
+    requestMissing()          // "I have nothing" — resume rows and reflush
+  }
+
   func beginDriving() {
+    phoneAppGone = false
     heartbeat?.invalidate()
     let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
     RunLoop.main.add(t, forMode: .common)
@@ -968,7 +989,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   func sessionReachabilityDidChange(_ s: WCSession) {
-    DispatchQueue.main.async { self.reachable = s.isReachable }
+    DispatchQueue.main.async {
+      self.reachable = s.isReachable
+      // ★ The moment the counterpart app terminates, reachability drops. That is the signal — no
+      //   silence timer needed, and crucially no ping needed to discover it (a ping would relaunch
+      //   the very app we are trying to notice has gone).
+      if !s.isReachable, self.attached, !self.phoneAppGone {
+        self.phoneAppGone = true
+        self.heartbeat?.invalidate(); self.heartbeat = nil    // stop reaching for it
+        if self.rowsPerSec != 0 { self.rowsPerSec = 0 }
+      }
+    }
   }
 }
 

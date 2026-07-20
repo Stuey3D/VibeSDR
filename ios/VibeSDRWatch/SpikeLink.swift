@@ -78,6 +78,10 @@ final class SpikeLink: ObservableObject {
   /// Waterfall rate rung Link Management has settled on: 1 = full, 2 = half, 3 = the emergency
   /// floor. Feeds the link glyph so a compensated-but-poor link never reads as green.
   @Published var throttleRung = 1
+  /// ★ The iPhone app is closed and Buddy has STOPPED trying to wake it. ContentView shows a card
+  /// offering Reopen / Not now — see WatchLink.phoneAppGone for why this is a question and not an
+  /// automatic retry.
+  @Published var phoneAppGone = false
   /// No phone → no boot handshake. Always "ready" so the placeholder shows "Waiting for
   /// signal" on a cold start rather than a phone-setup message.
   @Published var phoneStatus = "ready"
@@ -440,6 +444,8 @@ final class SpikeLink: ObservableObject {
     // plan) is a preference, not a symptom, and must never show a permanent red link.
     let rung = client.adaptiveRung
     if throttleRung != rung { throttleRung = rung }
+    let gone = WatchLink.shared.phoneAppGone
+    if phoneAppGone != gone { phoneAppGone = gone }
 
     // Heavy-server advisory. Only meaningful on the iPhone relay (own wifi/cellular has the headroom).
     // Most servers stream ~18-40 KB/s and never trip this; only a deliberately-cranked FFT (like an
