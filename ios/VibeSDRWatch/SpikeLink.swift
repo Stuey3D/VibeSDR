@@ -344,14 +344,14 @@ final class SpikeLink: ObservableObject {
     }
   }
 
+  /// Show the servers screen. In Buddy this is NAVIGATION, not a teardown.
+  ///
+  /// ★ It used to `goIdle()` the client, which in Buddy detaches the WCSession link — so opening
+  ///   the servers list stopped the phone streaming, and the waterfall you came back to was dead.
+  ///   The phone's own session is untouched by us browsing: it keeps playing, and picking a server
+  ///   simply redirects it (cmd:inst). Only clear the NAME, which is what drives navigation.
   func backToPicker() {
-    client?.goIdle()
     serverName = ""
-    // Leaving a session means leaving its MODE. Without this, exiting Companion left
-    // isPhoneControl set, so the next Standalone session drew its glyphs against a phone hop that
-    // was no longer driving anything.
-    isPhoneControl = false
-    phoneHopHealthy = nil
   }
 
   /// Called from the ported ContentView's 20fps driver tick. Drains the audio-synced

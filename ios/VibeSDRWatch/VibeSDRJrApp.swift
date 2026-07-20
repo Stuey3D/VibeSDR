@@ -131,6 +131,9 @@ struct VibeSDRJrApp: App {
   /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
   @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
   @State private var showReturnTip = false
+  /// The servers screen is a DESTINATION, not the entry point — see the note in `body`.
+  /// `SpikeLink.serverName` empties when the menu asks for it; we mirror that into navigation.
+  @State private var showPicker = false
 
   var body: some Scene {
     WindowGroup {
@@ -142,10 +145,20 @@ struct VibeSDRJrApp: App {
         //   which ICON you tap, which is the whole point of splitting the apps: "how do you know
         //   if you've connected via the phone or via the watch" (Stuart) is answered before the
         //   app even opens.
-        if link.serverName.isEmpty {
+        //
+        // ★★ AND IT OPENS ON THE WATERFALL, NOT ON A SERVER LIST. That is how the pre-merge
+        //    companion behaved and it is right: the phone is already tuned to something, so the
+        //    watch's job on launch is to SHOW it, not to ask a question whose answer it already
+        //    has. Making the picker the entry point (build 76) meant every launch demanded a
+        //    choice before you could see the radio you were already listening to.
+        //
+        //    The servers screen is still there — reached from the menu, exactly like every other
+        //    screen — and in Buddy it changes the PHONE's connection.
+        if showPicker {
           InstancePickerView(onConnect: { server in
             link.start(url: server.url, host: server.host, type: server.serverType,
                        name: server.name, pin: server.pin)
+            showPicker = false                 // the phone is retuning; go back and watch it
           })
           .environmentObject(favs)
         } else {
@@ -157,6 +170,14 @@ struct VibeSDRJrApp: App {
           }
         }
       }
+      // Open the phone link immediately: Buddy has nothing else to be. This also means the
+      // waterfall is already drawing by the time the user has focused on the screen.
+      .onAppear {
+        if link.serverName.isEmpty { link.startPhoneControl() }
+      }
+      // The menu's SERVERS tile clears serverName; treat that as "show me the picker" rather than
+      // as "the session ended", because in Buddy the phone's session never ends when we browse.
+      .onChange(of: link.serverName) { _, name in showPicker = name.isEmpty }
       // ★ AFTER the mode decision, never over it. This used to fire 0.4s from onAppear, which put a
       //   full-screen tip sheet straight on top of the launch gate and the chooser — you were asked
       //   to choose a mode you could not see. Waiting for `modePicked` also puts the tip in its
