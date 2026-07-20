@@ -47,6 +47,9 @@ enum LinkHint: Equatable {
   case wristHop
   /// The whole WCSession pipe is suspect, so we cannot honestly blame either hop.
   case indeterminate
+  /// NOT a fault: the phone's 30s idle saver has deliberately slowed the spectrum for
+  /// battery. Rows still arrive, just slower; a tune wakes it. Explains the slow scroll.
+  case powersave
 }
 
 /// Server-link health for the status glyph. Piggybacks on the hint machinery (below) so the
@@ -1227,6 +1230,13 @@ struct ContentView: View {
     let stateFresh = link.lastStateAt.map { now.timeIntervalSince($0) < hintStateFresh } ?? false
     let gap = link.lastRowAt.map { now.timeIntervalSince($0) } ?? 0
 
+    // 0. The phone DELIBERATELY slowed the spectrum (30s idle saver). Not a fault, so it
+    //    outranks the warning hops below — the slow scroll has a benign explanation and we
+    //    should give it before crying "link rough". NOT gated on stateFresh: during idle no
+    //    tune fires, so no fresh state echo arrives; the why latches until the phone sends the
+    //    'live'/wake clear (which a tune does). rows keep arriving, so no gap trigger sees it.
+    if link.why == "powersave" { return .powersave }
+
     // 1. The phone TOLD us it is rebuilding the link. Outranks everything below:
     //    of course the rows have stopped — that is what a reconnect IS.
     if stateFresh, link.why == "reconnecting" { return .reconnecting }
@@ -1265,6 +1275,8 @@ struct ContentView: View {
       case .wristHop:       return ["iphone", "wifi.exclamationmark", "applewatch"]
       // "Link rough" — nothing more is honestly known.
       case .indeterminate:  return ["wifi.exclamationmark"]
+      // "Phone saving power" — a moon, not a warning glyph: this is a mode, not a fault.
+      case .powersave:      return ["moon.zzz.fill", "iphone"]
       }
     }()
     // The glyph row says WHICH HOP is bad; the caption says WHAT IS HAPPENING. The diagram alone
@@ -1275,6 +1287,7 @@ struct ContentView: View {
       case .serverHop:     return "Server link rough"
       case .wristHop:      return "Watch link weak"
       case .indeterminate: return "Link rough"
+      case .powersave:     return "Phone saving power"
       }
     }()
     VStack(spacing: 1) {
@@ -1316,6 +1329,7 @@ struct ContentView: View {
       case .serverHop:     return "iPhone's link to the server is rough. Spectrum erratic. Tuning still works."
       case .wristHop:      return "Watch link to iPhone is weak. Spectrum erratic. Tuning still works."
       case .indeterminate: return "Link rough. Spectrum erratic."
+      case .powersave:     return "iPhone is saving power, so the spectrum has slowed. Tune to wake it."
       }
     }())
     .onAppear  { withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { pulse = 0.5 } }

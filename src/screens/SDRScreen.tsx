@@ -923,6 +923,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
   // all slow with the data; any touch restores full rate instantly.
   const [idleSlow,      setIdleSlow]      = useState(true);
+  const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
@@ -2662,6 +2663,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (idleActiveRef.current) {
       idleActiveRef.current = false;
       client.current?.setRate(1); // wake: full data rate immediately
+      watchProvider.setPowersave(false);
+      setPowersaveUi(false);
     }
   }, []);
 
@@ -2670,18 +2673,24 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (idleActiveRef.current) {
         idleActiveRef.current = false;
         client.current?.setRate(1);
+        watchProvider.setPowersave(false);
+        setPowersaveUi(false);
       }
       return;
     }
     idleActiveRef.current = false; // new client (baseUrl) starts at divisor 1
     const t = setInterval(() => {
-      // A watch showing the waterfall is an active viewer even though nobody is
-      // touching the phone — don't idle-slow the feed under it.
+      // A watch showing the waterfall with the phone FOREGROUND is an active viewer even
+      // though nobody's touching the phone — don't idle-slow under it. Once the phone
+      // backgrounds (pocket), isActive goes false and the saver DOES engage: that's the
+      // wrist slowdown Buddy's pill explains (rows still flow via the native forwarder).
       if (watchProvider.isActive) return;
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
         client.current?.setRate(IDLE_DIVISOR);
+        watchProvider.setPowersave(true);   // → Buddy 'powersave' pill
+        setPowersaveUi(true);               // → phone pill
       }
     }, 5000);
     return () => clearInterval(t);
@@ -3203,6 +3212,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // disturbs nobody. Arming is an FM-DX rule, not a "shared backend" rule.
       onTuneDelta: (delta: number) => {
         const c = client.current; if (!c || !delta) return;
+        markInteract();           // a watch tune is an interaction — wake the idle saver + clear its pill
         wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
         if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
@@ -3247,6 +3257,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       onZoomDelta: (delta: number) => {
         if (!delta) return;
+        markInteract();           // watch zoom is an interaction too — wake the idle saver
         // DEBOUNCE to 100ms, same as tuning: accumulate the zoom detents and apply the
         // combined factor ≤1/100ms (trailing-edge), so a fast zoom spin doesn't hammer the
         // zoom path / flood the server with config echoes.
@@ -3255,7 +3266,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         const apply = () => {
           lastZoomApplyAt.current = Date.now();
           const d = zoomAccum.current; zoomAccum.current = 0;
-          if (d) zoomByRef.current?.(Math.pow(2, -d / 6));
+          // HALF-OCTAVE per detent (-d/2), matching Jr's UberClient.zoom. /6 was the old
+          // sticky value: the server zooms in DISCRETE octaves, so a small per-detent creep
+          // shows NO change until the server's nearest level flips — "ring fills as you spin,
+          // then pops back". Half-octave crosses a server level every ~1-2 clicks: smooth.
+          // (Jr fixed this long ago; the watch's zoom path never got the same value.)
+          if (d) zoomByRef.current?.(Math.pow(2, -d / 2));
         };
         const wait = lastZoomApplyAt.current + 100 - now;
         if (wait <= 0) { apply(); }
@@ -4116,6 +4132,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           parity: panel is portrait-only) — decoder keeps running, banner
           tells the user where it went. Tablets (iPad) have the room, so the
           panel is allowed in landscape there. */}
+      {/* Idle power-save: the 30s saver has slowed the spectrum for battery. Tap/tune wakes
+          it (markInteract). Non-interactive so it never eats a touch on the waterfall. */}
+      {powersaveUi ? (
+        <View style={[styles.powersavePill, { bottom: pillBottom + 8 }]} pointerEvents="none">
+          <Text style={styles.powersavePillText}>
+            ◐  POWER SAVE · spectrum slowed — touch to wake
+          </Text>
+        </View>
+      ) : null}
+
       {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? (
         <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
               pointerEvents="none">
@@ -4879,6 +4905,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
     borderColor: 'rgba(120,240,120,0.45)', borderRadius: 8,
     paddingHorizontal: 14, paddingVertical: 7,
+  },
+  powersavePill: {
+    position: 'absolute', alignSelf: 'center', zIndex: 55,
+    backgroundColor: 'rgba(14,10,2,0.92)', borderWidth: 1,
+    borderColor: 'rgba(240,190,90,0.5)', borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 7,
+  },
+  powersavePillText: {
+    color: 'rgba(255,205,110,0.92)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 12, fontWeight: '700', letterSpacing: 0.5,
   },
   rotateBannerText: {
     color: 'rgba(140,255,140,0.9)', fontFamily: 'Atkinson Hyperlegible',

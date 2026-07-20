@@ -252,6 +252,7 @@ class WatchProvider {
   private phoneStatus = 'ready';
   /** Set by SDRScreen when it pauses the spectrum socket for power saving. */
   private specPaused = false;
+  private powersave  = false;   // 30s idle saver has throttled the spectrum (rows still live)
   private lastFavs = '';
   private sentFavs = '\u0000';
   /** Handled OUTSIDE attach(), because it must work when NO SDR screen is mounted —
@@ -612,6 +613,16 @@ class WatchProvider {
    *  go straight to the right screen with no detection round-trip. */
   setSpecPaused(p: boolean) { this.specPaused = p; }
 
+  /** The phone's 30s idle saver has THROTTLED the spectrum (rows still flow, just slower)
+   *  — distinct from `specPaused` (socket closed) or `idle` (rows stopped). Push a state
+   *  frame at once so Buddy's pill appears/clears immediately: during idle no tune is firing,
+   *  so we can't wait for the next freq echo to carry `why`. */
+  setPowersave(on: boolean) {
+    if (on === this.powersave) return;
+    this.powersave = on;
+    if (this.lastState) this.sendState(this.lastState.freq, this.lastState.mode, this.lastState.step);
+  }
+
   /** The phone is rebuilding its server link right now. A fact the watch cannot
    *  infer: from the wrist, a recovery in progress and a dead phone are the same
    *  black screen. Rides the existing throttled state echo as a `why` value. */
@@ -692,6 +703,9 @@ class WatchProvider {
       return 'idle';
     }
     this.idleSince = 0;
+    // Rows are LIVE but the 30s idle saver has slowed them for battery. Distinct from
+    // 'idle' (stopped): the wrist keeps drawing, the pill just explains the slower scroll.
+    if (this.powersave) return 'powersave';
     return 'live';
   }
 
