@@ -436,7 +436,10 @@ final class UberClient: ObservableObject {
     // The same headers the phone sends. It is not obvious that the server cares — but a
     // rejection with no reason and an unfamiliar User-Agent is not the moment to be
     // different for the sake of it.
-    req.setValue("VibeSDR/2.0 (watchOS; WristSDR spike)", forHTTPHeaderField: "User-Agent")
+    // ★ UberSDR is the one backend where we announce the PRODUCT rather than spoofing a
+    //   browser, so this string is what an operator actually sees in their user list. The spike
+    //   is the product now, and it is called VibeSDR Jr.
+    req.setValue("VibeSDR Jr/1.0 (watchOS)", forHTTPHeaderField: "User-Agent")
     req.setValue("VibeSDR", forHTTPHeaderField: "X-Requested-With")
     req.httpBody = try? JSONSerialization.data(withJSONObject: ["user_session_id": uuid])
     do {

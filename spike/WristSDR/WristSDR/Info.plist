@@ -17,9 +17,9 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleDisplayName</key>
-	<string>WristSDR</string>
+	<string>VibeSDR Jr</string>
 	<key>CFBundleName</key>
-	<string>WristSDR</string>
+	<string>VibeSDR Jr</string>
 	<!-- WATCH-ONLY. There is no iPhone app to pair with, and watchOS demands you SAY so:
 	     without WKWatchOnly it insists on a WKCompanionAppBundleIdentifier and refuses the
 	     install outright. WKRunsIndependentlyOfCompanionApp is NOT the same thing — that

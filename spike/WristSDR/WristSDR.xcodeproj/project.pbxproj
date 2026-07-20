@@ -315,7 +315,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "WristSDR/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "WristSDR";
+				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.stuey3d.wristsdr";
@@ -339,7 +339,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "WristSDR/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "WristSDR";
+				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.stuey3d.wristsdr";
