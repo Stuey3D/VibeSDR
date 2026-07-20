@@ -163,6 +163,32 @@ final class KiwiClient: ObservableObject, SDRClient {
   private var viewInit = false
   private var wfReady = false
   private let ident: String
+  /// Reaching the server through the paired iPhone's Bluetooth relay? Set by SpikeLink before
+  /// connecting. Caps the waterfall rate — see `topWfSpeed`.
+  ///
+  /// `nonisolated(unsafe)`: written once at construction, then only read (including from the
+  /// LinkManager callback, which runs off the main actor).
+  nonisolated(unsafe) var onRelay = false
+
+  /// The FASTEST waterfall rate we will ask this server for.
+  ///
+  /// ★★ MEASURED, 2026-07-20. Kiwi honours `wf_speed` properly — unlike OWRX, where every rate
+  ///    request either does nothing or kills the stream. On a fast server (85.183.11.108):
+  ///
+  ///        wf_speed 4 (fast)  18.9 KB/s   18.7 fps
+  ///        wf_speed 3 (med)   13.0 KB/s   12.9 fps
+  ///        wf_speed 2 (slow)   5.1 KB/s    5.1 fps
+  ///
+  ///    And rates vary ~6x BETWEEN servers at the same setting (3.4 - 18.9 KB/s measured across
+  ///    six), so "Kiwi is light" is only true of some Kiwis.
+  ///
+  /// ★ WHY A CAP AND NOT JUST THE LADDER. LinkManager already steps 4->3->2, but it is REACTIVE:
+  ///   it needs frames to arrive late before it backs off. Over Bluetooth the failure is not
+  ///   slowness, it is the socket being dropped — by which point there is nothing to adapt. On a
+  ///   fast server 18.9 KB/s of waterfall plus ~7 of audio is ~26 KB/s, at the very floor of the
+  ///   relay's ~25-62 KB/s range. Capping at 3 lands ~20 KB/s and keeps a usable waterfall; the
+  ///   ladder still steps DOWN from there if the link is worse than that.
+  nonisolated var topWfSpeed: Int { onRelay ? 3 : 4 }
 
   // ── Sockets / audio / DSP ──
   // nonisolated so the BACKGROUND keepalive timer can send on them without hopping to main — a
@@ -340,7 +366,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.wfSend("SERVER DE CLIENT openwebrx.js W/F")
         self.wfSend("SET send_dB=1")
         self.wfSend("SET wf_comp=1")
-        self.wfSend("SET wf_speed=4")
+        self.wfSend("SET wf_speed=\(self.topWfSpeed)")
         self.wfSend("SET maxdb=-10 mindb=-110")
         self.sendZoom()
       }
@@ -560,7 +586,8 @@ final class KiwiClient: ObservableObject, SDRClient {
   /// Rung 4 (`wf_speed=1`, 1 fps) is DELIBERATELY NOT IN THE LADDER — Stuart: "no amount of
   /// interpolation will rescue that". 5 fps is the floor for both adaptation and Low Data.
   lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 3) { [weak self] rung, fps in
-    self?.wfSend("SET wf_speed=\(5 - rung)")     // rung 1→4, 2→3, 3→2
+    // Never ABOVE the cap: on the relay rung 1 means 3 (med), not 4 (fast).
+    self?.wfSend("SET wf_speed=\(min(5 - rung, self?.topWfSpeed ?? 4))")
     self?.waterfall.setExpectedRowRate(fps)
   }
   var adaptiveRung: Int { linkMgr.adaptiveRung }
@@ -604,7 +631,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     sendDemod()
   }
   func setBandwidth(_ low: Double, _ high: Double) { bwLow = low; bwHigh = high; sendDemod() }
-  func resumeSpectrum() { wfSend("SET wf_speed=4") }
+  func resumeSpectrum() { wfSend("SET wf_speed=\(topWfSpeed)") }
   func suspend() { wfSend("SET wf_speed=0"); specQueue.removeAll(); status = "background · audio only" }
   func reconnectIfNeeded() { /* Kiwi keepalive + socket retry handle this for now */ }
   private var goingIdle = false

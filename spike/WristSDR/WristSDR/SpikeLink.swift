@@ -261,7 +261,10 @@ final class SpikeLink: ObservableObject {
     let c: any SDRClient
     switch type {
     case .kiwi:
-      c = KiwiClient(url: url, waterfall: waterfall)
+      let k = KiwiClient(url: url, waterfall: waterfall)
+      // Set BEFORE start(): the first wf_speed goes out during the handshake.
+      k.onRelay = (transport == .iphone)
+      c = k
     case .owrx:
       c = OwrxClient(url: url, waterfall: waterfall)
     case .fmdx:
