@@ -368,19 +368,39 @@ final class SpikeLink: ObservableObject {
     let rung = client.adaptiveRung
     if throttleRung != rung { throttleRung = rung }
 
-    // Heavy-server advisory. Only meaningful on the iPhone relay (own wifi/cellular has the headroom).
-    // Most servers stream ~18-40 KB/s and never trip this; only a deliberately-cranked FFT (like an
-    // 8192@20 box) sits above ~55. Require it SUSTAINED ~4s so a momentary spike doesn't nag; clear
-    // when the load drops or the watch moves off the relay.
+    // Heavy-server advisory — only meaningful on the iPhone relay (own wifi/cellular has headroom).
+    //
+    // ★★ THE OLD 55 KB/s THRESHOLD COULD NEVER FIRE, and that is why Stuart only ever saw the
+    //    disconnect. `inboundKbPerSec` measures what ARRIVED, and the relay's real-world ceiling is
+    //    ~25-62 KB/s (200-500 kbps). A server demanding 70 KB/s does not deliver 70 — it delivers
+    //    whatever the link manages, ~30, and then drops. So the meter reads BELOW the threshold
+    //    precisely when the link is failing. We were watching DEMAND through a window that only
+    //    shows DELIVERY, and delivery is capped by the very thing we wanted to detect.
+    //
+    //    So the number has to sit near the BOTTOM of the ceiling range, not the top: sustained
+    //    ~22 KB/s over the relay already means we are at the floor of what Bluetooth can carry.
     let kb = client.inboundKbPerSec
-    if transport == .iphone, kb > 55 {
+    let relayHeavy = transport == .iphone && kb > 22
+
+    // ★ AND THE RECONNECT ITSELF IS EVIDENCE. A reconnect while on the relay is the symptom the
+    //   user actually experiences, and it needs no threshold to be believed — if we are dropping
+    //   and re-establishing over Bluetooth, the link is the problem whatever the meter says. This
+    //   is the case a throughput test structurally cannot catch, because a dropped socket delivers
+    //   0 KB/s.
+    let relayDropping = transport == .iphone && client.status.hasPrefix("reconnect")
+
+    if relayHeavy || relayDropping {
       if relayHeavySince == nil { relayHeavySince = now }
-      if let s = relayHeavySince, now - s >= 4, bandwidthWarning == nil {
-        bandwidthWarning = "Heavy server (~\(kb) KB/s) — may stutter over the phone. Best on the watch’s own Wi-Fi."
+      // Dropping needs no dwell — it has already happened. Heaviness waits ~4s so a spike cannot nag.
+      if let st = relayHeavySince, relayDropping || now - st >= 4, bandwidthWarning == nil {
+        bandwidthWarning = relayDropping
+          ? "This server is too heavy for the phone link — it keeps dropping. Use the watch\u{2019}s own Wi-Fi."
+          : "Heavy server (~\(kb) KB/s) — may stutter over the phone. Best on the watch\u{2019}s own Wi-Fi."
       }
     } else {
       relayHeavySince = nil
-      if bandwidthWarning != nil, transport != .iphone || kb <= 45 { bandwidthWarning = nil }
+      // Hysteresis, so a server sitting right on the line cannot flicker the pill on and off.
+      if bandwidthWarning != nil, transport != .iphone || kb <= 16 { bandwidthWarning = nil }
     }
 
     // Surface a RECONNECT so the UI shows the "Reconnecting" pill, not the hard "link lost"
