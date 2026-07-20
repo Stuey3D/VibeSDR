@@ -682,62 +682,8 @@ export default function MenuSheet({
                 frequency — and the menu sheet sitting over the decoder panel made a
                 decoding profile look like it produced nothing. See ProfilePicker. */}
 
-            {/* ── DAB PROGRAMME (OWRX — only when a DAB ensemble is tuned) ── */}
-            {dabProgrammes.length > 0 && (<>
-              <SectionLabel label="DAB PROGRAMME" icon="dab" />
-              <View style={styles.profileDrop}>
-                <TouchableOpacity style={styles.profileDropHead} onPress={() => setDabOpen((o) => !o)} activeOpacity={0.7}>
-                  <Text style={styles.profileDropHeadText} numberOfLines={1}>
-                    {dabProgrammes.find((p) => p.id === activeDabId)?.name ?? 'Select programme'}
-                  </Text>
-                  <Text style={styles.profileDropChevron}>{dabOpen ? '▴' : '▾'}</Text>
-                </TouchableOpacity>
-                {dabOpen && (
-                  <ScrollView ref={dabScroll} style={[styles.profileDropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
-                              keyboardShouldPersistTaps="handled">
-                    {dabProgrammes.map((p) => {
-                      const active = p.id === activeDabId;
-                      return (
-                        <TouchableOpacity
-                          key={p.id}
-                          style={styles.profileDropItem}
-                          onLayout={e => { dabY.current[String(p.id)] = e.nativeEvent.layout.y; }}
-                          onPress={() => { onSelectDab?.(p.id); setDabOpen(false); }}
-                          activeOpacity={0.7}>
-                          <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
-                            {active ? '✓ ' : ''}{p.name}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                )}
-              </View>
-              {/* DAB speed correction — works around the dablin/OWRX chipmunk
-                  (UK DAB+ stations whose sample rate is misread). Presets match
-                  the common rate misreads; the user picks what sounds right. */}
-              <Text style={styles.dabSpeedLabel}>Speed fix · remembered per station</Text>
-              <View style={styles.dabSpeedRow}>
-                {[
-                  { v: 1,       l: 'Off' },
-                  { v: 0.6667,  l: '×0.67' },
-                  { v: 0.5,     l: '×0.50' },
-                  { v: 0.3333,  l: '×0.33' },
-                  { v: 0.25,    l: '×0.25' },
-                ].map((o) => {
-                  const active = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
-                  return (
-                    <TouchableOpacity
-                      key={o.l}
-                      style={[styles.dabSpeedChip, active && styles.dabSpeedChipActive]}
-                      onPress={() => onDabSpeed?.(o.v)}
-                      activeOpacity={0.7}>
-                      <Text style={[styles.dabSpeedChipText, active && styles.profileChipTextActive]}>{o.l}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </>)}
+            {/* DAB PROGRAMME list + speed control relocated to the DECODER BOX (§4.5/§5.2) —
+               it's the "what's on this signal" output, like the other decoders. */}
 
             {/* NEARBY STATION / VTS skip relocated to FreqModal (§4.1) — it belongs with
                the frequency you're tuning, not in settings. */}

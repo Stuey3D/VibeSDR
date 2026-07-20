@@ -4142,7 +4142,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? (
+      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0) ? (
         <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>
@@ -4166,6 +4166,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           onTuneHz={onTuneHz}
           imageRef={decoderImageRef}
           onImageStatus={setDecoderStatus}
+          dabProgrammes={dabProgrammes.map((p) => ({ id: p.id, name: p.name }))}
+          activeDabId={activeDabId}
+          onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
+          dabSpeed={dabSpeed}
+          onDabSpeed={onDabSpeed}
         />
       )}
 
@@ -4173,7 +4178,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {chatRotateHint && (
         <View style={[styles.rotateBanner, {
                 bottom: pillBottom + 8 +
-                  (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? 42 : 0),
+                  (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0) ? 42 : 0),
               }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>

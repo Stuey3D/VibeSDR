@@ -26,6 +26,7 @@ import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanva
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
+import StationLogo from './StationLogo';
 import type { Aircraft } from '../services/SDRBackend';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -57,7 +58,19 @@ export interface DecoderPanelProps {
   spotsKind?:      SpotsKind | null;
   spots?:          SpotRow[];
   onTuneHz?:       (hz: number) => void;
+  /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
+   *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
+  dabProgrammes?:  { id: number; name: string }[];
+  activeDabId?:    number;
+  onSelectDab?:    (id: number) => void;
+  dabSpeed?:       number;
+  onDabSpeed?:     (v: number) => void;
 }
+
+const DAB_SPEEDS = [
+  { v: 1, l: '1×' }, { v: 0.6667, l: '0.67×' }, { v: 0.5, l: '0.5×' },
+  { v: 0.3333, l: '0.33×' }, { v: 0.25, l: '0.25×' },
+];
 
 const MORSE_QUALITIES: MorseQuality[] = ['all', 'low', 'medium', 'high'];
 const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
@@ -151,10 +164,12 @@ export default function DecoderPanel({
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
+  dabProgrammes = [], activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
 }: DecoderPanelProps) {
-  const isSpotsMode = spotsKind !== null;
-  const isImageMode = !isSpotsMode && IMAGE_DECODERS.includes(activeDecoder);
-  const isAircraftMode = !isSpotsMode && !!aircraft?.length;
+  const isDabMode = dabProgrammes.length > 0;
+  const isSpotsMode = !isDabMode && spotsKind !== null;
+  const isImageMode = !isSpotsMode && !isDabMode && IMAGE_DECODERS.includes(activeDecoder);
+  const isAircraftMode = !isSpotsMode && !isDabMode && !!aircraft?.length;
 
   // Spots filters — header cyclers (skin sf-mode/sf-band/sf-age)
   const [sfMode, setSfMode] = useState('ALL');
@@ -205,7 +220,7 @@ export default function DecoderPanel({
   };
 
   // Appear / disappear
-  const panelOn = !!activeDecoder || isSpotsMode;
+  const panelOn = !!activeDecoder || isSpotsMode || isDabMode;
   useEffect(() => {
     if (panelOn) {
       setMinimised(false);
@@ -227,7 +242,9 @@ export default function DecoderPanel({
 
   if (!panelOn) return null;
 
-  const title = isSpotsMode
+  const title = isDabMode
+    ? 'DAB'
+    : isSpotsMode
     ? (spotsKind === 'cw' ? 'CW SPOTS' : 'DIGITAL SPOTS')
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
@@ -297,11 +314,27 @@ export default function DecoderPanel({
           )}
 
           {/* CLR — text decoders (skin _clearB) */}
-          {!isImageMode && !isSpotsMode && (
+          {!isImageMode && !isSpotsMode && !isDabMode && (
             <TouchableOpacity hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onClear?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>CLR</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* DAB speed correction (§4.5) — cycles the presets that fix the dablin/OWRX
+              "chipmunk" sample-rate misread. Highlighted when not 1×. */}
+          {isDabMode && onDabSpeed && (
+            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => {
+                e?.stopPropagation();
+                const i = DAB_SPEEDS.findIndex(o => Math.abs(o.v - (dabSpeed ?? 1)) < 0.001);
+                onDabSpeed(DAB_SPEEDS[(i < 0 ? 0 : i + 1) % DAB_SPEEDS.length].v);
+              }}>
+              <Text style={[dp.hbtnTxt, {
+                color: Math.abs((dabSpeed ?? 1) - 1) > 0.001 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                ⏩ {DAB_SPEEDS.find(o => Math.abs(o.v - (dabSpeed ?? 1)) < 0.001)?.l ?? '1×'}
+              </Text>
             </TouchableOpacity>
           )}
 
@@ -378,7 +411,7 @@ export default function DecoderPanel({
             <AircraftPanel aircraft={aircraft!} />
           </View>
         )}
-        {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && (
+        {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
             style={dp.body}
@@ -388,6 +421,26 @@ export default function DecoderPanel({
             <Text style={[dp.output, { color: dc.output, fontFamily: t.font }]} selectable>
               {decoderText}
             </Text>
+          </ScrollView>
+        )}
+
+        {/* DAB service list (§5.2) — logos resolve cleanly because DAB programme names are
+            EXACT ensemble strings (no RDS guessing like FM). Tap a row to switch service. */}
+        {!minimised && isDabMode && (
+          <ScrollView style={dp.body} showsVerticalScrollIndicator>
+            {dabProgrammes.map((p) => {
+              const active = p.id === activeDabId;
+              return (
+                <TouchableOpacity key={p.id} style={[dp.dabRow, { borderBottomColor: dc.hdrBdr }]}
+                  onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
+                  <StationLogo name={p.name} />
+                  <Text style={[dp.dabName, { color: active ? dc.btnActT : dc.output, fontFamily: t.font }]}
+                        numberOfLines={1}>
+                    {active ? '✓ ' : ''}{p.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         )}
 
@@ -477,6 +530,8 @@ const dp = StyleSheet.create({
   closeBtn: { color: C.closeCl, fontSize: 16, paddingHorizontal: 2, flexShrink: 0 },
   body:        { maxHeight: 200 },
   bodyContent: { padding: 12 },
+  dabRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  dabName:     { flex: 1, fontSize: 14 },
   output: {
     fontSize: 12, letterSpacing: 0.8, lineHeight: 20,
     color: C.outputCl, fontFamily: FONT,
