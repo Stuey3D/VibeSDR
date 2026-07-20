@@ -42,6 +42,12 @@ RCT_EXTERN_METHOD(sendFavourites : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
 
+RCT_EXTERN_METHOD(isClosedByUser
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(clearClosedByUser)
+
 RCT_EXTERN_METHOD(sendVolume : (nonnull NSNumber *)vol muted : (BOOL)muted)
 
 RCT_EXTERN_METHOD(sendAircraft : (NSString *)json)

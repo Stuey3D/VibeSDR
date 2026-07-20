@@ -346,6 +346,16 @@ final class FavStore: ObservableObject {
     persist()
   }
 
+  /// Mirror the PHONE's favourites into the picker (Buddy shows what the phone can connect to —
+  /// including its RTL-TCP / SpyServer entries the watch can't discover itself). In-memory only:
+  /// the phone is the source of truth, so we don't persist a watch-local copy that could go stale.
+  func setFromPhone(_ list: [WatchLink.Favourite]) {
+    favourites = list.map {
+      Favourite(name: $0.name.isEmpty ? $0.url : $0.name, url: $0.url,
+                serverType: ServerType(rawValue: $0.type ?? "ubersdr") ?? .ubersdr)
+    }
+  }
+
   /// Bump the Most-Used tally when a favourite is connected. No-op for non-favourites.
   func registerVisit(_ url: String) {
     guard let i = favourites.firstIndex(where: { $0.url == url }) else { return }

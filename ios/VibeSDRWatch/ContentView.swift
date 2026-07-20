@@ -1371,7 +1371,7 @@ struct ContentView: View {
   /// arrive eight seconds into the problem it exists to explain.
   private func heldLongEnough(_ h: LinkHint, now: Date) -> Bool {
     switch h {
-    case .reconnecting, .serverHop:
+    case .reconnecting, .serverHop, .powersave:
       return true
     case .wristHop, .indeterminate:
       guard let t = link.lastRowAt else { return false }

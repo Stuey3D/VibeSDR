@@ -32,6 +32,12 @@ class AppDelegate: ExpoAppDelegate {
     // window is owned by the scene. See UIApplicationSceneManifest in Info.plist.
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
+
+  // Full process termination (the scene path covers swipe-close; this covers the rest).
+  override func applicationWillTerminate(_ application: UIApplication) {
+    VibeWatchModule.appWillTerminate()
+    super.applicationWillTerminate(application)
+  }
 }
 
 // MARK: - Scene lifecycle (iOS 26+ mandatory)
@@ -73,6 +79,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     for activity in connectionOptions.userActivities {
       _ = RCTLinkingManager.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
     }
+  }
+
+  // The user swiped the app out of the switcher (or the system is releasing the scene).
+  // Fire the goodbye so the watch shows "Phone app closed" and STOPS pinging us — otherwise
+  // its heartbeat relaunches us headless and SDR audio pours out the speaker mid-call.
+  func sceneDidDisconnect(_ scene: UIScene) {
+    VibeWatchModule.appWillTerminate()
   }
 
   // Warm deep link (app already running).

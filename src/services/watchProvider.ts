@@ -43,6 +43,8 @@ const Native = NativeModules.VibeWatchModule as
       sendAircraft(json: string): void;
       sendFavourites(json: string): void;
       sendPhone(status: string): void;
+      isClosedByUser(): Promise<boolean>;
+      clearClosedByUser(): void;
       sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number, peakHold: boolean): void;
@@ -248,7 +250,9 @@ class WatchProvider {
    *  'starting'  — cold-launched (by the watch) and connecting. Not a fault; a boot.
    *  'ready'     — a session is live.
    *  'pick'      — no default instance, but there ARE favourites: the wrist chooses.
-   *  'setup'     — no default AND no favourites. Nothing the watch can do; say so. */
+   *  'setup'     — no default AND no favourites. Nothing the watch can do; say so.
+   *  'closed'    — the user swiped us closed; a heartbeat relaunched us headless and we
+   *                REFUSED to auto-connect (anti-hijack). The wrist shows the closed screen. */
   private phoneStatus = 'ready';
   /** Set by SDRScreen when it pauses the spectrum socket for power saving. */
   private specPaused = false;
@@ -259,6 +263,7 @@ class WatchProvider {
    *  which is the whole point: the watch launches the phone, the phone lands on the
    *  picker with no default instance, and the wrist is looking at nothing. */
   private instanceHandler: ((url: string) => void) | null = null;
+  private reopenHandler: (() => void) | null = null;
   private instanceSub: { remove(): void } | null = null;
   private lastLogo = '';   // what we WANT the watch to have
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
@@ -744,9 +749,23 @@ class WatchProvider {
       'VibeWatchCommand',
       (e: { cmd: string; val?: unknown }) => {
         if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''));
+        else if (e.cmd === 'reopen') this.reopenHandler?.();
       },
     );
   }
+
+  /** The wrist's "Reopen" after a deliberate close. Also OUTSIDE attach — it runs on a
+   *  headless relaunch where no screen is mounted. */
+  setReopenHandler(fn: () => void) { this.reopenHandler = fn; }
+
+  /** Did the user swipe the phone app closed? Persisted natively so it survives the
+   *  process death and is readable on a headless relaunch. */
+  wasClosedByUser(): Promise<boolean> {
+    return Native?.isClosedByUser?.() ?? Promise.resolve(false);
+  }
+
+  /** No longer closed — the user foregrounded us, or pressed Reopen. */
+  clearClosedByUser() { Native?.clearClosedByUser?.(); }
 
   private flushAll() {
     this.lastPalette = '';    // forces the settings/LUT resend on the next row

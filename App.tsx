@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { Animated, ActivityIndicator, AppState, LogBox, Text, View } from 'react-native';
+import { Animated, ActivityIndicator, AppState, LogBox, NativeModules, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,7 +10,8 @@ import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
 import { watchProvider } from './src/services/watchProvider';
-import { getFavourites } from './src/services/favourites';
+import { getFavourites, getTcpFavs } from './src/services/favourites';
+import { newLocalSession } from './src/services/localSession';
 import { getViewMode } from './src/services/viewMode';
 import { getDefaultInstance } from './src/services/defaultInstance';
 import { watchTargetPending } from './src/services/watchBoot';
@@ -199,10 +200,16 @@ export default function App() {
     watchProvider.startLink();
 
     const pushFavs = () => {
-      getFavourites()
-        .then((favs) => watchProvider.sendFavourites(
-          favs.map((f) => ({ name: f.name, url: f.url, type: f.serverType })),
-        ))
+      // The watch mirrors the phone's FULL list — network favourites (incl. spyserver:// entries)
+      // PLUS RTL-TCP favs, which live in a separate store (host:port). Synthesise a url for the
+      // TCP ones so the wrist has a stable key to send back (applyInstance matches it).
+      Promise.all([getFavourites(), getTcpFavs()])
+        .then(([favs, tcpFavs]) => watchProvider.sendFavourites([
+          ...favs.map((f) => ({ name: f.name, url: f.url, type: f.serverType })),
+          ...tcpFavs.map((t) => ({
+            name: t.name, url: `${t.proto ?? 'rtltcp'}://${t.host}:${t.port}`, type: t.proto ?? 'rtltcp',
+          })),
+        ]))
         .catch(() => {});
     };
     pushFavs();
@@ -220,13 +227,18 @@ export default function App() {
       }, 50);
     });
 
-    const goTo = async (f: { name: string; url: string; serverType?: string }, viewMode: ViewMode) => {
+    const goTo = async (
+      f: { name: string; url: string; serverType?: string },
+      viewMode: ViewMode,
+      extra?: Record<string, unknown>,   // local-shim params (RTL-TCP / SpyServer)
+    ) => {
       if (!(await whenNavReady())) { watchTargetPending.claimed = false; return; }
       const target = f.serverType === 'fmdx'
         ? { name: 'Tuner', params: { baseUrl: f.url, instanceName: f.name, viewMode } }
         : { name: 'SDR', params: {
               baseUrl: f.url, instanceName: f.name, viewMode,
               serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'kiwi' | 'owrx',
+              ...(extra ?? {}),
             } };
       // RESET, never navigate() — navigate PUSHES and leaves the old screen mounted
       // and streaming (that's what made the wrist flash between the waterfall and the
@@ -254,13 +266,48 @@ export default function App() {
       watchTargetPending.claimed = false;
     };
 
+    // RTL-TCP / SpyServer: spin up the on-device shim (the phone does the same in the
+    // picker's connectTcp/connectSpy), then open the local WS it hands back. PIN-less, so
+    // safe to drive headless from the wrist. host:port is parsed from the fav url.
+    const connectLocal = async (
+      type: 'rtltcp' | 'spyserver', host: string, port: number, name: string, viewMode: ViewMode,
+    ) => {
+      const Local = (NativeModules as { VibeLocalSDR?: {
+        startTcp?: (o: object) => Promise<{ port: number; wsBaseUrl: string }>;
+        startSpyServer?: (o: object) => Promise<{ port: number; wsBaseUrl: string }>;
+      } }).VibeLocalSDR;
+      const start = type === 'rtltcp' ? Local?.startTcp : Local?.startSpyServer;
+      if (!start) { watchTargetPending.claimed = false; watchProvider.setPhoneStatus('setup'); return; }
+      const opts = type === 'rtltcp'
+        ? { host, port, centerFreq: 14_100_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'usb' }
+        : { host, port, centerFreq: 100_000_000, fftSize: 8192, fftRate: 10, mode: 'wfm' };
+      const res = await start(opts);
+      return goTo(
+        { name: name || `${host}:${port}`, url: res.wsBaseUrl, serverType: 'ubersdr' },
+        viewMode,
+        { isLocal: true, isTcp: true, localPort: res.port, tcpHost: host, tcpPort: port,
+          localGen: newLocalSession() },
+      );
+    };
+
     const applyInstance = (url: string) => {
       if (!url) return;
       watchTargetPending.claimed = true;   // stop the picker auto-connecting past us
       watchProvider.setPhoneStatus('starting');
-      Promise.all([getFavourites(), getViewMode()])
-        .then(([favs, viewMode]) => {
+      Promise.all([getFavourites(), getTcpFavs(), getViewMode()])
+        .then(async ([favs, tcpFavs, viewMode]) => {
           const f = favs.find((x) => x.url === url);
+          // RTL-TCP favs live in their own store (host:port, no url) — the wrist row's url is
+          // synthesised as <proto>://host:port; match that back.
+          const tcp = tcpFavs.find((t) => `${t.proto ?? 'rtltcp'}://${t.host}:${t.port}` === url);
+          const type = f?.serverType ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
+          if (type === 'rtltcp' || type === 'spyserver') {
+            // Parse host:port off the url (rtltcp://h:p or spyserver://h:p).
+            const m = url.match(/^[a-z]+:\/\/([^:/]+):(\d+)/i);
+            const host = m?.[1] ?? tcp?.host ?? '';
+            const port = m ? Number(m[2]) : (tcp?.port ?? 0);
+            if (host && port) return connectLocal(type, host, port, f?.name ?? tcp?.name ?? '', viewMode);
+          }
           if (f) return goTo(f, viewMode);
           watchTargetPending.claimed = false;   // unknown URL — don't hold the picker
         })
@@ -268,8 +315,9 @@ export default function App() {
     };
     watchProvider.setInstanceHandler(applyInstance);
 
-    // Headless boot: decide what to connect to, with no user to ask.
-    if (startedInBackground) {
+    // Decide what to connect to with no user to ask: default → connect, else picker/setup.
+    // Shared by the headless boot AND the watch's Reopen, so both behave identically.
+    const decideAndConnect = () => {
       watchTargetPending.claimed = true;      // the picker must not race us
       watchProvider.setPhoneStatus('starting');
       Promise.all([getDefaultInstance(), getFavourites(), getViewMode()])
@@ -295,6 +343,29 @@ export default function App() {
           watchProvider.setPhoneStatus('setup');
           watchTargetPending.claimed = false;
         });
+    };
+
+    // The wrist's "Reopen" after a deliberate close: the flag is why we DIDN'T auto-connect
+    // (see below), so clearing it is the whole point — then behave like a fresh boot.
+    watchProvider.setReopenHandler(() => {
+      watchProvider.clearClosedByUser();
+      decideAndConnect();
+    });
+
+    // Headless boot: the watch heartbeat launched us in the background.
+    if (startedInBackground) {
+      watchProvider.setPhoneStatus('starting');
+      // ANTI-HIJACK. The user swiped us closed; a heartbeat has now relaunched us headless.
+      // Do NOT auto-connect + start audio — that dumped SDR audio out the speaker mid-call.
+      // Tell the wrist we're closed and wait for an explicit Reopen (which clears the flag).
+      watchProvider.wasClosedByUser().then((closed) => {
+        if (closed) {
+          watchProvider.setPhoneStatus('closed');
+          watchTargetPending.claimed = false;
+        } else {
+          decideAndConnect();
+        }
+      });
     }
 
     // Favourites change on the picker, not here — re-read on foreground rather than
@@ -306,6 +377,9 @@ export default function App() {
       // the app stop connecting on a normal open, which is far worse than the bug it
       // was guarding against.
       watchTargetPending.claimed = false;
+      // Foregrounded by a real user tap — no longer "closed by user", so the next
+      // headless boot is free to auto-connect again.
+      watchProvider.clearClosedByUser();
       pushFavs();
     });
     return () => sub.remove();

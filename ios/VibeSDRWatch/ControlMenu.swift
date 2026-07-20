@@ -425,17 +425,14 @@ struct ControlMenu: View {
           // (RTL-SDR hardware controls live on their OWN button top-left of the waterfall screen — see
           // ContentView — so this grid stays uncluttered for the remote backends that have no dongle.)
 
-          // SERVERS — back to the instance picker to switch server (or manage favourites).
+          // SERVERS — open the picker to switch server on the fly. The PHONE reconnects
+          // (backToPicker → showServers → InstancePickerView, whose onConnect sends cmd:inst).
           tile(icon: "antenna.radiowaves.left.and.right", label: "Servers", h: h) {
             dismiss(); link.backToPicker()
           }
 
-          // STOP — the ONLY in-app way to actually stop the audio. Background-audio mode keeps the app
-          // playing through a wrist-flick / crown press, so without this the only ways to silence it are
-          // force-quit or the Now Playing screen. Drops audio + sockets and lands back on the picker.
-          tile(icon: "stop.circle.fill", label: "Stop", h: h) {
-            dismiss(); link.backToPicker()
-          }
+          // (No STOP tile in Buddy — it's a Jr control. Buddy is a remote; stopping the audio
+          //  is the phone's job, and the tile did nothing here anyway.)
 
           // A WAY BACK. Brightness and contrast are watch-local, so a user who
           // cranks them until the waterfall is a white slab has no phone setting to

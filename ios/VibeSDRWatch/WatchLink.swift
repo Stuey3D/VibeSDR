@@ -97,6 +97,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// iPhone" is a symptom, not a diagnosis — a paused socket, a stalled renderer and
   /// a dead link all look identical from here, and chasing that cost hours.
   @Published var why = "live"
+  /// The phone app has been CLOSED by the user (goodbye received, or a 'closed' status).
+  /// Drives the "Phone app closed" screen and gates the heartbeat off (anti-hijack).
+  @Published var phoneClosed = false
   @Published var lastStateAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
@@ -339,11 +342,40 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     // the crown or touching the screen. The heartbeat would stall, the phone's
     // 10-second linkAlive window would expire, and it would stop sending rows: the
     // watch dropped to "waiting for connection" mid-use, for no reason but this.
+    startHeartbeat()
+  }
+
+  private func startHeartbeat() {
     heartbeat?.invalidate()
     let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
     RunLoop.main.add(t, forMode: .common)
     heartbeat = t
   }
+
+  /// The phone told us it is CLOSED (goodbye, or a 'closed' status after an anti-hijack
+  /// relaunch). STOP the heartbeat: every ping is a `sendMessage` that would relaunch the
+  /// phone headless and pour SDR audio out its speaker mid-call. We go silent until the user
+  /// explicitly asks to Reopen. This is the whole anti-hijack on the watch side.
+  private func stopHeartbeat() { heartbeat?.invalidate(); heartbeat = nil }
+
+  /// True from "Reopen App" until the phone actually comes back. While set, the heartbeat sends
+  /// `reopen` instead of `ping` — a single reopen can be dropped while the relaunching phone's JS
+  /// is still mounting its listener, so we keep asking until rows/ready prove it landed.
+  private var reopenPending = false
+
+  /// User pressed "Reopen App" on the closed screen. Resume poking the phone (a sendMessage
+  /// relaunches it) and keep asking it to reopen until it does.
+  func reopen() {
+    phoneClosed = false
+    reopenPending = true
+    startHeartbeat()
+    send(["cmd": "reopen"])
+  }
+
+  /// User pressed "Close Buddy". We cannot terminate a watchOS app from code, so go dormant:
+  /// heartbeat off (nothing relaunches the phone), and the closed screen stays up with no
+  /// Reopen pressure. The user can swipe Buddy away, or reopen the phone app to resume.
+  func closeBuddy() { stopHeartbeat() }
 
   // MARK: - Watch -> Phone
 
@@ -535,7 +567,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
   func ping() {
-    send(["cmd": "ping"])
+    // Anti-hijack: never poke a phone the user deliberately closed — a ping relaunches it.
+    guard !phoneClosed else { return }
+    // Mid-reopen: keep asking to reopen (a single reopen can be dropped during relaunch).
+    send(reopenPending ? ["cmd": "reopen"] : ["cmd": "ping"])
 
     // ONE-WAY LINK RECOVERY, from this end.
     //
@@ -596,6 +631,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
     // Hop to main: we mutate @Published state and the pixel buffer.
     DispatchQueue.main.async { self.apply(message) }
+  }
+
+  /// The GOODBYE arrives here: the phone sends it via transferUserInfo on termination so it
+  /// survives the process death (a fire-and-forget sendMessage would be dropped mid-exit).
+  func session(_ s: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+    DispatchQueue.main.async { self.apply(userInfo) }
   }
 
   /// Rows arrive as a flat binary blob (see VibeWatchModule.sendRow) — dictionary
@@ -661,6 +702,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     DispatchQueue.main.async {
       for r in rows { self.waterfall.push(row: r) }
       self.lastRowAt = Date()
+      // Rows streaming again means the phone is back (reopened) — drop the closed screen.
+      self.reopenPending = false
+      if self.phoneClosed { self.phoneClosed = false; if self.heartbeat == nil { self.startHeartbeat() } }
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }
       if rows.first?.count == WaterfallBuffer.width { self.everGotRow = true }
@@ -765,8 +809,26 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         dab = st
       }
 
+    case "goodbye":
+      // The phone is gone (user swiped it closed). Show the closed screen and go silent.
+      phoneClosed = true
+      stopHeartbeat()
+
     case "phone":
-      if let st = m["st"] as? String { phoneStatus = st }
+      if let st = m["st"] as? String {
+        phoneStatus = st
+        if st == "closed" {
+          // A heartbeat relaunched the phone headless but it refused to auto-connect and told
+          // us so. Same destination as a goodbye — UNLESS we're mid-reopen, where a stale
+          // 'closed' from the launch race must not bounce us back off the reopen.
+          if !reopenPending { phoneClosed = true; stopHeartbeat() }
+        } else {
+          // Any other status means the phone is alive and doing something real (reopened) —
+          // leave the closed screen and stop asking to reopen.
+          reopenPending = false
+          if phoneClosed { phoneClosed = false; if heartbeat == nil { startHeartbeat() } }
+        }
+      }
 
     case "favs":
       if let j = m[WK.json] as? String,

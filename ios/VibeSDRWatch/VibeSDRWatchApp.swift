@@ -4,6 +4,19 @@ import Darwin
 @main
 struct VibeSDRWatchApp: App {
   @StateObject private var link = WatchLink.shared
+  @StateObject private var favs = FavStore()
+
+  /// Show the SERVER PICKER when the user asked for it (menu → Servers) OR when the phone has
+  /// no live session to latch onto and is waiting for a choice. Never while a waterfall is up
+  /// unless explicitly requested — an already-connected phone means "show me what it's showing".
+  private var showPicker: Bool {
+    if link.phoneClosed { return false }
+    if link.showServers { return true }
+    // phoneStatus is authoritative: 'pick'/'setup' means the phone has NO live session and
+    // wants a choice. A connected phone sends 'ready' (+ rows), so this stays false and Buddy
+    // latches onto whatever the phone is showing. (everGotRow is sticky, so it can't gate this.)
+    return link.phoneStatus == "pick" || link.phoneStatus == "setup"
+  }
 
   var body: some Scene {
     WindowGroup {
@@ -11,22 +24,76 @@ struct VibeSDRWatchApp: App {
       // mandatory header (X + clock + grab handle) that stole ~100pt and cut the
       // bottom row off; that chrome cannot be removed from a sheet.
       NavigationStack {
-        // Routed by BACKEND, not by a strip swap: FM-DX has no spectrum at all, so
-        // it gets its own screen rather than a waterfall with the waterfall taken
-        // out. The phone never tells us which screen to be — what it SENDS already
-        // says: rows mean a spectrum, an FM-DX blob means a station.
         Group {
-          switch link.screen {
-          case .sdr:  ContentView()
-          case .fmdx: FmdxView()
-          case .dab:  DabView()
-          case .adsb: AircraftView()
+          if link.phoneClosed {
+            // The phone was swiped closed. Do NOT hijack it back open — the user decides.
+            PhoneClosedView()
+          } else if showPicker {
+            // Reuses Jr's picker verbatim (same page, same words) — the ONLY difference is
+            // that the PHONE connects, not the watch: onConnect sends cmd:inst.
+            InstancePickerView(onConnect: { server in
+              link.selectInstance(server.url)
+              link.showServers = false
+            })
+            .environmentObject(favs)
+            // On-the-fly switch (opened from the menu while connected): let the user back out
+            // to the live waterfall without picking. On a no-default cold boot there's nothing
+            // to go back to, so the button only appears once a session exists.
+            .overlay(alignment: .bottomTrailing) {
+              if link.everGotRow && link.showServers {
+                Button { link.showServers = false } label: {
+                  Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 26)).foregroundStyle(.orange)
+                    .background(Circle().fill(.black.opacity(0.5)))
+                }.buttonStyle(.plain).padding(8)
+              }
+            }
+          } else {
+            // Routed by BACKEND, not by a strip swap: FM-DX has no spectrum at all, so it
+            // gets its own screen. The phone never tells us which screen to be — what it
+            // SENDS already says: rows mean a spectrum, an FM-DX blob means a station.
+            switch link.screen {
+            case .sdr:  ContentView()
+            case .fmdx: FmdxView()
+            case .dab:  DabView()
+            case .adsb: AircraftView()
+            }
           }
         }
         .environmentObject(link)
-        .navigationBarHidden(true)   // both screens are full-bleed; no bar on either
+        .navigationBarHidden(true)   // full-bleed screens; no bar
       }
       .onAppear { link.activate() }
+      // The picker mirrors the PHONE's server list — the phone owns the connection, so its
+      // favourites (incl. RTL-TCP / SpyServer it can reach) are the truth, not a watch-local copy.
+      .onChange(of: link.favourites, initial: true) { _, new in favs.setFromPhone(new) }
+    }
+  }
+}
+
+// ── "Phone app closed" ────────────────────────────────────────────────────────────────────
+/// Shown when the phone sends a goodbye (user swiped it closed). Two honest choices: bring the
+/// phone back (Reopen), or leave it closed (Close). We NEVER relaunch the phone on our own —
+/// that is the whole point: a heartbeat reopening it dumped SDR audio out the speaker mid-call.
+struct PhoneClosedView: View {
+  @EnvironmentObject var link: WatchLink
+  var body: some View {
+    ScrollView {
+      VStack(spacing: 12) {
+        Image(systemName: "iphone.slash").font(.system(size: 30)).foregroundStyle(.orange)
+        Text("VibeSDR is closed on your iPhone").font(.system(size: 15, weight: .semibold))
+          .multilineTextAlignment(.center)
+        Text("Reopen it to carry on, or leave it closed.")
+          .font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
+          .multilineTextAlignment(.center)
+        Button { link.reopen() } label: {
+          Label("Reopen App", systemImage: "arrow.up.forward.app")
+            .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+        }.tint(.orange)
+        Button(role: .cancel) { link.closeBuddy() } label: {
+          Text("Close").font(.system(size: 14)).frame(maxWidth: .infinity)
+        }
+      }.padding(.horizontal, 6).padding(.vertical, 10)
     }
   }
 }

@@ -159,13 +159,47 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   // it can't use. Do NOT try to make WCSession behave like a flow-controlled pipe.
   // It isn't one.
 
+  /// The live module instance, so the app-lifecycle hooks (which run in AppDelegate/
+  /// SceneDelegate, not React) can reach the WCSession to fire a goodbye.
+  static weak var shared: VibeWatchModule?
+
+  /// Persisted the instant the user swipes the app closed. On the next launch — which the
+  /// watch's heartbeat can trigger HEADLESS, in the background — JS reads this and refuses to
+  /// auto-connect + start audio (which is what dumped SDR audio out the speaker mid-call).
+  /// Cleared when the user genuinely foregrounds the app (or taps Reopen on the wrist).
+  private static let closedKey = "vibe.phoneClosedByUser"
+
   override init() {
     super.init()
+    Self.shared = self
     guard WCSession.isSupported() else { return }
     let s = WCSession.default
     s.delegate = self
     s.activate()
     session = s
+  }
+
+  /// Called from applicationWillTerminate / sceneDidDisconnect. Sends a GOODBYE the watch can
+  /// trust, and marks the deliberate close. transferUserInfo (NOT sendMessage) because the
+  /// process is dying: it is queued to the WCSession daemon and delivered even after we're gone,
+  /// where a fire-and-forget sendMessage would be dropped mid-flight.
+  @objc static func appWillTerminate() {
+    UserDefaults.standard.set(true, forKey: closedKey)
+    let s = WCSession.default
+    guard WCSession.isSupported(), s.activationState == .activated else { return }
+    s.transferUserInfo(["k": "goodbye"])
+    if s.isReachable { s.sendMessage(["k": "goodbye"], replyHandler: nil, errorHandler: nil) }
+  }
+
+  /// JS reads this on a headless (background) boot to decide whether to auto-connect.
+  @objc(isClosedByUser:rejecter:)
+  func isClosedByUser(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+    resolve(UserDefaults.standard.bool(forKey: Self.closedKey))
+  }
+
+  /// Cleared by JS once the user has genuinely returned (foreground) or pressed Reopen.
+  @objc func clearClosedByUser() {
+    UserDefaults.standard.set(false, forKey: Self.closedKey)
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -433,6 +467,12 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
     sawWatch()
+    // Clear the deliberate-close flag NATIVELY the moment a reopen arrives — before the
+    // hasListeners guard — so a headless boot reads it as false even if JS hasn't mounted
+    // its command listener yet. Otherwise a dropped 'reopen' would strand us on 'closed'.
+    if (message["cmd"] as? String) == "reopen" {
+      UserDefaults.standard.set(false, forKey: Self.closedKey)
+    }
     guard hasListeners, let cmd = message["cmd"] as? String else { return }
     var body: [String: Any] = ["cmd": cmd]
     if let d = message["delta"] { body["delta"] = d }
