@@ -39,6 +39,7 @@
 		BACD927341B2F98BE72ADDD6 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */; };
 		49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */; };
 		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
+		9C8ACBFE98E4C6CC5D3C3CEC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FB5962ADE3FED0012F31D5D /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -77,6 +78,7 @@
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
 		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
+		4FB5962ADE3FED0012F31D5D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WristSDR.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -135,6 +137,7 @@
 				DDA18D942D5BEDA2D586530E /* WatchAudio.swift */,
 				95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */,
 				37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */,
+				4FB5962ADE3FED0012F31D5D /* Assets.xcassets */,
 				9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */,
 				1C35F1528A85321526664EFB /* Info.plist */,
 				FA1EA5780940B5B8F774A00E /* opus */,
@@ -210,7 +213,9 @@
 		49114E07FF772345755937AC /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (
+				9C8ACBFE98E4C6CC5D3C3CEC /* Assets.xcassets in Resources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */

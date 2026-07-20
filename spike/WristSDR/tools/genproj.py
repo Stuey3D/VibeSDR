@@ -54,6 +54,10 @@ BRIDGE_REF   = uid("bridgeref")
 OPUS_GROUP   = uid("opusgroup")
 OPUS_LIB_REF = uid("opuslibref")
 OPUS_LIB_BLD = uid("opuslibbld")
+# The app icon lives in an asset catalog; without it in the Resources phase the build succeeds and
+# ships a DEFAULT icon, which is the kind of miss nobody spots until it is on the Store page.
+ASSETS_REF   = uid("assetsref")
+ASSETS_BLD   = uid("assetsbld")
 
 file_refs, build_files, src_children = [], [], []
 for s in SOURCES:
@@ -75,6 +79,7 @@ pbx = f'''// !$*UTF8*$!
 /* Begin PBXBuildFile section */
 {chr(10).join(build_files)}
 		{OPUS_LIB_BLD} /* libopus.a in Frameworks */ = {{isa = PBXBuildFile; fileRef = {OPUS_LIB_REF} /* libopus.a */; }};
+		{ASSETS_BLD} /* Assets.xcassets in Resources */ = {{isa = PBXBuildFile; fileRef = {ASSETS_REF} /* Assets.xcassets */; }};
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -82,6 +87,7 @@ pbx = f'''// !$*UTF8*$!
 		{PLIST_REF} /* Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};
 		{BRIDGE_REF} /* {NAME}-Bridging-Header.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "{NAME}-Bridging-Header.h"; sourceTree = "<group>"; }};
 		{OPUS_LIB_REF} /* libopus.a */ = {{isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; }};
+		{ASSETS_REF} /* Assets.xcassets */ = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; }};
 		{PRODUCT_REF} /* {NAME}.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "{NAME}.app"; sourceTree = BUILT_PRODUCTS_DIR; }};
 /* End PBXFileReference section */
 
@@ -109,6 +115,7 @@ pbx = f'''// !$*UTF8*$!
 			isa = PBXGroup;
 			children = (
 {chr(10).join(src_children)}
+				{ASSETS_REF} /* Assets.xcassets */,
 				{BRIDGE_REF} /* {NAME}-Bridging-Header.h */,
 				{PLIST_REF} /* Info.plist */,
 				{OPUS_GROUP} /* opus */,
@@ -184,7 +191,9 @@ pbx = f'''// !$*UTF8*$!
 		{PHASE_RES} /* Resources */ = {{
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (
+				{ASSETS_BLD} /* Assets.xcassets in Resources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
 /* End PBXResourcesBuildPhase section */
