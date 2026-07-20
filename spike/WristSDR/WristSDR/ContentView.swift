@@ -1166,10 +1166,27 @@ struct ContentView: View {
   }
 
   /// How WELL the server link is holding — the phone app's instance triangle, tinted, X when down.
+  /// ★ SETTLING: an INDETERMINATE indicator while Link Management works out what this connection
+  ///   will carry (Stuart). For the first few seconds we genuinely do not know the sustainable
+  ///   rate — drawing a settled bar count then would be a guess dressed as a measurement, and the
+  ///   waterfall is deliberately slower meanwhile, so a green three-bar would also read as a lie.
+  ///
+  ///   It cycles through the quality tints while breathing, then SETTLES on the truth: green if the
+  ///   link earned full rate, red if it starved. Same idea as a Wi-Fi glyph cycling while it
+  ///   associates — the animation says "asking", not "bad".
+  private var settleTints: [Color] { [.green, .yellow, .orange, .red, .orange, .yellow] }
+
   @ViewBuilder private var qualityGlyph: some View {
     let q = linkQuality
     Group {
-      if q == .down {
+      if link.linkSettling {
+        // Cycle: index advances off the same 12Hz clock the rest of the chrome breathes on.
+        let i = Int(Date().timeIntervalSinceReferenceDate * 3) % settleTints.count
+        InstanceNodes()
+          .stroke(settleTints[i],
+                  style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+          .frame(width: 15, height: 15)
+      } else if q == .down {
         Image(systemName: "xmark").foregroundStyle(.red)
       } else {
         InstanceNodes()
@@ -1178,9 +1195,10 @@ struct ContentView: View {
           .frame(width: 15, height: 15)
       }
     }
-    // Breathe only while a warning pill is up — reuses the pill's own `pulse`, so glyph and pill
-    // are in lockstep: static when healthy, gently breathing whenever a warning is on screen.
-    .opacity(hint != nil ? pulse : 1)
+    // Breathe while settling OR while a warning pill is up — reuses the pill's own `pulse`, so
+    // glyph and pill stay in lockstep and there is only ever one breathing rhythm on screen.
+    .opacity((hint != nil || link.linkSettling) ? pulse : 1)
+    .animation(.easeInOut(duration: 0.35), value: link.linkSettling)
   }
 
   private var rawHint: LinkHint? {

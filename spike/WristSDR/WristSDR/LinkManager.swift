@@ -48,6 +48,14 @@ final class LinkManager {
   /// is a preference, not a symptom, and must never light the link indicator red.
   private(set) var adaptiveRung = 1
 
+  /// ★ STILL WORKING OUT WHAT THIS LINK CAN CARRY. True from connect until the rate is DECIDED —
+  /// either by climbing (the link proved good) or by starving (it proved poor). The UI draws an
+  /// indeterminate indicator meanwhile, because that is the truth: a settled bar count we have not
+  /// earned would be a guess dressed as a measurement.
+  ///
+  /// Only meaningful in .adaptive — a pinned rate needs no working out, so it is never settling.
+  private(set) var settling: Bool
+
   private var starvedSecs = 0
   private var healthySecs = 0
   /// Recent per-second frame counts, for the RECOVERY test only.
@@ -125,6 +133,7 @@ final class LinkManager {
     // adaptiveRung drives the link GLYPH, and a pinned rate is a preference, not a symptom — it
     // must never light the indicator. Only the adaptive start shows as throttled, which it is.
     self.adaptiveRung = (Self.mode == .adaptive) ? self.rung : 1
+    self.settling = (Self.mode == .adaptive)
   }
 
   /// Call once a second with the observed frame rate. `settled` is false while a tune/zoom
@@ -159,15 +168,19 @@ final class LinkManager {
       starvedSecs += 1; healthySecs = 0
       if starvedSecs >= Self.degradeAfter, rung < ladder.count {
         everStarved = true          // from here on, climbing back is a RECOVERY: be slow about it
+        settling = false            // decided: this link is poor
         set(rung + 1, adaptive: true)
         starvedSecs = 0
       }
     } else if avgRatio >= Self.healthyRatio {
       healthySecs += 1; starvedSecs = 0
       let needed = everStarved ? Self.recoverAfter : Self.firstClimbAfter
-      if healthySecs >= needed, rung > 1 {
-        set(rung - 1, adaptive: true)
-        healthySecs = 0
+      if healthySecs >= needed {
+        settling = false            // decided: we know what this link will carry
+        if rung > 1 {
+          set(rung - 1, adaptive: true)
+          healthySecs = 0
+        }
       }
     } else {
       starvedSecs = 0; healthySecs = 0            // in between — hold this rung

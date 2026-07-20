@@ -71,6 +71,10 @@ final class SpikeLink: ObservableObject {
   /// Waterfall rate rung Link Management has settled on: 1 = full, 2 = half, 3 = the emergency
   /// floor. Feeds the link glyph so a compensated-but-poor link never reads as green.
   @Published var throttleRung = 1
+  /// ★ Link Management is still working out what this connection will carry (the first few seconds
+  /// of a session). ContentView draws the link glyph as INDETERMINATE — cycling and breathing —
+  /// rather than showing a bar count it has not earned yet.
+  @Published var linkSettling = false
   /// No phone → no boot handshake. Always "ready" so the placeholder shows "Waiting for
   /// signal" on a cold start rather than a phone-setup message.
   @Published var phoneStatus = "ready"
@@ -370,6 +374,8 @@ final class SpikeLink: ObservableObject {
     // plan) is a preference, not a symptom, and must never show a permanent red link.
     let rung = client.adaptiveRung
     if throttleRung != rung { throttleRung = rung }
+    let settling = client.linkSettling
+    if linkSettling != settling { linkSettling = settling }
 
     // Heavy-server advisory — only meaningful on the iPhone relay (own wifi/cellular has headroom).
     //

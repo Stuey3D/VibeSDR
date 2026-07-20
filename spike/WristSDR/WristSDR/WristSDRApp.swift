@@ -63,6 +63,11 @@ func sdrTutorialTips(isOwrx: Bool) -> [TutorialTip] {
     .init(icon: "keyboard", text: "**Tap the frequency** to type one in directly."),
     .init(icon: "lock", text: "**Tap the padlock** to lock the controls."),
     .init(icon: "antenna.radiowaves.left.and.right", text: "The **connection pill** shows how you're connected and the link quality to the server."),
+    // ★ Explains a deliberate behaviour that would otherwise read as poor quality: with Automatic
+    //   Link Management on we OPEN SLOWER on purpose, because connection setup is the moment a
+    //   marginal link is most likely to drop. Without this line the first few seconds look like
+    //   the app is bad rather than careful.
+    .init(icon: "waveform.path.ecg", text: "With **Automatic Link Management** on, the waterfall starts slower while we work out how much the connection can carry. The link glyph cycles while it decides, then speeds up if the link is good."),
   ]
   if isOwrx {
     t.append(.init(icon: "wifi.exclamationmark", text: "Some OWRX servers stream heavily and can overwhelm the phone's Bluetooth link. If it stutters, use the watch's **own Wi-Fi or cellular** — you'll also see a warning pill when it happens."))

@@ -1272,6 +1272,7 @@ final class UberClient: ObservableObject {
   /// How far the controller has had to back off (1 = not throttled). Mirrors to SpikeLink for
   /// the link glyph — see LinkManager.adaptiveRung for why this is not `rateDivisor`.
   var adaptiveRung: Int { linkMgr.adaptiveRung }
+  var linkSettling: Bool { linkMgr.settling }
 
   private func stepLinkManagement() {
     // UberSDR only: VibeServer has fftRate/bins and we own both ends there.

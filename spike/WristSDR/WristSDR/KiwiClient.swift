@@ -18,6 +18,9 @@ protocol SDRClient: AnyObject {
   /// How far Link Management has had to throttle the waterfall (1 = full rate). Drives the link
   /// glyph. A backend with no rate lever (OWRX) keeps the default 1 via the extension below.
   var adaptiveRung: Int { get }
+  /// Still working out what this link will carry — the UI draws an INDETERMINATE indicator while
+  /// true. Default false: a backend with no rate lever has nothing to settle on.
+  var linkSettling: Bool { get }
   /// A plain-English refusal/timeout reason to show the user (nil = fine). Kiwi sets this on
   /// badp/too_busy/handshake-block/connect-timeout so nobody waits forever for a dead connection.
   var lastError: String? { get }
@@ -73,6 +76,7 @@ extension SDRClient {
   /// OpenWebRX has no waterfall-rate lever at all (fps/fft_fps/fft_size are ignored), so it never
   /// throttles and is never blamed for one.
   var adaptiveRung: Int { 1 }
+  var linkSettling: Bool { false }
   var profiles: [SDRProfile] { [] }
   var clients: Int { 0 }
   func selectProfile(_ id: String) {}
@@ -607,6 +611,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     self?.waterfall.setExpectedRowRate(fps)
   }
   var adaptiveRung: Int { linkMgr.adaptiveRung }
+  var linkSettling: Bool { linkMgr.settling }
 
   private func sendRxParams() {
     sendDemod()
