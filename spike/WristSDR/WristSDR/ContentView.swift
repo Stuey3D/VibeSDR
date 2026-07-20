@@ -1817,12 +1817,27 @@ struct ContentView: View {
         .outlined()          // legible over the bright SNR bar when the screen dims
       // Whatever the phone's meter says — S-meter, dBFS, SNR or FM-DX's dBf. We
       // do not choose the metric here; see WatchLink.meter.
-      Text(link.meter.isEmpty ? "—" : link.meter)
-        .font(.system(size: 11, weight: .semibold, design: .rounded))
-        .monospacedDigit()
-        .foregroundStyle(.white.opacity(0.9))
-        .outlined()
-        .layoutPriority(-1)   // the frequency wins the space
+      // ★ RESERVED WIDTH, or the SIGNAL BAR BREATHES. The pill's background IS the meter, and the
+      //   HStack hugs its content — so a reading that gains characters ("S7" -> "S9+20") widens the
+      //   pill and therefore the bar, which reads as the bar jumping on every peak. Very visible on
+      //   a strong signal, and nothing to do with the level itself.
+      //
+      //   `monospacedDigit()` cannot fix it: it equalises DIGIT widths, but the character COUNT is
+      //   what changes here. So reserve the widest reading with a hidden template and let the live
+      //   text sit inside it — the pill then keeps one width while the value moves.
+      ZStack(alignment: .trailing) {
+        Text("S9+60")
+          .font(.system(size: 11, weight: .semibold, design: .rounded))
+          .monospacedDigit()
+          .hidden()
+        Text(link.meter.isEmpty ? "—" : link.meter)
+          .font(.system(size: 11, weight: .semibold, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(.white.opacity(0.9))
+          .outlined()
+      }
+      .fixedSize()
+      .layoutPriority(-1)   // the frequency wins the space
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 4)
