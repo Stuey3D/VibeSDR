@@ -79,6 +79,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Servers screen requested from the menu. NAVIGATION only — the phone keeps playing while you
   /// browse, so this must never tear the link down (see WatchLinkCompat.backToPicker).
   @Published var showServers = false
+  /// When ANY message last arrived from the phone — the evidence that the watch↔phone hop is
+  /// alive. Rows are the strongest signal, but the phone legitimately goes quiet on rows (paused
+  /// for power, or a screen with no spectrum), while still sending state and favourites. So the
+  /// iPhone glyph keys off "anything at all", not rows alone.
+  @Published var lastAnyAt: Date? = nil
   @Published var everGotRow = false
 
   /// When a row last arrived. The watch used to know only two states — "iPhone not
@@ -665,6 +670,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   private func apply(_ m: [String: Any]) {
+    lastAnyAt = Date()      // stamped before the switch, so every message kind counts
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {

@@ -1128,23 +1128,38 @@ struct ContentView: View {
   /// pill so the two can never disagree. NOT from `link.level`: that's the tuned station's RF
   /// strength (the readout gradient), a different meter — a strong station on a dying link must
   /// still show red.
+  /// ★★ TWO HOPS, TWO GLYPHS, REPORTED INDEPENDENTLY (Stuart):
+  ///
+  ///        watch ──(A)── iPhone ──(B)── server
+  ///
+  ///    (B) THIS glyph — the server one — RELAYS THE PHONE'S OWN link meter. `serverLink` is the
+  ///        phone's score of its connection to the server (0=down…3=good), sent in every state
+  ///        frame. The watch has no direct opinion about that hop and must not invent one.
+  ///
+  ///    (A) the iPhone glyph reports watch↔phone — see `methodGlyph`.
+  ///
+  ///    Jr's version of this computed the SERVER glyph from row gaps, which is the watch↔phone hop
+  ///    wearing the wrong label. Ported unchanged it would have shown the phone's server as
+  ///    unhealthy whenever OUR link hiccuped — blaming the far end for a near-end fault, which is
+  ///    exactly the confusion the two-glyph split exists to end. Together they localise it:
+  ///      server red + iPhone green = the phone lost the server
+  ///      server green + iPhone red = you have walked away from your phone
   private var linkQuality: LinkQuality {
-    if link.transport == .none { return .down }
-    if stalledMessage != nil { return .down }            // no server connection at all
-    let gapQ: LinkQuality
-    if hint == nil {
-      gapQ = .good                                        // healthy, rows fresh
-    } else {
-      let gap = link.lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
-      gapQ = gap > hintRowGap ? .poor : .degraded         // stopped vs jerky-but-flowing
+    switch link.serverLink {
+    case 0:  return .down
+    case 1:  return .poor
+    case 2:  return .degraded
+    default: return .good
     }
-    // Take the WORSE of "are rows arriving on time" and "how much did we have to throttle to
-    // keep them arriving on time". Without this, Link Management doing its job would turn the
-    // glyph green on a link bad enough to need the emergency rung.
-    let throttleQ: LinkQuality = link.throttleRung >= 3 ? .poor
-                               : link.throttleRung == 2 ? .degraded
-                               : .good
-    return [gapQ, throttleQ].max(by: { $0.severity < $1.severity }) ?? gapQ
+  }
+
+  /// (A) watch ↔ iPhone. Rows arriving is the strongest evidence; a recent message covers the case
+  /// where the phone legitimately has nothing to send (paused for power, or a screen with no
+  /// spectrum at all) but is plainly still there.
+  private var phoneHopHealthy: Bool {
+    if let r = link.lastRowAt, Date().timeIntervalSince(r) < 4 { return true }
+    if let a = link.lastAnyAt, Date().timeIntervalSince(a) < 8 { return true }
+    return false
   }
 
   private func qualityTint(_ q: LinkQuality) -> Color {
@@ -1157,13 +1172,13 @@ struct ContentView: View {
   }
 
   /// What the watch is connected THROUGH. `.other` (the iPhone relay) → iphone; see transportFor.
+  /// ★ In Buddy this glyph GAINS COLOUR, because there is a second hop worth reporting. In Jr it
+  ///   is purely informational (how the watch reaches the internet) and the node glyph covers the
+  ///   only link there is. Here it reports watch↔phone — a real failure point (a pocket, a wall, a
+  ///   flat phone) that had no indicator at all before.
   @ViewBuilder private var methodGlyph: some View {
-    switch link.transport {
-    case .iphone:   Image(systemName: "iphone")
-    case .wifi:     Image(systemName: "wifi")
-    case .cellular: Image(systemName: "antenna.radiowaves.left.and.right")
-    case .none:     Image(systemName: "xmark").foregroundStyle(.red)
-    }
+    Image(systemName: "iphone")
+      .foregroundStyle(phoneHopHealthy ? .green : .red)
   }
 
   /// How WELL the server link is holding — the phone app's instance triangle, tinted, X when down.
