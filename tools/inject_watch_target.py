@@ -4,7 +4,7 @@
 WHY THIS EXISTS
     `expo prebuild` regenerates project.pbxproj from scratch and wipes hand-added targets.
     While the watch target was a thin companion that cost an afternoon in Xcode. It now holds
-    the ENTIRE Jr codebase — 32 Swift files, libopus, a bridging header — so the same accident
+    the whole Buddy watch app, so the same accident
     would cost a day. This turns it back into one command.
 
     It is the shipping-project counterpart of spike/WristSDR/tools/genproj.py, which proved the
@@ -17,7 +17,7 @@ IDEMPOTENT
     no-op and stale entries from an earlier file list cannot survive.
 
 RESERVED ID SPACE
-    AA000002000000000000 + CCxx (target structure), Dxxx (file refs), Fxxx (build files).
+    AA000002000000000000 + CCxx (target structure), Dxxxx (file refs), Fxxxx (build files).
     ★ EExx in the same prefix belongs to the PHONE-side WCSession module in the main app target
       and is deliberately NOT touched — see reserved_re().
 """
@@ -35,12 +35,14 @@ BUNDLE = "com.vibesdr.app.watchkitapp"  # ★ MUST NOT CHANGE — users have thi
                                         # id ships a SECOND app instead of an update.
 TEAM = "6PV2X6THHM"
 
-# ★ 26.0, not the companion's 10.0. Standalone needs modern watchOS, and libopus is arm64-only
-#   (Series 9+). Widening Phone Control back to Series 4-8 is a SEPARATE step: exclude Opus from
-#   an arm64_32 slice and gate the mode on capability. Until then the merged app is S9+ only,
-#   which is a REGRESSION in reach versus the shipped companion — deliberate, and temporary.
-DEPLOYMENT_TARGET = "26.0"
-ARCHS = "arm64"
+# ★ Buddy links NO libopus and runs NO DSP — the phone does both — so the arm64-only constraint
+#   that forced the merged app to Series 9+ is GONE. This is pure remote control again, which is
+#   what makes the wider hardware reach in the product story true rather than aspirational.
+#   The floor is set by the SCREENS, not the radio: Jr's views use handGestureShortcut (the
+#   double-tap gesture), which is watchOS 11+. That still reaches Series 6 and later — a real
+#   widening from the merged app's 26.0, which meant Series 9+ only.
+DEPLOYMENT_TARGET = "11.0"
+ARCHS = '"$(ARCHS_STANDARD)"'
 
 # Ids from Expo's own template. Stable across every prebuild so far; asserted, not assumed.
 APP_TARGET = "13B07F861A680F5B00A75B9A"
@@ -62,10 +64,7 @@ PHASE_EMBED = P + "CC0A"
 PROXY = P + "CC0B"
 DEPENDENCY = P + "CC0C"
 EMBED_BUILD = P + "CC0D"
-OPUS_LIB_REF = P + "CC0E"
-OPUS_LIB_BUILD = P + "CC0F"
 LOGOS_GROUP = P + "CC10"
-OPUS_GROUP = P + "CC11"
 
 # ── Sources: the whole of VibeSDR Jr. Discovered from disk rather than hand-listed, because the
 #    merged target IS the app now and a maintained list would drift the first time someone adds
@@ -82,13 +81,15 @@ SOURCES = sorted(p.name for p in WATCH_DIR.glob("*.swift") if p.name not in NOT_
 LOGOS = sorted(p.name for p in (WATCH_DIR / "Logos").glob("*.png"))
 RESOURCES = [("Assets.xcassets", "folder.assetcatalog", None)] + \
             [(n, "image.png", "Logos") for n in LOGOS]
-PLAIN = [("Info.plist", "text.plist.xml", None),
-         (f"{NAME}-Bridging-Header.h", "sourcecode.c.h", None)]
+# ★ No opus, no bridging header. Buddy does NO audio and NO DSP — the phone does both — so the
+#   whole Opus stack went with the direct clients. Leaving them referenced here would fail the
+#   build on files that no longer exist.
+PLAIN = [("Info.plist", "text.plist.xml", None)]
 
 
 def fid(kind, name):
     """Stable id from a name. Regenerating must not churn ids, or every diff is noise."""
-    return P + kind + hashlib.sha1(name.encode()).hexdigest()[:3].upper()
+    return P + kind + hashlib.sha1(name.encode()).hexdigest()[:4].upper()
 
 
 def ref_id(name):
@@ -101,7 +102,7 @@ def build_id(name):
 
 def reserved_re():
     """The id space this script owns. EExx (phone-side module) is excluded on purpose."""
-    return re.compile(P + r"(?:CC[0-9A-F]{2}|D[0-9A-F]{3}|F[0-9A-F]{3})\b")
+    return re.compile(P + r"(?:CC[0-9A-F]{2}|D[0-9A-F]{4}|F[0-9A-F]{4})\b")
 
 
 def strip(text):
@@ -148,8 +149,7 @@ def generate(text):
     # ── PBXBuildFile
     bf = [f"{T}{EMBED_BUILD} /* {NAME}.app in Embed Watch Content */ = {{isa = PBXBuildFile; "
           f"fileRef = {PRODUCT_REF} /* {NAME}.app */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};",
-          f"{T}{OPUS_LIB_BUILD} /* libopus.a in Frameworks */ = {{isa = PBXBuildFile; "
-          f"fileRef = {OPUS_LIB_REF} /* libopus.a */; }};"]
+]
     for n in SOURCES:
         bf.append(f"{T}{build_id(n)} /* {n} in Sources */ = {{isa = PBXBuildFile; "
                   f"fileRef = {ref_id(n)} /* {n} */; }};")
@@ -162,8 +162,7 @@ def generate(text):
     fr = [f"{T}{PRODUCT_REF} /* {NAME}.app */ = {{isa = PBXFileReference; "
           f"explicitFileType = wrapper.application; includeInIndex = 0; path = {NAME}.app; "
           f"sourceTree = BUILT_PRODUCTS_DIR; }};",
-          f"{T}{OPUS_LIB_REF} /* libopus.a */ = {{isa = PBXFileReference; "
-          f"lastKnownFileType = archive.ar; path = libopus.a; sourceTree = \"<group>\"; }};"]
+]
     for n, kind, _ in all_files:
         fr.append(f"{T}{ref_id(n)} /* {n} */ = {{isa = PBXFileReference; "
                   f"lastKnownFileType = {kind}; path = {n}; sourceTree = \"<group>\"; }};")
@@ -193,7 +192,6 @@ def generate(text):
 			children = (
 {children}
 				{LOGOS_GROUP} /* Logos */,
-				{OPUS_GROUP} /* opus */,
 			);
 			path = {NAME};
 			sourceTree = "<group>";
@@ -204,14 +202,6 @@ def generate(text):
 {chr(10).join(f"				{ref_id(n)} /* {n} */," for n in LOGOS)}
 			);
 			path = Logos;
-			sourceTree = "<group>";
-		}};
-{T}{OPUS_GROUP} /* opus */ = {{
-			isa = PBXGroup;
-			children = (
-				{OPUS_LIB_REF} /* libopus.a */,
-			);
-			path = opus;
 			sourceTree = "<group>";
 		}};
 """
@@ -278,7 +268,6 @@ def generate(text):
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				{OPUS_LIB_BUILD} /* libopus.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
@@ -300,19 +289,12 @@ def generate(text):
 				CURRENT_PROJECT_VERSION = {version};
 				DEVELOPMENT_TEAM = {TEAM};
 				GENERATE_INFOPLIST_FILE = NO;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/{NAME}/opus/include/opus",
-				);
 				INFOPLIST_FILE = {NAME}/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/{NAME}/opus",
-				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				MARKETING_VERSION = {marketing};
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
@@ -321,7 +303,6 @@ def generate(text):
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
-				SWIFT_OBJC_BRIDGING_HEADER = "{NAME}/{NAME}-Bridging-Header.h";
 {extra}				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = {DEPLOYMENT_TARGET};
@@ -386,7 +367,7 @@ def main():
         sys.exit("error: hashed id collision — widen the hash slice in fid()")
 
     PBXPROJ.write_text(generate(strip(text)))
-    print(f"injected {NAME}: {len(SOURCES)} sources, {len(RESOURCES)} resources, libopus")
+    print(f"injected {NAME}: {len(SOURCES)} sources, {len(RESOURCES)} resources")
     if NOT_YET_BUILT:
         print(f"  not built (by design): {', '.join(sorted(NOT_YET_BUILT))}")
 

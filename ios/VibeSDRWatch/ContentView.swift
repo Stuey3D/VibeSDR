@@ -584,7 +584,9 @@ struct ContentView: View {
       }
     }
     .sheet(isPresented: $showHardware) {
-      if let radio = link.vibe { NavigationStack { HardwareSheet(radio: radio) } }
+      // ★ Hardware controls live on the phone in Buddy — `link.vibe` is always nil here. See the
+      //   note in ControlMenu where HardwareSheet used to be.
+      EmptyView()
     }
     .sheet(isPresented: $showChat) {
       NavigationStack { ChatSheet().environmentObject(link) }
@@ -999,14 +1001,12 @@ struct ContentView: View {
       // stacked in a circle above it reads as furniture; this reads as an
       // indicator. The glyph sits inline to its left, unadorned.
       if crownMode == .volume {
-        // NATIVE volume: hand the crown to WKInterfaceVolumeControl and show Apple's own
-        // volume UI hugging the crown edge. (Frame is a first pass — dial in on device.)
-        HStack {
-          if crownOnRight { Spacer() }
-          VolumeControl(focused: true)
-            .frame(width: 36, height: 130)
-          if !crownOnRight { Spacer() }
-        }
+        // ★ NO NATIVE VolumeControl IN BUDDY. WKInterfaceVolumeControl drives the WATCH's own
+        //   audio session — and Buddy plays no audio, the phone does. Handing it the crown would
+        //   show Apple's HUD adjusting a silent output while the sound carried on unchanged.
+        //   Volume rides our own ring below and is sent as `cmd:vol` deltas, which is also why
+        //   changes made ON the phone mirror back to the wrist.
+        EmptyView()
       } else {
         // A FILLING RING with the mode glyph in the centre — matches the native volume
         // control's round, clearly-visible fill (the old thin edge-bar was hard to see).

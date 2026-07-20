@@ -42,14 +42,9 @@ private func haversineKm(_ a: CLLocationCoordinate2D, _ blat: Double, _ blon: Do
 /// their protocol lands in the spike.
 struct InstancePickerView: View {
   @EnvironmentObject var favs: FavStore
-  @EnvironmentObject var presence: PhonePresence
   @StateObject private var loc = LocationProvider()
   let onConnect: (SDRServer) -> Void
   /// Which device the list below connects. The button at the top SHOWS this and toggles it —
-  /// it is a mode indicator, not a one-way door.
-  @Binding var mode: PickerMode
-  /// nil = no iPhone detected, so there is no choice to offer and no button at all.
-  var onToggleMode: (() -> Void)? = nil
 
   private static let amber = Color(red: 0xff/255, green: 0xaa/255, blue: 0x00/255)
   private static let cream = Color(red: 0xf5/255, green: 0xe6/255, blue: 0xc8/255)
@@ -61,39 +56,30 @@ struct InstancePickerView: View {
   @State private var errored: Set<String> = []
   @State private var meta: [String: (dist: Double?, snr: Double?)] = [:]   // url -> live dist/snr
   @State private var showCustom = false
-  @StateObject private var mdns = VibeMdns()
-  @State private var pinFor: VibeAd? = nil
-  @State private var pinEntry = ""
 
   var body: some View {
     List {
-      modeToggleSection      // only when an iPhone is actually there — see below
       // ★ THE SAME FULL LIST IN BOTH MODES. Build 66 showed only the phone's favourites in
       //   Companion, which made it look like a lesser screen — Stuart: "Companion mode doesn't have
       //   the full server list like the watch does. Both need to have the exact same server lists."
       //   What differs is only WHO CONNECTS: in Companion a tap redirects the PHONE (cmd:inst), in
       //   Standalone it opens the watch's own sockets.
-      if mode == .companion { phoneServersSection }   // the phone's own, first — it is driving
-      discoveredSection      // your own local servers — the fastest, highest-quality link
+      phoneServersSection
       favouritesSection
       directoriesSection
       customSection
     }
     .listStyle(.carousel)
     // The toggle must appear and disappear with the phone, so keep asking while this screen is up.
-    .onAppear { presence.startPolling() }
-    .onDisappear { presence.stopPolling() }
     // PLAIN STRING, deliberately. The ViewBuilder form of navigationTitle lets you style the
     // text — but it also demotes it out of the LARGE left-aligned wordmark into the small
     // inline slot beside the clock. A coloured "Jr" is not worth losing the wordmark for.
     .navigationTitle("VibeSDR Jr")
     .task { await preloadForFavourites() }
-    .onAppear { loc.request(); mdns.start() }
-    .onDisappear { mdns.stop() }
+    .onAppear { loc.request() }
     .sheet(isPresented: $showCustom) { CustomServerSheet { name, url, type in
       favs.addCustom(name: name, url: url, type: type)
     } }
-    .sheet(item: $pinFor) { ad in vibePinSheet(ad) }
   }
 
   // ── Companion: the PHONE's server list ───────────────────────────────────────────
@@ -154,100 +140,13 @@ struct InstancePickerView: View {
   /// the watch has no session of its own. Leaving Companion is the direction that needs the warning
   /// (the phone app keeps running and keeps its server, and on a shared receiver its slot) — that
   /// belongs where Companion is exited, not here.
-  @ViewBuilder private var modeToggleSection: some View {
-    if let onToggleMode, presence.phonePaired {
-      // ★ A STATE INDICATOR THAT TOGGLES, not a one-way door. It shows the mode you are IN, in that
-      //   mode's colour, and says which device the list below will connect. The first version was a
-      //   one-way "Companion mode" button, which made Standalone look unreachable — it wasn't, but
-      //   nothing said so, and a control that only ever goes one way reads as a door, not a switch.
-      //
-      //   Colour carries the meaning, consistently with the launch chooser: ORANGE = Standalone
-      //   (the watch is the radio), CYAN = Companion (the iPhone is).
-      Section {
-        Button(action: onToggleMode) {
-          HStack(spacing: 7) {
-            Image(systemName: mode == .companion ? "iphone.gen3.radiowaves.left.and.right"
-                                                 : "applewatch.radiowaves.left.and.right")
-              .font(.system(size: 15))
-              .foregroundStyle(mode.tint)
-            VStack(alignment: .leading, spacing: 1) {
-              Text(mode.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(mode.tint)
-              Text(mode.subtitle)
-                .font(.system(size: 9)).foregroundStyle(Self.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-            // Says "this is a switch" without spending width on a word.
-            Image(systemName: "arrow.left.arrow.right")
-              .font(.system(size: 10, weight: .semibold))
-              .foregroundStyle(Self.dim)
-          }
-        }
-        .listItemTint(mode.tint.opacity(0.18))
-      }
-    }
-  }
 
   // ── Discovered VibeServers (mDNS `_vibesdr._tcp` on the LAN) ─────────────────────
   // Only shown once something's actually resolved. Cold auto-discovery is flaky on watchOS (the resolve
   // stalls until a real streaming connection wakes the stack), so in practice this fills in after your
   // first server connection of the session; the saved FAVOURITE is the reliable path.
-  @ViewBuilder private var discoveredSection: some View {
-    if !mdns.found.isEmpty {
-      Section("ON YOUR NETWORK") {
-        ForEach(mdns.found) { ad in
-          Button {
-            if ad.pinRequired { pinEntry = favs.savedPin(host: ad.host); pinFor = ad }
-            else { connectVibe(ad, pin: "") }
-          } label: {
-            HStack(spacing: 8) {
-              typeBadge(.vibeserver)
-              VStack(alignment: .leading, spacing: 1) {
-                Text(ad.name).font(.system(size: 15)).foregroundColor(Self.cream).lineLimit(1)
-                Text(ad.host).font(.system(size: 9.5)).foregroundColor(Self.dim).lineLimit(1)
-              }
-              Spacer()
-              if ad.pinRequired {
-                Image(systemName: "lock.fill").font(.system(size: 11)).foregroundColor(Self.amber)
-              }
-            }
-          }.buttonStyle(.plain)
-        }
-      }
-    }
-  }
 
-  private func vibePinSheet(_ ad: VibeAd) -> some View {
-    List {
-      Section("PIN — \(ad.name)") {
-        TextField("PIN", text: $pinEntry)
-          .font(.system(size: 18, design: .rounded)).multilineTextAlignment(.center)
-        Button {
-          let p = pinEntry.trimmingCharacters(in: .whitespaces)
-          pinFor = nil
-          connectVibe(ad, pin: p)
-        } label: {
-          Text("Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
-        }.tint(Self.amber)
-        // Save the PIN as a favourite so it auto-fills next time (matches the phone).
-        Button {
-          let p = pinEntry.trimmingCharacters(in: .whitespaces)
-          favs.saveVibe(name: ad.name, host: ad.host, pin: p)
-          pinFor = nil
-          connectVibe(ad, pin: p)
-        } label: {
-          Text("Save & Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
-        }.tint(.green)
-      }
-    }
-  }
 
-  private func connectVibe(_ ad: VibeAd, pin: String) {
-    favs.registerVisit("ws://\(ad.host)")
-    onConnect(SDRServer(name: ad.name, url: "ws://\(ad.host)", host: ad.host, serverType: .vibeserver, pin: pin))
-  }
 
   // ── Favourites ────────────────────────────────────────────────────────────────
   @ViewBuilder private var favouritesSection: some View {
@@ -388,7 +287,7 @@ struct InstancePickerView: View {
     if let sn = s.bestSnr { bits.append("SNR \(Int(sn.rounded()))") }
     // "soon" means the WATCH has no client for it — which is not true in Companion, where the
     // phone connects and RTL-TCP/SpyServer work today.
-    if !s.serverType.connectable, mode != .companion { bits.append("· soon") }
+    // No "soon" gate: the PHONE connects, and it supports every backend in this list.
     return bits.joined(separator: " · ")
   }
 
@@ -423,11 +322,9 @@ struct InstancePickerView: View {
     // In Companion the PHONE opens the socket, so the watch's own capability must not gate it —
     // that is what makes the phone's RTL-SDR dongle reachable from the wrist. In Standalone the
     // watch really cannot receive these, so the gate stands.
-    if mode == .companion {
-      WatchLink.shared.selectInstance(url)
-    } else {
-      guard type.connectable else { return }   // other protocols land as adapters are added
-    }
+    // The PHONE opens the socket, so the watch's own capability must not gate it — that is what
+    // makes the phone's RTL-SDR dongle reachable from the wrist.
+    WatchLink.shared.selectInstance(url)
     let host = URL(string: url)?.host ?? url.replacingOccurrences(of: "https://", with: "")
       .replacingOccurrences(of: "http://", with: "").trimmedTrailingSlash
     favs.registerVisit(url)

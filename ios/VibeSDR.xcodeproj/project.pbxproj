@@ -8,7 +8,30 @@
 
 /* Begin PBXBuildFile section */
 		AA000002000000000000CC0D /* VibeSDRWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AA000002000000000000CC02 /* VibeSDRWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		AA000002000000000000CC0F /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000002000000000000CC0E /* libopus.a */; };
+		AA000002000000000000F2863 /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D2863 /* AircraftView.swift */; };
+		AA000002000000000000F4BE4 /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4BE4 /* BandPlan.swift */; };
+		AA000002000000000000F30E0 /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D30E0 /* BandwidthView.swift */; };
+		AA000002000000000000F49CC /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D49CC /* Chat.swift */; };
+		AA000002000000000000F9727 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D9727 /* ContentView.swift */; };
+		AA000002000000000000F5E4F /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D5E4F /* ControlMenu.swift */; };
+		AA000002000000000000F4849 /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4849 /* CpuMeter.swift */; };
+		AA000002000000000000F4E67 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4E67 /* DabView.swift */; };
+		AA000002000000000000F24A0 /* FmdxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D24A0 /* FmdxView.swift */; };
+		AA000002000000000000F8437 /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D8437 /* InstancePickerView.swift */; };
+		AA000002000000000000F2380 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D2380 /* NumpadView.swift */; };
+		AA000002000000000000FEF8F /* PhoneClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DEF8F /* PhoneClient.swift */; };
+		AA000002000000000000FF874 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DF874 /* SDRDirectory.swift */; };
+		AA000002000000000000F2A0D /* SDRTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D2A0D /* SDRTypes.swift */; };
+		AA000002000000000000F2466 /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D2466 /* SpikeLink.swift */; };
+		AA000002000000000000F7A45 /* VibeSDRJrApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D7A45 /* VibeSDRJrApp.swift */; };
+		AA000002000000000000FD567 /* WatchLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DD567 /* WatchLink.swift */; };
+		AA000002000000000000FB657 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DB657 /* WaterfallBuffer.swift */; };
+		AA000002000000000000F28AA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D28AA /* Assets.xcassets */; };
+		AA000002000000000000FA582 /* logo_fmdx.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA582 /* logo_fmdx.png */; };
+		AA000002000000000000F6399 /* logo_kiwi.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D6399 /* logo_kiwi.png */; };
+		AA000002000000000000F6F92 /* logo_owrx.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D6F92 /* logo_owrx.png */; };
+		AA000002000000000000F2A06 /* logo_ubersdr.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D2A06 /* logo_ubersdr.png */; };
+		AA000002000000000000F73DA /* rtltcp.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D73DA /* rtltcp.png */; };
 		AA000002000000000000F286 /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D286 /* AircraftView.swift */; };
 		AA000002000000000000F4F0 /* AudioSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4F0 /* AudioSocket.swift */; };
 		AA000002000000000000F4BE /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4BE /* BandPlan.swift */; };
@@ -97,7 +120,31 @@
 
 /* Begin PBXFileReference section */
 		AA000002000000000000CC02 /* VibeSDRWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VibeSDRWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA000002000000000000CC0E /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
+		AA000002000000000000D2863 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D4BE4 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPlan.swift; sourceTree = "<group>"; };
+		AA000002000000000000D30E0 /* BandwidthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandwidthView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D49CC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
+		AA000002000000000000D9727 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D5E4F /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlMenu.swift; sourceTree = "<group>"; };
+		AA000002000000000000D4849 /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CpuMeter.swift; sourceTree = "<group>"; };
+		AA000002000000000000D4E67 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D24A0 /* FmdxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D8437 /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D2380 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumpadView.swift; sourceTree = "<group>"; };
+		AA000002000000000000DEF8F /* PhoneClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneClient.swift; sourceTree = "<group>"; };
+		AA000002000000000000DF874 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
+		AA000002000000000000D2A0D /* SDRTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRTypes.swift; sourceTree = "<group>"; };
+		AA000002000000000000D2466 /* SpikeLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeLink.swift; sourceTree = "<group>"; };
+		AA000002000000000000D7A45 /* VibeSDRJrApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeSDRJrApp.swift; sourceTree = "<group>"; };
+		AA000002000000000000DD567 /* WatchLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLink.swift; sourceTree = "<group>"; };
+		AA000002000000000000DB657 /* WaterfallBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaterfallBuffer.swift; sourceTree = "<group>"; };
+		AA000002000000000000D28AA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AA000002000000000000DA582 /* logo_fmdx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logo_fmdx.png; sourceTree = "<group>"; };
+		AA000002000000000000D6399 /* logo_kiwi.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logo_kiwi.png; sourceTree = "<group>"; };
+		AA000002000000000000D6F92 /* logo_owrx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logo_owrx.png; sourceTree = "<group>"; };
+		AA000002000000000000D2A06 /* logo_ubersdr.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logo_ubersdr.png; sourceTree = "<group>"; };
+		AA000002000000000000D73DA /* rtltcp.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = rtltcp.png; sourceTree = "<group>"; };
+		AA000002000000000000D7B59 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000002000000000000D286 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4F0 /* AudioSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSocket.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4BE /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPlan.swift; sourceTree = "<group>"; };
@@ -172,7 +219,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA000002000000000000CC0F /* libopus.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -190,47 +236,27 @@
 		AA000002000000000000CC03 /* VibeSDRWatch */ = {
 			isa = PBXGroup;
 			children = (
-				AA000002000000000000D286 /* AircraftView.swift */,
-				AA000002000000000000D4F0 /* AudioSocket.swift */,
-				AA000002000000000000D4BE /* BandPlan.swift */,
-				AA000002000000000000D30E /* BandwidthView.swift */,
-				AA000002000000000000D49C /* Chat.swift */,
-				AA000002000000000000D972 /* ContentView.swift */,
-				AA000002000000000000D5E4 /* ControlMenu.swift */,
-				AA000002000000000000D484 /* CpuMeter.swift */,
-				AA000002000000000000D4E6 /* DabView.swift */,
-				AA000002000000000000D6F1 /* FmDxClient.swift */,
-				AA000002000000000000DF03 /* FmdxMp3Decoder.swift */,
-				AA000002000000000000DAC4 /* FmdxSettings.swift */,
-				AA000002000000000000D24A /* FmdxView.swift */,
-				AA000002000000000000D3DF /* Gzip.swift */,
-				AA000002000000000000DCEF /* ImaAdpcm.swift */,
-				AA000002000000000000D843 /* InstancePickerView.swift */,
-				AA000002000000000000D564 /* KiwiClient.swift */,
-				AA000002000000000000DD30 /* LinkManager.swift */,
-				AA000002000000000000D945 /* ModeChooser.swift */,
-				AA000002000000000000D238 /* NumpadView.swift */,
-				AA000002000000000000D9E3 /* OpusDecoder.swift */,
-				AA000002000000000000DAD1 /* OwrxClient.swift */,
-				AA000002000000000000D827 /* OwrxSocket.swift */,
-				AA000002000000000000DEF8 /* PhoneClient.swift */,
-				AA000002000000000000DF87 /* SDRDirectory.swift */,
-				AA000002000000000000DC9C /* SignalProcessor.swift */,
-				AA000002000000000000D246 /* SpikeLink.swift */,
-				AA000002000000000000D929 /* TuneMemory.swift */,
-				AA000002000000000000DAEB /* UberClient.swift */,
-				AA000002000000000000D99B /* VibeMdns.swift */,
-				AA000002000000000000D7A4 /* VibeSDRJrApp.swift */,
-				AA000002000000000000D078 /* Vitals.swift */,
-				AA000002000000000000D05B /* VolumeControl.swift */,
-				AA000002000000000000D062 /* WatchAudio.swift */,
-				AA000002000000000000DD56 /* WatchLink.swift */,
-				AA000002000000000000DB65 /* WaterfallBuffer.swift */,
-				AA000002000000000000D28A /* Assets.xcassets */,
-				AA000002000000000000D7B5 /* Info.plist */,
-				AA000002000000000000D048 /* VibeSDRWatch-Bridging-Header.h */,
+				AA000002000000000000D2863 /* AircraftView.swift */,
+				AA000002000000000000D4BE4 /* BandPlan.swift */,
+				AA000002000000000000D30E0 /* BandwidthView.swift */,
+				AA000002000000000000D49CC /* Chat.swift */,
+				AA000002000000000000D9727 /* ContentView.swift */,
+				AA000002000000000000D5E4F /* ControlMenu.swift */,
+				AA000002000000000000D4849 /* CpuMeter.swift */,
+				AA000002000000000000D4E67 /* DabView.swift */,
+				AA000002000000000000D24A0 /* FmdxView.swift */,
+				AA000002000000000000D8437 /* InstancePickerView.swift */,
+				AA000002000000000000D2380 /* NumpadView.swift */,
+				AA000002000000000000DEF8F /* PhoneClient.swift */,
+				AA000002000000000000DF874 /* SDRDirectory.swift */,
+				AA000002000000000000D2A0D /* SDRTypes.swift */,
+				AA000002000000000000D2466 /* SpikeLink.swift */,
+				AA000002000000000000D7A45 /* VibeSDRJrApp.swift */,
+				AA000002000000000000DD567 /* WatchLink.swift */,
+				AA000002000000000000DB657 /* WaterfallBuffer.swift */,
+				AA000002000000000000D28AA /* Assets.xcassets */,
+				AA000002000000000000D7B59 /* Info.plist */,
 				AA000002000000000000CC10 /* Logos */,
-				AA000002000000000000CC11 /* opus */,
 			);
 			path = VibeSDRWatch;
 			sourceTree = "<group>";
@@ -238,21 +264,13 @@
 		AA000002000000000000CC10 /* Logos */ = {
 			isa = PBXGroup;
 			children = (
-				AA000002000000000000DA58 /* logo_fmdx.png */,
-				AA000002000000000000D639 /* logo_kiwi.png */,
-				AA000002000000000000D6F9 /* logo_owrx.png */,
-				AA000002000000000000D2A0 /* logo_ubersdr.png */,
-				AA000002000000000000D73D /* rtltcp.png */,
+				AA000002000000000000DA582 /* logo_fmdx.png */,
+				AA000002000000000000D6399 /* logo_kiwi.png */,
+				AA000002000000000000D6F92 /* logo_owrx.png */,
+				AA000002000000000000D2A06 /* logo_ubersdr.png */,
+				AA000002000000000000D73DA /* rtltcp.png */,
 			);
 			path = Logos;
-			sourceTree = "<group>";
-		};
-		AA000002000000000000CC11 /* opus */ = {
-			isa = PBXGroup;
-			children = (
-				AA000002000000000000CC0E /* libopus.a */,
-			);
-			path = opus;
 			sourceTree = "<group>";
 		};
 		13B07FAE1A68108700A75B9A /* VibeSDR */ = {
@@ -439,12 +457,12 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA000002000000000000F28A /* Assets.xcassets in Resources */,
-				AA000002000000000000FA58 /* logo_fmdx.png in Resources */,
-				AA000002000000000000F639 /* logo_kiwi.png in Resources */,
-				AA000002000000000000F6F9 /* logo_owrx.png in Resources */,
-				AA000002000000000000F2A0 /* logo_ubersdr.png in Resources */,
-				AA000002000000000000F73D /* rtltcp.png in Resources */,
+				AA000002000000000000F28AA /* Assets.xcassets in Resources */,
+				AA000002000000000000FA582 /* logo_fmdx.png in Resources */,
+				AA000002000000000000F6399 /* logo_kiwi.png in Resources */,
+				AA000002000000000000F6F92 /* logo_owrx.png in Resources */,
+				AA000002000000000000F2A06 /* logo_ubersdr.png in Resources */,
+				AA000002000000000000F73DA /* rtltcp.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -599,42 +617,24 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA000002000000000000F286 /* AircraftView.swift in Sources */,
-				AA000002000000000000F4F0 /* AudioSocket.swift in Sources */,
-				AA000002000000000000F4BE /* BandPlan.swift in Sources */,
-				AA000002000000000000F30E /* BandwidthView.swift in Sources */,
-				AA000002000000000000F49C /* Chat.swift in Sources */,
-				AA000002000000000000F972 /* ContentView.swift in Sources */,
-				AA000002000000000000F5E4 /* ControlMenu.swift in Sources */,
-				AA000002000000000000F484 /* CpuMeter.swift in Sources */,
-				AA000002000000000000F4E6 /* DabView.swift in Sources */,
-				AA000002000000000000F6F1 /* FmDxClient.swift in Sources */,
-				AA000002000000000000FF03 /* FmdxMp3Decoder.swift in Sources */,
-				AA000002000000000000FAC4 /* FmdxSettings.swift in Sources */,
-				AA000002000000000000F24A /* FmdxView.swift in Sources */,
-				AA000002000000000000F3DF /* Gzip.swift in Sources */,
-				AA000002000000000000FCEF /* ImaAdpcm.swift in Sources */,
-				AA000002000000000000F843 /* InstancePickerView.swift in Sources */,
-				AA000002000000000000F564 /* KiwiClient.swift in Sources */,
-				AA000002000000000000FD30 /* LinkManager.swift in Sources */,
-				AA000002000000000000F945 /* ModeChooser.swift in Sources */,
-				AA000002000000000000F238 /* NumpadView.swift in Sources */,
-				AA000002000000000000F9E3 /* OpusDecoder.swift in Sources */,
-				AA000002000000000000FAD1 /* OwrxClient.swift in Sources */,
-				AA000002000000000000F827 /* OwrxSocket.swift in Sources */,
-				AA000002000000000000FEF8 /* PhoneClient.swift in Sources */,
-				AA000002000000000000FF87 /* SDRDirectory.swift in Sources */,
-				AA000002000000000000FC9C /* SignalProcessor.swift in Sources */,
-				AA000002000000000000F246 /* SpikeLink.swift in Sources */,
-				AA000002000000000000F929 /* TuneMemory.swift in Sources */,
-				AA000002000000000000FAEB /* UberClient.swift in Sources */,
-				AA000002000000000000F99B /* VibeMdns.swift in Sources */,
-				AA000002000000000000F7A4 /* VibeSDRJrApp.swift in Sources */,
-				AA000002000000000000F078 /* Vitals.swift in Sources */,
-				AA000002000000000000F05B /* VolumeControl.swift in Sources */,
-				AA000002000000000000F062 /* WatchAudio.swift in Sources */,
-				AA000002000000000000FD56 /* WatchLink.swift in Sources */,
-				AA000002000000000000FB65 /* WaterfallBuffer.swift in Sources */,
+				AA000002000000000000F2863 /* AircraftView.swift in Sources */,
+				AA000002000000000000F4BE4 /* BandPlan.swift in Sources */,
+				AA000002000000000000F30E0 /* BandwidthView.swift in Sources */,
+				AA000002000000000000F49CC /* Chat.swift in Sources */,
+				AA000002000000000000F9727 /* ContentView.swift in Sources */,
+				AA000002000000000000F5E4F /* ControlMenu.swift in Sources */,
+				AA000002000000000000F4849 /* CpuMeter.swift in Sources */,
+				AA000002000000000000F4E67 /* DabView.swift in Sources */,
+				AA000002000000000000F24A0 /* FmdxView.swift in Sources */,
+				AA000002000000000000F8437 /* InstancePickerView.swift in Sources */,
+				AA000002000000000000F2380 /* NumpadView.swift in Sources */,
+				AA000002000000000000FEF8F /* PhoneClient.swift in Sources */,
+				AA000002000000000000FF874 /* SDRDirectory.swift in Sources */,
+				AA000002000000000000F2A0D /* SDRTypes.swift in Sources */,
+				AA000002000000000000F2466 /* SpikeLink.swift in Sources */,
+				AA000002000000000000F7A45 /* VibeSDRJrApp.swift in Sources */,
+				AA000002000000000000FD567 /* WatchLink.swift in Sources */,
+				AA000002000000000000FB657 /* WaterfallBuffer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -668,26 +668,19 @@
 		AA000002000000000000CC08 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ARCHS = arm64;
+				ARCHS = "$(ARCHS_STANDARD)";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 74;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/VibeSDRWatch/opus/include/opus",
-				);
 				INFOPLIST_FILE = VibeSDRWatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/VibeSDRWatch/opus",
-				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				MARKETING_VERSION = 9.0.2;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
@@ -696,37 +689,29 @@
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
-				SWIFT_OBJC_BRIDGING_HEADER = "VibeSDRWatch/VibeSDRWatch-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
 			};
 			name = Debug;
 		};
 		AA000002000000000000CC09 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ARCHS = arm64;
+				ARCHS = "$(ARCHS_STANDARD)";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 74;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/VibeSDRWatch/opus/include/opus",
-				);
 				INFOPLIST_FILE = VibeSDRWatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/VibeSDRWatch/opus",
-				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				MARKETING_VERSION = 9.0.2;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
@@ -735,11 +720,10 @@
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
-				SWIFT_OBJC_BRIDGING_HEADER = "VibeSDRWatch/VibeSDRWatch-Bridging-Header.h";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
 			};
 			name = Release;
 		};

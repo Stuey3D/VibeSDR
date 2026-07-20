@@ -127,18 +127,6 @@ func adsbTutorialTips() -> [TutorialTip] {
 struct VibeSDRJrApp: App {
   @StateObject private var link = SpikeLink()
   @StateObject private var favs = FavStore()
-  /// Launch gate: is the iPhone app actually in use? See PhonePresence for why this is a wait
-  /// rather than an instant answer.
-  @StateObject private var presence = PhonePresence()
-  /// Set once the user has chosen (or the gate chose for them), so the chooser is a LAUNCH
-  /// decision and cannot reappear when a session ends and drops back to the picker.
-  @State private var modePicked = false
-  /// Which device the servers screen connects. Survives leaving a session, so coming back to the
-  /// picker keeps the mode you were in rather than silently reverting to Standalone.
-  @State private var pickerMode: PickerMode = .standalone
-  /// Asking the phone whether it has a live server, so we know whether to land on its waterfall or
-  /// on the servers list. Brief, and only when entering Companion.
-  @State private var probingSession = false
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
   /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
   @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
@@ -149,111 +137,33 @@ struct VibeSDRJrApp: App {
       // NavigationStack so the numpad and control menu can be PUSHED, exactly as the
       // companion does — a sheet's mandatory header steals ~100pt on a watch.
       NavigationStack {
-        if !modePicked {
-          // Deciding, then (if the phone is shut) choosing. Both are launch-only states.
-          if !presence.settled {
-            ModeProbeView()
-              .task {
-                await presence.decide()
-                // Phone app open and in use → Companion, no chooser. But OPEN is not the same as
-                // RUNNING A SERVER: if it has no live session there is no waterfall to show, so
-                // land on the servers list instead of an empty screen.
-                if presence.phoneActive {
-                  pickerMode = .companion
-                  modePicked = true
-                  if await presence.probeSession() { link.startPhoneControl() }
-                }
-              }
-          } else {
-            ModeChooserView(
-              // Same rule from the chooser: straight to the phone's session if it has one,
-              // otherwise its servers list.
-              onCompanion: {
-                pickerMode = .companion
-                modePicked = true
-                Task { if await presence.probeSession() { link.startPhoneControl() } }
-              },
-              // Standalone lands on the servers screen — `serverName` stays empty, so the picker
-              // below is what shows next.
-              onStandalone: { modePicked = true })
-          }
-        } else if probingSession {
-          // Asking the phone whether it has a live server. Without this the toggle looks frozen for
-          // up to 2s, and then the screen changes on its own — which reads as a glitch.
-          ModeProbeView()
-        } else if link.serverName.isEmpty {
-          // Instance picker first — pick a server, THEN the receiver connects to it.
-          InstancePickerView(
-            onConnect: { server in
-              if pickerMode == .companion {
-                // The PHONE connects; we just render what it sends. `selectInstance` (cmd:inst) has
-                // already gone out from the row itself — this only puts us into the mode so the
-                // waterfall has somewhere to land.
-                link.startPhoneControl()
-              } else {
-                link.start(url: server.url, host: server.host, type: server.serverType,
-                           name: server.name, pin: server.pin)
-              }
-            },
-            mode: $pickerMode,
-            // Switching mode does NOT connect anything — it changes what the list below means.
-            // Leaving Companion also has to tear the phone link down, or its rows keep landing in
-            // the buffer a direct session is about to start drawing into.
-            onToggleMode: {
-              if pickerMode == .companion {
-                // -> Standalone. Stop the phone streaming at a watch that is about to run its own
-                //    receiver; the list below now connects us directly.
-                pickerMode = .standalone
-                WatchLink.shared.detach()
-                return
-              }
-              // -> Companion. If the phone is already running a server, go STRAIGHT to it: making
-              //    the user pick from a list to reach the session they can see on their phone is
-              //    the bug Stuart hit. Only when there is nothing to show do we stay on the list.
-              pickerMode = .companion
-              probingSession = true
-              Task {
-                let live = await presence.probeSession()
-                probingSession = false
-                if live { link.startPhoneControl() }
-              }
-            })
+        // ★ ONE MODE. Buddy is the remote — there is no standalone half to choose between, so the
+        //   launch gate, the chooser and the mode toggle are all gone. That choice is now made by
+        //   which ICON you tap, which is the whole point of splitting the apps: "how do you know
+        //   if you've connected via the phone or via the watch" (Stuart) is answered before the
+        //   app even opens.
+        if link.serverName.isEmpty {
+          InstancePickerView(onConnect: { server in
+            link.start(url: server.url, host: server.host, type: server.serverType,
+                       name: server.name, pin: server.pin)
+          })
           .environmentObject(favs)
-          .environmentObject(presence)
         } else {
-          // Route by screen, like the companion: DAB is a service LIST, not a waterfall band.
           switch link.screen {
-          case .sdr:
-            ContentView()
-              .environmentObject(link)
-              .navigationBarHidden(true)
-          case .dab:
-            DabView()
-              .environmentObject(link)
-              .environmentObject(favs)
-              .navigationBarHidden(true)
-          case .adsb:
-            AircraftView()
-              .environmentObject(link)
-              .environmentObject(favs)
-              .navigationBarHidden(true)
-          case .fmdx:
-            FmdxView()
-              .environmentObject(link)
-              .environmentObject(favs)
-              .navigationBarHidden(true)
+          case .sdr:   ContentView().environmentObject(link).navigationBarHidden(true)
+          case .dab:   DabView().environmentObject(link).environmentObject(favs).navigationBarHidden(true)
+          case .adsb:  AircraftView().environmentObject(link).environmentObject(favs).navigationBarHidden(true)
+          case .fmdx:  FmdxView().environmentObject(link).environmentObject(favs).navigationBarHidden(true)
           }
         }
       }
-      // First card on APP OPEN — the Return-to-App setting behind wrist-down listening. Then each screen
-      // shows its own one-time tutorial on first connect (see ContentView/DabView/AircraftView).
       // ★ AFTER the mode decision, never over it. This used to fire 0.4s from onAppear, which put a
       //   full-screen tip sheet straight on top of the launch gate and the chooser — you were asked
       //   to choose a mode you could not see. Waiting for `modePicked` also puts the tip in its
       //   right context: wrist-down listening is a STANDALONE concern, and in Companion mode the
       //   audio is the phone's, so the advice does not even apply.
-      .onChange(of: modePicked) { _, picked in
-        guard picked, !seenReturnTip else { return }
+      .onAppear {
+        guard !seenReturnTip else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showReturnTip = true }
       }
       .sheet(isPresented: $showReturnTip) {

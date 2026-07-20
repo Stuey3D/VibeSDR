@@ -127,32 +127,32 @@ final class SpikeLink: ObservableObject {
 
   /// FM-DX tuner state (mirrored from the client). nil = not on an FM-DX server.
   @Published var fmdx: FmdxInfo? = nil
-  var isFmDx: Bool { client is FmDxClient }
-  /// The FM-DX client, when we're on one — the server-settings menu drives it directly (antenna,
-  /// cEQ, iMS) rather than widening SDRClient for controls only one backend has.
-  var fmdxClient: FmDxClient? { client as? FmDxClient }
+  var isFmDx: Bool { (client as? PhoneClient)?.phoneScreen == .fmdx }
+  /// ★ No direct FM-DX client in Buddy. The server-settings menu (antenna, cEQ, iMS) drove the
+  ///   backend straight from the wrist, which only worked because the WATCH owned the connection.
+  ///   Here the phone does, so those controls are a remote request or nothing — see
+  ///   BRIEF-watch-app-split.md §Phase 2 "What does not port".
+  var fmdxClient: PhoneClient? { nil }
 
   /// The VibeServer radio, if we're on one — the client that OWNS the dongle and accepts hardware controls
   /// (gain / bias-T / AGC / PPM / sample rate). The hold-menu's "Radio" sub-sheet observes it directly, so
   /// the hardware controls don't have to be mirrored through the whole SDRClient protocol.
-  var vibe: UberClient? { if let u = client as? UberClient, u.isVibe { return u }; return nil }
+  /// ★ Hardware controls (gain, bias-T, AGC, ppm, sample rate) belong to whoever OWNS the dongle.
+  ///   In Buddy that is the phone, and there is no remote command for them — so the VibeServer
+  ///   hardware menu simply does not appear. Showing controls that silently do nothing would be
+  ///   worse than not having them. See BRIEF-watch-app-split.md §Phase 2 "What does not port".
+  var vibe: PhoneClient? { nil }
   var hasHardwareControls: Bool { vibe != nil }
 
   /// LEARNED station memory for the FM-DX dial. On the phone this was built as you tuned; the watch
   /// COMPANION piggybacked off the phone over WCSession. The standalone spike has no phone, so it learns
   /// its OWN — PS name keyed by 100 kHz channel — and persists it so the dial fills in over time.
-  @Published var stations: [LearnedStation] = LearnedStation.load()
-  private func learnStation(_ i: FmdxInfo) {
-    let name = i.ps.trimmingCharacters(in: .whitespaces)
-    guard i.freq > 0, name.count >= 2 else { return }              // need a real PS to learn
-    let ch = (i.freq / 100_000).rounded() * 100_000                 // snap to the FM raster
-    if let idx = stations.firstIndex(where: { $0.freqHz == ch }) {
-      if stations[idx].name != name { stations[idx].name = name; LearnedStation.save(stations) }
-    } else {
-      stations.append(LearnedStation(freqHz: ch, name: name))
-      LearnedStation.save(stations)
-    }
-  }
+  /// Learned FM-DX station names — MIRRORED from the phone, never persisted here. The phone is the
+  /// one doing the listening, so it owns the memory; Buddy just displays it.
+  @Published var stations: [LearnedStation] = []
+  /// No-op in Buddy: the PHONE learns stations and sends the list, so learning here would be a
+  /// second, divergent memory of the same thing.
+  private func learnStation(_ i: FmdxInfo) {}
 
   /// Which top-level screen to show. DAB, ADS-B and FM-DX are their own full screens (no waterfall),
   /// exactly as the companion routes it.
@@ -163,13 +163,10 @@ final class SpikeLink: ObservableObject {
     //   phone to FM-DX left the wrist on a frozen UberSDR waterfall while the audio changed
     //   underneath it. The V9 companion had DAB, ADS-B and FM-DX screens driven by the phone's own
     //   messages; the merge kept receiving them and stopped ROUTING on them.
-    if let phone = client as? PhoneClient { return phone.phoneScreen }
-    if client is FmDxClient { return .fmdx }
-    // Route on the ACTUAL demod — the source of truth. Using `!aircraft.isEmpty` too meant a reconnect
-    // that landed back on FM still showed the ADS-B screen (stale list) over an FM demod.
-    if mode == "dab", !dabProgrammes.isEmpty { return .dab }
-    if mode == "adsb" { return .adsb }
-    return .sdr
+    // Buddy follows the PHONE's backend — it has no opinion of its own, because it has no
+    // connection of its own. The direct-client type tests that used to live here went with the
+    // clients themselves.
+    (client as? PhoneClient)?.phoneScreen ?? .sdr
   }
   @Published var bandColor: Color? = nil
   @Published var bandLo = 0.0
@@ -265,53 +262,17 @@ final class SpikeLink: ObservableObject {
   /// Start (or switch to) a chosen server from the picker. Builds the backend client for the
   /// server's type (UberSDR or KiwiSDR), tearing down any previous one. One-time boot (battery +
   /// path monitor) runs on the first pick.
+  /// Point the PHONE at a server. Buddy opens no sockets of its own — this is a remote control
+  /// request, and the phone does the connecting.
+  ///
+  /// ★ The direct-connection path that used to live here (UberClient / KiwiClient / OwrxClient /
+  ///   FmDxClient, each with its own DSP and audio) is DELETED, not disabled. Buddy is the remote;
+  ///   VibeSDR Jr is the receiver. Keeping a dormant second implementation is exactly the
+  ///   "two completely different uses in the same app" the split exists to end.
   func start(url: String, host: String, type: ServerType, name: String, pin: String = "") {
     serverName = name
-    client?.goIdle()
-    // ★ Also detach the PHONE link, which may be running even though no PhoneClient exists: the
-    //   launch gate activates a WCSession purely to ask whether the phone is there. A user who then
-    //   picks Standalone would otherwise leave a 4s heartbeat pinging and the phone streaming rows
-    //   at a watch that is busy running its own receiver — competing for the same CPU and radio.
-    WatchLink.shared.detach()
-    applyPhoneWaterfallSettings()
-    isPhoneControl = false
-    everGotRow = false
-    lastRowsPushed = 0
-
-    let c: any SDRClient
-    switch type {
-    case .kiwi:
-      c = KiwiClient(url: url, waterfall: waterfall)
-    case .owrx:
-      c = OwrxClient(url: url, waterfall: waterfall)
-    case .fmdx:
-      c = FmDxClient(url: url)
-    case .vibeserver:
-      // VibeServer = the shim's UberSDR-style server → the UberClient in VibeServer mode (LAN ws://, PIN,
-      // ADPCM audio). `host` is host:port; scheme from the url (https/wss → secure).
-      let u = UberClient(waterfall: waterfall)
-      u.isVibe = true
-      u.secure = url.hasPrefix("https") || url.hasPrefix("wss")
-      u.host = host
-      u.vibePin = pin
-      c = u
-    default:  // .ubersdr
-      let u = UberClient(waterfall: waterfall)
-      u.host = host
-      c = u
-    }
-    client = c
-    // Clear cross-backend state so nothing from the previous server lingers (e.g. OWRX's profiles menu
-    // showing over an FM-DX session). driverTick re-mirrors from the new client on the next tick anyway.
-    profiles = []; clients = 0; chatLog = []; chatActivity = 0
-    dabProgrammes = []; aircraft = []; fmdx = nil; stationName = ""
-    connectError = nil
-    frequency = c.frequency
-    mode = c.mode
-    updateBand()
-
-    if !booted { booted = true; startBatteryMonitor(); startPathMonitor() }
-    c.start()
+    WatchLink.shared.selectInstance(url)
+    if !(client is PhoneClient) { startPhoneControl() }
   }
 
   /// Enter COMPANION MODE — the iPhone owns the radio and we render the rows it sends.
@@ -545,7 +506,9 @@ final class SpikeLink: ObservableObject {
     mode = client?.mode ?? mode
   }
 
-  var isOwrx: Bool { client is OwrxClient }   // for the OWRX-specific tutorial line
+  /// The OWRX-specific tutorial line. The phone tells us its backend via the favourites entry it
+  /// is on; until that is plumbed through, Buddy shows the general tips.
+  var isOwrx: Bool { false }
 
   func setStep(_ hz: Double) { step = hz }
   func setDabScale(_ s: Double) { client?.setDabScale(s); dabScale = s }

@@ -70,7 +70,10 @@ struct DabView: View {
     .digitalCrownRotation($crown, from: 0, through: Self.detents, by: 1,
                           sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: true)
     .overlay(alignment: .trailing) {
-      if volumeMode { VolumeControl(focused: true).frame(width: 34, height: 120).padding(.trailing, 2) }
+      // ★ No native VolumeControl in Buddy: WKInterfaceVolumeControl drives the WATCH's own audio
+      //   session, and Buddy plays no audio — the phone does. Volume rides the crown as cmd:vol
+      //   deltas, which is also how changes made ON the phone mirror back.
+
     }
     .onChange(of: volumeMode) { _, v in
       if v { crownFocused = false; armVolTimeout() }               // release list crown → VolumeControl

@@ -71,7 +71,10 @@ struct FmdxView: View {
       if volumeMode {
         HStack {
           Spacer()
-          VolumeControl(focused: true).frame(width: 34, height: 120).padding(.trailing, 2)
+          // ★ No native VolumeControl in Buddy. WKInterfaceVolumeControl drives the WATCH's own
+          //   audio session, and Buddy plays no audio — the phone does. Volume rides the crown and
+          //   is sent as `cmd:vol` deltas, which is also why it mirrors changes made ON the phone.
+          EmptyView()
         }
       }
     }
@@ -108,7 +111,11 @@ struct FmdxView: View {
     }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     .sheet(isPresented: $showSettings) {
-      NavigationStack { FmdxSettingsSheet().environmentObject(link) }
+      // ★ FM-DX server settings (antenna, cEQ, iMS) drove the backend directly and went with the
+      //   direct clients — see BRIEF-watch-app-split.md §Phase 2 "What does not port".
+      NavigationStack { Text("Server settings are on the iPhone.")
+        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.6))
+        .multilineTextAlignment(.center).padding() }
     }
     .onAppear {
       crownFocused = true
