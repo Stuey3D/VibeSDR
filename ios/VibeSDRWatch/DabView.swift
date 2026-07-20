@@ -1,84 +1,55 @@
 import SwiftUI
 import WatchKit
-import Combine
 
-/// DAB: a LIST, not a band — ported from the shipping companion's DabView, wired to SpikeLink.
+/// DAB: a LIST, not a band.
 ///
-/// A DAB multiplex is one wide block carrying a dozen-odd services. There's nothing to hunt for inside
-/// it and nothing to tune — the ensemble hands you an id→name map and you switch service with
-/// `selectDabService`, which re-sends the demod without moving frequency. So: NO waterfall (a DAB block's
-/// spectrum is a featureless slab), and the CROWN SELECTS a service (moves a cursor) rather than tuning.
-/// Turning moves the cursor; tapping commits (switching on every detent would tear the audio down as you
-/// spun past). The speed-fix lives in the header (the dablin chipmunk workaround), as Stuart asked.
+/// A DAB multiplex is one wide block carrying a dozen-odd services. There is nothing
+/// to hunt for inside it and nothing to tune — the ensemble hands you an id→name map
+/// and you switch service with `setAudioServiceId()`, which re-sends the demod without
+/// moving the frequency at all. So:
+///
+/// - **No waterfall.** The spectrum of a DAB block is a featureless slab. The SERVICES
+///   are the content, exactly as the station is the content on FM-DX.
+/// - **The crown SELECTS, it does not tune.** This inverts the rule the rest of the app
+///   lives by. Everywhere else the crown is a continuous control and the readout must
+///   chase it (hence prediction, settle windows, all of that). Here it steps through a
+///   finite list: there is nothing to overshoot and nothing to predict.
+/// - **The phone already refuses to tune in DAB** (SDRScreen guards the drum, the
+///   waterfall tap, direct tune AND the watch crown): a nudge knocks you off the
+///   ensemble block, which kills the decode and is a nuisance to re-find. Giving the
+///   crown a job it can actually do is better than leaving it inert.
+///
+/// Turning moves a CURSOR; tapping switches. Switching on every detent would tear the
+/// audio stream down and rebuild it once per service as you spun past — so you browse
+/// the mux without interrupting what you're hearing, and commit deliberately.
 struct DabView: View {
-  @EnvironmentObject var link: SpikeLink
+  @EnvironmentObject var link: WatchLink
 
+  @State private var showFavs = false
   @State private var cursor = 0
   @State private var crown = 0.0
   @State private var lastDetent = 0
-  @State private var showProfiles = false
-  @State private var showMenu = false
-  @State private var showChat = false
-  @State private var showSpeed = false
-  @State private var locked = false
-  @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
-  @State private var volTimeout: DispatchWorkItem?
-  @AppStorage("seenDabTutorial") private var seenDabTut = false
-  @State private var showDabTut = false
   @FocusState private var crownFocused: Bool
 
-  /// Auto-exit volume mode after a few idle seconds (reset on each volume change). Matches the native
-  /// volume HUD, which fades out on its own.
-  private func armVolTimeout() {
-    volTimeout?.cancel()
-    let work = DispatchWorkItem { volumeMode = false }
-    volTimeout = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)   // generous — native crown isn't visible to reset on
-  }
-
-  private var speedLabel: String {
-    speeds.first { abs(link.dabScale - $0.v) < 0.001 }?.l ?? "×\(String(format: "%.2f", link.dabScale))"
-  }
-
   private static let detents = 1000.0
-  private let speeds: [(v: Double, l: String)] = [
-    (1, "Off"), (0.6667, "×.67"), (0.5, "×.50"), (0.3333, "×.33"), (0.25, "×.25"),
-  ]
+
+  private var dab: WatchLink.DabState { link.dab ?? .init() }
 
   var body: some View {
     VStack(spacing: 0) {
       header
       list
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .background(Color.black.ignoresSafeArea())
-    .ignoresSafeArea(edges: .top)   // reclaim the tall reserved top strip so content sits under the status band
-    // WATER LOCK: the crown still scrolls the cursor and the pinch gesture still fires (both bypass the
-    // locked touchSCREEN), so DAB is fully usable wet — crown selects, pinch commits. `.primaryAction` is
-    // the Water-Lock-capable hand-gesture hook (same one the main screen uses for crown-mode cycling).
-    .overlay(alignment: .bottom) {
-      Button(action: commitCursor) { Color.clear.frame(width: 1, height: 1) }
-        .buttonStyle(.plain)
-        .handGestureShortcut(.primaryAction)
-    }
-    // Volume uses the NATIVE WKInterfaceVolumeControl (Apple's HUD) — it drives the real output/speaker
-    // and reaches full volume; our own gain couldn't. In volume mode the list releases the crown so the
-    // native control owns it. The idle timeout is a generous FIXED window (native crown ticks aren't
-    // visible to us to reset on, same as the main screen).
-    .focusable(!volumeMode)
+    .focusable(true)
     .focused($crownFocused)
-    .digitalCrownRotation($crown, from: 0, through: Self.detents, by: 1,
-                          sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: true)
-    .overlay(alignment: .trailing) {
-      // ★ No native VolumeControl in Buddy: WKInterfaceVolumeControl drives the WATCH's own audio
-      //   session, and Buddy plays no audio — the phone does. Volume rides the crown as cmd:vol
-      //   deltas, which is also how changes made ON the phone mirror back.
-
-    }
-    .onChange(of: volumeMode) { _, v in
-      if v { crownFocused = false; armVolTimeout() }               // release list crown → VolumeControl
-      else { volTimeout?.cancel(); DispatchQueue.main.async { crownFocused = true } }   // re-grab for the cursor
-    }
+    .digitalCrownRotation(
+      $crown,
+      from: 0, through: Self.detents, by: 1,
+      sensitivity: .low,                 // one service per click, not a blur of them
+      isContinuous: true,
+      isHapticFeedbackEnabled: true
+    )
     .onChange(of: crown) { _, new in
       let detent = Int(new.rounded())
       guard detent != lastDetent else { return }
@@ -87,123 +58,77 @@ struct DabView: View {
       if delta >  range / 2 { delta -= range }
       if delta < -range / 2 { delta += range }
       lastDetent = detent
-      let n = link.dabProgrammes.count
+
+      let n = dab.list.count
       guard n > 0 else { return }
-      cursor = min(n - 1, max(0, cursor - delta))   // clamp, don't wrap — a list has ends (crown up = up)
+      // CLAMP, don't wrap. A list has ends; spinning off the bottom and reappearing
+      // at the top is disorienting when you can see the whole list at once.
+      cursor = min(n - 1, max(0, cursor + delta))
     }
-    .sheet(isPresented: $showProfiles) {
-      ProfileSheet { id in link.selectProfile(id); showProfiles = false }
-        .environmentObject(link)
-    }
-    .navigationDestination(isPresented: $showMenu) {
-      ControlMenu { _ in }.environmentObject(link)
-    }
-    .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
-    // Passive status icons in the clock's band, top-left (clock keeps the right corner).
-    .overlay(alignment: .topLeading) { chrome }
-    .sheet(isPresented: $showSpeed) {
-      DabSpeedSheet(current: link.dabScale, speeds: speeds) { v in link.setDabScale(v); showSpeed = false }
-    }
-    // Drive the client→UI mirror here — driverTick lives on ContentView (not rendered on this screen), so
-    // without this the service list never grows and the "playing" icon never moves. 4 Hz suits a list.
-    .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
-      link.driverTick(now: ProcessInfo.processInfo.systemUptime)
+    .sheet(isPresented: $showFavs) {
+      FavouritesList(favs: link.favourites) { url in
+        link.selectInstance(url)
+        showFavs = false
+      }
     }
     .onAppear {
       crownFocused = true
-      if let i = link.dabProgrammes.firstIndex(where: { $0.id == link.dabActiveId }) { cursor = i }
-      if !seenDabTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showDabTut = true } }
+      // Start on what's PLAYING, not at the top — you almost always want the thing
+      // next to what you're already listening to.
+      if let i = dab.list.firstIndex(where: { $0.id == dab.active }) { cursor = i }
+      link.ping()
     }
-    .sheet(isPresented: $showDabTut) {
-      TutorialSheet(title: "DAB radio", tips: dabTutorialTips()) { seenDabTut = true; showDabTut = false }
-    }
-    .onChange(of: link.dabActiveId) { _, id in
-      if let i = link.dabProgrammes.firstIndex(where: { $0.id == id }) { cursor = i }
+    .onChange(of: dab.active) { _, id in
+      if let i = dab.list.firstIndex(where: { $0.id == id }) { cursor = i }
     }
   }
 
-  // PASSIVE status icons only — safe up in the clock's band (which doesn't take touches). The lock/menu
-  // BUTTONS live in the header (tappable area).
-  private var chrome: some View {
-    HStack(spacing: 6) {
-      BatteryPill(level: link.battery)
-      ConnGlyph(transport: link.transport).font(.system(size: 11))
-      QualityGlyph(link: link)
-    }
-    .padding(.leading, 28).padding(.top, 3)
-    .ignoresSafeArea(edges: .top)
-  }
-
-  /// Commit the service under the cursor — from a tap OR the pinch gesture (the latter works in Water
-  /// Lock, where taps don't). No-op if the cursor's service is already playing.
-  private func commitCursor() {
-    guard !locked else { return }
-    guard link.dabProgrammes.indices.contains(cursor) else { return }
-    let id = link.dabProgrammes[cursor].id
-    guard id != link.dabActiveId else { return }
-    link.selectDabService(id)
-    WKInterfaceDevice.current().play(.click)
-  }
-
-  // MARK: - Header (ensemble + speed fix + a way out)
+  // MARK: - Header (the clock's band is free height)
 
   private var header: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      // Ensemble label — non-interactive, rides high just under the status band.
+    VStack(spacing: 1) {
       HStack(spacing: 5) {
         Image(systemName: "square.stack.3d.up.fill")
-          .font(.system(size: 10, weight: .semibold)).foregroundStyle(.cyan)
-        Text(link.dabEnsembleName.isEmpty ? "DAB" : link.dabEnsembleName)
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.cyan)
+        Text(dab.ensemble.isEmpty ? "DAB" : dab.ensemble)
           .font(.system(size: 12, weight: .semibold, design: .rounded))
-          .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+          .foregroundStyle(.white)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+        // A way out: DAB has no menu (it's a list, not a control surface), so without
+        // this the wrist was stranded on whatever server the phone happened to be on.
+        ServersButton(show: $showFavs)
         Spacer(minLength: 0)
+        Color.clear.frame(width: 58, height: 1)   // the clock's territory
       }
-      // Buttons row — Lock · Volume · Menu · Chat (TAPPABLE area).
-      // SPACERS, not a fixed gap. The old `spacing: 24` fitted THREE buttons on a 49mm; adding a
-      // fourth needs ~200pt and a 41mm has ~162, so the row overflowed and dragged the whole screen
-      // off its left edge (lock button gone entirely). Even distribution adapts to any width.
-      HStack(spacing: 0) {
-        LockButton(locked: $locked, size: 18)
-        Spacer(minLength: 2)
-        // VOLUME: flips the crown to volume (native HUD) and back; auto-times out.
-        Button { if !locked { volumeMode.toggle(); WKInterfaceDevice.current().play(.click) } } label: {
-          Image(systemName: volumeMode ? "speaker.wave.2.fill" : "speaker.wave.2")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(locked ? .white.opacity(0.3) : (volumeMode ? .orange : .white))
-            .padding(4).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(locked)
-        Spacer(minLength: 2)
-        Button { if !locked { showMenu = true } } label: {
-          Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(locked ? .white.opacity(0.3) : .white)
-            .padding(4).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(locked)
-        // Chat was missing from DAB and ADS-B entirely — same OWRX server, same room of listeners,
-        // no way to talk to them from these screens. The glyph carries the listener COUNT too.
-        if link.supportsChat {
-          Spacer(minLength: 2)
-          ChatGlyph(clients: link.clients, activity: link.chatActivity) {
-            if !locked { showChat = true }
-          }
-        }
-        Spacer(minLength: 0)
+
+      // The phone's meter, mirrored — the one number that still means something on a
+      // screen with nothing to tune.
+      HStack(spacing: 5) {
+        Text(link.meter.isEmpty ? "—" : link.meter)
+          .font(.system(size: 10, weight: .semibold, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(.white.opacity(0.75))
+        signalBar
       }
-      // Speed fix — ONE compact button (the inline presets were too small to hit). Opens a sheet with
-      // big targets. The label shows the current factor so it doubles as a status readout.
-      Button { if !locked { showSpeed = true } } label: {
-        HStack(spacing: 4) {
-          Image(systemName: "gauge.with.dots.needle.bottom.50percent").font(.system(size: 10, weight: .semibold))
-          Text(link.dabScale != 1.0 ? "Speed Fix \(speedLabel)" : "Speed Fix").font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundColor(link.dabScale != 1.0 ? .black : .white)
-        .padding(.horizontal, 10).padding(.vertical, 4)
-        .background(link.dabScale != 1.0 ? Color.orange : Color.white.opacity(0.12), in: Capsule())
-        .fixedSize()
-      }.buttonStyle(.plain).disabled(locked)
     }
-    .padding(.horizontal, 10)
-    .padding(.top, 40)   // ensemble label sits just under the status band (top ignored)
-    .padding(.bottom, 4)
+    .padding(.horizontal, 12)
+    .padding(.top, 10)
+    .padding(.bottom, 5)
+  }
+
+  private var signalBar: some View {
+    GeometryReader { geo in
+      ZStack(alignment: .leading) {
+        Capsule().fill(.white.opacity(0.18))
+        Capsule()
+          .fill(LinearGradient(colors: [.red, .yellow, .green],
+                               startPoint: .leading, endPoint: .trailing))
+          .frame(width: max(2, geo.size.width * min(1, max(0, link.level))))
+      }
+    }
+    .frame(height: 3)
   }
 
   // MARK: - The services
@@ -212,64 +137,57 @@ struct DabView: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(spacing: 4) {
-          ForEach(Array(link.dabProgrammes.enumerated()), id: \.element.id) { i, svc in
+          ForEach(Array(dab.list.enumerated()), id: \.element.id) { i, svc in
             row(svc, focused: i == cursor)
               .id(svc.id)
               .onTapGesture {
-                guard !locked else { return }
                 cursor = i
-                link.selectDabService(svc.id)
+                link.selectDab(svc.id)
                 WKInterfaceDevice.current().play(.click)
               }
           }
         }
-        .padding(.horizontal, 8).padding(.bottom, 8)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
       }
+      // Keep the cursor on screen as the crown moves it — the crown is scrolling a
+      // SELECTION, so the list has to follow it rather than the other way round.
       .onChange(of: cursor) { _, i in
-        guard link.dabProgrammes.indices.contains(i) else { return }
-        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(link.dabProgrammes[i].id, anchor: .center) }
-      }
-    }
-  }
-
-  private func row(_ svc: DabProgramme, focused: Bool) -> some View {
-    let playing = svc.id == link.dabActiveId
-    return HStack(spacing: 6) {
-      // PLAYING and SELECTED are different: the cursor is where the crown is, the speaker is audible.
-      Image(systemName: playing ? "speaker.wave.2.fill" : "circle")
-        .font(.system(size: playing ? 11 : 7, weight: .semibold))
-        .foregroundStyle(playing ? .green : .white.opacity(0.3)).frame(width: 14)
-      Text(svc.name)
-        .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
-        .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, 8).padding(.vertical, 7)
-    .background(RoundedRectangle(cornerRadius: 8).fill(focused ? .cyan.opacity(0.22) : .white.opacity(0.08)))
-    .overlay(RoundedRectangle(cornerRadius: 8).stroke(focused ? .cyan : .clear, lineWidth: 1.2))
-  }
-}
-
-/// Big-target speed-fix picker for the DAB screen (the inline header presets were too small to tap).
-/// The current factor is highlighted; picking one applies + persists it for the tuned station.
-struct DabSpeedSheet: View {
-  let current: Double
-  let speeds: [(v: Double, l: String)]
-  let onPick: (Double) -> Void
-  var body: some View {
-    List {
-      Section(footer: Text("Fixes the dablin “chipmunk” on stations whose rate the server misreads. Remembered per station.").font(.system(size: 10))) {
-        ForEach(speeds, id: \.l) { o in
-          Button { onPick(o.v) } label: {
-            HStack {
-              Text(o.l).font(.system(size: 16, weight: .semibold))
-              Spacer()
-              if abs(current - o.v) < 0.001 { Image(systemName: "checkmark").foregroundColor(.orange) }
-            }
-          }.buttonStyle(.plain)
+        guard dab.list.indices.contains(i) else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+          proxy.scrollTo(dab.list[i].id, anchor: .center)
         }
       }
     }
-    .navigationTitle("Speed fix")
+  }
+
+  private func row(_ svc: WatchLink.DabService, focused: Bool) -> some View {
+    let playing = svc.id == dab.active
+    return HStack(spacing: 6) {
+      // PLAYING and SELECTED are different things, and both need to be legible: the
+      // cursor is where the crown is, the speaker is what you can hear.
+      Image(systemName: playing ? "speaker.wave.2.fill" : "circle")
+        .font(.system(size: playing ? 11 : 7, weight: .semibold))
+        .foregroundStyle(playing ? .green : .white.opacity(0.3))
+        .frame(width: 14)
+
+      Text(svc.name)
+        .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
+        .foregroundStyle(playing ? .white : .white.opacity(0.85))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 7)
+    .background(
+      RoundedRectangle(cornerRadius: 8)
+        .fill(focused ? .cyan.opacity(0.22) : .white.opacity(0.08))
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(focused ? .cyan : .clear, lineWidth: 1.2)
+    )
   }
 }

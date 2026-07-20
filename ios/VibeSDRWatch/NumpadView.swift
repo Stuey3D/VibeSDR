@@ -16,7 +16,7 @@ import WatchKit
 /// input surface, so Scribble reads "1" as "l" or "I", and the keys are too small
 /// to hit. There is no public API for Apple's own numeric pad.
 struct NumpadView: View {
-  @EnvironmentObject var link: SpikeLink
+  @EnvironmentObject var link: WatchLink
   @Environment(\.dismiss) private var dismiss
 
   @State private var entry = ""
@@ -233,7 +233,7 @@ struct NumpadView: View {
       }
     }
     /// What the main readout should speak from now on.
-    var display: SpikeLink.DisplayUnit {
+    var display: WatchLink.DisplayUnit {
       switch self {
       case .hz:  return .hz
       case .khz: return .khz

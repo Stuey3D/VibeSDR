@@ -16,7 +16,7 @@ final class CpuMeter: ObservableObject {
 
   /// Flip to false (or delete the badge in ContentView) before a store/TestFlight
   /// build. On while Stuart is comparing companion vs standalone.
-  static let enabled = false
+  static let enabled = true
 
   @Published var cpu: Double = 0
 

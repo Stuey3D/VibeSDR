@@ -20,30 +20,11 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_vibesdr._tcp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Finds VibeSDR servers running on your local network so you can connect without typing an address.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Your approximate location sorts the SDR server list by distance, nearest first. It stays on your watch.</string>
-	<key>RCTNewArchEnabled</key>
-	<true/>
 	<key>WKApplication</key>
 	<true/>
-	<key>WKBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>com.vibesdr.app</string>
 	<key>WKRunsIndependentlyOfCompanionApp</key>
-	<true/>
+	<false/>
 </dict>
 </plist>

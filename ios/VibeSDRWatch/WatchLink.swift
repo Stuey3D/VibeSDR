@@ -57,26 +57,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   static let shared = WatchLink()
 
   // Rendered state. The waterfall image is @Published so Canvas redraws on it.
-  //
-  // ★ INJECTABLE since the merge. SpikeLink OWNS the waterfall buffer and hands the SAME one to
-  //   every backend, so the ported UI reads a single buffer no matter which client is driving.
-  //   PhoneClient passes SpikeLink's buffer in here; the phone's finished rows then land in
-  //   exactly the place UberClient's DSP output would have. That is the whole seam — see
-  //   BRIEF-watch-app-merge.md §1: the phone path skips the DSP stage and joins at the row.
-  @Published var waterfall: WaterfallBuffer
-  /// Rows actually pushed. PhoneClient surfaces this as `SDRClient.rowsPushed`, which is what
-  /// SpikeLink watches to decide whether a connection is alive.
-  @Published var rowsPushed = 0
-  /// Measured row rate, published so PhoneClient can report a REAL `framesPerSec`.
-  ///
-  /// ★ It has to be measured, not stubbed. SpikeLink derives the link glyph from it
-  ///   (`framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)`), so returning a hardcoded 0 does not
-  ///   "avoid asserting a rate" — it asserts the WORST one, and paints the link red the instant a
-  ///   single row has ever arrived. The glyph must be able to say healthy when the link IS healthy,
-  ///   or it stops meaning anything when it says the opposite.
-  @Published var rowsPerSec: Double = 0
-  private var rowRateCount = 0
-  private var rowRateTimer: Timer?
+  @Published var waterfall  = WaterfallBuffer()
   @Published var frequency  = 0.0
   @Published var span       = 0.0
   @Published var snr        = 0.0
@@ -109,14 +90,6 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// a dead link all look identical from here, and chasing that cost hours.
   @Published var why = "live"
   @Published var lastStateAt: Date? = nil
-  /// When ANY message last arrived from the phone.
-  ///
-  /// ★ THE PASSIVE "is the phone app open?" SIGNAL. `lastStateAt` is not it: the phone sends `state`
-  ///   only from its SDR screen and only on CHANGE, while `flushAll()` — which it runs the moment
-  ///   the watch app becomes reachable — sends phone status, favourites, logo, stations and DAB but
-  ///   NO state. So listening for state alone heard nothing from a phone that was plainly talking
-  ///   to us, and that dead end is what pushed me into pinging, which WAKES the phone app.
-  @Published var lastAnyAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
   /// the phone's own link meter scores it.
@@ -332,10 +305,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   private var heartbeat: Timer?
 
-  /// `waterfall` defaults to a private buffer so `WatchLink.shared` still stands alone; PhoneClient
-  /// injects SpikeLink's instead.
-  init(waterfall: WaterfallBuffer = WaterfallBuffer()) {
-    self.waterfall = waterfall
+  override init() {
     super.init()
     if let raw = UserDefaults.standard.string(forKey: "vibe.displayUnit"),
        let u = DisplayUnit(rawValue: raw) {
@@ -343,86 +313,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     }
   }
 
-  // ── The phone's waterfall look, persisted so it survives without a phone attached ────────────
-  //
-  // ★ THE RULE (Stuart, 2026-07-19): everything waterfall/spectrum related SYNCS from the phone —
-  //   palette LUT, spatial smoothing, sharpness, peak hold — in both modes. The phone computes,
-  //   the watch mirrors, exactly as it already does for the band plan.
-  //
-  // ★★ THE ONE EXCEPTION: the watch-only BRIGHTNESS and CONTRAST controls stay device-local and
-  //    must never sync. They exist because a level that reads fine on a big bright phone can be
-  //    near-black on a wrist held at arm's length outdoors — that is a property of the SCREEN, not
-  //    of the user's taste, so mirroring them would defeat the reason they exist.
-  //    (`WaterfallBuffer` already keeps them in their own section; keep it that way.)
-  static let kLUT    = "vibe.wf.lut"
-  static let kSmooth = "vibe.wf.smoothing"
-  static let kSharp  = "vibe.wf.sharpness"
-  static let kPeak   = "vibe.wf.peakHold"
-
-  /// ★★ THE IPHONE APP WENT AWAY — and we must STOP REACHING FOR IT.
-  ///
-  /// ☐ CURRENTLY NEVER SET. The mechanism below is right; the DETECTION is not solved.
-  ///   - `isReachable` is wrong: it tracks the iOS app being FOREGROUND, not alive (build 78).
-  ///   - Inbound silence is wrong on its own: a backgrounded-but-alive phone goes quiet too.
-  ///   - Probing with a ping is self-defeating: the ping RELAUNCHES the app we are testing for,
-  ///     which is the very harm we are trying to avoid.
-  ///   The honest fix is a phone-side goodbye — the iOS app announcing its own departure — since
-  ///   only it knows the difference between "backgrounded" and "closed".
-  ///
-  /// Every ping can RELAUNCH the iOS app (that is how `sendMessage` works, and it is why Buddy can
-  /// cold-boot the phone at all). Harmless at launch, which is Buddy's whole job. Actively hostile
-  /// afterwards: close the phone app to take a CALL and the 4s heartbeat boots it straight back up,
-  /// restarting audio out of the phone's speaker mid-conversation (Stuart, build 77).
-  ///
-  /// So a closure is a decision, and we respect it: the heartbeat stops, we send nothing, and the
-  /// user is asked whether to reopen. Waking an app somebody deliberately closed is not a recovery,
-  /// it is an argument.
-  @Published private(set) var phoneAppGone = false
-
-  /// Is this link DRIVING a session? False = rows must not reach the shared buffer.
-  ///
-  /// ★ WCSession has no "close". The delegate stays registered, the phone keeps streaming while it
-  ///   thinks we are here, and rows keep arriving long after Companion mode has ended. Without a
-  ///   flag they land in whatever buffer we were last given — which after a mode switch is the one
-  ///   the DIRECT client is drawing into. Two writers, one buffer: the waterfall bounces and
-  ///   flickers as the two row sources interleave. Field-caught by Stuart, build 65.
-  private(set) var attached = false
-
-  /// Stop driving: no pings, no rate meter, no rows into the shared buffer.
-  ///
-  /// Called when Companion mode ends AND when Standalone starts — the launch gate activates a
-  /// session just to ask whether the phone is there, so a user who picks Standalone would
-  /// otherwise leave a heartbeat running and the phone streaming rows at a watch that is busy
-  /// running its own receiver.
-  func detach() {
-    // ★ TELL THE PHONE TO STOP. Dropping rows on arrival fixes the corruption but not the WASTE:
-    //   the phone judges "is a watch listening" from app reachability, so with Jr in the foreground
-    //   running its own receiver it would happily stream a waterfall nobody reads — spending phone
-    //   battery, and putting WCSession traffic on a radio the watch needs for its own sockets.
-    //   Sent BEFORE the latch drops, or the send would be suppressed by our own teardown.
-    send(["cmd": "stop"])
-    attached = false
-    // `cmd:need` is what RESUMES the phone, and requestMissing() rate-limits itself to one every
-    // 3s. Toggle Standalone -> Companion quickly and that limiter would swallow the resume, leaving
-    // a mode with no waterfall and no error. Clear it here so the next entry always gets through.
-    lastNeedAt = .distantPast
-    heartbeat?.invalidate(); heartbeat = nil
-    rowRateTimer?.invalidate(); rowRateTimer = nil
-    if rowsPerSec != 0 { rowsPerSec = 0 }
-    // Point somewhere harmless. A row already in flight cannot then paint over a live waterfall.
-    waterfall = WaterfallBuffer()
-  }
-
-  /// Open the WCSession and start LISTENING. Local only — this sends nothing and wakes nothing, so
-  /// it is safe on a launch path where the user may be heading for Standalone.
-  ///
-  /// ★★ THE HEARTBEAT IS NOT STARTED HERE, and that is the whole point. It pings every 4s, and
-  ///    `sendMessage` WAKES the iPhone app — so activating-with-heartbeat on launch started the
-  ///    user's phone app whether or not they wanted Companion (Stuart, build 72: "if I wanted to
-  ///    use standalone mode I'd end up having both apps open"). Pinging is now confined to
-  ///    `beginDriving()`, which only runs when Companion is explicitly chosen.
   func activate() {
-    attached = true
     startBatteryMonitor()
     guard WCSession.isSupported() else { return }
     let s = WCSession.default
@@ -440,50 +331,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     // the crown or touching the screen. The heartbeat would stall, the phone's
     // 10-second linkAlive window would expire, and it would stop sending rows: the
     // watch dropped to "waiting for connection" mid-use, for no reason but this.
-    // Rate meter only — see beginDriving() for the heartbeat.
-
-    // Row-rate meter, feeding PhoneClient.framesPerSec and through it the link glyph. .common mode
-    // for the same reason as the heartbeat: a default-mode timer stops while the crown is turning,
-    // which is exactly when you most want the glyph telling the truth.
-    rowRateTimer?.invalidate()
-    let r = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-      guard let self else { return }
-      let n = Double(self.rowRateCount)
-      self.rowRateCount = 0
-      if self.rowsPerSec != n { self.rowsPerSec = n }
-    }
-    RunLoop.main.add(r, forMode: .common)
-    rowRateTimer = r
-  }
-
-  /// Start DRIVING a Companion session: announce ourselves and keep the phone streaming.
-  ///
-  /// ★ Separated from `activate()` because this is the part that TALKS, and talking wakes the
-  ///   iPhone app. Only an explicit choice of Companion mode may do that. Merely opening Jr, or
-  ///   sitting on the servers list, must not.
-  ///
-  /// HEARTBEAT. The phone's `isReachable` goes stale and it then refuses to send while our crown
-  /// messages still get through — the downlink dies silently and the watch sits on "Waiting for
-  /// signal" forever. The phone treats any message from us as proof we are here, but that proof
-  /// expires; without a heartbeat it would only hold while the user happened to be turning the
-  /// crown. `.common` mode, NOT default: a default-mode timer STOPS FIRING while the run loop is
-  /// tracking — i.e. exactly while you are turning the crown or touching the screen — so the
-  /// phone's 10-second window would expire and it would stop sending rows mid-use.
-  /// User asked us to bring the phone app back. This is the ONE place a wake is allowed after a
-  /// closure, because the user just asked for it.
-  func reopenPhoneApp() {
-    phoneAppGone = false
-    beginDriving()
-    requestMissing()          // "I have nothing" — resume rows and reflush
-  }
-
-  func beginDriving() {
-    phoneAppGone = false
     heartbeat?.invalidate()
     let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
     RunLoop.main.add(t, forMode: .common)
     heartbeat = t
-    ping()   // announce ourselves now rather than waiting up to 4s
   }
 
   // MARK: - Watch -> Phone
@@ -754,23 +605,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// row is silently dropped for being the wrong length.
   private static let meterBytes = 12
   /// One row's payload: 6 doubles + the meter field + the bins.
-  /// ★★ THE PHONE'S ROW WIDTH, WHICH IS NOT OURS. `watchProvider.ts` sends `WATCH_BINS = 128`
-  ///    bins per row and always has. The V9 companion's WaterfallBuffer was also 128, so the two
-  ///    agreed by coincidence of shared history and nothing enforced it.
-  ///
-  ///    The merge broke that silently. The spike's buffer is 256 wide (it does its own DSP and can
-  ///    afford the resolution), so after the merge this block size was computed at 256 and EVERY
-  ///    incoming batch failed the length guard below — dropped with no error, no log, the phone
-  ///    still rendering happily on its own screen. Uplink alive, downlink dead: tuning worked, the
-  ///    waterfall never appeared. Field-caught by Stuart on build 61, who read it correctly as
-  ///    "the decoded data sent from phone to watch".
-  ///
-  ///    So this MUST track the phone, not the local buffer — they are independent facts and only
-  ///    the wire one belongs here. The local buffer is now 128 again too, so `widen()` is a no-op
-  ///    in practice; it stays as the guard that turns a future disagreement into a stretched
-  ///    waterfall instead of a silently blank one.
-  private static let phoneRowWidth = 128
-  private static let blockSize = 8 * 6 + meterBytes + phoneRowWidth
+  private static let blockSize = 8 * 6 + meterBytes + WaterfallBuffer.width
 
   /// Rows arrive BATCHED — several in one message.
   ///
@@ -782,30 +617,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   ///
   /// Fewer, bigger messages. The jitter buffer already expects bursty arrivals, so a
   /// pair landing together is exactly what it was designed for.
-  /// Stretch the phone's row to the local buffer width.
-  ///
-  /// `WaterfallBuffer.push(row:)` DROPS anything that isn't exactly its width, silently — a blank
-  /// waterfall with a healthy frame count is precisely what that looks like, which is the trap this
-  /// whole path just fell into. So convert here, once, rather than hoping the two sides match.
-  ///
-  /// Nearest-neighbour on purpose. The phone already did the DSP and the decimation; interpolating
-  /// between its bins would invent detail it didn't send, smearing a carrier across pixels it never
-  /// occupied. Duplicating is honest about the real resolution — and identical to what V9 showed,
-  /// since its buffer was the phone's width to begin with.
-  private static func widen(_ row: [UInt8]) -> [UInt8] {
-    let w = WaterfallBuffer.width
-    guard row.count != w, !row.isEmpty else { return row }
-    var out = [UInt8](repeating: 0, count: w)
-    for i in 0..<w { out[i] = row[min(row.count - 1, i * row.count / w)] }
-    return out
-  }
-
   private func handleRow(_ data: Data) {
-    // Discarded link: drop before decoding. Same class of bug as the "2nd server 93% hang", where
-    // UberClient's retry Tasks kept reopening sockets while the NEXT server started on top of it —
-    // hence the goingIdle latch there. A client being replaced must stop doing work, whatever the
-    // medium; WCSession just makes it easier to forget, because there is no socket to close.
-    guard attached else { return }
     guard data.count > 2, data[data.startIndex] == 2 else { return }
     let count = Int(data[data.startIndex + 1])
     guard count > 0, data.count >= 2 + count * Self.blockSize else { return }
@@ -827,12 +639,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if !t.isEmpty { meterText = t }
 
       let rStart = mStart + Self.meterBytes
-      rows.append(Self.widen([UInt8](data[rStart..<(rStart + Self.phoneRowWidth)])))
+      rows.append([UInt8](data[rStart..<(rStart + WaterfallBuffer.width)]))
     }
 
     let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      for r in rows { self.waterfall.push(row: r); self.rowsPushed += 1; self.rowRateCount += 1 }
+      for r in rows { self.waterfall.push(row: r) }
       self.lastRowAt = Date()
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }
@@ -850,9 +662,6 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   private func apply(_ m: [String: Any]) {
-    // Anything at all from the phone proves its app is running. Stamped before the switch so it
-    // counts every message kind, not just the ones we happen to handle.
-    lastAnyAt = Date()
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
@@ -962,27 +771,15 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // glass over nothing reads as a broken grey box.
       if let d = m[WK.image] as? Data { logo = d.isEmpty ? nil : d }
 
-    // ★ THE PHONE IS AUTHORITATIVE FOR HOW THE WATERFALL LOOKS, in BOTH modes (Stuart:
-    //   "spatial smoothing and peak hold need to match the phone"). Same principle as the palette
-    //   and the band plan — the phone computes, the watch mirrors — and the watch has no UI for
-    //   smoothing or sharpness at all, so there is no second opinion to reconcile.
-    //
-    //   PERSISTED, not just applied. These only arrive while a phone is attached, so without
-    //   saving them a Standalone session that never visited Companion would show whatever the
-    //   buffer happened to be left on. Saved here, re-applied by SpikeLink on every start.
     case "settings":
-      let d = UserDefaults.standard
-      if let l = m[WK.lut] as? Data, l.count == 1024 {
-        waterfall.setLUT([UInt8](l)); d.set(l, forKey: Self.kLUT)
-      }
-      if let sm = m[WK.smooth] as? Double { waterfall.smoothing = sm; d.set(sm, forKey: Self.kSmooth) }
+      if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }
+      if let sm = m[WK.smooth] as? Double { waterfall.smoothing = sm }
       if let nc = m[WK.needle] as? String, let c = Color(hex: nc) { needle = c }
       if let ni = m[WK.needleI] as? Double { needleI = ni }
-      if let sh = m[WK.sharp] as? Double { waterfall.sharpness = sh; d.set(sh, forKey: Self.kSharp) }
+      if let sh = m[WK.sharp] as? Double { waterfall.sharpness = sh }
       if let pk = m[WK.peak] as? Bool {
         peakHold = pk
         waterfall.peakHold = pk   // clears what's held when turned off
-        d.set(pk, forKey: Self.kPeak)
       }
 
     default:
@@ -997,24 +794,20 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   func sessionReachabilityDidChange(_ s: WCSession) {
-    DispatchQueue.main.async {
-      self.reachable = s.isReachable
-      // ★★ DO NOT INFER "APP CLOSED" FROM isReachable. On watchOS it is true only while the iOS
-      //    app is in the FOREGROUND — so it goes false when the phone screen locks, when the app
-      //    backgrounds, or during a call, while the app is very much alive and still streaming.
-      //
-      //    I shipped that inference in build 78 and it was wrong twice over (Stuart, build 78):
-      //      1. the "iPhone app closed" card appeared while audio was playing and the crown was
-      //         still tuning — the app was right there;
-      //      2. it also invalidated the HEARTBEAT, so the phone stopped being told we were here,
-      //         its linkAlive window expired, and it stopped sending rows. That was the stutter.
-      //         The false diagnosis CAUSED the second symptom.
-      //
-      //    Reachability is a routing hint, not a lifecycle event. Detecting a genuine close needs
-      //    the phone to say so — see the note on `phoneAppGone`.
-    }
+    DispatchQueue.main.async { self.reachable = s.isReachable }
   }
 }
 
-// Color(hex:) used to live here. It now lives with the adapter in SpikeLink.swift, which the
-// ported views already rely on — two identical copies in one module is a redeclaration error.
+extension Color {
+  /// "#rrggbb" as sent by the phone's VFO colour picker.
+  init?(hex: String) {
+    var s = hex.trimmingCharacters(in: .whitespaces)
+    if s.hasPrefix("#") { s.removeFirst() }
+    guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+    self.init(
+      red:   Double((v >> 16) & 0xff) / 255,
+      green: Double((v >>  8) & 0xff) / 255,
+      blue:  Double( v        & 0xff) / 255
+    )
+  }
+}
