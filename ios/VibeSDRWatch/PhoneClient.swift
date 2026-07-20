@@ -105,6 +105,8 @@ final class PhoneClient: ObservableObject, SDRClient {
 
   func start() {
     link.activate()
+    // Companion has been explicitly chosen, so NOW we may talk to the phone (and wake it).
+    link.beginDriving()
     // ★ ASK FOR EVERYTHING. The phone sends the palette LUT, favourites, station memory and
     //   settings ON CHANGE only, and re-sends them when it sees a ping after an 8s gap — which in
     //   V9 was guaranteed, because the first ping the phone ever saw WAS the watch app launching.

@@ -109,6 +109,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// a dead link all look identical from here, and chasing that cost hours.
   @Published var why = "live"
   @Published var lastStateAt: Date? = nil
+  /// When ANY message last arrived from the phone.
+  ///
+  /// ★ THE PASSIVE "is the phone app open?" SIGNAL. `lastStateAt` is not it: the phone sends `state`
+  ///   only from its SDR screen and only on CHANGE, while `flushAll()` — which it runs the moment
+  ///   the watch app becomes reachable — sends phone status, favourites, logo, stations and DAB but
+  ///   NO state. So listening for state alone heard nothing from a phone that was plainly talking
+  ///   to us, and that dead end is what pushed me into pinging, which WAKES the phone app.
+  @Published var lastAnyAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
   /// the phone's own link meter scores it.
@@ -385,6 +393,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     waterfall = WaterfallBuffer()
   }
 
+  /// Open the WCSession and start LISTENING. Local only — this sends nothing and wakes nothing, so
+  /// it is safe on a launch path where the user may be heading for Standalone.
+  ///
+  /// ★★ THE HEARTBEAT IS NOT STARTED HERE, and that is the whole point. It pings every 4s, and
+  ///    `sendMessage` WAKES the iPhone app — so activating-with-heartbeat on launch started the
+  ///    user's phone app whether or not they wanted Companion (Stuart, build 72: "if I wanted to
+  ///    use standalone mode I'd end up having both apps open"). Pinging is now confined to
+  ///    `beginDriving()`, which only runs when Companion is explicitly chosen.
   func activate() {
     attached = true
     startBatteryMonitor()
@@ -404,10 +420,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     // the crown or touching the screen. The heartbeat would stall, the phone's
     // 10-second linkAlive window would expire, and it would stop sending rows: the
     // watch dropped to "waiting for connection" mid-use, for no reason but this.
-    heartbeat?.invalidate()
-    let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
-    RunLoop.main.add(t, forMode: .common)
-    heartbeat = t
+    // Rate meter only — see beginDriving() for the heartbeat.
 
     // Row-rate meter, feeding PhoneClient.framesPerSec and through it the link glyph. .common mode
     // for the same reason as the heartbeat: a default-mode timer stops while the crown is turning,
@@ -421,6 +434,27 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     }
     RunLoop.main.add(r, forMode: .common)
     rowRateTimer = r
+  }
+
+  /// Start DRIVING a Companion session: announce ourselves and keep the phone streaming.
+  ///
+  /// ★ Separated from `activate()` because this is the part that TALKS, and talking wakes the
+  ///   iPhone app. Only an explicit choice of Companion mode may do that. Merely opening Jr, or
+  ///   sitting on the servers list, must not.
+  ///
+  /// HEARTBEAT. The phone's `isReachable` goes stale and it then refuses to send while our crown
+  /// messages still get through — the downlink dies silently and the watch sits on "Waiting for
+  /// signal" forever. The phone treats any message from us as proof we are here, but that proof
+  /// expires; without a heartbeat it would only hold while the user happened to be turning the
+  /// crown. `.common` mode, NOT default: a default-mode timer STOPS FIRING while the run loop is
+  /// tracking — i.e. exactly while you are turning the crown or touching the screen — so the
+  /// phone's 10-second window would expire and it would stop sending rows mid-use.
+  func beginDriving() {
+    heartbeat?.invalidate()
+    let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
+    RunLoop.main.add(t, forMode: .common)
+    heartbeat = t
+    ping()   // announce ourselves now rather than waiting up to 4s
   }
 
   // MARK: - Watch -> Phone
@@ -787,6 +821,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   private func apply(_ m: [String: Any]) {
+    // Anything at all from the phone proves its app is running. Stamped before the switch so it
+    // counts every message kind, not just the ones we happen to handle.
+    lastAnyAt = Date()
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {

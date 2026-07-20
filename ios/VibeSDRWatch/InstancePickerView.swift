@@ -155,7 +155,7 @@ struct InstancePickerView: View {
   /// (the phone app keeps running and keeps its server, and on a shared receiver its slot) — that
   /// belongs where Companion is exited, not here.
   @ViewBuilder private var modeToggleSection: some View {
-    if let onToggleMode, presence.phoneActive {
+    if let onToggleMode, presence.phonePaired {
       // ★ A STATE INDICATOR THAT TOGGLES, not a one-way door. It shows the mode you are IN, in that
       //   mode's colour, and says which device the list below will connect. The first version was a
       //   one-way "Companion mode" button, which made Standalone look unreachable — it wasn't, but
