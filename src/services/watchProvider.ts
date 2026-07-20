@@ -111,7 +111,17 @@ const WATCH_BINS = 128;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
-const MIN_ROW_MS = 60;
+// 5 rows/sec. The wrist waterfall does NOT scroll at this rate — Jr's WaterfallBuffer
+// runs tickScroll (pixels, render-rate, smooth) on a separate clock from tickTrace (data
+// intake), so 5fps of fresh data still scrolls smoothly, each row spanning a few steps.
+// What this actually buys is HEADROOM on the WCSession interactive queue: rows share that
+// one Bluetooth-limited queue with state, and at 16.7/s (batched 2 = ~8.3 msg/s) a weak
+// link backs up — the waterfall freezes while tune commands (other direction) still flow,
+// and phoneHopHealthy starves into a false "Reconnecting to iPhone" over a live session.
+// At 5fps that's ~2.5 msg/s, 3.3x the room. The old "1fps" revert was choppy because the
+// buffer then had ONE clock; the split-clock buffer is what makes this safe now. (Stuart
+// 2026-07-20, off the saturating-link screenshot.)
+const MIN_ROW_MS = 200;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */
