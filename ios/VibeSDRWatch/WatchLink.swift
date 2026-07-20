@@ -361,6 +361,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   /// ★★ THE IPHONE APP WENT AWAY — and we must STOP REACHING FOR IT.
   ///
+  /// ☐ CURRENTLY NEVER SET. The mechanism below is right; the DETECTION is not solved.
+  ///   - `isReachable` is wrong: it tracks the iOS app being FOREGROUND, not alive (build 78).
+  ///   - Inbound silence is wrong on its own: a backgrounded-but-alive phone goes quiet too.
+  ///   - Probing with a ping is self-defeating: the ping RELAUNCHES the app we are testing for,
+  ///     which is the very harm we are trying to avoid.
+  ///   The honest fix is a phone-side goodbye — the iOS app announcing its own departure — since
+  ///   only it knows the difference between "backgrounded" and "closed".
+  ///
   /// Every ping can RELAUNCH the iOS app (that is how `sendMessage` works, and it is why Buddy can
   /// cold-boot the phone at all). Harmless at launch, which is Buddy's whole job. Actively hostile
   /// afterwards: close the phone app to take a CALL and the 4s heartbeat boots it straight back up,
@@ -991,14 +999,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func sessionReachabilityDidChange(_ s: WCSession) {
     DispatchQueue.main.async {
       self.reachable = s.isReachable
-      // ★ The moment the counterpart app terminates, reachability drops. That is the signal — no
-      //   silence timer needed, and crucially no ping needed to discover it (a ping would relaunch
-      //   the very app we are trying to notice has gone).
-      if !s.isReachable, self.attached, !self.phoneAppGone {
-        self.phoneAppGone = true
-        self.heartbeat?.invalidate(); self.heartbeat = nil    // stop reaching for it
-        if self.rowsPerSec != 0 { self.rowsPerSec = 0 }
-      }
+      // ★★ DO NOT INFER "APP CLOSED" FROM isReachable. On watchOS it is true only while the iOS
+      //    app is in the FOREGROUND — so it goes false when the phone screen locks, when the app
+      //    backgrounds, or during a call, while the app is very much alive and still streaming.
+      //
+      //    I shipped that inference in build 78 and it was wrong twice over (Stuart, build 78):
+      //      1. the "iPhone app closed" card appeared while audio was playing and the crown was
+      //         still tuning — the app was right there;
+      //      2. it also invalidated the HEARTBEAT, so the phone stopped being told we were here,
+      //         its linkAlive window expired, and it stopped sending rows. That was the stutter.
+      //         The false diagnosis CAUSED the second symptom.
+      //
+      //    Reachability is a routing hint, not a lifecycle event. Detecting a genuine close needs
+      //    the phone to say so — see the note on `phoneAppGone`.
     }
   }
 }

@@ -82,6 +82,8 @@ final class SpikeLink: ObservableObject {
   /// offering Reopen / Not now — see WatchLink.phoneAppGone for why this is a question and not an
   /// automatic retry.
   @Published var phoneAppGone = false
+  /// Last row rate handed to the waterfall interpolator, so we only re-seed on a real change.
+  private var lastSeededRowRate: Double = 0
   /// No phone → no boot handshake. Always "ready" so the placeholder shows "Waiting for
   /// signal" on a cold start rather than a phone-setup message.
   @Published var phoneStatus = "ready"
@@ -446,6 +448,27 @@ final class SpikeLink: ObservableObject {
     if throttleRung != rung { throttleRung = rung }
     let gone = WatchLink.shared.phoneAppGone
     if phoneAppGone != gone { phoneAppGone = gone }
+
+    // ★ SEED THE INTERPOLATOR WITH THE PHONE'S ACTUAL ROW RATE.
+    //
+    //   In Jr, LinkManager seeds this whenever it changes the rung, precisely so the estimator
+    //   does not have to crawl to the new rate. Buddy has no LinkManager — the phone owns the rate
+    //   — so NOTHING was seeding it, and the buffer was left to learn by EMA from a default of
+    //   10fps. Its own comment says why that hurts: the EMA settles at alpha 0.1, so a real change
+    //   takes ~20 rows (~4 SECONDS), and throughout it the drain runs at the wrong pace, empties
+    //   the queue, hits the dry path and re-prefills. That is judder.
+    //
+    //   And in Buddy the rate genuinely moves: the phone pauses the spectrum for power when it
+    //   thinks nobody is watching and resumes on our ping, so every pause/resume was another
+    //   4-second reconvergence. We know the true rate — it is measured on the link — so say it.
+    //
+    //   Only on a MEANINGFUL change: re-seeding every tick would stop the estimator refining
+    //   toward the real arrival cadence, which is the thing it is good at.
+    let measured = WatchLink.shared.rowsPerSec
+    if measured > 0, abs(measured - lastSeededRowRate) >= 2 {
+      lastSeededRowRate = measured
+      waterfall.setExpectedRowRate(measured)
+    }
 
     // Heavy-server advisory. Only meaningful on the iPhone relay (own wifi/cellular has the headroom).
     // Most servers stream ~18-40 KB/s and never trip this; only a deliberately-cranked FFT (like an
