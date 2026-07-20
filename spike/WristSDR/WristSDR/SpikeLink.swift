@@ -263,11 +263,7 @@ final class SpikeLink: ObservableObject {
     case .kiwi:
       c = KiwiClient(url: url, waterfall: waterfall)
     case .owrx:
-      let o = OwrxClient(url: url, waterfall: waterfall)
-      // Tell it which radio we are on BEFORE it connects: the HD audio rate is chosen at handshake
-      // and cannot be renegotiated afterwards.
-      o.onRelay = (transport == .iphone)
-      c = o
+      c = OwrxClient(url: url, waterfall: waterfall)
     case .fmdx:
       c = FmDxClient(url: url)
     case .vibeserver:
@@ -381,17 +377,21 @@ final class SpikeLink: ObservableObject {
     //    precisely when the link is failing. We were watching DEMAND through a window that only
     //    shows DELIVERY, and delivery is capped by the very thing we wanted to detect.
     //
-    //    ★ 40 KB/s (Stuart): warn while APPROACHING the ceiling, not once past it — a pill that
-    //      arrives with the disconnect is a bereavement notice, not a warning.
+    //    ★ 25 KB/s, and this is now MEASURED rather than guessed (Stuart's OWRX, 2026-07-20):
     //
-    //      CAVEAT, and it decides whether this number is right: 40 only warns EARLY if this link's
-    //      ceiling is above 40. If a given relay tops out at ~35, the meter never reads 40 and we
-    //      are back to an unsatisfiable test. That is what `relayDropping` below is for — it cannot
-    //      miss, because it triggers on the event itself. If the drop warning keeps firing without
-    //      the heavy warning preceding it, this number is too high for that link and wants lowering
-    //      toward the low twenties.
+    //        WFM/DAB audio alone   23.8 KB/s   (195 kbps — and it CANNOT be lowered, see OwrxClient)
+    //        FFT / waterfall       18-53 KB/s  (also cannot be lowered)
+    //        together              42-77 KB/s  against a Bluetooth ceiling of ~25-62 KB/s
+    //
+    //      So on this class of profile the audio ON ITS OWN reaches the bottom of what the relay
+    //      can carry. 25 is the point where "you are at the limit of Bluetooth" stops being a
+    //      prediction and becomes a description — and it is comfortably reachable by the meter,
+    //      which the old 55 never was (delivery is capped by the very thing we want to detect).
+    //
+    //      Deliberately BELOW the earlier 40: the warning has to arrive while there is still
+    //      something the user can do about it, and there is no lever left inside the app.
     let kb = client.inboundKbPerSec
-    let relayHeavy = transport == .iphone && kb > 40
+    let relayHeavy = transport == .iphone && kb > 25
 
     // ★ AND THE RECONNECT ITSELF IS EVIDENCE. A reconnect while on the relay is the symptom the
     //   user actually experiences, and it needs no threshold to be believed — if we are dropping
@@ -405,13 +405,13 @@ final class SpikeLink: ObservableObject {
       // Dropping needs no dwell — it has already happened. Heaviness waits ~4s so a spike cannot nag.
       if let st = relayHeavySince, relayDropping || now - st >= 4, bandwidthWarning == nil {
         bandwidthWarning = relayDropping
-          ? "This server is too heavy for the phone link — it keeps dropping. Use the watch\u{2019}s own Wi-Fi."
-          : "Nearing the phone link\u{2019}s limit (~\(kb) KB/s) — may start dropping. Best on the watch\u{2019}s own Wi-Fi."
+          ? "Too heavy for the phone\u{2019}s Bluetooth link — it keeps dropping. Switch to the watch\u{2019}s own Wi-Fi or cellular."
+          : "At the limit of the phone\u{2019}s Bluetooth link (~\(kb) KB/s). Use the watch\u{2019}s own Wi-Fi or cellular for this server."
       }
     } else {
       relayHeavySince = nil
       // Hysteresis, so a server sitting right on the line cannot flicker the pill on and off.
-      if bandwidthWarning != nil, transport != .iphone || kb <= 30 { bandwidthWarning = nil }
+      if bandwidthWarning != nil, transport != .iphone || kb <= 18 { bandwidthWarning = nil }
     }
 
     // Surface a RECONNECT so the UI shows the "Reconnecting" pill, not the hard "link lost"
