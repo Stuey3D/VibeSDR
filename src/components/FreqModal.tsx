@@ -200,6 +200,10 @@ export default function FreqModal({
         // the window (adding behavior double-adjusts and bounces).
         behavior={Platform.OS === 'ios' && !isLandscape ? 'padding' : undefined}
         style={[st.center, {
+          // Two rest states (§6.4): with NO keyboard (e.g. Bookmarks tab before you tap a field)
+          // CENTRE the card so a tall list isn't shoved off the bottom; with the keyboard up,
+          // anchor it just above the keyboard.
+          justifyContent: kbHeight === 0 && cardMode === 'bookmarks' ? 'center' : 'flex-end',
           paddingBottom: isLandscape ? kbHeight + 8 : 16 + (Platform.OS === 'android' ? kbHeight : 0),
         }]} pointerEvents="box-none"
       >
