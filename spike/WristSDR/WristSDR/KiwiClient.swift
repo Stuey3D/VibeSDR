@@ -120,7 +120,10 @@ final class KiwiClient: ObservableObject, SDRClient {
     "wfm": ("nbfm", -6000, 6000),
   ]
   private static let fullBW = 30_000_000.0
-  private static let maxZoom = 14
+  // 12, not the server's 14. 30 MHz / 2^12 = 7.3 kHz min span; 2^14 = 1.8 kHz, NARROWER than
+  // an SSB channel, so one contact overran the screen and auto-contrast flooded it with pure
+  // bright pixels. Matches the 6 kHz floor UberSDRClient enforces for the same reason.
+  private static let maxZoom = 12
   private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
   private static let OPEN_WF = true
 

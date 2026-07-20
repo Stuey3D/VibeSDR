@@ -921,7 +921,9 @@ final class OwrxClient: ObservableObject, SDRClient {
   func zoom(delta: Int) {
     let factor = pow(2.0, Double(-delta))
     let maxSpan = sampRate > 0 ? sampRate : 200_000
-    viewBw = min(maxSpan, max(2_000, viewBw * factor))
+    // 6 kHz floor (was 2 kHz — narrower than an SSB channel, which let one contact overrun
+    // the screen and flood it with auto-contrast white). Matches Uber/Kiwi's max-zoom floor.
+    viewBw = min(maxSpan, max(6_000, viewBw * factor))
   }
   func setVolume(_ v: Double) { audio.setVolume(Float(v)) }
   func setMode(_ m: String) {

@@ -1225,7 +1225,11 @@ export class OwrxAdapter implements SDRBackend {
     // what broke pan/levels on UberSDR. nativeBinHz = sampRate/fftSize.
     const fftSize = this.cfg?.fftSize ?? OWRX_OUT_BINS;
     const MAX_UPSAMPLE = 8;   // allow up to 8× interpolation, then stop zooming
-    const minViewBw = Math.min(sr, (OWRX_OUT_BINS / MAX_UPSAMPLE) * (sr / fftSize));
+    // Floor at 6 kHz (one SSB channel each side), matching Uber/Kiwi: zooming past a single
+    // contact leaves nothing to show but stretched noise, and auto-contrast floods it white.
+    // Keep whichever floor is WIDER (the bin-based one guards over-upsampling), but never let
+    // the visible span fall below 6 kHz — and never exceed the source rate on a tiny server.
+    const minViewBw = Math.min(sr, Math.max(6_000, (OWRX_OUT_BINS / MAX_UPSAMPLE) * (sr / fftSize)));
     this.viewCenter = frequency;
     this.viewBw = Math.max(minViewBw, Math.min(sr, binBandwidth * OWRX_OUT_BINS));
     if (this.lastRow) this.emitSlice(this.lastRow);

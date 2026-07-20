@@ -44,7 +44,10 @@ const VibeLocal = NativeModules.VibeLocalSDR as {
 const KIWI_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 
 const KIWI_FULL_BW = 30_000_000;   // zoom 0 span (Hz) — Kiwi's nominal 0–30 MHz
-const KIWI_MAX_ZOOM = 14;
+// 12, not the server's 14. 30 MHz / 2^12 = 7.3 kHz min span; 2^14 = 1.8 kHz is NARROWER
+// than an SSB channel, so one contact overran the screen and auto-contrast flooded it with
+// white. Matches UberSDRClient's device-confirmed 6 kHz max-zoom floor. Drives Buddy too.
+const KIWI_MAX_ZOOM = 12;
 const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
