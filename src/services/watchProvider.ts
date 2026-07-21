@@ -113,14 +113,13 @@ const WATCH_BINS = 128;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
-// 10 rows/sec. ★ CORRECTION (2026-07-21): the WaterfallBuffer scrolls at the DATA rate (it
-// LEARNS `interval` from arrivals and advances one row per interval, sub-row interpolated). It
-// does NOT scroll at a fixed render rate — my earlier note claiming 5fps looked smooth was wrong,
-// validated only on STALE watch code. At 5fps the waterfall genuinely CREEPS (~5 lines/sec). 10fps
-// is a good balance: a healthy-looking scroll, still lighter than the original 16.7/s that could
-// saturate the WCSession queue. The tune-command 100ms debounce (not row throttling) is what keeps
-// the queue clear now. (Buddy's real buffer only went live on the watch at build 102.)
-const MIN_ROW_MS = 100;
+// 5 rows/sec — the right rate for a Bluetooth link (Stuart). The WaterfallBuffer scrolls at the
+// DATA rate, so 5fps only looks smooth if the buffer is TOLD it's 5fps (setExpectedRowRate) — Jr
+// does that and is perfectly smooth at 5fps; Buddy now does too (WatchLink.activate/session start).
+// Without that seed the buffer slow-learns from the default 10fps, drains dry and stalls (the
+// creep + laggy spectrum). Rate ≠ the problem; buffer-driving was. Tune-command 100ms debounce
+// (watch→phone) protects the WCSession queue, NOT row throttling.
+const MIN_ROW_MS = 200;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */

@@ -343,7 +343,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     // 10-second linkAlive window would expire, and it would stop sending rows: the
     // watch dropped to "waiting for connection" mid-use, for no reason but this.
     startHeartbeat()
+    // ★ Drive the WaterfallBuffer like Jr: TELL it the feed rate so it doesn't slow-learn from the
+    // 10fps default, drain dry and stall (which read as a creeping waterfall + laggy spectrum). The
+    // phone always feeds Buddy at 5fps (MIN_ROW_MS 200 / forwarder 0.2s) — the right rate for BT.
+    waterfall.setExpectedRowRate(Self.rowFps)
   }
+
+  /// The fixed phone→watch row rate. 5fps is right for a Bluetooth link; the buffer must be TOLD it.
+  static let rowFps = 5.0
 
   private func startHeartbeat() {
     heartbeat?.invalidate()
@@ -836,6 +843,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
             fmdx = nil; isFmdx = false; dab = nil; aircraft = []
             everGotRow = false; meter = ""
             bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
+            waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
           }
         }
       }
