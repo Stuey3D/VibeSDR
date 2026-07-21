@@ -938,13 +938,13 @@ struct ContentView: View {
     // Now it just hugs the clock digits (18→58.8pt from the right edge). The watchOS status glyphs
     // (car mode, location, recording) live top-LEFT and are colourful enough to read on the
     // waterfall unaided — and we can't know when one is shown, so we don't darken there.
-    let cw: CGFloat = 62
-    let ch: CGFloat = 26
+    let cw: CGFloat = 54   // hug the clock, not a spare-icon slot: narrowed off the LEFT (right edge is
+    let ch: CGFloat = 26   // pinned near the digits) so it doesn't slide half-under a left status glyph.
     ctx.fill(
-      // Right edge FLUSH to the bezel. The system clock is right-aligned and hugs the
-      // bezel; a 2pt inset shifted the pill's centre left of the digits, so a wide 24h
-      // "22:35" landed right-of-centre in the pill. Flush → symmetric padding on the clock.
-      Path(roundedRect: CGRect(x: size.width - cw, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
+      // Right edge 8pt off the bezel. The system clock is NOT flush to the bezel — it's inset a fair
+      // way — so a pill flush to the bezel overhung to the right of the digits and read as shifted.
+      // Pulling the right edge in ~8pt sits the pill back under the clock. (Tunable — nudge if needed.)
+      Path(roundedRect: CGRect(x: size.width - cw - 12, y: 15, width: cw, height: ch),   // x-12/y15: nudged to sit dead-centre on the clock
            cornerRadius: ch / 2),
       with: .color(.black.opacity(0.72))
     )
