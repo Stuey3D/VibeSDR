@@ -290,7 +290,7 @@ export default function App() {
       );
     };
 
-    const applyInstance = (url: string) => {
+    const applyInstance = (url: string, wtype?: string, wname?: string) => {
       if (!url) return;
       watchTargetPending.claimed = true;   // stop the picker auto-connecting past us
       watchProvider.setPhoneStatus('starting');
@@ -300,16 +300,20 @@ export default function App() {
           // RTL-TCP favs live in their own store (host:port, no url) — the wrist row's url is
           // synthesised as <proto>://host:port; match that back.
           const tcp = tcpFavs.find((t) => `${t.proto ?? 'rtltcp'}://${t.host}:${t.port}` === url);
-          const type = f?.serverType ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
+          // Prefer a favourite's stored type, else the type the WATCH sent (directory picks aren't
+          // favourited, so the fav lookup misses — without the watch's type the connect fails).
+          const type = f?.serverType ?? wtype ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
           if (type === 'rtltcp' || type === 'spyserver') {
             // Parse host:port off the url (rtltcp://h:p or spyserver://h:p).
             const m = url.match(/^[a-z]+:\/\/([^:/]+):(\d+)/i);
             const host = m?.[1] ?? tcp?.host ?? '';
             const port = m ? Number(m[2]) : (tcp?.port ?? 0);
-            if (host && port) return connectLocal(type, host, port, f?.name ?? tcp?.name ?? '', viewMode);
+            if (host && port) return connectLocal(type, host, port, f?.name ?? wname ?? tcp?.name ?? '', viewMode);
           }
           if (f) return goTo(f, viewMode);
-          watchTargetPending.claimed = false;   // unknown URL — don't hold the picker
+          // Not a favourite, but the watch told us what it is — connect the directory server directly.
+          if (type) return goTo({ name: wname || url, url, serverType: type }, viewMode);
+          watchTargetPending.claimed = false;   // unknown URL, no type — don't hold the picker
         })
         .catch(() => { watchTargetPending.claimed = false; });
     };

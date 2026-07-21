@@ -597,7 +597,15 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   /// Switch the PHONE to another instance. Handled outside the SDR screen on the
   /// phone, because the whole point is that it works when no SDR screen is up.
-  func selectInstance(_ url: String) { send(["cmd": "inst", "val": url]) }
+  /// Pick a server for the PHONE to connect to. Send the TYPE (and name) too — a directory server the
+  /// user hasn't favourited isn't in the phone's list, so without the type the phone can't tell an
+  /// OWRX/Kiwi from an UberSDR and the connect fails.
+  func selectInstance(_ url: String, type: String = "", name: String = "") {
+    var msg: [String: Any] = ["cmd": "inst", "val": url]
+    if !type.isEmpty { msg["type"] = type }
+    if !name.isEmpty { msg["name"] = name }
+    send(msg)
+  }
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }

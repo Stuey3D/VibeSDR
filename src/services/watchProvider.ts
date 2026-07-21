@@ -258,7 +258,7 @@ class WatchProvider {
   /** Handled OUTSIDE attach(), because it must work when NO SDR screen is mounted —
    *  which is the whole point: the watch launches the phone, the phone lands on the
    *  picker with no default instance, and the wrist is looking at nothing. */
-  private instanceHandler: ((url: string) => void) | null = null;
+  private instanceHandler: ((url: string, type?: string, name?: string) => void) | null = null;
   private reopenHandler: (() => void) | null = null;
   private stopHandler: (() => void) | null = null;
   private instanceSub: { remove(): void } | null = null;
@@ -745,15 +745,19 @@ class WatchProvider {
   /** Register the "switch to this instance" handler. Lives OUTSIDE attach/detach so
    *  it survives screen changes — the command has to work from the picker, where no
    *  SDR screen exists to have attached anything. */
-  setInstanceHandler(fn: (url: string) => void) {
+  setInstanceHandler(fn: (url: string, type?: string, name?: string) => void) {
     if (!this.available) return;
     this.instanceHandler = fn;
     if (this.instanceSub) return;
     this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.instanceSub = this.emitter.addListener(
       'VibeWatchCommand',
-      (e: { cmd: string; val?: unknown }) => {
-        if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''));
+      (e: { cmd: string; val?: unknown; type?: unknown; name?: unknown }) => {
+        // Pass the TYPE (+ name): a directory server the user hasn't favourited isn't in the phone's
+        // list, so without the type the phone can't connect it with the right protocol.
+        if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''),
+                                                     e.type ? String(e.type) : undefined,
+                                                     e.name ? String(e.name) : undefined);
         else if (e.cmd === 'reopen') this.reopenHandler?.();
       },
     );

@@ -43,7 +43,7 @@ struct VibeSDRWatchApp: App {
             // session to return to (everGotRow) AND we opened it deliberately (showServers).
             InstancePickerView(
               onConnect: { server in
-                link.selectInstance(server.url)
+                link.selectInstance(server.url, type: server.serverType.rawValue, name: server.name)
                 link.showServers = false
               },
               onClose: (link.everGotRow && link.showServers) ? { link.showServers = false } : nil
