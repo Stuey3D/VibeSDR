@@ -1389,7 +1389,10 @@ struct ContentView: View {
     case "authenticating":        return ("Checking your PIN…", true)
     case "registering":           return ("Registering with the server…", true)
     case "connecting":            return ("Connecting to the server…", true)
-    case "reconnecting":          return ("Connection dropped — reconnecting…", true)
+    // On the FIRST connect nothing has "dropped" — the client is just still coming up. Only call it a
+    // drop once a session has actually existed (everGotRow).
+    case "reconnecting":          return link.everGotRow ? ("Connection dropped — reconnecting…", true)
+                                                         : ("Connecting to the server…", true)
     case "retrying (ws)…":        return ("Reconnecting…", true)
     case "switching profile…":    return ("Switching profile…", true)
     case "background · audio only": return ("Paused to save power · audio playing", true)
