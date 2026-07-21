@@ -1559,7 +1559,11 @@ struct ContentView: View {
     //   true in the sense this test means: the phone is our client. If rows have stopped while the
     //   phone is still talking to us, the far hop is what broke — which is what this message says.
     if link.reachable {
-      return ("exclamationmark.triangle", "Lost the server\nSpectrum stopped")
+      // ★ !stateFresh = the phone has gone COMPLETELY silent (no rows AND no state). On Buddy that's
+      //   the phone APP being closed, not the SDR server dropping — so don't flash the wrong "Lost the
+      //   server". Hold the last frames; WatchLink's silence watchdog raises the Start screen shortly.
+      if !stateFresh { return nil }
+      return ("exclamationmark.triangle", "iPhone lost the server\nSpectrum stopped")
     }
     return stateFresh
       ? ("exclamationmark.triangle", "Watch link lost\nSpectrum stopped")

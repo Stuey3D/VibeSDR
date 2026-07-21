@@ -587,6 +587,22 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func ping() {
     // Anti-hijack: never poke a phone the user deliberately closed — a ping relaunches it.
     guard !phoneClosed else { return }
+
+    // SILENCE WATCHDOG. If the phone has sent us NOTHING — no rows AND no state — for a good while
+    // while we had a live session, it has almost certainly been closed. The goodbye (transferUserInfo)
+    // is slow and unreliable, and the sendMessage goodbye needs isReachable, which is false at
+    // termination — so we can't count on being TOLD. Raise the Start screen ourselves and go silent
+    // (stop pinging a phone that's gone — that ping is what relaunches it, the hijack). NOT
+    // deliberatelyClosed: if the phone was merely blipping and pushes a row, handleRow un-closes us.
+    if everGotRow, !isBackground {
+      let lastHeard = max(lastRowAt ?? .distantPast, lastStateAt ?? .distantPast)
+      if Date().timeIntervalSince(lastHeard) > 12 {
+        phoneClosed = true
+        stopHeartbeat()
+        return
+      }
+    }
+
     // Mid-reopen: keep asking to reopen (a single reopen can be dropped during relaunch).
     send(reopenPending ? ["cmd": "reopen"] : ["cmd": "ping"])
 
