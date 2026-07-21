@@ -71,32 +71,30 @@ struct VibeSDRWatchApp: App {
   }
 }
 
-// ── "Phone app closed" ────────────────────────────────────────────────────────────────────
-/// Shown when the phone sends a goodbye (user swiped it closed). Two honest choices: bring the
-/// phone back (Reopen), or leave it closed (Close). We NEVER relaunch the phone on our own —
-/// that is the whole point: a heartbeat reopening it dumped SDR audio out the speaker mid-call.
+// ── "Start VibeSDR" ───────────────────────────────────────────────────────────────────────
+/// Shown whenever VibeSDR on the phone is NOT running/connected — a cold or accidental open, or
+/// after the phone app was closed. Buddy NEVER auto-boots the phone; the user presses ▶ Start
+/// VibeSDR to launch + connect deliberately. Covers both cases Stuart named: the watch app still in
+/// memory from a last use, and an accidental open where the phone app isn't up. (Struct name kept
+/// for the routing; it is the START screen now.)
 struct PhoneClosedView: View {
   @EnvironmentObject var link: WatchLink
   var body: some View {
-    ScrollView {
-      VStack(spacing: 12) {
-        Image(systemName: "iphone.slash").font(.system(size: 30)).foregroundStyle(.orange)
-        Text("VibeSDR is closed on your iPhone").font(.system(size: 15, weight: .semibold))
-          .multilineTextAlignment(.center)
-        Text("Reopen it to carry on, or leave it closed.")
-          .font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
-          .multilineTextAlignment(.center)
-        Button { link.reopen() } label: {
-          Label("Reopen App", systemImage: "arrow.up.forward.app")
-            .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
-        }.tint(.orange)
-        // No "Close" button — watchOS can't close an app from code (the old one was a no-op).
-        // Press the Digital Crown to leave Buddy.
-        Text("Or press the crown to close Buddy.")
-          .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
-          .multilineTextAlignment(.center)
-      }.padding(.horizontal, 6).padding(.vertical, 10)
-    }
+    VStack(spacing: 14) {
+      Button { link.reopen() } label: {
+        VStack(spacing: 8) {
+          Image(systemName: "play.circle.fill").font(.system(size: 56))
+          Text("Start VibeSDR").font(.system(size: 16, weight: .bold))
+        }.frame(maxWidth: .infinity).padding(.vertical, 8)
+      }
+      .buttonStyle(.plain).foregroundStyle(.orange)
+      Text("VibeSDR isn't running on your iPhone. Start it to connect.")
+        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+        .multilineTextAlignment(.center)
+      Text("Press the crown to leave Buddy.")
+        .font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
+        .multilineTextAlignment(.center)
+    }.padding(.horizontal, 10)
   }
 }
 

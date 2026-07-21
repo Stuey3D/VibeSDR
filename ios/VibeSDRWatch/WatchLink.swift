@@ -332,21 +332,21 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     s.activate()
     session = s
 
-    // HEARTBEAT. The phone's WCSession.isReachable goes stale and it then refuses
-    // to send, while our crown messages still get through — the downlink dies
-    // silently and the watch sits on "Waiting for signal" forever. The phone treats
-    // any message from us as proof we're here, but that proof expires; without a
-    // heartbeat it would only hold while the user happened to be turning the crown.
-    // .common mode, NOT the default. A Timer scheduled in default mode STOPS FIRING
-    // while the run loop is in tracking mode — i.e. exactly while you are turning
-    // the crown or touching the screen. The heartbeat would stall, the phone's
-    // 10-second linkAlive window would expire, and it would stop sending rows: the
-    // watch dropped to "waiting for connection" mid-use, for no reason but this.
-    startHeartbeat()
     // ★ Drive the WaterfallBuffer like Jr: TELL it the feed rate so it doesn't slow-learn from the
     // 10fps default, drain dry and stall (which read as a creeping waterfall + laggy spectrum). The
     // phone always feeds Buddy at 5fps (MIN_ROW_MS 200 / forwarder 0.2s) — the right rate for BT.
     waterfall.setExpectedRowRate(Self.rowFps)
+
+    // ★ NO AUTO COLD-BOOT (Stuart 2026-07-21). Buddy must NOT launch the phone app just by being
+    // opened — an accidental open used to boot VibeSDR on the phone. Only RESUME the heartbeat for a
+    // session that's already LIVE (wrist came back to a running, connected phone). A cold/accidental
+    // open, or a phone we've been told is closed, lands on the START screen — the user taps ▶ Start
+    // VibeSDR to launch/connect deliberately (that's the one place a ping is allowed to relaunch it).
+    if everGotRow && !phoneClosed {
+      startHeartbeat()   // resume a live session across a wrist-down/up
+    } else {
+      phoneClosed = true // show the Start screen; no ping, no boot
+    }
   }
 
   /// The fixed phone→watch row rate. 5fps is right for a Bluetooth link; the buffer must be TOLD it.
