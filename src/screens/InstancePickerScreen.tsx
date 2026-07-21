@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 // safe-area-context SafeAreaView — RN's own is iOS-only, which put the
 // header under the status bar on Android (G35: cog untappable)
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { splashBridge } from '../../App';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -222,6 +222,10 @@ type ListItem =
   | { kind: 'header';   groupKey: string; label: string; count: number; collapsible: boolean; collapsed: boolean };
 
 export default function InstancePickerScreen({ navigation, route }: Props) {
+  // Bottom safe-area inset, so the lists can clear the home indicator. A flat paddingBottom:40 left
+  // the KiwiSDR-warning footer (and the FM-DX directory toggle) clipped under it on both the 17PM and
+  // the SE — see the list contentContainerStyles below.
+  const insets = useSafeAreaInsets();
   const [instances,   setInstances]     = useState<SDRInstance[]>([]);
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
@@ -1526,7 +1530,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               data={listData}
               keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
-              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
               ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
               ListEmptyComponent={
                 <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textAlign: 'center', marginTop: 40 }}>
@@ -1542,7 +1546,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             activationDistance={12}
             keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
             renderItem={renderItem as any}
-            contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+            contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
               <View style={{ marginBottom: 4 }}>
