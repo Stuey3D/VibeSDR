@@ -31,9 +31,14 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Tuner'>;
 /** What the WATCH gets. One builder, so the live frame and the hello reply can
  *  never drift apart. `dBf` is FM-DX's own unit — the watch prints whatever string
  *  we hand it and so can never disagree with the phone about the signal. */
-function watchFmdxPayload(s: FmdxState, level: number, rx: string) {
+function watchFmdxPayload(s: FmdxState, level: number, rx: string,
+                         antennas: { id: number; name: string }[] = []) {
   const iso = ituToIso(s.tx?.itu) || s.countryIso;
   return {
+    eq: !!(s as any).eq,
+    ims: !!(s as any).ims,
+    ant: (s as any).ant ?? 0,
+    antennas,
     freq: s.freqHz,
     ps: s.ps ?? '',
     rt: s.rt ?? '',
@@ -153,6 +158,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   // iOS: defer the native share sheet to the AudioSheet's onDismiss (see SDRScreen).
   const pendingRecShare = useRef<string | null>(null);
   const [serverInfo, setServerInfo] = useState<FmdxServerInfo | null>(null);
+  const serverInfoRef = useRef<FmdxServerInfo | null>(null);   // for the watch payload (static per server)
   const [showNotice, setShowNotice] = useState(false);   // first-connect shared-tuner notice
 
   // Meter bus — carries the signal fill AND the 3-bar server-connection link
@@ -238,6 +244,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       onFmdxInfo: (info) => {
         if (destroyed.current) return;
         setServerInfo(info);
+        serverInfoRef.current = info;
         rxNameRef.current = info.tunerName ?? '';
       },
       onFmdxState: (s) => {
@@ -260,7 +267,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         // RDS RadioText changes constantly and WCSession queues rather than drops.
         // `dBf` is FM-DX's own unit; the watch prints whatever string we send, so
         // it can never disagree with us about the signal.
-        watchProvider.sendFmdx(watchFmdxPayload(s, sn, rxNameRef.current));
+        watchProvider.sendFmdx(watchFmdxPayload(s, sn, rxNameRef.current, serverInfoRef.current?.antennas ?? []));
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
         // Lock-screen card: "STATION · 89.2" (freq beside the RDS name), or just
         // the frequency until RDS locks. Deduped so we don't spam the card.
@@ -453,6 +460,10 @@ export default function TunerScreen({ route, navigation }: Props) {
       onMode: () => {},          // FM-DX is WFM only — no demod choice to make
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
       onZoomDelta: () => {},     // no spectrum, nothing to zoom
+      // ── Thin-remote FM-DX server controls (the watch relayed the tap) ──
+      onFmdxEq:      (on) => (backendRef.current as any)?.setEq?.(on),
+      onFmdxIms:     (on) => (backendRef.current as any)?.setIms?.(on),
+      onFmdxAntenna: (id) => (backendRef.current as any)?.setAntenna?.(id),
       // Volume is the SYSTEM's, not the backend's — FM-DX audio comes out of the same
       // speaker as everything else, so the wrist controls it here exactly as it does on
       // the SDR screen. (Unlike tuning, this disturbs nobody: a shared tuner is shared,
@@ -475,7 +486,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         if (s0) {
           watchProvider.sendFmdx(
             watchFmdxPayload(s0, Math.min(1, Math.max(0, s0.sig / 70)),
-                             rxNameRef.current),
+                             rxNameRef.current, serverInfoRef.current?.antennas ?? []),
           );
         }
       },

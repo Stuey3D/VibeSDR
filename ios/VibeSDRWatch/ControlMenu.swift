@@ -501,13 +501,22 @@ struct ControlMenu: View {
       }
     }
     .sheet(isPresented: $showBw) {
-      // ★ No passband editor in Buddy. It edits the FILTER, which belongs to whoever demodulates —
-      //   the phone — and the watch protocol has no bandwidth command. Changing the MODE moves the
-      //   edges, which is the control that does exist. An editor that silently did nothing would be
-      //   worse than its absence.
-      Text("Filter is set on the iPhone.")
-        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
-        .multilineTextAlignment(.center).padding()
+      // THIN-REMOTE passband: widen/narrow about the current centre; the phone runs setBandwidth and
+      // echoes the new edges back (so the readout updates on the round trip). Keeps the centre so it
+      // works for every mode; the phone clamps to what the demodulator allows.
+      VStack(spacing: 12) {
+        Text("Bandwidth").font(.system(size: 15, weight: .semibold))
+        Text(bwLabel).font(.system(size: 30, weight: .bold)).monospacedDigit().foregroundStyle(.green)
+        HStack(spacing: 14) {
+          Button { adjustBandwidth(widen: false) } label: {
+            Image(systemName: "minus").font(.system(size: 20, weight: .bold)).frame(maxWidth: .infinity)
+          }.tint(.orange)
+          Button { adjustBandwidth(widen: true) } label: {
+            Image(systemName: "plus").font(.system(size: 20, weight: .bold)).frame(maxWidth: .infinity)
+          }.tint(.orange)
+        }
+        Text("Narrower · Wider").font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+      }.padding()
     }
   }
 
@@ -515,6 +524,17 @@ struct ControlMenu: View {
   private var bwLabel: String {
     let k = (link.filtHi - link.filtLo) / 1000
     return k >= 10 ? String(format: "%.0fk", k) : String(format: "%.1fk", k)
+  }
+
+  /// Widen/narrow the passband about its centre by ~15% (min 300 Hz), clamped 500 Hz…24 kHz, then
+  /// relay both edges to the phone.
+  private func adjustBandwidth(widen: Bool) {
+    let lo = link.filtLo, hi = link.filtHi
+    let width = max(200, hi - lo)
+    let centre = (hi + lo) / 2
+    let step = max(300, width * 0.15)
+    let newWidth = widen ? min(24_000, width + step) : max(500, width - step)
+    link.setBandwidth(lo: centre - newWidth / 2, hi: centre + newWidth / 2)
   }
 
   /// Off (never drop) + the timed steps. Kept here so ContentView and the picker agree.

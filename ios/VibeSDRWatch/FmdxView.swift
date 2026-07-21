@@ -114,22 +114,41 @@ struct FmdxView: View {
     }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     .sheet(isPresented: $showSettings) {
-      // Servers is the way OUT (and to switch receiver) — must be here or FM-DX is a dead end.
-      // ☐ FM-DX server settings (antenna/cEQ/iMS) will be WIRED to the phone (thin-remote: phone
-      //   advertises what the server exposes, watch relays taps). Note stays until that lands.
+      // THIN-REMOTE server controls: the watch shows the phone-advertised state and relays taps; the
+      // phone runs the FM-DX Webserver command. Only shown when the server actually exposes them.
       NavigationStack {
-        VStack(spacing: 14) {
-          Button {
-            showSettings = false
-            link.backToPicker()
-          } label: {
-            Label("Servers", systemImage: "antenna.radiowaves.left.and.right")
-              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
-          }.tint(.orange)
-          Text("Antenna / cEQ / iMS settings are on the iPhone for now.")
-            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
-            .multilineTextAlignment(.center)
-        }.padding()
+        ScrollView {
+          VStack(spacing: 14) {
+            let eq = link.fmdx?.eq ?? false
+            let ims = link.fmdx?.ims ?? false
+            HStack(spacing: 10) {
+              fmdxOpt("cEQ", on: eq) { link.setFmdxEq(!eq) }
+              fmdxOpt("iMS", on: ims) { link.setFmdxIms(!ims) }
+            }
+            if let ants = link.fmdx?.antennas, ants.count > 1 {
+              Text("ANTENNA").font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.5)).frame(maxWidth: .infinity, alignment: .leading)
+              ForEach(ants) { a in
+                let sel = (link.fmdx?.ant ?? 0) == a.id
+                Button { link.setFmdxAntenna(a.id) } label: {
+                  HStack {
+                    Text(a.name).font(.system(size: 14)).lineLimit(1)
+                    Spacer()
+                    if sel { Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)) }
+                  }.frame(maxWidth: .infinity)
+                }.buttonStyle(.plain).foregroundStyle(sel ? .green : .white.opacity(0.85))
+                  .padding(.vertical, 8).padding(.horizontal, 12)
+                  .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(sel ? 0.12 : 0.05)))
+              }
+            }
+            Divider().padding(.vertical, 2)
+            // Servers is the way OUT (and to switch receiver) — must be here or FM-DX is a dead end.
+            Button { showSettings = false; link.backToPicker() } label: {
+              Label("Servers", systemImage: "antenna.radiowaves.left.and.right")
+                .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+            }.tint(.orange)
+          }.padding()
+        }
       }
     }
     .onAppear {
@@ -139,6 +158,18 @@ struct FmdxView: View {
     .sheet(isPresented: $showTut) {
       TutorialSheet(title: "FM-DX Tuner", tips: fmdxTutorialTips()) { seenTut = true; showTut = false }
     }
+  }
+
+  /// A cEQ/iMS toggle chip — green when the server has it on (state comes from the phone).
+  @ViewBuilder
+  private func fmdxOpt(_ label: String, on: Bool, _ action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Text(label).font(.system(size: 14, weight: .semibold)).frame(maxWidth: .infinity)
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(on ? .black : .white.opacity(0.85))
+    .padding(.vertical, 10)
+    .background(RoundedRectangle(cornerRadius: 10).fill(on ? Color.green : Color.white.opacity(0.08)))
   }
 
   private func armVolTimeout() {

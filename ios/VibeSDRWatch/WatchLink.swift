@@ -303,6 +303,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var rx = ""               // where the RECEIVER is — `dist` is measured from HERE
     var meter = ""            // the phone's meter text, mirrored
     var level: Double = 0     // 0..1 bar fill
+    // ── Server controls, relayed to/from the phone (thin-remote). ──
+    var eq = false            // cEQ filter
+    var ims = false           // iMS multipath suppression
+    var ant = 0               // selected antenna (0-based)
+    var antennas: [FmdxAntenna] = []   // advertised antennas; empty = no switch to show
   }
 
   /// Filter edges as Hz offsets from the carrier. NOT symmetric: LSB is entirely
@@ -596,6 +601,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
+
+  // ── Thin-remote server controls: the watch relays the tap; the phone runs the command. ──
+  /// SDR passband — send both edges (Hz offsets from carrier); the phone calls setBandwidth.
+  func setBandwidth(lo: Double, hi: Double) { send(["cmd": "bw", "lo": lo, "hi": hi]) }
+  /// FM-DX server toggles + antenna select.
+  func setFmdxEq(_ on: Bool)  { send(["cmd": "fmdxEq",  "val": on]) }
+  func setFmdxIms(_ on: Bool) { send(["cmd": "fmdxIms", "val": on]) }
+  func setFmdxAntenna(_ id: Int) { send(["cmd": "fmdxAnt", "val": id]) }
   func ping() {
     // Anti-hijack: never poke a phone the user deliberately closed — a ping relaunches it.
     guard !phoneClosed else { return }

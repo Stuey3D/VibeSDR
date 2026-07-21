@@ -86,7 +86,7 @@ struct FmdxInfo: Equatable {
 
 /// One selectable antenna on an FM-DX server. Keys arrive as `antN` (1-based) but the `Z` command
 /// and the `ant` state field are 0-based, so `id` is N-1.
-struct FmdxAntenna: Identifiable, Equatable {
+struct FmdxAntenna: Identifiable, Equatable, Codable {
   let id: Int
   let name: String
 }

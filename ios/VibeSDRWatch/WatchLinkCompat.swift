@@ -76,6 +76,7 @@ extension WatchLink {
     i.stereo = f.stereo
     i.rds = !f.ps.isEmpty || !f.pi.isEmpty      // the phone sends no rds flag; RDS content IS one
     i.tx = f.tx;      i.city = f.city;    i.dist = f.dist;  i.rx = f.rx;  i.flag = f.flag
+    i.eq = f.eq;      i.ims = f.ims;      i.antenna = f.ant; i.antennas = f.antennas
     return i
   }
   var isFmDx: Bool { isFmdx }

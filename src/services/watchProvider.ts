@@ -204,6 +204,12 @@ export interface WatchCommandHandlers {
   onHello(): void;
   /** DAB: pick an audio service out of the multiplex. Not a tune — DAB is a list. */
   onDabSelect?(id: number): void;
+  /** Thin-remote server controls the watch relays. Optional: only the SDR screen has a passband,
+   *  only the FM-DX screen has cEQ/iMS/antenna. */
+  onBandwidth?(lo: number, hi: number): void;
+  onFmdxEq?(on: boolean): void;
+  onFmdxIms?(on: boolean): void;
+  onFmdxAntenna?(id: number): void;
 }
 
 class WatchProvider {
@@ -400,7 +406,7 @@ class WatchProvider {
 
     this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.cmdSubs.push(
-      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean }) => {
+      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean; lo?: number; hi?: number }) => {
         switch (e.cmd) {
           case 'tune': this.lastGestureAt = Date.now(); handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
@@ -423,6 +429,11 @@ class WatchProvider {
             this.lastPingAt = Date.now();
             break;
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
+          // Thin-remote server controls — the watch relayed a tap, run the phone's command.
+          case 'bw':      handlers.onBandwidth?.(Number(e.lo ?? 0), Number(e.hi ?? 0)); break;
+          case 'fmdxEq':  handlers.onFmdxEq?.(e.val === true); break;
+          case 'fmdxIms': handlers.onFmdxIms?.(e.val === true); break;
+          case 'fmdxAnt': handlers.onFmdxAntenna?.(Number(e.val ?? 0)); break;
           // The watch is telling us it's missing something we only send ON CHANGE
           // (the palette LUT, the logo, the station memory). It knows; we don't.
           // Forget what we think it has.
@@ -498,6 +509,7 @@ class WatchProvider {
     freq: number; ps: string; rt: string; pi: string; sig: number;
     users: number; stereo: boolean; tx: string; meter: string; level: number;
     pty: string; city: string; dist: number; flag: string; rx: string;
+    eq?: boolean; ims?: boolean; ant?: number; antennas?: { id: number; name: string }[];
   }) {
     if (!this.isActive || !this.owns('fmdx')) return;
     this.pendingFmdx = JSON.stringify(state);

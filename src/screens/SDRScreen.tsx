@@ -3243,6 +3243,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onTuneHz: (hz: number) => { if (hz > 0) onTuneHzRef.current?.(hz); },
       onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
+      // Thin-remote passband from the wrist — both edges (Hz offsets from carrier), atomically.
+      onBandwidth: (lo: number, hi: number) => onFilterBoth(lo, hi),
 
       // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
       // drives — so it moves the real waterfall, and the watch gets genuinely
