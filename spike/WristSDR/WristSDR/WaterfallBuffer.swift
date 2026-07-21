@@ -365,7 +365,13 @@ final class WaterfallBuffer {
     // The averaging still has to exist — a line redrawn from raw bins is unreadable
     // noise — but it is now advanced every FRAME rather than every row, so a short time
     // constant no longer makes it jittery.
-    let tc = 0.10                                    // seconds to close ~63% of the gap
+    // TIME CONSTANT SCALES WITH THE ROW RATE. 0.10 was tuned for Jr's ~10fps feed, where liveRow
+    // steps every ~0.10s so the trace is ALWAYS chasing and never catches up between rows — smooth.
+    // At Buddy's 5fps (interval ~0.20s) a 0.10 constant catches up in half the gap and then HOLDS
+    // until the next step: "ease, hold, ease, hold" — the stutter Stuart sees. Tying tc to the actual
+    // interval keeps the trace still-moving when the next row lands at ANY rate, so it glides at 5fps
+    // exactly as it does at 10/20fps (where interval ≤ 0.10 and the 0.10 floor keeps it responsive).
+    let tc = max(0.10, interval)                     // seconds to close ~63% of the gap
     let a = min(1, max(0, dt / tc))
     for i in 0..<specRow.count {
       specRow[i] += (Double(liveRow[i]) - specRow[i]) * a
