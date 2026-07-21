@@ -293,10 +293,11 @@ final class WatchSpectrumForwarder {
     // rows hard until tuning settles, freeing the link for the frequency. Snaps back to full
     // rate the instant the crown stops.
     let now = ProcessInfo.processInfo.systemUptime
-    // 5 rows/sec, matching the JS path (MIN_ROW_MS = 200) — right for a BT link. Buddy tells its
-    // WaterfallBuffer the rate (setExpectedRowRate) so 5fps stays smooth. NO tune throttle: backing
-    // rows off during a spin STARVED the buffer and froze the waterfall while tuning.
-    if now - lastRowSentAt < 0.2 { return }
+    // 10 rows/sec, matching the JS path (MIN_ROW_MS = 60) — Stuart's BT rule. 60ms clears the ~100ms
+    // locked-feed interval so every frame passes (see watchProvider's tuning notes); Buddy tells its
+    // WaterfallBuffer the rate (rowFps=10) so it stays smooth. NO tune throttle: backing rows off
+    // during a spin STARVED the buffer and froze the waterfall while tuning.
+    if now - lastRowSentAt < 0.06 { return }
     lastRowSentAt = now
 
     // Rolling auto-range: EMA the per-frame min/max so the map tracks the noise floor

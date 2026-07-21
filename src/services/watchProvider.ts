@@ -113,13 +113,14 @@ const WATCH_BINS = 128;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
-// 5 rows/sec — the right rate for a Bluetooth link (Stuart). The WaterfallBuffer scrolls at the
-// DATA rate, so 5fps only looks smooth if the buffer is TOLD it's 5fps (setExpectedRowRate) — Jr
-// does that and is perfectly smooth at 5fps; Buddy now does too (WatchLink.activate/session start).
-// Without that seed the buffer slow-learns from the default 10fps, drains dry and stalls (the
-// creep + laggy spectrum). Rate ≠ the problem; buffer-driving was. Tune-command 100ms debounce
-// (watch→phone) protects the WCSession queue, NOT row throttling.
-const MIN_ROW_MS = 200;
+// 10 rows/sec over Bluetooth (Stuart 2026-07-21: "10fps over bluetooth, 5fps on data-save/poor,
+// 20fps where available on wifi/cellular"). 60ms is the value the tuning notes above landed on for a
+// clean 10fps: it clears BOTH source intervals (passes every frame of the locked 100ms feed, halves
+// the awake 50ms feed) — where 90-100ms collides with the 100ms source and drops to a ragged ~8fps.
+// The earlier 200ms/5fps was an override for a "5fps on BT" theory; Jr proves the relay carries far
+// more (it runs the Kiwi waterfall at 13fps on the same phone), so 10fps is well within budget and
+// Buddy's rows are tiny (~316 bytes). Buddy tells its buffer this rate (rowFps=10) so it stays smooth.
+const MIN_ROW_MS = 60;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */

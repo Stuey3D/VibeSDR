@@ -353,8 +353,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     }
   }
 
-  /// The fixed phone→watch row rate. 5fps is right for a Bluetooth link; the buffer must be TOLD it.
-  static let rowFps = 5.0
+  /// The fixed phone→watch row rate. 10fps over Bluetooth (Stuart's rule); the buffer + the jitter-
+  /// buffer slot interval are both driven off this, so it MUST match the phone forwarder's cadence
+  /// (WatchSpectrumForwarder 60ms / watchProvider MIN_ROW_MS 60).
+  static let rowFps = 10.0
 
   private func startHeartbeat() {
     heartbeat?.invalidate()
