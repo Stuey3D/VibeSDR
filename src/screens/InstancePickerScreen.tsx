@@ -82,6 +82,7 @@ import {
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { watchTargetPending } from '../services/watchBoot';
+import { watchProvider } from '../services/watchProvider';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          repairVibeserverFavourites, saveFavourites, registerFavouriteVisit,
          FavSort, getFavSort, setFavSort,
@@ -388,6 +389,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // watch's target so BACK works, but we must not take over.)
     if (watchTargetPending.claimed || route.params?.noAutoConnect) return;
     if (!cancelled && dEarly && !isDeepLinkActive()) {
+        // ★ ANTI-HIJACK. The user deliberately closed the app; a watch heartbeat can relaunch us
+        //   headless (a stray ping fired while isReachable was still stale-true). Auto-connecting to
+        //   the default here is the hijack — SDR audio pours out mid-call. This is a SECOND path
+        //   besides App.tsx's background-boot check (that one can lose the race / misread AppState),
+        //   so gate it here too, synchronously before the navigate. Sit on the picker and tell the
+        //   wrist we're closed; only an explicit Reopen (or genuine foreground) revives us.
+        if (await watchProvider.wasClosedByUser()) {
+          watchProvider.setPhoneStatus('closed');
+          return;
+        }
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }

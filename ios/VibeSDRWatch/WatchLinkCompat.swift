@@ -49,11 +49,9 @@ extension WatchLink {
   /// OWRX-specific tutorial line: the phone knows its backend, we do not (yet).
   var isOwrx: Bool { false }
 
-  /// Is the watch app backgrounded (wrist down)? Jr uses this to suspend its own spectrum socket
-  /// for power. Buddy has no socket to suspend — the PHONE decides when to stop sending, and it
-  /// already drops the spectrum when nothing is watching. So this is always false and the ported
-  /// power-saving branches simply never fire.
-  var isBackground: Bool { false }
+  // isBackground now lives on the WatchLink class (a real @Published) — it must flip true the instant
+  // the wrist drops so the row-gap that follows isn't mistaken for a rough link and painted with the
+  // 'reconnecting' glyph. See WatchLink.suspend()/resume().
   /// ☐ CHAT IS NOT PORTED YET, and it is a PROTOCOL job rather than a UI one: neither the phone
   ///   nor WatchLink has any notion of chat today — nothing sends it, nothing receives it. Wiring
   ///   the sheet up to nothing would give a chat box that silently swallows messages on a SHARED
@@ -143,8 +141,5 @@ extension WatchLink {
   func setDabScale(_ scale: Double) {}
   /// Selecting a DAB service redirects the PHONE, exactly as tuning does.
   func selectDabService(_ id: Int) { selectDab(id) }
-  /// The phone decides when to stop sending (it drops the spectrum for power when nothing is
-  /// watching). We have no socket of our own to suspend.
-  func suspend() {}
-  func resume() { requestMissing() }
+  // suspend(graceSeconds:) and resume() live in WatchLink.swift — they call the private send().
 }

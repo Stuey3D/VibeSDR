@@ -100,6 +100,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// The phone app has been CLOSED by the user (goodbye received, or a 'closed' status).
   /// Drives the "Phone app closed" screen and gates the heartbeat off (anti-hijack).
   @Published var phoneClosed = false
+  /// Wrist down = watch backgrounded. Set the instant scenePhase leaves .active (Buddy has no
+  /// background audio, so watchOS suspends us right after and the row feed stops); the ported
+  /// power-save branches read this to suppress the false 'reconnecting' glyph and to fast-resume.
+  @Published var isBackground = false
   /// The phone was DELIBERATELY closed (a goodbye, or a headless-relaunch 'closed' status). Latches the
   /// closed state so a stale in-flight row can't un-close us and restart the phone-relaunching heartbeat.
   /// Cleared only by a user Reopen or a genuine live phone status.
@@ -640,6 +644,24 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     s.sendMessage(msg, replyHandler: nil, errorHandler: nil)
   }
 
+  /// Wrist dropped. Buddy has no socket of its own to suspend, but it MUST mark itself backgrounded
+  /// immediately: watchOS suspends us in a moment (no background audio), the row feed stops, and
+  /// without this the resulting gap reads as a rough link and shows the 'reconnecting' glyph. Also
+  /// tell the phone to stop forwarding the waterfall we can't see after the user's grace period —
+  /// battery on BOTH ends (the phone owns the grace timer; ours would freeze the instant we suspend).
+  func suspend(graceSeconds: Double = 0) {
+    isBackground = true
+    send(["cmd": "wrist", "down": true, "grace": graceSeconds])
+  }
+
+  /// Wrist back up: clear the background flag (the hint logic runs again) and tell the phone to resume
+  /// forwarding, then re-request anything we missed.
+  func resume() {
+    isBackground = false
+    send(["cmd": "wrist", "down": false])
+    requestMissing()
+  }
+
   // MARK: - Phone -> Watch
 
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
@@ -887,12 +909,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
           // us so. Same destination as a goodbye — UNLESS we're mid-reopen, where a stale
           // 'closed' from the launch race must not bounce us back off the reopen.
           if !reopenPending { phoneClosed = true; deliberatelyClosed = true; stopHeartbeat() }
+        } else if deliberatelyClosed {
+          // ★ THE HIJACK GUARD. We were deliberately closed (goodbye). A stray heartbeat ping — sent
+          //   in the seconds after the swipe while isReachable was still stale-true — can relaunch the
+          //   phone headless; if it then auto-connects and sends 'starting'/'ready', that status must
+          //   NOT drag us back off the Start screen. Staying latched here (heartbeat already stopped)
+          //   means the watch sends nothing more, so there are no further pings to relaunch it either.
+          //   ONLY a user Reopen (reopen() clears the latch) brings us back. We still record the raw
+          //   status above for display, but take no action on it.
+          break
         } else {
-          // Any other status means the phone is alive and doing something real (reopened) —
-          // leave the closed screen and stop asking to reopen. A genuine live status is the one
-          // signal (besides a user Reopen) trustworthy enough to clear the deliberate-close latch.
+          // Any other status means the phone is alive and doing something real (a fresh connect, or a
+          // reopen we asked for) — leave the closed screen and stop asking to reopen.
           reopenPending = false
-          deliberatelyClosed = false
           if phoneClosed { phoneClosed = false; if heartbeat == nil { startHeartbeat() } }
           // TEAR DOWN the previous session (Stuart: "everything between sessions needs tearing
           // down"). Otherwise an old FM-DX RDS name (fmdx.ps) / DAB ensemble / aircraft list /

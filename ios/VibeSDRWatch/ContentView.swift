@@ -187,9 +187,6 @@ struct ContentView: View {
   @State private var showSdrTut = false
   @State private var showChat = false
   @State private var showHardware = false
-  /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
-  /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
-  @State private var suspendWork: DispatchWorkItem?
   /// User-selectable wrist-down spectrum timeout (seconds; 0 = Off, keep it running). Set in
   /// the ControlMenu; the same @AppStorage key drives both.
   @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
@@ -686,21 +683,16 @@ struct ContentView: View {
       // playing in the background, which is the whole point of WKBackgroundModes=[audio]).
       guard phase == .active else {
         crownMode = .tune
-        // GRACE PERIOD, user-selectable (ControlMenu → WRIST DOWN). Don't drop the spectrum the
-        // instant the wrist falls — a quick glance away shouldn't cost a full reconnect on the
-        // way back. Off (0) keeps the waterfall running with the wrist down (costs battery);
-        // otherwise suspend after the chosen number of seconds. Audio plays throughout either
-        // way (WKBackgroundModes=[audio]); this only defers dropping the waterfall socket.
-        guard wristTimeout > 0 else { return }   // Off — never drop
-        let work = DispatchWorkItem { link.suspend() }
-        suspendWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + wristTimeout, execute: work)
+        // Buddy has no background audio, so watchOS suspends us right after the wrist falls and the
+        // row feed stops regardless — a LOCAL grace timer would just freeze mid-count. So mark
+        // background NOW (kills the false 'reconnecting' glyph the row-gap would otherwise trigger)
+        // and hand the grace period to the PHONE: it keeps forwarding for `wristTimeout` seconds (a
+        // quick glance-back stays instant), then stops sending the waterfall we can't see — battery
+        // on both ends. Off (0) tells the phone never to pause.
+        link.suspend(graceSeconds: wristTimeout)
         return
       }
-      // Back up. If the suspend was still pending we never actually dropped the socket — just
-      // cancel it and carry on, no reconnect, no re-sync flash.
-      suspendWork?.cancel()
-      suspendWork = nil
+      // Back up.
       crownUsedAt = Date()
       applyTone()          // re-assert our settings (harmless if nothing was torn down)
       if link.isBackground {
@@ -1235,7 +1227,11 @@ struct ContentView: View {
     //    should give it before crying "link rough". NOT gated on stateFresh: during idle no
     //    tune fires, so no fresh state echo arrives; the why latches until the phone sends the
     //    'live'/wake clear (which a tune does). rows keep arriving, so no gap trigger sees it.
-    if link.why == "powersave" { return .powersave }
+    // SUPPRESSED (Stuart 2026-07-21): the phone's idle saver slows the phone's OWN rendering, but the
+    // watch keeps being fed at full 10fps by the native forwarder — so the wrist never actually slows,
+    // and a "Phone saving power" pill on a perfectly-smooth waterfall just reads as a fault that isn't.
+    // Kept as a guard (not a hint) so rows-still-flowing doesn't fall through to serverHop/wristHop.
+    if link.why == "powersave" { return nil }
 
     // 1. The phone TOLD us it is rebuilding the link. Outranks everything below:
     //    of course the rows have stopped — that is what a reconnect IS.
