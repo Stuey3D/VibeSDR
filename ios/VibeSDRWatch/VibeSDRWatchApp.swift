@@ -90,9 +90,11 @@ struct PhoneClosedView: View {
           Label("Reopen App", systemImage: "arrow.up.forward.app")
             .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
         }.tint(.orange)
-        Button(role: .cancel) { link.closeBuddy() } label: {
-          Text("Close").font(.system(size: 14)).frame(maxWidth: .infinity)
-        }
+        // No "Close" button — watchOS can't close an app from code (the old one was a no-op).
+        // Press the Digital Crown to leave Buddy.
+        Text("Or press the crown to close Buddy.")
+          .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+          .multilineTextAlignment(.center)
       }.padding(.horizontal, 6).padding(.vertical, 10)
     }
   }

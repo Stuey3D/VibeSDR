@@ -114,13 +114,22 @@ struct FmdxView: View {
     }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     .sheet(isPresented: $showSettings) {
-      // ★ FM-DX server settings (antenna, cEQ, iMS) drove the backend directly — only possible
-      //   when the WATCH owned the connection. The phone owns it here and the wire has no commands
-      //   for them, so say where they live rather than showing controls that do nothing.
+      // Servers is the way OUT (and to switch receiver) — must be here or FM-DX is a dead end.
+      // ☐ FM-DX server settings (antenna/cEQ/iMS) will be WIRED to the phone (thin-remote: phone
+      //   advertises what the server exposes, watch relays taps). Note stays until that lands.
       NavigationStack {
-        Text("Server settings are on the iPhone.")
-          .font(.system(size: 13)).foregroundStyle(.white.opacity(0.6))
-          .multilineTextAlignment(.center).padding()
+        VStack(spacing: 14) {
+          Button {
+            showSettings = false
+            link.backToPicker()
+          } label: {
+            Label("Servers", systemImage: "antenna.radiowaves.left.and.right")
+              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+          }.tint(.orange)
+          Text("Antenna / cEQ / iMS settings are on the iPhone for now.")
+            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
+            .multilineTextAlignment(.center)
+        }.padding()
       }
     }
     .onAppear {
