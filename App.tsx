@@ -352,6 +352,17 @@ export default function App() {
       decideAndConnect();
     });
 
+    // The wrist's "Stop": disconnect and return the phone to the server list to WAIT. Resetting to the
+    // picker unmounts the SDR/Tuner screen — which destroys the client (audio + sockets stop) — and the
+    // noAutoConnect param + the claimed flag keep it from reconnecting. The watch follows via 'pick'.
+    watchProvider.setStopHandler(() => {
+      watchTargetPending.claimed = true;
+      whenNavReady().then((ready) => {
+        if (ready) navigationRef.reset({ routes: [{ name: 'InstancePicker', params: { noAutoConnect: true } }] } as never);
+        watchProvider.setPhoneStatus('pick');
+      });
+    });
+
     // Headless boot: the watch heartbeat launched us in the background.
     if (startedInBackground) {
       watchProvider.setPhoneStatus('starting');

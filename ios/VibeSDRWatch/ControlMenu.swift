@@ -431,8 +431,12 @@ struct ControlMenu: View {
             dismiss(); link.backToPicker()
           }
 
-          // (No STOP tile in Buddy — it's a Jr control. Buddy is a remote; stopping the audio
-          //  is the phone's job, and the tile did nothing here anyway.)
+          // STOP — tell the phone to disconnect the server and return to its server list to wait
+          // (idle: audio + data stop, iOS memory management can then reclaim). Distinct from pause,
+          // which stays on the stopped waterfall. Buddy follows to the picker via the phone's status.
+          tile(icon: "stop.circle.fill", label: "Stop", h: h) {
+            dismiss(); link.stopServer()
+          }
 
           // A WAY BACK. Brightness and contrast are watch-local, so a user who
           // cranks them until the waterfall is a white slab has no phone setting to

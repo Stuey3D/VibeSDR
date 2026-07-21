@@ -260,6 +260,7 @@ class WatchProvider {
    *  picker with no default instance, and the wrist is looking at nothing. */
   private instanceHandler: ((url: string) => void) | null = null;
   private reopenHandler: (() => void) | null = null;
+  private stopHandler: (() => void) | null = null;
   private instanceSub: { remove(): void } | null = null;
   private lastLogo = '';   // what we WANT the watch to have
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
@@ -434,6 +435,8 @@ class WatchProvider {
           case 'fmdxEq':  handlers.onFmdxEq?.(e.val === true); break;
           case 'fmdxIms': handlers.onFmdxIms?.(e.val === true); break;
           case 'fmdxAnt': handlers.onFmdxAntenna?.(Number(e.val ?? 0)); break;
+          // STOP from the wrist: leave the SDR screen — disconnect + return to the server list, idle.
+          case 'stopsrv': this.stopHandler?.(); break;
           // The watch is telling us it's missing something we only send ON CHANGE
           // (the palette LUT, the logo, the station memory). It knows; we don't.
           // Forget what we think it has.
@@ -759,6 +762,10 @@ class WatchProvider {
   /** The wrist's "Reopen" after a deliberate close. Also OUTSIDE attach — it runs on a
    *  headless relaunch where no screen is mounted. */
   setReopenHandler(fn: () => void) { this.reopenHandler = fn; }
+
+  /** The wrist's "Stop" — disconnect the current server and return the phone to the picker to wait.
+   *  OUTSIDE attach() like reopen, because it must navigate regardless of which screen is mounted. */
+  setStopHandler(fn: () => void) { this.stopHandler = fn; }
 
   /** Did the user swipe the phone app closed? Persisted natively so it survives the
    *  process death and is readable on a headless relaunch. */

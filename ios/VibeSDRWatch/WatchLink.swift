@@ -602,6 +602,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
 
+  /// STOP — tell the phone to leave the SDR screen: that tears down the client (audio + sockets stop)
+  /// and returns the phone to its server list to WAIT, idle. Unlike pause (which stays on the stopped
+  /// waterfall), this disconnects AND goes back. Buddy follows to the picker via the phone's status.
+  func stopServer() { send(["cmd": "stopsrv"]) }
+
   // ── Thin-remote server controls: the watch relays the tap; the phone runs the command. ──
   /// SDR passband — send both edges (Hz offsets from carrier); the phone calls setBandwidth.
   func setBandwidth(lo: Double, hi: Double) { send(["cmd": "bw", "lo": lo, "hi": hi]) }
