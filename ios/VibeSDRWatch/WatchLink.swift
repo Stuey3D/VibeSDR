@@ -837,7 +837,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }
       if rows.first?.count == WaterfallBuffer.width { self.everGotRow = true }
-      self.isFmdx = false       // a row means a spectrum — see `screen`
+      // A spectrum row means we've left FM-DX/DAB — clear their state so an old RDS name (stationName
+      // = fmdx?.ps) or DAB ensemble can't bleed onto the SDR ticker (Stuart: "PRIDE on a shortwave
+      // session"). Guarded so it publishes on the TRANSITION only, not on every 10fps row.
+      if self.isFmdx { self.isFmdx = false }     // see `screen`
+      if self.fmdx != nil { self.fmdx = nil }
+      if self.dab != nil { self.dab = nil }
       // NOTE: the row's frequency is deliberately IGNORED — rows are lossy pixels and
       // can be queued; the readout comes from the throttled `state` echo and from our
       // own prediction while the crown moves.
