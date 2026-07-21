@@ -816,6 +816,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     case "phone":
       if let st = m["st"] as? String {
+        // 'starting' EDGE = a NEW session is beginning (connect / reopen / instance switch).
+        let newSession = st == "starting" && phoneStatus != "starting"
         phoneStatus = st
         if st == "closed" {
           // A heartbeat relaunched the phone headless but it refused to auto-connect and told
@@ -827,6 +829,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
           // leave the closed screen and stop asking to reopen.
           reopenPending = false
           if phoneClosed { phoneClosed = false; if heartbeat == nil { startHeartbeat() } }
+          // TEAR DOWN the previous session (Stuart: "everything between sessions needs tearing
+          // down"). Otherwise an old FM-DX RDS name (fmdx.ps) / DAB ensemble / aircraft list /
+          // band bleeds into a different backend — e.g. "PRIDE" showing on a shortwave session.
+          if newSession {
+            fmdx = nil; isFmdx = false; dab = nil; aircraft = []
+            everGotRow = false; meter = ""
+            bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
+          }
         }
       }
 
