@@ -682,28 +682,34 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // does the same: rows land HERE, and driverTick() releases them onto a smooth ~5fps cadence — so the
   // waterfall gets fed evenly (its interval estimator settles on the real rate) and the trace/scroll
   // interpolation has an even cadence to glide along, exactly as on Jr.
-  private var pendingRows: [[UInt8]] = []
-  private var drainAccum = 0.0
-  private var lastDrainAt = 0.0
+  private var pendingRows: [(slot: Double, row: [UInt8])] = []
+  private var lastSlot = 0.0
+  /// A small cushion (like Jr's spectrumDelay) so there's always a little buffer to absorb WCSession
+  /// micro-jitter before a row is due — rebuilt after any gap.
+  private static let rowCushion = 0.12
 
-  /// Called every render frame from ContentView. Release queued rows onto a steady cadence, leaning on
-  /// queue depth so a Bluetooth clump is SPREAD OUT (a touch fast when backed up, a touch slow when
-  /// thin) instead of dumped — never fast-forwarding through a clump, never draining dry mid-gap.
-  func driverTick(now: Double) {
-    if lastDrainAt == 0 { lastDrainAt = now }
-    let dt = min(0.25, now - lastDrainAt)
-    lastDrainAt = now
-    guard !pendingRows.isEmpty else { drainAccum = 0; return }
-
-    let depth = Double(pendingRows.count)
-    let rate: Double = depth > 3 ? 1.6 : (depth < 1.5 ? 0.7 : 1.0)
-    let rowInterval = 1.0 / Self.rowFps
-    drainAccum += (dt / rowInterval) * rate
-    while drainAccum >= 1, !pendingRows.isEmpty {
-      waterfall.push(row: pendingRows.removeFirst())
-      drainAccum -= 1
+  /// Schedule a batch of just-arrived rows onto EVENLY-SPACED release slots. A Bluetooth clump lands
+  /// with the same timestamp, so instead of pushing them together we hand each the next slot one
+  /// `interval` after the last — spreading the clump across future frames at the true row rate. After
+  /// a gap the schedule snaps back to `now + cushion`, so a slow feed never accrues artificial latency.
+  private func enqueueRows(_ rows: [[UInt8]]) {
+    let now = ProcessInfo.processInfo.systemUptime
+    let interval = 1.0 / Self.rowFps
+    for r in rows {
+      lastSlot = max(now + Self.rowCushion, lastSlot + interval)
+      pendingRows.append((lastSlot, r))
     }
     if pendingRows.count > 12 { pendingRows.removeFirst(pendingRows.count - 12) }   // hard backstop
+  }
+
+  /// Called every render frame from ContentView. Release any rows whose scheduled slot has arrived —
+  /// a FIXED-cadence jitter buffer (Jr's model), NOT depth-adaptive: a second rate loop fighting
+  /// tickScroll's own depth adaptation is what left the trace jerky while the waterfall looked fine.
+  func driverTick(now: Double) {
+    while let first = pendingRows.first, first.slot <= now {
+      waterfall.push(row: first.row)
+      pendingRows.removeFirst()
+    }
   }
 
   /// Rows arrive BATCHED — several in one message.
@@ -743,7 +749,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      self.pendingRows.append(contentsOf: rows)   // jitter buffer — driverTick releases them evenly
+      self.enqueueRows(rows)   // jitter buffer — driverTick releases them on evenly-spaced slots
       self.lastRowAt = Date()
       // Rows streaming again means the phone is back (reopened) — drop the closed screen.
       self.reopenPending = false
@@ -768,7 +774,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
-        pendingRows.append([UInt8](d))   // jitter buffer — driverTick releases it evenly
+        enqueueRows([[UInt8](d)])   // jitter buffer — driverTick releases it on an evenly-spaced slot
         if d.count == WaterfallBuffer.width { everGotRow = true }
       }
       // Rows never set the frequency — see handleRow.
@@ -880,7 +886,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
             everGotRow = false; meter = ""
             bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
             waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
-            pendingRows.removeAll(); drainAccum = 0; lastDrainAt = 0       // and a fresh jitter queue
+            pendingRows.removeAll(); lastSlot = 0                          // and a fresh jitter queue
           }
         }
       }

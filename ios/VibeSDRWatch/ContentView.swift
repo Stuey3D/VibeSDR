@@ -1407,6 +1407,10 @@ struct ContentView: View {
     if s.contains("KB/s") || s.contains("cpu:") || s.hasPrefix("sec=") { return nil }
 
     switch s {
+    // The `.powersave` LinkHint already owns this with the calm "Phone saving power" pill (a mode,
+    // not a fault) — letting it fall through to the raw-status default painted a SECOND, orange
+    // "powersave" pill on top. Stay silent here so only the friendly one shows.
+    case "powersave":             return nil
     case "starting":              return ("Starting up…", true)
     case "authenticating":        return ("Checking your PIN…", true)
     case "registering":           return ("Registering with the server…", true)
