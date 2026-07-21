@@ -39,6 +39,9 @@ enum LinkHint: Equatable {
   /// right now (UberSDRClient's starvation watchdog doing its job). Shown even
   /// though rows have stopped — a recovery in progress is not a failure.
   case reconnecting
+  /// First few seconds of a fresh session: the meter reads low while the link is still coming up — say
+  /// "Initialising", not "Server link poor".
+  case initialising
   /// "The server hop is rough." Shown EVEN WHILE ROWS STILL ARRIVE: this is the
   /// erratic-but-working case, and a gap-only trigger misses it entirely.
   case serverHop
@@ -1213,6 +1216,10 @@ struct ContentView: View {
     //    of course the rows have stopped — that is what a reconnect IS.
     if stateFresh, link.why == "reconnecting" { return .reconnecting }
 
+    // ★ SETTLE WINDOW (Stuart): while the Link Manager is still working out the rate on a fresh
+    //    connect, the meter reads low — that is initialising, not a poor link.
+    if link.linkSettling { return .initialising }
+
     // 2. The phone's own link to the server is poor. Shown even while rows are
     //    STILL ARRIVING — jerky-but-working is precisely the case a row-gap
     //    trigger cannot see, and the case the user most wants explained.
@@ -1241,6 +1248,7 @@ struct ContentView: View {
       // reconnecting sign, so it needs no marked link.
       // ("@instance" = the triangle-node server mark, not an SF Symbol — see the ForEach below.)
       case .reconnecting:   return ["arrow.triangle.2.circlepath", "@instance"]
+      case .initialising:   return ["arrow.triangle.2.circlepath", "@instance"]
       // "Server link rough — spectrum erratic"
       case .serverHop:      return ["@instance", "wifi.exclamationmark", "iphone"]
       // "Watch link weak — spectrum erratic"
@@ -1254,6 +1262,7 @@ struct ContentView: View {
     let caption: String = {
       switch h {
       case .reconnecting:  return "Reconnecting…"
+      case .initialising:  return "Initialising…"
       case .serverHop:     return "Server link poor"
       case .wristHop:      return "Watch link weak"
       case .indeterminate: return "Link poor"
@@ -1295,6 +1304,7 @@ struct ContentView: View {
     .accessibilityLabel({
       switch h {
       case .reconnecting:  return "Reconnecting to server. Tuning still works."
+      case .initialising:  return "Getting the spectrum going. Tuning still works."
       case .serverHop:     return "iPhone's link to the server is poor. Spectrum erratic. Tuning still works."
       case .wristHop:      return "Watch link to iPhone is weak. Spectrum erratic. Tuning still works."
       case .indeterminate: return "Link poor. Spectrum erratic."
@@ -1339,7 +1349,7 @@ struct ContentView: View {
   /// arrive eight seconds into the problem it exists to explain.
   private func heldLongEnough(_ h: LinkHint, now: Date) -> Bool {
     switch h {
-    case .reconnecting, .serverHop:
+    case .reconnecting, .initialising, .serverHop:
       return true
     case .wristHop, .indeterminate:
       guard let t = link.lastRowAt else { return false }

@@ -84,7 +84,15 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// for power, or a screen with no spectrum), while still sending state and favourites. So the
   /// iPhone glyph keys off "anything at all", not rows alone.
   @Published var lastAnyAt: Date? = nil
-  @Published var everGotRow = false
+  @Published var everGotRow = false {
+    didSet {
+      if everGotRow && !oldValue { liveSince = Date() }   // fresh session came up — start the settle window
+      else if !everGotRow { liveSince = nil }             // torn down for a new session
+    }
+  }
+  /// When the CURRENT session first showed rows. For the first few seconds the link meter reads low
+  /// while it's still coming up — the hint says "Initialising", not "Server link poor".
+  @Published private(set) var liveSince: Date? = nil
 
   /// When a row last arrived. The watch used to know only two states — "iPhone not
   /// reachable" or "fine" — but there is a THIRD: the phone is right there and
@@ -111,7 +119,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published private(set) var deliberatelyClosed = false
   /// Stamped on wrist-up so the silence watchdog restarts its grace instead of firing instantly on a
   /// stale lastRowAt (a long wrist-down) — which was flashing the Start screen for a moment on the way back.
-  private var resumedAt = Date.distantPast
+  private(set) var resumedAt = Date.distantPast
   @Published var lastStateAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
