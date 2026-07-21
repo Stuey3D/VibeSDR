@@ -26,8 +26,15 @@ struct VibeSDRWatchApp: App {
       NavigationStack {
         Group {
           if link.phoneClosed {
-            // The phone was swiped closed. Do NOT hijack it back open — the user decides.
-            PhoneClosedView()
+            // Two very different reasons the rows stopped, two different screens:
+            //  • the phone is HERE (reachable) or we KNOW you closed it (goodbye) → offer to Start it.
+            //  • the phone is OUT OF BLUETOOTH REACH (on Wi-Fi away from it) → Start would do nothing;
+            //    Buddy can't work without the phone, so ask you to get back to it.
+            if link.reachable || link.deliberatelyClosed {
+              PhoneClosedView()          // "Start VibeSDR"
+            } else {
+              ConnectToIPhoneView()      // "Connect to iPhone"
+            }
           } else if showPicker {
             // Reuses Jr's picker verbatim (same page, same words) — the ONLY difference is
             // that the PHONE connects, not the watch: onConnect sends cmd:inst.
@@ -89,6 +96,27 @@ struct PhoneClosedView: View {
       }
       .buttonStyle(.plain).foregroundStyle(.orange)
       Text("VibeSDR isn't running on your iPhone. Start it to connect.")
+        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+        .multilineTextAlignment(.center)
+      Text("Press the crown to leave Buddy.")
+        .font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
+        .multilineTextAlignment(.center)
+    }.padding(.horizontal, 10)
+  }
+}
+
+// ── "Connect to iPhone" ─────────────────────────────────────────────────────────────────────
+/// Shown when the phone is OUT OF BLUETOOTH REACH (e.g. the watch is on Wi-Fi/cellular away from the
+/// phone). Buddy is a remote — it has no receiver of its own — so "Start VibeSDR" would be a lie here:
+/// there's nothing to start on a phone we can't talk to. Tell the truth instead: get back to the phone.
+/// (No button: there's nothing the watch can DO but wait for the link to return, at which point rows
+/// resume on their own and this screen drops.)
+struct ConnectToIPhoneView: View {
+  var body: some View {
+    VStack(spacing: 12) {
+      Image(systemName: "iphone.gen3.slash").font(.system(size: 48)).foregroundStyle(.orange)
+      Text("Connect to iPhone").font(.system(size: 16, weight: .bold))
+      Text("Buddy needs your iPhone. Move back into range of it, or connect the two, and the waterfall returns on its own.")
         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
         .multilineTextAlignment(.center)
       Text("Press the crown to leave Buddy.")

@@ -1245,7 +1245,7 @@ struct ContentView: View {
       case .serverHop:      return ["@instance", "wifi.exclamationmark", "iphone"]
       // "Watch link weak — spectrum erratic"
       case .wristHop:       return ["iphone", "wifi.exclamationmark", "applewatch"]
-      // "Link rough" — nothing more is honestly known.
+      // "Link poor" — nothing more is honestly known.
       case .indeterminate:  return ["wifi.exclamationmark"]
       }
     }()
@@ -1254,9 +1254,9 @@ struct ContentView: View {
     let caption: String = {
       switch h {
       case .reconnecting:  return "Reconnecting…"
-      case .serverHop:     return "Server link rough"
+      case .serverHop:     return "Server link poor"
       case .wristHop:      return "Watch link weak"
-      case .indeterminate: return "Link rough"
+      case .indeterminate: return "Link poor"
       }
     }()
     VStack(spacing: 1) {
@@ -1295,9 +1295,9 @@ struct ContentView: View {
     .accessibilityLabel({
       switch h {
       case .reconnecting:  return "Reconnecting to server. Tuning still works."
-      case .serverHop:     return "iPhone's link to the server is rough. Spectrum erratic. Tuning still works."
+      case .serverHop:     return "iPhone's link to the server is poor. Spectrum erratic. Tuning still works."
       case .wristHop:      return "Watch link to iPhone is weak. Spectrum erratic. Tuning still works."
-      case .indeterminate: return "Link rough. Spectrum erratic."
+      case .indeterminate: return "Link poor. Spectrum erratic."
       }
     }())
     .onAppear  { withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { pulse = 0.5 } }

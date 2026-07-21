@@ -2276,7 +2276,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setPwPrompt(true);
         } else {
           Alert.alert('Connection Error', msg, [
-            { text: 'Back to Instances', onPress: () => navigation.goBack() },
+            { text: 'Back to Servers', onPress: () => navigation.goBack() },
             { text: 'Enter Password', onPress: () => setPwPrompt(true) },
           ]);
         }
@@ -2875,7 +2875,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       clearDefaultInstance()
         .then(() => {
           setIsDefault(false);
-          Alert.alert('Default Cleared', 'No default instance is set.');
+          Alert.alert('Default Cleared', 'No default server is set.');
         })
         .catch(() => {});
     } else {
@@ -3986,7 +3986,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const chipMock = (
     <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)', backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 5, minWidth: 200 }}>
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to instance list</Text>
+        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to server list</Text>
       </View>
       <View style={{ height: 1, backgroundColor: 'rgba(255,160,0,0.5)', marginHorizontal: 8 }} />
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
@@ -4015,7 +4015,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum.",
       target: tourRef('vfoDrum') },
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: 'Tap the Servers chip (top-left) to return to the instance list — since the Back gesture is off, this is your way out. You can also favourite the current server or set it as your default from here.',
+      body: 'Tap the Servers chip (top-left) to return to the server list — since the Back gesture is off, this is your way out. You can also favourite the current server or set it as your default from here.',
       target: tourRef('serversChip'), illustration: chipMock },
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Noise reduction, the auto notch, decoders, bookmarks, recordings and display settings all live behind the settings cog.',
@@ -4221,7 +4221,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
@@ -4260,7 +4260,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setServerBusy(false); fullReconnect(); }} activeOpacity={0.85}>
@@ -4280,7 +4280,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); navigation.goBack(); }} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>BACK TO INSTANCE LIST</Text>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>BACK TO SERVER LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); fullReconnect(); }} activeOpacity={0.85}>
@@ -4355,12 +4355,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
             <Text style={styles.serverLostBody}>
-              Audio is still running, but the waterfall and spectrum didn’t restart. Reconnect to restore them, or pick another instance.
+              Audio is still running, but the waterfall and spectrum didn’t restart. Reconnect to restore them, or pick another server.
             </Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setSpecFailed(false); fullReconnect(); }} activeOpacity={0.85}>
@@ -4382,7 +4382,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setConnLost(false); fullReconnect(); }} activeOpacity={0.85}>
@@ -4401,15 +4401,15 @@ export default function SDRScreen({ route, navigation }: Props) {
             <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
             <Text style={styles.serverLostBody}>
               No response from {instanceName || 'the receiver'}. {route.params.isLocal
-                ? 'Check the SDR is plugged in and try again, or pick another instance.'
+                ? 'Check the SDR is plugged in and try again, or pick another server.'
                 : isKiwi
                   ? "It may be offline or a temporary network issue — but if a retry also fails, this KiwiSDR's owner likely only allows their own web page and blocks apps like VibeSDR. Try another, or use UberSDR / OpenWebRX."
-                  : 'It may be offline or unreachable — try again or pick another instance.'}
+                  : 'It may be offline or unreachable — try again or pick another server.'}
             </Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setConnTimedOut(false); fullReconnect(); }} activeOpacity={0.85}>
@@ -4620,7 +4620,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (instCount > 0) {
             Alert.alert(
               'Bookmarks',
-              `Keep the ${instCount} bookmark${instCount !== 1 ? 's' : ''} saved for this instance?`,
+              `Keep the ${instCount} bookmark${instCount !== 1 ? 's' : ''} saved for this server?`,
               [
                 { text: 'Keep', style: 'default' },
                 { text: 'Clear', style: 'destructive',

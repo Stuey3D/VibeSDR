@@ -106,8 +106,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var isBackground = false
   /// The phone was DELIBERATELY closed (a goodbye, or a headless-relaunch 'closed' status). Latches the
   /// closed state so a stale in-flight row can't un-close us and restart the phone-relaunching heartbeat.
-  /// Cleared only by a user Reopen or a genuine live phone status.
-  private var deliberatelyClosed = false
+  /// Cleared only by a user Reopen or a genuine live phone status. `private(set)` so the app router can
+  /// pick the Start screen (phone is here, deliberately closed) vs Connect-to-iPhone (phone out of reach).
+  @Published private(set) var deliberatelyClosed = false
+  /// Stamped on wrist-up so the silence watchdog restarts its grace instead of firing instantly on a
+  /// stale lastRowAt (a long wrist-down) — which was flashing the Start screen for a moment on the way back.
+  private var resumedAt = Date.distantPast
   @Published var lastStateAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
@@ -595,8 +599,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     // (stop pinging a phone that's gone — that ping is what relaunches it, the hijack). NOT
     // deliberatelyClosed: if the phone was merely blipping and pushes a row, handleRow un-closes us.
     if everGotRow, !isBackground {
-      let lastHeard = max(lastRowAt ?? .distantPast, lastStateAt ?? .distantPast)
-      if Date().timeIntervalSince(lastHeard) > 12 {
+      // Give a wrist-up (resumedAt) or a fresh row/state a few seconds to reconnect before concluding
+      // the phone is gone — the ContentView shows a "Reconnecting to VibeSDR" pill over the held
+      // waterfall meanwhile. Only past the grace do we raise the Start / Connect-to-iPhone screen.
+      let lastHeard = max(lastRowAt ?? .distantPast, lastStateAt ?? .distantPast, resumedAt)
+      if Date().timeIntervalSince(lastHeard) > 5 {
         phoneClosed = true
         stopHeartbeat()
         return
@@ -674,6 +681,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// forwarding, then re-request anything we missed.
   func resume() {
     isBackground = false
+    resumedAt = Date()   // restart the silence grace — don't flash Start before rows can return
     send(["cmd": "wrist", "down": false])
     requestMissing()
   }

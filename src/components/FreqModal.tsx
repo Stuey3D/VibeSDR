@@ -382,8 +382,8 @@ export default function FreqModal({
               <TextInput style={[st.searchInput, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
                 value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={dimText} maxLength={60} autoCorrect={false} />
               <View style={st.bmSegRow}>
-                <TouchableOpacity style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS INSTANCE</Text></TouchableOpacity>
-                <TouchableOpacity style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL INSTANCES</Text></TouchableOpacity>
+                <TouchableOpacity style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS SERVER</Text></TouchableOpacity>
+                <TouchableOpacity style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL SERVERS</Text></TouchableOpacity>
               </View>
               <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
                 <Text style={[st.bmBtnText, { color: t.freqColor }]}>★ SAVE BOOKMARK</Text>

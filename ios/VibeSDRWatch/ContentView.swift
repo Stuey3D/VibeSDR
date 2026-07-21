@@ -1269,8 +1269,8 @@ struct ContentView: View {
       case .serverHop:      return ["@instance", "wifi.exclamationmark", "iphone"]
       // "Watch link weak — spectrum erratic"
       case .wristHop:       return ["iphone", "wifi.exclamationmark", "applewatch"]
-      // "Link rough" — nothing more is honestly known.
-      case .indeterminate:  return ["wifi.exclamationmark"]
+      // "Link poor" — nothing more is honestly known.
+      case .indeterminate:  return ["arrow.triangle.2.circlepath", "iphone"]
       // "Phone saving power" — a moon, not a warning glyph: this is a mode, not a fault.
       case .powersave:      return ["moon.zzz.fill", "iphone"]
       }
@@ -1280,9 +1280,9 @@ struct ContentView: View {
     let caption: String = {
       switch h {
       case .reconnecting:  return "Reconnecting…"
-      case .serverHop:     return "Server link rough"
+      case .serverHop:     return "Server link poor"
       case .wristHop:      return "Watch link weak"
-      case .indeterminate: return "Link rough"
+      case .indeterminate: return "Reconnecting to VibeSDR"
       case .powersave:     return "Phone saving power"
       }
     }()
@@ -1322,9 +1322,9 @@ struct ContentView: View {
     .accessibilityLabel({
       switch h {
       case .reconnecting:  return "Reconnecting to server. Tuning still works."
-      case .serverHop:     return "iPhone's link to the server is rough. Spectrum erratic. Tuning still works."
+      case .serverHop:     return "iPhone's link to the server is poor. Spectrum erratic. Tuning still works."
       case .wristHop:      return "Watch link to iPhone is weak. Spectrum erratic. Tuning still works."
-      case .indeterminate: return "Link rough. Spectrum erratic."
+      case .indeterminate: return "Reconnecting to VibeSDR…"
       case .powersave:     return "iPhone is saving power, so the spectrum has slowed. Tune to wake it."
       }
     }())

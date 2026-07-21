@@ -998,7 +998,7 @@ export default function MenuSheet({
                 <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
             </>) : isLocal || isKiwi ? null : (<>
-              <SectionLabel label="INSTANCE ADMIN" icon="admin" />
+              <SectionLabel label="SERVER ADMIN" icon="admin" />
               <BtnRow>
                 <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
                 <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
@@ -1010,7 +1010,7 @@ export default function MenuSheet({
             </>)}
 
             {/* ── INSTANCE ───────────────────────────────────────── */}
-            <SectionLabel label="INSTANCE" icon="instance" />
+            <SectionLabel label="SERVER" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
             {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
                 (top-left of the spectrum) — they're the "which server am I on / how

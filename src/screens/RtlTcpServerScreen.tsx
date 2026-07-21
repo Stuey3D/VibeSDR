@@ -276,7 +276,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
         {/* Stop + back */}
         <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red }]} onPress={stopAndBack}>
           <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>
-            {error ? '‹ Back to instances' : '■ Stop server & back to instances'}
+            {error ? '‹ Back to servers' : '■ Stop server & back to servers'}
           </Text>
         </TouchableOpacity>
       </ScrollView>

@@ -9,7 +9,7 @@
  *
  * This is a stateful two-tap control, NOT a double-tap gesture (no timing window):
  *   • Collapsed  →  [instance glyph] ‹ Servers        tap = expand (goes nowhere)
- *   • Expanded   →  ‹ Back to instance list  (header, = exit, same x-anchor as the
+ *   • Expanded   →  ‹ Back to server list  (header, = exit, same x-anchor as the
  *                    chip, so "tap-tap in the same spot" is the muscle-memory exit)
  *                   ♡ Favourite this server  (toggles in place, stays open)
  *                   ☆ Set as default         (toggles in place, stays open)
@@ -117,10 +117,10 @@ export default function ServersChip({
           <View style={[styles.menu, { borderColor: AMBER_BORDER }]}>
             {/* Header = the exit, at the chip's x-anchor (tap-tap same spot) */}
             <Pressable onPress={onHeader} style={styles.row}
-              accessibilityRole="button" accessibilityLabel="Back to instance list">
+              accessibilityRole="button" accessibilityLabel="Back to server list">
               <SectionIcon name="instance" size={GLYPH} color={amber} />
               <Text style={[styles.chevron, { color: amber, fontFamily: font }]}>‹</Text>
-              <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Back to instance list</Text>
+              <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Back to server list</Text>
             </Pressable>
 
             <View style={[styles.sep, { backgroundColor: SEP_STRONG }]} />

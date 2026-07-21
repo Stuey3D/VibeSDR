@@ -380,7 +380,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </View>
 
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red }]} onPress={stopAndBack}>
-            <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to instances</Text>
+            <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to servers</Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>

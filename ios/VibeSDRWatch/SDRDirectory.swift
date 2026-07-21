@@ -86,7 +86,7 @@ func detectServerType(_ url: String) async -> ServerType? {
 
 enum Directories {
   static let all: [DirectoryMeta] = [
-    .init(id: "ubersdr",      name: "UberSDR",      desc: "Official UberSDR instances"),
+    .init(id: "ubersdr",      name: "UberSDR",      desc: "Official UberSDR servers"),
     .init(id: "receiverbook", name: "Receiverbook", desc: "OpenWebRX + KiwiSDR (receiverbook.de)"),
     .init(id: "kiwisdr",      name: "KiwiSDR",      desc: "Public KiwiSDR network"),
     .init(id: "fmdx",         name: "FM-DX",        desc: "FM-DX Webserver network"),
