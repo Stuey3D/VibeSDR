@@ -670,6 +670,42 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// One row's payload: 6 doubles + the meter field + the bins.
   private static let blockSize = 8 * 6 + meterBytes + WaterfallBuffer.width
 
+  // ── Jitter buffer (Stuart, 2026-07-21: "Buddy feels super sluggish vs Jr") ──────────────────────
+  //
+  // Buddy USED to push rows straight into the waterfall the instant a WCSession message landed. But
+  // WCSession delivers over Bluetooth in CLUMPS — several rows at once, then a gap — so the buffer's
+  // scroll would fast-forward through a clump and then stall until the next one (the sluggish, lurchy
+  // feel), and worse, the buffer's own interval estimator learned the ~0.6s BATCH cadence instead of
+  // the true 5fps, scrolled too slow, backed up past its 4-row cap and DROPPED frames.
+  //
+  // Jr never had this because its clients drain a jitter queue every frame (drainSpectrum). Buddy now
+  // does the same: rows land HERE, and driverTick() releases them onto a smooth ~5fps cadence — so the
+  // waterfall gets fed evenly (its interval estimator settles on the real rate) and the trace/scroll
+  // interpolation has an even cadence to glide along, exactly as on Jr.
+  private var pendingRows: [[UInt8]] = []
+  private var drainAccum = 0.0
+  private var lastDrainAt = 0.0
+
+  /// Called every render frame from ContentView. Release queued rows onto a steady cadence, leaning on
+  /// queue depth so a Bluetooth clump is SPREAD OUT (a touch fast when backed up, a touch slow when
+  /// thin) instead of dumped — never fast-forwarding through a clump, never draining dry mid-gap.
+  func driverTick(now: Double) {
+    if lastDrainAt == 0 { lastDrainAt = now }
+    let dt = min(0.25, now - lastDrainAt)
+    lastDrainAt = now
+    guard !pendingRows.isEmpty else { drainAccum = 0; return }
+
+    let depth = Double(pendingRows.count)
+    let rate: Double = depth > 3 ? 1.6 : (depth < 1.5 ? 0.7 : 1.0)
+    let rowInterval = 1.0 / Self.rowFps
+    drainAccum += (dt / rowInterval) * rate
+    while drainAccum >= 1, !pendingRows.isEmpty {
+      waterfall.push(row: pendingRows.removeFirst())
+      drainAccum -= 1
+    }
+    if pendingRows.count > 12 { pendingRows.removeFirst(pendingRows.count - 12) }   // hard backstop
+  }
+
   /// Rows arrive BATCHED — several in one message.
   ///
   /// Not an optimisation: a correction. `WCSession.sendMessage` is an INTERACTIVE
@@ -707,7 +743,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      for r in rows { self.waterfall.push(row: r) }
+      self.pendingRows.append(contentsOf: rows)   // jitter buffer — driverTick releases them evenly
       self.lastRowAt = Date()
       // Rows streaming again means the phone is back (reopened) — drop the closed screen.
       self.reopenPending = false
@@ -732,7 +768,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
-        waterfall.push(row: [UInt8](d))
+        pendingRows.append([UInt8](d))   // jitter buffer — driverTick releases it evenly
         if d.count == WaterfallBuffer.width { everGotRow = true }
       }
       // Rows never set the frequency — see handleRow.
@@ -844,6 +880,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
             everGotRow = false; meter = ""
             bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
             waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
+            pendingRows.removeAll(); drainAccum = 0; lastDrainAt = 0       // and a fresh jitter queue
           }
         }
       }

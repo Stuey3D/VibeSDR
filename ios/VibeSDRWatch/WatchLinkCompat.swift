@@ -126,10 +126,6 @@ extension WatchLink {
   /// you browse, and choosing a server simply redirects it.
   func backToPicker() { showServers = true }
 
-  /// Jr drains a jitter queue here each frame; Buddy's rows are pushed straight into the buffer as
-  /// they arrive, because the PHONE has already aligned them to its own audio cushion.
-  func driverTick(now: Double) {}
-
   func reconnectIfNeeded() { ping() }
 
   /// ☐ Chat has no wire protocol yet (neither side). `supportsChat` is false so nothing offers it;
