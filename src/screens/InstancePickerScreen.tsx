@@ -1539,6 +1539,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           ) : (
             <FlatList
               data={listData}
+              style={{ flex: 1 }}
               keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
@@ -1553,6 +1554,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         ) : (
           <DraggableFlatList
             data={listData}
+            containerStyle={{ flex: 1 }}
             onDragEnd={({ data }) => handleFavDragEnd(data)}
             activationDistance={12}
             keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
