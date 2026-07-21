@@ -49,7 +49,8 @@ const COL = {
   sub:     'rgba(255,255,255,0.55)',
 };
 
-export default function VTSBar({ notif, bottom, serverType }: { notif: VtsNotifData | null; bottom: number; serverType?: string }) {
+export default function VTSBar({ notif, bottom, serverType, onHeight }:
+    { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void }) {
   const [shown, setShown] = useState<VtsNotifData | null>(null);
   const shownRef = useRef<VtsNotifData | null>(null);
   const fade    = useRef(new Animated.Value(0)).current;
@@ -129,7 +130,8 @@ export default function VTSBar({ notif, bottom, serverType }: { notif: VtsNotifD
   const overflow = textW > areaW && areaW > 0;
 
   return (
-    <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none">
+    <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none"
+      onLayout={(e) => onHeight?.(e.nativeEvent.layout.height)}>
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
       {/* Source mark: live-data badge (RDS logo / text) wins; otherwise the
           bookmark-origin icon — backend logo, EiBi mark, or phone glyph. */}

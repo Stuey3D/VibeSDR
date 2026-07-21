@@ -3504,6 +3504,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
   }, [connected]);
   const [vtsNotif,        setVtsNotif]        = useState<VtsNotifData | null>(null);
+  const [vtsBarH,         setVtsBarH]         = useState(0);   // measured VTS height → lift the decoder box above it
   const vtsKey            = useRef(0);
   const vtsLastStation    = useRef('');
   const vtsBandKey        = useRef<string | null>(null);
@@ -4156,7 +4157,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           aircraft={aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}
-          bottomOffset={pillBottom + 8}
+          // Sit ABOVE the VTS bar (which shows the live station) rather than covering it —
+          // both visible, VTS between the box and the controls. Lift by the measured VTS height.
+          bottomOffset={pillBottom + 8 + (vtsNotif && vtsBarH ? vtsBarH + 6 : 0)}
           onClear={() => setDecoderText('')}
           onClose={closeDecoder}
           morseQuality={morseQuality}
@@ -4508,7 +4511,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
-      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}
+      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH} />}
 
       {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
       <CenterVfoButton visible={vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
