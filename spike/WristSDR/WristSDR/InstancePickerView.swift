@@ -50,6 +50,7 @@ struct InstancePickerView: View {
   private static let dim   = Color.white.opacity(0.45)
 
   @State private var openDir: String? = nil
+  @State private var openGroups: Set<String> = []   // "dirId|ISO" of expanded country groups
   @State private var lists: [String: [SDRServer]] = [:]     // directoryId -> servers
   @State private var loading: Set<String> = []
   @State private var errored: Set<String> = []
@@ -224,7 +225,29 @@ struct InstancePickerView: View {
             Text("Couldn't load — tap to retry").font(.system(size: 12)).foregroundColor(.orange)
               .onTapGesture { Task { await load(dir.id) } }
           }
-          ForEach(sortedServers(lists[dir.id] ?? [])) { serverRow($0) }
+          let servers = sortedServers(lists[dir.id] ?? [])
+          // Small directories stay flat; big ones (KiwiSDR) collapse into country groups so the
+          // whole world isn't one endless scroll on the wrist.
+          if servers.count > 12 {
+            ForEach(countryGroups(servers, dirId: dir.id), id: \.key) { g in
+              Button { toggleGroup(g.key) } label: {
+                HStack(spacing: 6) {
+                  Text(g.iso.isEmpty ? "🏳️" : CountryBBox.flag(g.iso)).font(.system(size: 15))
+                  Text(g.iso.isEmpty ? "Other" : g.iso).font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Self.cream)
+                  Spacer()
+                  Text("\(g.servers.count)").font(.system(size: 11)).foregroundColor(Self.dim)
+                  Image(systemName: openGroups.contains(g.key) ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11)).foregroundColor(Self.dim)
+                }
+              }.buttonStyle(.plain)
+              if openGroups.contains(g.key) {
+                ForEach(g.servers) { serverRow($0) }
+              }
+            }
+          } else {
+            ForEach(servers) { serverRow($0) }
+          }
         }
       }
     }
@@ -249,6 +272,35 @@ struct InstancePickerView: View {
 
   /// Simplified wrist sort: by distance from the user when the directory reports it (UberSDR gives
   /// server-side distance); otherwise by country with the user's own country first, rest alphabetical.
+  private func toggleGroup(_ key: String) {
+    if openGroups.contains(key) { openGroups.remove(key) } else { openGroups.insert(key) }
+  }
+
+  /// Bucket an ALREADY-SORTED server list by country (code if the directory gave one, else derived
+  /// from coordinates). Groups are ordered nearest-first (min distance to the user), then by size.
+  private func countryGroups(_ servers: [SDRServer], dirId: String)
+    -> [(key: String, iso: String, servers: [SDRServer])] {
+    var buckets: [String: [SDRServer]] = [:]
+    var order: [String] = []
+    for s in servers {
+      let iso = s.countryCode
+        ?? { if let la = s.latitude, let lo = s.longitude { return CountryBBox.iso(lat: la, lon: lo) }; return nil }()
+        ?? ""
+      if buckets[iso] == nil { order.append(iso) }
+      buckets[iso, default: []].append(s)
+    }
+    func nearest(_ list: [SDRServer]) -> Double {
+      guard let c = loc.coord else { return .infinity }
+      return list.compactMap { s in s.latitude.flatMap { la in s.longitude.map { haversineKm(c, la, $0) } } }.min() ?? .infinity
+    }
+    return order.map { (key: "\(dirId)|\($0)", iso: $0, servers: buckets[$0] ?? []) }
+      .sorted { a, b in
+        let da = nearest(a.servers), db = nearest(b.servers)
+        if da != db { return da < db }
+        return a.servers.count > b.servers.count
+      }
+  }
+
   private func sortedServers(_ list: [SDRServer]) -> [SDRServer] {
     // Preferred: real distance from the user's own location to each server's coords (works across
     // every directory that publishes lat/lon — UberSDR/Kiwi/Receiverbook/FMDX). The server-reported
