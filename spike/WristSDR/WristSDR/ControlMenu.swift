@@ -309,7 +309,6 @@ struct ControlMenu: View {
   private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
   @State private var showWrist = false
   @State private var showBw = false
-  @State private var showDab = false
   @State private var showBookmarks = false
   @State private var showDisplay = false
   @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
@@ -401,48 +400,36 @@ struct ControlMenu: View {
           }
           .buttonStyle(.plain).padding(.bottom, 5)
           LazyVGrid(columns: cols, spacing: 5) {
+          // ORDER (Stuart): Demod, Step first; then Zoom, Volume, Mute, Bandwidth, Display, Wrist down,
+          // Servers, Stop. DAB (conditional) sits with Bandwidth; CROWN (sensitivity) just before Display.
+          //
+          // NAME the control, then show its VALUE — a tile reading just "USB"/"9k" leaves you guessing
+          // what it's the setting FOR. The name makes it a control; the value makes the menu a readout.
+          tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
+          tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
           }
-          // The iPhone's SYSTEM volume, not an app gain. The wrist shows the phone's
-          // real level — including changes made ON the phone — so the two can never
-          // disagree. (An app gain was the first attempt: delivered loudness is
-          // appGain × systemVolume, the watch could only see one of the two, and with
-          // the phone at 50% the meter read full while delivering half.)
+          // The iPhone's SYSTEM volume, not an app gain. The wrist shows the phone's real level —
+          // including changes made ON the phone — so the two can never disagree.
           tile(icon: "speaker.wave.2.fill", label: "Volume", h: h) {
             dismiss(); onPickCrown(.volume)
           }
-          // Mute is NOT volume-to-zero: that would lose the level you were listening
-          // at, so unmuting could not put it back. This gates playback and leaves the
-          // volume where it is.
+          // Mute is NOT volume-to-zero: that would lose the level you were listening at, so unmuting
+          // could not put it back. This gates playback and leaves the volume where it is.
           tile(icon: link.muted ? "speaker.slash.fill" : "speaker.fill",
                label: link.muted ? "Unmute" : "Mute", h: h) {
             dismiss(); link.setMuted(!link.muted)
           }
-          // NAME the control, then show its VALUE. A tile reading just "Fine" (or
-          // "9k", or "USB") shows you the setting while leaving you to guess what
-          // it's the setting FOR. The name makes the tile a control; the value makes
-          // the menu double as a status readout. You need both.
-          // The WATCH's own brightness/contrast — the phone's settings are mirrored
-          // as the base, but the same numbers don't serve both screens: a waterfall
-          // that reads fine on a big bright phone can be near-black on a wrist held
-          // at an angle outdoors. These are watch-local and persist.
-          // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
-          // (crown-preview pickers), and the peak-hold toggle. Groups what used to be two crowded tiles.
-          tile(icon: "display", label: "Display", h: h) { showDisplay = true }
-          tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
-          tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
-          tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
-          // DAB — only on a DAB profile. Programme picker (OWRX plays nothing until a service is
-          // chosen; we auto-pick the first) + the speed-fix presets for the dablin chipmunk.
-          if link.mode == "dab" {
-            tile(name: "DAB", value: link.stationName.isEmpty ? "\(link.dabProgrammes.count) svc" : link.stationName, h: h) { showDab = true }
-          }
-          // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall
-          // running with the wrist down (costs power); the timed options drop it after N and
-          // reconnect on the way back.
+          // (DAB tile removed — the programme picker + speed fix live on the main DAB screen now.)
+          tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
+          // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
+          // (crown-preview pickers), the peak-hold toggle and a reset. Watch-local look.
+          tile(icon: "display", label: "Display", h: h) { showDisplay = true }
+          // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall running
+          // with the wrist down (costs power); the timed options drop it after N and reconnect on return.
           tile(name: "WRIST DOWN", value: wristLabel, h: h) { showWrist = true }
 
           // (RTL-SDR hardware controls live on their OWN button top-left of the waterfall screen — see
@@ -518,9 +505,6 @@ struct ControlMenu: View {
       PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
         link.setMode(m); showModes = false; dismiss()
       }
-    }
-    .sheet(isPresented: $showDab) {
-      DabSheet().environmentObject(link)
     }
     .sheet(isPresented: $showSteps) {
       PickerList(title: "Step",
