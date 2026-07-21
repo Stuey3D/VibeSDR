@@ -42,6 +42,7 @@ const Native = NativeModules.VibeWatchModule as
       sendDab(json: string): void;
       sendAircraft(json: string): void;
       sendFavourites(json: string): void;
+      sendDirectory(json: string): void;
       sendPhone(status: string): void;
       isClosedByUser(): Promise<boolean>;
       clearClosedByUser(): void;
@@ -259,6 +260,7 @@ class WatchProvider {
    *  which is the whole point: the watch launches the phone, the phone lands on the
    *  picker with no default instance, and the wrist is looking at nothing. */
   private instanceHandler: ((url: string, type?: string, name?: string) => void) | null = null;
+  private browseHandler: ((dirId: string) => void) | null = null;
   private reopenHandler: (() => void) | null = null;
   private stopHandler: (() => void) | null = null;
   private instanceSub: { remove(): void } | null = null;
@@ -742,6 +744,20 @@ class WatchProvider {
     Native!.sendFavourites(this.lastFavs);
   }
 
+  /** A directory's servers, for the watch to MIRROR (it keeps no server list of its own). Fetched by
+   *  the phone on a `browse` request; the watch displays these and connects by referencing them. */
+  sendDirectory(dirId: string, servers: {
+    id: string; name: string; type: string; country: string | null;
+    users: number; full: boolean; dist: number | null;
+  }[]) {
+    if (!this.available || !this.reachable) return;
+    Native?.sendDirectory?.(JSON.stringify({ dir: dirId, servers }));
+  }
+
+  /** Register the "browse this directory for the watch" handler (phone fetches + sends). Outside
+   *  attach() so it works from the picker where no SDR screen is mounted. */
+  setBrowseHandler(fn: (dirId: string) => void) { this.browseHandler = fn; }
+
   /** Register the "switch to this instance" handler. Lives OUTSIDE attach/detach so
    *  it survives screen changes — the command has to work from the picker, where no
    *  SDR screen exists to have attached anything. */
@@ -752,12 +768,13 @@ class WatchProvider {
     this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.instanceSub = this.emitter.addListener(
       'VibeWatchCommand',
-      (e: { cmd: string; val?: unknown; type?: unknown; name?: unknown }) => {
-        // Pass the TYPE (+ name): a directory server the user hasn't favourited isn't in the phone's
-        // list, so without the type the phone can't connect it with the right protocol.
+      (e: { cmd: string; val?: unknown; type?: unknown; name?: unknown; dir?: unknown }) => {
+        // Connect by URL — the phone resolves it against its OWN objects (favourites + browsed
+        // directory cache), so it always connects a server it actually holds (fixes OWRX etc.).
         if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''),
                                                      e.type ? String(e.type) : undefined,
                                                      e.name ? String(e.name) : undefined);
+        else if (e.cmd === 'browse') this.browseHandler?.(String(e.dir ?? ''));
         else if (e.cmd === 'reopen') this.reopenHandler?.();
       },
     );

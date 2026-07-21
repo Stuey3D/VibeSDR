@@ -15,6 +15,13 @@ import { newLocalSession } from './src/services/localSession';
 import { getViewMode } from './src/services/viewMode';
 import { getDefaultInstance } from './src/services/defaultInstance';
 import { watchTargetPending } from './src/services/watchBoot';
+import { fetchDirectory, type DirectoryId } from './src/services/directories';
+import type { SDRInstance } from './src/services/instancesApi';
+
+// The phone is the single source of truth for the server list — Buddy MIRRORS it and connects by
+// referencing these objects (never a list of its own). Filled when the watch browses a directory, so
+// a later connect resolves to the exact server the phone fetched, with its real type/params.
+const watchServerCache = new Map<string, SDRInstance>();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
@@ -297,12 +304,13 @@ export default function App() {
       Promise.all([getFavourites(), getTcpFavs(), getViewMode()])
         .then(async ([favs, tcpFavs, viewMode]) => {
           const f = favs.find((x) => x.url === url);
+          // The phone's OWN directory object, cached when the watch browsed it. This is the mirror:
+          // Buddy referenced a server, we connect the exact one WE fetched (right type + longitude).
+          const cached = watchServerCache.get(url);
           // RTL-TCP favs live in their own store (host:port, no url) — the wrist row's url is
           // synthesised as <proto>://host:port; match that back.
           const tcp = tcpFavs.find((t) => `${t.proto ?? 'rtltcp'}://${t.host}:${t.port}` === url);
-          // Prefer a favourite's stored type, else the type the WATCH sent (directory picks aren't
-          // favourited, so the fav lookup misses — without the watch's type the connect fails).
-          const type = f?.serverType ?? wtype ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
+          const type = f?.serverType ?? cached?.serverType ?? wtype ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
           if (type === 'rtltcp' || type === 'spyserver') {
             // Parse host:port off the url (rtltcp://h:p or spyserver://h:p).
             const m = url.match(/^[a-z]+:\/\/([^:/]+):(\d+)/i);
@@ -311,13 +319,35 @@ export default function App() {
             if (host && port) return connectLocal(type, host, port, f?.name ?? wname ?? tcp?.name ?? '', viewMode);
           }
           if (f) return goTo(f, viewMode);
-          // Not a favourite, but the watch told us what it is — connect the directory server directly.
+          // A browsed directory server the phone holds — connect it with its real name/type/longitude.
+          if (cached) return goTo({ name: cached.name, url: cached.url, serverType: cached.serverType ?? type },
+                                  viewMode, { serverLongitude: cached.longitude ?? null });
           if (type) return goTo({ name: wname || url, url, serverType: type }, viewMode);
           watchTargetPending.claimed = false;   // unknown URL, no type — don't hold the picker
         })
         .catch(() => { watchTargetPending.claimed = false; });
     };
     watchProvider.setInstanceHandler(applyInstance);
+
+    // The watch asked to browse a directory. The PHONE fetches it (its own service), caches the full
+    // server objects (so a later connect resolves to them), and sends the watch a light display list.
+    const browseForWatch = (dirId: string) => {
+      fetchDirectory(dirId as DirectoryId)
+        .then((list) => {
+          list.forEach((s) => { if (s.url) watchServerCache.set(s.url, s); });
+          watchProvider.sendDirectory(dirId, list.map((s) => ({
+            id: s.url,
+            name: s.name,
+            type: s.serverType ?? 'ubersdr',
+            country: s.countryCode ?? null,
+            users: s.users ?? 0,
+            full: !!s.full,
+            dist: s.distance ?? null,
+          })));
+        })
+        .catch(() => watchProvider.sendDirectory(dirId, []));   // empty list = "couldn't load" on the wrist
+    };
+    watchProvider.setBrowseHandler(browseForWatch);
 
     // Decide what to connect to with no user to ask: default → connect, else picker/setup.
     // Shared by the headless boot AND the watch's Reopen, so both behave identically.

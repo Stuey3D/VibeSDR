@@ -45,6 +45,7 @@ private func haversineKm(_ a: CLLocationCoordinate2D, _ blat: Double, _ blon: Do
 ///   phone cannot reach would be a dead row.
 struct InstancePickerView: View {
   @EnvironmentObject var favs: FavStore
+  @EnvironmentObject var link: WatchLink   // Buddy mirrors the PHONE's directory list — no local fetch
   @StateObject private var loc = LocationProvider()
   let onConnect: (SDRServer) -> Void
   /// Non-nil ONLY when there's a live session to go back to (opened from the menu while connected).
@@ -82,7 +83,6 @@ struct InstancePickerView: View {
     // text — but it also demotes it out of the LARGE left-aligned wordmark into the small
     // inline slot beside the clock. A coloured "Jr" is not worth losing the wordmark for.
     .navigationTitle("Servers")
-    .task { await preloadForFavourites() }
     .onAppear { loc.request() }
     .sheet(isPresented: $showCustom) { CustomServerSheet { name, url, type in
       favs.addCustom(name: name, url: url, type: type)
@@ -171,17 +171,20 @@ struct InstancePickerView: View {
               Text(dir.desc).font(.system(size: 9.5)).foregroundColor(Self.dim).lineLimit(1)
             }
             Spacer()
-            if loading.contains(dir.id) { ProgressView().scaleEffect(0.6) }
+            if openDir == dir.id && link.directories[dir.id] == nil { ProgressView().scaleEffect(0.6) }
             else { Image(systemName: openDir == dir.id ? "chevron.up" : "chevron.down").foregroundColor(Self.dim) }
           }
         }.buttonStyle(.plain)
 
         if openDir == dir.id {
-          if errored.contains(dir.id) {
+          // MIRROR the phone: nil = still waiting for its reply, [] = it couldn't load, else the servers.
+          if link.directories[dir.id] == nil {
+            HStack(spacing: 6) { ProgressView().scaleEffect(0.6); Text("Loading…").font(.system(size: 12)).foregroundColor(Self.dim) }
+          } else if (link.directories[dir.id] ?? []).isEmpty {
             Text("Couldn't load — tap to retry").font(.system(size: 12)).foregroundColor(.orange)
-              .onTapGesture { Task { await load(dir.id) } }
+              .onTapGesture { link.browse(dir.id) }
           }
-          let servers = sortedServers(lists[dir.id] ?? [])
+          let servers = sortedServers(link.directories[dir.id] ?? [])
           // Small directories stay flat; big ones (KiwiSDR) collapse into country groups so the
           // whole world isn't one endless scroll on the wrist.
           if servers.count > 12 {
@@ -326,7 +329,7 @@ struct InstancePickerView: View {
   private func toggleDir(_ id: String) {
     if openDir == id { openDir = nil; return }
     openDir = id
-    if lists[id] == nil { Task { await load(id) } }
+    if link.directories[id] == nil { link.browse(id) }   // ask the phone to fetch + send it
   }
 
   private func load(_ id: String) async {

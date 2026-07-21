@@ -375,6 +375,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "favs", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// A directory's servers, fetched by the PHONE on the watch's request. Buddy has no server list of
+  /// its own — it mirrors the phone's and connects by referencing these (which the phone caches).
+  @objc(sendDirectory:)
+  func sendDirectory(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "dir", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
   /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
   /// LIST, not a continuum: you switch service, you never tune.
   @objc(sendDab:)

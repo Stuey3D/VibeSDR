@@ -206,6 +206,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // the phone never has to tell us which screen to be, because what it SENDS
   // already says: rows mean a spectrum, an fmdx blob means a station.
   @Published var fmdx: FmdxState? = nil
+  /// Directory listings MIRRORED from the phone (keyed by directory id). Buddy keeps no server list of
+  /// its own — the phone fetches on `browse` and sends the rows; Buddy just displays and references them.
+  @Published var directories: [String: [SDRServer]] = [:]
+  private struct DirMsg: Codable {
+    let dir: String; let servers: [DirRow]
+    struct DirRow: Codable { let id: String; let name: String; let type: String
+                             let country: String?; let users: Int; let full: Bool; let dist: Double? }
+  }
   /// The DAB multiplex, when the phone is on a DAB profile. DAB is a LIST, not a
   /// continuum: the crown SELECTS a service, it does not tune. (The phone already
   /// refuses to tune in DAB — a nudge knocks you off the ensemble block, killing the
@@ -610,6 +618,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
 
+  /// Ask the PHONE to browse a directory and send us its servers (we mirror; we never fetch our own).
+  func browse(_ dir: String) { send(["cmd": "browse", "dir": dir]) }
+
   /// STOP — tell the phone to leave the SDR screen: that tears down the client (audio + sockets stop)
   /// and returns the phone to its server list to WAIT, idle. Unlike pause (which stays on the stopped
   /// waterfall), this disconnects AND goes back. Buddy follows to the picker via the phone's status.
@@ -1004,6 +1015,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
          let d = j.data(using: .utf8),
          let list = try? JSONDecoder().decode([Favourite].self, from: d) {
         favourites = list
+      }
+
+    case "dir":
+      // A directory listing the PHONE fetched (we asked via browse). Mirror it — no local fetching.
+      if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
+         let msg = try? JSONDecoder().decode(DirMsg.self, from: d) {
+        directories[msg.dir] = msg.servers.map { r in
+          SDRServer(name: r.name, url: r.id, host: URL(string: r.id)?.host ?? r.id,
+                    serverType: ServerType(rawValue: r.type) ?? .ubersdr,
+                    countryCode: r.country, distance: r.dist, users: r.users, full: r.full)
+        }
       }
 
     case "stations":

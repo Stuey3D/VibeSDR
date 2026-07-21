@@ -40,6 +40,8 @@ RCT_EXTERN_METHOD(sendDab : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendFavourites : (NSString *)json)
 
+RCT_EXTERN_METHOD(sendDirectory : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
 
 RCT_EXTERN_METHOD(isClosedByUser
