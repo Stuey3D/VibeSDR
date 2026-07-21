@@ -59,6 +59,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   const [areaW, setAreaW] = useState(0);
   const [textW, setTextW] = useState(0);
 
+  // Report height 0 the moment we're hidden, so anything stacked above us (the decoder box)
+  // drops back down instead of floating over the gap where the VTS used to be.
+  useEffect(() => { if (!shown) onHeight?.(0); }, [shown, onHeight]);
+
   const dismiss = () => {
     if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
     Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })

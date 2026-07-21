@@ -4159,7 +4159,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           decoding={decoding}
           // Sit ABOVE the VTS bar (which shows the live station) rather than covering it —
           // both visible, VTS between the box and the controls. Lift by the measured VTS height.
-          bottomOffset={pillBottom + 8 + (vtsNotif && vtsBarH ? vtsBarH + 6 : 0)}
+          bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0)}
           onClear={() => setDecoderText('')}
           onClose={closeDecoder}
           morseQuality={morseQuality}
