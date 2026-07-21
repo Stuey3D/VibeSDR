@@ -113,24 +113,14 @@ const WATCH_BINS = 128;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
-// 5 rows/sec. The wrist waterfall does NOT scroll at this rate — Jr's WaterfallBuffer
-// runs tickScroll (pixels, render-rate, smooth) on a separate clock from tickTrace (data
-// intake), so 5fps of fresh data still scrolls smoothly, each row spanning a few steps.
-// What this actually buys is HEADROOM on the WCSession interactive queue: rows share that
-// one Bluetooth-limited queue with state, and at 16.7/s (batched 2 = ~8.3 msg/s) a weak
-// link backs up — the waterfall freezes while tune commands (other direction) still flow,
-// and phoneHopHealthy starves into a false "Reconnecting to iPhone" over a live session.
-// At 5fps that's ~2.5 msg/s, 3.3x the room. The old "1fps" revert was choppy because the
-// buffer then had ONE clock; the split-clock buffer is what makes this safe now. (Stuart
-// 2026-07-20, off the saturating-link screenshot.)
-const MIN_ROW_MS = 200;
-
-/** While the crown is actively spinning (tune OR zoom), rows back off further so the
- *  gesture's own commands — and the phone's server reconfiguration — own the link. A
- *  spin lasts as long as fresh gestures keep landing inside this window; rows snap back
- *  to MIN_ROW_MS the moment it stops. You aren't reading fine waterfall detail mid-spin. */
-const GESTURE_ROW_MS = 320;
-const GESTURE_ACTIVE_MS = 350;
+// 10 rows/sec. ★ CORRECTION (2026-07-21): the WaterfallBuffer scrolls at the DATA rate (it
+// LEARNS `interval` from arrivals and advances one row per interval, sub-row interpolated). It
+// does NOT scroll at a fixed render rate — my earlier note claiming 5fps looked smooth was wrong,
+// validated only on STALE watch code. At 5fps the waterfall genuinely CREEPS (~5 lines/sec). 10fps
+// is a good balance: a healthy-looking scroll, still lighter than the original 16.7/s that could
+// saturate the WCSession queue. The tune-command 100ms debounce (not row throttling) is what keeps
+// the queue clear now. (Buddy's real buffer only went live on the watch at build 102.)
+const MIN_ROW_MS = 100;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */
@@ -980,9 +970,10 @@ class WatchProvider {
     // over, and its rows would drag the wrist back to the waterfall.
     if (!this.owns('sdr')) return;
     const now = Date.now();
-    // Mid-spin (tune/zoom): rows yield to the gesture. Otherwise the steady 5fps floor.
-    const gap = (now - this.lastGestureAt < GESTURE_ACTIVE_MS) ? GESTURE_ROW_MS : MIN_ROW_MS;
-    if (now - this.lastRowAt < gap) return; // coalesce: newest wins
+    // Steady rate always — NO backing off during a tune/zoom spin. That gesture throttle
+    // STARVED the WaterfallBuffer (it ran dry and stalled), which read as "the waterfall stops
+    // moving while I tune". The tune-command 100ms debounce protects the WCSession queue instead.
+    if (now - this.lastRowAt < MIN_ROW_MS) return; // coalesce: newest wins
     this.lastRowAt = now;
 
     if (this.colormap !== this.lastPalette) {

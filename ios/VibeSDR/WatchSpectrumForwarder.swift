@@ -293,12 +293,10 @@ final class WatchSpectrumForwarder {
     // rows hard until tuning settles, freeing the link for the frequency. Snaps back to full
     // rate the instant the crown stops.
     let now = ProcessInfo.processInfo.systemUptime
-    // Steady-state cap = 5 rows/sec, matching the JS foreground path (MIN_ROW_MS = 200).
-    // Rows share the one Bluetooth-limited WCSession queue with state; more than this backs
-    // it up and the wrist freezes (see watchProvider MIN_ROW_MS note). Jr's split-clock
-    // WaterfallBuffer scrolls smoothly on far less than 10fps of fresh data.
-    let minGap = (now - lastRetuneAt < 0.35) ? 0.3 : 0.2   // spinning: ≤3/s · steady: 5/s
-    if now - lastRowSentAt < minGap { return }
+    // 10 rows/sec, matching the JS path (MIN_ROW_MS = 100). NO tune throttle: backing rows off
+    // during a spin STARVED the WaterfallBuffer and froze the wrist waterfall while tuning. The
+    // buffer scrolls at the DATA rate, so it needs a steady healthy feed. (See watchProvider note.)
+    if now - lastRowSentAt < 0.1 { return }
     lastRowSentAt = now
 
     // Rolling auto-range: EMA the per-frame min/max so the map tracks the noise floor
