@@ -4720,6 +4720,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClose={() => setModeSelOpen(false)}
         showServerMaps={(route.params.serverType ?? 'ubersdr') !== 'owrx' && !isLocal && !isKiwi}
         onServerMap={(k) => { setModeSelOpen(false); setMapKind(k); }}
+        owrxPages={route.params.serverType === 'owrx' ? {
+          onMap:   () => { setModeSelOpen(false); onAdminLink('/map', 'Map'); },
+          onFiles: () => { setModeSelOpen(false); onAdminLink('/files', 'Files'); },
+        } : null}
         decoderControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' && (!isLandscape || isTablet) ? {
           decMode: selDecoder, decOn: activeDecoder !== null && activeDecoder === selDecoder, isLocal,
           onDecToggle, rttySettings, onRttySettings, wefaxLpm, onWefaxLpm,

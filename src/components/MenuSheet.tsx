@@ -991,11 +991,9 @@ export default function MenuSheet({
                    gallery (SSTV/WEFAX/Navtex images) + settings, so we link those
                    rather than UberSDR's noise/conditions/listeners pages. ──── */}
             {serverType === 'owrx' ? (<>
+              {/* MAP + FILES relocated to the demodulator menu (they're "what's on this
+                 signal" content, with the other maps). ADMIN stays — it's server settings. */}
               <SectionLabel label="OPENWEBRX" icon="server" />
-              <BtnRow>
-                <Btn label="🗺 MAP"   onPress={() => onAdminLink?.('/map', 'Map')} />
-                <Btn label="🖼 FILES" onPress={() => onAdminLink?.('/files', 'Files')} />
-              </BtnRow>
               <BtnRow>
                 <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>

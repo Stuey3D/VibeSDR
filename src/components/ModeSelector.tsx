@@ -100,6 +100,9 @@ interface ModeSelectorProps {
     rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
     wefaxLpm?: number; onWefaxLpm?: (v: number) => void;
   } | null;
+  // OWRX MAP + FILES pages (relocated from MenuSheet OPENWEBRX section) — same
+  // "what's on this signal" family. null = not OWRX.
+  owrxPages?: { onMap: () => void; onFiles: () => void } | null;
   // SERVER EXTENSIONS / DECODED SPOTS (relocated from MenuSheet §4.3). null = don't show.
   spotsControls?: {
     label: string; spotsKind: string | null;
@@ -111,7 +114,7 @@ interface ModeSelectorProps {
 
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl,
   filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth,
-  showServerMaps = false, onServerMap,
+  showServerMaps = false, onServerMap, owrxPages,
   decoderControls, spotsControls }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const { height: winH } = useWindowDimensions();
@@ -357,6 +360,26 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
                 </TouchableOpacity>
               )}
+            </View>
+          </View>
+        )}
+
+        {/* OWRX MAP + FILES — relocated from the MenuSheet OPENWEBRX section. The OWRX
+            equivalent of the server maps (its combined map + the decoded-image gallery). */}
+        {owrxPages && (
+          <View style={dst.decWrap}>
+            <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
+              OPENWEBRX
+            </Text>
+            <View style={st.grid}>
+              <TouchableOpacity style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+                onPress={owrxPages.onMap} activeOpacity={0.8}>
+                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+                onPress={owrxPages.onFiles} activeOpacity={0.8}>
+                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🖼 FILES</Text>
+              </TouchableOpacity>
             </View>
           </View>
         )}
