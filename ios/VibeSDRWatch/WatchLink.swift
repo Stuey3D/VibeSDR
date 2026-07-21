@@ -100,6 +100,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// The phone app has been CLOSED by the user (goodbye received, or a 'closed' status).
   /// Drives the "Phone app closed" screen and gates the heartbeat off (anti-hijack).
   @Published var phoneClosed = false
+  /// The phone was DELIBERATELY closed (a goodbye, or a headless-relaunch 'closed' status). Latches the
+  /// closed state so a stale in-flight row can't un-close us and restart the phone-relaunching heartbeat.
+  /// Cleared only by a user Reopen or a genuine live phone status.
+  private var deliberatelyClosed = false
   @Published var lastStateAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
@@ -374,6 +378,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// relaunches it) and keep asking it to reopen until it does.
   func reopen() {
     phoneClosed = false
+    deliberatelyClosed = false   // the user explicitly wants it back — release the latch
     reopenPending = true
     startHeartbeat()
     send(["cmd": "reopen"])
@@ -752,8 +757,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       self.enqueueRows(rows)   // jitter buffer — driverTick releases them on evenly-spaced slots
       self.lastRowAt = Date()
       // Rows streaming again means the phone is back (reopened) — drop the closed screen.
-      self.reopenPending = false
-      if self.phoneClosed { self.phoneClosed = false; if self.heartbeat == nil { self.startHeartbeat() } }
+      // ★ UNLESS the phone was DELIBERATELY closed (goodbye): a stale in-flight row that lands just
+      // after the goodbye must NOT un-close us and restart the heartbeat — that heartbeat is exactly
+      // what relaunches the phone headless (the hijack). Only a user Reopen or a real phone status
+      // clears the deliberate-close latch. (Stuart, 2026-07-21: "if I close the phone, Buddy reopens it.")
+      if !self.deliberatelyClosed {
+        self.reopenPending = false
+        if self.phoneClosed { self.phoneClosed = false; if self.heartbeat == nil { self.startHeartbeat() } }
+      }
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }
       if rows.first?.count == WaterfallBuffer.width { self.everGotRow = true }
@@ -861,6 +872,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     case "goodbye":
       // The phone is gone (user swiped it closed). Show the closed screen and go silent.
       phoneClosed = true
+      deliberatelyClosed = true
       stopHeartbeat()
 
     case "phone":
@@ -872,11 +884,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
           // A heartbeat relaunched the phone headless but it refused to auto-connect and told
           // us so. Same destination as a goodbye — UNLESS we're mid-reopen, where a stale
           // 'closed' from the launch race must not bounce us back off the reopen.
-          if !reopenPending { phoneClosed = true; stopHeartbeat() }
+          if !reopenPending { phoneClosed = true; deliberatelyClosed = true; stopHeartbeat() }
         } else {
           // Any other status means the phone is alive and doing something real (reopened) —
-          // leave the closed screen and stop asking to reopen.
+          // leave the closed screen and stop asking to reopen. A genuine live status is the one
+          // signal (besides a user Reopen) trustworthy enough to clear the deliberate-close latch.
           reopenPending = false
+          deliberatelyClosed = false
           if phoneClosed { phoneClosed = false; if heartbeat == nil { startHeartbeat() } }
           // TEAR DOWN the previous session (Stuart: "everything between sessions needs tearing
           // down"). Otherwise an old FM-DX RDS name (fmdx.ps) / DAB ensemble / aircraft list /
