@@ -4230,6 +4230,14 @@ export default function SDRScreen({ route, navigation }: Props) {
                 <Text style={styles.serverLostBtnText}>RECONNECT</Text>
               </TouchableOpacity>
             </View>
+            {/* A Kiwi that keeps kicking a connected user still lets them reach compatibility mode —
+                otherwise unreachable, since the initial-refusal card never shows once it connects. */}
+            {route.params.serverType === 'kiwi' && (
+              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
+                onPress={() => { setServerLost(false); setCompatWarn(true); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
         );
@@ -4269,6 +4277,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                 <Text style={styles.serverLostBtnText}>RETRY</Text>
               </TouchableOpacity>
             </View>
+            <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
+              onPress={() => { setServerBusy(false); setCompatWarn(true); }} activeOpacity={0.85}>
+              <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}
