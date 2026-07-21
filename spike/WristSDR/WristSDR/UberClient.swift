@@ -286,8 +286,31 @@ final class UberClient: ObservableObject {
         guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
         self.audioPerSec  = Double(self.audioCount)
+        let hadAudioThisSec = self.audioCount > 0
+        let hadSpectrumThisSec = self.frameCount > 0
         self.frameCount = 0
         self.audioCount = 0
+
+        // AUDIO LIVENESS WATCHDOG (Stuart, 2026-07-21). The spectrum self-heals via
+        // reconnectIfNeeded/retrySpectrum, but the audio socket only recovered on an EXPLICIT
+        // failed/recv: state. A SILENT audio death — bytes just stop while the socket still looks
+        // open — left the waterfall running and the audio gone for good ("faded out, server rough,
+        // never came back"). The health signal was spectrum frames, so a live waterfall masked a dead
+        // audio path entirely. Fix: if audio was ever flowing and the link is otherwise ALIVE (spectrum
+        // frames still arriving, proving server + connection are fine), yet no audio packet has landed
+        // for a few seconds, reopen it — re-arming every 5s until it comes home.
+        if hadAudioThisSec {
+          self.lastAudioAt = Date()
+          self.everHadAudio = true
+          self.audioRetries = 0          // healthy again — reset the backoff
+        }
+        if self.everHadAudio, self.status == "live", hadSpectrumThisSec,
+           Date().timeIntervalSince(self.lastAudioAt) > 5 {
+          self.audioWsState = "audio silent — recovering"
+          self.lastAudioAt = Date()      // re-arm: try again in another 5s if still silent
+          self.retryAudio()
+        }
+
         self.stepLinkManagement()
       }
     }
@@ -645,6 +668,10 @@ final class UberClient: ObservableObject {
   }
   private var everHadFrames = false
   private var lastFrameAt = Date.distantPast
+  // Audio-liveness watchdog state (see the rateTimer). lastAudioAt tracks the last second in which
+  // an audio packet arrived; everHadAudio gates the watchdog so it never fires before audio has begun.
+  private var everHadAudio = false
+  private var lastAudioAt = Date.distantPast
 
   /// UberSDR sends its JSON config as a GZIPPED BINARY frame, not a text frame — the magic
   /// bytes are the only way to tell it from a spectrum frame. (The web client sniffs for

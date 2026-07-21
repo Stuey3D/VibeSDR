@@ -254,6 +254,20 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.framesPerSec = Double(self.frameCount)
         if self.frameCount > 0, self.retries > 0 { self.retries = 0 }   // stable again → reset backoff
         self.frameCount = 0
+
+        // SILENT-AUDIO WATCHDOG (Stuart, 2026-07-21). frameCount above is the SND *audio* rate. If SND
+        // dies silently while the W/F waterfall keeps advancing, framesPerSec falls to 0 but nothing
+        // reconnects (reconnectIfNeeded is a no-op; the connect timer only fires before the first frame).
+        // So: audio was flowing (everFrame), status is live, the W/F socket is STILL pushing rows this
+        // second (link + server are fine), yet no SND frame for >5s ⇒ reconnect. retrySnd's own `retrying`
+        // guard + backoff stop this from stacking.
+        let wfAdvancing = self.rowsPushed > self.lastRowsSnapshot
+        self.lastRowsSnapshot = self.rowsPushed
+        if self.everFrame, self.status == "live", wfAdvancing, !self.retrying,
+           ProcessInfo.processInfo.systemUptime - self.lastSndAt > 5 {
+          self.retrySnd(reason: "audio silent")
+        }
+
         self.linkMgr.tick(fps: self.framesPerSec,
                           live: !self.goingIdle && self.rowsPushed > 0,
                           settled: ProcessInfo.processInfo.systemUptime - self.lastWfChangeAt > 3) }
@@ -287,7 +301,14 @@ final class KiwiClient: ObservableObject, SDRClient {
 
   private func markFrame() {
     if !everFrame { everFrame = true; connectTimer?.invalidate(); connectTimer = nil }
+    lastSndAt = ProcessInfo.processInfo.systemUptime   // audio-liveness stamp for the silent-SND watchdog
   }
+  // Audio-liveness watchdog state (see the rateTimer). Kiwi runs SND (audio) and W/F (waterfall) as
+  // two separate sockets; SND can die silently while W/F keeps painting, leaving the waterfall alive
+  // and the audio gone for good. lastSndAt = the last SND audio frame; lastRowsSnapshot lets the
+  // watchdog confirm the W/F socket is STILL advancing (link is fine) before blaming the audio.
+  private var lastSndAt: Double = 0
+  private var lastRowsSnapshot = 0
 
   // ── Reconnect on a mid-session drop (UberClient's proven pattern) ──
   private var retries = 0

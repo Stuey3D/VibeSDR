@@ -192,6 +192,18 @@ final class OwrxClient: ObservableObject, SDRClient {
         self.framesPerSec = Double(self.frameCount)
         self.kbPerSec = self.bytesThisSec / 1024; self.bytesThisSec = 0
         self.fftFps = self.fftThisSec; self.fftThisSec = 0
+
+        // SILENT-AUDIO WATCHDOG (Stuart, 2026-07-21). FFT + audio share one socket, but the server can
+        // keep sending FFT while audio stops. frameCount counts BOTH, so the stall watchdog below never
+        // fires in that case — the waterfall stays live and the audio is gone for good. Track audio on
+        // its own: if audio was ever flowing, the FFT is STILL arriving this second (link + server fine),
+        // yet no audio frame for >10s (well past OWRX's normal multi-second stutter), reconnect. Modes
+        // with no audio at all (ADS-B) never stamp lastAudioFrameAt, so this can't fire on them.
+        if self.everFrame, !self.retrying, self.fftFps > 0, self.lastAudioFrameAt > 0,
+           ProcessInfo.processInfo.systemUptime - self.lastAudioFrameAt > 10 {
+          self.retry(reason: "audio silent")
+        }
+
         if self.frameCount > 0 {
           self.retries = 0; self.zeroSecs = 0
         } else if !self.everFrame, self.avoidRelayActive, !self.retrying {
@@ -795,12 +807,14 @@ final class OwrxClient: ObservableObject, SDRClient {
     let playRate = (modeSnapshot == "dab") ? Int(Double(rate) * dabRateScale) : rate
     audio.play(pcm: pcm, rate: Int32(playRate), channels: 1)
     frameCount &+= 1                                   // off-main; no per-frame main hop
+    lastAudioFrameAt = ProcessInfo.processInfo.systemUptime   // audio-liveness stamp (silent-audio watchdog)
     if !sawFirstFrame { sawFirstFrame = true; Task { @MainActor in self.everFrame = true; if self.status != "live" { self.status = "live" } } }
   }
   nonisolated(unsafe) private var modeSnapshot = "am"   // read off-main in onAudio; benign
 
   // FFT decoded off main; slice the view window; hop to main to enqueue the row.
   nonisolated(unsafe) private var lastFftAt = 0.0
+  nonisolated(unsafe) private var lastAudioFrameAt = 0.0   // last decoded audio frame — silent-audio watchdog
   nonisolated private func onFft(_ payload: ArraySlice<UInt8>) {
     // THROTTLE to ~10 fps. OWRX pushes FFT fast and each frame is a whole-profile ADPCM decode +
     // DSP — at full rate that pegged a watch core (>100%). The waterfall doesn't need more than
