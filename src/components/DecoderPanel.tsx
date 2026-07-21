@@ -68,8 +68,8 @@ export interface DecoderPanelProps {
 }
 
 const DAB_SPEEDS = [
-  { v: 1, l: '1×' }, { v: 0.6667, l: '0.67×' }, { v: 0.5, l: '0.5×' },
-  { v: 0.3333, l: '0.33×' }, { v: 0.25, l: '0.25×' },
+  { v: 1, l: 'Off' }, { v: 0.6667, l: '×0.67' }, { v: 0.5, l: '×0.5' },
+  { v: 0.3333, l: '×0.33' }, { v: 0.25, l: '×0.25' },
 ];
 
 const MORSE_QUALITIES: MorseQuality[] = ['all', 'low', 'medium', 'high'];
@@ -202,6 +202,7 @@ export default function DecoderPanel({
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [minimised, setMinimised] = useState(false);
+  const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
   const opacity  = useRef(new Animated.Value(0)).current;
   const slideY   = useRef(new Animated.Value(20)).current;
   const outputRef = useRef<ScrollView>(null);
@@ -322,18 +323,14 @@ export default function DecoderPanel({
             </TouchableOpacity>
           )}
 
-          {/* DAB speed correction (§4.5) — cycles the presets that fix the dablin/OWRX
-              "chipmunk" sample-rate misread. Highlighted when not 1×. */}
+          {/* DAB speed correction (§4.5) — opens the SPEED FIX popup (separate preset
+              buttons), a popup like the spots filters. Highlighted when not Off. */}
           {isDabMode && onDabSpeed && (
             <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
-              onPress={(e: any) => {
-                e?.stopPropagation();
-                const i = DAB_SPEEDS.findIndex(o => Math.abs(o.v - (dabSpeed ?? 1)) < 0.001);
-                onDabSpeed(DAB_SPEEDS[(i < 0 ? 0 : i + 1) % DAB_SPEEDS.length].v);
-              }}>
+              onPress={(e: any) => { e?.stopPropagation(); setDabSpeedOpen(o => !o); }}>
               <Text style={[dp.hbtnTxt, {
                 color: Math.abs((dabSpeed ?? 1) - 1) > 0.001 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
-                ⏩ {DAB_SPEEDS.find(o => Math.abs(o.v - (dabSpeed ?? 1)) < 0.001)?.l ?? '1×'}
+                SPEED FIX
               </Text>
             </TouchableOpacity>
           )}
@@ -426,6 +423,25 @@ export default function DecoderPanel({
 
         {/* DAB service list (§5.2) — logos resolve cleanly because DAB programme names are
             EXACT ensemble strings (no RDS guessing like FM). Tap a row to switch service. */}
+        {/* SPEED FIX popup (§4.5) — separate preset buttons; fixes the dablin/OWRX
+            chipmunk misread. Remembered per station. */}
+        {!minimised && isDabMode && dabSpeedOpen && (
+          <View style={[dp.dabSpeedPop, { borderBottomColor: dc.hdrBdr }]}>
+            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: t.font }]}>SPEED FIX · remembered per station</Text>
+            <View style={dp.dabSpeedRow}>
+              {DAB_SPEEDS.map((o) => {
+                const on = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
+                return (
+                  <TouchableOpacity key={o.l}
+                    style={[dp.dabSpeedBtn, { borderColor: on ? dc.btnActT : dc.btnBdr }, on && { backgroundColor: dc.btnAct }]}
+                    onPress={() => { onDabSpeed?.(o.v); setDabSpeedOpen(false); }} activeOpacity={0.7}>
+                    <Text style={[dp.dabSpeedBtnTxt, { color: on ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>{o.l}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
         {!minimised && isDabMode && (
           <ScrollView style={dp.body} showsVerticalScrollIndicator>
             {dabProgrammes.map((p) => {
@@ -532,6 +548,11 @@ const dp = StyleSheet.create({
   bodyContent: { padding: 12 },
   dabRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   dabName:     { flex: 1, fontSize: 14 },
+  dabSpeedPop: { paddingVertical: 8, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  dabSpeedTitle: { fontSize: 10, letterSpacing: 0.5, marginBottom: 6 },
+  dabSpeedRow: { flexDirection: 'row', gap: 6 },
+  dabSpeedBtn: { flex: 1, borderWidth: 1, borderRadius: 4, paddingVertical: 8, alignItems: 'center' },
+  dabSpeedBtnTxt: { fontSize: 11, fontWeight: '600' },
   output: {
     fontSize: 12, letterSpacing: 0.8, lineHeight: 20,
     color: C.outputCl, fontFamily: FONT,

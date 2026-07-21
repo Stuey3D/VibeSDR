@@ -4168,7 +4168,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           onImageStatus={setDecoderStatus}
           dabProgrammes={dabProgrammes.map((p) => ({ id: p.id, name: p.name }))}
           activeDabId={activeDabId}
-          onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
+          onSelectDab={(id) => {
+          client.current?.setAudioServiceId?.(id); setActiveDabId(id);
+          // Keep the VTS on the station you just picked — don't wait for the server's next
+          // metadata frame. The logo effect re-resolves off liveStation.name.
+          const p = dabProgrammes.find((x) => x.id === id);
+          if (p) { liveStationRef.current = p.name; setLiveStation((s) => ({ ...s, name: p.name })); }
+        }}
           dabSpeed={dabSpeed}
           onDabSpeed={onDabSpeed}
         />
@@ -4513,7 +4519,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverType={route.params.serverType ?? 'ubersdr'}
         dabProgrammes={dabProgrammes}
         activeDabId={activeDabId}
-        onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
+        onSelectDab={(id) => {
+          client.current?.setAudioServiceId?.(id); setActiveDabId(id);
+          // Keep the VTS on the station you just picked — don't wait for the server's next
+          // metadata frame. The logo effect re-resolves off liveStation.name.
+          const p = dabProgrammes.find((x) => x.id === id);
+          if (p) { liveStationRef.current = p.name; setLiveStation((s) => ({ ...s, name: p.name })); }
+        }}
         dabSpeed={dabSpeed}
         onDabSpeed={onDabSpeed}
         vtsName={vtsMenuName}
