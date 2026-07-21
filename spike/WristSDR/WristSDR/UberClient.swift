@@ -1195,6 +1195,9 @@ final class UberClient: ObservableObject {
   /// (up to ~1.8 GHz), so the 30 MHz clamp would have locked the whole VHF/UHF band away.
   private var freqMin: Double { 10_000 }
   private var freqMax: Double { isVibe ? 1_800_000_000 : 30_000_000 }
+  var tuneMinHz: Double { freqMin }
+  var tuneMaxHz: Double { freqMax }
+  func setAutoContrast(_ v: Double) { proc.autoContrast = v }
 
   /// Crown tuning. The audio socket carries the tune; the spectrum view follows it.
   func tune(delta: Int, step: Double) {

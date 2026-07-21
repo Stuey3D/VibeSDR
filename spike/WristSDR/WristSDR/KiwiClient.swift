@@ -69,6 +69,15 @@ protocol SDRClient: AnyObject {
   func sendChat(_ text: String)
   /// FM-DX tuner state (nil unless this is an FM-DX server). Default inert.
   var fmdxInfo: FmdxInfo? { get }
+  /// The frequency window tunable RIGHT NOW (Hz) on the current server — for OWRX this is the
+  /// CURRENT profile only (centre ± sampRate/2), since bookmarks must never switch profile. A
+  /// bookmark outside this window is refused with a warning rather than retuned.
+  var tuneMinHz: Double { get }
+  var tuneMaxHz: Double { get }
+  /// Auto-contrast (0–20) — the DSP's dynamic-range squeeze (`SignalProcessor.autoContrast`). The
+  /// primary visibility control; Brightness/Contrast are post-normalisation tweaks on top. Default
+  /// no-op for a backend with no waterfall DSP (FM-DX).
+  func setAutoContrast(_ v: Double)
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -96,6 +105,13 @@ extension SDRClient {
   var chatActivity: Int { 0 }
   func sendChat(_ text: String) {}
   var fmdxInfo: FmdxInfo? { nil }
+  /// The server's BROAD coverage (Hz) — used to FILTER the bookmark list so a bookmark saved on a
+  /// wideband server doesn't clutter one that can't reach it (e.g. a +30 MHz OWRX bookmark on a
+  /// 0–30 MHz Kiwi). Defaults to the live tune window; OWRX widens it because its tune window is
+  /// only the current profile while the server itself covers far more.
+  var coverMinHz: Double { tuneMinHz }
+  var coverMaxHz: Double { tuneMaxHz }
+  func setAutoContrast(_ v: Double) {}
 }
 
 extension UberClient: SDRClient {
@@ -149,6 +165,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   @Published var lastError: String? = nil
   var rowsPushed = 0
   var displaySpanHz: Double { viewInit ? viewBw : rxBw }
+  var tuneMinHz: Double { 0 }
+  var tuneMaxHz: Double { rxBw }   // server-reported coverage top (30 MHz, or narrower/converted)
+  func setAutoContrast(_ v: Double) { proc.autoContrast = v }
 
   private var everFrame = false
   private var errorShown = false

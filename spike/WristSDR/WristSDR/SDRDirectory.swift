@@ -591,3 +591,63 @@ enum CountryBBox {
     return s
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bookmarks — LOCAL to the watch. A saved spot on the dial: name + frequency + demod.
+// No server is attached (the phone's `UserBookmark` binds a scope; Jr deliberately does
+// not — a bookmark is just a frequency you can recall on whatever server reaches it).
+// Field names track the phone's UserBookmark so a future WCSession/iCloud sync is a
+// straight map. Persisted exactly like FavStore (UserDefaults + JSON).
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct Bookmark: Codable, Identifiable, Hashable {
+  var id = UUID()
+  var name: String
+  var frequency: Double   // Hz
+  var mode: String        // lowercase demod: am/sam/usb/lsb/cw/nfm/wfm…
+
+  private enum CodingKeys: String, CodingKey { case id, name, frequency, mode }
+}
+
+@MainActor
+final class BookmarkStore: ObservableObject {
+  @Published private(set) var bookmarks: [Bookmark] = []
+
+  private static let key = "vibe.spike.bookmarks"
+
+  init() {
+    if let raw = UserDefaults.standard.data(forKey: Self.key),
+       let b = try? JSONDecoder().decode([Bookmark].self, from: raw) { bookmarks = b }
+  }
+
+  private func persist() {
+    if let d = try? JSONEncoder().encode(bookmarks) { UserDefaults.standard.set(d, forKey: Self.key) }
+  }
+
+  func add(name: String, frequency: Double, mode: String) {
+    // De-dupe on frequency+mode so tapping Save twice on the same spot doesn't stack.
+    if let i = bookmarks.firstIndex(where: { $0.frequency == frequency && $0.mode == mode }) {
+      bookmarks[i].name = name
+    } else {
+      bookmarks.append(Bookmark(name: name, frequency: frequency, mode: mode))
+    }
+    bookmarks.sort { $0.frequency < $1.frequency }
+    persist()
+  }
+
+  func remove(_ b: Bookmark) {
+    bookmarks.removeAll { $0.id == b.id }
+    persist()
+  }
+
+  func remove(at offsets: IndexSet, from shown: [Bookmark]) {
+    let ids = offsets.map { shown[$0].id }
+    bookmarks.removeAll { ids.contains($0.id) }
+    persist()
+  }
+
+  func removeAll() {
+    bookmarks.removeAll()
+    persist()
+  }
+}

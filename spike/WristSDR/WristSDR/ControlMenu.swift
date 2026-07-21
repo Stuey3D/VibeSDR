@@ -211,21 +211,23 @@ struct BatteryPillV: View {
 }
 
 enum CrownMode: Equatable {
-  case tune, zoom, brightness, contrast, volume
+  case tune, zoom, brightness, contrast, autoContrast, volume
 
   var glyph: String {
     switch self {
-    case .tune:       return "dial.medium"
-    case .zoom:       return "magnifyingglass"
-    case .brightness: return "sun.max.fill"
-    case .contrast:   return "circle.lefthalf.filled"
-    case .volume:     return "speaker.wave.2.fill"
+    case .tune:         return "dial.medium"
+    case .zoom:         return "magnifyingglass"
+    case .brightness:   return "sun.max.fill"
+    case .contrast:     return "circle.lefthalf.filled"
+    case .autoContrast: return "wand.and.stars"
+    case .volume:       return "speaker.wave.2.fill"
     }
   }
   var label: String {
     switch self {
     case .tune: return "Tune"; case .zoom: return "Zoom"; case .volume: return "Volume"
     case .brightness: return "Bright"; case .contrast: return "Contrast"
+    case .autoContrast: return "Auto"
     }
   }
   /// Double-Tap cycles just the three primary crown modes.
@@ -293,6 +295,7 @@ enum CrownSens: String, CaseIterable {
 /// it isn't worth a third of the menu.
 struct ControlMenu: View {
   @EnvironmentObject var link: SpikeLink
+  @EnvironmentObject var bookmarks: BookmarkStore
   @Environment(\.dismiss) private var dismiss
 
   /// Set by the caller when Volume or Zoom is chosen: the menu closes and the
@@ -307,6 +310,8 @@ struct ControlMenu: View {
   @State private var showWrist = false
   @State private var showBw = false
   @State private var showDab = false
+  @State private var showBookmarks = false
+  @State private var showDisplay = false
   @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
   private var linkModeBlurb: String {
     switch LinkManager.Mode(rawValue: linkMode) ?? .adaptive {
@@ -319,10 +324,6 @@ struct ControlMenu: View {
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
   @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
-  /// WATCH-LOCAL waterfall offsets — the same keys ContentView drives. Mirrored here
-  /// only so Reset can clear them.
-  @AppStorage("wfBright")   private var wfBright   = 0.0
-  @AppStorage("wfContrast") private var wfContrast = 0.0
 
   private let cols = Array(repeating: GridItem(.flexible(), spacing: 5), count: 2)
 
@@ -382,6 +383,23 @@ struct ControlMenu: View {
             }
             .buttonStyle(.plain).padding(.bottom, 5)
           }
+          // BOOKMARKS — full-width, above the tile grid. Save the current spot and recall saved ones.
+          // Standalone Jr needs its own dial memory (Buddy just reaches for the phone). Local to the watch.
+          Button { showBookmarks = true } label: {
+            HStack(spacing: 8) {
+              Image(systemName: "bookmark.fill").font(.system(size: 17)).foregroundColor(.orange)
+              VStack(alignment: .leading, spacing: 1) {
+                Text("BOOKMARKS").font(.system(size: 11, weight: .bold)).foregroundColor(.orange)
+                Text(bookmarks.bookmarks.isEmpty ? "Save this frequency"
+                     : "\(bookmarks.bookmarks.count) saved").font(.system(size: 11)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+              }
+              Spacer(); Image(systemName: "chevron.right").foregroundColor(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+          }
+          .buttonStyle(.plain).padding(.bottom, 5)
           LazyVGrid(columns: cols, spacing: 5) {
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
@@ -409,12 +427,9 @@ struct ControlMenu: View {
           // as the base, but the same numbers don't serve both screens: a waterfall
           // that reads fine on a big bright phone can be near-black on a wrist held
           // at an angle outdoors. These are watch-local and persist.
-          tile(icon: "sun.max.fill", label: "Bright", h: h) {
-            dismiss(); onPickCrown(.brightness)
-          }
-          tile(icon: "circle.lefthalf.filled", label: "Contrast", h: h) {
-            dismiss(); onPickCrown(.contrast)
-          }
+          // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
+          // (crown-preview pickers), and the peak-hold toggle. Groups what used to be two crowded tiles.
+          tile(icon: "display", label: "Display", h: h) { showDisplay = true }
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
@@ -444,12 +459,8 @@ struct ControlMenu: View {
           tile(icon: "stop.circle.fill", label: "Stop", h: h) {
             dismiss(); link.backToPicker()
           }
-
-          // A WAY BACK. Brightness and contrast are watch-local, so a user who
-          // cranks them until the waterfall is a white slab has no phone setting to
-          // undo it with — and no obvious way to tell that the WATCH is what they
-          // broke. Resets ONLY the watch's own offsets; the phone is untouched.
-          resetTile(h: h)
+          // (Reset view moved INTO the Display menu — it resets all the display settings now, not
+          // just brightness/contrast, so it belongs beside them.)
         }
 
         // LINK MANAGEMENT — three states, not a switch. "Slow because I chose to" and "slow
@@ -534,6 +545,15 @@ struct ControlMenu: View {
     .sheet(isPresented: $showBw) {
       BandwidthView().environmentObject(link)
     }
+    .sheet(isPresented: $showBookmarks) {
+      BookmarksView { dismiss() }.environmentObject(link).environmentObject(bookmarks)
+    }
+    .sheet(isPresented: $showDisplay) {
+      DisplaySheet(
+        onPickCrown: { m in showDisplay = false; dismiss(); onPickCrown(m) },
+        closeAll:    { showDisplay = false; dismiss() }
+      ).environmentObject(link)
+    }
   }
 
   /// Total passband width in kHz, for the BW tile readout.
@@ -602,36 +622,6 @@ struct ControlMenu: View {
   // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
   static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl", "dab", "adsb"]
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
-
-  /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already
-  /// at default, so it reads as a status as much as a button.
-  private func resetTile(h: CGFloat) -> some View {
-    let dirty = wfBright != 0 || wfContrast != 0
-    return Button {
-      wfBright = 0
-      wfContrast = 0
-      link.waterfall.brightness = 0
-      link.waterfall.contrast = 0
-      WKInterfaceDevice.current().play(.success)
-    } label: {
-      VStack(spacing: 2) {
-        Image(systemName: "arrow.counterclockwise")
-          .font(.system(size: h * 0.26, weight: .semibold))
-        Text("Reset view")
-          .font(.system(size: h * 0.15, weight: .semibold, design: .rounded))
-          .lineLimit(1)
-          .minimumScaleFactor(0.6)
-      }
-      .foregroundStyle(dirty ? .white : .white.opacity(0.35))
-      .frame(maxWidth: .infinity)
-      .frame(height: h)
-      .background(RoundedRectangle(cornerRadius: h * 0.30)
-        .fill(.white.opacity(dirty ? 0.16 : 0.06)))
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .disabled(!dirty)
-  }
 
   private var crownLabel: String {
     CrownSens(rawValue: crownSens)?.label ?? "Normal"
@@ -944,6 +934,298 @@ struct ProfileSheet: View {
         // A tick after layout, else the List hasn't built its rows and scrollTo is a no-op.
         DispatchQueue.main.async { proxy.scrollTo(active, anchor: .center) }
       }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+/// Bookmarks — save the current spot on the dial and recall saved ones. LOCAL to the watch.
+/// The list is filtered to the current server's coverage (a +30 MHz OWRX bookmark won't clutter a
+/// 0–30 MHz Kiwi). Recall NEVER switches an OWRX profile: a frequency outside the current profile
+/// window is refused with a "Frequency Range Not Available" pill (see SpikeLink.recall/notify).
+struct BookmarksView: View {
+  @EnvironmentObject var link: SpikeLink
+  @EnvironmentObject var store: BookmarkStore
+  @Environment(\.dismiss) private var dismiss
+  /// Closes the CONTROL MENU behind this sheet, so a recall lands straight on the waterfall.
+  let closeMenu: () -> Void
+
+  @State private var showSave = false
+  @State private var draftName = ""
+  @State private var confirmDeleteAll = false
+
+  /// Only bookmarks this server can actually reach — the rest are hidden, not greyed.
+  private var shown: [Bookmark] { store.bookmarks.filter { link.inCoverage($0.frequency) } }
+
+  var body: some View {
+    List {
+      Section {
+        Button {
+          draftName = Self.freqLabel(link.frequency)
+          showSave = true
+        } label: {
+          HStack(spacing: 8) {
+            Image(systemName: "plus.circle.fill").foregroundColor(.orange)
+            Text("Save this frequency").font(.system(size: 14, weight: .semibold))
+          }
+        }
+        .buttonStyle(.plain)
+        // Deletion is a two-step, deliberate act (swipe → tap the trash) — say so, once, here.
+        if !shown.isEmpty {
+          Text("Swipe a bookmark left to delete")
+            .font(.system(size: 10)).foregroundColor(.secondary)
+        }
+      }
+
+      if shown.isEmpty {
+        Section {
+          Text(store.bookmarks.isEmpty ? "No bookmarks yet." : "None of your bookmarks are within this server's range.")
+            .font(.system(size: 12)).foregroundColor(.secondary)
+        }
+      } else {
+        Section("Saved") {
+          ForEach(shown) { b in
+            let reachable = link.canTune(b.frequency)
+            Button {
+              link.recall(b)      // tunes if reachable, else raises the warning pill on the waterfall
+              dismiss(); closeMenu()
+            } label: {
+              HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(b.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                  HStack(spacing: 6) {
+                    Text(Self.freqLabel(b.frequency)).font(.system(size: 11)).foregroundColor(.white.opacity(0.65))
+                    if !b.mode.isEmpty {
+                      Text(b.mode.uppercased()).font(.system(size: 10, weight: .bold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.white.opacity(0.12), in: Capsule()).foregroundColor(.white.opacity(0.8))
+                    }
+                  }
+                }
+                Spacer()
+                // Out of the current OWRX profile — still listed, but flag that recall will need a
+                // profile change (which we don't do automatically).
+                if !reachable {
+                  Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11)).foregroundColor(.yellow.opacity(0.8))
+                }
+              }
+              .opacity(reachable ? 1 : 0.55)
+            }
+            .buttonStyle(.plain)
+            // Two-step delete: swipe reveals the trash, tapping it removes. No full-swipe auto-delete.
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              Button(role: .destructive) {
+                if let b2 = shown.first(where: { $0.id == b.id }) { store.remove(b2) }
+              } label: { Image(systemName: "trash") }
+            }
+          }
+        }
+
+        // DELETE ALL — a rare, heavy action, so it lives at the very bottom and asks first.
+        Section {
+          Button(role: .destructive) { confirmDeleteAll = true } label: {
+            HStack(spacing: 8) {
+              Image(systemName: "trash")
+              Text("Delete all bookmarks").font(.system(size: 13, weight: .semibold))
+            }
+          }
+        }
+      }
+    }
+    .navigationTitle("Bookmarks")
+    .confirmationDialog("Delete all bookmarks?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+      Button("Delete all", role: .destructive) { store.removeAll() }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This removes every saved bookmark on this watch. It can't be undone.")
+    }
+    .sheet(isPresented: $showSave) {
+      VStack(spacing: 10) {
+        Text("Name this bookmark").font(.system(size: 13, weight: .semibold))
+        TextField("Name", text: $draftName)
+          .textInputAutocapitalization(.words)
+        HStack(spacing: 8) {
+          Button("Cancel") { showSave = false }.buttonStyle(.bordered)
+          Button("Save") {
+            let name = draftName.trimmingCharacters(in: .whitespaces)
+            store.add(name: name.isEmpty ? Self.freqLabel(link.frequency) : name,
+                      frequency: link.frequency, mode: link.mode)
+            showSave = false
+          }.buttonStyle(.borderedProminent)
+        }
+      }
+      .padding()
+    }
+  }
+
+  /// 145.500 MHz / 7.100 MHz / 198 kHz — mirrors how the readout speaks frequency.
+  static func freqLabel(_ hz: Double) -> String {
+    if hz >= 1_000_000 { return String(format: "%.3f MHz", hz / 1_000_000) }
+    if hz >= 1_000     { return String(format: "%.0f kHz", hz / 1_000) }
+    return String(format: "%.0f Hz", hz)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+/// DISPLAY — one home for the waterfall's look. Auto contrast / Brightness / Contrast are CROWN
+/// tweaks (tap → dismiss to the waterfall and adjust live), all WATCH-LOCAL (the wrist varies in
+/// readability far more than the phone). Palette + VFO colour open a crown-preview picker and CAN
+/// track the phone via "Sync". Peak hold is a plain toggle (exposes a control that was hardwired on).
+struct DisplaySheet: View {
+  @EnvironmentObject var link: SpikeLink
+  let onPickCrown: (CrownMode) -> Void   // arms a waterfall crown mode + closes the menu
+  let closeAll: () -> Void               // closes the Display sheet + the menu, back to the spectrum
+
+  @AppStorage("wfAutoContrast") private var wfAutoContrast = 5.0
+  @AppStorage("wfBright")       private var wfBright       = 0.0
+  @AppStorage("wfContrast")     private var wfContrast     = 0.0
+  @AppStorage("wfPalette")      private var wfPalette      = "sync"
+  @AppStorage("wfVfoColour")    private var wfVfoColour    = "sync"
+  @AppStorage("wfPeakHold")     private var wfPeakHold     = true
+
+  @State private var showPalette = false
+  @State private var showVfo     = false
+
+  /// Crown steps as a signed integer, matching how the phone speaks brightness/contrast ("+5").
+  private func steps(_ v: Double) -> String { let n = Int((v / 0.04).rounded()); return n > 0 ? "+\(n)" : "\(n)" }
+
+  private var palette: WFPalette { SpikeLink.palettes.first { $0.id == wfPalette } ?? .sonar }
+  private var vfo: VfoColour { SpikeLink.vfoColours.first { $0.id == wfVfoColour } ?? SpikeLink.vfoColours[1] }
+  private var displayDirty: Bool {
+    wfAutoContrast != 5 || wfBright != 0 || wfContrast != 0
+      || wfPalette != "sync" || wfVfoColour != "sync" || !wfPeakHold
+  }
+
+  var body: some View {
+    List {
+      Section("Tone") {
+        toneRow(icon: "wand.and.stars",        label: "Auto contrast", value: "\(Int(wfAutoContrast))") { onPickCrown(.autoContrast) }
+        toneRow(icon: "sun.max.fill",          label: "Brightness",    value: steps(wfBright))          { onPickCrown(.brightness) }
+        toneRow(icon: "circle.lefthalf.filled", label: "Contrast",      value: steps(wfContrast))        { onPickCrown(.contrast) }
+      }
+      Section("Colour") {
+        Button { showPalette = true } label: {
+          colourRow(label: "Palette", detail: palette.name, swatches: palette.swatches)
+        }.buttonStyle(.plain)
+        Button { showVfo = true } label: {
+          colourRow(label: "VFO colour", detail: vfo.name, swatches: [vfo.color])
+        }.buttonStyle(.plain)
+      }
+      Section {
+        Toggle(isOn: $wfPeakHold) {
+          Label("Peak hold", systemImage: "chart.line.uptrend.xyaxis")
+        }
+        .onChange(of: wfPeakHold) { _, on in link.peakHold = on; link.waterfall.peakHold = on }
+      }
+
+      // RESET — the escape hatch. These are all watch-local, so a user who cranks brightness to a
+      // white slab (or picks a palette they hate) has no phone setting to undo it; this puts the
+      // whole Display menu back to defaults. Dimmed/disabled when already at defaults.
+      Section {
+        Button(role: .destructive) {
+          wfAutoContrast = 5; wfBright = 0; wfContrast = 0
+          wfPalette = "sync"; wfVfoColour = "sync"; wfPeakHold = true
+          link.setAutoContrast(5); link.waterfall.brightness = 0; link.waterfall.contrast = 0
+          link.applyPalette("sync"); link.applyVfo("sync")
+          link.peakHold = true; link.waterfall.peakHold = true
+          WKInterfaceDevice.current().play(.success)
+        } label: {
+          Label("Reset display", systemImage: "arrow.counterclockwise")
+        }
+        .disabled(!displayDirty)
+      }
+    }
+    .navigationTitle("Display")
+    .sheet(isPresented: $showPalette) {
+      ColourCrownPicker(title: "Palette", current: wfPalette,
+        options: SpikeLink.palettes.map { .init(id: $0.id, name: $0.name, colors: $0.swatches) }) { id in
+          wfPalette = id; link.applyPalette(id); closeAll()
+      }
+    }
+    .sheet(isPresented: $showVfo) {
+      ColourCrownPicker(title: "VFO colour", current: wfVfoColour,
+        options: SpikeLink.vfoColours.map { .init(id: $0.id, name: $0.name, colors: [$0.color]) }) { id in
+          wfVfoColour = id; link.applyVfo(id); closeAll()
+      }
+    }
+  }
+
+  private func toneRow(icon: String, label: String, value: String, tap: @escaping () -> Void) -> some View {
+    Button(action: tap) {
+      HStack(spacing: 10) {
+        Image(systemName: icon).frame(width: 22).foregroundColor(.orange)
+        Text(label).font(.system(size: 14))
+        Spacer()
+        Text(value).font(.system(size: 14, weight: .semibold)).monospacedDigit().foregroundColor(.white.opacity(0.7))
+        Image(systemName: "digitalcrown.horizontal.arrow.clockwise").font(.system(size: 11)).foregroundColor(.white.opacity(0.35))
+      }
+    }.buttonStyle(.plain)
+  }
+
+  private func colourRow(label: String, detail: String, swatches: [Color]) -> some View {
+    HStack(spacing: 10) {
+      SwatchStripe(colors: swatches).frame(width: 34, height: 22)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(label).font(.system(size: 14))
+        Text(detail).font(.system(size: 11)).foregroundColor(.white.opacity(0.6))
+      }
+      Spacer(); Image(systemName: "chevron.right").foregroundColor(.white.opacity(0.4))
+    }
+  }
+}
+
+/// Little stack of colour bands — the palette preview drawn on the Display rows and the picker.
+struct SwatchStripe: View {
+  let colors: [Color]
+  var body: some View {
+    HStack(spacing: 0) { ForEach(Array(colors.enumerated()), id: \.offset) { _, c in c } }
+      .clipShape(RoundedRectangle(cornerRadius: 4))
+      .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(0.2), lineWidth: 0.5))
+  }
+}
+
+/// A crown-driven colour/palette picker. Spin the crown to move through the options, watch the big
+/// preview change live, tap to apply and return to the spectrum. Handles both palettes (many bands)
+/// and VFO colours (one). "Sync" is just the first option — it tracks the phone once iCloud lands.
+struct ColourCrownPicker: View {
+  struct Option: Identifiable { let id: String; let name: String; let colors: [Color] }
+  let title: String
+  let current: String
+  let options: [Option]
+  let onApply: (String) -> Void
+
+  @State private var sel = 0.0
+  @FocusState private var focused: Bool
+
+  private var idx: Int { min(options.count - 1, max(0, Int(sel.rounded()))) }
+
+  var body: some View {
+    VStack(spacing: 10) {
+      Text(title).font(.system(size: 13, weight: .semibold)).foregroundColor(.white.opacity(0.7))
+      // The big live preview — this IS the button.
+      Button { onApply(options[idx].id) } label: {
+        ZStack(alignment: .bottom) {
+          SwatchStripe(colors: options[idx].colors).frame(height: 70)
+          Text(options[idx].name)
+            .font(.system(size: 15, weight: .bold)).foregroundColor(.white)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(.black.opacity(0.55), in: Capsule())
+            .padding(.bottom, 8)
+        }
+      }
+      .buttonStyle(.plain)
+      .overlay(RoundedRectangle(cornerRadius: 8).stroke(.orange.opacity(0.8), lineWidth: 2))
+      Text("Turn crown · tap to set").font(.system(size: 10)).foregroundColor(.secondary)
+    }
+    .padding()
+    .focusable(true)
+    .focused($focused)
+    .digitalCrownRotation($sel, from: 0, through: Double(max(0, options.count - 1)), by: 1,
+                          sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
+    .onAppear {
+      sel = Double(options.firstIndex { $0.id == current } ?? 0)
+      focused = true
     }
   }
 }

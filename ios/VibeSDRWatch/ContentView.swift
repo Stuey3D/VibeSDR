@@ -909,7 +909,10 @@ struct ContentView: View {
     let cw: CGFloat = 62
     let ch: CGFloat = 26
     ctx.fill(
-      Path(roundedRect: CGRect(x: size.width - cw - 2, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
+      // Right edge FLUSH to the bezel. The system clock is right-aligned and hugs the
+      // bezel; a 2pt inset shifted the pill's centre left of the digits, so a wide 24h
+      // "22:35" landed right-of-centre in the pill. Flush → symmetric padding on the clock.
+      Path(roundedRect: CGRect(x: size.width - cw, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
            cornerRadius: ch / 2),
       with: .color(.black.opacity(0.72))
     )

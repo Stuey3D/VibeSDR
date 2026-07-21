@@ -90,6 +90,15 @@ final class OwrxClient: ObservableObject, SDRClient {
   var supportsChat: Bool { true }          // OWRX has a shared text chat; other backends default off
   var rowsPushed = 0
   var displaySpanHz: Double { viewBw }
+  // Tunable window = the CURRENT profile only (centre ± half the sample rate) — bookmarks must
+  // never switch profile, so anything outside this is refused with a warning, not retuned.
+  var tuneMinHz: Double { sampRate > 0 ? centerFreq - sampRate / 2 : 0 }
+  var tuneMaxHz: Double { sampRate > 0 ? centerFreq + sampRate / 2 : 0 }
+  // ...but the server as a whole covers far more than one profile. Keep OWRX bookmarks VISIBLE
+  // (don't filter them out) so they can be recalled once you're on the right profile.
+  var coverMinHz: Double { 0 }
+  var coverMaxHz: Double { 2_000_000_000 }
+  func setAutoContrast(_ v: Double) { proc.autoContrast = v }
 
   // ── Endpoint ──
   private let hostPart: String          // host:port

@@ -459,6 +459,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setFavourites(next);
   }, [favourites]);
 
+  // Favourite a custom-URL server: DETECT the backend before saving so an OWRX/Kiwi
+  // URL pasted into the box isn't stored (and iconed) as UberSDR — the default that
+  // toggleFavourite falls back to. Detection returns null only when the host can't be
+  // reached; then keep the old default. connectFav re-detects on connect regardless.
+  const favouriteCustomUrl = useCallback(async (url: string, name: string) => {
+    const detected = await detectServerType(url).catch(() => null);
+    const next = await toggleFavourite({ name, url, serverType: detected ?? 'ubersdr' }, favourites);
+    setFavourites(next);
+  }, [favourites]);
+
   // Manual-mode drag reorder: the dragged list mixes headers/directories, but only favourite rows
   // can be picked up, so we persist just the new favourite order (by url) and let listData rebuild
   // the rest into their canonical spots.
@@ -1433,13 +1443,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Save', onPress: (text?: string) =>
-                            handleToggleFav({ name: (text && text.trim()) || fallback, url }) },
+                            favouriteCustomUrl(url, (text && text.trim()) || fallback) },
                       ],
                       'plain-text',
                       fallback,
                     );
                   } else {
-                    handleToggleFav({ name: fallback, url });
+                    favouriteCustomUrl(url, fallback);
                   }
                 }}
               >

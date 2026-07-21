@@ -126,6 +126,7 @@ private struct WaterfallCanvas: View {
 /// up there would collide with it.
 struct ContentView: View {
   @EnvironmentObject var link: SpikeLink
+  @EnvironmentObject var bookmarks: BookmarkStore
 
   // Developer CPU comparison badge (companion vs standalone JR). Gated by
   // CpuMeter.enabled — turn OFF before any public release.
@@ -235,6 +236,14 @@ struct ContentView: View {
   /// -1…+1, 0 = exactly what the phone shows. Saved, so you set them once.
   @AppStorage("wfBright")   private var wfBright   = 0.0
   @AppStorage("wfContrast") private var wfContrast = 0.0
+  /// Display settings, all WATCH-LOCAL (the wrist screen varies in readability far more than the
+  /// phone, so these are deliberately NOT synced from it — unlike palette/VFO colour, which can be).
+  /// `wfAutoContrast` is the DSP dynamic-range squeeze 0–20 (the primary visibility control, default
+  /// 5); brightness/contrast are tweaks on top. Palette/VFO default to "sync" (match the phone).
+  @AppStorage("wfAutoContrast") private var wfAutoContrast = 5.0
+  @AppStorage("wfPalette")      private var wfPalette      = "sync"
+  @AppStorage("wfVfoColour")    private var wfVfoColour    = "sync"
+  @AppStorage("wfPeakHold")     private var wfPeakHold     = true
 
   /// The ONE knob that matters. Smoothness vs battery, nothing else — the Canvas
   /// repaints everything (waterfall, trace, VFO) on every tick regardless.
@@ -260,6 +269,12 @@ struct ContentView: View {
   private func applyTone() {
     link.waterfall.brightness = wfBright
     link.waterfall.contrast = wfContrast
+    // The client seeds autoContrast=5 at start, so re-assert the saved value after (re)connect.
+    link.setAutoContrast(wfAutoContrast)
+    link.applyPalette(wfPalette)
+    link.applyVfo(wfVfoColour)
+    link.peakHold = wfPeakHold
+    link.waterfall.peakHold = wfPeakHold
   }
 
   /// When the crown was last actually turned. A non-tune mode ENDS when you leave —
@@ -567,6 +582,21 @@ struct ContentView: View {
     // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
     // blocked / unreachable). Covers the screen so nobody sits waiting; one tap back to servers.
     .overlay { if let err = link.connectError { refusalCard(err) } }
+    // Transient notice pill (e.g. a bookmark that can't be tuned on the current OWRX profile).
+    // Auto-clears; see SpikeLink.notify. Centred so it reads over any waterfall colour.
+    .overlay(alignment: .center) {
+      if let notice = link.notice {
+        Text(notice)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundColor(.white)
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 14).padding(.vertical, 9)
+          .background(.black.opacity(0.82), in: Capsule())
+          .overlay(Capsule().stroke(.orange.opacity(0.7), lineWidth: 1))
+          .transition(.opacity)
+      }
+    }
+    .animation(.easeInOut(duration: 0.2), value: link.notice)
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
     // pad's own content began, pushing the bottom row clean off the screen (and
@@ -578,6 +608,7 @@ struct ContentView: View {
     .navigationDestination(isPresented: $showMenu) {
       ControlMenu { mode in crownMode = mode; crownUsedAt = Date() }
         .environmentObject(link)
+        .environmentObject(bookmarks)
     }
     // First-use waterfall tutorial (once) — includes the OWRX Bluetooth-link warning on OWRX servers.
     .onAppear { if !seenSdrTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showSdrTut = true } } }
@@ -651,6 +682,9 @@ struct ContentView: View {
       case .contrast:
         wfContrast = clamp(wfContrast + Double(delta) * 0.04)
         link.waterfall.contrast = wfContrast
+      case .autoContrast:
+        wfAutoContrast = min(20, max(0, wfAutoContrast + Double(delta) * 0.5))
+        link.setAutoContrast(wfAutoContrast)
       }
     }
     // Volume mode hands the crown to the native WKInterfaceVolumeControl; releasing the
@@ -907,7 +941,10 @@ struct ContentView: View {
     let cw: CGFloat = 62
     let ch: CGFloat = 26
     ctx.fill(
-      Path(roundedRect: CGRect(x: size.width - cw - 2, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
+      // Right edge FLUSH to the bezel. The system clock is right-aligned and hugs the
+      // bezel; a 2pt inset shifted the pill's centre left of the digits, so a wide 24h
+      // "22:35" landed right-of-centre in the pill. Flush → symmetric padding on the clock.
+      Path(roundedRect: CGRect(x: size.width - cw, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
            cornerRadius: ch / 2),
       with: .color(.black.opacity(0.72))
     )
@@ -1084,8 +1121,9 @@ struct ContentView: View {
 
   private var meterTint: Color {
     switch crownMode {
-    case .brightness: return .yellow
-    case .contrast:   return .white
+    case .brightness:   return .yellow
+    case .contrast:     return .white
+    case .autoContrast: return .orange
     // Muted must be unmistakable at a glance: the bar still shows the level the phone
     // will return to, but nothing is coming out of it.
     case .volume:     return link.muted ? .red : .green
@@ -1099,8 +1137,9 @@ struct ContentView: View {
   private var meterValue: Double {
     switch crownMode {
     // -1…+1 mapped onto the bar, so centre = "no change from the phone".
-    case .brightness: return (wfBright + 1) / 2
-    case .contrast:   return (wfContrast + 1) / 2
+    case .brightness:   return (wfBright + 1) / 2
+    case .contrast:     return (wfContrast + 1) / 2
+    case .autoContrast: return wfAutoContrast / 20
     // The iPhone's REAL system volume — so a phone sitting at 50% reads half a bar, not
     // a full one. That lie is the entire reason this feature was rebuilt.
     case .volume:     return link.volume

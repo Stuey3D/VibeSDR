@@ -132,6 +132,7 @@ func adsbTutorialTips() -> [TutorialTip] {
 struct WristSDRApp: App {
   @StateObject private var link = SpikeLink()
   @StateObject private var favs = FavStore()
+  @StateObject private var bookmarks = BookmarkStore()
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
   /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
   @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
@@ -154,6 +155,7 @@ struct WristSDRApp: App {
           case .sdr:
             ContentView()
               .environmentObject(link)
+              .environmentObject(bookmarks)
               .navigationBarHidden(true)
           case .dab:
             DabView()

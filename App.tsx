@@ -10,7 +10,8 @@ import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
 import { watchProvider } from './src/services/watchProvider';
-import { getFavourites, getTcpFavs } from './src/services/favourites';
+import { getFavourites, getTcpFavs, setFavouriteServerType } from './src/services/favourites';
+import { detectServerType } from './src/services/sdrTypes';
 import { newLocalSession } from './src/services/localSession';
 import { getViewMode } from './src/services/viewMode';
 import { getDefaultInstance } from './src/services/defaultInstance';
@@ -310,7 +311,18 @@ export default function App() {
           // RTL-TCP favs live in their own store (host:port, no url) — the wrist row's url is
           // synthesised as <proto>://host:port; match that back.
           const tcp = tcpFavs.find((t) => `${t.proto ?? 'rtltcp'}://${t.host}:${t.port}` === url);
-          const type = f?.serverType ?? cached?.serverType ?? wtype ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
+          let type = f?.serverType ?? cached?.serverType ?? wtype ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
+          // RE-DETECT the HTTP backend, exactly as the phone's own connectFav does — a favourite saved
+          // with the wrong type (e.g. an OWRX added via the custom URL box, which defaults to UberSDR)
+          // must still connect right from the watch. fmdx/spyserver/vibeserver/rtl aren't HTTP-sniffable.
+          if (type !== 'fmdx' && type !== 'spyserver' && type !== 'vibeserver' && type !== 'rtltcp'
+              && /^https?:\/\//i.test(url)) {
+            const detected = await detectServerType(url);
+            if (detected) {
+              if (f && detected !== f.serverType) setFavouriteServerType(url, detected).catch(() => {});
+              type = detected as typeof type;
+            }
+          }
           if (type === 'rtltcp' || type === 'spyserver') {
             // Parse host:port off the url (rtltcp://h:p or spyserver://h:p).
             const m = url.match(/^[a-z]+:\/\/([^:/]+):(\d+)/i);
@@ -318,9 +330,9 @@ export default function App() {
             const port = m ? Number(m[2]) : (tcp?.port ?? 0);
             if (host && port) return connectLocal(type, host, port, f?.name ?? wname ?? tcp?.name ?? '', viewMode);
           }
-          if (f) return goTo(f, viewMode);
+          if (f) return goTo({ ...f, serverType: (type ?? f.serverType) as typeof f.serverType }, viewMode);
           // A browsed directory server the phone holds — connect it with its real name/type/longitude.
-          if (cached) return goTo({ name: cached.name, url: cached.url, serverType: cached.serverType ?? type },
+          if (cached) return goTo({ name: cached.name, url: cached.url, serverType: (type ?? cached.serverType) },
                                   viewMode, { serverLongitude: cached.longitude ?? null });
           if (type) return goTo({ name: wname || url, url, serverType: type }, viewMode);
           watchTargetPending.claimed = false;   // unknown URL, no type — don't hold the picker

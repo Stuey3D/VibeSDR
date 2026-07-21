@@ -42,6 +42,17 @@ final class SpikeLink: ObservableObject {
   // stuck on the boot band's colour (looked "always blue"). A didSet can't miss a path.
   @Published var frequency = 0.0 { didSet { if frequency != oldValue { updateBand() } } }
   @Published var span = 0.0
+  /// Bookmark gating (all Hz), mirrored from the client each tick. `tuneMin/Max` is the window
+  /// reachable RIGHT NOW (OWRX = current profile only); `coverMin/Max` is the server's broad
+  /// coverage, used to filter which bookmarks are even shown. See BookmarkStore / BookmarksView.
+  @Published var tuneMin = 0.0
+  @Published var tuneMax = 0.0
+  @Published var coverMin = 0.0
+  @Published var coverMax = 0.0
+  /// True when `hz` can be tuned on the current server/profile without a profile change.
+  func canTune(_ hz: Double) -> Bool { tuneMax > tuneMin && hz >= tuneMin && hz <= tuneMax }
+  /// True when a bookmark at `hz` belongs on the current server at all (broad coverage).
+  func inCoverage(_ hz: Double) -> Bool { coverMax > coverMin && hz >= coverMin && hz <= coverMax }
   /// How the watch is reaching the server — mirrored from the client's NWPathMonitor. Drives
   /// the connection-method glyph. Republished (not driverTick-mirrored) so it updates even
   /// before the first row lands, e.g. while still connecting on wifi.
@@ -344,6 +355,11 @@ final class SpikeLink: ObservableObject {
     }
     let sp = client.displaySpanHz   // the on-screen width, held across a reconnect (no snap)
     if span != sp { span = sp }
+    // Bookmark gating ranges (see canTune/inCoverage). Cheap to mirror; changes rarely.
+    if tuneMin  != client.tuneMinHz  { tuneMin  = client.tuneMinHz  }
+    if tuneMax  != client.tuneMaxHz  { tuneMax  = client.tuneMaxHz  }
+    if coverMin != client.coverMinHz { coverMin = client.coverMinHz }
+    if coverMax != client.coverMaxHz { coverMax = client.coverMaxHz }
     // Passband edges → the VFO's dashed LSB/USB lines (drawVFO), and the bandwidth UI.
     if filtLo != client.bwLow { filtLo = client.bwLow }
     if filtHi != client.bwHigh { filtHi = client.bwHigh }
@@ -524,6 +540,27 @@ final class SpikeLink: ObservableObject {
     frequency = client?.frequency ?? frequency
   }
 
+  // ── Bookmark recall + transient notice pill ──────────────────────────────────
+  /// A short-lived notice shown as a pill over the waterfall (bookmark refusals etc). nil = none.
+  @Published var notice: String? = nil
+  private var noticeTask: Task<Void, Never>? = nil
+  func notify(_ text: String, for seconds: Double = 2.5) {
+    notice = text
+    noticeTask?.cancel()
+    noticeTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+      if !Task.isCancelled { self?.notice = nil }
+    }
+  }
+
+  /// Recall a bookmark: retune + set demod on the CURRENT server. NEVER switches an OWRX profile —
+  /// if the frequency is outside the window tunable right now, refuse and warn rather than clamp.
+  func recall(_ b: Bookmark) {
+    guard canTune(b.frequency) else { notify("Frequency Range Not Available"); return }
+    if !b.mode.isEmpty, b.mode != mode { setMode(b.mode) }
+    tune(toHz: b.frequency)
+  }
+
   // ── Battery ─────────────────────────────────────────────────────────────────
   private func startBatteryMonitor() {
     let dev = WKInterfaceDevice.current()
@@ -538,15 +575,10 @@ final class SpikeLink: ObservableObject {
     batteryTimer = t
   }
 
-  // ── Sonar Green LUT ──────────────────────────────────────────────────────────
-  /// The 12-stop Sonar Green gradient from `src/assets/colormaps.ts`, expanded to a 256-entry
-  /// RGBA LUT by linear interpolation across the evenly-spaced stops.
-  static let sonarGreenLUT: [UInt8] = {
-    let stops: [(Double, Double, Double)] = [
-      (0x00, 0x00, 0x00), (0x00, 0x08, 0x00), (0x00, 0x1a, 0x00), (0x00, 0x33, 0x00),
-      (0x00, 0x50, 0x00), (0x00, 0x78, 0x00), (0x00, 0xaa, 0x00), (0x00, 0xcc, 0x00),
-      (0x00, 0xff, 0x00), (0x80, 0xff, 0x80), (0xcc, 0xff, 0xcc), (0xef, 0xff, 0xff),
-    ]
+  // ── Waterfall palettes ───────────────────────────────────────────────────────
+  /// Expand an evenly-spaced RGB stop list to a 256-entry RGBA LUT by linear interpolation.
+  /// (The waterfall buffer maps intensity 0…255 → LUT index → colour.)
+  nonisolated static func buildLUT(_ stops: [(Double, Double, Double)]) -> [UInt8] {
     var lut = [UInt8](repeating: 0, count: 256 * 4)
     let segs = Double(stops.count - 1)
     for i in 0..<256 {
@@ -554,16 +586,113 @@ final class SpikeLink: ObservableObject {
       let s = min(Int(p), stops.count - 2)
       let f = p - Double(s)
       let a = stops[s], b = stops[s + 1]
-      let r = a.0 + (b.0 - a.0) * f
-      let g = a.1 + (b.1 - a.1) * f
-      let bl = a.2 + (b.2 - a.2) * f
-      lut[i * 4 + 0] = UInt8(max(0, min(255, r.rounded())))
-      lut[i * 4 + 1] = UInt8(max(0, min(255, g.rounded())))
-      lut[i * 4 + 2] = UInt8(max(0, min(255, bl.rounded())))
+      lut[i * 4 + 0] = UInt8(max(0, min(255, (a.0 + (b.0 - a.0) * f).rounded())))
+      lut[i * 4 + 1] = UInt8(max(0, min(255, (a.1 + (b.1 - a.1) * f).rounded())))
+      lut[i * 4 + 2] = UInt8(max(0, min(255, (a.2 + (b.2 - a.2) * f).rounded())))
       lut[i * 4 + 3] = 255
     }
     return lut
-  }()
+  }
+
+  /// The 12-stop Sonar Green gradient from `src/assets/colormaps.ts`.
+  static let sonarGreenLUT: [UInt8] = buildLUT(WFPalette.sonar.stops)
+
+  /// The selectable palettes (plus the SYNC sentinel first — see WFPalette.sync). LUTs are built
+  /// lazily on first use and cached by the struct.
+  static let palettes: [WFPalette] = [.sync, .sonar, .sonarOrange, .nightVision, .classic, .jet, .viridis, .grey, .blackHot]
+
+  /// The selectable VFO colours (SYNC first — falls back to the orange default until iCloud lands).
+  static let vfoColours: [VfoColour] = [
+    .init(id: "sync",    name: "Sync",    hex: "#FF8C00"),   // shows the fallback colour until iCloud
+    .init(id: "orange",  name: "Orange",  hex: "#FF8C00"),
+    .init(id: "red",     name: "Red",     hex: "#FF3B30"),
+    .init(id: "yellow",  name: "Yellow",  hex: "#FFD60A"),
+    .init(id: "green",   name: "Green",   hex: "#34C759"),
+    .init(id: "cyan",    name: "Cyan",    hex: "#32ADE6"),
+    .init(id: "blue",    name: "Blue",    hex: "#0A84FF"),
+    .init(id: "magenta", name: "Magenta", hex: "#FF375F"),
+    .init(id: "white",   name: "White",   hex: "#FFFFFF"),
+  ]
+
+  /// Apply a saved palette choice to the waterfall. `sync` resolves to the phone's palette once the
+  /// iCloud layer exists; until then it falls back to Sonar Green (the historical default).
+  func applyPalette(_ id: String) {
+    let chosen = id == "sync" ? "sonar" : id            // TODO(iCloud): map sync → phone's palette
+    let p = SpikeLink.palettes.first { $0.id == chosen } ?? .sonar
+    waterfall.setLUT(p.lut)
+  }
+
+  /// Apply a saved VFO-colour choice. `sync` → phone's colour later; orange fallback for now.
+  func applyVfo(_ id: String) {
+    let v = SpikeLink.vfoColours.first { $0.id == id } ?? SpikeLink.vfoColours[1]
+    needle = Color(hex: v.hex) ?? .orange
+  }
+
+  /// Push the DSP auto-contrast (0–20) to the active backend. Re-asserted on connect/reconnect
+  /// because each client seeds its own default (5) at start — see ContentView.applyTone.
+  func setAutoContrast(_ v: Double) { client?.setAutoContrast(v) }
+}
+
+/// A selectable waterfall palette: an id, a display name, and the gradient stops (used both to build
+/// the 256-entry LUT and to draw the little preview stripes on the Display button).
+struct WFPalette: Identifiable {
+  let id: String
+  let name: String
+  let stops: [(Double, Double, Double)]
+  var lut: [UInt8] { SpikeLink.buildLUT(stops) }
+
+  /// Build from "#rrggbb" stops copied straight from the phone's `src/assets/colormaps.ts`, so the
+  /// watch palettes are the SAME as the phone's (and "Sync" can map by name later).
+  init(id: String, name: String, hex: [String]) {
+    self.id = id; self.name = name
+    self.stops = hex.map { h in
+      var s = h; if s.hasPrefix("#") { s.removeFirst() }
+      let v = UInt32(s, radix: 16) ?? 0
+      return (Double((v >> 16) & 0xff), Double((v >> 8) & 0xff), Double(v & 0xff))
+    }
+  }
+
+  /// A handful of representative swatches sampled across the gradient, for the button/preview stripes.
+  var swatches: [Color] {
+    guard stops.count > 1 else { return stops.map { Color(red: $0.0/255, green: $0.1/255, blue: $0.2/255) } }
+    let n = 6
+    return (0..<n).map { k -> Color in
+      let p = Double(k) / Double(n - 1) * Double(stops.count - 1)
+      let s = min(Int(p), stops.count - 2); let f = p - Double(s)
+      let a = stops[s], b = stops[s + 1]
+      return Color(red: (a.0 + (b.0 - a.0) * f)/255,
+                   green: (a.1 + (b.1 - a.1) * f)/255,
+                   blue: (a.2 + (b.2 - a.2) * f)/255)
+    }
+  }
+
+  // Stops copied verbatim from the phone's COLORMAPS_STOPS (src/assets/colormaps.ts) so the wrist
+  // matches the phone. "Sync" tracks the phone's own choice once iCloud lands; preview = sonar for now.
+  static let sync = WFPalette(id: "sync", name: "Sync",
+    hex: ["#000000","#000800","#001a00","#003300","#005000","#007800","#00aa00","#00cc00","#00ff00","#80ff80","#ccffcc","#efffff"])
+  static let sonar = WFPalette(id: "sonar", name: "Sonar Green",
+    hex: ["#000000","#000800","#001a00","#003300","#005000","#007800","#00aa00","#00cc00","#00ff00","#80ff80","#ccffcc","#efffff"])
+  static let sonarOrange = WFPalette(id: "sonarorange", name: "Sonar Orange",
+    hex: ["#000000","#0d0400","#1a0800","#2e1000","#4a1a00","#6e2800","#9e3c00","#c85000","#e86800","#ff8c20","#ffb860","#fff0cc"])
+  static let nightVision = WFPalette(id: "nightvision", name: "Night Vision",
+    hex: ["#000000","#0c0000","#1a0000","#2e0000","#4a0000","#700000","#a00000","#cc0000","#ee1010","#ff4040","#ff8080","#ffcccc"])
+  static let classic = WFPalette(id: "classic", name: "Classic",
+    hex: ["#000020","#000030","#000050","#000091","#1E90FF","#FFFFFF","#FFFF00","#FE6D16","#FE6D16","#FF0000","#FF0000","#C60000","#9F0000","#750000","#4A0000"])
+  static let jet = WFPalette(id: "jet", name: "Jet",
+    hex: ["#00008f","#0000ff","#00ffff","#ffff00","#ff0000","#800000"])
+  // The canonical 10-stop viridis (matplotlib) — perceptually uniform, dark-purple → teal → yellow.
+  static let viridis = WFPalette(id: "viridis", name: "Viridis",
+    hex: ["#440154","#482878","#3e4a89","#31688e","#26828e","#1f9e89","#35b779","#6ece58","#b5de2b","#fde725"])
+  static let grey = WFPalette(id: "grey", name: "Greyscale", hex: ["#000000","#FFFFFF"])
+  static let blackHot = WFPalette(id: "blackhot", name: "Black Hot", hex: ["#FFFFFF","#000000"])
+}
+
+/// A selectable VFO (tuned-carrier line) colour.
+struct VfoColour: Identifiable {
+  let id: String
+  let name: String
+  let hex: String
+  var color: Color { Color(hex: hex) ?? .orange }
 }
 
 /// "#rrggbb" → Color. Shared by the adapter and the ported views (the companion carried this

@@ -84,6 +84,8 @@ final class FmDxClient: SDRClient {
   var rowsPushed = 0
   var framesPerSec: Double = 0
   var displaySpanHz: Double { 0 }
+  var tuneMinHz: Double { 87_500_000 }
+  var tuneMaxHz: Double { 108_000_000 }
   var bwLow: Double { 0 }
   var bwHigh: Double { 0 }
 
