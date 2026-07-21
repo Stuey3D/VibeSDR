@@ -47,6 +47,9 @@ struct InstancePickerView: View {
   @EnvironmentObject var favs: FavStore
   @StateObject private var loc = LocationProvider()
   let onConnect: (SDRServer) -> Void
+  /// Non-nil ONLY when there's a live session to go back to (opened from the menu while connected).
+  /// Shows a "Close Server List" row at the top; nil on a cold boot where there's nowhere to return.
+  var onClose: (() -> Void)? = nil
 
   private static let amber = Color(red: 0xff/255, green: 0xaa/255, blue: 0x00/255)
   private static let cream = Color(red: 0xf5/255, green: 0xe6/255, blue: 0xc8/255)
@@ -61,6 +64,14 @@ struct InstancePickerView: View {
 
   var body: some View {
     List {
+      if let onClose {
+        Button(action: onClose) {
+          HStack(spacing: 8) {
+            Image(systemName: "xmark.circle.fill").font(.system(size: 17))
+            Text("Close Server List").font(.system(size: 14, weight: .semibold))
+          }.foregroundColor(.orange).frame(maxWidth: .infinity)
+        }.buttonStyle(.plain)
+      }
       favouritesSection
       directoriesSection
       customSection
@@ -69,7 +80,7 @@ struct InstancePickerView: View {
     // PLAIN STRING, deliberately. The ViewBuilder form of navigationTitle lets you style the
     // text — but it also demotes it out of the LARGE left-aligned wordmark into the small
     // inline slot beside the clock. A coloured "Jr" is not worth losing the wordmark for.
-    .navigationTitle("VibeSDR Jr")
+    .navigationTitle("Servers")
     .task { await preloadForFavourites() }
     .onAppear { loc.request() }
     .sheet(isPresented: $showCustom) { CustomServerSheet { name, url, type in

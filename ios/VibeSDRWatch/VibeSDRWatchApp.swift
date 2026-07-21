@@ -38,23 +38,17 @@ struct VibeSDRWatchApp: App {
           } else if showPicker {
             // Reuses Jr's picker verbatim (same page, same words) — the ONLY difference is
             // that the PHONE connects, not the watch: onConnect sends cmd:inst.
-            InstancePickerView(onConnect: { server in
-              link.selectInstance(server.url)
-              link.showServers = false
-            })
+            // On-the-fly switch (opened from the menu while a session is live): a "Close Server List"
+            // row at the TOP of the list backs out to the waterfall. Only offered when there's a live
+            // session to return to (everGotRow) AND we opened it deliberately (showServers).
+            InstancePickerView(
+              onConnect: { server in
+                link.selectInstance(server.url)
+                link.showServers = false
+              },
+              onClose: (link.everGotRow && link.showServers) ? { link.showServers = false } : nil
+            )
             .environmentObject(favs)
-            // On-the-fly switch (opened from the menu while connected): let the user back out
-            // to the live waterfall without picking. On a no-default cold boot there's nothing
-            // to go back to, so the button only appears once a session exists.
-            .overlay(alignment: .bottomTrailing) {
-              if link.everGotRow && link.showServers {
-                Button { link.showServers = false } label: {
-                  Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 26)).foregroundStyle(.orange)
-                    .background(Circle().fill(.black.opacity(0.5)))
-                }.buttonStyle(.plain).padding(8)
-              }
-            }
           } else {
             // Routed by BACKEND, not by a strip swap: FM-DX has no spectrum at all, so it
             // gets its own screen. The phone never tells us which screen to be — what it
