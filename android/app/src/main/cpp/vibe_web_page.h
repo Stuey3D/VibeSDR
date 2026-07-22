@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (261.1 KB)
+// Source: web/client/  (261.5 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -308,14 +308,18 @@ html, body {
    reach, and it parks at the left when squelch is off. Field-proven design — see the phone. */
 .sqlBlock { padding: 7px 0; }
 .sqlBlock > label { color: var(--btn-text); font-size: 12px; display: block; margin-bottom: 6px; }
-/* margin-top leaves clearance for the ball, which now sits ABOVE the bar (like the phone) instead
-   of half-clipped inside it. overflow is VISIBLE so the ball shows; the fill clips itself with its
-   own border-radius. */
-.sqlBar { position: relative; height: 22px; border-radius: 5px; margin-top: 12px; overflow: visible;
-          background: rgba(255,255,255,0.06); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+/* ★ The BAR is a TALL, TRANSPARENT HIT AREA — 14px of clearance above a 22px visual track. The ball
+   sits in that top clearance, so it is INSIDE the clickable box: the cursor becomes a hand ON the
+   ball, and a drag can start on it. (Before, the hit area was just the 22px track, so the ball
+   above it was dead — the hand only appeared just below it.) The JS measures the bar's left/width
+   for the horizontal mapping, and the track fills the bar's full width, so nothing there changes. */
+.sqlBar { position: relative; height: 36px; margin-top: 2px; overflow: visible;
           cursor: pointer; touch-action: none; }
+.sqlTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; border-radius: 5px;
+            overflow: hidden; background: rgba(255,255,255,0.06);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
 .sqlFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: rgba(255,255,255,0.85);
-           border-radius: 5px; transition: background-color 0.12s linear; }
+           transition: background-color 0.12s linear; }
 .sqlBar.closed .sqlFill { background: rgba(255,77,77,0.9); }
 /* The needle spans the whole bar; the ball sits on top where a thumb finds it. pointer-events off
    so a drag that lands on the ball still measures against the BAR, never the ball (the phone's
@@ -323,11 +327,11 @@ html, body {
 /* ALWAYS visible — parked at the left when squelch is off, so the ball is on screen to grab. A
    hidden handle is an undiscoverable control: without the ball, nobody knows the bar is draggable
    (the note says "drag the ball up from the left", and there must be a ball there to obey it). */
-.sqlNeedle { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; left: 0;
+.sqlNeedle { position: absolute; top: 14px; bottom: 0; width: 2px; margin-left: -1px; left: 0;
              background: #3ddc84; box-shadow: 0 0 4px rgba(61,220,132,0.7); pointer-events: none; }
 /* Dimmed while off — present and grabbable, but clearly not yet gating. */
 .sqlBar:not(.on) .sqlNeedle { opacity: 0.55; }
-.sqlBall { position: absolute; top: -13px; left: 50%; width: 18px; height: 18px; margin-left: -9px;
+.sqlBall { position: absolute; top: -14px; left: 50%; width: 18px; height: 18px; margin-left: -9px;
            border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 4px rgba(0,0,0,0.7);
            border: 1px solid rgba(0,0,0,0.25); }
 .sqlNote { color: var(--unit); font-size: 11px; margin-top: 6px; line-height: 1.35; }
@@ -934,7 +938,7 @@ select.btn { padding: 6px 8px; }
   <div class="sqlBlock">
     <label>SQUELCH</label>
     <div id="sqlBar" class="sqlBar" title="Drag the ball to set the squelch; drag fully left for OFF">
-      <div id="sqlFill" class="sqlFill"></div>
+      <div class="sqlTrack"><div id="sqlFill" class="sqlFill"></div></div>
       <div id="sqlNeedle" class="sqlNeedle"><span class="sqlBall"></span></div>
     </div>
     <div class="sqlNote" id="sqlNote">Off — audio always passes.</div>
