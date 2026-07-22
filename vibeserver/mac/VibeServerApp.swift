@@ -194,12 +194,21 @@ final class Server: ObservableObject {
     /// Bring the default browser to the front. No Automation consent needed — this is the same
     /// thing clicking its Dock icon does. We cannot pick the TAB this way, but the page itself
     /// answers the summons, so the user is never left wondering which window we meant.
+    ///
+    /// ★ ACTIVATE a running browser; do not LAUNCH it. `openApplication` asks the app to open, and
+    /// a browser asked to open with nothing to show makes a new blank tab — which is what Edge did
+    /// (Safari happened not to). If it is already running, and it must be since it is listening to
+    /// us, activating is both correct and side-effect free.
     private func activateDefaultBrowser() {
         guard let probe = URL(string: "http://localhost"),
               let app = NSWorkspace.shared.urlForApplication(toOpen: probe) else { return }
-        let cfg = NSWorkspace.OpenConfiguration()
-        cfg.activates = true
-        NSWorkspace.shared.openApplication(at: app, configuration: cfg)
+        if let id = Bundle(url: app)?.bundleIdentifier,
+           let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
+            running.activate(options: [.activateAllWindows])
+            return
+        }
+        // Not running at all — then launching it IS what the user wants, so open the page properly.
+        if let url = URL(string: address) { NSWorkspace.shared.open(url) }
     }
 
 }

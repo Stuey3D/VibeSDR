@@ -102,7 +102,20 @@ export interface AudioCallbacks {
   onLevel?: (peak: number) => void;
 }
 
+/**
+ * One second of silence, 8 kHz mono WAV, as a data URI (~200 bytes). Loops seamlessly because it is
+ * literally zeros. Only ever used as the Chromium media-session anchor above.
+ */
+const SILENT_LOOP =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+
 export class AudioPlayer {
+  /** Chromium (Chrome, Edge, Brave…) but not Safari. See `anchorEl`. */
+  private static _needsAnchor(): boolean {
+    const ua = navigator.userAgent;
+    return /Chrome|Chromium|Edg\//.test(ua) && !/^((?!Chrome|Chromium).)*Safari/.test(ua);
+  }
+
   private ws: WebSocket | null = null;
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
@@ -125,6 +138,17 @@ export class AudioPlayer {
    */
   private mediaEl: HTMLAudioElement | null = null;
   private streamDest: MediaStreamAudioDestinationNode | null = null;
+  /**
+   * ★ CHROMIUM ANCHOR. The MediaStream element above is enough for Safari, but Chromium does NOT
+   * attach its Global Media Controls to an element fed by `srcObject` — MediaStream playback is
+   * treated as call-like audio and deliberately kept out of the media widget. So on Chrome/Edge
+   * (and therefore on Windows too) Now Playing stayed empty while the audio played perfectly.
+   *
+   * The fix the web has settled on: a second element playing a real `src` — a silent, looping
+   * clip — purely to give Chromium something it is willing to attach the session to. It makes no
+   * sound and carries no audio of ours; the actual radio still comes out of the Web Audio graph.
+   */
+  private anchorEl: HTMLAudioElement | null = null;
   private ring: [Float32Array, Float32Array] | null = null;
   private cap = 48000 * 2;
   private wPos = 0;
@@ -134,6 +158,13 @@ export class AudioPlayer {
   private url: string;
   private cb: AudioCallbacks;
   private closedByUs = false;
+
+  /** Tear down the Chromium anchor alongside the real output. */
+  private _stopAnchor() {
+    if (!this.anchorEl) return;
+    try { this.anchorEl.pause(); this.anchorEl.src = ''; } catch { /* already gone */ }
+    this.anchorEl = null;
+  }
   private _volume = 1;
   private _muted = false;
   /** Server-side squelch threshold, dB. <= -100 means OFF (matches the app's convention). */
@@ -168,6 +199,19 @@ export class AudioPlayer {
       } catch {
         this.streamDest = null;
         this.mediaEl = null;
+      }
+
+      // Chromium only — Safari already shows Now Playing from the MediaStream element, and a
+      // second playing element there risks confusing which one the OS follows.
+      if (AudioPlayer._needsAnchor()) {
+        try {
+          this.anchorEl = new Audio(SILENT_LOOP);
+          this.anchorEl.loop = true;
+          // Not zero: Chromium can treat a muted element as inaudible and skip the widget
+          // entirely. The clip is silent by CONTENT, so this is still completely inaudible.
+          this.anchorEl.volume = 1;
+          void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
+        } catch { this.anchorEl = null; }
       }
 
       // AudioWorklet is [SecureContext]-only. A VibeServer is plain http:// on a
@@ -421,6 +465,7 @@ export class AudioPlayer {
     this.ws?.close();
     this.ws = null;
     if (this.mediaEl) { this.mediaEl.pause(); this.mediaEl.srcObject = null; this.mediaEl = null; }
+    this._stopAnchor();
     this.streamDest = null;
     if (this.sp) { this.sp.onaudioprocess = null; this.sp.disconnect(); this.sp = null; }
     this.ctx?.close();
