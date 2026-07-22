@@ -2,8 +2,32 @@
 
 **Raised:** Stuart Carr, 2026-07-22 — *"this is the biggest vibeserver bug that needs fixing as
 priority 1"*
-**Status:** OPEN. Cause not yet identified. Several plausible fixes tried and measured; none moved
-the number.
+**Status:** ★ FIXED — and the cause was OUR OWN CODE, added the same day.
+
+**The culprit: the silent looping `<audio>` "anchor"** added hours earlier so Chromium would show
+Now Playing (it refuses to attach Global Media Controls to a MediaStream `srcObject`). Chromium
+appears to re-decode the clip on every loop and never release it — 3,600 loops an hour.
+
+MEASURED, same machine, same page, same server:
+
+| | With anchor | Without |
+|---|---|---|
+| Edge CPU | 38% | **3.1%** |
+| Edge memory | climbing ~700 MB/s, peaked **13.1 GB** | flat |
+| CPU temp | 89°C | 56°C |
+
+3.1% is LOWER than Safari's 4.9%. Everything else reported — the heat, the hangs, the stall when
+opening a tab, the browser becoming unusable — was downstream of the leak and went with it.
+
+★★ THE LESSON WORTH KEEPING: the JS heap stayed at **5 MB** throughout. A leak of 700 MB/s was
+completely invisible to every JavaScript-level measurement, because the memory was in the browser's
+media pipeline, not in our objects. The self-profiler is what proved our drawing was free (0% of
+wall on Chromium) and turned "it must be our rendering" into "it cannot be our rendering" — which
+is what finally pointed at a subsystem rather than a draw call.
+
+Now Playing on Chromium is therefore OFF by default. It is a nicety; the leak was catastrophic. The
+anchor survives behind `#anchor` for experimenting with a leak-free version (now served as a blob
+URL rather than a data: URI — UNVERIFIED). Any retest must watch memory for MINUTES, not seconds.
 
 ---
 
@@ -37,7 +61,7 @@ work.
 regardless of the incoming frame rate, so lowering the server's rate saved the SERVER work and the
 client none at all. The cost is per-RENDER, not per-FRAME-RECEIVED.
 
-## Tried, measured, did not fix (do not re-try blindly)
+## Tried, measured, did not fix — kept anyway where they stand on their own merits
 
 1. **Waterfall self-copy → ring buffer.** It scrolled by `drawImage(canvas, 0, 1)` onto itself every
    frame. Genuinely wrong and now fixed, but not the cause.

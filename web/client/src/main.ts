@@ -305,7 +305,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // The AudioContext is built after several awaits, so the browser no longer
   // credits it to the Connect click and may leave it suspended. Rather than rely
   // on that chain surviving, always arm a resume on the next real interaction.
-  audio.start().catch((e) => console.error('audio start failed', e));
+  if (NO_AUDIO) console.warn('[bisect] audio disabled by #noaudio');
+  else audio.start().catch((e) => console.error('audio start failed', e));
 
   // PERMANENT resume. Anything that steals focus — a native dialog, a tab switch,
   // the OS — can suspend the AudioContext, and an unsuspend handler that removes
@@ -319,7 +320,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
 
   buildControls();
   initMediaSession();
-  initDecoders(host, auth);
+  if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
+  else initDecoders(host, auth);
   initIdleThrottle();
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
@@ -364,6 +366,76 @@ function renderHz(): number {
 
 let lastRenderAt = 0;
 
+/**
+ * ★ SELF-PROFILER — add #perf to the URL.
+ *
+ * DevTools needs a responsive browser to draw its own timeline, which is exactly what we do not
+ * have on Chromium here. So the page times itself: microseconds around each phase, averaged over a
+ * second, printed to the console and shown in the corner. It works when the profiler cannot, and it
+ * will work the same way on Windows and Android, where we have no debugger at all.
+ *
+ * Off unless asked for — the timing itself is cheap but not free.
+ */
+// Checked LIVE, not captured at load: the hash can be set after the script runs (and we rewrite it
+// ourselves when a summon lands), so a snapshot taken once was fragile. Also switchable by hand
+// from the console — `vibePerf(true)` — for when a URL cannot easily be edited.
+/**
+ * ★ BISECT SWITCHES, for the Chromium cost hunt (BUG-vibeserver-chromium-render.md).
+ *
+ * The self-profiler proved our JS drawing is ~0% of wall on Chromium while the process sits at 38%,
+ * so the cost is somewhere we cannot time from inside a frame. These turn whole subsystems OFF so
+ * the bill can be attributed by subtraction, which is the only tool left:
+ *
+ *   #noaudio  — never start the audio pipeline (WebSocket, worklet, decode)
+ *   #nowf     — never draw the waterfall or spectrum (data still arrives)
+ *   #nodec    — never start the decoder sidecar connection
+ *
+ * Combine freely, e.g. `#perf,noaudio`. Whichever one collapses the CPU names the culprit.
+ */
+const NO_AUDIO = location.hash.includes('noaudio');
+const NO_WF    = location.hash.includes('nowf');
+const NO_DEC   = location.hash.includes('nodec');
+
+let PERF_FORCE: boolean | null = null;
+function isPerf(): boolean {
+  if (PERF_FORCE !== null) return PERF_FORCE;
+  return location.hash.includes('perf') || location.search.includes('perf');
+}
+(window as unknown as { vibePerf: (on?: boolean) => string }).vibePerf = (on = true) => {
+  PERF_FORCE = on;
+  return on ? 'perf overlay ON' : 'perf overlay OFF';
+};
+const perf = { tick: 0, draw: 0, scale: 0, frames: 0, renders: 0 };
+let perfEl: HTMLDivElement | null = null;
+
+function perfReport(secs: number) {
+  if (!isPerf()) return;
+  const n = Math.max(1, perf.renders);
+  // ★ JS HEAP (Chromium only). This is the number that says WHOSE leak it is: if the heap climbs,
+  // it is our objects; if the heap is flat while the process still grows, the growth is in GPU or
+  // canvas memory and no amount of staring at our JS will find it.
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  const heap = mem ? ` · heap ${(mem.usedJSHeapSize / 1048576).toFixed(0)}MB` : '';
+  const line =
+    `renders ${(perf.renders / secs).toFixed(0)}/s · ` +
+    `tick ${(perf.tick / n).toFixed(2)}ms · ` +
+    `draw ${(perf.draw / n).toFixed(2)}ms · ` +
+    `scale ${(perf.scale / n).toFixed(2)}ms · ` +
+    `total ${((perf.tick + perf.draw + perf.scale) / n).toFixed(2)}ms/render · ` +
+    `${(((perf.tick + perf.draw + perf.scale) / (secs * 1000)) * 100).toFixed(0)}% of wall` + heap;
+  console.log('[perf]', line);
+  if (!perfEl) {
+    perfEl = document.createElement('div');
+    perfEl.style.cssText =
+      'position:fixed;left:8px;top:8px;z-index:9999;background:rgba(0,0,0,0.8);color:#ffb833;' +
+      'font:11px ui-monospace,monospace;padding:6px 8px;border:1px solid rgba(255,160,0,0.4);' +
+      'border-radius:6px;pointer-events:none;white-space:pre';
+    document.body.appendChild(perfEl);
+  }
+  perfEl.textContent = line.replace(/ · /g, '\n');
+  perf.tick = perf.draw = perf.scale = perf.renders = 0;
+}
+
 function loop() {
   if (!wf || !spec) return;
   const nowMs = performance.now();
@@ -377,8 +449,12 @@ function loop() {
   // sitting on the signal, not a number you read.
   wf.filterLow = spec.bandwidthLow;
   wf.filterHigh = spec.bandwidthHigh;
-  wf.tick();      // synthesise any waterfall lines now due (see Waterfall.tick)
-  wf.draw();
+  const measuring = isPerf();
+  const t0 = measuring ? performance.now() : 0;
+  if (!NO_WF) wf.tick();   // synthesise any waterfall lines now due (see Waterfall.tick)
+  const t1 = measuring ? performance.now() : 0;
+  if (!NO_WF) wf.draw();
+  const t2 = measuring ? performance.now() : 0;
 
   // ★ THE SCALE AND BAND STRIP ARE NOT PER-FRAME WORK. Both redraw TEXT — frequency labels, band
   // names — and both only change when the view does: a tune, a zoom, or a resize. Redrawing them
@@ -396,6 +472,10 @@ function loop() {
     drawScale();
     drawBands();
   }
+  if (measuring) {
+    const t3 = performance.now();
+    perf.tick += t1 - t0; perf.draw += t2 - t1; perf.scale += t3 - t2; perf.renders++;
+  }
 
   const now = performance.now();
   if (now - lastBytesAt > 1000) {
@@ -407,6 +487,7 @@ function loop() {
     framesPerSec = frameCount / secs;
     frameCount = 0;
     lastBytesAt = now;
+    perfReport(secs);
     updateStatus();
     updateRecTime();
     checkIdle();

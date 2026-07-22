@@ -103,15 +103,42 @@ export interface AudioCallbacks {
 }
 
 /**
- * One second of silence, 8 kHz mono WAV, as a data URI (~200 bytes). Loops seamlessly because it is
- * literally zeros. Only ever used as the Chromium media-session anchor above.
+ * One second of silence, 8 kHz mono WAV. Only ever used as the Chromium media-session anchor.
+ *
+ * ★★ SERVED AS A BLOB, NOT A data: URI. As a data: URI, looping this leaked ~700 MB/SECOND in
+ * Chromium — see `_needsAnchor`. A blob URL is decoded from a real resource and is the shape
+ * Chromium's media pipeline expects; whether that alone cures it is UNVERIFIED, which is why the
+ * anchor stays opt-in.
  */
-const SILENT_LOOP =
-  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+const SILENT_WAV_B64 = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+function silentLoopUrl(): string {
+  const bin = atob(SILENT_WAV_B64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+}
 
 export class AudioPlayer {
-  /** Chromium (Chrome, Edge, Brave…) but not Safari. See `anchorEl`. */
+  /**
+   * ★★ OFF BY DEFAULT — THIS LEAKED ~700 MB/SECOND IN CHROMIUM.
+   *
+   * The anchor is a silent, looping <audio> element added so Chromium would attach its Global
+   * Media Controls (it refuses to attach them to a MediaStream `srcObject`). It worked — Now
+   * Playing appeared in Edge — and it also made Edge consume 13 GB of RAM, peg a performance core
+   * at ~38%, run at 89°C, hang on opening a tab, and stall the whole browser. Chromium appears to
+   * re-decode the clip on every loop and never release it: 3,600 loops an hour.
+   *
+   * MEASURED, same machine and page: with the anchor Edge sat at 38% CPU and climbing memory;
+   * without it, 6.8% and flat — lower than Safari. Nothing else moved that number, and several
+   * plausible-looking render fixes were tried first and did not.
+   *
+   * So Now Playing on Chromium is NOT worth this. It is a nicety; the leak is catastrophic. The
+   * anchor now only runs behind `#anchor`, for experimenting with a leak-free version — the blob
+   * URL above is the first thing to retest, and the memory figure must be watched for MINUTES, not
+   * seconds, before believing any of it.
+   */
   private static _needsAnchor(): boolean {
+    if (!location.hash.includes('anchor') || location.hash.includes('noanchor')) return false;
     const ua = navigator.userAgent;
     return /Chrome|Chromium|Edg\//.test(ua) && !/^((?!Chrome|Chromium).)*Safari/.test(ua);
   }
@@ -162,7 +189,12 @@ export class AudioPlayer {
   /** Tear down the Chromium anchor alongside the real output. */
   private _stopAnchor() {
     if (!this.anchorEl) return;
-    try { this.anchorEl.pause(); this.anchorEl.src = ''; } catch { /* already gone */ }
+    try {
+      const src = this.anchorEl.src;
+      this.anchorEl.pause();
+      this.anchorEl.src = '';
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+    } catch { /* already gone */ }
     this.anchorEl = null;
   }
   private _volume = 1;
@@ -196,9 +228,11 @@ export class AudioPlayer {
       //
       // ★ SAFARI: the MediaStream element, because it is the only thing Safari attaches Now
       //   Playing to, and Safari's playout of it is clean.
+      // #noanchor disables the Chromium media-session anchor — it is the ONLY Chromium-only code
+      // we have, which makes it the first suspect for a Chromium-only leak.
       if (AudioPlayer._needsAnchor()) {
         try {
-          this.anchorEl = new Audio(SILENT_LOOP);
+          this.anchorEl = new Audio(silentLoopUrl());
           this.anchorEl.loop = true;
           // Not zero: Chromium can treat a muted element as inaudible and skip the widget
           // entirely. The clip is silent by CONTENT, so this is still completely inaudible.

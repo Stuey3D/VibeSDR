@@ -144,6 +144,27 @@ html, body {
   display: grid; grid-template-columns: 1fr auto 1fr;
   align-items: center; gap: 1.1em; min-width: 0;
 }
+
+/* ★ NARROW WINDOWS: STACK, DON'T CLIP.
+   The three-track grid centres the middle block on the SCREEN, which is right whenever there is
+   room for it. Below ~1100px there isn't: the tracks reach their min-content width and the row
+   overflows, so the meter, the search box and the right-hand controls are simply cut off the edge
+   of the window (seen at ~1230px with DevTools docked).
+   Clipping is the worst possible answer — the controls are GONE, with nothing to say so and no way
+   to reach them. Stacking is merely less pretty. The bar sits at the bottom of a column layout and
+   the waterfall above it is the flexible one, so extra rows grow the bar UPWARDS and the waterfall
+   yields, which is the trade you want: a shorter waterfall over an unusable control bar.
+   NB the "never wrap" note above is about flex-wrap on the SAME row, which made the right-hand
+   column jump about as content grew by a few pixels. This is a deliberate switch of layout at a
+   threshold, not content-dependent reflow, so it cannot jitter. */
+@media (max-width: 1100px) {
+  .barRow {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    row-gap: 0.7em;
+  }
+  #midBlock { justify-self: center; flex-wrap: wrap; justify-content: center; }
+}
 #midBlock {
   display: flex; align-items: center; gap: 1.1em;
   min-width: 0; justify-self: center;
