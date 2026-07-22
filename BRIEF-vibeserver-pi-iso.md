@@ -154,6 +154,20 @@ intact. `apt` then works because it IS apt, not an imitation of it.
 the appliance is Raspberry Pi OS plus our package, so APT updates both the OS and VibeServer. The
 image is re-cut occasionally for NEW installs, not to deliver fixes to existing ones.
 
+**Where to host it — GitHub Pages is fine, and free.** ★ Note the two senses of "repo": a GitHub
+repo is a GIT repository; APT needs a DEBIAN repository, a specific file tree served over HTTP. You
+cannot point apt at a git repo. But because that tree is static, GitHub Pages serves it happily —
+which is precisely how Docker, VS Code and others distribute. Bake into the image:
+
+```
+# /etc/apt/sources.list.d/vibeserver.list
+deb https://<org>.github.io/vibeserver-apt stable main
+```
+
+plus our public key in `/etc/apt/keyrings/`. Cloudflare Pages/R2 works identically; pick whichever
+is less friction. ★ **GitHub *Releases* is NOT an apt repo** — attached `.deb` files have no index,
+so apt cannot see them. It must be a generated tree.
+
 **What it costs:**
 - Build a `.deb` from the CMake output (`nfpm` or `dpkg-deb`); the binary is already self-contained.
 - **Hold a signing key, and keep holding it.** The one genuine ongoing responsibility, and the part
