@@ -139,6 +139,37 @@ of the owner's LAN. That is a concrete capability we can simply remove.
 appliance that third editor is OPTIONAL, so the browser page must be complete on its own — which is
 exactly the baseline rule in §2.0.
 
+## 5.2 ★ Updates — APT, and NO update server to run
+
+The concern: a desktop app can be updated by hand, but an ISO cannot, and we do not want to operate
+update infrastructure. Stuart's instinct — get into the APT system so `sudo apt update && sudo apt
+upgrade` does it for us — is the right answer, and it is cheaper than it sounds.
+
+**A Debian repository is STATIC FILES.** `dists/`, `pool/`, a `Packages.gz` index and a GPG-signed
+`Release`. No daemon, no database, no runtime cost. Host it on the same Cloudflare account already
+serving the website (Pages or R2) — which keeps the "no recurring costs while this is a hobby" rule
+intact. `apt` then works because it IS apt, not an imitation of it.
+
+**The ISO stops being an update channel.** The image is only the initial install; after first boot
+the appliance is Raspberry Pi OS plus our package, so APT updates both the OS and VibeServer. The
+image is re-cut occasionally for NEW installs, not to deliver fixes to existing ones.
+
+**What it costs:**
+- Build a `.deb` from the CMake output (`nfpm` or `dpkg-deb`); the binary is already self-contained.
+- **Hold a signing key, and keep holding it.** The one genuine ongoing responsibility, and the part
+  that hurts if it is lost — plan its storage and its rotation story before the first release.
+- Ship the image with our repo key and a `sources.list.d` entry already installed.
+
+**Also:**
+- `unattended-upgrades` for security patches, so a field box nobody logs into still gets OS fixes.
+- A field appliance on its own hotspot has NO internet and simply will not update. Fine — but
+  Compute Hardware & Network must show the installed version and when it last checked, and offer
+  "update now" when a network is present, rather than silently doing nothing.
+
+**Rejected:** a bespoke self-updater (needs its own hosting and signing anyway, and re-invents what
+apt already does well) and image-based A/B updaters such as RAUC/Mender (robust, but far too heavy
+for this).
+
 ## 6. ★ Recovery — a headless box must not be brickable
 
 No screen, no keyboard: if Wi-Fi setup fails or the password is forgotten, the user has no way in.
@@ -170,5 +201,9 @@ forces AP mode on next boot.
 7. Power settings measurably change consumption on a battery bank; throttling does not glitch audio
    for connected clients.
 8. Recovery from the boot partition restores access on a box whose password is unknown.
-9. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
+9. **Updates:** `sudo apt update && sudo apt upgrade` on a running appliance fetches and installs a
+   newer VibeServer from the static repo, verifies its signature, and restarts the service without
+   losing configuration. An appliance with no internet reports its version and last-checked date
+   rather than failing.
+10. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
    grants a shell but REFUSES port forwarding — verified by an attempted `ssh -L` tunnel failing.
