@@ -2275,6 +2275,24 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
+          // Squelch line position (0..1 on the bar, -1 = off) — computed HERE so both the WATCH feed
+          // and the phone bus share it. Effect above seeds SNR-mode/Kiwi/local; OWRX + the SNR-gate-on-
+          // an-S-meter-bar case are filled in below.
+          let sqlN = sqlNormRef.current;
+          if (owrxDbm != null) {
+            // OWRX server squelch (dB on the smeter scale) → the same linear map the OWRX bar uses.
+            if (owrxSquelchRef.current > -130) sqlN = Math.max(0, Math.min(1, (owrxSquelchRef.current + 110) / 100));
+          } else if (sqlN < 0 && !isKiwi && !isLocal
+              && signalModeRef.current !== 'snr' && snrSquelchRef.current > -999) {
+            // dBFS/S-meter mode: line sits at the noise floor + threshold. The floor (chDbfs − snrDb) is
+            // signal- and zoom-INDEPENDENT (same-packet cancellation), so it's stationary — but radiod's
+            // reported noise density still jitters, so smooth it with an EMA. Stationary → settles, no
+            // drift (unlike the earlier peak-based floor). /90 = dBFS bar scale.
+            const floorInst = chDbfs - snrDb;
+            const f = floorEmaRef.current;
+            floorEmaRef.current = f <= -900 ? floorInst : f + 0.1 * (floorInst - f);
+            sqlN = Math.max(0, Math.min(1, (floorEmaRef.current + snrSquelchRef.current + 130) / 90));
+          }
           // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
           // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
           // rendered SNR showed a permanent "—" while its bar moved perfectly well.
@@ -2284,30 +2302,13 @@ export default function SDRScreen({ route, navigation }: Props) {
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6, link: 0,
             }),
+            sqlN,
           );
           // Backgrounded (watch-only) frames must NOT drive the meter bus: it
           // re-renders a React leaf per frame, and per-frame React commits in the
           // background are exactly what starved the audio DSP in v6. Nobody can
           // see the phone's meter anyway — the watch gets its level above.
           if (appActiveRef.current) {
-            // Squelch line position. The effect above set it for SNR-mode / Kiwi / local. The one case
-            // it can't (no live floor) is the SNR gate shown on an S-meter/dBFS bar: convert the SNR
-            // threshold to dBFS via the live noise floor (signal dBFS − SNR), then onto the dBFS scale.
-            let sqlN = sqlNormRef.current;
-            if (owrxDbm != null) {
-              // OWRX server squelch (dB on the smeter scale) → the same linear map the OWRX bar uses.
-              if (owrxSquelchRef.current > -130) sqlN = Math.max(0, Math.min(1, (owrxSquelchRef.current + 110) / 100));
-            } else if (sqlN < 0 && !isKiwi && !isLocal
-                && signalModeRef.current !== 'snr' && snrSquelchRef.current > -999) {
-              // dBFS/S-meter mode: line sits at the noise floor + threshold. The floor (chDbfs − snrDb)
-              // is now signal- and zoom-INDEPENDENT (same-packet cancellation), so it's stationary — but
-              // radiod's reported noise density still jitters, so smooth it with an EMA. Stationary input
-              // → the EMA settles and stays (no drift, unlike the earlier peak-based floor). /90 = dBFS.
-              const floorInst = chDbfs - snrDb;
-              const f = floorEmaRef.current;
-              floorEmaRef.current = f <= -900 ? floorInst : f + 0.1 * (floorInst - f);
-              sqlN = Math.max(0, Math.min(1, (floorEmaRef.current + snrSquelchRef.current + 130) / 90));
-            }
             meterBus.current.emit({
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,

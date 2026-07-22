@@ -73,6 +73,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// than reimplementing the colour maps here.)
   @Published var meter      = ""
   @Published var level      = 0.0
+  /// Squelch threshold as a 0..1 bar position (mirrored from the phone via the row), -1 = off.
+  /// Drives the red squelch line + the breathing "SQL" readout — see ContentView. Gate is CLOSED
+  /// (muting) when `level < sql`.
+  @Published var sql        = -1.0
   @Published var mode       = ""
   @Published var step       = 0.0
   @Published var reachable  = false
@@ -765,8 +769,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// VibeWatchModule.meterBytes, or the row is sliced at the wrong offset and every
   /// row is silently dropped for being the wrong length.
   private static let meterBytes = 12
-  /// One row's payload: 6 doubles + the meter field + the bins.
-  private static let blockSize = 8 * 6 + meterBytes + WaterfallBuffer.width
+  /// One row's payload: 7 doubles (freq, span, snr, level, lo, hi, SQL) + the meter field + the bins.
+  private static let blockSize = 8 * 7 + meterBytes + WaterfallBuffer.width
 
   // ── Jitter buffer (Stuart, 2026-07-21: "Buddy feels super sluggish vs Jr") ──────────────────────
   //
@@ -827,16 +831,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     var rows: [[UInt8]] = []
     var meterText = ""
-    var f = [Double](repeating: 0, count: 6)
+    var f = [Double](repeating: 0, count: 7)
 
     for b in 0..<count {
       let base = data.startIndex + 2 + b * Self.blockSize
-      for i in 0..<6 {
+      for i in 0..<7 {
         let lo = base + i * 8
         let bits = data[lo..<(lo + 8)].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
         f[i] = Double(bitPattern: UInt64(littleEndian: bits))
       }
-      let mStart = base + 8 * 6
+      let mStart = base + 8 * 7
       let mBytes = data[mStart..<(mStart + Self.meterBytes)].prefix { $0 != 0 }
       let t = String(decoding: mBytes, as: UTF8.self)
       if !t.isEmpty { meterText = t }
@@ -875,6 +879,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       self.level     = latest[3]
       self.filtLo    = latest[4]
       self.filtHi    = latest[5]
+      self.sql       = latest[6]   // squelch threshold (0..1 bar position, -1 = off)
     }
   }
 

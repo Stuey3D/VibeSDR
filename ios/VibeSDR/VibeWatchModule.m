@@ -15,7 +15,8 @@ RCT_EXTERN_METHOD(sendRow
                   : (nonnull NSNumber *)level lo
                   : (nonnull NSNumber *)lo hi
                   : (nonnull NSNumber *)hi meter
-                  : (NSString *)meter)
+                  : (NSString *)meter sql
+                  : (nonnull NSNumber *)sql)
 
 RCT_EXTERN_METHOD(startWatchSpectrum
                   : (NSString *)url binBandwidth

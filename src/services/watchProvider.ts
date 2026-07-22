@@ -31,7 +31,7 @@ const Native = NativeModules.VibeWatchModule as
   | {
       isReachable(): Promise<boolean>;
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
-              lo: number, hi: number, meter: string): void;
+              lo: number, hi: number, meter: string, sql: number): void;
       sendState(freq: number, mode: string, step: number, meter: string,
                 level: number, why: string, link: number,
                 band: string, bandCol: string,
@@ -231,6 +231,8 @@ class WatchProvider {
    *  "18db"). Mirrored verbatim — see setSignal. */
   private meter = '';
   private level = 0;
+  /** Squelch threshold as a 0..1 bar position (−1 = off). Rides the ROW like the meter. */
+  private sql = -1;
   private lastFmdxAt = 0;
   private pendingFmdx: string | null = null;
   private fmdxTimer: ReturnType<typeof setTimeout> | null = null;
@@ -832,10 +834,11 @@ class WatchProvider {
    * (The uplink still worked, because a message from the watch always wakes the
    * phone: the wrist could tune but had gone deaf.) ONE channel, one throttle.
    */
-  setSignal(snr: number, level: number, meter: string) {
+  setSignal(snr: number, level: number, meter: string, sql = -1) {
     this.snr = snr;
     this.level = level;
     this.meter = meter;
+    this.sql = sql;
     // NO SEND HERE. The meter rides the ROW (see sendRow) — it must never get a
     // message of its own.
     //
@@ -1067,7 +1070,7 @@ class WatchProvider {
     // the carrier on AM/FM — LSB sits entirely below it, USB entirely above, CW
     // is offset — so a single bandwidth number would draw every mode as AM.
     Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr, this.level,
-                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0, this.meter);
+                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0, this.meter, this.sql);
   }
 }
 

@@ -254,15 +254,16 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
                   replyHandler: nil, errorHandler: nil)
   }
 
-  @objc(sendRow:freq:span:snr:level:lo:hi:meter:)
+  @objc(sendRow:freq:span:snr:level:lo:hi:meter:sql:)
   func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
-               level: NSNumber, lo: NSNumber, hi: NSNumber, meter: String) {
+               level: NSNumber, lo: NSNumber, hi: NSNumber, meter: String, sql: NSNumber) {
     // The FOREGROUND path (JS produces the row). When a watch is attached and the phone
     // LOCKS, JS stops and the native WatchSpectrumForwarder produces rows instead (which
     // also land in pushWatchRow) — same wire format, off the throttled JS thread.
     guard let row = Data(base64Encoded: rowB64) else { return }
     pushWatchRow(row, freq: freq.doubleValue, span: span.doubleValue, snr: snr.doubleValue,
-                 level: level.doubleValue, lo: lo.doubleValue, hi: hi.doubleValue, meter: meter)
+                 level: level.doubleValue, lo: lo.doubleValue, hi: hi.doubleValue, meter: meter,
+                 sql: sql.doubleValue)
   }
 
   /// The shared row sender — one 256-byte row + its header, batched and sent over
@@ -271,12 +272,12 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// race on `pendingRows`; in practice they're mutually exclusive (handoff), this is
   /// belt-and-braces.
   func pushWatchRow(_ row: Data, freq: Double, span: Double, snr: Double,
-                    level: Double, lo: Double, hi: Double, meter: String) {
+                    level: Double, lo: Double, hi: Double, meter: String, sql: Double = -1) {
     watchSendQueue.async { [weak self] in
       guard let self, let s = self.session, self.linkAlive else { return }
 
-      var blob = Data(capacity: 8 * 6 + Self.meterBytes + row.count)
-      for v in [freq, span, snr, level, lo, hi] {
+      var blob = Data(capacity: 8 * 7 + Self.meterBytes + row.count)
+      for v in [freq, span, snr, level, lo, hi, sql] {
         var d = v.bitPattern.littleEndian
         withUnsafeBytes(of: &d) { blob.append(contentsOf: $0) }
       }
