@@ -368,6 +368,8 @@ final class SpikeLink: ObservableObject {
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
     let mt = "\(Int(client.signalDb.rounded()))dB"
     if meter != mt { meter = mt }
+    let sn = min(1, max(0, client.signalDb / 50))   // signal on the needle's 0..1 scale (pos*50 dB)
+    if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
 
     // A new row was drawn → the spectrum is alive.
     if client.rowsPushed != lastRowsPushed {
@@ -638,6 +640,9 @@ final class SpikeLink: ObservableObject {
   // live signal reading, the red needle off the squelch value. `sql` (0..1) is the needle position; the
   // indicator's CLOSED state is derived (level < needle), like the phone.
   @Published var sql = -1.0
+  /// The signal on the SAME 0..1 scale as the needle (signalDb / 50) — so the squelch bar and needle
+  /// line up (the meter's own `level` is a compressed fill pinned near full, useless for this).
+  @Published var sqlSignal = 0.0
 
   /// `pos`: 0..1 needle position on the signal bar; < 0 = off. Maps to a 0..50 dB SNR for the server.
   func setSquelch(_ pos: Double) {
@@ -650,6 +655,10 @@ final class SpikeLink: ObservableObject {
   func pollSignal() {
     client?.drainSpectrum(now: ProcessInfo.processInfo.systemUptime)
     if let l = client?.signalLevel, abs(level - l) > 0.003 { level = l }
+    if let db = client?.signalDb {
+      let sn = min(1, max(0, db / 50))
+      if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
+    }
   }
 }
 

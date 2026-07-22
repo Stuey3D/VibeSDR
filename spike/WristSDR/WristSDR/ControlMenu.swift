@@ -1234,10 +1234,10 @@ struct SquelchView: View {
   var body: some View {
     VStack(spacing: 10) {
       Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
-      Text(pos < 0.02 ? "Off" : (link.level < pos ? "Muting" : "Passing"))
+      Text(pos < 0.02 ? "Off" : (link.sqlSignal < pos ? "Muting" : "Passing"))
         .font(.system(size: 13, weight: .bold))
-        .foregroundColor(pos < 0.02 ? .secondary : (link.level < pos ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
-      SquelchBar(level: link.level, pos: pos)
+        .foregroundColor(pos < 0.02 ? .secondary : (link.sqlSignal < pos ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
+      SquelchBar(level: link.sqlSignal, pos: pos)
       Text("Point the needle just above the noise.\nTurn the crown · tap Done.")
         .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
       Button("Done") { dismiss() }.buttonStyle(.borderedProminent).tint(.orange)

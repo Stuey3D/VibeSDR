@@ -1883,8 +1883,8 @@ struct ContentView: View {
           .monospacedDigit()
           .hidden()
         // Squelch closing (signal below the needle): the readout flips to a breathing red "SQL"; above
-        // it → the meter figure returns. Derived from the bar vs the needle, like the phone.
-        if link.sql >= 0 && link.level < link.sql {
+        // it → the meter figure returns. Uses the needle-scale signal (sqlSignal) so it matches the gate.
+        if link.sql >= 0 && link.sqlSignal < link.sql {
           BreathingSQL()
         } else {
           Text(link.meter.isEmpty ? "—" : link.meter)
@@ -1901,7 +1901,7 @@ struct ContentView: View {
     .padding(.vertical, 4)
     .background(alignment: .leading) {
       GeometryReader { geo in
-        let closed = link.sql >= 0 && link.level < link.sql
+        let closed = link.sql >= 0 && link.sqlSignal < link.sql
         ZStack(alignment: .leading) {
           Color.black.opacity(0.55)                       // track + scrim in one
           LinearGradient(
