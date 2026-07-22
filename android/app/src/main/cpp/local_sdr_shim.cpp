@@ -2307,6 +2307,55 @@ struct LocalSdrShim::Impl {
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        } else if (reqLine.rfind("GET /icon-512.png", 0) == 0) {
+            std::string body((const char*)kVibeIcon512, kVibeIcon512Len);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: max-age=3600\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /manifest.webmanifest", 0) == 0) {
+            // PWA INSTALL. Lets a listener install the client as a real app — its own window, its
+            // own dock/taskbar icon, no browser chrome — which suits "VibeServer is also a desktop
+            // SDR" far better than a tab does.
+            // ★ Install requires a SECURE CONTEXT, so this is offered on localhost (the
+            // desktop-SDR case) but NOT to a LAN client over plain http://. That is a browser rule,
+            // not ours.
+            static const char* kManifest = R"JSON({
+  "name": "VibeServer",
+  "short_name": "VibeServer",
+  "description": "Listen to this radio",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080601",
+  "theme_color": "#080601",
+  "icons": [
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+})JSON";
+            std::string body(kManifest);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/manifest+json\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Connection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /sw.js", 0) == 0) {
+            // The minimum service worker that makes a site installable. It deliberately does NOT
+            // cache: the client is served from the radio it controls, so a stale cached copy would
+            // be a client talking to a server it no longer matches — the worst kind of bug to
+            // debug. Chromium simply requires a fetch handler to exist.
+            static const char* kSw =
+                "self.addEventListener('install', e => self.skipWaiting());\n"
+                "self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));\n"
+                "self.addEventListener('fetch', e => { /* always network: never serve a stale client */ });\n";
+            std::string body(kSw);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\n"
+                          "Service-Worker-Allowed: /\r\n"
+                          "Connection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
         } else if (reqLine.rfind("GET /favicon", 0) == 0) {
             // A REAL file, not the data: URI in the page. Safari refuses data: URI
             // favicons outright and silently shows its own default arrow instead, so

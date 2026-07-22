@@ -33,6 +33,12 @@ the mechanism works perfectly — it is simply unaffordable. Do NOT retry with a
 container, or a longer clip: a longer clip only makes the leak slower, and a slow leak is worse than
 a fast one because it hides.
 
+★ **Installing as a PWA was tested too, and does not help.** The client is installable (manifest +
+service worker + 512px icon, all served by the shim) and runs happily in its own window — but the
+media controls stay absent. Installing changes nothing about the underlying rule: Chromium's media
+session needs a MEDIA ELEMENT to attach to, and our audio comes out of a Web Audio graph. So that is
+now twice confirmed by measurement rather than argument.
+
 Chromium therefore has no Now Playing and no media-key control until Chromium changes or some
 fundamentally different mechanism appears. Safari keeps both (it attaches happily to the MediaStream
 element). `#anchor` remains only so the experiment can be repeated cheaply if the landscape shifts.

@@ -318,6 +318,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
 
+  // Register the service worker — Chromium will not offer "install" without one. It caches
+  // nothing (see /sw.js); it exists purely to satisfy the installability rule.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* http:// LAN, or unsupported */ });
+  }
+
   buildControls();
   initMediaSession();
   if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
