@@ -320,6 +320,18 @@ export default function DecoderPanel({
             {decoderStatus}
           </Text>
 
+          {/* EXPAND LEADS, and stays outside the filter run. It changes how each row is DRAWN;
+              MODE/BAND/AGE change WHICH rows are listed. Sitting it between two cyclers read as
+              a fourth filter. */}
+          {isSpotsMode && spotsKind === 'digi' && (
+            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => { e?.stopPropagation(); setSpotsExpanded(v => !v); }}>
+              <Text style={[dp.hbtnTxt, {
+                color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                {spotsExpanded ? 'COLLAPSE' : 'EXPAND'}
+              </Text>
+            </TouchableOpacity>
+          )}
           {/* Spots filter cyclers (skin sf-mode / sf-band / sf-age dropdowns) */}
           {isSpotsMode && spotsKind === 'digi' && (
             <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
@@ -330,15 +342,6 @@ export default function DecoderPanel({
               <Text style={[dp.hbtnTxt, {
                 color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 {sfMode === 'ALL' ? 'MODE' : sfMode}
-              </Text>
-            </TouchableOpacity>
-          )}
-          {isSpotsMode && spotsKind === 'digi' && (
-            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
-              onPress={(e: any) => { e?.stopPropagation(); setSpotsExpanded(v => !v); }}>
-              <Text style={[dp.hbtnTxt, {
-                color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
-                {spotsExpanded ? 'COLLAPSE' : 'EXPAND'}
               </Text>
             </TouchableOpacity>
           )}
@@ -437,6 +440,21 @@ export default function DecoderPanel({
               {minimised ? '□' : '−'}
             </Text>
           </TouchableOpacity>
+
+          {/* Close — stops the decoder and dismisses the panel (see dismissDecoderPanel).
+              ★ NOT shown for DAB or ADS-B: there the whole profile IS the decoder, so closing the
+              box would leave the receiver in a mode with nothing to show and no obvious way back.
+              Every other decoder is something layered ON a mode you can happily return to, on
+              every server type — hence no backend condition here. */}
+          {!isDabMode && !isAircraftMode && (
+            <TouchableOpacity
+              hitSlop={8}
+              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => { e?.stopPropagation(); onClose(); }}
+            >
+              <Text style={[dp.hbtnTxt, { color: dc.close, fontFamily: t.font }]}>×</Text>
+            </TouchableOpacity>
+          )}
         </TouchableOpacity>
 
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}

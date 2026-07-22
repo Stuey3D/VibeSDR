@@ -1814,6 +1814,19 @@ export default function SDRScreen({ route, navigation }: Props) {
     stopSpotFlush();
   }, [stopSpotFlush]);
 
+  // The panel's X. Closing the box must STOP the decoder, not just hide the box — a decoder still
+  // running behind a dismissed panel is invisible CPU and a confusing menu state.
+  //
+  // ★ It must also clear `selDecoder`, exactly as toggling the decoder off from the menu does.
+  // `closeDecoder()` alone stops the run but leaves the menu entry selected with its settings
+  // callout expanded, so USB: RTTY would return to plain USB while still looking like RTTY was on.
+  // Spots live in the same panel and have their own teardown, so route to whichever is showing.
+  const dismissDecoderPanel = useCallback(() => {
+    if (spotsKindRef.current) stopSpots();
+    closeDecoder();
+    setSelDecoder(null);
+  }, [closeDecoder, stopSpots]);
+
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
@@ -4303,7 +4316,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // both visible, VTS between the box and the controls. Lift by the measured VTS height.
           bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0)}
           onClear={() => setDecoderText('')}
-          onClose={closeDecoder}
+          onClose={dismissDecoderPanel}
           morseQuality={morseQuality}
           onMorseQuality={onMorseQuality}
           spotsKind={spotsKind}
