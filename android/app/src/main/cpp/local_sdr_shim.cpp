@@ -1272,6 +1272,9 @@ struct LocalSdrShim::Impl {
     std::mutex clientMtx;
     std::shared_ptr<net::Socket> specClient;
     std::shared_ptr<net::Socket> audioClient;
+    // The single occupant's session id (empty = free). Guarded by clientMtx. A client's spectrum +
+    // audio sockets share this id; a second client is refused while it is held. See acceptWs.
+    std::string occupantSession;
     std::atomic<uint64_t> frameCounter{0};
 
     std::mutex sendMtx; // serialises all WS writes (both directions are split, sends here)
@@ -2291,9 +2294,21 @@ struct LocalSdrShim::Impl {
             acceptDxcluster(sock, wsKey);
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
-            acceptWs(sock, wsKey, wsAudio);
+            acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"));
         } else if (reqLine.find("/connection") != std::string::npos) {
-            std::string body = "{\"allowed\":true}";
+            // Preflight for a manually-added server (the phone/web asks before opening sockets).
+            // Report occupancy HERE so a full server says "in use, try again later" up front,
+            // instead of the client opening a socket only to be refused with type:"busy". A
+            // loopback caller (the host's own browser) is never told it is busy — it IS the
+            // occupant or is about to become one.
+            bool busy;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              busy = !occupantSession.empty()
+                     && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen())); }
+            if (busy && isLoopback(sock->peerAddress())) busy = false;
+            std::string body = busy
+                ? "{\"allowed\":false,\"reason\":\"in-use\"}"
+                : "{\"allowed\":true}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
@@ -2460,35 +2475,55 @@ struct LocalSdrShim::Impl {
         }
     }
 
-    void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio) {
+    void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
+                  const std::string& session) {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
 
-        // ★ ONE CLIENT AT A TIME, AND THE OLD ONE MUST BE TOLD.
+        // ★ ONE OCCUPANT AT A TIME — and a second one is TURNED AWAY, not allowed to take over.
         //
-        // These are single pointers: a second client simply REPLACED the first, whose socket stayed
-        // open while never receiving another frame again. The victim did not error, did not
-        // disconnect and could not recover — it just froze forever, with no clue why. (Found the
-        // hard way: opening the web client on the serving Mac silently froze a listening iPhone.)
+        // The radio serves one listener until real multi-client lands
+        // (files/BRIEF-vibeserver-protocol-foundations.md §4). The previous behaviour was TAKEOVER:
+        // a new socket displaced the incumbent and closed it. But every client auto-reconnects on
+        // close, so two of them (two browsers, or a Mac and a phone) closed each other forever — a
+        // reconnect WAR where both could half-tune, audio stuttered, and the racing setSampleRate /
+        // setFftRate calls from two control threads could corrupt the DSP rate state. So: reject.
         //
-        // So close the displaced socket explicitly. A disconnected client shows a clear state and
-        // reconnects; a starved one is stuck until the user force-quits it. Until multi-client
-        // lands (files/BRIEF-vibeserver-protocol-foundations.md §4) takeover is the behaviour —
-        // but it is now VISIBLE takeover rather than a silent kill.
-        std::shared_ptr<net::Socket> displaced;
+        // Occupancy is keyed on the client's session id, NOT its socket or IP: one browser opens a
+        // spectrum AND an audio socket, both carrying the same id, and both must be let in. Two
+        // browsers on the SAME machine share an IP but have different ids — which is why IP won't do
+        // (that was the case that still fought). A socket with no id at all (an old client, or a raw
+        // probe) is treated as its own anonymous occupant so it can't silently share the slot.
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            const std::string me = session.empty() ? ("anon:" + sock->peerAddress()) : session;
+            const bool occupied = !occupantSession.empty()
+                && occupantSession != me
+                && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()));
+            if (occupied) {
+                // Tell them plainly, as a WS text frame (we have already upgraded), then close. The
+                // client shows "in use, try again later" and must NOT retry-storm — see the web
+                // client's handling of type:"busy".
+                LOGI("%s WS refused — server busy (occupant present)", isAudio ? "audio" : "spectrum");
+                sendWs(sock, 0x1,
+                       (const uint8_t*)"{\"type\":\"busy\"}", 15);
+                sock->close();
+                return;
+            }
+            occupantSession = me;   // claim (or re-affirm) the slot for this client
+        }
+
         if (isAudio) {
             std::lock_guard<std::mutex> lk(clientMtx);
-            if (audioClient && audioClient != sock && audioClient->isOpen()) displaced = audioClient;
             audioClient = sock;
-            LOGI("audio WS connected%s", displaced ? " (replacing an earlier listener)" : "");
+            LOGI("audio WS connected");
         } else {
             std::lock_guard<std::mutex> lk(clientMtx);
-            if (specClient && specClient != sock && specClient->isOpen()) displaced = specClient;
             specClient = sock;
             sendConfig(sock); sendHwInfo(sock);
-            LOGI("spectrum WS connected%s", displaced ? " (replacing an earlier listener)" : "");
+            LOGI("spectrum WS connected");
             // ★ TELL A NEW CLIENT THE CURRENT STATE. The device message is otherwise only sent when
             // the state CHANGES, so anyone who connected — or refreshed — after the dongle was
             // pulled saw a page that simply never updated, with nothing to explain it. Refreshing
@@ -2496,8 +2531,6 @@ struct LocalSdrShim::Impl {
             if (deviceLost.load())
                 sendText(sock, "{\"type\":\"device\",\"present\":false}");
         }
-        // Closed OUTSIDE the lock: the displaced socket's own reader may be waking up to take it.
-        if (displaced) displaced->close();
 
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
@@ -2508,7 +2541,14 @@ struct LocalSdrShim::Impl {
         }
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (specClient == sock) specClient = nullptr;
-          if (audioClient == sock) audioClient = nullptr; }
+          if (audioClient == sock) audioClient = nullptr;
+          // Free the slot once BOTH of the occupant's sockets are gone (a browser closing one tab
+          // drops both). Until then a momentary spectrum reconnect must not surrender the slot to a
+          // waiting device. A refused socket never reached here (it returned early), so it can't
+          // clear an occupancy it never held.
+          const bool specGone  = !specClient  || !specClient->isOpen();
+          const bool audioGone = !audioClient || !audioClient->isOpen();
+          if (specGone && audioGone) occupantSession.clear(); }
         sock->close();
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
     }

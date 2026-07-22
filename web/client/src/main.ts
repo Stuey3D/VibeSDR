@@ -186,8 +186,13 @@ async function connect(host: string, pin: string) {
     throw e;
   }
 
-  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + uuid() + '&mode=binary8', auth)}`;
-  const audioUrl = `${wsBase}${withAuth('/ws/audio', auth)}`;
+  // ★ ONE session id, on BOTH sockets. The server treats a session as a single occupant, and a
+  // browser opens two sockets (spectrum + audio) — without a shared id the audio socket looks like
+  // a different client and the occupancy check would reject a client's own audio. Two browsers or
+  // two devices get two ids, which is exactly what we want to keep apart.
+  const sid = uuid();
+  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8', auth)}`;
+  const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid, auth)}`;
 
   // The shim only rejects a bad PIN at WS-upgrade time (401), so surface that
   // as a splash error rather than silently retrying forever.
@@ -247,6 +252,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onSummon: () => onSummoned(),
+    onBusy: () => showBusy(),
     onDevice: (present) => showDeviceBanner(present),
     onHwInfo: (gains, rates, locked, maxFps, forceIdle) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
@@ -1371,6 +1377,33 @@ function showDeviceBanner(present: boolean) {
     '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
     'Reconnect it and restart VibeServer to resume.</span>';
   document.body.appendChild(el);
+}
+
+/** The server is already serving another listener. One radio, one occupant, until multi-client
+ *  lands — so say so plainly and STOP (the client already suppressed its auto-reconnect). A full
+ *  overlay, not a toast: nothing else on the page will work, and a dismissable banner would just
+ *  invite the user to sit staring at a dead waterfall. */
+function showBusy() {
+  const id = 'busyOverlay';
+  if (document.getElementById(id)) return;
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText =
+    'position:fixed;inset:0;z-index:9800;background:rgba(8,6,1,0.92);' +
+    'display:flex;align-items:center;justify-content:center;text-align:center;' +
+    'font:15px ui-monospace,monospace;color:#ffb833';
+  el.innerHTML =
+    '<div style="max-width:340px;padding:24px"><div style="font-size:20px;letter-spacing:4px;' +
+    'margin-bottom:12px">IN USE</div>' +
+    '<div style="opacity:0.8;line-height:1.5">This server is serving another listener. It handles ' +
+    'one at a time.<br><br>Try again in a little while.</div>' +
+    '<button id="busyRetry" style="margin-top:18px;background:none;border:1px solid rgba(255,180,50,0.5);' +
+    'color:#ffb833;border-radius:6px;padding:8px 18px;font:13px ui-monospace,monospace;cursor:pointer">' +
+    'Try again</button></div>';
+  document.body.appendChild(el);
+  // A reload is the honest retry: it re-runs the /connection preflight and re-opens the sockets
+  // from scratch, so a slot freed in the meantime is picked up cleanly.
+  document.getElementById('busyRetry')?.addEventListener('click', () => location.reload());
 }
 
 /** The server says the person at the host machine is looking for this tab. */

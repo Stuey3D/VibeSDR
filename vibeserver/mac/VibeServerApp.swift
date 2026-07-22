@@ -157,6 +157,18 @@ final class Server: ObservableObject {
                     self.lastError = "The receiver stopped — was the dongle unplugged?"
                     self.timer?.invalidate(); self.timer = nil
                 }
+                if before != self.listeners {
+                    // ★ WITHDRAW the Bonjour advert while the one slot is taken, re-publish when it
+                    // frees. A server that cannot accept anyone should not appear in Discovered
+                    // lists inviting a connection that will only be refused. (When multi-radio
+                    // lands this becomes "withdraw when ALL slots are full".) A manually-added
+                    // server still answers /connection with "in-use", so nothing is hidden that a
+                    // determined client cannot still ask about.
+                    if self.running {
+                        if self.listeners > 0 { self.stopAdvertising() }
+                        else                  { self.startAdvertising() }
+                    }
+                }
                 if before != self.listeners || !self.running { self.onChange?() }
             }
         }

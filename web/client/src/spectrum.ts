@@ -67,6 +67,8 @@ export interface SpectrumCallbacks {
               forceIdleSaver?: boolean) => void;
   onRds?:    (meta: RdsMeta) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
+  /** The server is already serving someone else — do not retry. */
+  onBusy?: () => void;
   onRtt?:    (ms: number) => void;
   /** Bytes received on the spectrum socket — the BIGGER half of the link. */
   onBytes?:  (n: number) => void;
@@ -104,6 +106,8 @@ export class SpectrumClient {
   private gainTimer: number | null = null;
   private lastGainAt = 0;
   private reconnectTimer: number | null = null;
+  /** Set when the server told us it is busy — suppresses the auto-reconnect. */
+  private refused = false;
 
   // Scratch buffers, resized on bin-count change.
   private bins: Float32Array | null = null;
@@ -148,7 +152,7 @@ export class SpectrumClient {
     ws.onclose = (e) => {
       this._stopTimers();
       this.cb.onStatus?.('closed', e.code === 1006 ? 'connection lost' : `closed (${e.code})`);
-      if (!this.closedByUs) {
+      if (!this.closedByUs && !this.refused) {
         this.reconnectTimer = window.setTimeout(() => this.connect(), 3000);
       }
     };
@@ -197,6 +201,13 @@ export class SpectrumClient {
         this.cb.onConfig?.(cfg);
         break;
       }
+      case 'busy':
+        // Someone else has the radio. The server refuses one occupant at a time and closes us
+        // right after this frame — so DON'T reconnect (the default 3s retry would hammer a busy
+        // server forever, which is the OWRX-style bad-neighbour behaviour we avoid elsewhere).
+        this.refused = true;
+        this.cb.onBusy?.();
+        break;
       case 'device':
         // The server has lost (or regained) its radio. Without this the page just stops updating
         // and looks broken — a black waterfall with working controls, which tells the user nothing.
