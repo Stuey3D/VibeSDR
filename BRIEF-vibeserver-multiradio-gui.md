@@ -640,6 +640,34 @@ rather than being a concept the user has to hold in their head.
 - **It accommodates non-RTL hardware without redesign** — the RSP1B is simply another branch, even
   though driver support is future work (§5.9).
 
+### The visual language
+
+Stuart: *"radios supplying bias-T power are highlighted yellow with a little lightning bolt next to
+them. We could even do line diagrams of each radio so it looks like you are clicking and dragging an
+RTL-SDR USB stick. Make it really visually clear to the server owner."*
+
+**Bias-T: yellow, plus a ⚡ glyph.** ★ The glyph is not decoration — it carries the meaning WITHOUT
+relying on colour. Roughly one man in twelve has some colour vision deficiency, and this is the one
+state in the whole UI where "I didn't notice" has physical consequences (§5.0). Colour catches the
+eye; the glyph is what actually says it. Both, always.
+
+That also satisfies §5.0 rule 4 — hardware-affecting settings must be **visible with attribution** —
+at a glance, across the whole station, rather than by opening each radio in turn.
+
+**Three states worth showing on every radio**, matching what the menu-bar app already distinguishes:
+
+| State | Shown as |
+|---|---|
+| Supplying bias-T | Yellow + ⚡ |
+| In use by a listener | Solid / lit, with the listener count where a pool serves several |
+| Offline (unplugged or failed) | Greyed with a warning glyph — the same condition the client banner reports |
+
+**Line art per model.** Drawing a recognisable RTL-SDR stick, a NESDR and an RSP makes the chart a
+picture of the actual station rather than a diagram of abstract boxes — and it makes a drag feel
+like moving the physical thing, which is the point of the gesture. Note this is already a solved
+problem here: `spike/tools/make_family_icons.py` generates the brand's green line-art family, so
+per-model artwork should extend that generator rather than start a new visual language.
+
 ### ★ THE HAZARD DRAG-AND-DROP INTRODUCES
 
 Moving a radio to a different antenna changes its **installation facts**, and one of them is
@@ -649,7 +677,9 @@ is precisely the accident §5.0 exists to prevent.
 
 So a move:
 
-1. **Resets hardware-affecting settings to safe defaults** — bias-T off, above all.
+1. **Resets hardware-affecting settings to safe defaults — bias-T is switched OFF automatically**,
+   and stays off until the server owner deliberately sets it again on the new antenna (Stuart,
+   confirmed). It is never carried across a move, under any circumstances.
 2. **Re-asks the antenna's question:** *"Does one of these radios power this antenna?"* — because
    the answer has genuinely changed for BOTH antennas involved.
 3. Keeps harmless settings (gain trim, an upconverter offset that belongs to the dongle rather than
