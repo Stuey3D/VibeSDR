@@ -180,6 +180,37 @@ so apt cannot see them. It must be a generated tree.
   Compute Hardware & Network must show the installed version and when it last checked, and offer
   "update now" when a network is present, rather than silently doing nothing.
 
+### 5.2.1 Updates in the web config GUI (Stuart, 2026-07-22)
+
+Compute Hardware & Network gains an **Updates** section covering the whole box — OS packages and
+VibeServer together, since apt does not distinguish:
+
+- **Policy:** off · security only · everything.
+- **Schedule:** daily / weekly / monthly, with a chosen time of day.
+- **Client warning:** because the server knows an update is due, connected clients are told
+  *"the server is carrying out an update, your connection may drop"* rather than simply losing audio.
+
+**Implementation notes that shape the design:**
+
+- **Drive `unattended-upgrades`; do not reimplement apt.** The three policy levels map onto its
+  `Allowed-Origins` (security-only vs everything) and the schedule onto a systemd timer. We WRITE
+  ITS CONFIG. Anything we run ourselves dies when the service restarts (below).
+- ★ **We cannot narrate our own restart.** When the update contains VibeServer, its `postinst`
+  restarts the service — killing the process that is showing progress and warning clients. So the
+  run must be owned by something that outlives us (the timer), and our part is: ANNOUNCE BEFORE,
+  and DETECT AFTER (a "was I just restarted by an upgrade?" marker on start, to log or confirm).
+  Clients reconnect on their own; they already do.
+- ★ **The warning is a PROTOCOL message**, not a web-page banner — the phone, the watch and the web
+  client must all render it. That makes it a `files/BRIEF-vibeserver-protocol-foundations.md` item
+  (a server `notice` to all clients), not something added here.
+- **Do not defer indefinitely for listeners.** "Never update while someone is connected" means a
+  busy server never updates. Warn, allow a grace period, then proceed.
+- **Reboots need their own consent.** Kernel/firmware updates require one, and an unannounced reboot
+  of a remote appliance is far worse than a service blip. Detect `/var/run/reboot-required`, surface
+  "reboot needed" in the GUI, and keep automatic reboot OPT-IN with its own scheduled time.
+- **A failed upgrade must not brick it.** apt does not roll back. At minimum the §6 recovery route
+  covers it; consider pinning a known-good version so a bad build can be stepped back to.
+
 **Rejected:** a bespoke self-updater (needs its own hosting and signing anyway, and re-invents what
 apt already does well) and image-based A/B updaters such as RAUC/Mender (robust, but far too heavy
 for this).
@@ -219,5 +250,9 @@ forces AP mode on next boot.
    newer VibeServer from the static repo, verifies its signature, and restarts the service without
    losing configuration. An appliance with no internet reports its version and last-checked date
    rather than failing.
-10. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
+10. **Update policy:** setting security-only vs everything, and a weekly 03:00 schedule, is
+    reflected in the system's own `unattended-upgrades`/timer config — verified by inspecting it, not
+    just our UI. Connected clients receive the update notice before the service restarts, and
+    reconnect afterwards without user action.
+11. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
    grants a shell but REFUSES port forwarding — verified by an attempted `ssh -L` tunnel failing.
