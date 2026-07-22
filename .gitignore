@@ -73,3 +73,5 @@ android/app/src/main/cpp/vibedsp/test/build/
 spike/WristSDR/build/
 spike/WristSDR/build-*.log
 /build/
+vibeserver/mac/AppIcon.icns
+vibeserver/mac/Resources/

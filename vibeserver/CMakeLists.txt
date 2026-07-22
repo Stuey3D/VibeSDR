@@ -51,9 +51,11 @@ file(GLOB FT8_SRC
     "${CPP_DIR}/ft8_lib/fft/kiss_fftr.c"
     "${CPP_DIR}/ft8_lib/common/monitor.c")
 
-# ── the server itself ─────────────────────────────────────────────────────────
-add_executable(vibeserver
-    "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
+# ── the core, as a STATIC LIB shared by the CLI and the .app ──────────────────
+# The menu-bar app and the command-line harness must be the same server, not two servers that
+# drift. Both link this.
+add_library(vibeserver_core STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_api.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     "${CPP_DIR}/mdns_responder.cpp"
@@ -66,8 +68,13 @@ add_executable(vibeserver
     "${CPP_DIR}/decoders/audio_nr.cpp"
     "${CPP_DIR}/decoders/auto_notch.cpp"
     ${FT8_SRC})
-target_include_directories(vibeserver PRIVATE
-    "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")
+target_include_directories(vibeserver_core PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")
+target_link_libraries(vibeserver_core PUBLIC vibedsp)
+
+# ── the CLI harness ───────────────────────────────────────────────────────────
+add_executable(vibeserver
+    "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
 # ── librtlsdr + libusb: the dongle, driven DIRECTLY ───────────────────────────
 # STATIC on purpose. A user drags one .app out of a DMG and it works — no Homebrew, no dylib
 # hunting, nothing to install. Prefer the static archives; fall back to whatever is found so a
@@ -89,14 +96,15 @@ endif()
 message(STATUS "librtlsdr: ${RTLSDR_LIB}")
 message(STATUS "libusb:    ${USB_LIB}")
 
-target_include_directories(vibeserver PRIVATE "${RTLSDR_INC}")
+target_include_directories(vibeserver_core PUBLIC "${RTLSDR_INC}")
 # Use the REAL rtl-sdr.h, not the iOS no-op stub the shim falls back to.
-target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_LIBRTLSDR)
-target_link_libraries(vibeserver PRIVATE vibedsp "${RTLSDR_LIB}" "${USB_LIB}")
+target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
+target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
+target_link_libraries(vibeserver PRIVATE vibeserver_core)
 if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
-  target_link_libraries(vibeserver PRIVATE
+  target_link_libraries(vibeserver_core PUBLIC
       "-framework IOKit" "-framework CoreFoundation" "-framework Security" objc)
 endif()
 find_package(Threads REQUIRED)
-target_link_libraries(vibeserver PRIVATE Threads::Threads)
+target_link_libraries(vibeserver_core PUBLIC Threads::Threads)
