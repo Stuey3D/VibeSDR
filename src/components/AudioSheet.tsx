@@ -45,50 +45,69 @@ const C = {
 function SquelchBar({ level, pos, onDrag }: {
   level: number; pos: number; onDrag?: (x: number) => void;
 }) {
-  const [w, setW] = useState(0);
-  // While dragging, show the finger's position, not the round-tripped one: the gate value goes out
-  // to the backend and comes back through the meter bus, and a ball that lags the finger by a
-  // frame or two feels broken even when the value is right.
-  const [drag, setDrag] = useState<number | null>(null);
-  const shown = drag ?? pos;
+  // The bar's position in WINDOW coordinates, measured on layout.
+  //
+  // ★ Do NOT use the touch's locationX. It is relative to whichever view actually received the
+  // touch, and once the ball slides under your finger that view becomes the BALL — so locationX
+  // collapses to 0..22 and the needle lurches back towards the left. That is what "not latching to
+  // my finger" and the "ghost of a 2nd needle" both were: one value fighting another every frame.
+  // pageX minus a measured origin is target-independent and cannot do that.
+  const bar = useRef<View>(null);
+  const geo = useRef({ x: 0, w: 1 });
+  const measure = useCallback(() => {
+    bar.current?.measureInWindow((x, _y, width) => { geo.current = { x, w: Math.max(1, width) }; });
+  }, []);
+
+  // `held` is the value THIS control owns while the user is interacting. It stays put after release
+  // instead of reverting to `pos`: the gate value goes out to the backend and comes back through the
+  // meter bus, and until that round-trip completes (or if it never confirms, as on a backend whose
+  // line position we can't derive) reverting means the ball visibly snaps back out from under the
+  // finger that just placed it. Cleared only once `pos` agrees, so external changes still win.
+  const [held, setHeld] = useState<number | null>(null);
+  useEffect(() => {
+    if (held === null) return;
+    if (Math.abs(pos - held) < 0.02 || (held < 0 && pos < 0)) setHeld(null);
+  }, [pos, held]);
+
+  const shown = held ?? pos;
   const off = shown < 0;
   const closed = !off && level < shown;
   // Parked at the left end when off — the handle stays on screen and in reach.
   const handleX = `${Math.max(0, Math.min(1, off ? 0 : shown)) * 100}%` as const;
 
-  const wRef = useRef(0);
-  wRef.current = w;
+  const apply = useCallback((pageX: number) => {
+    const { x, w } = geo.current;
+    const raw = (pageX - x) / w;
+    // Dragging off the LEFT edge is how you turn it off — the same gesture as "no threshold at
+    // all", rather than a separate control to hunt for.
+    const v = raw < -0.04 ? -1 : Math.max(0, Math.min(1, raw));
+    setHeld(v); onDrag?.(v);
+  }, [onDrag]);
+
   const pan = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => !!onDrag,
     onMoveShouldSetPanResponder: () => !!onDrag,
-    onPanResponderGrant: (e) => {
-      const x = e.nativeEvent.locationX / Math.max(1, wRef.current);
-      setDrag(Math.max(0, Math.min(1, x))); onDrag?.(Math.max(0, Math.min(1, x)));
-    },
-    onPanResponderMove: (e) => {
-      const raw = e.nativeEvent.locationX / Math.max(1, wRef.current);
-      // Dragging off the LEFT edge is how you turn it off — the same gesture as "no threshold at
-      // all", rather than a separate control to hunt for.
-      if (raw < -0.04) { setDrag(-1); onDrag?.(-1); return; }
-      const x = Math.max(0, Math.min(1, raw));
-      setDrag(x); onDrag?.(x);
-    },
-    onPanResponderRelease: () => setDrag(null),
-    onPanResponderTerminate: () => setDrag(null),
-  }), [onDrag]);
+    // Claim the gesture outright. Without this the ScrollView this sheet sits in can steal a
+    // mostly-horizontal drag mid-flick and leave the ball stranded.
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
+    onPanResponderGrant: (e) => { measure(); apply(e.nativeEvent.pageX); },
+    onPanResponderMove: (e) => apply(e.nativeEvent.pageX),
+  }), [onDrag, apply, measure]);
 
   return (
-    <View style={st.sqlBarWrap} {...(onDrag ? pan.panHandlers : {})}
-          onLayout={(ev) => setW(ev.nativeEvent.layout.width)}>
+    <View ref={bar} style={st.sqlBarWrap} {...(onDrag ? pan.panHandlers : {})}
+          onLayout={measure}>
       <View style={st.sqlBarTrack}>
         <View style={[st.sqlBarFill, {
           width: `${Math.max(0, Math.min(1, level)) * 100}%`,
           backgroundColor: closed ? 'rgba(255,77,77,0.9)' : 'rgba(255,255,255,0.9)',
         }]} />
       </View>
-      <View style={[st.sqlNeedle, { left: handleX },
+      {/* pointerEvents none: the handles must never become the touch target — see the note above. */}
+      <View pointerEvents="none" style={[st.sqlNeedle, { left: handleX },
                     off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
-      <View style={[st.sqlBall,   { left: handleX },
+      <View pointerEvents="none" style={[st.sqlBall,   { left: handleX },
                     off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
     </View>
   );
