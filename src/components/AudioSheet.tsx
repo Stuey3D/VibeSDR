@@ -83,6 +83,9 @@ export interface AudioSheetProps {
    *  the native share VC presents over this Modal and wedges touch handling). */
   onDismiss?: () => void;
   serverType?: string;         // 'ubersdr' | 'owrx' | 'kiwi'
+  /** Meter display mode — squelch readouts follow it (S-units when 'smeter'), while the value SENT
+   *  to the backend stays in its native unit. */
+  signalMode?: 'snr' | 'smeter' | 'dbfs';
   isLocal?:  boolean;          // V4 local hardware
   /** FM-DX: only REC + Recordings apply (no client DSP / squelch / notch). */
   recordingOnly?: boolean;
@@ -128,7 +131,7 @@ export interface AudioSheetProps {
 }
 
 export default function AudioSheet({
-  visible, onClose, onDismiss, serverType = 'ubersdr', isLocal = false, recordingOnly = false,
+  visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb,
   recording = false, onRec, recSeconds = 0, onRecordings,
   snrSquelch = -999, onSnrSquelch,
@@ -146,6 +149,16 @@ export default function AudioSheet({
   const isOwrx = serverType === 'owrx';
   const isKiwi = serverType === 'kiwi';
   const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi;
+
+  // Squelch readout in the DISPLAYED meter unit (S-units when the meter shows S-meter), while the
+  // slider's value stays in the backend's NATIVE unit for the wire. dBm/dBFS → S (S9 = −73, 6 dB/S).
+  const sqlDisp = (v: number) => {
+    if (signalMode === 'smeter') {
+      if (v >= -73) { const o = Math.round(v + 73); return o > 0 ? `S9+${o}` : 'S9'; }
+      return `S${Math.max(1, 9 - Math.ceil((-73 - v) / 6))}`;
+    }
+    return `${Math.round(v)}dB`;
+  };
 
   // OWRX squelch/NR sliders — seeded from the server/profile preset (keyed on
   // seq so a profile switch re-syncs even when the new preset equals the old).
@@ -232,7 +245,7 @@ export default function AudioSheet({
                 onValueChange={(v: number) => { const db = v <= -130 ? -150 : v; setOwrxSql(db); onOwrxSquelch?.(db); }}
                 minimumTrackTintColor={owrxSql > -130 ? C.gold : C.muted}
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : `${owrxSql}dB`}</Text>
+              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql)}</Text>
             </View>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
@@ -256,7 +269,7 @@ export default function AudioSheet({
                 onValueChange={(v: number) => onLocalSquelch?.(v <= -100 ? -100 : v)}
                 minimumTrackTintColor={localSquelch > -100 ? C.gold : C.muted}
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{localSquelch <= -100 ? 'Off' : `${localSquelch.toFixed(0)}dB`}</Text>
+              <Text style={st.bwVal}>{localSquelch <= -100 ? 'Off' : sqlDisp(localSquelch)}</Text>
             </View>
           ) : null}
 
@@ -301,7 +314,7 @@ export default function AudioSheet({
                 onValueChange={(v: number) => onKiwiSquelch?.(v <= -130 ? -130 : v)}
                 minimumTrackTintColor={kiwiSquelch > -130 ? C.gold : C.muted}
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{kiwiSquelch <= -130 ? 'Off' : `${kiwiSquelch}dBm`}</Text>
+              <Text style={st.bwVal}>{kiwiSquelch <= -130 ? 'Off' : sqlDisp(kiwiSquelch)}</Text>
             </View>
           )}
 

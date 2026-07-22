@@ -1297,6 +1297,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const floorEmaRef = useRef(-1000);   // smoothed noise floor (chDbfs − SNR) for the dBFS squelch line
   const snrSquelchRef = useRef(snrSquelch);
   useEffect(() => { snrSquelchRef.current = snrSquelch; }, [snrSquelch]);
+  // OWRX squelch (server squelch_level, dB) lives in the AudioSheet — mirror it here for the line.
+  // Seed from the profile preset, then track user changes via onOwrxSquelch. -150/-130 = off.
+  const owrxSquelchRef = useRef(-150);
+  useEffect(() => { if (owrxDspDefaults?.squelchDb !== undefined) owrxSquelchRef.current = owrxDspDefaults.squelchDb; }, [owrxDspDefaults]);
   useEffect(() => {
     const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
     let s = -1;
@@ -2290,7 +2294,10 @@ export default function SDRScreen({ route, navigation }: Props) {
             // it can't (no live floor) is the SNR gate shown on an S-meter/dBFS bar: convert the SNR
             // threshold to dBFS via the live noise floor (signal dBFS − SNR), then onto the dBFS scale.
             let sqlN = sqlNormRef.current;
-            if (sqlN < 0 && owrxDbm == null && !isKiwi && !isLocal
+            if (owrxDbm != null) {
+              // OWRX server squelch (dB on the smeter scale) → the same linear map the OWRX bar uses.
+              if (owrxSquelchRef.current > -130) sqlN = Math.max(0, Math.min(1, (owrxSquelchRef.current + 110) / 100));
+            } else if (sqlN < 0 && !isKiwi && !isLocal
                 && signalModeRef.current !== 'snr' && snrSquelchRef.current > -999) {
               // dBFS/S-meter mode: line sits at the noise floor + threshold. The floor (chDbfs − snrDb)
               // is now signal- and zoom-INDEPENDENT (same-packet cancellation), so it's stationary — but
@@ -4733,7 +4740,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDspParam={onServerDspParam}
         serverVersion={serverVersion}
         serverLabel={serverLabel}
-        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
+        onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
@@ -4823,9 +4830,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
-        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
+        onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
+        signalMode={signalMode}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}
         serverDspParams={serverDspParams}
