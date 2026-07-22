@@ -1077,6 +1077,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // audio-stream floor offset (madpsy/ka9q_ubersdr#77) so it's honest 0–50 dB,
   // NOT the buggy 30–80 dB UberSDR shows. null until the first reading arrives.
   const audioSnrRef = useRef<number | null>(null);
+  // radiod channel BASEBAND POWER (dBFS), same −30 honest offset as the SNR. Zoom-INDEPENDENT (the
+  // demodulator's own channel measurement) — so the S-meter/dBFS reading uses THIS, not the spectrum
+  // peak (which scales with zoom), matching the ka9q web UI. null until the first reading arrives.
+  const audioDbfsRef = useRef<number | null>(null);
   // Last time an audio packet was heard (VibeSignal fires ~5×/s while audio
   // flows). Used to tell a slow spectrum re-subscribe (audio still alive → keep
   // the calm "reinitialising" notice) from a genuine drop (audio dead too).
@@ -1285,6 +1289,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   // OWRX and Kiwi have no SNR feed (radiod-only) — default to the S-meter
   // (the 'snr' mode reads dead on those backends).
   useEffect(() => { if ((isOwrx || isKiwi) && signalMode === 'snr') setSignalMode('smeter'); }, [isOwrx, isKiwi, signalMode]);
+  // Squelch → red line position on the signal bar, in the SAME scale the bar draws, so the line sits
+  // on the shown meter. -1 = off/none. Read live in the meter emit via sqlNormRef. NB v1: the SNR gate
+  // is on-scale only in 'snr' mode (the UberSDR/VibeServer default — the demo case); OWRX & FM squelch
+  // positioning are follow-ups (OWRX's value lives in the AudioSheet, not here yet).
+  const sqlNormRef = useRef(-1);
+  const floorEmaRef = useRef(-1000);   // smoothed noise floor (chDbfs − SNR) for the dBFS squelch line
+  const snrSquelchRef = useRef(snrSquelch);
+  useEffect(() => { snrSquelchRef.current = snrSquelch; }, [snrSquelch]);
+  useEffect(() => {
+    const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+    let s = -1;
+    if (isKiwi)       { if (kiwiSquelch > -130) s = clamp01((kiwiSquelch + 130) / 90); }
+    else if (isLocal) { if (hwSquelch   > -100) s = clamp01((hwSquelch   + 130) / 90); }
+    else if (!isOwrx) { if (snrSquelch  > -999 && signalMode === 'snr') s = sigNorm(snrSquelch); }
+    sqlNormRef.current = s;   // SNR-gate in S-meter/dBFS mode is filled live in the meter emit (needs floor)
+  }, [isKiwi, isLocal, isOwrx, kiwiSquelch, hwSquelch, snrSquelch, signalMode]);
   const handleChatJoin = useCallback((cs: string) => {
     const clean = sanitizeCallsign(cs);
     if (!clean) return;
@@ -1868,8 +1888,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     // radiod channel SNR (basebandPower − noiseDensity); −30 corrects the +30 dB
     // audio-stream floor offset so the meter reads honest dB.
-    const subSig = emitter.addListener('VibeSignal', (e: { snr: number }) => {
-      audioSnrRef.current = e.snr - 30;
+    const subSig = emitter.addListener('VibeSignal', (e: { snr: number; dbfs?: number }) => {
+      audioSnrRef.current = e.snr - 30;   // SNR: honest 0–50 (radiod's +30 floor offset removed)
+      // dBFS/S-meter uses the RAW basebandPower — do NOT subtract 30. radiod reports the noise floor
+      // 30 dB low (which is why its SNR is inflated), but basebandPower itself is calibrated: raw ≈
+      // −73 dBFS = S9, matching the ka9q web S-meter. The −30 belongs to the SNR only, never here.
+      if (typeof e.dbfs === 'number') audioDbfsRef.current = e.dbfs;
       lastAudioAtRef.current = Date.now();
     });
     // Native ⏮⏭ defer to JS. Bookmark mode jumps the station list; step mode
@@ -2224,7 +2248,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           // an SNR feed, drives the bar in every mode); otherwise fall back to
           // the spectrum-derived peak as before.
           const owrxDbm = owrxSmeterRef.current;
-          const levelDbm = owrxDbm ?? peak;
+          // Radiod (UberSDR/VibeServer) reports channel BASEBAND POWER — zoom-independent, the way the
+          // ka9q web S-meter reads. Use it for the dBFS/S-meter level instead of the spectrum peak (which
+          // scales with zoom). Kiwi/local/OWRX keep their own level source.
+          const chDbfs = (owrxDbm == null && !isKiwi && !isLocal && audioDbfsRef.current != null)
+            ? audioDbfsRef.current : peak;
+          const levelDbm = owrxDbm ?? chDbfs;
           // Bar source follows the meter mode: SNR uses the compression curve
           // (sigNorm, calibrated for honest 0–50 dB); S-meter/dBFS use the
           // absolute level mapping off the dBm level. OWRX's smeter dB spans
@@ -2234,7 +2263,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             ? Math.max(0, Math.min(1, (owrxDbm + 110) / 100))
             : signalModeRef.current === 'snr'
               ? sigNorm(snrDb)
-              : Math.max(0, Math.min(1, (peak + 130) / 90));
+              : Math.max(0, Math.min(1, (chDbfs + 130) / 90));
           // Skin-feel smoothing rescaled for 10Hz updates (the skin's 0.55/0.18
           // alphas assumed its ~60Hz rAF loop — at 10Hz they felt sluggish).
           const sm = meterSmooth.current;
@@ -2257,10 +2286,26 @@ export default function SDRScreen({ route, navigation }: Props) {
           // background are exactly what starved the audio DSP in v6. Nobody can
           // see the phone's meter anyway — the watch gets its level above.
           if (appActiveRef.current) {
+            // Squelch line position. The effect above set it for SNR-mode / Kiwi / local. The one case
+            // it can't (no live floor) is the SNR gate shown on an S-meter/dBFS bar: convert the SNR
+            // threshold to dBFS via the live noise floor (signal dBFS − SNR), then onto the dBFS scale.
+            let sqlN = sqlNormRef.current;
+            if (sqlN < 0 && owrxDbm == null && !isKiwi && !isLocal
+                && signalModeRef.current !== 'snr' && snrSquelchRef.current > -999) {
+              // dBFS/S-meter mode: line sits at the noise floor + threshold. The floor (chDbfs − snrDb)
+              // is now signal- and zoom-INDEPENDENT (same-packet cancellation), so it's stationary — but
+              // radiod's reported noise density still jitters, so smooth it with an EMA. Stationary input
+              // → the EMA settles and stays (no drift, unlike the earlier peak-based floor). /90 = dBFS.
+              const floorInst = chDbfs - snrDb;
+              const f = floorEmaRef.current;
+              floorEmaRef.current = f <= -900 ? floorInst : f + 0.1 * (floorInst - f);
+              sqlN = Math.max(0, Math.min(1, (floorEmaRef.current + snrSquelchRef.current + 130) / 90));
+            }
             meterBus.current.emit({
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
               link: meterBus.current.value.link,
+              sql: sqlN,
             });
           }
         }

@@ -96,6 +96,9 @@ export interface MeterValues {
   /** Peak power in the passband, dBFS — feeds the S-meter / dBFS readouts. */
   dbfs: number;
   active: boolean; link: 0|1|2|3;
+  /** Squelch threshold as a bar-normalised position (0..1), in the SAME scale the bar draws, so the
+   *  red squelch line sits on the shown meter. -1 = squelch off / not applicable (no line, no SQL). */
+  sql?: number;
 }
 export interface MeterBus {
   value: MeterValues;
@@ -104,7 +107,7 @@ export interface MeterBus {
 }
 export function createMeterBus(): MeterBus {
   const bus: MeterBus = {
-    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0 },
+    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0, sql: -1 },
     subs:  new Set(),
     emit(v: MeterValues) { bus.value = v; bus.subs.forEach(f => f(v)); },
   };
@@ -258,16 +261,29 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
   const peakX  = width * Math.min(1, Math.max(0, peak));
   const colors = signal > 0.001 ? sigGradColors(signal) : [];
   const pos    = signal > 0.001 ? sigGradPos(signal) : [];
+  // Squelch: red threshold line at its bar position; while the signal is BELOW it the gate is closed
+  // (muting) and the fill dims a touch — noticeable but still readable. Above it, full brightness.
+  const sql      = m ? (m.sql ?? -1) : -1;
+  const sqlOn    = sql >= 0;
+  const sqlX     = width * Math.min(1, Math.max(0, sql));
+  const sqlClosed = sqlOn && signal < sql;
   return (
     <Canvas style={StyleSheet.absoluteFill}>
       <Rect x={0} y={0} width={width} height={height} color="rgba(105,98,82,0.30)" />
       {fillW > 1 && colors.length > 0 && (
-        <Rect x={0} y={0} width={fillW} height={height}>
+        <Rect x={0} y={0} width={fillW} height={height} opacity={sqlClosed ? 0.55 : 1}>
           <LinearGradient start={vec(0,0)} end={vec(fillW,0)} colors={colors} positions={pos} />
         </Rect>
       )}
       {peakX > 2 && (
         <Rect x={peakX - 1} y={0} width={2} height={height} color="rgba(255,245,200,0.92)" />
+      )}
+      {sqlOn && (
+        <>
+          {/* White halo so the red squelch line stays visible over any fill colour. */}
+          <Rect x={sqlX - 2} y={0} width={4} height={height} color="rgba(255,255,255,0.90)" />
+          <Rect x={sqlX - 1} y={0} width={2} height={height} color="rgba(255,50,50,1)" />
+        </>
       )}
     </Canvas>
   );
@@ -359,6 +375,20 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
   // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
   const liveSnrText = snrText ? snrText : (m ? meterText(meterMode ?? 'snr', m) : '');
   const liveActive  = m ? m.active : signalActive;
+  // Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
+  // readout flips to a breathing red "SQL" (no extra screen space), and the bar dims (SignalCanvas).
+  const sqlNorm   = m ? (m.sql ?? -1) : -1;
+  const sqlClosed = sqlNorm >= 0 && (m ? m.level : 0) < sqlNorm;
+  const breathe   = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!sqlClosed) { breathe.setValue(1); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(breathe, { toValue: 0.3, duration: 650, useNativeDriver: true }),
+      Animated.timing(breathe, { toValue: 1.0, duration: 650, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [sqlClosed, breathe]);
   return (
     // maxWidth cap: the pill must NEVER swallow the signal bar — on narrow
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
@@ -401,16 +431,27 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
               is back — shows the interlocking-rings symbol when stereo is active. */}
           {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={t.modeColor} />}
         </View>
-        <Text style={[pm.snr, {
-          color: t.snrColor, fontFamily: t.font, width: snrWidth,
-          fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
-          lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
-          includeFontPadding: false,
-          fontWeight: '700',
-          opacity: liveActive ? 1.0 : 0.65,
-        }]}>
-          {liveSnrText}
-        </Text>
+        {sqlClosed ? (
+          <Animated.Text style={[pm.snr, {
+            color: '#ff4040', fontFamily: t.font, width: snrWidth,
+            fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
+            lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
+            includeFontPadding: false, fontWeight: '800', opacity: breathe,
+          }]}>
+            SQL
+          </Animated.Text>
+        ) : (
+          <Text style={[pm.snr, {
+            color: t.snrColor, fontFamily: t.font, width: snrWidth,
+            fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
+            lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
+            includeFontPadding: false,
+            fontWeight: '700',
+            opacity: liveActive ? 1.0 : 0.65,
+          }]}>
+            {liveSnrText}
+          </Text>
+        )}
       </TouchableOpacity>
     </View>
   );
