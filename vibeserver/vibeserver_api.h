@@ -30,6 +30,7 @@ typedef struct {
     double maxFftRate;     // 0 = default    ─┘
     double lockedRate;     // 0 = client may change the capture rate
     bool   serveWebClient; // serve the browser client at GET /
+    bool   forceIdleSaver; // listeners may NOT switch off idle power-saving (solar/cellular hosts)
 } VsConfig;
 
 /** Live status for a status view. Deliberately the same numbers the CLI prints. */

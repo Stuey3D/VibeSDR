@@ -246,13 +246,17 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
       }
     },
-    onHwInfo: (gains, rates, locked, maxFps) => {
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
       // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
       // a capped server from a failing link, and the difference matters.
       serverMaxFps = maxFps > 0 ? maxFps : 0;
       if (serverMaxFps > 0 && spec) spec.setFftRate(wantedFps());
+      // ★ The owner REQUIRES idle saving (a solar/cellular host, where power outranks a listener's
+      // preference). Force it on and lock the control, saying who set it — the same courtesy as a
+      // pinned sample rate. Never leave a switch on screen that we would silently ignore.
+      applyForcedIdle(forceIdle === true);
       populateHw();
     },
     onRds: (m) => {
@@ -1145,6 +1149,27 @@ function wantedFps(): number {
 
 let lastInteraction = Date.now();
 let throttled = false;
+/** Listener's choice. Off = never ask the server to slow down, however long nobody touches it. */
+let idleSaver = true;
+/** The owner has made idle saving mandatory (hwinfo.forceIdleSaver). */
+let idleForced = false;
+
+function applyForcedIdle(forced: boolean) {
+  idleForced = forced;
+  const btn = document.getElementById('idleSaver') as HTMLButtonElement | null;
+  if (!btn) return;
+  if (forced) {
+    idleSaver = true;
+    btn.classList.add('on');
+    btn.textContent = 'ON · SERVER';
+    btn.disabled = true;
+    btn.title = 'The owner of this server requires idle power saving.';
+  } else {
+    btn.disabled = false;
+    btn.title = '';
+    btn.textContent = idleSaver ? 'ON' : 'OFF';
+  }
+}
 
 function markActive() {
   lastInteraction = Date.now();
@@ -1156,7 +1181,7 @@ function markActive() {
 }
 
 function checkIdle() {
-  if (!spec || throttled) return;
+  if (!spec || throttled || !idleSaver) return;
   if (Date.now() - lastInteraction < IDLE_AFTER_MS) return;
   throttled = true;
   spec.setFftRate(wantedFps());
@@ -2388,6 +2413,15 @@ function buildMenu() {
     spec!.setHwPpm(v);
     savePref('ppm', v);
   };
+  // Persisted like the other preferences. Turning it back ON does not wait for the next idle
+  // period to matter; turning it OFF must un-throttle immediately, or the user sits at 5 fps
+  // wondering whether the switch did anything.
+  toggle('idleSaver', (on) => {
+    if (idleForced) return;         // owner-enforced: the control is locked, not merely ignored
+    idleSaver = on;
+    if (!on && throttled) { throttled = false; spec?.setFftRate(wantedFps()); updateStatus(); }
+  }, 'idleSaver', true);
+
   toggle('biasT', (on) => spec!.setHwBiasT(on), 'biasT');
   toggle('agc',   (on) => spec!.setHwAgc(on),   'agc');
   segment('dsSeg', 'ds', (v) => spec!.setHwDirectSampling(v as 0 | 1 | 2), 'directSampling');

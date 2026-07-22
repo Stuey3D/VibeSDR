@@ -416,6 +416,12 @@ static std::string         g_vsSecret;                 // empty = no PIN (open)
 static std::atomic<int>    g_vsPort{0};
 static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
 static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (20 fps)
+// ★ The IDLE SAVER is a CLIENT feature — after a while without interaction the listener asks us to
+// drop the spectrum rate, which saves this host real FFT work and real radio time. Normally the
+// listener may switch it off. A server on solar and cellular in the middle of nowhere cannot afford
+// that choice, so its owner can make the saving MANDATORY: published to clients, which then lock
+// their toggle on and say who set it (the same courtesy as lockedRate).
+static std::atomic<bool>   g_vsForceIdle{false};
 // Serve the browser client at GET /? Off = app-only, so a stranger who finds the
 // address in a browser gets nothing. The WS endpoints stay up (the app uses them);
 // only the human-facing page is withheld.
@@ -2137,6 +2143,10 @@ struct LocalSdrShim::Impl {
         // 0 here = the server's default (20 fps), i.e. no owner-imposed cap.
         { double mr = g_serveOnLan.load() ? g_vsMaxFftRate.load() : 0.0;
           j += ",\"maxFftRate\":" + std::to_string((long long)(mr > 0 ? mr : 0)); }
+        // Owner requires the idle saver — the client locks its toggle on rather than offering a
+        // switch we would silently ignore.
+        j += ",\"forceIdleSaver\":";
+        j += (g_serveOnLan.load() && g_vsForceIdle.load()) ? "1" : "0";
         j += "}";
         sendText(sock, j);
     }
@@ -2796,6 +2806,10 @@ void LocalSdrShim::setVibeServerPort(int port) {
 }
 void LocalSdrShim::setVibeServerAuth(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsMtx); g_vsSecret = secret;
+}
+void LocalSdrShim::setVibeServerForceIdleSaver(bool on) {
+    g_vsForceIdle.store(on);
+    LOGI("VibeServer idle saver: %s", on ? "REQUIRED (clients may not disable)" : "listener's choice");
 }
 void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate) {
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);

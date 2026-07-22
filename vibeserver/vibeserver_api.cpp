@@ -40,6 +40,7 @@ void vs_default_config(VsConfig* cfg) {
     cfg->maxFftRate     = 0;
     cfg->lockedRate     = 0;
     cfg->serveWebClient = true;
+    cfg->forceIdleSaver = false;
 }
 
 int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
@@ -52,6 +53,7 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     LocalSdrShim::setVibeServerLimits(cfg->maxBandwidthHz, cfg->maxFftRate);
     LocalSdrShim::setVibeServerLockedRate(cfg->lockedRate);
     LocalSdrShim::setVibeServerWebEnabled(cfg->serveWebClient);
+    LocalSdrShim::setVibeServerForceIdleSaver(cfg->forceIdleSaver);
 
     std::string err;
     // Negative fd = "open by device index" on desktop — see local_sdr_shim.cpp.

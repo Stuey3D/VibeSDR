@@ -38,6 +38,9 @@ final class Server: ObservableObject {
     @AppStorage("maxFps")   var maxFps     = 0.0      // 0 = server default (20), else 20/10/5
     @AppStorage("maxBwHz")  var maxBwHz    = 0.0      // 0 = uncapped demod bandwidth
     @AppStorage("lockRate") var lockedRate = 0.0      // 0 = client may change the capture rate
+    /// Listeners normally choose whether to let the waterfall idle down. A host on solar and
+    /// cellular cannot afford that choice, so its owner can make the saving mandatory.
+    @AppStorage("forceIdle") var forceIdleSaver = false
     @AppStorage("autoStart") var autoStart = true     // start serving as soon as the app launches
 
     /// Called whenever anything the menu bar draws has changed.
@@ -71,6 +74,7 @@ final class Server: ObservableObject {
         cfg.maxFftRate     = maxFps
         cfg.maxBandwidthHz = maxBwHz
         cfg.lockedRate     = lockedRate
+        cfg.forceIdleSaver = forceIdleSaver
 
         // The C strings must outlive the call, so hold them across it.
         mode.withCString { modePtr in
@@ -392,6 +396,9 @@ struct SettingsView: View {
                     Text("Up to 16 kHz").tag(16_000.0)
                 }
                 Text("Caps what each listener may ask for. The server tells them the limit, so they settle at it instead of mistaking it for a bad connection.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Require idle power saving", isOn: $server.forceIdleSaver)
+                Text("Listeners normally choose whether the waterfall slows down when nobody is touching it. Turn this on for a server running on solar or cellular, where saving power matters more than one listener's preference.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Advanced · Network") {

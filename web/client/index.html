@@ -1039,6 +1039,14 @@ select.btn { padding: 6px 8px; }
   </div>
 
   <h2>WATERFALL</h2>
+  <!-- IDLE SAVER: after 30s without interaction, ask the server to drop its spectrum rate. Unlike a
+       client-side slowdown this saves the SERVER real work (and its Wi-Fi radio), which is what
+       matters for a solar or battery host. Some listeners want a waterfall that keeps its full time
+       resolution while they watch it without touching anything — hence the toggle. -->
+  <div class="mrow">
+    <label>IDLE SAVER</label>
+    <div class="seg"><button class="btn on" id="idleSaver">ON</button></div>
+  </div>
   <div class="mrow">
     <label>RANGE</label>
     <div class="seg" id="wfCoarse">

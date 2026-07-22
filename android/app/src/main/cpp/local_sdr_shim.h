@@ -49,6 +49,9 @@ public:
     // The client still interpolates the waterfall, so a throttled fps stays
     // smooth. Set BEFORE start() (honoured on the serving path only).
     static void setVibeServerLimits(double maxBandwidthHz, double maxFftRate);
+    /** Require listeners to keep their idle power-saving on (they normally choose). For a host on
+     *  solar/cellular where saving power outranks a listener's preference. Set BEFORE start(). */
+    static void setVibeServerForceIdleSaver(bool on);
     // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
     // that hits a decode issue can ask the server to fall back to raw int16 PCM.
     static void setVibeServerCompressAudio(bool on);
