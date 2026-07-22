@@ -102,8 +102,8 @@ existing document rather than sprouting per-radio files:
 
 - **Global:** server name, admin password, hub port, update policy.
 - **Per radio:** everything a single VibeServer already takes — because a radio IS one.
-- Identify dongles by **serial**, not index, or unplugging one renumbers the rest and a listener
-  lands on the wrong receiver. Index is the fallback when a dongle has no serial.
+- Identify dongles by the resolution order in §5.1 — serial, then USB port path, never index. Each
+  radio stores BOTH a serial and a port path so it can be matched by whichever is unambiguous.
 
 ## 5.1 ★★ DEVICE IDENTITY — the hard part, and the one that can damage hardware
 
