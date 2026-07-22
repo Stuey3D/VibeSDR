@@ -167,6 +167,9 @@ public:
          *  live). Surfaced on the sharing screen so the host can see the server
          *  responding to the client. */
         double   sampleRate       = 0.0;
+        /** The radio has stopped delivering IQ — unplugged or failed. The server is still up and
+         *  still serving; it simply has nothing to serve. */
+        bool     deviceLost       = false;
     };
     VibeServerStatus getVibeServerStatus();
 

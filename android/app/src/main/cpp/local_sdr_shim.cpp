@@ -3712,6 +3712,7 @@ LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
     { std::lock_guard<std::mutex> lk(g_vsMtx); s.pinEnabled = !g_vsSecret.empty(); }
     if (!p) return s;
     s.running   = g_serveOnLan.load();
+    s.deviceLost = p->deviceLost.load();
     s.fftRate   = p->fftRate;
     s.bandwidthHz = p->vfoBwHz.load();
     s.sampleRate  = p->sampleRate;

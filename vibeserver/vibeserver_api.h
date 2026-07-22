@@ -44,6 +44,7 @@ typedef struct {
     double bandwidthHz;
     double sampleRate;
     bool   pinEnabled;
+    bool   deviceLost;     // radio unplugged or failed; server still up, nothing to serve
     int    port;           // the port actually bound
 } VsStatus;
 

@@ -87,6 +87,7 @@ void vs_status(VsStatus* out) {
     out->bandwidthHz      = s.bandwidthHz;
     out->sampleRate       = s.sampleRate;
     out->pinEnabled       = s.pinEnabled;
+    out->deviceLost       = s.deviceLost;
     out->port             = g_port;
 }
 
@@ -103,7 +104,18 @@ int vs_device_count(void) {
 const char* vs_device_name(int index) {
 #ifdef VIBE_HAVE_LIBRTLSDR
     if (index < 0 || (uint32_t)index >= rtlsdr_get_device_count()) { g_deviceName.clear(); return ""; }
-    const char* n = rtlsdr_get_device_name((uint32_t)index);
+    // ★ THE USB DESCRIPTOR, NOT librtlsdr's GUESS. rtlsdr_get_device_name() reports the TUNER
+    // chip's generic name — "Generic RTL2832U OEM" — which tells a user nothing and is identical
+    // across wildly different dongles. The USB strings carry what is written on the box:
+    // manufacturer "RTLSDRBlog", product "Blog V4". Knowing it is a V4 rather than a V3 is the
+    // difference between a setup a user can complete and one they have to guess at, because the
+    // two need OPPOSITE HF settings (see the profiles section of the multi-radio brief).
+    char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
+    if (rtlsdr_get_device_usb_strings((uint32_t)index, mfr, prd, ser) == 0 && prd[0]) {
+        g_deviceName = mfr[0] ? (std::string(mfr) + " " + prd) : std::string(prd);
+        return g_deviceName.c_str();
+    }
+    const char* n = rtlsdr_get_device_name((uint32_t)index);   // fallback: better than nothing
     g_deviceName = n ? n : "";
     return g_deviceName.c_str();
 #else

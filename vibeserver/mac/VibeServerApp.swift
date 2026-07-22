@@ -12,6 +12,7 @@
 
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 // ── Server: the one object that owns the core ────────────────────────────────
 @MainActor
@@ -42,6 +43,36 @@ final class Server: ObservableObject {
     /// cellular cannot afford that choice, so its owner can make the saving mandatory.
     @AppStorage("forceIdle") var forceIdleSaver = false
     @AppStorage("autoStart") var autoStart = true     // start serving as soon as the app launches
+    /** Surfaced when macOS refuses to register the login item — silence would look like a toggle
+     *  that does nothing. */
+    @Published var loginItemError: String?
+
+    /**
+     * Open at login.
+     *
+     * ★ NOT stored in our own preferences. macOS owns this — the user can remove the login item in
+     * System Settings ▸ General ▸ Login Items at any time, and a mirrored bool would then be a lie.
+     * Read the real status; write through to the real registration.
+     *
+     * With "start serving when VibeServer opens" (above), the pair means a rebooted Mac is back on
+     * the air before anyone touches it — which is the whole point for a machine left serving.
+     */
+    var openAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            do {
+                if newValue { try SMAppService.mainApp.register() }
+                else        { try SMAppService.mainApp.unregister() }
+                loginItemError = nil
+            } catch {
+                // Commonly: the app is not where macOS expects it. Say so usefully rather than
+                // leaving a switch that silently springs back.
+                loginItemError = "macOS refused: \(error.localizedDescription). "
+                    + "Move VibeServer to your Applications folder and try again."
+            }
+            objectWillChange.send()
+        }
+    }
 
     /// Called whenever anything the menu bar draws has changed.
     var onChange: (() -> Void)?
@@ -158,6 +189,29 @@ final class Server: ObservableObject {
         return "VibeServer on \(host)"
     }
 
+    /** The radio has gone (unplugged or failed) while the server is still up. */
+    var radioLost: Bool { running && status.deviceLost }
+
+    /**
+     * Take the radio back after a replug.
+     *
+     * ★ A FULL STOP AND START, deliberately — not a clever in-place reopen. Reopening the device
+     * underneath the running threads is exactly what crashed the server earlier: the HTTP and
+     * control threads were still calling into librtlsdr on a handle being closed. stop() joins
+     * everything first, so this is the same path as quitting and reopening the app, which is known
+     * to work. Listeners reconnect on their own.
+     */
+    func reconnectRadio() {
+        stop()
+        refreshDevices()
+        guard deviceCount > 0 else {
+            lastError = "No radio found. Plug the receiver in and try again."
+            onChange?()
+            return
+        }
+        start()
+    }
+
     var address: String { "http://localhost:\(port)/" }
 
     /// Who is listening, for the takeover warning. Empty when nobody is.
@@ -259,7 +313,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func render() {
         guard let button = item.button else { return }
         button.appearsDisabled = !server.running
-        if server.running {
+        if server.radioLost {
+            // Serving, but with nothing to serve. Say so in the menu bar rather than showing a
+            // healthy icon over a dead radio.
+            button.appearsDisabled = true
+            button.title = " !"
+            button.toolTip = "VibeServer — radio disconnected"
+        } else if server.running {
             let n = server.listeners
             button.title = n > 0 ? " \(n)" : ""
             button.toolTip = n > 0
@@ -322,6 +382,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
 
+        if server.radioLost {
+            let r = NSMenuItem(title: "Reconnect Radio", action: #selector(reconnectRadio), keyEquivalent: "r")
+            menu.addItem(r)
+            menu.addItem(.separator())
+        }
         if server.running {
             menu.addItem(withTitle: "Open in Browser", action: #selector(openBrowser), keyEquivalent: "o")
             menu.addItem(withTitle: "Stop Serving", action: #selector(toggleServing), keyEquivalent: "")
@@ -349,6 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !server.running {
             return server.deviceCount == 0 ? "No RTL-SDR connected" : "Stopped"
         }
+        if server.radioLost { return "Radio disconnected — plug it back in, then Reconnect Radio" }
         let n = server.listeners
         let who = n == 0 ? "nobody listening" : (n == 1 ? "1 listener" : "\(n) listeners")
         return "Serving on \(server.address) — \(who)"
@@ -356,6 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // ── Actions ──────────────────────────────────────────────────────────────
     @objc private func openBrowser() { server.openInBrowser() }
+    @objc private func reconnectRadio() { server.reconnectRadio(); render() }
     @objc private func toggleServing() { server.running ? server.stop() : server.start(); render() }
     @objc private func quit() { server.stop(); NSApp.terminate(nil) }
 
@@ -432,7 +499,7 @@ struct SettingsView: View {
                 Text("Caps what each listener may ask for. The server tells them the limit, so they settle at it instead of mistaking it for a bad connection.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Require idle power saving", isOn: $server.forceIdleSaver)
-                Text("Listeners normally choose whether the waterfall slows down when nobody is touching it. Turn this on for a server running on solar or cellular, where saving power matters more than one listener's preference.")
+                Text("When nobody is touching the waterfall it slows down, which cuts this machine's CPU and the data it sends. Listeners can normally switch that off — turn this on to make it compulsory. Worth doing if you have a data allowance to protect, or the server runs on battery or solar.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Advanced · Network") {
@@ -441,11 +508,31 @@ struct SettingsView: View {
                 Text("Leave at 0 unless something else needs this port.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section {
+            if server.radioLost {
+                Section {
+                    Label("Radio disconnected", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text("Plug the receiver back in, then press Reconnect.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Reconnect Radio") { server.reconnectRadio() }
+                }
+            }
+            Section("Startup") {
+                Toggle("Open VibeServer at login", isOn: Binding(
+                    get: { server.openAtLogin },
+                    set: { server.openAtLogin = $0 }))
                 Toggle("Start serving when VibeServer opens", isOn: $server.autoStart)
+                Text("Both on = a rebooted Mac is serving again before anyone touches it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let err = server.loginItemError {
+                    Text(err).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section {
                 Text(server.running
-                     ? "Changes apply next time you start serving."
-                     : "Changes apply when you start serving.")
+                     ? "Radio and access changes apply next time you start serving."
+                     : "Radio and access changes apply when you start serving.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

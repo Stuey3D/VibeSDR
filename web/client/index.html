@@ -1091,9 +1091,10 @@ select.btn { padding: 6px 8px; }
 
   <h2>WATERFALL</h2>
   <!-- IDLE SAVER: after 30s without interaction, ask the server to drop its spectrum rate. Unlike a
-       client-side slowdown this saves the SERVER real work (and its Wi-Fi radio), which is what
-       matters for a solar or battery host. Some listeners want a waterfall that keeps its full time
-       resolution while they watch it without touching anything — hence the toggle. -->
+       client-side slowdown this saves the SERVER real work (and its radio), which is what matters
+       when the host is on battery, solar, or a metered connection. Some listeners want a waterfall
+       that keeps its full time resolution while they watch without touching anything — hence the
+       toggle. The owner may make it compulsory (hwinfo.forceIdleSaver), in which case it locks on. -->
   <!-- WATERFALL RATE — the LISTENER's own choice, separate from the owner's ceiling and from the
        idle saver. Some machines and some browsers simply cannot paint 20 fps of waterfall without
        breaking a sweat; asking the server for fewer frames costs time resolution and nothing else,

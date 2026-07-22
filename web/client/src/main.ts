@@ -1363,7 +1363,7 @@ function applyForcedIdle(forced: boolean) {
     btn.classList.add('on');
     btn.textContent = 'ON · SERVER';
     btn.disabled = true;
-    btn.title = 'The owner of this server requires idle power saving.';
+    btn.title = 'The owner of this server requires idle power saving — it may be on battery, solar, or a metered connection.';
   } else {
     btn.disabled = false;
     btn.title = '';

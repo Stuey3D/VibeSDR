@@ -153,6 +153,48 @@ That is honest, actionable, and it costs the user nothing if they do not care �
 notes, is the common case: *"not so much a problem if a user has 4 v4s all connected to the same
 antenna using the same settings."*
 
+### 5.2 ★ RADIO PROFILES — split by CAPABILITY, and detect the model to suggest one
+
+Stuart, 2026-07-22: *"if a user plugs a v3 in and then sees it as a v3 this makes setup
+significantly easier … they set up radio profiles (but not like OWRX) so a user with 2 v4s and 2 v3s
+could make a v4 profile with the direct-sampling controls locked out, and a v3 profile which has
+auto-enable direct sampling below 24 MHz, or if they are using an upconverter they can enter the
+offset frequency. That way the radios are split by capability."*
+
+**The model is knowable.** The USB descriptor carries manufacturer `RTLSDRBlog` and product
+`Blog V4` — `rtlsdr_get_device_usb_strings()` returns both, and the Mac app now shows them. This is
+strictly better than `rtlsdr_get_device_name()`, which reports the TUNER chip ("Generic RTL2832U
+OEM") and is identical across dongles that need opposite settings.
+
+**Why capability profiles rather than per-radio fiddling.** HF works differently on different
+hardware, and getting it wrong looks like a broken receiver rather than a wrong setting:
+
+| Hardware | How it reaches HF | What the profile should do |
+|---|---|---|
+| **RTL-SDR v3** | Direct sampling, Q branch | Auto-enable direct sampling below ~24 MHz; expose the control |
+| **RTL-SDR v4** | Built-in upconverter | Direct sampling controls LOCKED OUT — using them is simply wrong here |
+| **Any + external upconverter** | External mixer | Offset frequency entered once; tuning is transparent thereafter |
+| **Plain RTL2832U** | No HF | Hide HF entirely rather than offer a band it cannot hear |
+
+A profile is therefore **a named bundle of capability facts and control policy**, applied to one or
+more radios. Two v4s share one profile; the two v3s share another; nothing is typed twice.
+
+**Deliberately NOT OWRX-style profiles.** OWRX profiles are *band/frequency* presets that switch a
+shared receiver's tuning, and switching one retunes the radio for everybody. These are *hardware
+capability* descriptions — they do not change frequency, they change what the client is allowed to
+ask for and what the server does automatically. Nobody's listening is disturbed by another user
+selecting one, because a radio has one user (§1).
+
+**Detect, suggest, never assume.** On seeing a new dongle the GUI proposes the matching profile from
+the USB product string ("This looks like an RTL-SDR Blog V4 — use the V4 profile?"). The owner
+confirms. Auto-applying would be exactly the failure §5.1 exists to prevent: an unrecognised or
+misidentified dongle must still land on SAFE DEFAULTS, not on a guess. Clones lie about their
+descriptors, so the string is a hint, never proof.
+
+**What a profile carries** (draft — settle when built): direct-sampling policy (`off` / `manual` /
+`auto below N Hz`), upconverter offset, tunable frequency range, bias-T policy, gain range, and
+which of these the listener may touch versus admin-only versus locked.
+
 ### ★ DECIDED: VibeServer will NOT write EEPROMs
 
 Stuart, 2026-07-22: *"I'd rather not build in the EEPROM editor as I don't want to potentially brick
