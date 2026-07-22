@@ -942,13 +942,15 @@ function drawSquelchBar(sigDbRaw: number) {
   bar.classList.toggle('on', on);
   const fill = document.getElementById('sqlFill') as HTMLElement | null;
   if (fill) fill.style.width = `${(Math.max(0, Math.min(1, sqlSigNorm)) * 100).toFixed(1)}%`;
+  const n = document.getElementById('sqlNeedle') as HTMLElement | null;
   if (on) {
     const span = Math.max(1, sqlScaleMax - sqlScaleMin);
     const frac = Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / span));
-    const n = document.getElementById('sqlNeedle') as HTMLElement | null;
     if (n) n.style.left = `${(frac * 100).toFixed(1)}%`;
     bar.classList.toggle('closed', sigDbRaw < squelchDb);
   } else {
+    // Park the ball at the left when off — visible and grabbable, so the control is discoverable.
+    if (n) n.style.left = '0%';
     bar.classList.remove('closed');
   }
   const note = document.getElementById('sqlNote');

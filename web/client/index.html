@@ -297,10 +297,13 @@ html, body {
 /* The needle spans the whole bar; the ball sits on top where a thumb finds it. pointer-events off
    so a drag that lands on the ball still measures against the BAR, never the ball (the phone's
    "ghost needle" bug in DOM form). */
+/* ALWAYS visible — parked at the left when squelch is off, so the ball is on screen to grab. A
+   hidden handle is an undiscoverable control: without the ball, nobody knows the bar is draggable
+   (the note says "drag the ball up from the left", and there must be a ball there to obey it). */
 .sqlNeedle { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; left: 0;
-             background: #3ddc84; box-shadow: 0 0 4px rgba(61,220,132,0.7); pointer-events: none;
-             display: none; }
-.sqlBar.on .sqlNeedle { display: block; }
+             background: #3ddc84; box-shadow: 0 0 4px rgba(61,220,132,0.7); pointer-events: none; }
+/* Dimmed while off — present and grabbable, but clearly not yet gating. */
+.sqlBar:not(.on) .sqlNeedle { opacity: 0.55; }
 .sqlBall { position: absolute; top: -5px; left: 50%; width: 16px; height: 16px; margin-left: -8px;
            border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 3px rgba(0,0,0,0.6); }
 .sqlNote { color: var(--unit); font-size: 11px; margin-top: 6px; line-height: 1.35; }
