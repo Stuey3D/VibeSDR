@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (247.3 KB)
+// Source: web/client/  (247.7 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -11,8 +11,12 @@ static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
 <title>VibeSDR</title>
 <!-- A real URL, not a data: URI — Safari refuses data: favicons and falls back
      to its default arrow. The shim serves this from GET /favicon.png. -->
-<link rel="icon" type="image/png" href="/favicon.png">
-<link rel="apple-touch-icon" href="/favicon.png">
+<!-- ?v= is a CACHE KEY, not decoration. Safari keeps a separate, very sticky favicon cache and
+     remembers FAILURES as well as hits — one 404 from something else on this port (a stale mock
+     server, during development) leaves the tab showing a letter badge forever, however correct the
+     response becomes afterwards. Bump v when the icon changes. -->
+<link rel="icon" type="image/png" href="/favicon.png?v=2">
+<link rel="apple-touch-icon" href="/favicon.png?v=2">
 <style>
 /* Design tokens — the same values as src/constants/theme.ts, which were
    themselves transcribed from the original CSS. Amber-on-black. */

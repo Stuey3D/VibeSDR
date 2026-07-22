@@ -2312,9 +2312,12 @@ struct LocalSdrShim::Impl {
             // favicons outright and silently shows its own default arrow instead, so
             // the icon has to come from a URL. ~1 KB, compiled in beside the page.
             std::string body((const char*)kVibeFavicon, kVibeFaviconLen);
+            // An hour, not a day. The icon is ~9 KB and served off the LAN, so a re-fetch costs
+            // nothing — whereas a day-long hold means a changed icon does not appear until
+            // tomorrow. The page also carries a ?v= cache key for exactly this reason.
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
-                          "Cache-Control: max-age=86400\r\nConnection: close\r\nContent-Length: "
+                          "Cache-Control: max-age=3600\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /bookmarks", 0) == 0) {
