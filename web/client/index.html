@@ -630,6 +630,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   gap: 10px; padding: 7px 0; font-size: 12px; flex-wrap: wrap;
 }
 .mrow label { color: var(--btn-text); flex: 0 0 auto; }
+/* The split is meaningless while the spectrum trace is hidden — show the control as inert. */
+.mrow.dim { opacity: .38; }
 .mrow .val { color: var(--unit); font-size: 11px; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
 .mrow input[type=range] { flex: 1 1 auto; width: auto; min-width: 90px; }
 .mrow select { flex: 1 1 auto; }
@@ -1079,7 +1081,7 @@ select.btn { padding: 6px 8px; }
     <label for="palette">COLOUR MAP</label>
     <select id="palette" class="btn"></select>
   </div>
-  <div class="mrow">
+  <div class="mrow" id="specRatioRow">
     <label for="specRatio">SPECTRUM / WATERFALL</label>
     <input type="range" id="specRatio" min="0" max="60" value="25">
     <span class="val" id="specRatioVal">25%</span>

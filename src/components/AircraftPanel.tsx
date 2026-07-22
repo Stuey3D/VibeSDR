@@ -84,7 +84,7 @@ export default function AircraftPanel({ aircraft }: { aircraft: Aircraft[] }) {
 
               <View style={s.distCol}>
                 <Text style={s.dist} numberOfLines={1}>
-                  {a.distKm != null ? `${a.distKm} km` : '—'}
+                  {a.distKm != null ? `${Math.round(a.distKm)} km` : '—'}
                 </Text>
                 <Text style={s.sub} numberOfLines={1}>
                   {a.bearing != null ? COMPASS[Math.round(a.bearing / 45) % 8] : ''}

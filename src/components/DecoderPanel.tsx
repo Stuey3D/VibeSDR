@@ -138,9 +138,13 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
           {abbrCountry(s.country)}
         </Text>
         {/* Distance-to-receiver (FT8: from the TX grid). Its own cell so country +
-            distance both show; blank when unknown. */}
+            distance both show; blank when unknown.
+            ★ ROUND IT. UberSDR sends distance_km as a raw float, so this printed
+            "8231.437291841km" and blew the column apart. Sub-kilometre precision is
+            meaningless anyway — a Maidenhead grid square is ~100 km across, so every
+            digit after the point is invented. */}
         <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>
-          {s.distKm != null ? `${s.distKm}km` : ''}
+          {s.distKm != null ? `${Math.round(s.distKm)}km` : ''}
         </Text>
       </View>
       {expanded && (
@@ -221,7 +225,7 @@ export default function DecoderPanel({
   const { theme: themeForRows } = useTheme();
   const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
     <SpotRowView s={item} isCW={spotsKind === 'cw'} font={themeForRows.font}
-                 callColor={themeForRows.name === 'white' ? '#ffffff' : C.outputCl}
+                 callColor={C.gold}
                  onTuneHz={onTuneHz} expanded={spotsExpanded} />
   ), [spotsKind, themeForRows, onTuneHz, spotsExpanded]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
@@ -586,19 +590,27 @@ const dp = StyleSheet.create({
   spotLine:    { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // Indented to the width of the time cell so it reads as belonging to the row above rather than
   // as a row of its own, and dimmer so a collapsed-style scan still skims past it.
-  spotDetail:  { fontSize: 9, letterSpacing: 0.3, color: 'rgba(255,160,0,0.40)',
-                 marginLeft: 44, marginTop: 2 },
+  // Line 2 is prose to READ, not a column to scan, so it gets a readable size rather than a
+  // decorative one. Still stepped back from line 1, but by opacity alone now.
+  spotDetail:  { fontSize: 11, letterSpacing: 0.2, color: 'rgba(255,255,255,0.62)',
+                 marginLeft: 44, marginTop: 3 },
   spotEmpty:   { padding: 12, textAlign: 'center' },
   // 7-column layout (Time·Call·Band·Mode·SNR·Country·Distance) — fixed widths sized
   // for the SE's ~340pt panel; call + country flex the remainder
-  spotCell:    { fontSize: 10, letterSpacing: 0.4, color: 'rgba(255,160,0,0.60)' },
-  spotTime:    { width: 38 },
-  spotBand:    { width: 36 },
-  spotMode:    { width: 38 },
-  spotSnr:     { width: 28, textAlign: 'right' },
-  spotCall:    { flex: 1.2, fontSize: 11, marginLeft: 6 },
+  // ★ Data WHITE, callsign AMBER — the reverse of the original. Dim amber on black at 10pt was
+  // unreadable on a 17 Pro Max even at arm's length: the colour was doing the work of a hierarchy
+  // that weight and size should do. Now the data reads plainly and the amber marks the one field
+  // you scan for.
+  spotCell:    { fontSize: 11, letterSpacing: 0.3, color: 'rgba(255,255,255,0.88)' },
+  // Widened with the font step from 10pt to 11pt — the old widths were cut for 10pt and clip
+  // "20:14"/"FT8" at the larger size. Check on the SE in Display Zoom before trimming these.
+  spotTime:    { width: 42 },
+  spotBand:    { width: 38 },
+  spotMode:    { width: 40 },
+  spotSnr:     { width: 30, textAlign: 'right' },
+  spotCall:    { flex: 1.2, fontSize: 13, fontWeight: '700', marginLeft: 6 },
   spotCountry: { flex: 0.9, textAlign: 'right' },
-  spotDist:    { width: 52, textAlign: 'right', marginLeft: 4 },
+  spotDist:    { width: 56, textAlign: 'right', marginLeft: 4 },
   settingsRow: {
     flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5,
     paddingHorizontal: 12, paddingVertical: 6,

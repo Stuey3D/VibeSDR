@@ -116,7 +116,20 @@ export class Waterfall {
   wallHitSide: 'lo' | 'hi' | null = null;
 
   /** Spectrum trace visible? (The waterfall keeps the space either way.) */
-  showSpec = true;
+  // ★ Hiding the trace COLLAPSES the split — it does not merely skip the draw. Gating only the
+  // draw left the spectrum's slice of canvas reserved and painted flat black, so "trace off" gave
+  // a dead strip above the waterfall. Dragging the ratio slider to 0 already did the right thing,
+  // which made these two controls disagree about what "no spectrum" means. Now they are one
+  // mechanism: the user's chosen ratio is remembered and restored when the trace comes back.
+  private _showSpec = true;
+  get showSpec() { return this._showSpec; }
+  set showSpec(v: boolean) {
+    if (this._showSpec === v) return;
+    this._showSpec = v;
+    this.resize();
+  }
+  /** The split actually used for layout — zero while the trace is hidden. */
+  private effectiveRatio(): number { return this._showSpec ? this.specRatio : 0; }
   /** Fill opacity of the trace (the app's bgOpacity). */
   specAlpha = 0.85;
 
@@ -209,7 +222,7 @@ export class Waterfall {
     const dpr = renderDpr();
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
-    const wfH = Math.max(1, Math.round(h * (1 - this.specRatio)));
+    const wfH = Math.max(1, Math.round(h * (1 - this.effectiveRatio())));
 
     // NB: do NOT early-out on canvas size alone. Changing the spectrum/waterfall
     // split leaves the canvas exactly the same size and only moves the boundary
@@ -422,7 +435,7 @@ export class Waterfall {
     if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
     if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
 
-    if (specH > 4 && this.spec && this.showSpec) {
+    if (specH > 4 && this.spec && this._showSpec) {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }

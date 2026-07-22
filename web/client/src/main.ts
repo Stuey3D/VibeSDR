@@ -2732,6 +2732,10 @@ function buildMenu() {
     wf!.showSpec = specOn;
     showBtn.classList.toggle('on', specOn);
     showBtn.textContent = specOn ? 'SHOW' : 'HIDE';
+    // The split slider does nothing while the trace is hidden, so say so rather than letting it
+    // drag with no visible effect.
+    const rs = document.getElementById('specRatio') as HTMLInputElement | null;
+    if (rs) { rs.disabled = !specOn; rs.closest('.mrow')?.classList.toggle('dim', !specOn); }
   };
   showBtn.onclick = () => { specOn = !specOn; applyShow(); savePref('specShow', specOn); };
   applyShow();
