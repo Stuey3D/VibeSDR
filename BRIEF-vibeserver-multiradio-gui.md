@@ -255,6 +255,37 @@ no splash (§1.1, §3.0). The overwhelmingly common setup never meets any of the
 Repeat per antenna. Antennas that differ in coverage become the pools a listener chooses between
 (§5.2.2); radios on one antenna are interchangeable and never surfaced.
 
+### ★★ How little of this needs an EEPROM change
+
+Stuart: *"you only have to change the EEPROM of the radio supplying the power — for the others the
+serial number doesn't matter, as we identify their capabilities from their USB name."*
+
+Correct, and the general rule is worth stating because it makes the EEPROM tool a rarity rather than
+a chore:
+
+> **A radio needs a unique serial only when it carries a PER-RADIO INSTALLATION FACT that the USB
+> descriptor cannot reveal, AND it is otherwise indistinguishable from its neighbours.**
+
+Everything else is already known without one:
+
+- **Capability comes from the USB product string** — "Blog V4" versus "Blog V3" tells us how each
+  reaches HF, so a mixed pool needs no serials at all.
+- **Pooled radios are interchangeable** — if nothing distinguishes them, nothing needs identifying.
+
+So the cases that actually require it are few:
+
+| Setup | Serial needed? |
+|---|---|
+| Any number of identical radios, none powering the antenna | **No** |
+| Mixed models (3 × v4 + 1 × v3), none powering the antenna | **No** — the product string separates them |
+| Several IDENTICAL radios, one supplying bias-T | **Yes — that one only** |
+| Mixed models where the ONE v3 supplies the power | **No** — it is already unique by model |
+| Several identical radios, one with an upconverter fitted | **Yes — that one only** |
+
+In practice that is usually **exactly one dongle, and often none**. Which is the right place to land:
+the tool exists for a real hazard (§5.0), is offered at the moment that hazard appears (§4.5 step 3),
+and most owners will never need to touch it.
+
 ### Why this is the right shape
 
 - **Every question is answerable.** "Does a radio power this antenna?" is observable from where the
