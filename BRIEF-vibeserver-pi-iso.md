@@ -241,6 +241,39 @@ new service after restart, and if it fails to come up within ~60s, reinstall the
 automatically and report it prominently in the GUI. A failed update must never cost the owner their
 receiver.
 
+### 5.2.3 Supervision and handover — the goals are right, the mechanism should differ
+
+Two refinements were proposed: (a) the OLD process stays alive, verifies the NEW one truly took
+over, then cleans itself up — or reasserts itself and leaves an error in the admin section; and
+(b) OLD releases the RADIO first but keeps serving the web side, so arrivals see "an update is
+happening", handing over the ports once NEW is confirmed good.
+
+Both GOALS are right and are kept: **arrivals must not meet a dead server**, and **a failed update
+must self-heal**. The mechanisms below achieve them with far less machinery.
+
+**Why not "OLD supervises NEW":** dpkg replaces the binary in place and `postinst` restarts the
+service, so systemd kills OLD as part of the upgrade — it does not get to adjudicate. Keeping it
+alive means preventing our own package from restarting the service and moving orchestration
+elsewhere. And "OLD reasserts itself" needs the old BINARY, which has just been overwritten — so a
+copy must be kept regardless. At that point the kept copy (the previous `.deb`, §5.2.2) is doing the
+real work and the surviving process adds nothing.
+
+★ **The thing that outlives the swap should be the UPDATE SCRIPT owned by the systemd timer.** It
+survives our restart by design — that is the whole point of §5.2.1's "we cannot narrate our own
+restart" — so it is the natural owner of the post-restart health check and of the rollback.
+
+★ **Use systemd SOCKET ACTIVATION instead of a port handover.** systemd owns the listening socket
+and passes it to whichever process is running, so during the swap incoming connections QUEUE IN THE
+KERNEL rather than being refused. Someone arriving mid-update simply waits the few seconds and is
+then served normally — no error, no custom "updating" page, and no two-process port negotiation to
+write or debug. It is strictly better than the proposed handover, for less code.
+
+The only thing socket activation does not provide is an explanatory page during the gap. For a
+~3-second window, where connected clients already had a 5-minute warning (§5.2.1) and reconnect
+automatically, that is not worth a bespoke handover protocol. If the gap ever grows (a slow Pi, a
+large migration), revisit with a tiny fallback unit serving a static "updating" page on the same
+socket — still far simpler than two live servers negotiating.
+
 **Rejected:** a bespoke self-updater (needs its own hosting and signing anyway, and re-invents what
 apt already does well) and image-based A/B updaters such as RAUC/Mender (robust, but far too heavy
 for this).
@@ -284,5 +317,8 @@ forces AP mode on next boot.
     reflected in the system's own `unattended-upgrades`/timer config — verified by inspecting it, not
     just our UI. Connected clients receive the update notice before the service restarts, and
     reconnect afterwards without user action.
-11. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
+11. **Update resilience:** a deliberately broken package fails its health check and the previous
+    version is reinstalled automatically, with the failure reported in the admin section. A client
+    connecting during the restart window is held and then served, rather than refused.
+12. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
    grants a shell but REFUSES port forwarding — verified by an attempted `ssh -L` tunnel failing.
