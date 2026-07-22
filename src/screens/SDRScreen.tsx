@@ -160,6 +160,17 @@ function sigNorm(v: number): number {
   return SIG_KNEE_FILL +
          (1 - SIG_KNEE_FILL) * (v - SIG_KNEE) / (SIG_CEIL - SIG_KNEE);
 }
+/** The exact inverse of sigNorm — bar fraction back to dB. Piecewise-linear, so this is exact,
+ *  not an approximation. Needed by the draggable squelch ball: the user grabs a POSITION on the
+ *  meter and the backend needs the dB it stands for. */
+function sigDenorm(x: number): number {
+  if (x <= 0) return SIG_FLOOR;
+  if (x >= 1) return SIG_CEIL;
+  if (x <= SIG_KNEE_FILL)
+    return SIG_FLOOR + (SIG_KNEE - SIG_FLOOR) * x / SIG_KNEE_FILL;
+  return SIG_KNEE +
+         (SIG_CEIL - SIG_KNEE) * (x - SIG_KNEE_FILL) / (1 - SIG_KNEE_FILL);
+}
 
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -3090,6 +3101,32 @@ export default function SDRScreen({ route, navigation }: Props) {
     sendAudioCmd({ type: 'set_audio_gate', min_snr: minSnr <= -999 ? -999 : minSnr + 30 });
   }, [sendAudioCmd]);
 
+  // Dragging the squelch ball gives a POSITION on the meter (0..1); each backend's gate wants its
+  // own native unit. This is the exact inverse of the forward mapping above — one place, so the
+  // ball can never land somewhere the red line wouldn't. x < 0 = the user dragged it off = Off.
+  //
+  // The dBFS/S-meter SNR case reads the same smoothed noise floor the forward map uses, so the
+  // needle you let go of is the level the gate actually opens at.
+  const onSquelchDrag = useCallback((x: number) => {
+    if (x < 0) {
+      if (isKiwi) onKiwiSquelch(-130);
+      else if (isLocal) onLocalSquelch(-100);
+      else onSnrSquelch(-999);
+      return;
+    }
+    const c = Math.max(0, Math.min(1, x));
+    if (isKiwi)       onKiwiSquelch(c * 90 - 130);
+    else if (isLocal) onLocalSquelch(Math.max(-100, c * 90 - 130));
+    else if (signalMode === 'snr') onSnrSquelch(sigDenorm(c));
+    else {
+      // dBFS/S-meter mode: invert `(floor + threshold + 130) / 90`. Without a settled floor there
+      // is no honest answer, so leave the gate alone rather than jumping it somewhere arbitrary.
+      const floor = floorEmaRef.current;
+      if (floor <= -900) return;
+      onSnrSquelch(c * 90 - 130 - floor);
+    }
+  }, [isKiwi, isLocal, signalMode, onKiwiSquelch, onLocalSquelch, onSnrSquelch]);
+
   // ── FM squelch ────────────────────────────────────────────────────────────
   const onFmSquelch = useCallback((db: number) => {
     setFmSquelch(db);
@@ -4827,6 +4864,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onRec={toggleRecording}
         onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
         snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
+        onSquelchDrag={onSquelchDrag}
         localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
         kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
