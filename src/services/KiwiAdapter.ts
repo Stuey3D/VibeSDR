@@ -252,6 +252,11 @@ export class KiwiAdapter implements SDRBackend {
     });
   }
 
+  /** When audio actually started flowing this session — for the short-session test in
+   *  onSocketDrop (admitted, streamed, cut in seconds = a receiver limit, not a lost link). */
+  private streamStartedAt = 0;
+  private streamedFor(): number { return this.streamStartedAt ? Date.now() - this.streamStartedAt : 0; }
+
   private _onConnected: (() => void) | null = null;
   private wfOpened = false;
 
@@ -448,6 +453,7 @@ export class KiwiAdapter implements SDRBackend {
 
   private maybeConnected(): void {
     this.everConnected = true;
+    if (!this.streamStartedAt) this.streamStartedAt = Date.now();
     if (this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
   }
 
@@ -835,8 +841,19 @@ export class KiwiAdapter implements SDRBackend {
             ? `This KiwiSDR closed the connection: “${reason}”. Try another KiwiSDR, or use UberSDR or OpenWebRX.`
             : 'This KiwiSDR closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another KiwiSDR, or use UberSDR or OpenWebRX.');
       }
+    } else if (this.streamedFor() < 20000 && !this.errorShown) {
+      // ★ ADMITTED, STREAMED, THEN CUT IN SECONDS — a receiver enforcing a limit, not a lost link.
+      // MEASURED 2026-07-22 against both of one owner's KiwiSDRs: audio flowed normally, then a
+      // silent close at ~10s every time, with NO badp, NO too_busy, NO close reason. Byte-identical
+      // handshakes succeeded for 2 minutes earlier the same morning, so it is not what we send —
+      // it is server-side state about our IP (both boxes run ip_limit_mins=25).
+      //
+      // Reported as a genuine mid-session loss it reads as "VibeSDR is broken"; it isn't, and no
+      // amount of reconnecting will help. Say what it is and send them elsewhere.
+      this.errorShown = true;
+      this.cb.onError('This KiwiSDR let us in and then ended the session after a few seconds. That’s the receiver applying a limit — many cap how long each listener gets per day — not a problem with your connection. It should let you back in later. Try another KiwiSDR for now.');
     } else {
-      // Was streaming, then dropped — a genuine mid-session loss.
+      // Was streaming for a while, then dropped — a genuine mid-session loss.
       this.cb.onServerLost?.();
     }
   }
