@@ -499,9 +499,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let host = NSHostingController(rootView: SettingsView(server: server))
+            // Don't let the hosting controller drive the window size back to the Form's full ideal
+            // height — that is exactly what pushed the lower sections off-screen. We size the
+            // window ourselves below and let the Form scroll inside it.
+            host.sizingOptions = []
             let w = NSWindow(contentViewController: host)
             w.title = "VibeServer Settings"
-            w.styleMask = [.titled, .closable]
+            // ★ RESIZABLE, and BOUNDED. Without an explicit content size the window grows to the
+            // Form's full ideal height — taller than the screen — and, top-anchored with no resize
+            // handle, the lower sections (Startup) fall off the bottom with no way to scroll to
+            // them. Pinning a sensible height shorter than the smallest screen lets the Form's own
+            // scrolling engage, and .resizable lets a user who wants to see more just drag it open.
+            w.styleMask = [.titled, .closable, .resizable]
+            w.setContentSize(NSSize(width: 420, height: 620))
+            w.contentMinSize = NSSize(width: 380, height: 360)
             w.isReleasedWhenClosed = false
             settingsWindow = w
         }
