@@ -603,6 +603,20 @@ Each radio's process is bound to a **resolved identity**, not to whatever appear
 - Two radios must never resolve to the same physical device; the hub rejects that configuration
   rather than starting two processes fighting over one dongle.
 
+## 5.3 ★ TWO SETTINGS PANES, split by what the thing actually is
+
+Stuart: *"we basically hide everything behind the initial server setup … we have a specific
+network/DSP settings pane with all the FPS / idle / adaptive link management, and the physical SDR
+hardware stuff is on its own page with the antennas in a flow chart."*
+
+| Pane | Contains | Because |
+|---|---|---|
+| **Network & DSP** | Waterfall rate ceiling, idle-saver policy, adaptive link management, bandwidth ceiling, locked sample rate, port | These are about DATA and the CONNECTION. Bandwidth belongs here, not with the hardware — it is a network cost before it is a radio setting |
+| **Hardware & Antennas** | The flow chart (§5.5), bias-T, PPM, direct sampling, gain range, per-radio installation facts | These are about the PHYSICAL STATION — what is plugged into what, and what it is safe to do |
+
+Everything a listener sees is a consequence of these two, decided once at setup. Nothing that can
+damage hardware, break the law, or cost the owner money is reachable from a client.
+
 ## 5.4 ★★ WHAT A LISTENER ACTUALLY GETS: gain and bandwidth. That is it.
 
 Stuart: *"realistically all a client needs access to is the gain slider and bandwidth controls. That
@@ -623,6 +637,21 @@ So the wizard's "choose what the user can access" step (§4.5 step 5) shrinks to
 questions: *may they change the gain, and up to what?* and *may they change the bandwidth, and up to
 what?* Everything else is simply not a listener's concern, and does not need a policy setting at all
 — which removes a whole category of configuration nobody wanted to fill in.
+
+### ★ Direct sampling should be AUTOMATIC, not a client control
+
+Stuart wondered whether the client might get direct-sampling mode as well. The brief's
+recommendation is **no — and not admin-only either, but automatic.**
+
+Direct sampling is not a preference, it is a MECHANISM: on a v3 it is simply how HF reaches the
+tuner, so it should follow the frequency (on below ~24 MHz, off above) exactly as §4.5 step 4
+configures it. A listener toggling it can only ever break their own reception — switch it off on HF
+and the band goes silent; switch it on above 24 MHz and everything else does. There is no listening
+situation in which the wrong setting is the one they wanted.
+
+So it is derived, not chosen. The owner decides the POLICY once per radio in the wizard (auto below
+N, always off, manual); the client sees the result and no switch. On hardware where it does not
+apply at all — a v4, with its built-in upconverter — it is absent entirely, per the rule below.
 
 ★ **And hide what the hardware cannot do.** If a radio has no bias-T circuitry — several Nooelec
 NESDR models, only the "SMArTee" variants carry it — the option is not disabled, it is ABSENT. Same
