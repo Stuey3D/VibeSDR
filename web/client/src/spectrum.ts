@@ -46,6 +46,8 @@ export interface Config {
   binBandwidth: number;
   totalBandwidth: number;
   maxBandwidth: number;
+  /** The server's own demodulator, if it reported one — authoritative for a fresh client's mode. */
+  serverMode?: string;
 }
 
 export interface RdsMeta {
@@ -189,6 +191,7 @@ export class SpectrumClient {
           binBandwidth:   msg.binBandwidth ?? this.cfg.binBandwidth,
           totalBandwidth: msg.totalBandwidth ?? this.cfg.totalBandwidth,
           maxBandwidth:   msg.maxBandwidth ?? this.cfg.maxBandwidth,
+          serverMode:     typeof msg.mode === 'string' ? msg.mode : this.cfg.serverMode,
         };
         this.cfg = cfg;
         // Adopt the server's view once our own sends have settled. While a

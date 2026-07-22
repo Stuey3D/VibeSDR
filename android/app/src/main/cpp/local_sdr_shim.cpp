@@ -1962,13 +1962,17 @@ struct LocalSdrShim::Impl {
         const double span = displaySpan();
         double effective = span / zoomFactor.load();                  // zoom-aware span
         double binBw = effective / (double)OUT_BINS;                  // we emit OUT_BINS bins
-        char buf[320];
+        char buf[384];
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
         // to this so you can't zoom out past the actual RTL bandwidth.
+        // ★ mode: the server is AUTHORITATIVE on its own starting demodulator (the owner sets it,
+        // and it is configurable). Without it the web client defaulted to nfm while the server ran
+        // wfm — the UI showed NFM with a thin NFM passband until you clicked a mode. The client
+        // adopts this on the first config when it has no remembered session.
         snprintf(buf, sizeof buf,
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
-            "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f}",
-            (long long)llround(viewCenter.load()), OUT_BINS, binBw, effective, span);
+            "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,\"mode\":\"%s\"}",
+            (long long)llround(viewCenter.load()), OUT_BINS, binBw, effective, span, mode.c_str());
         sendText(sock, buf);
     }
 

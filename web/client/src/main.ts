@@ -246,7 +246,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         // before; otherwise park the VFO at the view centre.
         const last = lastTuned();
         spec!.frequency = last?.hz ?? cfg.centerFreq;
-        setMode(last?.mode ?? spec!.mode, !!last);
+        // Server's mode wins over the client's built-in default on a fresh visit — the owner can
+        // set the starting demodulator, and defaulting to nfm showed the wrong mode + a thin NFM
+        // passband until the user clicked. A remembered session still wins over both.
+        const initialMode = (last?.mode ?? cfg.serverMode ?? spec!.mode) as SDRMode;
+        setMode(initialMode, !!last);
         renderFreq();
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
       }
@@ -1078,16 +1082,23 @@ function updateStatus() {
     case 'suspended': fault = 'AUDIO PAUSED — CLICK THE PAGE'; break;
     case 'no-stream': fault = 'AUDIO DISCONNECTED'; break;
     case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
-    case 'squelched': info  = 'NO AUDIO — SQUELCH ENABLED'; break;
+    // Squelch is NOT a fault and no longer takes an overlay — the message clipped inside the
+    // meter and hid the very bar you watch while waiting for a signal. It shows as the breathing
+    // SQL chip beside the link bars instead (below).
   }
   // A fault replaces the meter and pulses, to grab attention. Squelch does neither:
   // it is expected behaviour, and the meter is exactly what you want to watch while
   // waiting for a signal to break the threshold.
   $('sig').classList.toggle('fault', !!fault);
-  $('sig').classList.toggle('squelched', !fault && !!info);
-  $('sigFault').textContent = fault || info;
-  $('sigFault').classList.toggle('show', !!fault || !!info);
-  $('sigFault').classList.toggle('info', !fault && !!info);
+  $('sigFault').textContent = fault;
+  $('sigFault').classList.toggle('show', !!fault);
+  $('sigFault').classList.remove('info');
+
+  // SQL chip: shown whenever squelch is armed, BREATHING RED only while it is actually muting.
+  const chip = $('sqlChip');
+  const sqlArmed = squelchDb > -100;
+  chip.classList.toggle('set', sqlArmed);
+  chip.classList.toggle('muting', audio?.health === 'squelched');
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────

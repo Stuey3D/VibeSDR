@@ -225,6 +225,16 @@ html, body {
 #linkBars.q3 i { background: #33cc44; }
 #linkBars.q0::before { content: '✕'; color: #e04040; font-weight: 900; font-size: 11px; line-height: 11px; }
 #linkBars.q0 i { display: none; }
+/* SQL chip beside the link bars — steady dim when squelch is set, BREATHING RED while the gate is
+   actually muting (signal below the threshold), so an unexpected silence has a visible cause right
+   next to the connection quality rather than a text overlay that clipped inside the meter. */
+#sqlChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+           border-radius: 3px; border: 1px solid rgba(255,180,50,0.5); color: var(--amber);
+           line-height: 1.2; }
+#sqlChip.set { display: inline-block; }
+#sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
+                  animation: sqlBreathe 1.5s ease-in-out infinite; }
+@keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 
 /* Search: bookmarks + band plan. */
 #searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -255,7 +265,9 @@ html, body {
 /* Everything from here is pushed to the right edge, so BOOKMARKS lands directly
    under the search box above it and the two rows line up. */
 .pushRight { margin-left: auto; }
-#sig { position: relative; height: 0.62em; border-radius: 0.31em; background: var(--meter-track); overflow: hidden; }
+/* Taller than the old 0.62em hairline — there is ample room in the bottom bar and the extra
+   height makes the SNR fill actually readable. */
+#sig { position: relative; height: 1.05em; border-radius: 0.5em; background: var(--meter-track); overflow: hidden; }
 /* A fault takes over the WHOLE meter: that's where you're already looking when
    you wonder why there's no sound, and a long message in the status line just ran
    off the edge of the screen. */
@@ -854,6 +866,7 @@ select.btn { padding: 6px 8px; }
               <span id="linkBars" title="Link quality">
                 <i></i><i></i><i></i>
               </span>
+              <span id="sqlChip" title="Squelch">SQL</span>
               <span id="status">—</span>
             </span>
           </div>
