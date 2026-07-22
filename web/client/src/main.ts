@@ -738,9 +738,30 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
 
   $('sigFill').style.width = `${(sigSmooth * 100).toFixed(1)}%`;
   $('sigPeak').style.left = `${(sigPeak * 100).toFixed(1)}%`;
+
+  // SQUELCH NEEDLE. The gate is a dBFS threshold and `sigDb` is dBFS, so the needle maps onto the
+  // bar through exactly the same normalisation as the fill — it lands where the signal would have
+  // to reach to open the gate, which is the only position that means anything.
+  const sqlOn = squelchDb > -100;
+  const sig = $('sig');
+  sig.classList.toggle('sqlOn', sqlOn);
+  if (sqlOn) {
+    const sqlNorm = Math.max(0, Math.min(1, (squelchDb - dbMin) / Math.max(1, dbMax - dbMin)));
+    $('sigSql').style.left = `${(sqlNorm * 100).toFixed(1)}%`;
+    // Compare against the RAW reading, not the smoothed fill: the smoothing has a slow decay, so a
+    // gate that has just closed would keep reading "passing" for most of a second.
+    sig.classList.toggle('sqlClosed', sigDb < squelchDb);
+  } else {
+    sig.classList.remove('sqlClosed');
+  }
+
   $('sigLabel').textContent =
-    `${sigDb.toFixed(0)} dBFS · ${toSUnit(sigDb)} · SNR ${snrSmooth.toFixed(0)} dB`;
+    `${sigDb.toFixed(0)} dBFS · ${toSUnit(sigDb)} · SNR ${snrSmooth.toFixed(0)} dB`
+    + (sqlOn && sigDb < squelchDb ? ' · SQL' : '');
 }
+
+/** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
+let squelchDb = -100;
 
 /** dBFS -> S-unit, 6 dB per unit (lifted from the skin's _toSUnit ladder). */
 function toSUnit(dbfs: number): string {
@@ -2370,7 +2391,7 @@ function buildMenu() {
     (v) => (v <= -100 ? 'OFF' : `${v} dB`),
     // Mirror the setting into the audio engine: squelch is applied SERVER-side, so
     // without this the client cannot tell a closed squelch from a muted tab.
-    (v) => { spec!.setSquelch(v); if (audio) audio.squelchDb = v; },
+    (v) => { spec!.setSquelch(v); if (audio) audio.squelchDb = v; squelchDb = v; },
     'squelch');
 
   slider('nr', 'nrVal',
@@ -2505,7 +2526,7 @@ function pushSettingsToServer() {
   // restores the squelch but not the engine's knowledge of it — and the false
   // "IS THE TAB MUTED?" warning comes straight back.
   const sql = num('squelch');
-  if (sql !== undefined) { spec.setSquelch(sql); if (audio) audio.squelchDb = sql; }
+  if (sql !== undefined) { spec.setSquelch(sql); if (audio) audio.squelchDb = sql; squelchDb = sql; }
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nr / 100);
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);

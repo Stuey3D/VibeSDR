@@ -22,6 +22,36 @@ const C = {
   sectionC:    'rgba(180,190,210,0.80)',
 };
 
+/**
+ * The visual squelch bar — the same shape as the watch editors (VibeSDR Jr's `SquelchBar` is the
+ * reference). Live signal fills the bar; a green needle marks the threshold; the fill reddens when
+ * the signal is BELOW the needle, i.e. while the gate is muting you.
+ *
+ * WHY, given there is already a slider with a number on it: the number is meaningless until you
+ * know where the noise sits, and this sheet COVERS the signal meter. The bar answers "am I above
+ * the noise?" directly, which is the only question anyone is actually asking of a squelch control.
+ *
+ * `level` and `pos` are both the meter bus's own 0..1 bar scale — the same numbers the main signal
+ * meter draws, so the needle here lands where the red line lands there. `pos` < 0 = squelch off.
+ */
+function SquelchBar({ level, pos }: { level: number; pos: number }) {
+  const closed = pos >= 0 && level < pos;
+  const fill = Math.max(0, Math.min(1, level)) * 100;
+  return (
+    <View style={st.sqlBarWrap}>
+      <View style={st.sqlBarTrack}>
+        <View style={[st.sqlBarFill, {
+          width: `${fill}%`,
+          backgroundColor: closed ? 'rgba(255,77,77,0.9)' : 'rgba(255,255,255,0.9)',
+        }]} />
+        {pos >= 0 && (
+          <View style={[st.sqlNeedle, { left: `${Math.max(0, Math.min(1, pos)) * 100}%` }]} />
+        )}
+      </View>
+    </View>
+  );
+}
+
 // ── Helpers (local copies) ────────────────────────────────────────────────────
 function fmtRecTime(s: number) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -278,7 +308,7 @@ export default function AudioSheet({
           </>)}
 
           {/* Local SDR: power-based squelch (dBFS). */}
-          {onLocalSquelch ? (
+          {onLocalSquelch ? (<>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>SQUELCH</Text>
               <Slider style={st.bwSlider}
@@ -289,7 +319,8 @@ export default function AudioSheet({
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
               <Text style={st.bwVal}>{localSquelch <= -100 ? 'Off' : sqlDisp(localSquelch)}</Text>
             </View>
-          ) : null}
+            <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} />
+          </>) : null}
 
           {/* Local SDR audio noise reduction — strength slider (0=off..20). */}
           {onLocalNR && (
@@ -323,7 +354,7 @@ export default function AudioSheet({
           )}
 
           {/* Kiwi squelch — client-side dBFS gate (dBm threshold, −130 = Off). */}
-          {onKiwiSquelch && (
+          {onKiwiSquelch && (<>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>SQUELCH</Text>
               <Slider style={st.bwSlider}
@@ -334,10 +365,11 @@ export default function AudioSheet({
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
               <Text style={st.bwVal}>{kiwiSquelch <= -130 ? 'Off' : sqlDisp(kiwiSquelch)}</Text>
             </View>
-          )}
+            <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} />
+          </>)}
 
           {/* SNR Squelch — UberSDR audio gate (0–50 dB in our meter's units). */}
-          {!recordingOnly && !onLocalSquelch && !onKiwiSquelch && !isOwrx && (
+          {!recordingOnly && !onLocalSquelch && !onKiwiSquelch && !isOwrx && (<>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>SNR SQL</Text>
               <Slider style={st.bwSlider}
@@ -348,7 +380,8 @@ export default function AudioSheet({
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
               <Text style={st.bwVal}>{snrSquelch <= -999 ? 'Off' : `≥${snrSquelch.toFixed(0)}`}</Text>
             </View>
-          )}
+            <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} />
+          </>)}
 
           {/* FM Squelch — only for fm/nfm. */}
           {!isOwrx && isFmMode && (
@@ -470,6 +503,13 @@ const st = StyleSheet.create({
   bwLabel:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
   bwVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  // Squelch bar — indented to line up under the slider, not under its label.
+  sqlBarWrap:  { paddingLeft: 38, paddingRight: 74, paddingBottom: 4 },
+  sqlBarTrack: { height: 8, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.15)',
+                 overflow: 'hidden', justifyContent: 'center' },
+  sqlBarFill:  { position: 'absolute', left: 0, top: 0, bottom: 0 },
+  sqlNeedle:   { position: 'absolute', top: 0, bottom: 0, width: 2, marginLeft: -1,
+                 backgroundColor: '#3ddc84' },
 
   subPanel: {
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 6,

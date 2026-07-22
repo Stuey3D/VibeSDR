@@ -919,23 +919,38 @@ struct BandwidthView: View {
 
 /// SNR squelch editor (thin-remote): the crown sets the threshold (dB) and RELAYS it to the phone,
 /// which actions the gate and echoes the line position back on the row. 0 = Off. Tap Done to close.
+///
+/// VISUAL editor, matching Jr: you aim a needle at a live signal bar rather than reading a number
+/// off a scale you have no feel for. "Point it just above the noise" is a thing anyone can do; "set
+/// it to 12 dB" is not.
+///
+/// ONE DIFFERENCE FROM JR, and it is forced: Buddy is a thin remote. The crown speaks dB, but the
+/// bar is drawn in the phone's meter scale, and the dB→bar mapping is the phone's (it varies with
+/// meter mode and backend). So the needle position can only come from the phone's echoed `sql` —
+/// there is no honest way to compute it here. That costs one relay round-trip of needle lag, which
+/// is the correct trade: a needle that's instantly in the WRONG place is worse than one that's
+/// briefly behind. The dB figure above the bar updates immediately, so the crown never feels dead.
 struct SquelchView: View {
   @EnvironmentObject var link: WatchLink
   @Environment(\.dismiss) private var dismiss
   @State private var val = 0.0
   @FocusState private var focused: Bool
 
+  private var closed: Bool { link.sql >= 0 && link.level < link.sql }
+
   var body: some View {
     VStack(spacing: 8) {
       Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
+      Text(val < 0.5 ? "Off" : (closed ? "Muting" : "Passing"))
+        .font(.system(size: 13, weight: .bold))
+        .foregroundColor(val < 0.5 ? .secondary : (closed ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
+      SquelchBar(level: link.level, pos: val < 0.5 ? -1 : link.sql)
+      // The number still earns its place: it's what you'd write down to set the same gate again,
+      // and it's the only part of this screen that responds to the crown with zero lag.
       Text(val < 0.5 ? "Off" : "≥ \(Int(val)) dB")
-        .font(.system(size: 24, weight: .bold, design: .rounded)).monospacedDigit()
+        .font(.system(size: 15, weight: .bold, design: .rounded)).monospacedDigit()
         .foregroundColor(val < 0.5 ? .secondary : .white)
-      // Live signal (mirrored from the phone), so you set the gate by SIGHT — when speech stops and
-      // noise shows, that reading is the level to sit just above.
-      Text("Signal now  \(link.meter.isEmpty ? "—" : link.meter)")
-        .font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundColor(.green)
-      Text("Mutes audio below this signal level.\nTurn the crown · tap Done.")
+      Text("Point the needle just above the noise.\nTurn the crown · tap Done.")
         .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
       Button("Done") { dismiss() }.buttonStyle(.borderedProminent).tint(.orange)
     }
@@ -946,5 +961,33 @@ struct SquelchView: View {
                           sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
     .onChange(of: val) { _, v in link.setSquelch(v < 0.5 ? -999 : v) }
     .onAppear { val = link.squelchSet <= -999 ? 0 : link.squelchSet; focused = true }
+  }
+}
+
+/// The live signal bar with a green squelch needle — shared shape with Jr's editor (see
+/// spike/WristSDR ControlMenu.swift). White fill = the live signal; the bar reddens when the
+/// signal is below the needle, i.e. when the gate is muting you. `pos` < 0 = squelch off.
+struct SquelchBar: View {
+  let level: Double
+  let pos: Double
+  var body: some View {
+    GeometryReader { geo in
+      let w = geo.size.width
+      let closed = pos >= 0 && level < pos
+      ZStack(alignment: .leading) {
+        Capsule().fill(.white.opacity(0.15))
+        Capsule().fill(closed ? Color(red: 1, green: 0.3, blue: 0.3).opacity(0.9) : .white.opacity(0.9))
+          .frame(width: w * min(1, max(0, level)))
+          .animation(.easeOut(duration: 0.1), value: level)
+        if pos >= 0 {
+          let x = w * min(1, max(0, pos))
+          Rectangle().fill(.green).frame(width: 2).offset(x: x - 1)
+          Image(systemName: "arrowtriangle.down.fill")
+            .font(.system(size: 9)).foregroundColor(.green).offset(x: x - 5, y: -11)
+        }
+      }
+    }
+    .frame(height: 14)
+    .padding(.top, 10)   // headroom for the arrow
   }
 }

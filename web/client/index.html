@@ -241,6 +241,15 @@ html, body {
 #sigFault.show { display: flex; }
 #sigFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
 #sigPeak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--peak-line); left: 0; }
+/* Squelch threshold needle — the same "point it just above the noise" control the watch and phone
+   use. Hidden entirely when squelch is off, so a meter with no gate stays uncluttered. */
+#sigSql { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; left: 0;
+          background: #3ddc84; box-shadow: 0 0 0 1px rgba(0,0,0,0.55); display: none; }
+#sig.sqlOn #sigSql { display: block; }
+/* Gate CLOSED (signal below the needle) — the fill dims and reddens, so silence is explained
+   rather than mysterious. This is the whole point of the indicator. */
+#sig.sqlClosed #sigFill { opacity: 0.55; filter: hue-rotate(-35deg) saturate(1.4); }
+#sig.fault #sigSql { display: none; }
 /* NO font-size / letter-spacing here — a leftover from the pre-scaling layout that
    silently overrode the em-based rule above and pinned this readout to a hard 10px.
    It was the ONLY thing in the bar that didn't shrink, so on a 1366 laptop it ran
@@ -760,7 +769,7 @@ select.btn { padding: 6px 8px; }
            purposes, and the signal meter spans exactly their combined width. -->
       <div class="stack" id="rightCol">
         <div id="sigWrap">
-          <div id="sig"><div id="sigFill"></div><div id="sigPeak"></div><span id="sigFault"></span></div>
+          <div id="sig"><div id="sigFill"></div><div id="sigSql"></div><div id="sigPeak"></div><span id="sigFault"></span></div>
           <div id="sigLine">
             <span id="sigLabel">—</span>
             <span id="linkStats">
