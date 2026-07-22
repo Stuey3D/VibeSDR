@@ -295,7 +295,13 @@ final class KiwiClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
-        if self.frameCount > 0, self.retries > 0 { self.retries = 0 }   // stable again → reset backoff
+        // Reset the backoff only once a session has PROVEN ITSELF (see shortSessionLimit). Resetting
+        // on any frame at all meant a server that kicks after a few seconds got an endless 1.5s
+        // reconnect loop: frames arrive → backoff cleared → kicked → retry fast → repeat, forever.
+        if self.frameCount > 0, self.retries > 0,
+           ProcessInfo.processInfo.systemUptime - self.sessionStart >= Self.shortSession {
+          self.retries = 0; self.shortSessions = 0
+        }
         self.frameCount = 0
 
         // SILENT-AUDIO WATCHDOG (Stuart, 2026-07-21). frameCount above is the SND *audio* rate. If SND
@@ -343,7 +349,10 @@ final class KiwiClient: ObservableObject, SDRClient {
   }
 
   private func markFrame() {
+    // A session STARTS at its first audio frame — that's when the server has actually accepted us,
+    // and it's what the short-session test above measures from.
     if !everFrame { everFrame = true; connectTimer?.invalidate(); connectTimer = nil }
+    if sessionStart <= sessionStartUnset { sessionStart = ProcessInfo.processInfo.systemUptime }
     lastSndAt = ProcessInfo.processInfo.systemUptime   // audio-liveness stamp for the silent-SND watchdog
   }
   // Audio-liveness watchdog state (see the rateTimer). Kiwi runs SND (audio) and W/F (waterfall) as
@@ -356,16 +365,54 @@ final class KiwiClient: ObservableObject, SDRClient {
   // ── Reconnect on a mid-session drop (UberClient's proven pattern) ──
   private var retries = 0
   private var retrying = false
+  /// A session shorter than this is not a session — it's a server showing us the door (listening-time
+  /// limit, slot limit, one-connection-per-IP rule). 20s is well past a slow handshake but well
+  /// inside any of those limits.
+  private static let shortSession = 20.0
+  /// How many short sessions before we STOP. ★ This is an etiquette limit as much as a UX one: an
+  /// unbounded reconnect loop against someone's KiwiSDR is abusive, and ours had one — the backoff
+  /// reset on any frame, so a server that kicked us after a few seconds got hammered every 1.5s
+  /// indefinitely. Three strikes, then we leave them alone and say why. (Stuart, 2026-07-22, on a
+  /// server that kicks in seconds: "may be garbage for the server owner".)
+  private static let shortSessionLimit = 3
+  private var shortSessions = 0
+  private static let sessionStartUnset = -1.0
+  private let sessionStartUnset = KiwiClient.sessionStartUnset
+  private var sessionStart = KiwiClient.sessionStartUnset
+  /// Set once we've decided to stop retrying this server. Nothing reopens a socket after this.
+  private var gaveUp = false
   @Published var dropReason = ""     // shown so we can see WHY Kiwi keeps dropping (failed vs recv)
   private func retrySnd(reason: String = "") {
-    guard !retrying, !goingIdle else { return }
+    guard !retrying, !goingIdle, !gaveUp else { return }
+
+    // STOP RECONNECTING to a server that keeps ending the session in seconds. We cannot tell a
+    // deliberate kick from a hostile link, but the right response is the same either way: stop
+    // knocking. Reconnecting forever would be rude to the owner and useless to the user.
+    if ProcessInfo.processInfo.systemUptime - sessionStart < Self.shortSession {
+      shortSessions += 1
+      if shortSessions >= Self.shortSessionLimit {
+        gaveUp = true
+        sndSock.cancel(); wfSock.cancel()
+        fail("This KiwiSDR keeps ending the session after a few seconds — usually a listening-time "
+           + "limit, a full slot, or one-connection-per-listener. We\u{2019}ve stopped retrying so we "
+           + "don\u{2019}t hammer the owner\u{2019}s receiver. Try another KiwiSDR.")
+        return
+      }
+    } else {
+      shortSessions = 0
+    }
+
     retrying = true
     retries += 1
+    sessionStart = Self.sessionStartUnset   // the next session is only 'real' once frames flow again
     if !reason.isEmpty { dropReason = reason }
     status = "reconnect \(retries) ka=\(kaCount): \(dropReason)"
     sndSock.cancel(); wfSock.cancel()
     sndAuthed = false; wfAuthed = false; wfOpened = false
-    let wait = UInt64(min(retries, 5)) * 1_500_000_000   // 1.5s → 7.5s, then hold
+    // Backoff grows with BOTH the retry count and how many short sessions we've had — a server
+    // ending sessions in seconds gets progressively longer gaps, not a fixed 1.5s knock.
+    let steps = min(retries + shortSessions * 2, 8)
+    let wait = UInt64(steps) * 1_500_000_000   // 1.5s → 12s, then hold
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: wait)
       self.retrying = false
