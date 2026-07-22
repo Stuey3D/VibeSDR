@@ -113,6 +113,32 @@ Recommended: the first-boot flow *sets both* from one prompt, but VibeServer kee
 hashed copy and never holds or proxies the OS credential thereafter. Network-side lockout stays as
 per foundations §6 (nonce/HMAC + backoff).
 
+## 5.1 ★ SSH — OFF by default, opt-in, and hardened when on
+
+Pi owners expect SSH; an appliance that ships with it open does not deserve their trust. Stuart's
+call is to leave it off, and that is right — with one correction to the reasoning, because it
+changes the mitigation.
+
+Running an SSH *server* does not let the Pi reach out to anything. The real exposure is the reverse:
+an authenticated user gets **port forwarding**, turning the appliance into a jump host into the rest
+of the owner's LAN. That is a concrete capability we can simply remove.
+
+- **Default OFF.** Also matches Raspberry Pi OS's own default since 2016, so it surprises nobody —
+  and an appliance shipping with SSH on and a shared password is how appliances join botnets.
+- **Opt-in toggle in Compute Hardware & Network** (§3) — OS-level, so it sits on the ISO side of the
+  boundary, never in `VibeServerConfig`.
+- **When enabled, forwarding stays off:** `AllowTcpForwarding no`, `PermitTunnel no`,
+  `GatewayPorts no`. Keeps the shell people actually want; removes the jump-host capability.
+- **Prefer key-only auth** (`PasswordAuthentication no` once a key is installed). A user-chosen
+  password on a box that may face a network is the weak link, and §5 already avoids holding the OS
+  credential in the server.
+- Pi OS's existing convention — an empty `ssh` file on the boot partition enabling it at boot — pairs
+  naturally with the §6 recovery route.
+
+**Knock-on:** macOS brief §5 counts SSH/file editing as the third of "three editors". On the
+appliance that third editor is OPTIONAL, so the browser page must be complete on its own — which is
+exactly the baseline rule in §2.0.
+
 ## 6. ★ Recovery — a headless box must not be brickable
 
 No screen, no keyboard: if Wi-Fi setup fails or the password is forgotten, the user has no way in.
@@ -144,3 +170,5 @@ forces AP mode on next boot.
 7. Power settings measurably change consumption on a battery bank; throttling does not glitch audio
    for connected clients.
 8. Recovery from the boot partition restores access on a box whose password is unknown.
+9. **SSH:** absent by default (port closed on a fresh image); enabling it from Compute Hardware
+   grants a shell but REFUSES port forwarding — verified by an attempted `ssh -L` tunnel failing.
