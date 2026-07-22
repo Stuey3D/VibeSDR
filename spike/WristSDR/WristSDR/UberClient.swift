@@ -160,6 +160,12 @@ final class UberClient: ObservableObject {
   /// until the first audio packet lands (then it takes over from the spectrum SNR). Written off-main
   /// in the audio handler, read on the spectrum tick — a benign Double race.
   private var chanSnr: Double = .nan
+  /// radiod's raw baseband power in dBFS — the absolute level, used by the dBFS and S-unit meter
+  /// units. NaN until the first audio packet. Same benign off-main write as chanSnr.
+  var chanDbfs: Double = .nan
+  /// Absolute signal level in dBFS for the meter text. NaN while we only have spectrum SNR (which
+  /// is a RATIO, not a level — there is no honest dBFS to show then, so the readout falls back).
+  @Published var signalDbfs: Double = .nan
   @Published var framesPerSec: Double = 0
   @Published var audioPerSec: Double = 0
 
@@ -777,6 +783,7 @@ final class UberClient: ObservableObject {
     // Meter SNR from radiod's per-packet CHANNEL SNR (zoom-independent, the true number, same as the
     // phone) when we have it; fall back to the spectrum SNR only until the first audio packet lands.
     signalDb    = chanSnr.isNaN ? proc.snrDb : chanSnr
+    signalDbfs  = chanDbfs
     let dec = decimate(row, to: WaterfallBuffer.width)
     // WaterfallBuffer DROPS rows that aren't exactly its width, silently. A blank waterfall
     // with a healthy frame count is exactly what that looks like.
@@ -1007,6 +1014,9 @@ final class UberClient: ObservableObject {
           let bb = Float(bitPattern: d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 13, as: UInt32.self) })
           let nd = Float(bitPattern: d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 17, as: UInt32.self) })
           if bb > -900, nd > -900 { self.chanSnr = Double(bb - nd) - 30 }
+          // Baseband power on its own is the dBFS reading — what the "dBFS" and "S-unit" meter
+          // units want. Keep it raw; the −30 above is an SNR correction and must NOT apply here.
+          if bb > -900 { self.chanDbfs = Double(bb) }
         }
         // Decode + play OFF the main actor: ~50 packets/sec, and it must never fight the
         // waterfall for the main thread.

@@ -12,6 +12,10 @@ protocol SDRClient: AnyObject {
   var bwHigh: Double { get }
   var signalLevel: Double { get }
   var signalDb: Double { get }
+  /// Absolute level in dBFS, for the dBFS/S-unit meter units. NaN means "this backend can't say" —
+  /// only radiod (UberSDR) carries a true per-packet baseband power, so everyone else defaults to
+  /// NaN below and the meter falls back to the SNR reading.
+  var signalDbfs: Double { get }
   var rowsPushed: Int { get }
   var framesPerSec: Double { get }
   var status: String { get }
@@ -89,6 +93,7 @@ extension SDRClient {
   /// throttles and is never blamed for one.
   var adaptiveRung: Int { 1 }
   var linkSettling: Bool { false }
+  var signalDbfs: Double { .nan }
   var profiles: [SDRProfile] { [] }
   var clients: Int { 0 }
   func selectProfile(_ id: String) {}

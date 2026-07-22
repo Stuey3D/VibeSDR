@@ -62,6 +62,32 @@ final class SpikeLink: ObservableObject {
   /// STUB: blank → the readout shows "—". NOTE for later: could derive an S-meter from the
   /// DSP's own level.
   @Published var meter = ""
+  /// Which UNIT the meter reads in. Set from the Display menu; three ways of saying the same
+  /// signal, and which one is "right" depends entirely on the operator — a DXer wants S-units,
+  /// someone setting squelch wants SNR, someone chasing overload wants dBFS.
+  @AppStorage("meterUnit") var meterUnit = "snr" { didSet { meter = "" } }
+
+  /// Format the meter readout in the chosen unit.
+  ///
+  /// dBFS and S-units need an ABSOLUTE level, which only radiod's per-packet baseband power gives
+  /// us; until the first audio packet lands (or on a backend that doesn't carry it) `dbfs` is NaN
+  /// and there is no honest absolute number, so both fall back to the SNR reading rather than
+  /// inventing one from a ratio.
+  static func meterText(unit: String, snrDb: Double, dbfs: Double) -> String {
+    let snrTxt = "\(Int(snrDb.rounded()))dB"
+    guard unit != "snr", !dbfs.isNaN else { return snrTxt }
+    if unit == "dbfs" { return "\(Int(dbfs.rounded()))dBFS" }
+    return sUnit(dbfs)
+  }
+
+  /// dBFS → S-unit, 6 dB per unit — the same ladder the phone and web client use, so one signal
+  /// reads the same number on all three surfaces.
+  static func sUnit(_ dbfs: Double) -> String {
+    if dbfs >= -73 { return "S9+\(min(60, Int((dbfs + 73) / 6 + 0.5) * 6))" }
+    let ladder = [-79.0, -85, -91, -97, -103, -109, -115]
+    for (i, t) in ladder.enumerated() where dbfs >= t { return "S\(8 - i)" }
+    return "S1"
+  }
   /// Smoothed 0..1 meter fill behind the frequency pill. STUB: the spike's DSP does not
   /// surface a normalised level yet, so this stays 0 (empty bar). NOTE for later.
   @Published var level = 0.0
@@ -366,7 +392,7 @@ final class SpikeLink: ObservableObject {
     // Signal meter — bar fill + SNR text, computed for free by the spectrum DSP. Round the
     // text so it doesn't invalidate the view on sub-dB jitter.
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
-    let mt = "\(Int(client.signalDb.rounded()))dB"
+    let mt = Self.meterText(unit: meterUnit, snrDb: client.signalDb, dbfs: client.signalDbfs)
     if meter != mt { meter = mt }
     let sn = min(1, max(0, client.signalDb / 50))   // signal on the needle's 0..1 scale (pos*50 dB)
     if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }

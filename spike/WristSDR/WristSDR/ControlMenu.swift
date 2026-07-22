@@ -1073,6 +1073,7 @@ struct DisplaySheet: View {
   @AppStorage("wfPalette")      private var wfPalette      = "sync"
   @AppStorage("wfVfoColour")    private var wfVfoColour    = "sync"
   @AppStorage("wfPeakHold")     private var wfPeakHold     = true
+  @AppStorage("meterUnit")      private var meterUnit      = "snr"
 
   @State private var showPalette = false
   @State private var showVfo     = false
@@ -1084,7 +1085,7 @@ struct DisplaySheet: View {
   private var vfo: VfoColour { SpikeLink.vfoColours.first { $0.id == wfVfoColour } ?? SpikeLink.vfoColours[1] }
   private var displayDirty: Bool {
     wfAutoContrast != 5 || wfBright != 0 || wfContrast != 0
-      || wfPalette != "sync" || wfVfoColour != "sync" || !wfPeakHold
+      || wfPalette != "sync" || wfVfoColour != "sync" || !wfPeakHold || meterUnit != "snr"
   }
 
   var body: some View {
@@ -1101,6 +1102,17 @@ struct DisplaySheet: View {
         Button { showVfo = true } label: {
           colourRow(label: "VFO colour", detail: vfo.name, swatches: [vfo.color])
         }.buttonStyle(.plain)
+      }
+      // METER UNIT — the readout in the frequency pill only. The squelch bar is deliberately NOT
+      // affected: it is a unitless "point the needle above the noise" control that works, and
+      // putting units on it would re-open a thing that's already right.
+      Section("Signal meter") {
+        Picker("Units", selection: $meterUnit) {
+          Text("SNR").tag("snr")
+          Text("S-units").tag("smeter")
+          Text("dBFS").tag("dbfs")
+        }
+        .onChange(of: meterUnit) { _, u in link.meterUnit = u }
       }
       Section {
         Toggle(isOn: $wfPeakHold) {
@@ -1119,6 +1131,7 @@ struct DisplaySheet: View {
           link.setAutoContrast(5); link.waterfall.brightness = 0; link.waterfall.contrast = 0
           link.applyPalette("sync"); link.applyVfo("sync")
           link.peakHold = true; link.waterfall.peakHold = true
+          meterUnit = "snr"; link.meterUnit = "snr"
           WKInterfaceDevice.current().play(.success)
         } label: {
           Label("Reset display", systemImage: "arrow.counterclockwise")
