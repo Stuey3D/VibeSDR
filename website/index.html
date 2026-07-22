@@ -229,6 +229,23 @@
   /* ── Section scaffold ── */
   section { position: relative; z-index: 2; }
   .band { border-top: 1px solid var(--line); padding: 72px 0; }
+
+  /* VibeServer macOS alpha callout */
+  .mac-alpha { margin-top: 34px; padding: 26px 28px; border: 1px solid var(--phosphor-dim);
+    border-radius: 14px; background: rgba(53,224,138,0.05); max-width: 60ch; }
+  .mac-alpha h3 { font-family: var(--sans); font-size: 22px; margin: 0 0 10px; color: var(--ink); }
+  .mac-alpha p { color: var(--muted); font-size: 15px; line-height: 1.55; margin: 0 0 18px; }
+  .mac-alpha .btn { display: inline-block; }
+  /* The Vibe family grid */
+  .family-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 22px; margin-top: 34px; }
+  .fam { margin: 0; text-align: center; }
+  .fam img { width: 108px; height: 108px; border-radius: 22px; display: block; margin: 0 auto 14px;
+    box-shadow: 0 6px 22px rgba(0,0,0,0.5); }
+  .fam figcaption { font-family: var(--mono); font-size: 12px; color: var(--phosphor); line-height: 1.5; }
+  .fam figcaption b { display: block; font-size: 13px; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .fam figcaption span { display: block; color: var(--muted); font-size: 11.5px; letter-spacing: 0.01em; }
+
   .band h2 {
     font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.02em; font-weight: 750;
     margin: 10px 0 8px; text-wrap: balance;
@@ -294,6 +311,7 @@
   <nav>
     <a href="#tunes">What it tunes</a>
     <a href="#dsp">VibeDSP</a>
+    <a href="#family">Family</a>
     <a href="#made">How it's made</a>
     <a href="https://github.com/Stuey3D/VibeSDR">Source</a>
     <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App&nbsp;Store</a>
@@ -393,6 +411,48 @@
       <li>Built&#8209;in web client — any browser, no app</li>
       <li>~25× lighter than raw rtl_tcp — Wi&#8209;Fi or hotspot</li>
     </ul>
+
+    <div class="mac-alpha">
+      <p class="soon-k">New · macOS alpha · build in progress</p>
+      <h3>Now on the Mac too</h3>
+      <p>
+        The same server, native on macOS — a menu&#8209;bar app around the same DSP core. Plug in an
+        RTL&#8209;SDR, click <b>Open in Browser</b>, and tune. Notarised by Apple, so it opens
+        cleanly. This early build serves <b>one dongle at a time</b> and the advanced admin features
+        are still to come, so it's best on your home network — and if you open it to the internet,
+        <b>set a PIN</b>: a listener can change the dongle's hardware settings.
+      </p>
+      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v0.1.0-alpha">Download the macOS alpha →</a>
+    </div>
+  </div>
+</section>
+
+<section class="band family-band" id="family">
+  <div class="wrap">
+    <p class="eyebrow">The Vibe family</p>
+    <h2>One radio, <span class="glow">many shapes.</span></h2>
+    <p class="sub big">
+      Everything shares one engine and one look. VibeSDR is the app; around it sit the pieces that
+      carry the signal further — onto your wrist, into your pocket, and out to your own network.
+    </p>
+    <div class="family-grid">
+      <figure class="fam">
+        <img src="assets/family-jr.png" alt="VibeSDR Jr app icon" />
+        <figcaption><b>VibeSDR&nbsp;Jr</b><span>A full receiver on the Apple&nbsp;Watch — standalone, no phone.</span></figcaption>
+      </figure>
+      <figure class="fam">
+        <img src="assets/family-buddy.png" alt="VibeSDR Buddy app icon" />
+        <figcaption><b>VibeSDR&nbsp;Buddy</b><span>The wrist remote for the phone app — drive VibeSDR from your Watch.</span></figcaption>
+      </figure>
+      <figure class="fam">
+        <img src="assets/family-vibedsp.png" alt="VibeDSP icon" />
+        <figcaption><b>VibeDSP</b><span>Our own ARM&#8209;NEON engine — demodulates and draws every pixel on your device.</span></figcaption>
+      </figure>
+      <figure class="fam">
+        <img src="assets/family-vibeserver.png" alt="VibeServer icon" />
+        <figcaption><b>VibeServer</b><span>Share a dongle with your own devices — on Android, and now the Mac.</span></figcaption>
+      </figure>
+    </div>
   </div>
 </section>
 
