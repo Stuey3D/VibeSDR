@@ -603,6 +603,61 @@ Each radio's process is bound to a **resolved identity**, not to whatever appear
 - Two radios must never resolve to the same physical device; the hub rejects that configuration
   rather than starting two processes fighting over one dongle.
 
+## 5.5 ★★ THE GUI AFTER SETUP: a flow chart of the station
+
+Stuart's design: once the wizard has run, the GUI is **picture-based** — antennas along the top,
+a line down from each, splitting into the radios beneath. Click a radio to give it a specific
+setting. Drag a radio onto a different antenna after a hardware shuffle.
+
+His own station as the worked example — an **LZ1AQ** loop feeding **2 × RTL-SDR v4**, a **Nooelec
+NESDR v5**, and an **SDRplay RSP1B**:
+
+```
+                    ┌──────────────────────────┐
+                    │   ANTENNA — LZ1AQ        │
+                    │   0.5 – 30 MHz           │
+                    └────────────┬─────────────┘
+             ┌───────────────────┼───────────────────┐
+   ┌─────────┴─────────┐  ┌──────┴──────┐  ┌─────────┴─────────┐
+   │  2 × RTL-SDR v4   │  │ NESDR v5    │  │  SDRplay RSP1B    │
+   │  shared settings  │  │             │  │                   │
+   └───────────────────┘  └─────────────┘  └───────────────────┘
+```
+
+**The branches group by TYPE, and same-type radios share one settings block.** That is the pool
+(§5.2.2) made visible: two v4s are configured once, not twice, and the saving is obvious on screen
+rather than being a concept the user has to hold in their head.
+
+### What the picture gives us for free
+
+- **Pools are visible.** A branch with two radios under it IS a pool. Nobody has to be taught the
+  word.
+- **Per-radio overrides have an obvious home.** Click the individual radio, not the branch — which
+  is exactly the profile/installation split (§5.2.2) expressed as a click target.
+- **"Unassigned radios do not serve"** becomes self-evident: a dongle attached to no antenna sits
+  loose at the bottom, plainly not connected to anything. The rule needs no explanation because the
+  picture already says it.
+- **It accommodates non-RTL hardware without redesign** — the RSP1B is simply another branch, even
+  though driver support is future work (§5.9).
+
+### ★ THE HAZARD DRAG-AND-DROP INTRODUCES
+
+Moving a radio to a different antenna changes its **installation facts**, and one of them is
+dangerous. If the dragged radio was the one supplying bias-T, that setting must **NOT** travel with
+it — dropping it on another antenna would start pushing DC into a feed nobody asked to power, which
+is precisely the accident §5.0 exists to prevent.
+
+So a move:
+
+1. **Resets hardware-affecting settings to safe defaults** — bias-T off, above all.
+2. **Re-asks the antenna's question:** *"Does one of these radios power this antenna?"* — because
+   the answer has genuinely changed for BOTH antennas involved.
+3. Keeps harmless settings (gain trim, an upconverter offset that belongs to the dongle rather than
+   the feed) since they follow the hardware, not the coax.
+
+A drag is a physical statement — *"I moved this lead"* — and the software should respond as if the
+user had just rewired the station, because they have.
+
 ## 5.9 ★ WHAT IS RTL-SHAPED HERE — the assumptions that break when other SDRs arrive
 
 Stuart: *"it will get more complex when we support other SDRs in the future, but right now with the
