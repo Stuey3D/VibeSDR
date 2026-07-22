@@ -241,6 +241,11 @@ no splash (§1.1, §3.0). The overwhelmingly common setup never meets any of the
    - ★ **The v3 uses the Q BRANCH** (`direct_samp` mode 2). The I branch is the wrong input on that
      hardware and yields silence on HF with nothing to explain it. Our own shim already documents
      this: `0=off, 1=I, 2=Q (not needed on Blog V4)`.
+   - ★ **UNVERIFIED ON HARDWARE.** Stuart runs v4s only, so the v3 recommendation has never been
+     tested here — it comes from the hardware design and our own shim's comment, not from a working
+     receiver. Before this wizard ships, the v3 path must be tried on an actual v3: does Q-branch
+     direct sampling below ~24 MHz genuinely produce HF? Shipping hardware advice we have not seen
+     work is how a user ends up with silence and no idea whether it is them or us.
    - **Unknown or clone dongles:** do not guess. Say that HF may need direct sampling enabled or an
      upconverter fitted, and let the user decide — clones lie about their descriptors (§5.2).
    - **Upconverter:** if one is fitted to a radio, this is where its offset is entered.
