@@ -2301,7 +2301,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           // property of the SIGNAL, not of the squelch, so it is tracked here regardless.
           // (chDbfs − snrDb is signal- and zoom-independent by same-packet cancellation, but
           // radiod's reported noise density jitters, so it's smoothed.)
-          if (owrxDbm == null && !isKiwi && !isLocal) {
+          //
+          // FROZEN WHILE THE USER IS DRAGGING. The needle's position is (floor + threshold), so a
+          // drifting floor makes the needle wander under a finger that is holding still — you end
+          // up chasing your own control. Stuart: "freeze the noise floor fluctuations so the needle
+          // doesn't wiggle about... it can wiggle after setting as it's not aggressive." Frozen for
+          // the length of the gesture only; the EMA resumes from where it left off on release.
+          if (owrxDbm == null && !isKiwi && !isLocal && !sqlDraggingRef.current) {
             const floorInst = chDbfs - snrDb;
             const f = floorEmaRef.current;
             floorEmaRef.current = f <= -900 ? floorInst : f + 0.1 * (floorInst - f);
@@ -3127,7 +3133,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   //
   // The dBFS/S-meter SNR case reads the same smoothed noise floor the forward map uses, so the
   // needle you let go of is the level the gate actually opens at.
+  // True for the length of a squelch drag — freezes the noise-floor EMA so the needle can't wander
+  // under a stationary finger. See the emit for why that matters.
+  const sqlDraggingRef = useRef(false);
+  const onSquelchDragEnd = useCallback(() => { sqlDraggingRef.current = false; }, []);
   const onSquelchDrag = useCallback((x: number) => {
+    sqlDraggingRef.current = true;
     if (x < 0) {
       if (isKiwi) onKiwiSquelch(-130);
       else if (isLocal) onLocalSquelch(-100);
@@ -4885,6 +4896,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
         snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
         onSquelchDrag={onSquelchDrag}
+        onSquelchDragEnd={onSquelchDragEnd}
         localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
         kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}

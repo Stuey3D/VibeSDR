@@ -42,8 +42,9 @@ const C = {
  * draws, so this needle sits exactly where that red line sits. `pos` < 0 = squelch off.
  * `onDrag` receives a 0..1 position, or -1 for off; SDRScreen converts to the backend's native unit.
  */
-function SquelchBar({ level, pos, gate, onDrag }: {
-  level: number; pos: number; gate?: boolean; onDrag?: (x: number) => void;
+function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
+  level: number; pos: number; gate?: boolean;
+  onDrag?: (x: number) => void; onDragEnd?: () => void;
 }) {
   // The bar's position in WINDOW coordinates, measured on layout.
   //
@@ -98,7 +99,10 @@ function SquelchBar({ level, pos, gate, onDrag }: {
     onShouldBlockNativeResponder: () => true,
     onPanResponderGrant: (e) => { measure(); apply(e.nativeEvent.pageX); },
     onPanResponderMove: (e) => apply(e.nativeEvent.pageX),
-  }), [onDrag, apply, measure]);
+    // Tell the owner the gesture is over so it can unfreeze the noise floor (see onSquelchDrag).
+    onPanResponderRelease: () => onDragEnd?.(),
+    onPanResponderTerminate: () => onDragEnd?.(),
+  }), [onDrag, onDragEnd, apply, measure]);
 
   return (
     <View ref={bar} style={st.sqlBarWrap} {...(onDrag ? pan.panHandlers : {})}
@@ -211,6 +215,8 @@ export interface AudioSheetProps {
   /** Squelch dragged to a 0..1 position on the meter (-1 = dragged off / Off). SDRScreen owns the
    *  position→native-unit conversion, since it owns the forward mapping the red line is drawn from. */
   onSquelchDrag?: (x: number) => void;
+  /** The drag gesture ended — releases the frozen noise floor. */
+  onSquelchDragEnd?: () => void;
   fmSquelch?:    number;  onFmSquelch?:    (v: number) => void;
   isFmMode?:     boolean;
 
@@ -241,7 +247,7 @@ export default function AudioSheet({
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
-  kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag,
+  kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
@@ -383,7 +389,12 @@ export default function AudioSheet({
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
                 <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
-                             gate={liveM?.gate} onDrag={onSquelchDrag} />
+                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
+                <Text style={st.sqlHint}>
+                  Your squelch stays at the signal level you set. The needle drifts a little here
+                  and on the live meter as the noise floor moves — that's normal, not the setting
+                  changing.
+                </Text>
               </View>
             </View>
           ) : null}
@@ -425,7 +436,12 @@ export default function AudioSheet({
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
                 <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
-                             gate={liveM?.gate} onDrag={onSquelchDrag} />
+                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
+                <Text style={st.sqlHint}>
+                  Your squelch stays at the signal level you set. The needle drifts a little here
+                  and on the live meter as the noise floor moves — that's normal, not the setting
+                  changing.
+                </Text>
               </View>
             </View>
           )}
@@ -436,7 +452,12 @@ export default function AudioSheet({
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
                 <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
-                             gate={liveM?.gate} onDrag={onSquelchDrag} />
+                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
+                <Text style={st.sqlHint}>
+                  Your squelch stays at the signal level you set. The needle drifts a little here
+                  and on the live meter as the noise floor moves — that's normal, not the setting
+                  changing.
+                </Text>
               </View>
             </View>
           )}
@@ -570,6 +591,10 @@ const st = StyleSheet.create({
   sqlBarWrap:  { height: 40, marginTop: 8, position: 'relative', justifyContent: 'flex-end' },
   // "SQUELCH" needs more than the 32pt the short labels use, or it wraps to "SQUE / LCH".
   sqlLabel:    { width: 62 },
+  // Sets the expectation that a gate sitting ON the noise will chatter a little — otherwise that
+  // reads as a bug rather than as physics.
+  sqlHint:     { color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+                 fontSize: 10, lineHeight: 13, paddingTop: 4, paddingBottom: 2 },
   sqlBarTrack: { height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.15)',
                  overflow: 'hidden' },
   sqlBarFill:  { position: 'absolute', left: 0, top: 0, bottom: 0 },
