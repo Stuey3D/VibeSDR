@@ -34,6 +34,10 @@ const C = {
  * What is left is the one gesture that was always the real interaction: drag the ball to just above
  * the noise. Drag it off the left end to turn squelch off.
  *
+ * THE NEEDLE IS ALWAYS DRAWN, including when squelch is OFF — parked at the left end and dimmed.
+ * A handle that only appears once the thing is already on is a handle you can never use to turn it
+ * on, which is exactly how v2 shipped: with squelch off there was simply nothing to grab.
+ *
  * `level` and `pos` are the meter bus's own 0..1 bar scale — the same numbers the main signal meter
  * draws, so this needle sits exactly where that red line sits. `pos` < 0 = squelch off.
  * `onDrag` receives a 0..1 position, or -1 for off; SDRScreen converts to the backend's native unit.
@@ -47,7 +51,10 @@ function SquelchBar({ level, pos, onDrag }: {
   // frame or two feels broken even when the value is right.
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? pos;
-  const closed = shown >= 0 && level < shown;
+  const off = shown < 0;
+  const closed = !off && level < shown;
+  // Parked at the left end when off — the handle stays on screen and in reach.
+  const handleX = `${Math.max(0, Math.min(1, off ? 0 : shown)) * 100}%` as const;
 
   const wRef = useRef(0);
   wRef.current = w;
@@ -79,10 +86,10 @@ function SquelchBar({ level, pos, onDrag }: {
           backgroundColor: closed ? 'rgba(255,77,77,0.9)' : 'rgba(255,255,255,0.9)',
         }]} />
       </View>
-      {shown >= 0 && (<>
-        <View style={[st.sqlNeedle, { left: `${Math.max(0, Math.min(1, shown)) * 100}%` }]} />
-        <View style={[st.sqlBall,   { left: `${Math.max(0, Math.min(1, shown)) * 100}%` }]} />
-      </>)}
+      <View style={[st.sqlNeedle, { left: handleX },
+                    off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
+      <View style={[st.sqlBall,   { left: handleX },
+                    off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
     </View>
   );
 }
@@ -324,7 +331,7 @@ export default function AudioSheet({
               Off (open); NR left = Off, slides up for more reduction. */}
           {isOwrx && (<>
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <Slider style={st.bwSlider}
                 minimumValue={-130} maximumValue={-20} step={1}
                 value={owrxSql <= -130 ? -130 : owrxSql}
@@ -348,7 +355,7 @@ export default function AudioSheet({
           {/* Local SDR: power-based squelch (dBFS). */}
           {onLocalSquelch ? (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
                 <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} onDrag={onSquelchDrag} />
               </View>
@@ -389,7 +396,7 @@ export default function AudioSheet({
           {/* Kiwi squelch — client-side dBFS gate (dBm threshold, −130 = Off). */}
           {onKiwiSquelch && (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
                 <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} onDrag={onSquelchDrag} />
               </View>
@@ -399,7 +406,7 @@ export default function AudioSheet({
           {/* SNR Squelch — UberSDR audio gate (0–50 dB in our meter's units). */}
           {!recordingOnly && !onLocalSquelch && !onKiwiSquelch && !isOwrx && (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
                 <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} onDrag={onSquelchDrag} />
               </View>
@@ -528,15 +535,21 @@ const st = StyleSheet.create({
   bwVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
   // The squelch meter IS the control, so it gets a slider's worth of height and touch target —
   // it replaced the slider rather than sitting under it.
-  sqlBarWrap:  { height: 32, justifyContent: 'center', position: 'relative' },
+  // 40 tall: a 22px ball on top, its needle dropping through the 14px bar parked at the bottom.
+  // The ball has to sit ABOVE the bar or your finger covers the very signal you're aiming at.
+  // marginTop buys the ball its own air: it overhangs the top of the bar, and without this it
+  // collides with whatever row sits above (AUTO NOTCH).
+  sqlBarWrap:  { height: 40, marginTop: 8, position: 'relative', justifyContent: 'flex-end' },
+  // "SQUELCH" needs more than the 32pt the short labels use, or it wraps to "SQUE / LCH".
+  sqlLabel:    { width: 62 },
   sqlBarTrack: { height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.15)',
                  overflow: 'hidden' },
   sqlBarFill:  { position: 'absolute', left: 0, top: 0, bottom: 0 },
-  // Needle + ball live OUTSIDE the track: the track clips its fill, and the ball has to overhang.
-  sqlNeedle:   { position: 'absolute', top: 4, bottom: 4, width: 2, marginLeft: -1,
+  // Needle + ball live OUTSIDE the track: the track clips its fill, and both must overhang it.
+  sqlNeedle:   { position: 'absolute', top: 11, bottom: 0, width: 2, marginLeft: -1,
                  backgroundColor: '#3ddc84' },
-  sqlBall:     { position: 'absolute', top: 4, width: 24, height: 24, borderRadius: 12,
-                 marginLeft: -12, backgroundColor: '#3ddc84',
+  sqlBall:     { position: 'absolute', top: 0, width: 22, height: 22, borderRadius: 11,
+                 marginLeft: -11, backgroundColor: '#3ddc84',
                  borderWidth: 2, borderColor: 'rgba(0,0,0,0.55)' },
 
   subPanel: {
