@@ -298,6 +298,19 @@ that only a unique serial removes.
 (Stuart's own dongles already have unique serials, set for OpenWebRX, which requires them — further
 evidence that anyone running several receivers ends up needing this.)
 
+**Unique serials are the RECOMMENDED path, not a power-user extra.** Stuart:
+
+> "A user would have to remember the exact USB port order every time, which is not recommended and
+> not a good experience. Serial numbers coded to the radio is the foolproof way … if we can give
+> the users a GUI to change the EEPROM in a foolproof and as safe as we can make it way then that
+> is the best thing to do."
+
+Port-path identity is a FALLBACK that keeps a stock setup working. It is not a good answer for
+anyone running more than one dongle, because it silently transfers a hardware-safety guarantee onto
+the user's memory of a cable arrangement — six months later, at boot, with nobody watching. The GUI
+should therefore actively OFFER to set serials at the moment the hazard appears: two dongles with
+the same serial, and different bias-T settings between their profiles.
+
 **So: build it, as an advanced tool, gated hard.**
 
 - **Admin password required**, and a typed confirmation — the user types the NEW SERIAL to proceed,
@@ -311,6 +324,16 @@ evidence that anyone running several receivers ends up needing this.)
   layout matches what we expect, and refuse politely if it does not — `rtl_eeprom` remains
   available to anyone who wants to take that risk themselves.
 - **Read back and verify** after writing, and say plainly whether it took.
+- ★ **ONE DONGLE PLUGGED IN AT A TIME.** The single biggest foolproofing measure, and cheap: with
+  two identical dongles attached, the software knows which handle it holds but the USER cannot know
+  which physical stick that is — and writing the wrong serial to the wrong stick recreates exactly
+  the mix-up this exists to prevent. So the flow is: *"Unplug every receiver except the one you want
+  to name."* It is a one-time setup task; the friction is worth the certainty.
+- **Offer a sensible name, require it typed.** Suggest `VIBE-01`, `VIBE-02`… so nobody has to invent
+  a scheme, but still make the user type it to confirm. Suggestion removes the blank page; typing
+  removes the slip.
+- **Say that a replug is needed.** The dongle re-enumerates with its new serial only after being
+  unplugged and reconnected; without that sentence the user reasonably thinks it did not work.
 
 ### ★ AND A RULE THAT PROTECTS PEOPLE WHO NEVER USE IT
 
