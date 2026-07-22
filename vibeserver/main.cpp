@@ -36,7 +36,9 @@ std::atomic<bool> g_stop{false};
 void onSignal(int) { g_stop = true; }
 
 struct Opts {
-    std::string tcpHost = "127.0.0.1";   // rtl_tcp source
+    int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
+    bool        useUsb  = true;          // default: drive the dongle directly
+    std::string tcpHost = "127.0.0.1";   // rtl_tcp source (when --tcp is given)
     int         tcpPort = 1234;
     double      freq    = 9'410'000;     // Hz
     double      rate    = 2'400'000;     // capture sample rate, Hz
@@ -54,7 +56,8 @@ struct Opts {
 void usage() {
     std::printf(
         "VibeServer (standalone)\n\n"
-        "  --tcp HOST:PORT   rtl_tcp IQ source            (default 127.0.0.1:1234)\n"
+        "  --device N        RTL-SDR index to open directly (default 0)\n"
+        "  --tcp HOST:PORT   use an rtl_tcp source instead of USB\n"
         "  --freq HZ         initial centre frequency     (default 9410000)\n"
         "  --rate HZ         capture sample rate          (default 2400000)\n"
         "  --gain TENTHS_DB  tuner gain, <0 = auto        (default auto)\n"
@@ -67,8 +70,8 @@ void usage() {
         "  --lock-rate HZ    pin the capture rate (clients cannot change it)\n"
         "  --no-web          do not serve the browser client at GET /\n"
         "  -h, --help\n\n"
-        "IQ comes from rtl_tcp — there is no USB path in this build (see the file header).\n"
-        "Start one first, e.g.:  rtl_tcp -a 127.0.0.1 -f 9410000 -s 2400000\n");
+        "By default the dongle is driven DIRECTLY over libusb — nothing else to install or run.\n"
+        "--tcp is for development against a remote or synthetic source.\n");
 }
 
 bool parse(int argc, char** argv, Opts& o) {
@@ -79,7 +82,9 @@ bool parse(int argc, char** argv, Opts& o) {
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "-h" || a == "--help") { usage(); return false; }
+        else if (a == "--device") { o.device = std::atoi(need(i)); o.useUsb = true; }
         else if (a == "--tcp") {
+            o.useUsb = false;
             std::string v = need(i);
             auto c = v.rfind(':');
             if (c == std::string::npos) { std::fprintf(stderr, "--tcp wants HOST:PORT\n"); std::exit(2); }
@@ -127,17 +132,23 @@ int main(int argc, char** argv) {
     // The shim is a singleton — one radio, one pipeline, one server per process.
     LocalSdrShim& shim = LocalSdrShim::instance();
     std::string err;
-    const int port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
-                                   o.fftSize, o.fftRate, o.mode, err);
+    // fd < 0 selects the desktop USB path: -1 = device 0, -2 = device 1, … (see local_sdr_shim.cpp).
+    const int port = o.useUsb
+        ? shim.start(-(o.device + 1), 0, 0, o.freq, o.rate, o.gain,
+                     o.fftSize, o.fftRate, o.mode, err)
+        : shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
+                        o.fftSize, o.fftRate, o.mode, err);
     if (port <= 0) {
         std::fprintf(stderr, "VibeServer: failed to start — %s\n",
                      err.empty() ? "(no reason given)" : err.c_str());
-        std::fprintf(stderr, "Is there an rtl_tcp listening on %s:%d?\n", o.tcpHost.c_str(), o.tcpPort);
+        if (!o.useUsb)
+            std::fprintf(stderr, "Is there an rtl_tcp listening on %s:%d?\n", o.tcpHost.c_str(), o.tcpPort);
         return 1;
     }
 
-    std::printf("VibeServer listening on port %d  (IQ from rtl_tcp %s:%d)\n",
-                port, o.tcpHost.c_str(), o.tcpPort);
+    if (o.useUsb) std::printf("VibeServer listening on port %d  (RTL-SDR device %d)\n", port, o.device);
+    else          std::printf("VibeServer listening on port %d  (IQ from rtl_tcp %s:%d)\n",
+                              port, o.tcpHost.c_str(), o.tcpPort);
     std::printf("  clients: http://<this-machine>:%d/    auth: %s\n",
                 port, o.pin.empty() ? "OPEN (no PIN)" : "PIN required");
     if (o.maxBw > 0 || o.maxFps > 0)

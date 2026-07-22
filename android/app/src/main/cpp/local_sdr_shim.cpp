@@ -22,6 +22,10 @@
 #ifdef __ANDROID__
   #include <android/log.h>
   #include <rtl-sdr.h>
+#elif defined(VIBE_HAVE_LIBRTLSDR)
+  // Desktop (macOS/Linux) with real librtlsdr linked — the standalone VibeServer drives the
+  // dongle itself over libusb, so it needs the genuine header, not the stub.
+  #include <rtl-sdr.h>
 #else
   #include "rtl_sdr_stub.h"   // iOS: no-op rtlsdr_* decls so the USB path compiles
 #endif
@@ -2811,10 +2815,42 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->audioFreq.store(centerFreq);
     impl->mode = mode.empty() ? "nfm" : mode;
 
-    impl->usbFd = dup(fd);
-    if (impl->usbFd < 0) { err = "dup(usb fd) failed"; delete impl; return -1; }
-    int ret = rtlsdr_open_sys_dev(&impl->dev, (intptr_t)impl->usbFd);
-    if (ret != 0 || !impl->dev) { err = "rtlsdr_open_sys_dev failed: " + std::to_string(ret); ::close(impl->usbFd); delete impl; return -1; }
+    // TWO WAYS IN, because the platforms differ in who is allowed to claim the USB device.
+    //
+    //   fd >= 0 — ANDROID. Java owns the device (the app has no permission to claim it from
+    //             native), opens it, and hands us a descriptor to wrap. We dup it so the
+    //             caller keeps ownership of theirs.
+    //   fd <  0 — DESKTOP (macOS/Linux). libusb claims the dongle directly, so `fd` carries a
+    //             DEVICE INDEX instead (negated: -1 = index 0, -2 = index 1, …). No helper
+    //             process, no rtl_tcp — this is what makes a standalone desktop app possible.
+    int ret;
+#ifdef __ANDROID__
+    // rtlsdr_open_sys_dev() is an ANDROID-ONLY librtlsdr extension (upstream has no such call),
+    // so the fd path cannot even be compiled on desktop — and is never taken there anyway.
+    if (fd >= 0) {
+        impl->usbFd = dup(fd);
+        if (impl->usbFd < 0) { err = "dup(usb fd) failed"; delete impl; return -1; }
+        ret = rtlsdr_open_sys_dev(&impl->dev, (intptr_t)impl->usbFd);
+        if (ret != 0 || !impl->dev) { err = "rtlsdr_open_sys_dev failed: " + std::to_string(ret); ::close(impl->usbFd); delete impl; return -1; }
+    } else
+#endif
+    {
+        const int index = -fd - 1;
+        const uint32_t nDev = rtlsdr_get_device_count();
+        if (nDev == 0) { err = "no RTL-SDR found — is the dongle plugged in?"; delete impl; return -1; }
+        if ((uint32_t)index >= nDev) {
+            err = "RTL-SDR index " + std::to_string(index) + " out of range (" + std::to_string(nDev) + " found)";
+            delete impl; return -1;
+        }
+        impl->usbFd = -1;   // we own the device via librtlsdr, there is no fd of ours to close
+        ret = rtlsdr_open(&impl->dev, (uint32_t)index);
+        if (ret != 0 || !impl->dev) {
+            err = "rtlsdr_open(" + std::to_string(index) + ") failed: " + std::to_string(ret)
+                + " — is another program using the dongle?";
+            delete impl; return -1;
+        }
+        LOGI("USB device %d opened: %s", index, rtlsdr_get_device_name((uint32_t)index));
+    }
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
     // Offset tuning: physically tune HW_OFFSET_HZ above the logical centre.
     impl->tuneHw(centerFreq);
@@ -2837,7 +2873,9 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
     if (!impl->listener) {
         err = "could not bind localhost port";
-        impl->teardownAudio(); impl->rx.stop(); rtlsdr_close(impl->dev); ::close(impl->usbFd); delete impl; return -1;
+        impl->teardownAudio(); impl->rx.stop(); rtlsdr_close(impl->dev);
+        if (impl->usbFd >= 0) ::close(impl->usbFd);   // -1 on the desktop path (no fd of ours)
+        delete impl; return -1;
     }
     impl->port = chosen;
     impl->serverRunning.store(true);

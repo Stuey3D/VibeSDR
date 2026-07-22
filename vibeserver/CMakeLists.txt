@@ -68,6 +68,35 @@ add_executable(vibeserver
     ${FT8_SRC})
 target_include_directories(vibeserver PRIVATE
     "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")
-target_link_libraries(vibeserver PRIVATE vibedsp)
+# ── librtlsdr + libusb: the dongle, driven DIRECTLY ───────────────────────────
+# STATIC on purpose. A user drags one .app out of a DMG and it works — no Homebrew, no dylib
+# hunting, nothing to install. Prefer the static archives; fall back to whatever is found so a
+# dev machine still configures.
+find_library(RTLSDR_LIB NAMES rtlsdr librtlsdr.a rtlsdr.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_library(USB_LIB    NAMES usb-1.0 libusb-1.0.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_path(RTLSDR_INC rtl-sdr.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+if(NOT RTLSDR_LIB OR NOT RTLSDR_INC)
+  message(FATAL_ERROR "librtlsdr not found. On macOS: brew install librtlsdr")
+endif()
+# Prefer the .a next to whatever find_library picked, so we bundle rather than link a dylib.
+get_filename_component(_rtl_dir "${RTLSDR_LIB}" DIRECTORY)
+if(EXISTS "${_rtl_dir}/librtlsdr.a")
+  set(RTLSDR_LIB "${_rtl_dir}/librtlsdr.a")
+endif()
+if(EXISTS "${_rtl_dir}/libusb-1.0.a")
+  set(USB_LIB "${_rtl_dir}/libusb-1.0.a")
+endif()
+message(STATUS "librtlsdr: ${RTLSDR_LIB}")
+message(STATUS "libusb:    ${USB_LIB}")
+
+target_include_directories(vibeserver PRIVATE "${RTLSDR_INC}")
+# Use the REAL rtl-sdr.h, not the iOS no-op stub the shim falls back to.
+target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_LIBRTLSDR)
+target_link_libraries(vibeserver PRIVATE vibedsp "${RTLSDR_LIB}" "${USB_LIB}")
+if(APPLE)
+  # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
+  target_link_libraries(vibeserver PRIVATE
+      "-framework IOKit" "-framework CoreFoundation" "-framework Security" objc)
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(vibeserver PRIVATE Threads::Threads)
