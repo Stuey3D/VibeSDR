@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (261.5 KB)
+// Source: web/client/  (261.8 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -335,6 +335,8 @@ html, body {
            border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 4px rgba(0,0,0,0.7);
            border: 1px solid rgba(0,0,0,0.25); }
 .sqlNote { color: var(--unit); font-size: 11px; margin-top: 6px; line-height: 1.35; }
+.rowNote { color: var(--text-dim); font-size: 11px; line-height: 1.35; margin: -2px 0 4px;
+           opacity: 0.85; }
 /* NO font-size / letter-spacing here — a leftover from the pre-scaling layout that
    silently overrode the em-based rule above and pinned this readout to a hard 10px.
    It was the ONLY thing in the bar that didn't shrink, so on a 1366 laptop it ran
@@ -1177,6 +1179,8 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-wfrate="5">5</button>
     </div>
   </div>
+  <div class="rowNote">The waterfall interpolates onto the display, so a lower rate looks much the
+    same — it mainly cuts the incoming data rate. A higher rate reacts faster to brief signals.</div>
   <div class="mrow">
     <label>IDLE SAVER</label>
     <div class="seg"><button class="btn on" id="idleSaver">ON</button></div>
