@@ -156,6 +156,10 @@ final class UberClient: ObservableObject {
   /// dB (for the meter text), signalLevel = 0…1 fill for the bar behind the frequency pill.
   @Published var signalLevel: Double = 0
   @Published var signalDb: Double = 0
+  /// radiod's per-packet CHANNEL SNR (dBFS, −30 corrected), the zoom-independent meter number. NaN
+  /// until the first audio packet lands (then it takes over from the spectrum SNR). Written off-main
+  /// in the audio handler, read on the spectrum tick — a benign Double race.
+  private var chanSnr: Double = .nan
   @Published var framesPerSec: Double = 0
   @Published var audioPerSec: Double = 0
 
@@ -770,7 +774,9 @@ final class UberClient: ObservableObject {
 
     let row = proc.process(unwrapped, centerHz: freq, bwHz: binBandwidth * Double(n))
     signalLevel = proc.level      // SNR bar — computed for free inside process()
-    signalDb    = proc.snrDb
+    // Meter SNR from radiod's per-packet CHANNEL SNR (zoom-independent, the true number, same as the
+    // phone) when we have it; fall back to the spectrum SNR only until the first audio packet lands.
+    signalDb    = chanSnr.isNaN ? proc.snrDb : chanSnr
     let dec = decimate(row, to: WaterfallBuffer.width)
     // WaterfallBuffer DROPS rows that aren't exactly its width, silently. A blank waterfall
     // with a healthy frame count is exactly what that looks like.
@@ -994,6 +1000,14 @@ final class UberClient: ObservableObject {
         "&frequency=\(Int(frequency))&mode=\(mode)&format=opus&version=2")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
+        // radiod carries the CHANNEL SNR (basebandPower − noiseDensity, both dBFS) in the 21-byte
+        // packet header — zoom-INDEPENDENT, the true meter number (same source the phone uses). Feed
+        // signalDb from this. −30 corrects radiod's known audio-stream floor offset (its SNR over-reads).
+        if d.count > 21 {
+          let bb = Float(bitPattern: d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 13, as: UInt32.self) })
+          let nd = Float(bitPattern: d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 17, as: UInt32.self) })
+          if bb > -900, nd > -900 { self.chanSnr = Double(bb - nd) - 30 }
+        }
         // Decode + play OFF the main actor: ~50 packets/sec, and it must never fight the
         // waterfall for the main thread.
         if let out = self.opus.decode(d) {
