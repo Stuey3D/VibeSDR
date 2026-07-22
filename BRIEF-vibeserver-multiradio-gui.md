@@ -640,6 +640,38 @@ rather than being a concept the user has to hold in their head.
 - **It accommodates non-RTL hardware without redesign** — the RSP1B is simply another branch, even
   though driver support is future work (§5.9).
 
+### ★★ PREFER THE RADIO THAT IS ALREADY IDENTIFIABLE — do not ask for an EEPROM change you can avoid
+
+Stuart: *"if a server owner adds a load of RTL-SDRs and tells one to be the bias-T power, and we
+detect all the serials are the same, we tell them to change the EEPROM. But if one or two have
+unique serials or identifiers — the one v3 among three v4s — then we highlight that radio in a
+different colour and advise using that one to supply bias-T, as it already has a unique identifier
+and no EEPROM mods needed."*
+
+The best possible handling of a risky operation: **make it unnecessary.** At step 3 of the wizard
+(§4.5), when the user says a radio powers the antenna:
+
+1. **Is any attached radio already uniquely identifiable?** Either by a unique serial, or by being
+   the only one of its model on that antenna (the lone v3 among v4s — §5.2's table).
+2. **If yes → highlight it and recommend it**, with the reason: *"This receiver can already be told
+   apart from the others, so bias-T will be applied to the right one every time. No hardware change
+   needed."*
+3. **If no → then, and only then**, offer the EEPROM route (§5.2 revision) for whichever radio they
+   choose.
+
+★ **BUT FILTER BY WHETHER IT CAN ACTUALLY SUPPLY BIAS-T.** Not every RTL-family dongle has the
+circuitry: RTL-SDR Blog v3 and v4 do; several Nooelec NESDR models do NOT (only the "SMArTee"
+variants carry it). Recommending a stick that physically cannot power an antenna would send the
+owner chasing a fault that is not in the software. So the candidate list is:
+
+> uniquely identifiable **AND** bias-T capable **AND** on this antenna
+
+and if that list is empty, fall through to the EEPROM offer without pretending otherwise.
+
+**It stays advice, never enforcement.** The owner may have a physical reason it must be a particular
+stick — which port of the distributor it is on, cable lengths, or simply which one they can reach.
+If they pick a different radio, accept it and offer the EEPROM route for that one instead.
+
 ### The visual language
 
 Stuart: *"radios supplying bias-T power are highlighted yellow with a little lightning bolt next to
