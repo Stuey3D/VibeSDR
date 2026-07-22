@@ -136,7 +136,10 @@ enum Directories {
         longitude: (it["longitude"] as? NSNumber)?.doubleValue,
         distance: (it["distance"] as? NSNumber)?.doubleValue,
         bestSnr: bestSnr,
-        users: (it["available_clients"] as? Int) ?? 0,
+        // ★ NORMALISED TO 'IN USE', because UberSDR reports the opposite of Kiwi: its
+        // `available_clients` is slots FREE (0 = full), while Kiwi's `users` is slots TAKEN.
+        // Left raw, one directory's "8/8" would mean empty and the other's would mean full.
+        users: max(0, ((it["max_clients"] as? Int) ?? 0) - ((it["available_clients"] as? Int) ?? 0)),
         maxUsers: (it["max_clients"] as? Int) ?? 0,
         full: ((it["available_clients"] as? Int) ?? 1) <= 0
       )
@@ -182,6 +185,8 @@ enum Directories {
       guard let u0 = r["url"] as? String, !u0.isEmpty else { return nil }
       let u = u0.trimmedTrailingSlash
       let snr = (r["snr"] as? String)?.split(separator: ",").compactMap { Double($0) }.max()
+      let kiwiUsers = Int((r["users"] as? String) ?? "") ?? 0
+      let kiwiMax   = Int((r["users_max"] as? String) ?? "") ?? 0
       return SDRServer(
         name: (r["name"] as? String) ?? "KiwiSDR",
         url: u,
@@ -191,8 +196,12 @@ enum Directories {
         latitude: parseCoord(r["gps"], 0),
         longitude: parseCoord(r["gps"], 1),
         bestSnr: snr,
-        users: Int((r["users"] as? String) ?? "") ?? 0,
-        maxUsers: Int((r["users_max"] as? String) ?? "") ?? 0
+        users: kiwiUsers,
+        maxUsers: kiwiMax,
+        // ★ The two directories COUNT THE OPPOSITE WAY. UberSDR reports FREE slots
+        // (available_clients: 0 = full); KiwiSDR reports slots IN USE (users 8 of users_max 8 =
+        // full). Getting this backwards greys out every empty receiver and offers every full one.
+        full: kiwiMax > 0 && kiwiUsers >= kiwiMax
       )
     }
   }

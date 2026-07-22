@@ -394,6 +394,18 @@ export class KiwiAdapter implements SDRBackend {
           this.cb.onServerBusy?.();
         }
         break;
+      case 'ip_limit':
+        // ★ THE DAILY PER-IP TIME LIMIT — the real cause of "it lets us in, then kicks us after a
+        // few seconds". Owners set `ip_limit_mins` (verified on a live receiver: 25 minutes a day);
+        // once your IP has spent it, the server still ACCEPTS you and then ends the session almost
+        // immediately. On the wire that is indistinguishable from a flaky connection, so without
+        // this we reconnected forever and blamed the link. It's a rule, not a fault.
+        this.started = false;
+        if (!this.errorShown) {
+          this.errorShown = true;
+          this.cb.onError('You’ve used this KiwiSDR’s daily time allowance for your connection — the owner limits how long each listener gets per day. It’ll let you back in tomorrow. Try another KiwiSDR in the meantime.');
+        }
+        break;
       case 'badp':
         // 0 = sign-in OK. Non-zero = the server rejected the sign-in itself. It can't tell us
         // WHY on the wire, but it's always one of: the owner set a private listen PASSWORD we

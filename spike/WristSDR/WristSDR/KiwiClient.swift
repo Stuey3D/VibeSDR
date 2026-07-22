@@ -340,8 +340,13 @@ final class KiwiClient: ObservableObject, SDRClient {
   }
 
   /// Surface a refusal reason ONCE (badp/too_busy/handshake/timeout all funnel here).
-  private func fail(_ msg: String) {
-    guard !errorShown, !everFrame else { return }
+  /// `midSession: true` for refusals that can only arrive AFTER audio has been flowing — the daily
+  /// per-IP time limit above all. The plain `guard !everFrame` was written for handshake-time
+  /// refusals, and would have silently swallowed exactly the message that explains a mid-session
+  /// kick, leaving the reconnect loop to guess again.
+  private func fail(_ msg: String, midSession: Bool = false) {
+    guard !errorShown, midSession || !everFrame else { return }
+    gaveUp = true          // a stated rule is final — never keep knocking after one
     errorShown = true
     lastError = msg
     status = "refused"
@@ -574,6 +579,15 @@ final class KiwiClient: ObservableObject, SDRClient {
       if val != "0" && val != "" {
         fail("This KiwiSDR is full — every listening slot is in use. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
       }
+    case "ip_limit":
+      // ★ THE DAILY PER-IP TIME LIMIT — the real reason behind "it lets us in and then kicks us".
+      // Many owners set `ip_limit_mins` (25 on Bedford, for example): once your IP has used its
+      // allowance for the day, the server still ACCEPTS the connection and then ends it seconds
+      // later. Identical on the wire to a flaky link, which is why we used to blame Bluetooth and
+      // reconnect forever. It is a rule, not a fault — say so and stop.
+      fail("You\u{2019}ve used this KiwiSDR\u{2019}s daily time allowance for your connection"
+         + " — the owner limits how long each listener gets per day. It\u{2019}ll let you back in"
+         + " tomorrow. Try another KiwiSDR in the meantime.", midSession: true)
     case "badp":
       // Non-zero = the sign-in was rejected: a private listen PASSWORD we don't have, or the owner
       // only allows their own web page. Owner setting, not an app fault.

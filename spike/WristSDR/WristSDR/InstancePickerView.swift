@@ -325,6 +325,10 @@ struct InstancePickerView: View {
 
   private func serverSubtitle(_ s: SDRServer) -> String {
     var bits: [String] = []
+    // FULL first, so the reason a row is greyed and untappable is the first thing read rather than
+    // something to deduce. Slot counts only when the directory actually gave us them.
+    if s.full { bits.append("FULL") }
+    if s.maxUsers > 0 { bits.append("\(s.users)/\(s.maxUsers)") }
     if let cc = s.countryCode { bits.append(cc) } else if !s.location.isEmpty { bits.append(s.location) }
     if let d = s.distance { bits.append("\(Int(d.rounded())) km") }
     if let sn = s.bestSnr { bits.append("SNR \(Int(sn.rounded()))") }
