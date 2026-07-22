@@ -223,6 +223,60 @@ descriptors, so the string is a hint, never proof.
 `auto below N Hz`), upconverter offset, tunable frequency range, bias-T policy, gain range, and
 which of these the listener may touch versus admin-only versus locked.
 
+### 5.2.1 The profile GUI, as Stuart specced it
+
+**A profile is radio capability AND installation.** Not the model alone — two identical V4s can need
+different profiles because of what they are plugged into. This is why model detection may only ever
+SUGGEST (§5.2): the software can read the dongle, but it cannot see the coax.
+
+**The flow:**
+
+1. **Create SDR profile** → name it, e.g. *VHF/UHF*.
+2. Every RTL-SDR setting is present, and for each one the owner chooses: **listener may change it**,
+   or **admin only**. (This is foundations §5.4's per-control policy, surfaced as a page rather than
+   scattered through the UI.)
+3. Set the **frequency range** — e.g. FM broadcast upwards — with the ability to **block bands**, so
+   an operator can stay the right side of local law.
+4. **Lock out bias-T** — this antenna is not powered.
+5. **Lock out direct sampling** — no HF on this profile.
+6. **Allow gain, but cap it.** The owner knows this receiver overloads above 29.6 dB, so the
+   listener gets the control with a ceiling rather than an argument.
+7. Save, then **add a radio to the profile** — here, the V3.
+
+**Worked examples, all Stuart's:**
+
+| Situation | Profiles | Why |
+|---|---|---|
+| One V3, unpowered VHF antenna | 1 — *VHF/UHF* | Capability and installation both match |
+| Two V4s, **one** supplying bias-T to a shared powered antenna, the other behind a DC block | **2** — *V4 Wideband (Bias-T active)* and *V4 Wideband (Bias-T disabled)*, one radio each | Same hardware, DIFFERENT installation. The distinction lives in the coax, not the dongle |
+| Two V4s, antenna powered EXTERNALLY | **1** — *V4 Wideband*, both radios | Identical capability and identical installation, so nothing to separate |
+
+★ The middle case is precisely why **unique serials matter** and why the rule in §5.0 exists: serial
+`00000001` supplies the power, `00000002` sits behind the block, and each is bound to its own
+profile. Had they shared a serial, a reboot could swap them — an unpowered LNA and DC into a block.
+With unique serials, bias-T may be restored automatically; without, it starts off (§5.0 rule 2).
+
+**Relationships:** a profile holds MANY radios; a radio belongs to exactly ONE profile. That is what
+makes the third case a single edit rather than two, and it is why profiles are worth having at all —
+a user with four identical dongles on one antenna configures them once.
+
+### ★ An unassigned radio does not serve
+
+A dongle that is plugged in but belongs to no profile has **no policy**: no frequency limits, no
+band blocks, no gain ceiling, no bias-T decision. It must therefore NOT start serving. It appears in
+the GUI as a new receiver awaiting a profile, and the owner assigns it.
+
+Serving it with defaults would mean exposing a receiver whose legal limits and hardware policy
+nobody has set — which is the opposite of what the profile system is for.
+
+### ★ Band blocks are enforced SERVER-SIDE
+
+Frequency limits and blocked bands exist for legal and hardware reasons, so they cannot live in the
+client. The client is TOLD the permitted ranges (so it can grey out what it must not offer — never
+show a control we would silently ignore), and the shim REFUSES a tune outside them regardless of
+what any client asks for. A modified or third-party client must not be able to tune an operator into
+trouble.
+
 ### ★★ REVISED DECISION: an EEPROM serial writer, gated hard
 
 **First position (2026-07-22):** do not build it — bricking risk, no value added over
