@@ -937,6 +937,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
   // all slow with the data; any touch restores full rate instantly.
   const [idleSlow,      setIdleSlow]      = useState(true);
+  // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
+  // follow what the link will actually carry rather than asking for the maximum and stuttering.
+  const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
   const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
@@ -1074,6 +1077,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
     AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
       if (v === 'native' || v === '20fps' || v === '30fps') setFrameRate(v);
+    }).catch(() => {});
+    AsyncStorage.getItem('lsv_link_mode').then((v: string | null) => {
+      if (v === 'full' || v === 'adaptive' || v === 'lowData') setLinkMode(v);
     }).catch(() => {});
   }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
@@ -2795,6 +2801,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onIdleSlow = useCallback((v: boolean) => {
     setIdleSlow(v);
     AsyncStorage.setItem('lsv_idle_slow', v ? '1' : '0').catch(() => {});
+  }, []);
+
+  const onLinkMode = useCallback((m: 'full'|'adaptive'|'lowData') => {
+    setLinkMode(m);
+    AsyncStorage.setItem('lsv_link_mode', m).catch(() => {});
+    // Live: the controller reads this on its next tick, so the change is felt within a second
+    // rather than needing a reconnect.
+    // The adapter wraps UberSDRClient; only that backend has a rate lever, so this is a soft
+    // reach rather than a protocol addition. Other backends simply have no linkMode to set.
+    const c = client.current as unknown as { linkMode?: string; inner?: { linkMode?: string } } | null;
+    if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
 
   const onFrameRate = useCallback((v: 'native'|'20fps'|'30fps') => {
@@ -4786,6 +4803,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         frameRate={frameRate}           onFrameRate={onFrameRate}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
+        linkMode={linkMode}             onLinkMode={onLinkMode}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics} hapticsHardware={hapticsHardware}

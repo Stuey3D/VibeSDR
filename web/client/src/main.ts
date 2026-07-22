@@ -246,7 +246,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
       }
     },
-    onHwInfo: (gains, rates, locked) => { hwGains = gains; hwRates = rates; hwLockedRate = locked; populateHw(); },
+    onHwInfo: (gains, rates, locked, maxFps) => {
+      hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
+      // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
+      // a capped server from a failing link, and the difference matters.
+      serverMaxFps = maxFps > 0 ? maxFps : 0;
+      if (serverMaxFps > 0 && spec) spec.setFftRate(wantedFps());
+      populateHw();
+    },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
       // RDS is the station naming itself — it outranks any bookmark guess.
@@ -1127,6 +1135,13 @@ function updateMediaSession() {
 const IDLE_AFTER_MS = 30_000;
 const ACTIVE_FPS = 20;
 const IDLE_FPS = 5;
+/** The owner's cap, from hwinfo. 0 = uncapped. */
+let serverMaxFps = 0;
+/** What we should be asking for right now: our own choice, clamped to the server's ceiling. */
+function wantedFps(): number {
+  const want = throttled ? IDLE_FPS : ACTIVE_FPS;
+  return serverMaxFps > 0 ? Math.min(want, serverMaxFps) : want;
+}
 
 let lastInteraction = Date.now();
 let throttled = false;
@@ -1135,7 +1150,7 @@ function markActive() {
   lastInteraction = Date.now();
   if (throttled) {
     throttled = false;
-    spec?.setFftRate(ACTIVE_FPS);
+    spec?.setFftRate(wantedFps());
     updateStatus();
   }
 }
@@ -1144,7 +1159,7 @@ function checkIdle() {
   if (!spec || throttled) return;
   if (Date.now() - lastInteraction < IDLE_AFTER_MS) return;
   throttled = true;
-  spec.setFftRate(IDLE_FPS);
+  spec.setFftRate(wantedFps());
   updateStatus();
 }
 
@@ -2538,7 +2553,7 @@ function pushSettingsToServer() {
 
   // Re-assert the frame rate: the shim keeps whatever it was last set to, so a
   // reconnect could otherwise land in a stuck 5 fps with no way back.
-  spec.setFftRate(throttled ? IDLE_FPS : ACTIVE_FPS);
+  spec.setFftRate(wantedFps());
 
   // Gain and sample rate wait for hwinfo — we can't validate them until the
   // server has told us what this dongle actually supports.

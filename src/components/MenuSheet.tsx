@@ -96,6 +96,10 @@ export interface MenuSheetProps {
   // SNR squelch — value ≤ -999 = off/open
   snrSquelch?:    number;
   onSnrSquelch?:  (v: number) => void;
+  /** Adaptive waterfall-rate policy. 'adaptive' follows the link, 'full' never throttles,
+   *  'lowData' pins the floor by choice (so it must never read as a poor link). */
+  linkMode?:      'full' | 'adaptive' | 'lowData';
+  onLinkMode?:    (m: 'full' | 'adaptive' | 'lowData') => void;
   // Local SDR power-based squelch (dBFS, -100 = off). Replaces the (dead) SNR
   // squelch slider on local instances.
   localSquelch?:   number;
@@ -466,6 +470,7 @@ export default function MenuSheet({
   filterLow, filterHigh, bwEdgeMax = 6000, onFilterLow, onFilterHigh, onFilterBoth,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
+  linkMode = 'adaptive', onLinkMode,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR, notchOn = false, onNotch, eibiEnabled = true, onEibiToggle, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
@@ -939,6 +944,21 @@ export default function MenuSheet({
                 <BtnRow>
                   <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
                 </BtnRow>
+
+                {/* AUTO LINK MANAGEMENT — asks the server for fewer waterfall frames when the
+                    connection cannot carry them, and climbs back when it recovers. The waterfall
+                    interpolates regardless, so a lower rate costs TIME RESOLUTION, not smooth
+                    scrolling — a stuttering link is ugly, a slower one mostly is not.
+                    AUTO is the default. FULL never throttles (may stutter). LOW DATA pins the
+                    floor for metered connections — a choice, so it never shows as a poor link. */}
+                {onLinkMode && (<>
+                  <SubLabel label="Link Management" />
+                  <BtnRow>
+                    <Btn label="AUTO"     active={linkMode==='adaptive'} onPress={() => onLinkMode('adaptive')} />
+                    <Btn label="FULL"     active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
+                    <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
+                  </BtnRow>
+                </>)}
 
               </View>
             )}

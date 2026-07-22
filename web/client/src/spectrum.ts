@@ -59,7 +59,7 @@ export interface RdsMeta {
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
-  onHwInfo?: (gains: number[], rates: number[], lockedRate: number) => void;
+  onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number) => void;
   onRds?:    (meta: RdsMeta) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   onRtt?:    (ms: number) => void;
@@ -193,7 +193,8 @@ export class SpectrumClient {
         break;
       }
       case 'hwinfo':
-        this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0);
+        this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
+                           Number(msg.maxFftRate) || 0);
         break;
       case 'rds':
         this.cb.onRds?.({

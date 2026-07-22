@@ -19,6 +19,7 @@ import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { resolveStationIso, receiverIso } from './rdsCountry';
+import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,9 @@ export interface SDRCallbacks {
   /** Link quality: 0=down, 1=poor(red), 2=fluctuating(yellow), 3=good(green).
    *  Derived from frame inter-arrival jitter, stalls, ping RTT, reconnects. */
   onLink?:      (q: 0 | 1 | 2 | 3) => void;
+  /** Adaptive link state: how far the controller has throttled (1 = full) and whether it is still
+   *  working the link out. Lets the UI show a throttled-but-fine link honestly instead of red. */
+  onLinkRate?:  (adaptiveRung: number, settling: boolean, fps: number) => void;
   /** True from the moment a recovery starts (socket torn down) until the first
    *  frame arrives on the fresh one. The watch cannot infer this — from the wrist
    *  a recovery-in-progress and a dead phone look identical — so the phone, which
@@ -442,6 +446,7 @@ export class UberSDRClient {
     const msg: Record<string, unknown> = { type: 'zoom', frequency: p.frequency };
     if (p.binBandwidth > 0) msg.binBandwidth = p.binBandwidth;
     this.spectrumWs.send(JSON.stringify(msg));
+    this.lastResubAt = Date.now();   // frames pause across this — not a bad link
     this._armSettle();
   }
 
@@ -477,6 +482,10 @@ export class UberSDRClient {
    * config reports a binBandwidth change and on reconnect (skin app.js
    * onConfig parity).
    */
+  /** Called when the view changes — frames pause across the re-subscription, and the controller
+   *  must not read that as starvation. */
+  noteResubscribe() { this.lastResubAt = Date.now(); }
+
   setRate(divisor: number) {
     this.rateDivisor = Math.max(1, Math.min(8, Math.round(divisor)));
     this.gapHist.length = 0; // legit frame-rate change — don't read as stalls
@@ -543,6 +552,7 @@ export class UberSDRClient {
 
   destroy() {
     this.destroyed = true;
+    this.stopLinkManager();
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
     if (this.settleTimer)    { clearTimeout(this.settleTimer);    this.settleTimer = null; }
@@ -629,6 +639,10 @@ export class UberSDRClient {
       if (this.rateDivisor > 1) {
         ws.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
       }
+      // Adaptive rate control. On a RECONNECT the server is back at its default, so re-assert
+      // whatever rung we had settled on rather than silently jumping back to full rate.
+      this.startLinkManager();
+      this.link?.reassert();
     };
 
     ws.onmessage = (e) => {
@@ -782,6 +796,57 @@ export class UberSDRClient {
 
   // ── Link quality state ──────────────────────────────────────────────────
   private gapHist: number[] = [];   // recent frame inter-arrival gaps (ms)
+
+  // ── Adaptive link management (ported policy — see services/linkManager.ts) ──────────────────
+  /** Only the VibeServer shim sends `hwinfo`, so its arrival is an honest signal of which rate
+   *  lever this server speaks: VibeServer takes `fftRate` in fps, UberSDR takes a `set_rate`
+   *  divisor. Everything else about the controller is identical. */
+  private isVibeServer = false;
+  private link: LinkManager | null = null;
+  private specFrames = 0;              // frames counted in the current 1s window
+  private linkTimer: ReturnType<typeof setInterval> | null = null;
+  private serverMaxFps = 0;            // the owner's ceiling, once hwinfo tells us
+
+  private startLinkManager() {
+    if (this.linkTimer) return;
+    const mode = (this.linkMode ?? 'adaptive') as LinkMode;
+    this.link = new LinkManager({
+      ladder: this.isVibeServer ? LADDERS.vibeserver : LADDERS.ubersdr,
+      // 5 fps is the deepest a USER may pin — below that is adaptive-only, because the
+      // interpolation can hide 5 but not 3.3.
+      lowDataRung: 2,
+      mode,
+      apply: (rung, fps) => {
+        if (this.isVibeServer) {
+          if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+            this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: fps }));
+          }
+        } else {
+          this.setRate(rung);          // UberSDR: rung IS the poll divisor
+        }
+      },
+    });
+    if (this.serverMaxFps > 0) this.link.applyServerCeiling(this.serverMaxFps);
+    this.linkTimer = setInterval(() => {
+      const fps = this.specFrames;
+      this.specFrames = 0;
+      const live = this.spectrumWs?.readyState === WebSocket.OPEN;
+      // `settled` guards a tune/zoom re-subscription, where frames legitimately pause — reading
+      // that as a bad link would throttle every time the user moved the dial.
+      this.link?.tick(fps, !!live, Date.now() - this.lastResubAt > 1500);
+      if (this.link) this.callbacks.onLinkRate?.(this.link.adaptiveRung, this.link.settling, fps);
+    }, 1000);
+  }
+
+  private stopLinkManager() {
+    if (this.linkTimer) { clearInterval(this.linkTimer); this.linkTimer = null; }
+    this.link = null;
+  }
+
+  /** When the view last changed — frames pause across a re-subscription. */
+  private lastResubAt = 0;
+  /** User preference, set by the app (Auto / Full rate / Low data). */
+  linkMode: LinkMode = 'adaptive';
   private lastFrameAt    = 0;
   private lastReconnectAt = 0;
   private pingSentAt     = 0;
@@ -1049,6 +1114,7 @@ export class UberSDRClient {
       emit.bwHz         = v.binBandwidth * s.binCount;
       this._armSettle();
     }
+    this.specFrames++;            // per-second count for the adaptive controller
     this.callbacks.onSpectrum(out, emit);
   }
 
@@ -1103,6 +1169,13 @@ export class UberSDRClient {
       // messages outright, so the client hides the picker rather than offer a
       // control that silently does nothing.
       this.callbacks.onHwLockedRate?.(Number(msg.lockedRate) || 0);
+      // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
+      // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
+      // permitted one, and read the difference as a failing link — stepping down forever chasing a
+      // limit that can never be reached. (The server's own comment makes the same point.)
+      this.isVibeServer = true;
+      this.serverMaxFps = Number(msg.maxFftRate) || 0;
+      if (this.serverMaxFps > 0) this.link?.applyServerCeiling(this.serverMaxFps);
       return;
     }
     if (msg.type === 'config') {

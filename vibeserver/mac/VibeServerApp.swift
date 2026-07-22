@@ -29,6 +29,15 @@ final class Server: ObservableObject {
     @AppStorage("pin")      var pin        = ""
     @AppStorage("port")     var wantedPort = 0        // 0 = first free 48000-48049
     @AppStorage("serveWeb") var serveWeb   = true
+    // ── Link management ceilings ─────────────────────────────────────────────
+    // What the OPERATOR is willing to spend on each listener. The server enforces these, and —
+    // crucially — publishes them so an adaptive client can see the ceiling instead of reading it
+    // as a failing link and stepping down forever chasing a limit it can never reach.
+    // 0 = no cap. Tiers match the Android server's (FPS_TIERS in src/services/vibeServer.ts) so a
+    // setting means the same thing on every host.
+    @AppStorage("maxFps")   var maxFps     = 0.0      // 0 = server default (20), else 20/10/5
+    @AppStorage("maxBwHz")  var maxBwHz    = 0.0      // 0 = uncapped demod bandwidth
+    @AppStorage("lockRate") var lockedRate = 0.0      // 0 = client may change the capture rate
     @AppStorage("autoStart") var autoStart = true     // start serving as soon as the app launches
 
     /// Called whenever anything the menu bar draws has changed.
@@ -59,6 +68,9 @@ final class Server: ObservableObject {
         cfg.centreHz = centreHz
         cfg.port     = Int32(wantedPort)
         cfg.serveWebClient = serveWeb
+        cfg.maxFftRate     = maxFps
+        cfg.maxBandwidthHz = maxBwHz
+        cfg.lockedRate     = lockedRate
 
         // The C strings must outlive the call, so hold them across it.
         mode.withCString { modePtr in
@@ -359,6 +371,28 @@ struct SettingsView: View {
                 Text("Network listeners must enter this. This Mac never has to.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
+            }
+            Section("Link Management") {
+                Picker("Waterfall rate", selection: $server.maxFps) {
+                    Text("Full · 20 fps").tag(0.0)
+                    Text("Half · 10 fps").tag(10.0)
+                    Text("Quarter · 5 fps").tag(5.0)
+                }
+                Picker("Capture rate", selection: $server.lockedRate) {
+                    Text("Listener chooses").tag(0.0)
+                    Text("Pinned · 2.4 MHz").tag(2_400_000.0)
+                    Text("Pinned · 1.8 MHz").tag(1_800_000.0)
+                    Text("Pinned · 1.2 MHz").tag(1_200_000.0)
+                    Text("Pinned · 960 kHz").tag(960_000.0)
+                }
+                Picker("Demod bandwidth", selection: $server.maxBwHz) {
+                    Text("Uncapped").tag(0.0)
+                    Text("Up to 200 kHz").tag(200_000.0)
+                    Text("Up to 50 kHz").tag(50_000.0)
+                    Text("Up to 16 kHz").tag(16_000.0)
+                }
+                Text("Caps what each listener may ask for. The server tells them the limit, so they settle at it instead of mistaking it for a bad connection.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Advanced · Network") {
                 TextField("Port", value: $server.wantedPort, format: .number,
