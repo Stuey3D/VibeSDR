@@ -59,6 +59,8 @@ export interface RdsMeta {
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
+  /** The person at the server is looking for this window. */
+  onSummon?: () => void;
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
               forceIdleSaver?: boolean) => void;
   onRds?:    (meta: RdsMeta) => void;
@@ -193,6 +195,10 @@ export class SpectrumClient {
         this.cb.onConfig?.(cfg);
         break;
       }
+      case 'summon':
+        // The host machine is looking for this tab. Handled by main.ts (flash + focus attempt).
+        this.cb.onSummon?.();
+        break;
       case 'hwinfo':
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1);

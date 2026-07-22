@@ -65,6 +65,9 @@ bool vs_is_running(void);
 void vs_status(VsStatus* out);
 
 /** How many RTL-SDR devices are attached right now (for a device picker / "plug one in" state). */
+/** Ask the connected client to make itself known (flash + focus). No-op if nobody is listening. */
+void vs_summon(void);
+
 int  vs_device_count(void);
 
 /** Display name of device `index`, or "" if there is no such device. Valid until the next call. */

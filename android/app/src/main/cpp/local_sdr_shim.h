@@ -52,6 +52,10 @@ public:
     /** Require listeners to keep their idle power-saving on (they normally choose). For a host on
      *  solar/cellular where saving power outranks a listener's preference. Set BEFORE start(). */
     static void setVibeServerForceIdleSaver(bool on);
+    /** Tell the connected client the host is looking for it — the browser tab flashes and tries to
+     *  focus itself. Uses the socket we already have, so no browser automation and no permission
+     *  prompt. No-op when nobody is listening. */
+    void summonClient();
     // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
     // that hits a decode issue can ask the server to fall back to raw int16 PCM.
     static void setVibeServerCompressAudio(bool on);

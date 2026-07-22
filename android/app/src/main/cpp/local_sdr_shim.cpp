@@ -2807,6 +2807,13 @@ void LocalSdrShim::setVibeServerPort(int port) {
 void LocalSdrShim::setVibeServerAuth(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsMtx); g_vsSecret = secret;
 }
+void LocalSdrShim::summonClient() {
+    // "The person at the host is looking for you." Costs nothing when nobody is listening.
+    if (!p) return;
+    std::shared_ptr<net::Socket> sock;
+    { std::lock_guard<std::mutex> lk(p->clientMtx); sock = p->specClient; }
+    if (sock && sock->isOpen()) p->sendText(sock, "{\"type\":\"summon\"}");
+}
 void LocalSdrShim::setVibeServerForceIdleSaver(bool on) {
     g_vsForceIdle.store(on);
     LOGI("VibeServer idle saver: %s", on ? "REQUIRED (clients may not disable)" : "listener's choice");

@@ -90,6 +90,8 @@ void vs_status(VsStatus* out) {
     out->port             = g_port;
 }
 
+void vs_summon(void) { LocalSdrShim::instance().summonClient(); }
+
 int vs_device_count(void) {
 #ifdef VIBE_HAVE_LIBRTLSDR
     return (int)rtlsdr_get_device_count();

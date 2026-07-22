@@ -246,6 +246,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
       }
     },
+    onSummon: () => onSummoned(),
     onHwInfo: (gains, rates, locked, maxFps, forceIdle) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
@@ -1164,6 +1165,15 @@ function flashHere() {
 window.addEventListener('hashchange', () => {
   if (location.hash === '#here') flashHere();
 });
+
+/** The server says the person at the host machine is looking for this tab. */
+function onSummoned() {
+  flashHere();
+  // Best effort — browsers rightly refuse to steal focus without a user gesture, and the menu-bar
+  // click happened in another app. The flash is what actually does the work; if focus lands too,
+  // so much the better.
+  try { window.focus(); } catch { /* not permitted — the flash still shows */ }
+}
 
 let lastInteraction = Date.now();
 let throttled = false;
