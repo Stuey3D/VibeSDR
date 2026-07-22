@@ -91,41 +91,71 @@ function fmtSpotTime(t: number): string {
          String(d.getUTCMinutes()).padStart(2, '0');
 }
 
+// Expanded line 2 wants the exact instant — FT8 lives on 15-second slots, so minutes alone
+// cannot tell two transmissions in the same minute apart.
+function fmtSpotTimeSec(t: number): string {
+  const d = new Date(t);
+  return String(d.getUTCHours()).padStart(2, '0') + ':' +
+         String(d.getUTCMinutes()).padStart(2, '0') + ':' +
+         String(d.getUTCSeconds()).padStart(2, '0') + 'z';
+}
+
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
 // render, and unchanged rows skip re-render entirely when new spots flush in.
-const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz }: {
-  s: SpotRow; isCW: boolean; font: string; callColor: string;
+const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded }: {
+  s: SpotRow; isCW: boolean; font: string; callColor: string; expanded: boolean;
   onTuneHz?: (hz: number) => void;
 }) {
-  // Columns: Time · Band · Mode · SNR · Call · Country (Stuart 2026-06-12 —
-  // freq + distance dropped, they truncated everything on the SE; the row
-  // tap still tunes to the spot's frequency)
+  // Line 1: Time · Call · Band · Mode · SNR · Country · Distance.
+  //
+  // Call moved from fifth to second (2026-07-22): it is the IDENTITY of the row, and reading it
+  // after three metadata cells is backwards.
+  //
+  // Line 2 (expanded only) carries the MESSAGE. The original columns were chosen for DX hunting —
+  // distance, country, grid — and the message was left out, but a user watching FT8 pointed out
+  // that the message is what tells you whether you are seeing a CQ, a signal report, or a QSO in
+  // progress. Distance answers "how far"; the message answers "what is happening".
   return (
-    <TouchableOpacity style={dp.spotRow}
+    <TouchableOpacity style={expanded ? dp.spotRowTall : dp.spotRow}
       onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
-      <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
-        {fmtSpotTime(s.time)}
-      </Text>
-      <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
-      <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
-        {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
-      </Text>
-      <Text style={[dp.spotCell, dp.spotSnr,
-        { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: font }]}>
-        {s.snr !== undefined ? s.snr : ''}
-      </Text>
-      <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
-            numberOfLines={1}>
-        {s.call}
-      </Text>
-      <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
-        {abbrCountry(s.country)}
-      </Text>
-      {/* Distance-to-receiver (FT8: from the TX grid). Its own cell so country +
-          distance both show; blank when unknown. */}
-      <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>
-        {s.distKm != null ? `${s.distKm}km` : ''}
-      </Text>
+      <View style={dp.spotLine}>
+        <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
+          {fmtSpotTime(s.time)}
+        </Text>
+        <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
+              numberOfLines={1}>
+          {s.call}
+        </Text>
+        <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
+        <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
+          {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
+        </Text>
+        <Text style={[dp.spotCell, dp.spotSnr,
+          { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: font }]}>
+          {s.snr !== undefined ? s.snr : ''}
+        </Text>
+        <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
+          {abbrCountry(s.country)}
+        </Text>
+        {/* Distance-to-receiver (FT8: from the TX grid). Its own cell so country +
+            distance both show; blank when unknown. */}
+        <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>
+          {s.distKm != null ? `${s.distKm}km` : ''}
+        </Text>
+      </View>
+      {expanded && (
+        // Dimmer than line 1 on purpose: this is context to READ, not a scan target. Parts are
+        // joined with · and any missing piece simply drops out — a report or a 73 carries no
+        // locator, so the row must not leave a gap where the grid would have been.
+        <Text style={[dp.spotDetail, { fontFamily: font }]} numberOfLines={1}>
+          {[
+            s.msg,
+            s.grid,
+            s.bearing != null ? `${Math.round(s.bearing)}°` : undefined,
+            fmtSpotTimeSec(s.time),
+          ].filter(Boolean).join(' · ')}
+        </Text>
+      )}
     </TouchableOpacity>
   );
 });
@@ -175,6 +205,10 @@ export default function DecoderPanel({
   const [sfMode, setSfMode] = useState('ALL');
   const [sfBand, setSfBand] = useState('ALL');
   const [sfAge,  setSfAge]  = useState(0);
+  // Collapsed is the DEFAULT and stays the one-line row it has always been: on an SE that is the
+  // difference between a dozen spots on screen and five. Expanding opens every row to two lines at
+  // once — a per-row disclosure would mean hunting for the arrow on the row you care about.
+  const [spotsExpanded, setSpotsExpanded] = useState(false);
   const visibleSpots = React.useMemo(() => {
     if (!isSpotsMode) return [];
     const cutoff = sfAge > 0 ? Date.now() - sfAge * 60_000 : 0;
@@ -188,8 +222,8 @@ export default function DecoderPanel({
   const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
     <SpotRowView s={item} isCW={spotsKind === 'cw'} font={themeForRows.font}
                  callColor={themeForRows.name === 'white' ? '#ffffff' : C.outputCl}
-                 onTuneHz={onTuneHz} />
-  ), [spotsKind, themeForRows, onTuneHz]);
+                 onTuneHz={onTuneHz} expanded={spotsExpanded} />
+  ), [spotsKind, themeForRows, onTuneHz, spotsExpanded]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -225,6 +259,9 @@ export default function DecoderPanel({
   useEffect(() => {
     if (panelOn) {
       setMinimised(false);
+      // The panel is never unmounted when it closes, so without this it reopens still expanded
+      // from a previous session.
+      setSpotsExpanded(false);
       Animated.parallel([
         Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
         Animated.spring(slideY, { toValue: 0, damping: 22, stiffness: 200, useNativeDriver: true }),
@@ -233,6 +270,10 @@ export default function DecoderPanel({
       Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }).start();
     }
   }, [panelOn, opacity, slideY]);
+
+  // CW spots have no message or grid to reveal, so an expanded state carried across the switch
+  // would just be tall empty rows.
+  useEffect(() => { setSpotsExpanded(false); }, [spotsKind]);
 
   // Scroll to bottom when text grows
   useEffect(() => {
@@ -285,6 +326,15 @@ export default function DecoderPanel({
               <Text style={[dp.hbtnTxt, {
                 color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 {sfMode === 'ALL' ? 'MODE' : sfMode}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {isSpotsMode && spotsKind === 'digi' && (
+            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => { e?.stopPropagation(); setSpotsExpanded(v => !v); }}>
+              <Text style={[dp.hbtnTxt, {
+                color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                {spotsExpanded ? 'COLLAPSE' : 'EXPAND'}
               </Text>
             </TouchableOpacity>
           )}
@@ -520,14 +570,26 @@ const dp = StyleSheet.create({
   status:     { fontSize: 9, letterSpacing: 1, color: C.muted, flexShrink: 1, overflow: 'hidden' },
   statusGrow: { flex: 1 },
   // Spots table
+  // The cells now live in the inner `spotLine`, so the row box itself must NOT be a row — a nested
+  // row would shrink to its content and the right-hand cells would lose their alignment.
   spotRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 10, paddingVertical: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(255,160,0,0.08)',
   },
+  // Expanded rows keep the same horizontal padding and divider; only the vertical box grows.
+  spotRowTall: {
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,160,0,0.08)',
+  },
+  spotLine:    { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Indented to the width of the time cell so it reads as belonging to the row above rather than
+  // as a row of its own, and dimmer so a collapsed-style scan still skims past it.
+  spotDetail:  { fontSize: 9, letterSpacing: 0.3, color: 'rgba(255,160,0,0.40)',
+                 marginLeft: 44, marginTop: 2 },
   spotEmpty:   { padding: 12, textAlign: 'center' },
-  // 6-column layout (Time·Band·Mode·SNR·Call·Country) — fixed widths sized
+  // 7-column layout (Time·Call·Band·Mode·SNR·Country·Distance) — fixed widths sized
   // for the SE's ~340pt panel; call + country flex the remainder
   spotCell:    { fontSize: 10, letterSpacing: 0.4, color: 'rgba(255,160,0,0.60)' },
   spotTime:    { width: 38 },
