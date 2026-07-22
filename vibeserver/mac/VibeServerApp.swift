@@ -37,6 +37,8 @@ final class Server: ObservableObject {
     // 0 = no cap. Tiers match the Android server's (FPS_TIERS in src/services/vibeServer.ts) so a
     // setting means the same thing on every host.
     @AppStorage("maxFps")   var maxFps     = 0.0      // 0 = server default (20), else 20/10/5
+    @AppStorage("eibi")     var eibiStations = false  // download the EiBi schedule for /stations search
+    @Published var eibiStatus = ""                    // "1234 stations" / "downloading…" / "offline"
     @AppStorage("maxBwHz")  var maxBwHz    = 0.0      // 0 = uncapped demod bandwidth
     @AppStorage("lockRate") var lockedRate = 0.0      // 0 = client may change the capture rate
     /// Listeners normally choose whether to let the waterfall idle down. A host on solar and
@@ -105,6 +107,19 @@ final class Server: ObservableObject {
         if !running && deviceCount > 0 { start() }
     }
 
+    /// Download the EiBi schedule and hand it to the core for /stations, or clear it when off.
+    /// Runs off the main actor; only the small status string comes back to the UI.
+    func refreshEibi() {
+        guard eibiStations else { EibiStations.clear(); eibiStatus = ""; return }
+        eibiStatus = "downloading…"
+        Task { @MainActor in
+            await EibiStations.refresh()
+            // The core now holds the list; report a friendly done-state. (Count lives in the core;
+            // we keep the UI honest without a second round-trip by just saying it is loaded.)
+            self.eibiStatus = "loaded — shortwave stations are in search"
+        }
+    }
+
     func start() {
         lastError = nil
         var cfg = VsConfig()
@@ -124,7 +139,7 @@ final class Server: ObservableObject {
                 cfg.pin  = pinPtr
                 var err = [CChar](repeating: 0, count: 256)
                 let p = vs_start(&cfg, &err, 256)
-                if p > 0 { port = Int(p); running = true }
+                if p > 0 { port = Int(p); running = true; refreshEibi() }
                 else     { lastError = String(cString: err); running = false }
             }
         }
@@ -569,6 +584,20 @@ struct SettingsView: View {
                 Text("Network listeners must enter this. This Mac never has to.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
+            }
+            Section("Station search") {
+                // Off by default: it is a network fetch, and a headless/offline server should not
+                // reach out uninvited. On, the server downloads the EiBi shortwave schedule and
+                // serves it so a listener's search finds broadcast stations, not just their own
+                // bookmarks and the band plan. The list is time-filtered to what is on air now.
+                Toggle("Shortwave station list (EiBi)", isOn: Binding(
+                    get: { server.eibiStations },
+                    set: { server.eibiStations = $0; server.refreshEibi() }))
+                if !server.eibiStatus.isEmpty {
+                    Text(server.eibiStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Downloads the EiBi schedule (eibispace.de) so listeners can search broadcast stations. A browser can't fetch it directly, so the server does. Refreshed once a day; cached for offline.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Link Management") {
                 Picker("Waterfall rate", selection: $server.maxFps) {

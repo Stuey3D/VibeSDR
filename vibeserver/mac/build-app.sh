@@ -58,6 +58,7 @@ swiftc \
   -import-objc-header "$ROOT/vibeserver/vibeserver_api.h" \
   -I "$ROOT/vibeserver" \
   "$MAC/VibeServerApp.swift" \
+  "$MAC/EibiStations.swift" \
   $LIBS "$RTLSDR" "$USBLIB" \
   -lc++ \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
