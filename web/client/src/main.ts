@@ -1029,59 +1029,24 @@ function updateViewOverlays() {
 // and the media keys say something useful.
 
 /**
- * Now Playing artwork — composited exactly as the PHONE does it
- * (VibeStreamService.refreshArtwork): the artwork base, with the RTL-TCP logo
- * inset bottom-right at 30% of the width, 4.5% padding, amber-tinted (#ffb833)
- * on a dark rounded inset. Same two source images, same numbers, so the lock
- * screen looks identical whether you're listening on the phone or in the browser.
+ * Now Playing artwork — the VibeServer mark.
+ *
+ * It used to composite the phone's lock-screen recipe (an artwork base with the RTL-TCP logo
+ * inset, amber-tinted, bottom-right). That is unnecessary here: the VibeServer icon already
+ * carries the family radio glyph AND the triangle-node inset, so there is nothing to add — and
+ * one image cannot half-load the way two could, which is what left Now Playing showing a blank
+ * square. An RDS station logo still overrides this whenever one is known.
  */
 let artworkUrl = '';
 
 function buildArtwork() {
   const base = $<HTMLImageElement>('artBase');
-  const inset = $<HTMLImageElement>('artInset');
-  const make = () => {
+  const use = () => {
     if (!base.naturalWidth) return;
-    const S = 512;
-    const c = document.createElement('canvas');
-    c.width = c.height = S;
-    const ctx = c.getContext('2d')!;
-    ctx.drawImage(base, 0, 0, S, S);
-
-    if (inset.naturalWidth) {
-      const size = S * 0.30;
-      const pad = S * 0.045;
-      const x = S - size - pad;
-      const y = S - size - pad;
-
-      // Dark rounded inset behind the logo, as the app draws it.
-      ctx.fillStyle = 'rgba(12,10,6,0.92)';
-      const r = size * 0.18;
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + size, y, x + size, y + size, r);
-      ctx.arcTo(x + size, y + size, x, y + size, r);
-      ctx.arcTo(x, y + size, x, y, r);
-      ctx.arcTo(x, y, x + size, y, r);
-      ctx.closePath();
-      ctx.fill();
-
-      // The logo is black line art — tint it amber, as the app does.
-      const t = document.createElement('canvas');
-      t.width = t.height = Math.round(size);
-      const tc = t.getContext('2d')!;
-      const p = size * 0.14;
-      tc.drawImage(inset, p, p, size - 2 * p, size - 2 * p);
-      tc.globalCompositeOperation = 'source-in';
-      tc.fillStyle = '#ffb833';
-      tc.fillRect(0, 0, t.width, t.height);
-      ctx.drawImage(t, x, y);
-    }
-    artworkUrl = c.toDataURL('image/png');
+    artworkUrl = base.src;      // already a data: URI, baked in at build time
     updateMediaSession();
   };
-  if (base.complete) make(); else base.onload = make;
-  inset.onload = make;
+  if (base.complete) use(); else base.onload = use;
 }
 
 function initMediaSession() {
