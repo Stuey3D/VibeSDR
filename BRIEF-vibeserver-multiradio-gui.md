@@ -323,7 +323,7 @@ SUGGEST (§5.2): the software can read the dongle, but it cannot see the coax.
 | Situation | Profiles | Why |
 |---|---|---|
 | One V3, unpowered VHF antenna | 1 — *VHF/UHF* | Capability and installation both match |
-| Two V4s, **one** supplying bias-T to a shared powered antenna, the other behind a DC block | **2** — *V4 Wideband (Bias-T active)* and *V4 Wideband (Bias-T disabled)*, one radio each | Same hardware, DIFFERENT installation. The distinction lives in the coax, not the dongle |
+| Two V4s, **one** supplying bias-T to a shared powered antenna, the other behind a DC block | ~~2 profiles~~ → **1 pooled profile, bias-T set per radio** (SUPERSEDED — see §5.2.2) | To a listener they are identical; the difference is installation, which is per-radio |
 | Two V4s, antenna powered EXTERNALLY | **1** — *V4 Wideband*, both radios | Identical capability and identical installation, so nothing to separate |
 
 ★ The middle case is precisely why **unique serials matter** and why the rule in §5.0 exists: serial
@@ -334,6 +334,54 @@ With unique serials, bias-T may be restored automatically; without, it starts of
 **Relationships:** a profile holds MANY radios; a radio belongs to exactly ONE profile. That is what
 makes the third case a single edit rather than two, and it is why profiles are worth having at all —
 a user with four identical dongles on one antenna configures them once.
+
+### 5.2.2 ★★ A PROFILE IS A POOL — and installation differences do not split it
+
+Stuart, refining the model:
+
+> "If all radios are equal — say all v4s on an antenna distributor, same signal, same settings — all
+> 4 are assigned to one profile and the server operates blind: a user connects, here's a radio, they
+> don't know if it's 1 or 4. Radio identity only matters if specific radios have specific
+> requirements, so an HF-only one needs to be selectable by the user, and VHF/UHF-only ones too. In
+> the scenario where both radios share the same antenna and the only difference is the bias-T, we
+> could do a linked profile so both are in the same pool with the same capabilities."
+
+This is `VibeServer-MultiClient-Brief.md` §3 — **pool vs picker is DERIVED, never selected** — with
+the missing piece supplied. Restating it in these terms:
+
+- **A profile IS a pool.** Radios sharing a profile are interchangeable to a listener, so the splash
+  offers the POOL and hands out whichever radio is free. Four v4s on a distributor look like one
+  entry that happens to serve four people.
+- **The splash appears only when there is a real choice** — i.e. more than one pool. One pool, one
+  entry, no picker (§3.0). Cards lead with COVERAGE, not hardware: *"HF 0.5–30 MHz · 80m OCF
+  dipole"*, never a dongle serial.
+- **Identity matters to the USER only where capability differs.** An HF-only receiver and a
+  VHF/UHF-only receiver are different pools, because choosing wrongly wastes the user's time.
+
+### ★ The correction this makes: installation differences are PER-RADIO, not per-profile
+
+Earlier in this brief (§5.2.1) the two-v4 case — one supplying bias-T, one behind a DC block — was
+described as needing TWO profiles. **That was wrong, and Stuart's "linked profile" is the better
+answer.** To a listener those two radios are identical: same antenna, same coverage, same controls.
+Splitting them into two pools would force a meaningless choice on someone who cannot know which to
+pick, and would halve the value of having two radios — each pool of one is either free or busy,
+where a pool of two absorbs a second listener.
+
+So:
+
+- The **profile** carries everything the LISTENER experiences: coverage, band blocks, gain ceiling,
+  which controls are theirs, direct-sampling policy.
+- Each **radio** carries its own INSTALLATION facts, which the listener never sees and never
+  chooses: bias-T on this one and off that one, an upconverter offset if only one has it, a per-unit
+  gain trim.
+
+One pool, four radios, three of them bias-T off and one on — perfectly coherent, and invisible
+where it should be.
+
+★ This does NOT weaken §5.0: bias-T is still per-radio, still default-off, and still only
+auto-restored to a radio identified by a unique serial. Being a per-radio setting inside a shared
+profile is precisely why the serial matters — the pool cannot tell you which physical stick feeds
+the powered antenna, but the serial can.
 
 ### ★ An unassigned radio does not serve
 
