@@ -208,6 +208,60 @@ existing document rather than sprouting per-radio files:
 - Identify dongles by the resolution order in §5.1 — serial, then USB port path, never index. Each
   radio stores BOTH a serial and a port path so it can be matched by whichever is unambiguous.
 
+## 4.5 ★★★ THE MODEL: THE ANTENNA IS THE OBJECT
+
+Stuart, arriving at it after everything above: *"I've got it, and the answer has been brutally
+simple the whole time."*
+
+**Configuration is organised around the ANTENNA, not the radio and not an abstract profile.** What
+this brief kept calling a "profile" IS an antenna — coverage, band limits, who powers it, what can
+hear HF through it. Every question a user must answer becomes one about their own installation,
+which is the only kind of question they can answer confidently.
+
+This supersedes the profile-centric framing in §5.2.1–§5.2.2. Those sections' CONTENT still holds —
+pooling, per-radio installation facts, control policy — but the object it hangs on is the antenna.
+
+### Simple Mode — the default, and no wizard at all
+
+**One radio, or several identical radios on one antenna.** Nothing to configure, nothing to choose,
+no splash (§1.1, §3.0). The overwhelmingly common setup never meets any of the machinery below.
+
+### Multi-antenna mode — a wizard, run once per antenna
+
+1. **Antenna name and frequency range.** *"80m OCF dipole, 0.5–30 MHz."* The user knows this; it is
+   the fact everything else derives from.
+2. **Add radios to this antenna.** A physical statement about what is plugged into what.
+3. **Does one of these radios power the antenna?** If yes, which one. ★ **If their serials collide,
+   this is the moment to suggest the EEPROM change** — not buried in an advanced menu, but exactly
+   where the user has just told us something that only a unique serial can make reliable (§5.2
+   revision, §5.0 rule 2). The reason is now obvious to them, because they are looking at it.
+4. **Model-aware recommendation, offered not imposed.** *"You have 3 × RTL-SDR v4 and 1 × v3, and
+   you have said this antenna covers HF. Recommended: no direct sampling on the v4s (they reach HF
+   through their built-in upconverter), and automatic direct sampling on the v3."*
+   - ★ **The v3 uses the Q BRANCH** (`direct_samp` mode 2). The I branch is the wrong input on that
+     hardware and yields silence on HF with nothing to explain it. Our own shim already documents
+     this: `0=off, 1=I, 2=Q (not needed on Blog V4)`.
+   - **Unknown or clone dongles:** do not guess. Say that HF may need direct sampling enabled or an
+     upconverter fitted, and let the user decide — clones lie about their descriptors (§5.2).
+   - **Upconverter:** if one is fitted to a radio, this is where its offset is entered.
+5. **Gain range and auto-gain.** The ceiling the owner knows this receiver overloads above, and
+   whether the listener may touch it.
+
+Repeat per antenna. Antennas that differ in coverage become the pools a listener chooses between
+(§5.2.2); radios on one antenna are interchangeable and never surfaced.
+
+### Why this is the right shape
+
+- **Every question is answerable.** "Does a radio power this antenna?" is observable from where the
+  user is standing. "Set the direct-sampling policy" is not.
+- **The hazards arise naturally.** Bias-T is asked about because powering an antenna is an antenna
+  fact — so the dangerous setting is raised at the one moment the user has the context to get it
+  right, rather than left to a checkbox in a settings page.
+- **The EEPROM suggestion lands where it makes sense**, immediately after the user has expressed a
+  requirement that depends on it.
+- **It matches how people describe their stations.** Nobody says "I have a v3 profile"; they say
+  "the dipole runs to the v3, and the discone feeds the two v4s."
+
 ## 5.0 ★★ PRINCIPLE: a dodgy config must not damage hardware
 
 Stuart, 2026-07-22: *"we want to prevent physical damage to hardware through dodgy configs."*
