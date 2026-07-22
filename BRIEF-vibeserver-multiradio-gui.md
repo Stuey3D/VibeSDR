@@ -603,6 +603,39 @@ Each radio's process is bound to a **resolved identity**, not to whatever appear
 - Two radios must never resolve to the same physical device; the hub rejects that configuration
   rather than starting two processes fighting over one dongle.
 
+## 5.9 ★ WHAT IS RTL-SHAPED HERE — the assumptions that break when other SDRs arrive
+
+Stuart: *"it will get more complex when we support other SDRs in the future, but right now with the
+RTL and its variants like the Nooelec NESDR v5 it should be super simple."*
+
+Right, and the design should stay simple for the hardware we actually support. But it rests on
+assumptions that are true of RTL dongles and not of SDRs generally, and they are much cheaper to
+list now than to rediscover mid-build:
+
+| Assumption | Why it holds for RTL | What breaks |
+|---|---|---|
+| **One radio = one user** | ~2.4 MHz around one LO; nothing to slice between users (`VibeServer-MultiClient-Brief` §0) | An RSPdx or Airspy sees 10 MHz. Several users COULD take independent VFOs from one device — which reopens the whole pool model, not just a setting |
+| **Serials collide** | RTL EEPROMs ship with `00000001` | Most other SDRs have genuinely unique serials. The EEPROM tool and the port-path fallback become RTL-only concerns |
+| **HF needs direct sampling or an upconverter** | v3 Q-branch, v4 built-in upconverter | Airspy HF+ and the RSPs cover HF natively; the wizard's step 4 becomes "not applicable" rather than a recommendation |
+| **Gain is one number in tenths of a dB** | Single tuner gain stage | RSP has LNA state + IF gain; Airspy has several stages. "Cap the gain at 29.6 dB" stops being expressible |
+| **Bias-T is a boolean** | On or off, one voltage | Varies by device, and some have none |
+| **librtlsdr is the driver** | One library, one API | Each family brings its own SDK, and some are not open |
+
+★ **The first row is the load-bearing one.** Everything in this brief — pools, one user per radio,
+per-radio isolation by process — follows from RTL's 2.4 MHz window. A wideband SDR does not merely
+add a driver; it invalidates the premise that made the architecture necessary. That is a design
+conversation to have deliberately when the time comes, not a porting exercise.
+
+### RTL variants are NOT a special case — but their descriptors differ
+
+Nooelec NESDR (SMArt v5 and friends), generic RTL2832U sticks and the RTL-SDR Blog units are all the
+same silicon and the same driver. The only thing that varies is the USB descriptor the model
+detection reads (§5.2): `NooElec` / `NESDR SMArt v5` rather than `RTLSDRBlog` / `Blog V4`.
+
+So model detection must be a small TABLE of known descriptor strings mapped to capabilities, not a
+match on "Blog". And anything unrecognised falls through to the safe path already specced: no
+assumption, safe defaults, and a plain question to the user (§5.2, §5.1).
+
 ## 6. Admin and lockdown
 
 The two-level model already agreed (foundations amendment) applies per radio:
