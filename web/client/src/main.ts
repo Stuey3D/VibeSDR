@@ -1296,9 +1296,12 @@ function showDeviceBanner(present: boolean) {
     'background:rgba(40,10,0,0.94);color:#ffb833;border:1px solid rgba(255,120,0,0.6);' +
     'border-radius:8px;padding:10px 16px;font:13px ui-monospace,monospace;text-align:center;' +
     'box-shadow:0 4px 18px rgba(0,0,0,0.6)';
+  // Promise ONLY what we can deliver. Automatic resume was tried and withdrawn — reopening the
+  // device from the watchdog thread crashed the server (see local_sdr_shim.cpp) — so the message
+  // says what is actually true today rather than what we wish it did.
   el.innerHTML = 'No radio connected to this server<br>' +
     '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
-    'It will resume automatically when it is plugged back in.</span>';
+    'Reconnect it and restart VibeServer to resume.</span>';
   document.body.appendChild(el);
 }
 

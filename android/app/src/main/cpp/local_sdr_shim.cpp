@@ -1053,7 +1053,18 @@ struct LocalSdrShim::Impl {
     // everything else reads. `usbIndex` is what we reopen, and `usbSerial` is what we reopen it BY,
     // because indices renumber when another dongle is unplugged.
     std::atomic<bool> stopping{false};
+    // A DELIBERATE restart (setSampleRate cancels and relaunches the read) looks identical to an
+    // unplug from inside the capture thread — which is exactly how the first version cried wolf
+    // while the radio was working perfectly.
+    std::atomic<bool> restarting{false};
     std::atomic<bool> deviceLost{false};
+    /** Capture has stopped and we did not ask it to. */
+    std::atomic<bool> captureDown{false};
+    /** When the last IQ buffer arrived. ★ THE ONLY RELIABLE UNPLUG SIGNAL.
+     *  `rtlsdr_read_async` does NOT return when the dongle is pulled — libusb simply stops
+     *  completing transfers, so the capture thread sits there forever and any detection that waits
+     *  for that call to return waits for ever too. Silence is the signal. */
+    std::atomic<double> lastIqAt{0.0};
     int usbIndex = -1;
     std::string usbSerial;
     std::thread hotplugThread;
@@ -2478,6 +2489,12 @@ struct LocalSdrShim::Impl {
             specClient = sock;
             sendConfig(sock); sendHwInfo(sock);
             LOGI("spectrum WS connected%s", displaced ? " (replacing an earlier listener)" : "");
+            // ★ TELL A NEW CLIENT THE CURRENT STATE. The device message is otherwise only sent when
+            // the state CHANGES, so anyone who connected — or refreshed — after the dongle was
+            // pulled saw a page that simply never updated, with nothing to explain it. Refreshing
+            // is the first thing anyone tries; it must be the moment they learn what is wrong.
+            if (deviceLost.load())
+                sendText(sock, "{\"type\":\"device\",\"present\":false}");
         }
         // Closed OUTSIDE the lock: the displaced socket's own reader may be waking up to take it.
         if (displaced) displaced->close();
@@ -2767,6 +2784,32 @@ struct LocalSdrShim::Impl {
     // nobody is there to do it. So: tell the clients, then watch for the dongle coming back and
     // pick it up automatically.
 
+    /** Start (or restart) the USB capture thread. ONE definition, so every path that relaunches
+     *  capture also gets the loss detection — the sample-rate path originally did not, which would
+     *  have silently disabled unplug detection for the rest of the session. */
+    void launchCapture() {
+        const uint32_t bufLen = rtlBufLenForRate(sampleRate);
+        Impl* self = this;
+        rtlThread = std::thread([self, bufLen]{
+            vibeThreadName("vibe-rtl");
+            rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
+            // We only reach here when the IQ stops. Three reasons, and they must not be confused:
+            if (self->stopping.load() || self->restarting.load()) return;   // we asked for it
+            self->captureDown.store(true);
+            // ★ VERIFY BEFORE ALARMING. If our dongle is still enumerable this was a stream fault,
+            // not an unplug — the watchdog restarts it and the user need never know. Only when the
+            // device has genuinely gone do we say so, because a false "no radio" over a working
+            // waterfall destroys trust in every later warning.
+            if (self->findOurDevice() < 0) {
+                self->deviceLost.store(true);
+                LOGE("RTL-SDR gone — unplugged or failed");
+                self->notifyDeviceState();
+            } else {
+                LOGE("RTL-SDR stream stopped but the device is still present — restarting");
+            }
+        });
+    }
+
     /** Tell every connected client whether we currently have a radio. They draw the message. */
     void notifyDeviceState() {
         std::shared_ptr<net::Socket> sock;
@@ -2793,7 +2836,15 @@ struct LocalSdrShim::Impl {
         return (usbIndex >= 0 && (uint32_t)usbIndex < n) ? usbIndex : 0;
     }
 
-    /** Reopen and restart capture. Returns false if the device still is not there. */
+    /**
+     * Reopen and restart capture. ★ NOT CALLED — kept as the skeleton of the real fix.
+     *
+     * Calling this from the watchdog thread CRASHED the server on replug: it closes and reopens
+     * `dev` while the HTTP/control threads are still calling rtlsdr_set_gain / tuneHw / setFftRate
+     * on that same pointer, with nothing serialising them. Before this can be used, every
+     * rtlsdr_* call site must go behind one device mutex — a real refactor, and it must be done
+     * with a test that hammers control calls while unplugging.
+     */
     bool reopenDevice() {
         const int idx = findOurDevice();
         if (idx < 0) return false;
@@ -2810,18 +2861,10 @@ struct LocalSdrShim::Impl {
         else { rtlsdr_set_tuner_gain_mode(dev, 1); rtlsdr_set_tuner_gain(dev, lastGainTenthDb); }
         rtlsdr_reset_buffer(dev);
 
-        const uint32_t bufLen = rtlBufLenForRate(sampleRate);
-        Impl* self = this;
-        rtlThread = std::thread([self, bufLen]{
-            vibeThreadName("vibe-rtl");
-            rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
-            if (!self->stopping.load()) {
-                self->deviceLost.store(true);
-                LOGE("RTL-SDR stopped delivering — device unplugged or failed");
-                self->notifyDeviceState();
-            }
-        });
-        deviceLost.store(false);
+        launchCapture();
+        const bool wasLost = deviceLost.exchange(false);
+        captureDown.store(false);
+        (void)wasLost;
         LOGI("RTL-SDR back — capture resumed on device %d", idx);
         notifyDeviceState();
         return true;
@@ -2837,7 +2880,32 @@ struct LocalSdrShim::Impl {
                 for (int i = 0; i < 20 && hotplugRun.load(); i++)
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 if (!hotplugRun.load()) break;
-                if (deviceLost.load() && !stopping.load()) reopenDevice();
+                if (stopping.load() || restarting.load()) continue;
+
+                // ★ SILENCE = GONE. 3s is far longer than any legitimate gap (a rate change is
+                // flagged by `restarting`, and normal delivery is continuous), and short enough
+                // that the message arrives while the user is still holding the plug.
+                const double last = lastIqAt.load(std::memory_order_relaxed);
+                const bool silent = last > 0 && (nowSecs() - last) > 3.0;
+                if (silent && !deviceLost.load()) {
+                    deviceLost.store(true);
+                    captureDown.store(true);
+                    LOGE("no IQ for 3s — dongle unplugged or failed");
+                    notifyDeviceState();
+                }
+                if (!captureDown.load()) continue;
+                // ★ DELIBERATELY DOES NOT REOPEN. The first version did, from THIS thread, while
+                // the HTTP/control threads were still calling rtlsdr_set_gain / tuneHw on the same
+                // `dev` pointer with no lock — closing and reopening underneath them crashed the
+                // whole server on replug, which is far worse than the black screen it was meant to
+                // cure. Safe in-process recovery needs `dev` behind a mutex that every rtlsdr_*
+                // call site respects; that is a real refactor, not a late-night patch.
+                // For now: report the truth and let the operator restart.
+                const bool back = findOurDevice() >= 0;
+                if (back == deviceLost.load()) {      // state changed
+                    deviceLost.store(!back);
+                    notifyDeviceState();
+                }
             }
         });
     }
@@ -2863,7 +2931,14 @@ struct LocalSdrShim::Impl {
     }
 
     static void asyncHandler(unsigned char* buf, uint32_t len, void* ctx) {
-        ((Impl*)ctx)->enqueueIq(buf, (int)(len / 2));
+        Impl* self = (Impl*)ctx;
+        self->lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+        self->enqueueIq(buf, (int)(len / 2));
+    }
+
+    static double nowSecs() {
+        using namespace std::chrono;
+        return duration<double>(steady_clock::now().time_since_epoch()).count();
     }
 
     // SpyServer read loop: the client owns framing; we just forward IQ into the
@@ -3112,20 +3187,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->startDspThread();
     {
         const uint32_t bufLen = rtlBufLenForRate(impl->sampleRate);
-        impl->rtlThread = std::thread([impl, bufLen]{
-            vibeThreadName("vibe-rtl");
-            rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, bufLen);
-            // ★ WE ONLY GET HERE WHEN THE IQ STOPS. Either we cancelled it, or the dongle was
-            // UNPLUGGED — and this used to be the same thing: the thread exited silently, nothing
-            // noticed, and the server carried on serving a page that could never show a signal
-            // again. On a desktop that is a puzzling black screen; on a headless Pi it needed a
-            // reboot to recover. Say so, and let the watchdog put it right.
-            if (!impl->stopping.load()) {
-                impl->deviceLost.store(true);
-                LOGE("RTL-SDR stopped delivering — device unplugged or failed");
-                impl->notifyDeviceState();
-            }
-        });
+        (void)bufLen;
+        impl->launchCapture();
         impl->startHotplugWatch();
     }
 
@@ -3583,7 +3646,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     // deadlock). With both quiesced, the rtlsdr control transfer below runs on an
     // idle libusb and the engine rebuild has no concurrent rx.feed.
     if (tcp) { impl->tcpRunning.store(false); }
-    else     { rtlsdr_cancel_async(impl->dev); }
+    else     { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->stopDspThread();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
@@ -3613,11 +3676,8 @@ void LocalSdrShim::setSampleRate(double rate) {
     impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
     else {
-        const uint32_t bufLen = rtlBufLenForRate(impl->sampleRate);
-        impl->rtlThread = std::thread([impl, bufLen]{
-            vibeThreadName("vibe-rtl");
-            rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, bufLen);
-        });
+        impl->launchCapture();
+        impl->restarting.store(false);   // back to normal: a stop now really is an unplug
     }
     LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
 }
