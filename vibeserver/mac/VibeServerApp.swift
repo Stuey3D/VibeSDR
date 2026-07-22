@@ -632,7 +632,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 380)
-        .fixedSize(horizontal: false, vertical: true)
+        // ★ NO .fixedSize(vertical:) here — it forced the Form to its full intrinsic HEIGHT, which
+        // is exactly what defeated scrolling: a Form pinned to its content height cannot scroll, so
+        // a window shorter than the content just clipped both ends. Let the grouped Form keep its
+        // native scrolling and fill whatever height the window gives it.
+        .frame(minWidth: 380)
     }
 }
