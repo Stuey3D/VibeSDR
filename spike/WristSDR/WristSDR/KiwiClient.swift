@@ -169,6 +169,21 @@ final class KiwiClient: ObservableObject, SDRClient {
   @Published var bwHigh: Double = 4900
   @Published var signalLevel: Double = 0
   @Published var signalDb: Double = 0
+  /// Kiwi squelch is a CLIENT-SIDE gate on the S-meter dBm the SND header already carries — the
+  /// same choice the phone made, because Kiwi's server-side squelch is SNR-based and unreliable.
+  /// −130 = off.
+  private var sqDbm: Double = -130
+  /// Release tail. Speech has natural gaps and the S-meter dips into them; without a short hold the
+  /// gate chatters and chops the front off every syllable.
+  private var sqOpenUntil: Double = 0
+  func setSquelch(_ dbm: Double) { sqDbm = dbm <= -999 ? -130 : dbm }
+  /// Should audio pass right now? Cheap enough to call per packet.
+  private var sqOpen: Bool {
+    if sqDbm <= -130 { return true }
+    let now = ProcessInfo.processInfo.systemUptime
+    if signalDb >= sqDbm { sqOpenUntil = now + 0.35; return true }
+    return now < sqOpenUntil
+  }
   @Published var framesPerSec: Double = 0
   @Published var status = "starting"
   @Published var lastError: String? = nil
@@ -387,6 +402,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         }
       }
       guard !pcm.isEmpty else { return }
+      guard self.sqOpen else { return }   // squelch closed — see setSquelch
       self.audio.play(pcm: pcm, rate: Int32(self.trueAudioRate.rounded()), channels: 1)
       Task { @MainActor in
         self.signalDb = Double(smeter) / 10 - 127
@@ -549,6 +565,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     }
     guard !pcm.isEmpty else { return }
     let rate = Int32(trueAudioRate.rounded())
+    guard sqOpen else { return }   // squelch closed — drop the packet rather than play silence
     audio.play(pcm: pcm, rate: rate, channels: 1)
   }
 

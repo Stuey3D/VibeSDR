@@ -394,7 +394,7 @@ final class SpikeLink: ObservableObject {
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
     let mt = Self.meterText(unit: meterUnit, snrDb: client.signalDb, dbfs: client.signalDbfs)
     if meter != mt { meter = mt }
-    let sn = min(1, max(0, client.signalDb / 50))   // signal on the needle's 0..1 scale (pos*50 dB)
+    let sn = sqlNorm(client.signalDb)   // signal on the needle's 0..1 scale, per backend
     if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
 
     // A new row was drawn → the spectrum is alive.
@@ -670,10 +670,30 @@ final class SpikeLink: ObservableObject {
   /// line up (the meter's own `level` is a compressed fill pinned near full, useless for this).
   @Published var sqlSignal = 0.0
 
-  /// `pos`: 0..1 needle position on the signal bar; < 0 = off. Maps to a 0..50 dB SNR for the server.
+  /// Which scale `signalDb` speaks on the CURRENT backend, as (span, offset) such that
+  /// `bar = (signalDb − offset) / span`. The needle's dB value is the exact inverse — one place, so
+  /// the bar and the needle can never disagree about what a position means:
+  ///  - UberSDR/VibeServer: SNR in dB, 0…50.
+  ///  - Kiwi: S-meter dBm off the SND header, −130…−40 (the phone's mapping).
+  ///  - OWRX: 10·log10(power) off its smeter message, −110…−10 (again as the phone).
+  private var sqlScale: (span: Double, offset: Double) {
+    if client is KiwiClient { return (90, -130) }
+    if client is OwrxClient { return (100, -110) }
+    return (50, 0)
+  }
+
+  /// `pos`: 0..1 needle position on the signal bar; < 0 = off. Converted to whatever unit this
+  /// backend's gate speaks (see sqlScale).
   func setSquelch(_ pos: Double) {
     sql = pos < 0 ? -1 : min(1, pos)
-    client?.setSquelch(sql < 0 ? -999 : sql * 50)
+    let s = sqlScale
+    client?.setSquelch(sql < 0 ? -999 : sql * s.span + s.offset)
+  }
+
+  /// `signalDb` on the needle's own 0..1 scale, whichever backend we're on.
+  func sqlNorm(_ db: Double) -> Double {
+    let s = sqlScale
+    return min(1, max(0, (db - s.offset) / s.span))
   }
 
   /// Keep the signal bar live while the squelch SHEET covers the waterfall (its 20fps render driver
@@ -682,7 +702,7 @@ final class SpikeLink: ObservableObject {
     client?.drainSpectrum(now: ProcessInfo.processInfo.systemUptime)
     if let l = client?.signalLevel, abs(level - l) > 0.003 { level = l }
     if let db = client?.signalDb {
-      let sn = min(1, max(0, db / 50))
+      let sn = sqlNorm(db)
       if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
     }
   }

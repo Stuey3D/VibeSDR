@@ -79,6 +79,16 @@ final class OwrxClient: ObservableObject, SDRClient {
   @Published var bwHigh: Double = 4500
   @Published var signalLevel: Double = 0
   @Published var signalDb: Double = 0
+  /// OWRX squelch is SERVER-side: a `squelch_level` in dB on the same smeter scale `signalDb` reads
+  /// (10·log10(power)), roughly −110 (noise) … −10 (strong). −150 = open. Held here so every
+  /// dspcontrol resend (mode change, bandwidth, profile) carries the user's setting rather than
+  /// silently reopening the gate.
+  private var squelchLevel: Double = -150
+  func setSquelch(_ db: Double) {
+    squelchLevel = db <= -999 ? -150 : db
+    guard started else { return }
+    send(["type": "dspcontrol", "params": ["squelch_level": squelchLevel]])
+  }
   @Published var framesPerSec: Double = 0
   @Published var status = "starting"
   @Published var lastError: String? = nil
@@ -910,7 +920,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     // A secondary decoder (adsb, ft8, packet…) rides on top of the carrier via secondary_mod (else false).
     var params: [String: Any] = [
       "offset_freq": offset,
-      "mod": m.mod, "squelch_level": -150,
+      "mod": m.mod, "squelch_level": squelchLevel,
       "secondary_mod": (secondaryDecoder as Any?) ?? false,
     ]
     if secondaryDecoder != nil { params["secondary_offset_freq"] = 1000 }
