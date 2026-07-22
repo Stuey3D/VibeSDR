@@ -450,7 +450,7 @@ struct ContentView: View {
         if let warn = link.bandwidthWarning, !bwDismissed {
           Button { bwDismissed = true } label: {
             HStack(alignment: .top, spacing: 5) {
-              Image(systemName: "wifi.exclamationmark").font(.system(size: 11, weight: .bold))
+              Image(systemName: link.warningIcon).font(.system(size: 11, weight: .bold))
               Text(warn).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.leading)
             }
             .foregroundStyle(.white)

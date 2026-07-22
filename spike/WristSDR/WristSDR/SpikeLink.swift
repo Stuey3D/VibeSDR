@@ -132,7 +132,14 @@ final class SpikeLink: ObservableObject {
   /// Non-fatal "heavy server for the phone link" advisory — set only when on the iPhone relay and the
   /// inbound load sits above what that relay reliably carries. nil = nothing to say.
   @Published var bandwidthWarning: String? = nil
+  /// The glyph for whatever `bandwidthWarning` currently says. A server-side kick is not a
+  /// connection problem, so it must not wear the Wi-Fi icon — that alone would send someone off to
+  /// change their connection.
+  @Published var warningIcon = "wifi.exclamationmark"
   private var relayHeavySince: Double? = nil
+  /// When a Kiwi started reconnecting after a healthy session — the signature of a server-side
+  /// listening-time or slot limit, NOT of a bad link. See the advisory in driverTick.
+  private var kiwiDropsSince: Double? = nil
   /// OWRX profiles (grouped SDR→profiles) + connected-listener count, mirrored from the client.
   @Published var profiles: [SDRProfile] = []
   @Published var clients = 0
@@ -330,6 +337,12 @@ final class SpikeLink: ObservableObject {
     profiles = []; clients = 0; chatLog = []; chatActivity = 0
     dabProgrammes = []; aircraft = []; fmdx = nil; stationName = ""
     connectError = nil
+    // SQUELCH RESETS WITH THE SERVER. A threshold is only meaningful against the noise floor it was
+    // set on, and each backend reads on its own scale entirely (SNR dB vs dBm vs OWRX's smeter dB).
+    // Carrying it across would mean arriving at a new server to unexplained SILENCE — the exact
+    // failure the visible-squelch work exists to prevent.
+    sql = -1; sqlSignal = 0
+    bandwidthWarning = nil; kiwiDropsSince = nil; relayHeavySince = nil
     frequency = c.frequency
     mode = c.mode
     updateBand()
@@ -451,12 +464,43 @@ final class SpikeLink: ObservableObject {
     //   and re-establishing over Bluetooth, the link is the problem whatever the meter says. This
     //   is the case a throughput test structurally cannot catch, because a dropped socket delivers
     //   0 KB/s.
-    let relayDropping = transport == .iphone && client.status.hasPrefix("reconnect")
+    //
+    //   ★ BUT A KIWI RECONNECT IS NOT EVIDENCE OF ANYTHING OF THE SORT. Plenty of KiwiSDRs kick you
+    //   after a fixed listening time, or when an owner/slot limit bites — and that arrives as a
+    //   closed socket and a reconnect, exactly like a failing link. Blaming Bluetooth for it sent
+    //   the user off to change their connection over a server rule no connection can fix (Stuart hit
+    //   this on a server that always kicks him after a few seconds). Kiwi therefore needs the
+    //   THROUGHPUT evidence — a link genuinely too heavy still reads heavy — and gets its own
+    //   advisory below. The reconnect-alone shortcut stays for OWRX, whose FFT firehose really does
+    //   drown the relay, and which has no comparable kick behaviour.
+    let isKiwi = client is KiwiClient
+    let relayDropping = transport == .iphone && client.status.hasPrefix("reconnect") && !isKiwi
 
-    if relayHeavy || relayDropping {
+    // A backend that has told us WHY in plain English (Kiwi's full/password refusals) owns the
+    // explanation. Never talk over it with a guess about the link.
+    let serverExplained = client.lastError != nil
+
+    // KIWI KEEPS DROPPING — server-side, whatever the transport. Repeated reconnects on a server
+    // that connected fine is the signature of a listening-time or slot limit, not of a bad link.
+    if isKiwi, !serverExplained, everGotRow, client.status.hasPrefix("reconnect") {
+      if kiwiDropsSince == nil { kiwiDropsSince = now }
+      if let st = kiwiDropsSince, now - st >= 3, bandwidthWarning == nil {
+        bandwidthWarning = "This KiwiSDR keeps ending the session. Many limit how long you can "
+          + "listen, or how many people at once — it isn\u{2019}t your connection. Try another KiwiSDR."
+        warningIcon = "person.crop.circle.badge.exclamationmark"
+      }
+    } else if !client.status.hasPrefix("reconnect") {
+      kiwiDropsSince = nil
+    }
+
+    if serverExplained {
+      // The refusal card says it properly; drop any link guess we'd already put up.
+      if bandwidthWarning != nil { bandwidthWarning = nil }
+    } else if relayHeavy || relayDropping {
       if relayHeavySince == nil { relayHeavySince = now }
       // Dropping needs no dwell — it has already happened. Heaviness waits ~4s so a spike cannot nag.
       if let st = relayHeavySince, relayDropping || now - st >= 4, bandwidthWarning == nil {
+        warningIcon = "wifi.exclamationmark"
         bandwidthWarning = relayDropping
           ? "Too heavy for the phone\u{2019}s Bluetooth link — it keeps dropping. Switch to the watch\u{2019}s own Wi-Fi or cellular."
           : "At the limit of the phone\u{2019}s Bluetooth link (~\(kb) KB/s). Use the watch\u{2019}s own Wi-Fi or cellular for this server."
@@ -464,7 +508,9 @@ final class SpikeLink: ObservableObject {
     } else {
       relayHeavySince = nil
       // Hysteresis, so a server sitting right on the line cannot flicker the pill on and off.
-      if bandwidthWarning != nil, transport != .iphone || kb <= 18 { bandwidthWarning = nil }
+      // Kiwi's own drop advisory is not about the link, so the link conditions must not clear it.
+      if bandwidthWarning != nil, kiwiDropsSince == nil,
+         transport != .iphone || kb <= 18 { bandwidthWarning = nil }
     }
 
     // Surface a RECONNECT so the UI shows the "Reconnecting" pill, not the hard "link lost"
