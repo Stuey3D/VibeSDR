@@ -309,6 +309,7 @@ struct ControlMenu: View {
   private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
   @State private var showWrist = false
   @State private var showBw = false
+  @State private var showSquelch = false
   @State private var showBookmarks = false
   @State private var showDisplay = false
   @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
@@ -423,6 +424,8 @@ struct ControlMenu: View {
           }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
+          // Squelch: SNR audio gate. Value = threshold in dB (Off = open).
+          tile(name: "SQL", value: link.snrSquelch <= -999 ? "Off" : "≥\(Int(link.snrSquelch))", h: h) { showSquelch = true }
           // (DAB tile removed — the programme picker + speed fix live on the main DAB screen now.)
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
@@ -528,6 +531,9 @@ struct ControlMenu: View {
     }
     .sheet(isPresented: $showBw) {
       BandwidthView().environmentObject(link)
+    }
+    .sheet(isPresented: $showSquelch) {
+      SquelchView().environmentObject(link)
     }
     .sheet(isPresented: $showBookmarks) {
       BookmarksView { dismiss() }.environmentObject(link).environmentObject(bookmarks)
@@ -1211,5 +1217,33 @@ struct ColourCrownPicker: View {
       sel = Double(options.firstIndex { $0.id == current } ?? 0)
       focused = true
     }
+  }
+}
+
+/// SNR squelch editor — crown sets the threshold (dB) live so you hear the gate and see the line
+/// move as you turn; 0 = Off (open). Tap Done to close. The audio gate is sent to the server live.
+struct SquelchView: View {
+  @EnvironmentObject var link: SpikeLink
+  @Environment(\.dismiss) private var dismiss
+  @State private var val = 0.0
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    VStack(spacing: 8) {
+      Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
+      Text(val < 0.5 ? "Off" : "≥ \(Int(val)) dB")
+        .font(.system(size: 24, weight: .bold, design: .rounded)).monospacedDigit()
+        .foregroundColor(val < 0.5 ? .secondary : .white)
+      Text("Mutes audio below this signal level.\nTurn the crown · tap Done.")
+        .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
+      Button("Done") { dismiss() }.buttonStyle(.borderedProminent).tint(.orange)
+    }
+    .padding()
+    .focusable(true)
+    .focused($focused)
+    .digitalCrownRotation($val, from: 0, through: 50, by: 1,
+                          sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
+    .onChange(of: val) { _, v in link.setSquelch(v < 0.5 ? -999 : v) }   // live: hear it + see the line
+    .onAppear { val = link.snrSquelch <= -999 ? 0 : link.snrSquelch; focused = true }
   }
 }

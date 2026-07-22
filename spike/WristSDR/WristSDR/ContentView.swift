@@ -1882,11 +1882,17 @@ struct ContentView: View {
           .font(.system(size: 11, weight: .semibold, design: .rounded))
           .monospacedDigit()
           .hidden()
-        Text(link.meter.isEmpty ? "—" : link.meter)
-          .font(.system(size: 11, weight: .semibold, design: .rounded))
-          .monospacedDigit()
-          .foregroundStyle(.white.opacity(0.9))
-          .outlined()
+        // Squelch CLOSED (signal below threshold → muting now): the readout flips to a breathing
+        // red "SQL"; OPEN → the meter figure returns. Same double-duty as the phone (no extra space).
+        if link.sql >= 0 && link.level < link.sql {
+          BreathingSQL()
+        } else {
+          Text(link.meter.isEmpty ? "—" : link.meter)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(0.9))
+            .outlined()
+        }
       }
       .fixedSize()
       .layoutPriority(-1)   // the frequency wins the space
@@ -1895,6 +1901,7 @@ struct ContentView: View {
     .padding(.vertical, 4)
     .background(alignment: .leading) {
       GeometryReader { geo in
+        let closed = link.sql >= 0 && link.level < link.sql
         ZStack(alignment: .leading) {
           Color.black.opacity(0.55)                       // track + scrim in one
           LinearGradient(
@@ -1902,7 +1909,13 @@ struct ContentView: View {
             startPoint: .leading, endPoint: .trailing
           )
           .frame(width: geo.size.width * min(1, max(0, link.level)))
+          .opacity(closed ? 0.55 : 1)                     // dim while squelch is muting
           .animation(.easeOut(duration: 0.12), value: link.level)
+          if link.sql >= 0 {
+            let x = geo.size.width * min(1, max(0, link.sql))
+            Rectangle().fill(.white.opacity(0.9)).frame(width: 4, height: geo.size.height).offset(x: x - 2)
+            Rectangle().fill(Color(red: 1, green: 0.2, blue: 0.2)).frame(width: 2, height: geo.size.height).offset(x: x - 1)
+          }
         }
       }
     }
@@ -1985,5 +1998,19 @@ extension View {
       .shadow(color: color, radius: 0, x: -w, y: 0)
       .shadow(color: color, radius: 0, x: 0, y:  w)
       .shadow(color: color, radius: 0, x: 0, y: -w)
+  }
+}
+
+/// The breathing red "SQL" that replaces the signal figure while squelch is muting (gate closed).
+struct BreathingSQL: View {
+  @State private var dim = false
+  var body: some View {
+    Text("SQL")
+      .font(.system(size: 11, weight: .bold, design: .rounded))
+      .monospacedDigit()
+      .foregroundStyle(Color(red: 1, green: 0.3, blue: 0.3))
+      .outlined()
+      .opacity(dim ? 0.35 : 1)
+      .onAppear { withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { dim = true } }
   }
 }

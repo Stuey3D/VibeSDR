@@ -78,6 +78,9 @@ protocol SDRClient: AnyObject {
   /// primary visibility control; Brightness/Contrast are post-normalisation tweaks on top. Default
   /// no-op for a backend with no waterfall DSP (FM-DX).
   func setAutoContrast(_ v: Double)
+  /// SNR squelch (audio gate): mute below `minSnr` dB. ≤ -999 = OFF/open. Default no-op for backends
+  /// with no squelch (FM-DX). UberSDR/VibeServer send it to radiod's audio gate.
+  func setSquelch(_ minSnr: Double)
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -112,6 +115,7 @@ extension SDRClient {
   var coverMinHz: Double { tuneMinHz }
   var coverMaxHz: Double { tuneMaxHz }
   func setAutoContrast(_ v: Double) {}
+  func setSquelch(_ minSnr: Double) {}
 }
 
 extension UberClient: SDRClient {

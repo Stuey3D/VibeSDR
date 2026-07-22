@@ -1198,6 +1198,10 @@ final class UberClient: ObservableObject {
   var tuneMinHz: Double { freqMin }
   var tuneMaxHz: Double { freqMax }
   func setAutoContrast(_ v: Double) { proc.autoContrast = v }
+  /// SNR audio gate → radiod, same wire as the phone: +30 corrects radiod's audio-stream floor offset.
+  func setSquelch(_ minSnr: Double) {
+    audioSock.send(json: ["type": "set_audio_gate", "min_snr": minSnr <= -999 ? -999 : Int((minSnr + 30).rounded())])
+  }
 
   /// Crown tuning. The audio socket carries the tune; the spectrum view follows it.
   func tune(delta: Int, step: Double) {

@@ -631,6 +631,27 @@ final class SpikeLink: ObservableObject {
   /// Push the DSP auto-contrast (0–20) to the active backend. Re-asserted on connect/reconnect
   /// because each client seeds its own default (5) at start — see ContentView.applyTone.
   func setAutoContrast(_ v: Double) { client?.setAutoContrast(v) }
+
+  // ── Squelch ──────────────────────────────────────────────────────────────────
+  /// SNR squelch threshold in the meter's dB units (0–50). ≤ -999 = OFF/open.
+  @Published var snrSquelch = -999.0
+  /// Squelch line position on the signal bar (0..1), -1 = off. Drives the red line + breathing "SQL"
+  /// in ContentView; the gate is CLOSED (muting) when `level < sql`. Mirrors the phone's indicator.
+  @Published var sql = -1.0
+
+  func setSquelch(_ v: Double) {
+    snrSquelch = v
+    client?.setSquelch(v)
+    updateSquelchLine()
+  }
+  /// Map the SNR threshold onto the level bar with the phone's `sigNorm` curve (Jr's meter mirrors it).
+  /// NB: approximate — may want on-device calibration, like the phone's line did.
+  private func updateSquelchLine() {
+    guard snrSquelch > -999 else { sql = -1; return }
+    let v = snrSquelch
+    if v <= 5 { sql = 0 } else if v >= 55 { sql = 1 }
+    else if v <= 35 { sql = 0.8 * (v - 5) / 30 } else { sql = 0.8 + 0.2 * (v - 35) / 20 }
+  }
 }
 
 /// A selectable waterfall palette: an id, a display name, and the gradient stops (used both to build
