@@ -11,17 +11,22 @@
 import Foundation
 
 enum EibiStations {
+    /// Result of a refresh, so the UI can tell the truth instead of always claiming success.
+    enum Result { case loaded(Int), failed(String) }
+
     /// Fetch (or reuse today's cache), filter to what is on air now, and publish to the core.
     /// Safe to call repeatedly — it no-ops the network when the cache is fresh for today's season.
-    static func refresh() async {
+    static func refresh() async -> Result {
         do {
             let (file, season) = seasonFile()
             let csv = try await csvForSeason(file: file, season: season)
-            let json = buildJSON(activeNow(parse(csv)))
+            let active = activeNow(parse(csv))
+            let json = buildJSON(active)
             json.withCString { vs_set_stations($0) }
+            return .loaded(active.count)
         } catch {
-            // Offline or unreachable: leave whatever the core already has. The web search degrades
-            // to the user's bookmarks + the offline band plan, both local. Not worth surfacing.
+            // Leave whatever the core already has; the search degrades to bookmarks + band plan.
+            return .failed(error.localizedDescription)
         }
     }
 

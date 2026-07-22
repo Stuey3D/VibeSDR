@@ -113,10 +113,10 @@ final class Server: ObservableObject {
         guard eibiStations else { EibiStations.clear(); eibiStatus = ""; return }
         eibiStatus = "downloading…"
         Task { @MainActor in
-            await EibiStations.refresh()
-            // The core now holds the list; report a friendly done-state. (Count lives in the core;
-            // we keep the UI honest without a second round-trip by just saying it is loaded.)
-            self.eibiStatus = "loaded — shortwave stations are in search"
+            switch await EibiStations.refresh() {
+            case .loaded(let n): self.eibiStatus = "\(n) stations on air now — in search"
+            case .failed(let e): self.eibiStatus = "couldn't load: \(e)"
+            }
         }
     }
 

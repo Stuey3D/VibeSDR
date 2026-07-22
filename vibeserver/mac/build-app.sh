@@ -42,6 +42,21 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
        system prompt be the user's first experience of the app. -->
   <key>NSLocalNetworkUsageDescription</key>
   <string>VibeServer shares this Mac's radio with your phone, watch and browser on your local network.</string>
+  <!-- App Transport Security blocks cleartext HTTP by default, which silently killed the EiBi
+       download — eibispace.de serves the schedule over plain http only (no https). Scope the
+       exception to that one domain rather than allowing arbitrary loads; everything else stays
+       https-only. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>eibispace.de</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>   <true/>
+        <key>NSIncludesSubdomains</key>                 <true/>
+      </dict>
+    </dict>
+  </dict>
 </dict>
 </plist>
 PLIST
