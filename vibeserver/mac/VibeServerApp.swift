@@ -71,11 +71,12 @@ final class Server: ObservableObject {
                 else     { lastError = String(cString: err); running = false }
             }
         }
-        if running { startPolling() }
+        if running { startPolling(); startAdvertising() }
         refreshDevices()
     }
 
     func stop() {
+        stopAdvertising()
         vs_stop()
         running = false
         port = 0
@@ -102,6 +103,43 @@ final class Server: ObservableObject {
                 if before != self.listeners || !self.running { self.onChange?() }
             }
         }
+    }
+
+    // ── Bonjour ──────────────────────────────────────────────────────────────
+    //
+    // ★ The Mac MUST advertise this itself. The C++ core's mDNS responder answers HOSTNAME queries
+    // only (`vibesdr.local` A records) and deliberately serves no PTR/SRV/TXT — on Android the
+    // SERVICE registration comes from NsdManager, which has no macOS equivalent. Without this the
+    // phone, watch and every other client simply never see the Mac in their Discovered list.
+    //
+    // The contract is fixed by the existing clients (VibeMdnsModule.kt / src/services/mdns.ts) and
+    // must match exactly, or discovery silently finds nothing:
+    //   type `_vibesdr._tcp.`, TXT `proto=vibeserver`, TXT `pin` = "1" when a PIN is required.
+    private var bonjour: NetService?
+
+    private func startAdvertising() {
+        stopAdvertising()
+        guard running, port > 0 else { return }
+        let svc = NetService(domain: "local.", type: "_vibesdr._tcp.",
+                             name: serviceName, port: Int32(port))
+        svc.setTXTRecord(NetService.data(fromTXTRecord: [
+            "proto": Data("vibeserver".utf8),
+            "pin":   Data((pin.isEmpty ? "0" : "1").utf8),
+        ]))
+        svc.publish()
+        bonjour = svc
+    }
+
+    private func stopAdvertising() {
+        bonjour?.stop()
+        bonjour = nil
+    }
+
+    /// What clients see in their list. The Mac's own name is the least surprising label — it is
+    /// what the owner already calls this machine everywhere else on the network.
+    private var serviceName: String {
+        let host = Host.current().localizedName ?? "Mac"
+        return "VibeServer on \(host)"
     }
 
     var address: String { "http://localhost:\(port)/" }
