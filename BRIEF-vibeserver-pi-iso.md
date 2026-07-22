@@ -20,11 +20,54 @@ access amendment) and `files/BRIEF-vibeserver-macos.md` (the shared web config p
 
 1. Boot. If **no network connection is established**, VibeServer raises an **open Wi-Fi hotspot**
    named `VibeServer`.
-2. The user connects, and the configuration page appears as a **captive network page** — the same
-   experience as hotel Wi-Fi.
+2. The user connects and reaches the configuration page **by address, like a router's config page**
+   — `http://vibeserver.local/` where mDNS resolves, with the raw IP always documented as the
+   fallback.
 3. **First entry FORCES setting an admin password.** That password is the credential for both the
    Pi and VibeServer (but see §5 — the Pi's OS credential must not be held by the server process).
 4. From there the page offers full configuration of both the appliance and the receiver.
+
+### ★ 2.0 The rule: the web page is the baseline, the app is a shortcut
+
+**Every appliance must be fully setup-able and administrable from a browser alone**, by address, with
+no VibeSDR installed anywhere. That is the path for desktop users, for anyone who has not installed
+the app, and for anyone on a platform we do not ship to. It is the guarantee.
+
+§2.1's app-assisted setup is a **convenience layered on top** — it must never become the only way in,
+and no configuration option may exist solely in the app. If the two ever diverge, the browser page
+is authoritative.
+
+### ★ 2.1 Setup from the VibeSDR app (the shortcut)
+
+A NO-CAPTIVE-PORTAL design does not have to mean typing IP addresses. Most of the machinery already
+exists:
+
+- the shim already advertises the `_vibesdr._tcp` service (Android NsdManager) **and** answers a
+  hostname A record via `mdns_responder.cpp` (`vibesdr.local`), and
+- the app already browses for it in `src/services/mdns.ts`, which already carries a TXT-record
+  convention (`pin`).
+
+So: an appliance that has never been configured advertises itself as **unconfigured** (a TXT flag
+alongside the existing ones). Open VibeSDR on a phone joined to the same network — including the
+Pi's own hotspot, where mDNS works fine because it is link-local — and the app offers:
+
+> **Unconfigured VibeServer found — set it up?**
+
+…walking the user through admin password and network choice in the native UI, with the browser page
+remaining the full-featured surface for later administration. This is strictly better than a captive
+portal: a real app, no cut-down webview, no OS probe-URL trickery, and it works identically whether
+the box is on its own hotspot or already on the home network.
+
+**Caveats to design for:**
+- **First-claim security.** An unconfigured appliance advertising "set me up" can be claimed by
+  anyone on the link. Fine on a home network or the box's own hotspot; not fine on shared/public
+  Wi-Fi. Advertise setup mode ONLY while genuinely unconfigured, and consider a bounded window
+  after boot or a physical confirmation before a claim is accepted. First claim wins, and once
+  claimed the flag disappears.
+- **iOS Local Network permission** is required to browse — preflight it with an explanation screen
+  (same requirement as the macOS brief §3 notes for Bonjour).
+- **`.local` is not universal** (varies by Android version, older Windows). The IP address route of
+  step 2 must always work and must be printed in the docs and on the app's setup screen.
 
 ## 3. The configuration page has two halves
 
@@ -39,18 +82,22 @@ access amendment) and `files/BRIEF-vibeserver-macos.md` (the shared web config p
 appliance adds a section of its own, backed by the ISO's own config, and never leaks wifi or power
 fields into `VibeServerConfig`.
 
-## 4. ★ Captive portals are a RESTRICTED browser — design around it
+## 4. ★ No captive portal — and why (decision, 2026-07-22)
 
-The auto-opening page works by answering the OS probe URLs (`captive.apple.com/hotspot-detect.html`,
-`connectivitycheck.gstatic.com/generate_204`, `msftconnecttest.com/connecttest.txt`) from the AP's
-DNS/HTTP responder. The window that opens is **not a full browser**: it is a cut-down webview, most
-restrictive on iOS, where WebSockets and much JavaScript are unreliable or blocked outright, and the
-window can be closed by the OS at any moment.
+A captive portal was the original design and was **scrapped**. Recorded so it is not revived:
 
-Therefore the captive page MUST be a **lightweight setup page only** — set the admin password,
-choose AP-or-join, save — and then tell the user to open a real browser at the server's address for
-the full client and the management UI. Serving the SDR client (WebSocket spectrum + audio) into a
-captive webview will not work; do not attempt it.
+- The window a captive portal opens is **not a full browser**. It is a cut-down webview, most
+  restrictive on iOS, where WebSockets and much JavaScript are unreliable or blocked outright and
+  the OS may close the window at any moment. The SDR client is entirely WebSocket-driven, so it
+  could never have been served there — the portal could only ever have been a stub that handed the
+  user elsewhere.
+- It also required answering the OS probe URLs (`captive.apple.com/hotspot-detect.html`,
+  `connectivitycheck.gstatic.com/generate_204`, `msftconnecttest.com/connecttest.txt`) from the AP's
+  DNS/HTTP responder — fiddly, per-OS, and fragile.
+
+The replacement is §2: a plain address like a router, plus §2.1's mDNS-assisted setup from the app,
+which delivers the "it just appears" experience the captive portal was reaching for, in a real
+browser and a real app.
 
 ## 5. ★ One password, two systems — the sharp edge
 
@@ -81,13 +128,19 @@ forces AP mode on next boot.
 
 ## 8. Acceptance criteria (draft)
 
-1. Cold boot with no known network → `VibeServer` AP appears; joining it raises the captive page on
-   iOS, Android and macOS.
-2. First entry cannot be dismissed without setting an admin password.
-3. Joining a home network from the page works, survives reboot, and the AP stands down while the
+1. Cold boot with no known network → `VibeServer` AP appears; joining it, `http://vibeserver.local/`
+   loads the config page on iOS, Android and macOS, and the documented IP works on a host where
+   `.local` does not resolve.
+2. With VibeSDR installed and joined to that AP, the app discovers the appliance and offers to set
+   it up; completing setup clears the unconfigured flag, and a second phone no longer sees the
+   offer.
+3. First entry cannot be dismissed without setting an admin password.
+4. **Browser-only parity:** the entire first-boot setup and all later administration complete from a
+   browser with no VibeSDR installed on any device.
+5. Joining a home network from the page works, survives reboot, and the AP stands down while the
    box has a real network — and comes back if that network disappears.
-4. The VibeServer half of the page is verifiably identical to the Mac app's web config page (same
+6. The VibeServer half of the page is verifiably identical to the Mac app's web config page (same
    bundle, same schema) — a config file moved between a Mac and the Pi is accepted by both.
-5. Power settings measurably change consumption on a battery bank; throttling does not glitch audio
+7. Power settings measurably change consumption on a battery bank; throttling does not glitch audio
    for connected clients.
-6. Recovery from the boot partition restores access on a box whose password is unknown.
+8. Recovery from the boot partition restores access on a box whose password is unknown.
