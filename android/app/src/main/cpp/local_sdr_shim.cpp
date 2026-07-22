@@ -2383,8 +2383,32 @@ struct LocalSdrShim::Impl {
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
 
-        if (isAudio) { std::lock_guard<std::mutex> lk(clientMtx); audioClient = sock; LOGI("audio WS connected"); }
-        else { std::lock_guard<std::mutex> lk(clientMtx); specClient = sock; sendConfig(sock); sendHwInfo(sock); LOGI("spectrum WS connected"); }
+        // ★ ONE CLIENT AT A TIME, AND THE OLD ONE MUST BE TOLD.
+        //
+        // These are single pointers: a second client simply REPLACED the first, whose socket stayed
+        // open while never receiving another frame again. The victim did not error, did not
+        // disconnect and could not recover — it just froze forever, with no clue why. (Found the
+        // hard way: opening the web client on the serving Mac silently froze a listening iPhone.)
+        //
+        // So close the displaced socket explicitly. A disconnected client shows a clear state and
+        // reconnects; a starved one is stuck until the user force-quits it. Until multi-client
+        // lands (files/BRIEF-vibeserver-protocol-foundations.md §4) takeover is the behaviour —
+        // but it is now VISIBLE takeover rather than a silent kill.
+        std::shared_ptr<net::Socket> displaced;
+        if (isAudio) {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            if (audioClient && audioClient != sock && audioClient->isOpen()) displaced = audioClient;
+            audioClient = sock;
+            LOGI("audio WS connected%s", displaced ? " (replacing an earlier listener)" : "");
+        } else {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            if (specClient && specClient != sock && specClient->isOpen()) displaced = specClient;
+            specClient = sock;
+            sendConfig(sock); sendHwInfo(sock);
+            LOGI("spectrum WS connected%s", displaced ? " (replacing an earlier listener)" : "");
+        }
+        // Closed OUTSIDE the lock: the displaced socket's own reader may be waking up to take it.
+        if (displaced) displaced->close();
 
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;

@@ -144,6 +144,19 @@ final class Server: ObservableObject {
 
     var address: String { "http://localhost:\(port)/" }
 
+    /// Who is listening, for the takeover warning. Empty when nobody is.
+    var listenerAddr: String {
+        withUnsafeBytes(of: status.clientAddr) {
+            String(cString: $0.baseAddress!.assumingMemoryBound(to: CChar.self))
+        }
+    }
+    /// Is the current listener this very Mac? Then re-opening the page interrupts nobody but the
+    /// person clicking, and asking would be noise.
+    var listenerIsLocal: Bool {
+        let a = listenerAddr
+        return a.isEmpty || a.hasPrefix("127.") || a == "::1" || a == "::ffff:127.0.0.1"
+    }
+
     func openInBrowser() {
         guard running, let url = URL(string: address) else { return }
         NSWorkspace.shared.open(url)
@@ -219,11 +232,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// LEFT CLICK = listen. The common case by far is "I want to hear my radio", so it costs one
     /// click and no reading. If the server is not up yet, start it and then open — the user's
     /// intent is the same either way.
+    ///
+    /// EXCEPT when someone else is already listening. The server currently serves ONE client, so
+    /// opening a second session takes the radio from whoever has it. That must never happen from a
+    /// stray click — Stuart lost his own iPhone session to exactly this. Ask first, and name who is
+    /// about to be interrupted. When multi-client lands this prompt simply stops appearing.
     private func primaryAction() {
         if !server.running {
             guard server.deviceCount > 0 else { showMenu(); return }
             server.start()
             guard server.running else { showMenu(); return }   // failed: show why
+        }
+        if server.listeners > 0 && !server.listenerIsLocal {
+            let a = NSAlert()
+            a.messageText = "Someone is already listening"
+            a.informativeText = server.listenerAddr
+                + " is using this radio. VibeServer can only serve one listener at a time, so"
+                + " opening it here will disconnect them."
+            a.addButton(withTitle: "Listen Here Anyway")
+            a.addButton(withTitle: "Cancel")
+            a.alertStyle = .warning
+            NSApp.activate(ignoringOtherApps: true)
+            guard a.runModal() == .alertFirstButtonReturn else { return }
         }
         server.openInBrowser()
     }
