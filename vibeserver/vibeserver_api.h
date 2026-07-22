@@ -74,6 +74,17 @@ int  vs_device_count(void);
 /** Display name of device `index`, or "" if there is no such device. Valid until the next call. */
 const char* vs_device_name(int index);
 
+/**
+ * Hand the web client its searchable station list (GET /stations) — the EiBi schedule as a JSON
+ * array of {name, frequency, mode, group, comment, flag, itu, source}.
+ *
+ * ★ The SERVER must supply this because a browser cannot fetch eibispace.de itself (no CORS
+ * headers) — served same-origin from the shim, the problem disappears. On the phone the app owned
+ * the download; a standalone VibeServer has no app, so the host GUI downloads and calls this. Pass
+ * "" or "[]" to clear. Held until replaced; survives start/stop.
+ */
+void vs_set_stations(const char* json);
+
 #ifdef __cplusplus
 }
 #endif

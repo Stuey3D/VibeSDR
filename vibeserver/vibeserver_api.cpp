@@ -93,6 +93,10 @@ void vs_status(VsStatus* out) {
 
 void vs_summon(void) { LocalSdrShim::instance().summonClient(); }
 
+void vs_set_stations(const char* json) {
+    LocalSdrShim::instance().setStationsJson(json ? json : "");
+}
+
 int vs_device_count(void) {
 #ifdef VIBE_HAVE_LIBRTLSDR
     return (int)rtlsdr_get_device_count();
