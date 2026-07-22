@@ -278,6 +278,22 @@ socket — still far simpler than two live servers negotiating.
 apt already does well) and image-based A/B updaters such as RAUC/Mender (robust, but far too heavy
 for this).
 
+## 5.3 ★ The Pi must advertise itself — Linux has no NsdManager either
+
+Found on macOS 2026-07-22 and it applies here identically: the C++ core's mDNS responder answers
+HOSTNAME queries only (`vibesdr.local` A records) and serves no PTR/SRV/TXT. The SERVICE
+registration that puts a server in a client's Discovered list has always come from **Android's
+NsdManager**. macOS needed its own (`NetService`, shipped in `04a4dbf`); **Linux needs one too** —
+Avahi, or teaching the C++ responder to serve PTR/SRV/TXT so every non-Android host is covered at
+once. The latter is probably right by the time a third host exists.
+
+Without it the appliance serves perfectly and is invisible — and §2.1's "unconfigured VibeServer
+found" setup flow cannot work at all, since it is built on exactly this advertisement.
+
+Contract to match (from `VibeMdnsModule.kt` / `src/services/mdns.ts`): type `_vibesdr._tcp.`, TXT
+`proto=vibeserver`, TXT `pin` = "1" when a PIN is required — plus whatever flag §2.1 settles on for
+"unconfigured". Getting any of it wrong fails SILENTLY, which is how the macOS gap went unnoticed.
+
 ## 6. ★ Recovery — a headless box must not be brickable
 
 No screen, no keyboard: if Wi-Fi setup fails or the password is forgotten, the user has no way in.
