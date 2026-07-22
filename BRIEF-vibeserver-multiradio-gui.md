@@ -603,6 +603,36 @@ Each radio's process is bound to a **resolved identity**, not to whatever appear
 - Two radios must never resolve to the same physical device; the hub rejects that configuration
   rather than starting two processes fighting over one dongle.
 
+## 5.4 ★★ WHAT A LISTENER ACTUALLY GETS: gain and bandwidth. That is it.
+
+Stuart: *"realistically all a client needs access to is the gain slider and bandwidth controls. That
+is it."* And: *"if we can identify the ones that don't have bias-T, like my Nooelec NESDR v5, then we
+don't even show the bias-T option."*
+
+This is a real simplification. Foundations §5.4 imagined a per-control matrix — every hardware
+setting marked open / admin / locked. In practice the honest answer is much shorter:
+
+| Control | Who | Why |
+|---|---|---|
+| **Gain** | Listener, within the owner's ceiling | Genuinely varies with what they are listening to |
+| **Bandwidth** | Listener, within the owner's cap | Theirs to trade against noise |
+| Frequency, mode, volume, squelch, NR | Listener | Not hardware — this is just *using the radio* |
+| Sample rate, PPM, AGC, direct sampling, bias-T | **Owner only, always** | Station-wide decisions with hardware or legal consequences |
+
+So the wizard's "choose what the user can access" step (§4.5 step 5) shrinks to roughly two
+questions: *may they change the gain, and up to what?* and *may they change the bandwidth, and up to
+what?* Everything else is simply not a listener's concern, and does not need a policy setting at all
+— which removes a whole category of configuration nobody wanted to fill in.
+
+★ **And hide what the hardware cannot do.** If a radio has no bias-T circuitry — several Nooelec
+NESDR models, only the "SMArTee" variants carry it — the option is not disabled, it is ABSENT. Same
+rule as a pinned sample rate hiding the rate picker, and the enforced idle saver locking its toggle:
+never show a control we would silently ignore, and never make an owner wonder whether they simply
+have not found the right checkbox.
+
+The capability list per model (§5.2's detection table) is therefore what drives the UI, not just the
+recommendations: it says what this hardware HAS, and the GUI shows only that.
+
 ## 5.5 ★★ THE GUI AFTER SETUP: a flow chart of the station
 
 Stuart's design: once the wizard has run, the GUI is **picture-based** — antennas along the top,
