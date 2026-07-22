@@ -42,8 +42,8 @@ const C = {
  * draws, so this needle sits exactly where that red line sits. `pos` < 0 = squelch off.
  * `onDrag` receives a 0..1 position, or -1 for off; SDRScreen converts to the backend's native unit.
  */
-function SquelchBar({ level, pos, onDrag }: {
-  level: number; pos: number; onDrag?: (x: number) => void;
+function SquelchBar({ level, pos, gate, onDrag }: {
+  level: number; pos: number; gate?: boolean; onDrag?: (x: number) => void;
 }) {
   // The bar's position in WINDOW coordinates, measured on layout.
   //
@@ -71,7 +71,9 @@ function SquelchBar({ level, pos, onDrag }: {
 
   const shown = held ?? pos;
   const off = shown < 0;
-  const closed = !off && level < shown;
+  // Red = the gate is REALLY muting. Prefer its own verdict over bar geometry; while dragging,
+  // geometry is all we have (the new threshold hasn't round-tripped yet).
+  const closed = !off && (held !== null ? level < shown : (gate ?? (level < shown)));
   // Parked at the left end when off — the handle stays on screen and in reach.
   const handleX = `${Math.max(0, Math.min(1, off ? 0 : shown)) * 100}%` as const;
 
@@ -85,10 +87,13 @@ function SquelchBar({ level, pos, onDrag }: {
   }, [onDrag]);
 
   const pan = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => !!onDrag,
-    onMoveShouldSetPanResponder: () => !!onDrag,
-    // Claim the gesture outright. Without this the ScrollView this sheet sits in can steal a
-    // mostly-horizontal drag mid-flick and leave the ball stranded.
+    // CAPTURE phase, not bubble. The sheet is inside a ScrollView, and a ScrollView claims a touch
+    // the moment it moves more than a few pixels — so a drag that starts with any vertical
+    // component gets stolen before the bubble-phase handlers are ever asked. Capturing is the
+    // difference between "very difficult to get it latching" and grabbing it first time.
+    onStartShouldSetPanResponderCapture: () => !!onDrag,
+    onMoveShouldSetPanResponderCapture: () => !!onDrag,
+    // And once claimed, never give it back mid-drag.
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
     onPanResponderGrant: (e) => { measure(); apply(e.nativeEvent.pageX); },
@@ -97,6 +102,7 @@ function SquelchBar({ level, pos, onDrag }: {
 
   return (
     <View ref={bar} style={st.sqlBarWrap} {...(onDrag ? pan.panHandlers : {})}
+          hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
           onLayout={measure}>
       <View style={st.sqlBarTrack}>
         <View style={[st.sqlBarFill, {
@@ -340,7 +346,7 @@ export default function AudioSheet({
           {/* Live signal — set the gate against what you can SEE (this sheet hides the meter bar). */}
           {!recordingOnly && liveSig ? (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SIGNAL</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SIGNAL</Text>
               <View style={{ flex: 1 }} />
               <Text style={[st.bwVal, { color: C.gold, fontWeight: '700' }]}>{liveSig}</Text>
             </View>
@@ -376,7 +382,8 @@ export default function AudioSheet({
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
-                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} onDrag={onSquelchDrag} />
+                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                             gate={liveM?.gate} onDrag={onSquelchDrag} />
               </View>
             </View>
           ) : null}
@@ -417,7 +424,8 @@ export default function AudioSheet({
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
-                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} onDrag={onSquelchDrag} />
+                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                             gate={liveM?.gate} onDrag={onSquelchDrag} />
               </View>
             </View>
           )}
@@ -427,7 +435,8 @@ export default function AudioSheet({
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <View style={{ flex: 1 }}>
-                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1} onDrag={onSquelchDrag} />
+                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                             gate={liveM?.gate} onDrag={onSquelchDrag} />
               </View>
             </View>
           )}

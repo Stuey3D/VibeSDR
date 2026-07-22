@@ -99,6 +99,11 @@ export interface MeterValues {
   /** Squelch threshold as a bar-normalised position (0..1), in the SAME scale the bar draws, so the
    *  red squelch line sits on the shown meter. -1 = squelch off / not applicable (no line, no SQL). */
   sql?: number;
+  /** Is the gate ACTUALLY closed (muting) right now? Computed from the same quantity the gate
+   *  itself compares — not from bar geometry. In S-meter/dBFS mode the bar is a smoothed dBFS fill
+   *  while the UberSDR gate compares raw SNR, so "fill < line" could redden while audio flowed (and
+   *  miss real mutes). undefined = this backend can't say; fall back to geometry. */
+  gate?: boolean;
 }
 export interface MeterBus {
   value: MeterValues;
@@ -266,7 +271,8 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
   const sql      = m ? (m.sql ?? -1) : -1;
   const sqlOn    = sql >= 0;
   const sqlX     = width * Math.min(1, Math.max(0, sql));
-  const sqlClosed = sqlOn && signal < sql;
+  // Prefer the gate's OWN verdict; bar geometry is only a fallback (see MeterValues.gate).
+  const sqlClosed = sqlOn && (m?.gate ?? (signal < sql));
   return (
     <Canvas style={StyleSheet.absoluteFill}>
       <Rect x={0} y={0} width={width} height={height} color="rgba(105,98,82,0.30)" />
@@ -378,7 +384,7 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
   // Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
   // readout flips to a breathing red "SQL" (no extra screen space), and the bar dims (SignalCanvas).
   const sqlNorm   = m ? (m.sql ?? -1) : -1;
-  const sqlClosed = sqlNorm >= 0 && (m ? m.level : 0) < sqlNorm;
+  const sqlClosed = sqlNorm >= 0 && (m?.gate ?? ((m ? m.level : 0) < sqlNorm));
   const breathe   = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!sqlClosed) { breathe.setValue(1); return; }

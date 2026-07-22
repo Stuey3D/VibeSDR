@@ -627,8 +627,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
   const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
   const onHwStereo = useCallback((on: boolean) => { setHwStereo(on); LocalHw?.setStereoEnabled?.(on); }, [LocalHw]);
+  // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
+  // re-subscribing the whole audio callback every time the threshold moves.
+  const hwSquelchRef = useRef(-100);
   const onLocalSquelch = useCallback((db: number) => {
-    setHwSquelch(db); LocalHw?.setSquelch?.(db > -100, db);
+    setHwSquelch(db); hwSquelchRef.current = db; LocalHw?.setSquelch?.(db > -100, db);
   }, [LocalHw]);
   const onLocalNR = useCallback((level: number) => {
     setHwNrLevel(level);
@@ -2289,21 +2292,38 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Squelch line position (0..1 on the bar, -1 = off) — computed HERE so both the WATCH feed
           // and the phone bus share it. Effect above seeds SNR-mode/Kiwi/local; OWRX + the SNR-gate-on-
           // an-S-meter-bar case are filled in below.
+          // NOISE FLOOR, tracked UNCONDITIONALLY whenever we have both numbers.
+          //
+          // ★ This used to live inside the squelch branch below, which deadlocked: the floor was
+          // only computed once squelch was ON, but turning squelch on from a drag needs the floor
+          // to convert a bar position into dB — so the drag bailed out, the gate was never set, and
+          // neither the main meter's red line nor the actual muting ever appeared. The floor is a
+          // property of the SIGNAL, not of the squelch, so it is tracked here regardless.
+          // (chDbfs − snrDb is signal- and zoom-independent by same-packet cancellation, but
+          // radiod's reported noise density jitters, so it's smoothed.)
+          if (owrxDbm == null && !isKiwi && !isLocal) {
+            const floorInst = chDbfs - snrDb;
+            const f = floorEmaRef.current;
+            floorEmaRef.current = f <= -900 ? floorInst : f + 0.1 * (floorInst - f);
+          }
           let sqlN = sqlNormRef.current;
           if (owrxDbm != null) {
             // OWRX server squelch (dB on the smeter scale) → the same linear map the OWRX bar uses.
             if (owrxSquelchRef.current > -130) sqlN = Math.max(0, Math.min(1, (owrxSquelchRef.current + 110) / 100));
           } else if (sqlN < 0 && !isKiwi && !isLocal
               && signalModeRef.current !== 'snr' && snrSquelchRef.current > -999) {
-            // dBFS/S-meter mode: line sits at the noise floor + threshold. The floor (chDbfs − snrDb) is
-            // signal- and zoom-INDEPENDENT (same-packet cancellation), so it's stationary — but radiod's
-            // reported noise density still jitters, so smooth it with an EMA. Stationary → settles, no
-            // drift (unlike the earlier peak-based floor). /90 = dBFS bar scale.
-            const floorInst = chDbfs - snrDb;
-            const f = floorEmaRef.current;
-            floorEmaRef.current = f <= -900 ? floorInst : f + 0.1 * (floorInst - f);
+            // dBFS/S-meter mode: line sits at the (unconditionally tracked) noise floor + threshold.
+            // /90 = dBFS bar scale.
             sqlN = Math.max(0, Math.min(1, (floorEmaRef.current + snrSquelchRef.current + 130) / 90));
           }
+          // IS THE GATE ACTUALLY CLOSED? Compare the quantity each backend's gate itself compares,
+          // not the bar geometry: in S-meter/dBFS mode the bar is a smoothed dBFS fill while the
+          // UberSDR gate compares raw SNR, so "fill below line" could redden while audio flowed —
+          // and miss real mutes. undefined = can't say (OWRX gates server-side), draw by geometry.
+          const gate = isKiwi  ? (kiwiSqDbmRef.current > -130 ? levelDbm < kiwiSqDbmRef.current : false)
+            : isLocal          ? (hwSquelchRef.current > -100 ? chDbfs   < hwSquelchRef.current : false)
+            : owrxDbm != null  ? undefined
+            : (snrSquelchRef.current > -999 ? snrDb < snrSquelchRef.current : false);
           // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
           // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
           // rendered SNR showed a permanent "—" while its bar moved perfectly well.
@@ -2324,7 +2344,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
               link: meterBus.current.value.link,
-              sql: sqlN,
+              sql: sqlN, gate,
             });
           }
         }
