@@ -184,25 +184,18 @@ export class AudioPlayer {
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this._muted ? 0 : this._volume;
 
-      // Play OUT through a media element, so the OS sees real playback and gives
-      // us Now Playing / lock-screen / media-key control. Falls back to the plain
-      // destination if the browser won't take a MediaStream.
-      try {
-        this.streamDest = this.ctx.createMediaStreamDestination();
-        this.mediaEl = new Audio();
-        this.mediaEl.srcObject = this.streamDest.stream;
-        this.mediaEl.autoplay = true;
-        // The GainNode already carries volume/mute; keep the element wide open or
-        // the two would fight.
-        this.mediaEl.volume = 1;
-        void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
-      } catch {
-        this.streamDest = null;
-        this.mediaEl = null;
-      }
-
-      // Chromium only — Safari already shows Now Playing from the MediaStream element, and a
-      // second playing element there risks confusing which one the OS follows.
+      // ── How the OS media widget gets attached: ONE mechanism per engine ──────────────────
+      //
+      // ★ CHROMIUM: the silent anchor, and audio goes STRAIGHT to the destination.
+      //   Routing playback through a MediaStream element on Chromium drags it into the WebRTC
+      //   playout path, which applies ADAPTIVE RESAMPLING to manage latency — and that is audible
+      //   as the pitch drifting up and down for the first few seconds while it converges (reported
+      //   on Edge, and previously against the Android server on a work laptop; Safari never did
+      //   it). Chromium will not attach Global Media Controls to a srcObject element anyway, so
+      //   the MediaStream bought us nothing there and cost us the wobble.
+      //
+      // ★ SAFARI: the MediaStream element, because it is the only thing Safari attaches Now
+      //   Playing to, and Safari's playout of it is clean.
       if (AudioPlayer._needsAnchor()) {
         try {
           this.anchorEl = new Audio(SILENT_LOOP);
@@ -212,6 +205,20 @@ export class AudioPlayer {
           this.anchorEl.volume = 1;
           void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
         } catch { this.anchorEl = null; }
+      } else {
+        try {
+          this.streamDest = this.ctx.createMediaStreamDestination();
+          this.mediaEl = new Audio();
+          this.mediaEl.srcObject = this.streamDest.stream;
+          this.mediaEl.autoplay = true;
+          // The GainNode already carries volume/mute; keep the element wide open or
+          // the two would fight.
+          this.mediaEl.volume = 1;
+          void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
+        } catch {
+          this.streamDest = null;
+          this.mediaEl = null;
+        }
       }
 
       // AudioWorklet is [SecureContext]-only. A VibeServer is plain http:// on a

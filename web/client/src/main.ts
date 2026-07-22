@@ -8,7 +8,7 @@
 
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode } from './spectrum';
 import { AudioPlayer } from './audio';
-import { Waterfall } from './waterfall';
+import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, withAuth, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
@@ -258,6 +258,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // preference). Force it on and lock the control, saying who set it — the same courtesy as a
       // pinned sample rate. Never leave a switch on screen that we would silently ignore.
       applyForcedIdle(forceIdle === true);
+      applyRateOptions();
       populateHw();
     },
     onRds: (m) => {
@@ -340,8 +341,36 @@ let hwLockedRate = 0;
 /** The resolved PIN credentials, kept so bookmark WRITES can carry them. */
 let authState: AuthState | null = null;
 
+/** View signature — the scale and band strip only need redrawing when this changes. */
+let lastViewKey = '';
+
+/**
+ * ★ THE RENDER LOOP IS NOT FREE, AND IT WAS NOT TIED TO ANYTHING.
+ *
+ * It ran at the display's rate — 60 fps — no matter how fast frames actually arrived, so asking
+ * the server for 5 fps saved the SERVER work and saved the client none at all. MEASURED on an M4:
+ * Edge sat at ~40% CPU whether the stream was 20 fps or 5. The cost was never the data; it was
+ * redrawing the canvas sixty times a second, which Chromium does far more expensively than Safari.
+ *
+ * So the render rate now follows the chosen waterfall rate. Three times the frame rate keeps the
+ * interpolated scroll smooth (rows are synthesised onto the render clock, which is what stops it
+ * stepping), floored at 20 so it never looks juddery and capped at 60 so it never exceeds the
+ * display. At 5 fps that is 15 renders a second instead of 60 — the lever the listener actually
+ * wanted when they turned the rate down because their machine was struggling.
+ */
+function renderHz(): number {
+  return Math.min(60, Math.max(20, wantedFps() * 3));
+}
+
+let lastRenderAt = 0;
+
 function loop() {
   if (!wf || !spec) return;
+  const nowMs = performance.now();
+  const minGap = 1000 / renderHz() - 1;      // -1ms: never miss a slot to rounding
+  if (nowMs - lastRenderAt < minGap) { requestAnimationFrame(loop); return; }
+  lastRenderAt = nowMs;
+
   wf.vfoHz = spec.frequency;
   updateViewOverlays();
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
@@ -350,8 +379,23 @@ function loop() {
   wf.filterHigh = spec.bandwidthHigh;
   wf.tick();      // synthesise any waterfall lines now due (see Waterfall.tick)
   wf.draw();
-  drawScale();
-  drawBands();
+
+  // ★ THE SCALE AND BAND STRIP ARE NOT PER-FRAME WORK. Both redraw TEXT — frequency labels, band
+  // names — and both only change when the view does: a tune, a zoom, or a resize. Redrawing them
+  // 60 times a second was pure waste, and expensive waste: text and path rasterisation are the
+  // slowest things a 2D canvas does, and markedly slower on Chromium than on Safari's Core
+  // Graphics. MEASURED on an M4 serving the same page: Edge 38.7% CPU / 89°C against Safari's
+  // 4.9% / 59°C, with Edge driving both the CPU and GPU clocks higher as well.
+  //
+  // So: redraw them only when the view key actually changes. The waterfall itself still draws
+  // every frame — it interpolates rows onto the render clock, which is what makes it scroll
+  // smoothly rather than stepping.
+  const key = `${spec.frequency}|${spec.rfCenterHz()}|${spec.spanHz()}|${window.innerWidth}`;
+  if (key !== lastViewKey) {
+    lastViewKey = key;
+    drawScale();
+    drawBands();
+  }
 
   const now = performance.now();
   if (now - lastBytesAt > 1000) {
@@ -360,6 +404,8 @@ function loop() {
     specKbps  = (specBytes / 1024) / secs;
     audioBytes = 0;
     specBytes = 0;
+    framesPerSec = frameCount / secs;
+    frameCount = 0;
     lastBytesAt = now;
     updateStatus();
     updateRecTime();
@@ -393,7 +439,7 @@ function fmtTick(hz: number, step: number): string {
 
 function drawScale() {
   const c = $<HTMLCanvasElement>('scale');
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = renderDpr();
   const w = Math.round(c.clientWidth * dpr);
   const h = Math.round(c.clientHeight * dpr);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -469,7 +515,7 @@ function ituRegion(): number {
 
 function drawBands() {
   const c = $<HTMLCanvasElement>('bands');
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = renderDpr();
   const w = Math.round(c.clientWidth * dpr);
   const h = Math.round(c.clientHeight * dpr);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -686,7 +732,7 @@ function drawDbAxis(ctx: CanvasRenderingContext2D, W: number, H: number) {
   const { dbMin, dbMax } = wf.getRange();
   if (!isFinite(dbMin) || !isFinite(dbMax) || dbMax <= dbMin) return;
 
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = renderDpr();
   ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
@@ -812,9 +858,14 @@ function setStatus(s: string, detail?: string) {
 let lastFrameAt = 0;
 let linkQ: 0 | 1 | 2 | 3 = 0;
 
+/** Spectrum frames counted in the current 1s window, and the last completed count. */
+let frameCount = 0;
+let framesPerSec = 0;
+
 function noteFrame() {
+  frameCount++;
   const now = performance.now();
-  const expected = 1000 / (throttled ? IDLE_FPS : ACTIVE_FPS);
+  const expected = 1000 / Math.max(1, wantedFps());   // judge against what we ASKED for
   if (lastFrameAt) {
     const gap = now - lastFrameAt;
     if (gap > expected * 3) linkQ = 1;
@@ -828,7 +879,7 @@ function updateLink() {
   // No frame for a long time = stalled, regardless of what the last gap said.
   if (!spec || !lastFrameAt) linkQ = 0;
   else {
-    const expected = 1000 / (throttled ? IDLE_FPS : ACTIVE_FPS);
+    const expected = 1000 / Math.max(1, wantedFps());
     const since = performance.now() - lastFrameAt;
     if (since > expected * 8) linkQ = 1;
     if (since > 5000) linkQ = 0;
@@ -845,8 +896,14 @@ function updateStatus() {
   const total = audioKbps + specKbps;
   const idle = throttled ? ` · IDLE ${IDLE_FPS}fps` : '';
   const el = $('status');
-  el.textContent = `${total.toFixed(0)} KB/s · ${rtt.toFixed(0)} ms${idle}`;
-  el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`;
+  // ★ The MEASURED arrival rate, not the rate we asked for. Ask the server for 5 fps and there was
+  // previously nothing to confirm it had happened — nor to show a link failing to deliver what it
+  // promised. Shown to one decimal below 10, because the difference between 4.6 and 5 matters at
+  // the bottom of the ladder and is invisible when rounded.
+  const fps = framesPerSec >= 10 ? framesPerSec.toFixed(0) : framesPerSec.toFixed(1);
+  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${idle}`;
+  el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
+    + ` · asking for ${wantedFps()} fps`;
 
   // Faults go on the METER, not into the status text: a long message there ran
   // off the edge of the screen, and the meter is where you're already looking
@@ -1103,13 +1160,14 @@ function updateMediaSession() {
 // you leave it listening and walk away; it's the WATERFALL nobody is watching.
 
 const IDLE_AFTER_MS = 30_000;
-const ACTIVE_FPS = 20;
+/** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps(). */
+let activeFps = 20;
 const IDLE_FPS = 5;
 /** The owner's cap, from hwinfo. 0 = uncapped. */
 let serverMaxFps = 0;
 /** What we should be asking for right now: our own choice, clamped to the server's ceiling. */
 function wantedFps(): number {
-  const want = throttled ? IDLE_FPS : ACTIVE_FPS;
+  const want = throttled ? Math.min(IDLE_FPS, activeFps) : activeFps;
   return serverMaxFps > 0 ? Math.min(want, serverMaxFps) : want;
 }
 
@@ -1146,6 +1204,39 @@ let throttled = false;
 let idleSaver = true;
 /** The owner has made idle saving mandatory (hwinfo.forceIdleSaver). */
 let idleForced = false;
+
+/**
+ * Offer only the rates the owner actually permits.
+ *
+ * A ceiling of 10 fps means 20 is not on the menu; a ceiling of 5 leaves no choice at all, so the
+ * whole row goes — a control with one option is just a label pretending to be a control. Same rule
+ * as the pinned sample rate and the enforced idle saver: never show a switch we would ignore.
+ */
+function applyRateOptions() {
+  const seg = document.getElementById('wfRateSeg');
+  const row = seg?.parentElement;
+  if (!seg || !row) return;
+  const cap = serverMaxFps > 0 ? serverMaxFps : Infinity;
+
+  let offered = 0;
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
+    const v = Number(b.dataset.wfrate);
+    const ok = v <= cap;
+    b.hidden = !ok;
+    if (ok) offered++;
+  }
+  // Nothing to choose between — hide the row rather than present a single locked button.
+  row.hidden = offered <= 1;
+
+  // Our own choice cannot exceed the ceiling; fall back to the fastest still allowed.
+  if (activeFps > cap) {
+    activeFps = Number.isFinite(cap) ? cap : 20;
+    for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
+      b.classList.toggle('on', Number(b.dataset.wfrate) === activeFps);
+    }
+    spec?.setFftRate(wantedFps());
+  }
+}
 
 function applyForcedIdle(forced: boolean) {
   idleForced = forced;
@@ -2409,6 +2500,23 @@ function buildMenu() {
   // Persisted like the other preferences. Turning it back ON does not wait for the next idle
   // period to matter; turning it OFF must un-throttle immediately, or the user sits at 5 fps
   // wondering whether the switch did anything.
+  // ★ RESOLUTION — the biggest single lever on render cost. dpr 2 is FOUR TIMES the pixels of
+  // dpr 1, and everything (the row write, the two blits, the spectrum path, compositing) scales
+  // with pixel count. Sharp is the default; Standard is there for a machine or browser that is
+  // struggling, and on a waterfall the difference is far less visible than it would be on text.
+  segment('wfResSeg', 'wfres', (v) => {
+    setRenderScale(v / 100);
+    wf?.resize();          // rebuild the canvases at the new scale
+    drawScale(); drawBands();
+  }, 'wfRes');
+
+  // The listener's own rate cap. Applied immediately — a control that waits for the next idle
+  // period to take effect reads as broken.
+  segment('wfRateSeg', 'wfrate', (v) => {
+    activeFps = v > 0 ? v : 20;
+    spec?.setFftRate(wantedFps());
+  }, 'wfRate');
+
   toggle('idleSaver', (on) => {
     if (idleForced) return;         // owner-enforced: the control is locked, not merely ignored
     idleSaver = on;

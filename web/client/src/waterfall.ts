@@ -37,11 +37,25 @@ function rgba(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+/**
+ * Canvas pixel ratio — the single biggest lever on render cost, because everything scales with the
+ * PIXEL COUNT and dpr 2 is four times the pixels of dpr 1.
+ *
+ * A waterfall is noisy data, not text, so it survives dpr 1 far better than a UI would — and on a
+ * machine that is struggling, four times less work is worth more than crisper noise. Default is
+ * capped at 2 (the old behaviour); `setRenderScale` lowers it.
+ */
+let RENDER_SCALE = 2;
+export function setRenderScale(max: number) { RENDER_SCALE = Math.max(1, Math.min(2, max)); }
+export function renderDpr(): number { return Math.min(RENDER_SCALE, window.devicePixelRatio || 1); }
+
 export class Waterfall {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   /** Off-screen waterfall image; blitted to the visible canvas each frame. */
   private wf: HTMLCanvasElement;
+  /** Ring head: the row index holding the NEWEST line. Walks backwards; see addRow/draw. */
+  private head = 0;
   private wfCtx: CanvasRenderingContext2D;
 
   private proc = new SignalProcessor();
@@ -125,9 +139,13 @@ export class Waterfall {
 
   constructor(canvas: HTMLCanvasElement, opts: WaterfallOpts = {}) {
     this.canvas = canvas;
+    // NB `desynchronized: true` was tried here and REVERTED — it is a low-latency surface hint,
+    // it did not move Chromium's CPU or GPU figures at all, and it has a history of odd behaviour
+    // on macOS. Unproven changes do not earn a place in the render path.
     this.ctx = canvas.getContext('2d', { alpha: false })!;
     this.wf = document.createElement('canvas');
     this.wfCtx = this.wf.getContext('2d', { alpha: false })!;
+    this.head = 0;
     // Clamp here too: a bad value (e.g. a raw 0-60 slider position mistaken for a
     // fraction) would drive the waterfall height to zero and silently eat it.
     this.specRatio = clampRatio(opts.specRatio ?? 0.25);
@@ -188,7 +206,7 @@ export class Waterfall {
   getRange() { return this.proc.getRange(); }
 
   resize() {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     const wfH = Math.max(1, Math.round(h * (1 - this.specRatio)));
@@ -210,11 +228,21 @@ export class Waterfall {
     this.wfCtx.fillStyle = '#000';
     this.wfCtx.fillRect(0, 0, w, wfH);
     if (old) {
+      // Unwrap the ring as we copy, so the preserved history lands in reading order and the head
+      // can start again at 0. Keeping a wrapped buffer across a RESIZE would need the old head and
+      // the old height to stay consistent with the new ones — needless bookkeeping for a rare event.
       const tmp = document.createElement('canvas');
       tmp.width = old.width; tmp.height = old.height;
-      tmp.getContext('2d')!.putImageData(old, 0, 0);
-      this.wfCtx.drawImage(tmp, 0, 0, w, wfH);
+      const tc = tmp.getContext('2d')!;
+      tc.putImageData(old, 0, 0);
+      const oh = old.height;
+      const firstRows = oh - this.head;
+      if (firstRows > 0) this.wfCtx.drawImage(tmp, 0, this.head, old.width, firstRows,
+                                              0, 0, w, wfH * (firstRows / oh));
+      if (this.head > 0)  this.wfCtx.drawImage(tmp, 0, 0, old.width, this.head,
+                                              0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
     }
+    this.head = 0;
     // drawRow() bails without this, so the waterfall silently never draws.
     this.rowImg = this.ctx.createImageData(w, 1);
   }
@@ -234,6 +262,7 @@ export class Waterfall {
     if (!this.wf.width || !this.wf.height) return;
     this.wfCtx.fillStyle = '#000';
     this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height);
+    this.head = 0;      // an all-black ring has no meaningful head
   }
 
   /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
@@ -339,7 +368,13 @@ export class Waterfall {
       for (let i = 0; i < n; i++) blend[i] = (prev[i] * b + cur[i] * a) >> 8;
     }
 
-    this.wfCtx.drawImage(this.wf, 0, 1);   // scroll
+    // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
+    // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
+    // does NOT, and on a GPU-backed canvas it forces a full texture readback and copy per frame.
+    // MEASURED on an M4 with the same page: Edge 38.7% CPU and 89°C against Safari's 5.2% and
+    // 63°C. Instead the history is a RING: the newest row is written at a moving head and nothing
+    // else ever moves. Cost per frame drops from "copy the whole canvas" to "write one row".
+    this.head = (this.head - 1 + this.wf.height) % this.wf.height;
 
     const img = this.rowImg.data;
     const lut = this.lut;
@@ -357,7 +392,7 @@ export class Waterfall {
       img[p + 2] = lut[o + 2];
       img[p + 3] = 255;
     }
-    this.wfCtx.putImageData(this.rowImg, 0, 0);
+    this.wfCtx.putImageData(this.rowImg, 0, this.head);
   }
 
   /** Composite waterfall + spectrum trace + markers to the visible canvas. */
@@ -380,7 +415,12 @@ export class Waterfall {
     // frequency-space buffer rescaled the whole waterfall every frame (the
     // "redraws itself on every movement" blur). The app doesn't compensate at
     // all — it sends the view change and lets the frames arrive.
-    ctx.drawImage(this.wf, 0, specH);
+    // The ring is unwrapped HERE, at present time, with two blits: head→bottom, then top→head.
+    // Two GPU-side draws of untouched texture, versus the old full-canvas self-copy every frame.
+    const wfH = this.wf.height;
+    const first = wfH - this.head;              // rows from head to the end of the buffer
+    if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
+    if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
 
     if (specH > 4 && this.spec && this.showSpec) {
       this._drawSpec(ctx, W, specH);
@@ -565,7 +605,7 @@ export class Waterfall {
 
       // Say what it is. With an RF-centre marker on screen too, an unlabelled
       // needle is ambiguous — which line is the one you're listening to?
-      const dpr2 = Math.min(2, window.devicePixelRatio || 1);
+      const dpr2 = renderDpr();
       this.markerLabel(ctx, nX, W, 28 * dpr2,
         `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, col);
     }
@@ -577,7 +617,7 @@ export class Waterfall {
    *  radio is actually receiving. Pan past it and the RF centre has to move. */
   private _drawCapture(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (this.captureLoHz == null || this.captureHiHz == null) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     const x0 = this.hzToX(this.captureLoHz, W);
     const x1 = this.hzToX(this.captureHiHz, W);
     if (x1 < 0 || x0 > W) return;
@@ -614,7 +654,7 @@ export class Waterfall {
     ctx: CanvasRenderingContext2D, x: number, W: number, y: number,
     text: string, colour: string,
   ) {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
     const tw = ctx.measureText(text).width;
     const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
@@ -638,7 +678,7 @@ export class Waterfall {
     if (this.wallLoHz == null && this.wallHiHz == null) return;
     ctx.save();
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     const WALL = 'rgba(255,200,80,0.95)';
 
     if (this.wallLoHz != null) {
@@ -685,7 +725,7 @@ export class Waterfall {
     if (this.rfCenterHz == null) return;
     const x = this.hzToX(this.rfCenterHz, W);
     if (x < 0 || x > W) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
 
     ctx.save();
     ctx.strokeStyle = 'rgba(120,200,255,0.75)';

@@ -1066,6 +1066,25 @@ select.btn { padding: 6px 8px; }
        client-side slowdown this saves the SERVER real work (and its Wi-Fi radio), which is what
        matters for a solar or battery host. Some listeners want a waterfall that keeps its full time
        resolution while they watch it without touching anything — hence the toggle. -->
+  <!-- WATERFALL RATE — the LISTENER's own choice, separate from the owner's ceiling and from the
+       idle saver. Some machines and some browsers simply cannot paint 20 fps of waterfall without
+       breaking a sweat; asking the server for fewer frames costs time resolution and nothing else,
+       because the waterfall interpolates onto the render clock either way. -->
+  <div class="mrow">
+    <label>RESOLUTION</label>
+    <div class="seg" id="wfResSeg">
+      <button class="btn on" data-wfres="200">SHARP</button>
+      <button class="btn" data-wfres="100">STANDARD</button>
+    </div>
+  </div>
+  <div class="mrow">
+    <label>WATERFALL RATE</label>
+    <div class="seg" id="wfRateSeg">
+      <button class="btn on" data-wfrate="20">20</button>
+      <button class="btn" data-wfrate="10">10</button>
+      <button class="btn" data-wfrate="5">5</button>
+    </div>
+  </div>
   <div class="mrow">
     <label>IDLE SAVER</label>
     <div class="seg"><button class="btn on" id="idleSaver">ON</button></div>
