@@ -180,3 +180,51 @@ The shim rejects out-of-role commands with `{"t":"denied","cmd":"centre","reason
 11. **Hardware policy:** with `biasT:'admin'`, a controller's bias-T command is denied with reason `admin-required` and the client renders it read-only; admin toggles it successfully. With `gainMin/gainMax` set, an out-of-range gain command is clamped and echoed; the client slider shows only the permitted span.
 12. **Idle restore:** controller changes gain, centre, and bias-T (as admin), then all clients disconnect; after the grace window fully expires, the shim's state matches the launch defaults exactly — verified via `/vibeserver/info` and a fresh connect.
 13. **Single-client regression:** `maxClients: 1` behaves byte-identically to v8 for a proto-1 client (the shipped web client passes untouched).
+
+---
+
+## AMENDMENT (2026-07-22, Stuart) — two levels, and the secrets swap which one is optional
+
+Settled while VibeServer was first running standalone on macOS. Supersedes §6's framing (the
+mechanism is unchanged; which secret is *optional* is inverted).
+
+### The two levels
+
+| | Secret | Who holds it | What it grants |
+|---|---|---|---|
+| **Listen** | Access **PIN** (optional) | Friends and family, including remote ones | Use the radio: tune, listen, watch the waterfall — subject to the control token (§5) |
+| **Manage** | **Admin password** | The owner, and nobody else | Everything above, plus full management: control seizure, hardware policy, server settings |
+
+**The PIN is the secret you GIVE AWAY.** That is the whole reason the two cannot be merged, and the
+reason the original "the PIN could just be the admin password" idea was rejected: on a private
+server the PIN is handed to every listener, so merging them would make every listener an admin —
+able to unlock bias-T, seize control, and change the very policy that was meant to restrain them.
+(On a *public* server there is no PIN, which is what made the idea look free. Public is the minority
+case; the model has to hold for both.)
+
+**Inverted optionality.** §6 treated admin as the second, optional secret. It is the other way round:
+
+- **Admin password** — the primary secret; it means "this is my server".
+- **Access PIN** — optional, and only when you want to restrict who may listen.
+
+A public server therefore has exactly ONE secret (admin), which was the appeal of the original idea,
+without the merge. `adminPassword` and the PIN MUST still differ where both are set (§6's rule
+stands, and the config UI still enforces it).
+
+**Loopback is already exempt** (shipped, `3ee45bb`): the machine running the server is never
+challenged for the PIN. Same principle should extend to admin — the operator sitting at the host
+has the config file and the GUI in front of them, so an owner at their own desk types no password
+at all. Remote administration is the only case a password is actually needed for.
+
+### Server Management (the admin web UI)
+
+With an admin password entered, the web client reveals a **Server Management** button: the
+VibeServer GUI, shared in a browser, so the owner can administer the server remotely.
+
+- It is the macOS brief §5 "web config page" — same thing, now with its entry point specified.
+- **Hidden AND rejected without admin auth** — never merely hidden (§6's `admin-required` rule).
+- ★ **It lives in the shared web-client bundle, NOT in the Mac app.** A headless Pi has no GUI, so
+  this page is the Pi's ONLY configuration surface. Building it once means Mac, Pi and any future
+  host inherit the same editor — which is exactly the "one config schema, three editors" decision
+  in macOS brief §5 (GUI · web page · JSON file over SSH).
+- The Mac GUI and this page are two renderers of the same config document; neither owns it.
