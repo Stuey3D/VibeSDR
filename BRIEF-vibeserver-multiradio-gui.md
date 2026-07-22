@@ -228,8 +228,14 @@ no splash (§1.1, §3.0). The overwhelmingly common setup never meets any of the
 
 ### Multi-antenna mode — a wizard, run once per antenna
 
-1. **Antenna name and frequency range.** *"80m OCF dipole, 0.5–30 MHz."* The user knows this; it is
-   the fact everything else derives from.
+1. **Antenna name, frequency range, and BLOCKED bands.** *"80m OCF dipole, 0.5–30 MHz."* The user
+   knows this; it is the fact everything else derives from.
+   ★ **Blocked frequencies and bands are set HERE, at the antenna, and apply to every radio attached
+   to it** (Stuart). That is the correct level: a block is a statement about what this STATION may
+   receive — a legal or policy limit on the site — not a property of one dongle. Setting it on the
+   antenna means it cannot be forgotten when a radio is added later, and a radio dragged onto this
+   antenna inherits it immediately (§5.5). Enforcement remains server-side in each radio's process,
+   so no client can tune around it.
 2. **Add radios to this antenna.** A physical statement about what is plugged into what.
 3. **Does one of these radios power the antenna?** If yes, which one. ★ **If their serials collide,
    this is the moment to suggest the EEPROM change** — not buried in an advanced menu, but exactly
@@ -775,6 +781,9 @@ So a move:
    the answer has genuinely changed for BOTH antennas involved.
 3. Keeps harmless settings (gain trim, an upconverter offset that belongs to the dongle rather than
    the feed) since they follow the hardware, not the coax.
+4. **Inherits the new antenna's coverage and blocked bands** — automatically, because those belong
+   to the antenna. A radio moved to a different feed is subject to that feed's limits from the
+   moment it lands, with nothing for the owner to remember.
 
 A drag is a physical statement — *"I moved this lead"* — and the software should respond as if the
 user had just rewired the station, because they have.
