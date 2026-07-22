@@ -105,6 +105,34 @@ existing document rather than sprouting per-radio files:
 - Identify dongles by the resolution order in §5.1 — serial, then USB port path, never index. Each
   radio stores BOTH a serial and a port path so it can be matched by whichever is unambiguous.
 
+## 5.0 ★★ PRINCIPLE: a dodgy config must not damage hardware
+
+Stuart, 2026-07-22: *"we want to prevent physical damage to hardware through dodgy configs."*
+
+Almost everything here is recoverable — a wrong gain sounds bad, a wrong sample rate looks wrong, a
+wrong mode is a click away from right. **Bias-T is not.** It puts DC up the feed, and the wrong
+answer can leave an LNA unpowered (silently useless), push DC into a block, or set two supplies
+against each other on a shared antenna. The user is usually not present when a config is applied —
+it happens at boot, on a headless box, in a loft or a field.
+
+So hardware-affecting settings obey these rules, and any future one inherits them:
+
+1. **Default OFF.** Always, everywhere, including on a radio that matches no profile (§5.1).
+2. **Never auto-restored to a device that is not provably identified.** Only a UNIQUE SERIAL earns
+   automatic restoration at boot; a device known only by which socket it is in starts off and needs
+   a human that session (§5.2 revision).
+3. **Never inherited.** An unrecognised dongle takes safe defaults, not the settings of a radio that
+   happens to be free.
+4. **Always visible, with attribution.** The client shows whether it is on and who set it — never a
+   control whose state the user cannot see, and never one we would silently ignore.
+5. **Warn on a plausible conflict.** We cannot see the coax, so we cannot know two receivers share
+   an antenna — but when more than one radio has bias-T enabled we can say so once: *"Two receivers
+   are set to supply bias-T. If they share an antenna, only one should."* Cheap to say, and it names
+   the exact mistake.
+
+The test to apply to any new setting: **if this is wrong at 3am with nobody watching, what is the
+worst outcome?** If the answer involves hardware rather than audio, it belongs under these rules.
+
 ## 5.1 ★★ DEVICE IDENTITY — the hard part, and the one that can damage hardware
 
 Stuart: *"if a user has a v3 or a dongle that requires direct sampling active, and another where it
