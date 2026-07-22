@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (260.8 KB)
+// Source: web/client/  (261.1 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -308,11 +308,14 @@ html, body {
    reach, and it parks at the left when squelch is off. Field-proven design — see the phone. */
 .sqlBlock { padding: 7px 0; }
 .sqlBlock > label { color: var(--btn-text); font-size: 12px; display: block; margin-bottom: 6px; }
-.sqlBar { position: relative; height: 26px; border-radius: 5px; overflow: hidden;
+/* margin-top leaves clearance for the ball, which now sits ABOVE the bar (like the phone) instead
+   of half-clipped inside it. overflow is VISIBLE so the ball shows; the fill clips itself with its
+   own border-radius. */
+.sqlBar { position: relative; height: 22px; border-radius: 5px; margin-top: 12px; overflow: visible;
           background: rgba(255,255,255,0.06); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
           cursor: pointer; touch-action: none; }
 .sqlFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: rgba(255,255,255,0.85);
-           transition: background-color 0.12s linear; }
+           border-radius: 5px; transition: background-color 0.12s linear; }
 .sqlBar.closed .sqlFill { background: rgba(255,77,77,0.9); }
 /* The needle spans the whole bar; the ball sits on top where a thumb finds it. pointer-events off
    so a drag that lands on the ball still measures against the BAR, never the ball (the phone's
@@ -324,8 +327,9 @@ html, body {
              background: #3ddc84; box-shadow: 0 0 4px rgba(61,220,132,0.7); pointer-events: none; }
 /* Dimmed while off — present and grabbable, but clearly not yet gating. */
 .sqlBar:not(.on) .sqlNeedle { opacity: 0.55; }
-.sqlBall { position: absolute; top: -5px; left: 50%; width: 16px; height: 16px; margin-left: -8px;
-           border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+.sqlBall { position: absolute; top: -13px; left: 50%; width: 18px; height: 18px; margin-left: -9px;
+           border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 4px rgba(0,0,0,0.7);
+           border: 1px solid rgba(0,0,0,0.25); }
 .sqlNote { color: var(--unit); font-size: 11px; margin-top: 6px; line-height: 1.35; }
 /* NO font-size / letter-spacing here — a leftover from the pre-scaling layout that
    silently overrode the em-based rule above and pinned this readout to a hard 10px.
