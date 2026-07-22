@@ -70,6 +70,28 @@ second implementation of it — the same rule already applied to the web config 
 port-forward. A taken port FAILS LOUDLY for that radio (as `setVibeServerPort` already does) and the
 hub reports it — never silent drift, which would break a forward or a saved bookmark.
 
+## 3.0 ★ 48000 IS THE UNIVERSAL ENTRY
+
+Stuart: *"port 48000 is our universal entry then — and if a user only has one radio it works as it
+does now; if multiple radios it shows the splash screen."*
+
+One address to remember, one port to forward, one thing to advertise, whatever the setup:
+
+- **One radio** → 48000 goes straight to it. No splash, no choosing, no change from today's
+  behaviour. The overwhelmingly common case must not pay for a feature it does not use.
+- **Several radios** → 48000 shows the splash, and the choice sets the session (§3.1).
+
+★ **The hub always runs**, even for a single radio — it is the entry point, the admin surface and
+the Bonjour advertiser, so having it present-or-absent depending on radio count would mean two
+topologies to build and test rather than one. Adding a second dongle then changes nothing
+structural: the address, the forwarded port and the admin surface all stay exactly where they were,
+and a splash simply starts appearing.
+
+The cost is one extra process and one proxy hop for the single-radio case. Trivial on a Mac; on a Pi
+it goes on the same measurement list as per-radio RAM (§2) before any radio count is advertised. If
+it ever proves to matter there, the hub can serve a lone radio in-process — but that is an
+optimisation to make with numbers in hand, not up front.
+
 ## 3.1 ★ ONE FORWARDED PORT — the hub proxies, so 48000 is all anyone opens
 
 Stuart: *"right now this setup requires a user to forward multiple ports on their router for each
