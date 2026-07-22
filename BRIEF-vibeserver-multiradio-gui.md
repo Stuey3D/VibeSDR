@@ -70,6 +70,59 @@ second implementation of it — the same rule already applied to the web config 
 port-forward. A taken port FAILS LOUDLY for that radio (as `setVibeServerPort` already does) and the
 hub reports it — never silent drift, which would break a forward or a saved bookmark.
 
+## 3.1 ★ ONE FORWARDED PORT — the hub proxies, so 48000 is all anyone opens
+
+Stuart: *"right now this setup requires a user to forward multiple ports on their router for each
+radio — is there any way of doing internal port forwarding so a server owner only has to forward
+48000?"*
+
+Yes, and it should be the default. Asking someone to forward one port per radio is a real barrier —
+four radios means four forwarding rules, four chances to get it wrong, and a router UI most people
+touch once a year.
+
+**The hub becomes a reverse proxy.** It already listens on 48000; it also relays HTTP and WebSocket
+traffic to the child on 48001/48002/… . A WebSocket relay is an HTTP upgrade followed by copying
+bytes both ways — no parsing of the stream, so it cannot corrupt spectrum or audio.
+
+### ★ Route by SESSION, so the paths never change
+
+The obvious approach — a path prefix like `/r/loft/ws/user-spectrum` — breaks every existing client,
+because they all build paths at the root. Instead:
+
+1. The splash page at 48000 lists the radios. Choosing one sets a **session cookie (or token)**
+   naming that radio.
+2. Every subsequent request on 48000 — `GET /`, `/ws/user-spectrum`, `/ws/audio`, `/favicon.png` —
+   is proxied to that session's child, **at exactly the same path**.
+
+So the web client needs NO changes: it still asks for `/ws/user-spectrum` and still gets it. And
+because a radio has one user (§1), "this browser session is on Radio 2" is a complete and honest
+description of the world — there is nothing to multiplex.
+
+### What this does and does not change
+
+- **Isolation is untouched.** The point of one-process-per-radio was that a listener's FPS, FFT and
+  gain cannot affect another's. Those still live in separate processes; the hub only moves bytes.
+- **LAN access is unaffected.** Bonjour still advertises each radio directly (§4), so clients on the
+  network connect straight to 48001/48002 and never touch the proxy. **Port forwarding is a REMOTE
+  concern only** — which is exactly the case worth optimising, since it is the one with a router in
+  it.
+- **The hub becomes a single point of failure for REMOTE users.** Honest cost. A crash there takes
+  remote access to every radio, where before it would have taken one. Mitigate by keeping the proxy
+  dumb: route once on the session, then shovel bytes and never interpret them.
+- **Loopback traffic roughly doubles** for proxied clients (in to the hub, out to the child). At
+  ~120 KB/s per listener this is nothing on a Mac, and worth measuring on a Pi alongside the
+  per-process RAM figure.
+
+### Native clients
+
+The phone and watch do not do cookies. Two options, and the brief prefers the first:
+
+1. **Direct ports on the LAN** (already how discovery works), and for remote use let the app take a
+   `?radio=<id>` query parameter that the hub honours in place of the cookie. One extra field in a
+   saved server entry.
+2. A path prefix, which is cleaner in URL terms and worse in every other, because every client must
+   learn it.
+
 ## 4. Discovery — advertise the RADIOS, not just the hub
 
 Each child advertises itself over Bonjour as `_vibesdr._tcp` with its own name ("Kitchen RTL-SDR",
