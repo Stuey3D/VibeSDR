@@ -22,6 +22,34 @@ This is the deployment shape of the decision already taken in `VibeServer-MultiC
 an RTL-SDR sees only ~2.4 MHz around one LO, so there is nothing to slice between users. N dongles
 serve N controlling users, and quality is guaranteed rather than shared.
 
+## 1.1 ★★ THE TEST: multi-radio should be INVISIBLE when it should be
+
+Stuart: *"if a server is only running one profile with 4 radios — all the same antenna and
+capability — then the server operates as it does now, just in the back end a user is being assigned
+a radio. The only difference is a server gets 4 user slots instead of 1."*
+
+That is the whole design in a sentence, and it is the test to hold the implementation to.
+
+| | Today | One pool of 4 |
+|---|---|---|
+| Address | `host:48000` | `host:48000` |
+| Ports forwarded | 1 | 1 |
+| Splash / picker | none | **none** |
+| What a listener does | connects, listens | connects, listens |
+| Capacity | 1 listener | **4 listeners** |
+
+Nothing a user sees changes. They do not choose a radio, do not know whether they are on 1 of 1 or
+1 of 4, and cannot tell which. The allocation is a back-end fact.
+
+**The complexity earns its place only where it buys something:** more listeners on identical radios
+(no UI at all), or a genuine choice between DIFFERENT receivers (a picker, because picking wrongly
+would waste the user's time). Anything else — a picker over identical radios, a serial shown to a
+listener, a splash for one pool — is the feature leaking into a place it does not belong.
+
+Occupancy follows the same logic: "full" means every radio in that POOL is busy
+(`VibeServer-MultiClient-Brief.md` §4's three states), and it is per-pool — an HF listener is
+blocked when the HF pool is full even if four VHF radios sit idle.
+
 ## 2. ★ ONE PROCESS PER RADIO — isolation by construction
 
 **Take "each radio is its own separate VibeServer" literally: run one `vibeserver` process per
