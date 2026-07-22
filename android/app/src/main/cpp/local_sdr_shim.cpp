@@ -408,6 +408,12 @@ static void adpcmEncodeBlock(std::vector<uint8_t>& out, const int16_t* pcm, int 
 static std::atomic<bool>   g_serveOnLan{false};
 static std::mutex          g_vsMtx;
 static std::string         g_vsSecret;                 // empty = no PIN (open)
+// Operator-chosen listen port. 0 = scan 48000..48049 for the first free one (historic behaviour).
+// Set explicitly, we use THAT port or fail loudly: silently drifting to another port breaks a
+// router port-forward or a saved bookmark, and "clients can't connect but the server says it's
+// running" is a horrible symptom to diagnose. (Lived it: a stale mock squatting 48000 sent us to
+// 48001 without a word.)
+static std::atomic<int>    g_vsPort{0};
 static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
 static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (20 fps)
 // Serve the browser client at GET /? Off = app-only, so a stranger who finds the
@@ -837,6 +843,11 @@ struct VsAuth {
     }
 };
 VsAuth g_vsAuthState;
+
+/** Is this peer the host itself? IPv4 loopback, IPv6 loopback, and the v4-mapped form. */
+static bool isLoopback(const std::string& ip) {
+    return ip.rfind("127.", 0) == 0 || ip == "::1" || ip == "::ffff:127.0.0.1";
+}
 
 // Extract a query-string value (?a=1&key=val) from a full HTTP request line.
 /** Percent-decode a query value. queryParam() returns it RAW, so a station name
@@ -2173,6 +2184,12 @@ struct LocalSdrShim::Impl {
         std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
         if (secret.empty()) return true;                 // open access
         std::string ip = sock->peerAddress();
+        // THE MACHINE RUNNING THE SERVER NEVER NEEDS THE PIN. The PIN controls who on the NETWORK
+        // may use your radio; the person sitting at the host is the operator who set it. Making
+        // them type their own PIN to listen on their own Mac is friction that teaches people to
+        // pick weak ones — and anyone already running code on this machine can read the config
+        // file anyway, so it concedes nothing.
+        if (isLoopback(ip)) return true;
         if (g_vsAuthState.blocked(ip)) {
             sock->sendstr("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             LOGI("VibeServer auth: %s locked out (backoff)", ip.c_str());
@@ -2749,6 +2766,10 @@ bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
 static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
 
 // VibeServer server-side config setter definitions (state declared above Impl).
+void LocalSdrShim::setVibeServerPort(int port) {
+    g_vsPort.store(port > 0 ? port : 0);
+    LOGI("VibeServer port: %s", port > 0 ? std::to_string(port).c_str() : "auto (48000-48049)");
+}
 void LocalSdrShim::setVibeServerAuth(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsMtx); g_vsSecret = secret;
 }
@@ -2867,12 +2888,19 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->buildAudio();
 
     int chosen = -1;
-    for (int port = 48000; port < 48050; port++) {
-        try { impl->listener = net::listen(bindHost(), port); chosen = port; break; }
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
         catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int port = 48000; port < 48050; port++) {
+            try { impl->listener = net::listen(bindHost(), port); chosen = port; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
     }
     if (!impl->listener) {
-        err = "could not bind localhost port";
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
         impl->teardownAudio(); impl->rx.stop(); rtlsdr_close(impl->dev);
         if (impl->usbFd >= 0) ::close(impl->usbFd);   // -1 on the desktop path (no fd of ours)
         delete impl; return -1;
@@ -2949,12 +2977,19 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->buildAudio();
 
     int chosen = -1;
-    for (int p2 = 48000; p2 < 48050; p2++) {
-        try { impl->listener = net::listen("127.0.0.1", p2); chosen = p2; break; }
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
         catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
     }
     if (!impl->listener) {
-        err = "could not bind localhost port";
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
         impl->teardownAudio(); impl->rx.stop();
         impl->tcpSock->close(); impl->tcpSock = nullptr; delete impl; return -1;
     }
@@ -3078,12 +3113,19 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     impl->buildAudio();
 
     int chosen = -1;
-    for (int p2 = 48000; p2 < 48050; p2++) {
-        try { impl->listener = net::listen("127.0.0.1", p2); chosen = p2; break; }
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
         catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
     }
     if (!impl->listener) {
-        err = "could not bind localhost port";
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
         impl->teardownAudio(); impl->rx.stop();
         impl->spy->close(); delete impl; return -1;
     }
@@ -3185,7 +3227,9 @@ int LocalSdrShim::startDecoderService(std::string& err) {
         try { impl->listener = net::listen("127.0.0.1", port); chosen = port; break; }
         catch (...) { impl->listener = nullptr; }
     }
-    if (!impl->listener) { err = "could not bind localhost port"; delete impl; return -1; }
+    if (!impl->listener) { err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049"; delete impl; return -1; }
     impl->port = chosen;
     impl->serverRunning.store(true);
     impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });

@@ -39,6 +39,10 @@ public:
     // must pass an HMAC-SHA256(secret, nonce) challenge-response before the
     // spectrum/audio WebSockets upgrade — the secret itself never crosses the
     // wire. Empty secret (default) = open access (no PIN). Set BEFORE start().
+    /** Listen on THIS port. 0 (default) = scan 48000..48049 and take the first free one. An
+     *  explicit port is used or the start FAILS — never silently moved, or a port-forward or a
+     *  saved client bookmark would break with no visible cause. Set BEFORE start(). */
+    static void setVibeServerPort(int port);
     static void setVibeServerAuth(const std::string& secret);
     // Server-side compatibility limits, for low-end hosts / slow networks. A
     // maxBandwidthHz <= 0 means "no cap"; maxFftRate <= 0 means "server default".

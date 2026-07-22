@@ -50,6 +50,7 @@ struct Opts {
     double      maxBw   = 0;             // 0 = no cap  ─┐ link-management ceilings
     double      maxFps  = 0;             // 0 = default ─┘
     double      lockRate = 0;            // 0 = client-controlled
+    int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
 };
 
@@ -64,7 +65,8 @@ void usage() {
         "  --mode MODE       am|lsb|usb|nfm|wfm|cw        (default am)\n"
         "  --fft N           FFT size                     (default 4096)\n"
         "  --fps N           spectrum frames/sec          (default 15)\n"
-        "  --pin SECRET      require the PIN/HMAC handshake (default: open)\n"
+        "  --port N          listen on this port          (default: first free 48000-48049)\n"
+        "  --pin SECRET      require a PIN from NETWORK clients (this machine never needs it)\n"
         "  --max-bw HZ       server-enforced bandwidth ceiling\n"
         "  --max-fps N       server-enforced spectrum-rate ceiling\n"
         "  --lock-rate HZ    pin the capture rate (clients cannot change it)\n"
@@ -97,6 +99,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--mode")      o.mode     = need(i);
         else if (a == "--fft")       o.fftSize  = std::atoi(need(i));
         else if (a == "--fps")       o.fftRate  = std::atof(need(i));
+        else if (a == "--port")      o.port     = std::atoi(need(i));
         else if (a == "--pin")       o.pin      = need(i);
         else if (a == "--max-bw")    o.maxBw    = std::atof(need(i));
         else if (a == "--max-fps")   o.maxFps   = std::atof(need(i));
@@ -124,7 +127,8 @@ int main(int argc, char** argv) {
     // This is the whole point of the harness: these are the levers the operator gets, and the
     // ones Jr has been asking the server to honour with nothing on the other end.
     LocalSdrShim::setServeOnLan(true);          // bind 0.0.0.0, not loopback
-    LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open
+    LocalSdrShim::setVibeServerPort(o.port);    // 0 = auto-scan
+    LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open; loopback is always exempt
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerWebEnabled(o.web);
@@ -141,7 +145,10 @@ int main(int argc, char** argv) {
     if (port <= 0) {
         std::fprintf(stderr, "VibeServer: failed to start — %s\n",
                      err.empty() ? "(no reason given)" : err.c_str());
-        if (!o.useUsb)
+        // Only offer the source hint when the failure could plausibly BE the source — a port
+        // clash has nothing to do with rtl_tcp, and a wrong hint sends people hunting in the
+        // wrong place.
+        if (!o.useUsb && err.find("port") == std::string::npos)
             std::fprintf(stderr, "Is there an rtl_tcp listening on %s:%d?\n", o.tcpHost.c_str(), o.tcpPort);
         return 1;
     }
@@ -150,7 +157,7 @@ int main(int argc, char** argv) {
     else          std::printf("VibeServer listening on port %d  (IQ from rtl_tcp %s:%d)\n",
                               port, o.tcpHost.c_str(), o.tcpPort);
     std::printf("  clients: http://<this-machine>:%d/    auth: %s\n",
-                port, o.pin.empty() ? "OPEN (no PIN)" : "PIN required");
+                port, o.pin.empty() ? "OPEN (no PIN)" : "PIN required (except from this machine)");
     if (o.maxBw > 0 || o.maxFps > 0)
         std::printf("  ceilings: bandwidth %.0f Hz, spectrum %.0f fps\n", o.maxBw, o.maxFps);
     std::printf("Ctrl-C to stop.\n");
