@@ -211,6 +211,36 @@ VibeServer together, since apt does not distinguish:
 - **A failed upgrade must not brick it.** apt does not roll back. At minimum the §6 recovery route
   covers it; consider pinning a known-good version so a bad build can be stepped back to.
 
+### 5.2.2 The update sequence, and why not blue/green
+
+**The sequence:**
+
+1. An update is available → **download it**. Nothing is blocked and nobody notices; apt fetches
+   everything before it configures anything.
+2. **Clients connected?** Send the 5-minute warning notice (§5.2.1). **None connected?** Proceed
+   immediately — there is nobody to inconvenience.
+3. Install and restart. Downtime is **seconds**, not minutes: a systemd restart plus reopening USB
+   and starting the DSP, measured at roughly three seconds on the Mac build.
+4. Clients reconnect on their own.
+
+★ **Do NOT block new connections during the download.** Downloading disrupts nothing; only the
+install does. Refusing connections for the whole download costs availability for no benefit. Refuse
+(with "update in progress") only across the install itself, if at all — it is seconds.
+
+**Blue/green was considered and rejected: ONE DONGLE, ONE OWNER.** The idea of holding the new
+version, starting it, letting it take over and then cleaning up the old one cannot work here —
+libusb claims the RTL-SDR exclusively (proven the hard way: `rtl_tcp` holding the device produced
+`usb_claim_interface error -3`), and the listen port is likewise exclusive. The old process must
+FULLY RELEASE the radio before the new one can open it, so the handover is still a gap, and
+hand-rolling A/B deployment against a single receiver buys nothing that step 3 does not already give.
+
+★ **But steal blue/green's ONE genuine benefit: rollback.** Its real value was never the handover,
+it was that the old version still exists if the new one will not start — precisely the gap flagged
+above, since apt has no rollback. Cheap 80% version: **keep the previous `.deb`**, health-check the
+new service after restart, and if it fails to come up within ~60s, reinstall the old package
+automatically and report it prominently in the GUI. A failed update must never cost the owner their
+receiver.
+
 **Rejected:** a bespoke self-updater (needs its own hosting and signing anyway, and re-invents what
 apt already does well) and image-based A/B updaters such as RAUC/Mender (robust, but far too heavy
 for this).
