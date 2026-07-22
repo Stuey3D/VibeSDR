@@ -886,6 +886,11 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   $('sigFill').style.width = `${(sigSmooth * 100).toFixed(1)}%`;
   $('sigPeak').style.left = `${(sigPeak * 100).toFixed(1)}%`;
 
+  // Feed the squelch control the same live scale and signal the main meter is drawing, so the ball
+  // sits on exactly the level the fill is showing.
+  sqlScaleMin = dbMin; sqlScaleMax = dbMax; sqlSigNorm = sigSmooth;
+  drawSquelchBar(sigDb);
+
   // SQUELCH NEEDLE. The gate is a dBFS threshold and `sigDb` is dBFS, so the needle maps onto the
   // bar through exactly the same normalisation as the fill — it lands where the signal would have
   // to reach to open the gate, which is the only position that means anything.
@@ -909,6 +914,69 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
 
 /** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
 let squelchDb = -100;
+
+/** Push the current threshold everywhere it is applied. Squelch is a SERVER-side gate, so without
+ *  the spec call the client could not tell a closed gate from a muted tab. */
+function applySquelch(db: number, persist = true) {
+  squelchDb = db;
+  spec?.setSquelch(db);
+  if (audio) audio.squelchDb = db;
+  // The plain slider used to persist under 'squelch'; the restore path still reads that key, so the
+  // bar must keep writing it or a reload loses the setting AND resurrects the false muted-tab
+  // warning. Restore itself passes persist=false — no point rewriting what we just read.
+  if (persist) savePref('squelch', db);
+}
+
+/** Draw the live bar + threshold ball. Called every meter frame with the raw (unsmoothed) signal
+ *  so the red "gated" state is honest — the smoothed fill decays too slowly to judge the gate by. */
+function drawSquelchBar(sigDbRaw: number) {
+  const bar = document.getElementById('sqlBar');
+  if (!bar) return;
+  const on = squelchDb > SQL_OFF;
+  bar.classList.toggle('on', on);
+  const fill = document.getElementById('sqlFill') as HTMLElement | null;
+  if (fill) fill.style.width = `${(Math.max(0, Math.min(1, sqlSigNorm)) * 100).toFixed(1)}%`;
+  if (on) {
+    const span = Math.max(1, sqlScaleMax - sqlScaleMin);
+    const frac = Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / span));
+    const n = document.getElementById('sqlNeedle') as HTMLElement | null;
+    if (n) n.style.left = `${(frac * 100).toFixed(1)}%`;
+    bar.classList.toggle('closed', sigDbRaw < squelchDb);
+  } else {
+    bar.classList.remove('closed');
+  }
+  const note = document.getElementById('sqlNote');
+  if (note) note.textContent = on
+    ? 'Audio passes only above the ball. The level you set is where it stays — the bar underneath moves with the signal, the threshold does not.'
+    : 'Off — audio always passes. Drag the ball up from the left to set a threshold.';
+}
+
+/** Pointer handling for the squelch bar. Drag anywhere on the bar; drag off the LEFT edge to turn
+ *  squelch off — the same gesture as "no threshold at all", not a separate control to find. */
+function setupSquelchBar() {
+  const bar = document.getElementById('sqlBar');
+  if (!bar) return;
+  const applyFromX = (clientX: number) => {
+    const r = bar.getBoundingClientRect();
+    const frac = (clientX - r.left) / Math.max(1, r.width);
+    if (frac < -0.04) { applySquelch(SQL_OFF); return; }   // off the left edge = OFF
+    const f = Math.max(0, Math.min(1, frac));
+    applySquelch(Math.round(sqlScaleMin + f * (sqlScaleMax - sqlScaleMin)));
+  };
+  let dragging = false;
+  const down = (e: PointerEvent) => { dragging = true; bar.setPointerCapture(e.pointerId); applyFromX(e.clientX); e.preventDefault(); };
+  const move = (e: PointerEvent) => { if (dragging) { applyFromX(e.clientX); e.preventDefault(); } };
+  const up   = (e: PointerEvent) => { dragging = false; try { bar.releasePointerCapture(e.pointerId); } catch {} };
+  bar.addEventListener('pointerdown', down);
+  bar.addEventListener('pointermove', move);
+  bar.addEventListener('pointerup', up);
+  bar.addEventListener('pointercancel', up);
+}
+/** The live meter scale, updated each frame — the squelch bar drag maps pointer x through it. */
+let sqlScaleMin = -100, sqlScaleMax = -20;
+/** The last smoothed signal fraction (0..1), so the bar can colour the fill red when gated. */
+let sqlSigNorm = 0;
+const SQL_OFF = -100;
 
 /** dBFS -> S-unit, 6 dB per unit (lifted from the skin's _toSUnit ladder). */
 function toSUnit(dbfs: number): string {
@@ -2653,12 +2721,7 @@ function buildMenu() {
   };
 
   // ── Audio (server-side DSP in the shim) ──────────────────────────────────
-  slider('sql', 'sqlVal',
-    (v) => (v <= -100 ? 'OFF' : `${v} dB`),
-    // Mirror the setting into the audio engine: squelch is applied SERVER-side, so
-    // without this the client cannot tell a closed squelch from a muted tab.
-    (v) => { spec!.setSquelch(v); if (audio) audio.squelchDb = v; squelchDb = v; },
-    'squelch');
+  setupSquelchBar();
 
   slider('nr', 'nrVal',
     (v) => (v === 0 ? 'OFF' : `${v}%`),
@@ -2796,7 +2859,7 @@ function pushSettingsToServer() {
   // restores the squelch but not the engine's knowledge of it — and the false
   // "IS THE TAB MUTED?" warning comes straight back.
   const sql = num('squelch');
-  if (sql !== undefined) { spec.setSquelch(sql); if (audio) audio.squelchDb = sql; squelchDb = sql; }
+  if (sql !== undefined) applySquelch(sql, false);
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nr / 100);
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);

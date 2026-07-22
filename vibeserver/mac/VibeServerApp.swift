@@ -95,6 +95,16 @@ final class Server: ObservableObject {
         onChange?()
     }
 
+    /// Rescan for radios, and start serving if a radio has appeared and we were idle.
+    ///
+    /// ★ Deliberately NOT `reconnectRadio()`, which stops and restarts. If a radio is already
+    /// serving happily, pressing Refresh must not drop the listener — the button means "look
+    /// again", not "start over".
+    func rescan() {
+        refreshDevices()
+        if !running && deviceCount > 0 { start() }
+    }
+
     func start() {
         lastError = nil
         var cfg = VsConfig()
@@ -213,6 +223,49 @@ final class Server: ObservableObject {
     }
 
     var address: String { "http://localhost:\(port)/" }
+
+    /// The LAN IPv4 of the first real interface, or nil when there is no network.
+    ///
+    /// ★ "localhost" is useless to the person the server is FOR. An owner needs the string to hand
+    /// to someone else, and Android already shows it — a Mac that only offers localhost looks like
+    /// it cannot be reached from anywhere, which is precisely backwards.
+    private func lanIPv4() -> String? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return nil }
+        defer { freeifaddrs(head) }
+        var best: String?
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let f = ptr.pointee
+            guard f.ifa_addr?.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+            let name = String(cString: f.ifa_name)
+            // Skip loopback and the software bridges/tunnels a Mac is full of; en* is the real one.
+            guard name != "lo0", name.hasPrefix("en") else { continue }
+            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(f.ifa_addr, socklen_t(f.ifa_addr.pointee.sa_len),
+                              &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let ip = String(cString: buf)
+            if best == nil { best = ip }
+            if name == "en0" { return ip }   // prefer the primary interface
+        }
+        return best
+    }
+
+    /// Every way in, best first — for the menu and for copying to a listener.
+    var accessAddresses: [String] {
+        guard running, port > 0 else { return [] }
+        var out: [String] = []
+        if let ip = lanIPv4() { out.append("\(ip):\(port)") }
+        // Bonjour name, as advertised. Host.current().name already carries the .local suffix.
+        if let h = Host.current().name, h.hasSuffix(".local") { out.append("\(h):\(port)") }
+        return out
+    }
+
+    /// Live throughput, as the listener is actually being served right now.
+    var liveRateLine: String? {
+        guard running, status.clientConnected else { return nil }
+        let kbs = (status.specBytesPerSec + status.audioBytesPerSec) / 1024.0
+        return String(format: "%.0f KB/s · %.1f fps", kbs, status.fftRate)
+    }
 
     /// Who is listening, for the takeover warning. Empty when nobody is.
     var listenerAddr: String {
@@ -422,6 +475,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // ── Actions ──────────────────────────────────────────────────────────────
     @objc private func openBrowser() { server.openInBrowser() }
+    @objc private func copyAddress(_ sender: NSMenuItem) {
+        guard let a = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("http://\(a)/", forType: .string)
+    }
     @objc private func reconnectRadio() { server.reconnectRadio(); render() }
     @objc private func toggleServing() { server.running ? server.stop() : server.start(); render() }
     @objc private func quit() { server.stop(); NSApp.terminate(nil) }
@@ -464,12 +522,24 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Radio") {
-                LabeledContent("Receiver", value: server.deviceCount > 0 ? server.deviceName : "none connected")
-                TextField("Frequency (Hz)", value: $server.centreHz, format: .number)
-                Picker("Mode", selection: $server.mode) {
+                // ★ AT THE TOP, and always visible. A radio plugged in after launch is invisible
+                // until something rescans, and the only workaround was quitting the app — which is
+                // an absurd thing to ask of someone who just plugged a USB stick in.
+                HStack {
+                    LabeledContent("Receiver", value: server.deviceCount > 0 ? server.deviceName : "none connected")
+                    Spacer()
+                    Button("Refresh") { server.rescan() }
+                }
+                // ★ These are the LISTENER'S STARTING POINT, not a property of the radio — the
+                // web client remembers where it was last, so in practice this only decides what a
+                // brand-new listener lands on. Labelled so an owner can tell that from the name.
+                TextField("Listener's starting frequency (Hz)", value: $server.centreHz, format: .number)
+                Picker("Listener's starting mode", selection: $server.mode) {
                     Text("WFM").tag("wfm"); Text("AM").tag("am")
                     Text("USB").tag("usb"); Text("LSB").tag("lsb"); Text("NFM").tag("nfm")
                 }
+                Text("Where a listener's radio is tuned when they first open the page. Their browser remembers where they were after that, so this mostly affects first-time visitors.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Access") {
                 TextField("PIN", text: $server.pin, prompt: Text("Open — no PIN"))
@@ -503,9 +573,11 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Advanced · Network") {
+                // ★ "0" is a programmer's sentinel, not an answer to a question a person asked.
+                // Say what the default IS, then what typing here would do.
                 TextField("Port", value: $server.wantedPort, format: .number,
-                          prompt: Text("Automatic"))
-                Text("Leave at 0 unless something else needs this port.")
+                          prompt: Text("48000"))
+                Text("VibeServer uses port 48000. Leave this at 0 to keep that — it will pick the next free port if 48000 is already taken. Enter a number only if you need a specific port, for example to match a router rule you have already set up.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if server.radioLost {
