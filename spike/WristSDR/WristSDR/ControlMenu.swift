@@ -1234,9 +1234,9 @@ struct SquelchView: View {
   var body: some View {
     VStack(spacing: 10) {
       Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
-      Text(pos < 0.02 ? "Off" : (link.squelchClosed ? "Muting" : "Passing"))
+      Text(pos < 0.02 ? "Off" : (link.level < pos ? "Muting" : "Passing"))
         .font(.system(size: 13, weight: .bold))
-        .foregroundColor(pos < 0.02 ? .secondary : (link.squelchClosed ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
+        .foregroundColor(pos < 0.02 ? .secondary : (link.level < pos ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
       SquelchBar(level: link.level, pos: pos)
       Text("Point the needle just above the noise.\nTurn the crown · tap Done.")
         .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
@@ -1248,6 +1248,9 @@ struct SquelchView: View {
     .digitalCrownRotation($pos, from: 0, through: 1, by: 0.02,
                           sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
     .onChange(of: pos) { _, p in link.setSquelch(p < 0.02 ? -1 : p) }
+    .onReceive(Timer.publish(every: 1.0 / 15.0, on: .main, in: .common).autoconnect()) { _ in
+      link.pollSignal()   // the waterfall render driver pauses under the sheet — keep the bar live
+    }
     .onAppear { pos = link.sql < 0 ? 0 : link.sql; focused = true }
   }
 }
@@ -1260,16 +1263,17 @@ struct SquelchBar: View {
   var body: some View {
     GeometryReader { geo in
       let w = geo.size.width
+      let closed = pos >= 0.02 && level < pos   // signal below the needle → muting
       ZStack(alignment: .leading) {
         Capsule().fill(.white.opacity(0.15))
-        Capsule().fill(.white.opacity(0.9))
+        Capsule().fill(closed ? Color(red: 1, green: 0.3, blue: 0.3).opacity(0.9) : .white.opacity(0.9))
           .frame(width: w * min(1, max(0, level)))
           .animation(.easeOut(duration: 0.1), value: level)
         if pos >= 0.02 {
           let x = w * min(1, max(0, pos))
-          Rectangle().fill(.red).frame(width: 2).offset(x: x - 1)
+          Rectangle().fill(.green).frame(width: 2).offset(x: x - 1)
           Image(systemName: "arrowtriangle.down.fill")
-            .font(.system(size: 9)).foregroundColor(.red).offset(x: x - 5, y: -11)
+            .font(.system(size: 9)).foregroundColor(.green).offset(x: x - 5, y: -11)
         }
       }
     }

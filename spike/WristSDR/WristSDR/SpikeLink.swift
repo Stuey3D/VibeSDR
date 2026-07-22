@@ -368,7 +368,6 @@ final class SpikeLink: ObservableObject {
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
     let mt = "\(Int(client.signalDb.rounded()))dB"
     if meter != mt { meter = mt }
-    evalSquelch()   // client-side gate on the live bar — see setSquelch
 
     // A new row was drawn → the spectrum is alive.
     if client.rowsPushed != lastRowsPushed {
@@ -496,12 +495,12 @@ final class SpikeLink: ObservableObject {
   /// companion's quantisation so the meter feels the same.
   func volume(delta: Int) {
     volume = min(1, max(0, volume + Double(delta) / 16))
-    applyVolume()   // drives the engine's real output gain (respects mute + squelch)
+    if !muted { client?.setVolume(volume) }   // drives the engine's real output gain
   }
 
   func setMuted(_ m: Bool) {
     muted = m
-    applyVolume()   // real mute/unmute, not just a glyph (respects squelch)
+    client?.setVolume(m ? 0 : volume)          // real mute/unmute, not just a glyph
   }
 
   func setMode(_ m: String) {
@@ -633,33 +632,25 @@ final class SpikeLink: ObservableObject {
   /// because each client seeds its own default (5) at start — see ContentView.applyTone.
   func setAutoContrast(_ v: Double) { client?.setAutoContrast(v) }
 
-  // ── Squelch — a client-side audio gate on OUR OWN signal bar ────────────────────
-  // Set VISUALLY: point a needle at where the live bar hovers. Because the gate acts on the SAME
-  // `level` the bar shows, the units never matter — which is the whole reason squelch is a pain to set
-  // by number. Threshold, gate and line are all one 0..1 scale, so what you see is what you get.
-  @Published var sql = -1.0             // threshold as a 0..1 bar position, -1 = off (drives the line)
-  @Published var squelchClosed = false  // gate currently muting? drives the breathing "SQL" + bar dim
-  private var squelchOpenUntil = 0.0    // release tail (s) so voice gaps don't chatter the gate
+  // ── Squelch ─────────────────────────────────────────────────────────────────
+  // The GATE is SERVER-SIDE (client.setSquelch → radiod's audio gate) — proven to mute correctly, same
+  // as the phone/web. The bar+needle is just how you SET it visually: the blank bar is driven off Jr's
+  // live signal reading, the red needle off the squelch value. `sql` (0..1) is the needle position; the
+  // indicator's CLOSED state is derived (level < needle), like the phone.
+  @Published var sql = -1.0
 
-  /// `pos`: 0..1 bar position; < 0 = off.
+  /// `pos`: 0..1 needle position on the signal bar; < 0 = off. Maps to a 0..50 dB SNR for the server.
   func setSquelch(_ pos: Double) {
     sql = pos < 0 ? -1 : min(1, pos)
-    if sql < 0 { squelchClosed = false; squelchOpenUntil = 0; applyVolume() }
+    client?.setSquelch(sql < 0 ? -999 : sql * 50)
   }
 
-  /// Per-frame gate: mute when the live bar sits below the needle (with a 0.4 s release tail so the
-  /// gaps between words don't chatter it). Called from the frame update after `level` refreshes.
-  private func evalSquelch() {
-    guard sql >= 0 else { if squelchClosed { squelchClosed = false; applyVolume() }; return }
-    let now = ProcessInfo.processInfo.systemUptime
-    let open: Bool
-    if level >= sql { squelchOpenUntil = now + 0.4; open = true }
-    else            { open = now < squelchOpenUntil }
-    if squelchClosed == open { squelchClosed = !open; applyVolume() }
+  /// Keep the signal bar live while the squelch SHEET covers the waterfall (its 20fps render driver
+  /// pauses when hidden, freezing `level`). The editor ticks this ~15fps so the bar bounces.
+  func pollSignal() {
+    client?.drainSpectrum(now: ProcessInfo.processInfo.systemUptime)
+    if let l = client?.signalLevel, abs(level - l) > 0.003 { level = l }
   }
-
-  /// Effective output gain: silenced by MUTE or a CLOSED squelch, else the user's volume.
-  private func applyVolume() { client?.setVolume((muted || squelchClosed) ? 0 : volume) }
 }
 
 /// A selectable waterfall palette: an id, a display name, and the gradient stops (used both to build
