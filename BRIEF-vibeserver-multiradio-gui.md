@@ -195,29 +195,54 @@ descriptors, so the string is a hint, never proof.
 `auto below N Hz`), upconverter offset, tunable frequency range, bias-T policy, gain range, and
 which of these the listener may touch versus admin-only versus locked.
 
-### ★ DECIDED: VibeServer will NOT write EEPROMs
+### ★★ REVISED DECISION: an EEPROM serial writer, gated hard
 
-Stuart, 2026-07-22: *"I'd rather not build in the EEPROM editor as I don't want to potentially brick
-a user's RTL-SDR"* — noting that SDR Console does offer it, so it is not unheard of.
+**First position (2026-07-22):** do not build it — bricking risk, no value added over
+`rtl_eeprom -s`, and the port-path fallback means nobody NEEDS a unique serial.
 
-The right call, and cheap to make **because the port-path fallback means nobody ever needs it**. An
-EEPROM tweak is a convenience for users who want settings to follow a dongle between sockets, not a
-requirement of the design. Were identity to depend on unique serials, we would be forced to offer
-it; it does not, so we are not.
+**Revised the same evening, by a case that breaks the reasoning.** Stuart:
 
-The rest of the reasoning, so this is not revisited as "a nice convenience":
+> "If I have 2 RTL-SDR V4s sharing 1 antenna and I am using one of the bias-Ts to power that
+> antenna and the other has a DC block on it, I don't want to create a profile with the bias-T
+> enabled and one with it disabled and have the sticks switch profiles on reboot — and you then
+> have a bias-T sending power into a DC block and an antenna receiving no power."
 
-- **The downside is a user's hardware, permanently.** A write interrupted by an unplug, or a clone
-  with a different EEPROM layout — and there are many clones — leaves a paperweight.
-- **We would add nothing.** `rtl_eeprom -s` ships with the rtl-sdr tools and is what the community
-  already uses and documents.
-- **We would own the support burden.** Another product offering it does not transfer to us; we
-  cannot repair a bricked dongle for someone, and "the SDR app bricked my radio" is a reputation
-  that would outlive the feature.
+Port-path identity is stable per SOCKET, so it holds only while nothing physically moves. Here the
+configuration encodes a fact about the COAX — which lead has the DC block — and if the two dongles
+swap sockets, the software cannot tell, because their serials are identical. The result is a
+powered LNA left dead and DC pushed into a block. That is not a convenience gap; it is a hazard
+that only a unique serial removes.
 
-What we do instead: DETECT colliding serials, explain the consequence in one plain sentence, and
-mention `rtl_eeprom -s` as something the user may choose to run themselves. Their tool, their
-decision, their risk.
+(Stuart's own dongles already have unique serials, set for OpenWebRX, which requires them — further
+evidence that anyone running several receivers ends up needing this.)
+
+**So: build it, as an advanced tool, gated hard.**
+
+- **Admin password required**, and a typed confirmation — the user types the NEW SERIAL to proceed,
+  not just "OK". A slip should not be able to reach the hardware.
+- **Explicit warning, in plain words:** this permanently modifies the receiver; do not unplug it or
+  power off the machine while it is happening; if interrupted the dongle may be unusable.
+- **The radio must be STOPPED first** — never write to a device that is streaming.
+- **Only the serial is touched.** Vendor, product and every other byte are written back unchanged.
+- ★ **Refuse on an unrecognised EEPROM layout.** Clones exist with different layouts, and writing a
+  known offset into an unknown map is precisely how a dongle is bricked. Read first, verify the
+  layout matches what we expect, and refuse politely if it does not — `rtl_eeprom` remains
+  available to anyone who wants to take that risk themselves.
+- **Read back and verify** after writing, and say plainly whether it took.
+
+### ★ AND A RULE THAT PROTECTS PEOPLE WHO NEVER USE IT
+
+The writer helps those who run it. This protects everyone else, and should exist regardless:
+
+**Bias-T is never auto-applied at startup to a radio identified only by port path.** If identity
+rests on which socket a dongle is in — i.e. serials collide — bias-T starts OFF and must be enabled
+deliberately for that session. Only a radio identified by a UNIQUE SERIAL may have bias-T restored
+automatically on boot.
+
+The reasoning is Stuart's scenario exactly: the failure is silent, it is physical, and it happens at
+boot when nobody is watching. Making the dangerous setting require either a provably-identified
+device or a human present removes the whole class of accident. Direct sampling deserves the same
+treatment on the same grounds, though its failure costs reception rather than hardware.
 
 ### Hot-plug and process assignment
 
