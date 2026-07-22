@@ -153,6 +153,30 @@ That is honest, actionable, and it costs the user nothing if they do not care �
 notes, is the common case: *"not so much a problem if a user has 4 v4s all connected to the same
 antenna using the same settings."*
 
+### ★ DECIDED: VibeServer will NOT write EEPROMs
+
+Stuart, 2026-07-22: *"I'd rather not build in the EEPROM editor as I don't want to potentially brick
+a user's RTL-SDR"* — noting that SDR Console does offer it, so it is not unheard of.
+
+The right call, and cheap to make **because the port-path fallback means nobody ever needs it**. An
+EEPROM tweak is a convenience for users who want settings to follow a dongle between sockets, not a
+requirement of the design. Were identity to depend on unique serials, we would be forced to offer
+it; it does not, so we are not.
+
+The rest of the reasoning, so this is not revisited as "a nice convenience":
+
+- **The downside is a user's hardware, permanently.** A write interrupted by an unplug, or a clone
+  with a different EEPROM layout — and there are many clones — leaves a paperweight.
+- **We would add nothing.** `rtl_eeprom -s` ships with the rtl-sdr tools and is what the community
+  already uses and documents.
+- **We would own the support burden.** Another product offering it does not transfer to us; we
+  cannot repair a bricked dongle for someone, and "the SDR app bricked my radio" is a reputation
+  that would outlive the feature.
+
+What we do instead: DETECT colliding serials, explain the consequence in one plain sentence, and
+mention `rtl_eeprom -s` as something the user may choose to run themselves. Their tool, their
+decision, their risk.
+
 ### Hot-plug and process assignment
 
 Each radio's process is bound to a **resolved identity**, not to whatever appears next:
