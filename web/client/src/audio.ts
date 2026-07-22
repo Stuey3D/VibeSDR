@@ -132,10 +132,20 @@ export class AudioPlayer {
    * without it, 6.8% and flat — lower than Safari. Nothing else moved that number, and several
    * plausible-looking render fixes were tried first and did not.
    *
-   * So Now Playing on Chromium is NOT worth this. It is a nicety; the leak is catastrophic. The
-   * anchor now only runs behind `#anchor`, for experimenting with a leak-free version — the blob
-   * URL above is the first thing to retest, and the memory figure must be watched for MINUTES, not
-   * seconds, before believing any of it.
+   * ★★ THE BLOB URL WAS TESTED TOO, AND LEAKS IDENTICALLY — straight back to 38%. So it is not the
+   * URI scheme: Chromium leaks on a LOOPING MEDIA ELEMENT itself. The controls do come back, so the
+   * mechanism works perfectly; it is simply unaffordable. DO NOT retry this with another URL form,
+   * another container, or a longer clip — a longer clip only makes the leak slower, and a slow leak
+   * is worse than a fast one because it hides.
+   *
+   * Now Playing on Chromium is therefore ABANDONED until Chromium changes or a fundamentally
+   * different mechanism appears (something that is not a looping element — a real streamed
+   * response, or whatever Chromium eventually accepts for Web Audio). The cost of the feature is a
+   * browser that eats 13 GB and stops responding; the cost of not having it is a missing widget.
+   * That is not a close call.
+   *
+   * `#anchor` still exists purely so the experiment can be repeated cheaply if the landscape
+   * changes. Watch MEMORY for minutes, not CPU for seconds.
    */
   private static _needsAnchor(): boolean {
     if (!location.hash.includes('anchor') || location.hash.includes('noanchor')) return false;

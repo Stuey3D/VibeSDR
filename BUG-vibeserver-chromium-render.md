@@ -25,9 +25,17 @@ media pipeline, not in our objects. The self-profiler is what proved our drawing
 wall on Chromium) and turned "it must be our rendering" into "it cannot be our rendering" — which
 is what finally pointed at a subsystem rather than a draw call.
 
-Now Playing on Chromium is therefore OFF by default. It is a nicety; the leak was catastrophic. The
-anchor survives behind `#anchor` for experimenting with a leak-free version (now served as a blob
-URL rather than a data: URI — UNVERIFIED). Any retest must watch memory for MINUTES, not seconds.
+Now Playing on Chromium is therefore OFF by default, and after a second test, ABANDONED.
+
+★★ **The blob-URL variant was tested and leaks identically** — straight back to 38%. So it is not
+the URI scheme; **Chromium leaks on a looping media element itself**. The controls do reappear, so
+the mechanism works perfectly — it is simply unaffordable. Do NOT retry with another URL form,
+container, or a longer clip: a longer clip only makes the leak slower, and a slow leak is worse than
+a fast one because it hides.
+
+Chromium therefore has no Now Playing and no media-key control until Chromium changes or some
+fundamentally different mechanism appears. Safari keeps both (it attaches happily to the MediaStream
+element). `#anchor` remains only so the experiment can be repeated cheaply if the landscape shifts.
 
 ---
 
