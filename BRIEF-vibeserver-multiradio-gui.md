@@ -105,6 +105,67 @@ existing document rather than sprouting per-radio files:
 - Identify dongles by **serial**, not index, or unplugging one renumbers the rest and a listener
   lands on the wrong receiver. Index is the fallback when a dongle has no serial.
 
+## 5.1 ★★ DEVICE IDENTITY — the hard part, and the one that can damage hardware
+
+Stuart: *"if a user has a v3 or a dongle that requires direct sampling active, and another where it
+is not needed, we must not accidentally put the direct-sampling radio in the server that has direct
+sampling active."* And the reason that is hard: *"with RTL-SDRs that will need an EEPROM tweak to
+change the serial, otherwise they all get detected as 1 radio."*
+
+He is right. Stock RTL-SDRs ship with the same serial (`00000001` on most, including many v3/v4
+units), so **serial alone cannot distinguish them**. Getting this wrong is not cosmetic:
+
+- **Direct sampling** applied to a dongle that does not need it = a receiver that appears broken.
+- **Bias-T** applied to the wrong dongle = DC pushed up a feed that may not tolerate it. This is the
+  one that can cost someone an LNA or worse, and it is why identity must be *conservative*.
+
+### The resolution order
+
+Identify a physical dongle by the first of these that is unambiguous:
+
+1. **Serial** — when it is unique across the attached dongles. The best case: settings follow the
+   DONGLE wherever it is plugged. Users who want this set it once with `rtl_eeprom -s`.
+2. **USB port path** (bus + port numbers, from libusb, which we already link) — stable across
+   replugs and reboots, because it describes the SOCKET. This is the answer when serials collide,
+   and it is intuitive to explain: *"the v3 lives in the left-hand hub port."*
+3. **Index** — last resort only, and never persisted, because it renumbers the moment another
+   dongle is unplugged. Index is what makes settings land on the wrong radio.
+
+Store BOTH the serial and the port path in each radio's config, and match on the best available.
+
+### ★ An unknown dongle gets SAFE DEFAULTS, never someone else's config
+
+If a newly-appeared dongle matches no configured radio, it must NOT inherit the settings of a radio
+that happens to be free. It starts with **direct sampling off, bias-T off, automatic gain**, and is
+presented in the GUI as a new device awaiting setup. Inheriting is exactly how a bias-T ends up
+somewhere it should not be.
+
+### ★ Detect the collision and SAY so
+
+When two attached dongles report the same serial, the GUI must tell the owner plainly, once:
+
+> Two receivers report the same serial number (`00000001`). VibeServer will tell them apart by which
+> USB socket they are plugged into, so their settings follow the socket, not the dongle. If you move
+> them, their settings move too. To bind settings to a specific dongle instead, give it its own
+> serial with `rtl_eeprom -s`.
+
+That is honest, actionable, and it costs the user nothing if they do not care — which, as Stuart
+notes, is the common case: *"not so much a problem if a user has 4 v4s all connected to the same
+antenna using the same settings."*
+
+### Hot-plug and process assignment
+
+Each radio's process is bound to a **resolved identity**, not to whatever appears next:
+
+- A dongle appearing that matches a configured radio → that radio's process starts (or reclaims it),
+  with that radio's config.
+- A dongle appearing that matches nothing → offered as a new radio; nothing is auto-assigned.
+- A dongle disappearing → that radio reports offline and its process waits for its OWN device to
+  return (already implemented in the shim's hot-plug watch, which matches by serial and refuses to
+  grab a different dongle).
+- Two radios must never resolve to the same physical device; the hub rejects that configuration
+  rather than starting two processes fighting over one dongle.
+
 ## 6. Admin and lockdown
 
 The two-level model already agreed (foundations amendment) applies per radio:
@@ -141,6 +202,9 @@ DIFFERENT radios, which is the model the multi-client brief already chose.
 5. Both radios appear separately in the phone/watch picker over Bonjour with no client changes.
 6. Admin gates what it should: a non-admin cannot change ports, ceilings, or a `locked` bias-T; the
    host machine is never asked for a PIN.
-7. Swapping which USB socket each dongle is in does NOT swap which radio a listener reaches
-   (serial-keyed, not index-keyed).
-8. Measure and record RAM per radio process on a Pi before advertising a maximum radio count.
+7. **Identity:** with UNIQUE serials, moving a dongle between USB sockets keeps its settings. With
+   COLLIDING serials (the stock case), settings follow the socket and the GUI has said so. In
+   neither case does a listener reach a different receiver than the one they chose.
+8. **Safety:** a dongle that matches no configured radio starts with direct sampling OFF and bias-T
+   OFF, and never inherits another radio's settings.
+9. Measure and record RAM per radio process on a Pi before advertising a maximum radio count.

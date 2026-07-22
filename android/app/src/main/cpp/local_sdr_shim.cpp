@@ -1048,6 +1048,16 @@ struct LocalSdrShim::Impl {
     std::vector<float> fftAccum;    // running sum for FFT averaging (fftshifted)
     int accumCount = 0;
     std::thread rtlThread;
+    // ── Dongle hot-plug ─────────────────────────────────────────────────────
+    // `stopping` distinguishes OUR cancel from the device disappearing; `deviceLost` is the state
+    // everything else reads. `usbIndex` is what we reopen, and `usbSerial` is what we reopen it BY,
+    // because indices renumber when another dongle is unplugged.
+    std::atomic<bool> stopping{false};
+    std::atomic<bool> deviceLost{false};
+    int usbIndex = -1;
+    std::string usbSerial;
+    std::thread hotplugThread;
+    std::atomic<bool> hotplugRun{false};
 
     // IQ producer/consumer. CRITICAL: rtlsdr_read_async's callback runs on
     // libusb's event-handling thread, so it must return fast — running the heavy
@@ -2750,6 +2760,93 @@ struct LocalSdrShim::Impl {
         }
     }
 
+    // ── Dongle hot-plug: notice it go, take it back when it returns ─────────────────────────
+    //
+    // A server that keeps serving a page it can never fill is worse than one that says it is
+    // broken. And on a headless Pi "unplug the dongle, reboot the box" is not a recovery story —
+    // nobody is there to do it. So: tell the clients, then watch for the dongle coming back and
+    // pick it up automatically.
+
+    /** Tell every connected client whether we currently have a radio. They draw the message. */
+    void notifyDeviceState() {
+        std::shared_ptr<net::Socket> sock;
+        { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
+        if (!sock || !sock->isOpen()) return;
+        sendText(sock, deviceLost.load()
+            ? "{\"type\":\"device\",\"present\":false}"
+            : "{\"type\":\"device\",\"present\":true}");
+    }
+
+    /** Re-find our dongle after a replug. Prefer the SERIAL — indices renumber when a different
+     *  dongle is unplugged, and reopening by index can hand the listener a different receiver. */
+    int findOurDevice() const {
+        const uint32_t n = rtlsdr_get_device_count();
+        if (n == 0) return -1;
+        if (!usbSerial.empty()) {
+            for (uint32_t i = 0; i < n; i++) {
+                char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
+                if (rtlsdr_get_device_usb_strings(i, mfr, prd, ser) == 0 && usbSerial == ser)
+                    return (int)i;
+            }
+            return -1;      // ours specifically is not back yet — do NOT grab someone else's
+        }
+        return (usbIndex >= 0 && (uint32_t)usbIndex < n) ? usbIndex : 0;
+    }
+
+    /** Reopen and restart capture. Returns false if the device still is not there. */
+    bool reopenDevice() {
+        const int idx = findOurDevice();
+        if (idx < 0) return false;
+
+        if (rtlThread.joinable()) rtlThread.join();     // the old capture thread has exited
+        if (dev) { rtlsdr_close(dev); dev = nullptr; }
+
+        if (rtlsdr_open(&dev, (uint32_t)idx) != 0 || !dev) { dev = nullptr; return false; }
+
+        // Re-apply everything the device forgot by being unplugged. Same order as start().
+        rtlsdr_set_sample_rate(dev, (uint32_t)sampleRate);
+        tuneHw(rtlCenter.load());
+        if (lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(dev, 0);
+        else { rtlsdr_set_tuner_gain_mode(dev, 1); rtlsdr_set_tuner_gain(dev, lastGainTenthDb); }
+        rtlsdr_reset_buffer(dev);
+
+        const uint32_t bufLen = rtlBufLenForRate(sampleRate);
+        Impl* self = this;
+        rtlThread = std::thread([self, bufLen]{
+            vibeThreadName("vibe-rtl");
+            rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
+            if (!self->stopping.load()) {
+                self->deviceLost.store(true);
+                LOGE("RTL-SDR stopped delivering — device unplugged or failed");
+                self->notifyDeviceState();
+            }
+        });
+        deviceLost.store(false);
+        LOGI("RTL-SDR back — capture resumed on device %d", idx);
+        notifyDeviceState();
+        return true;
+    }
+
+    void startHotplugWatch() {
+        if (hotplugRun.exchange(true)) return;
+        hotplugThread = std::thread([this]{
+            vibeThreadName("vibe-hotplug");
+            while (hotplugRun.load()) {
+                // 2s: fast enough that a replug feels immediate, slow enough that scanning USB
+                // costs nothing measurable on a Pi.
+                for (int i = 0; i < 20 && hotplugRun.load(); i++)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (!hotplugRun.load()) break;
+                if (deviceLost.load() && !stopping.load()) reopenDevice();
+            }
+        });
+    }
+
+    void stopHotplugWatch() {
+        if (!hotplugRun.exchange(false)) return;
+        if (hotplugThread.joinable()) hotplugThread.join();
+    }
+
     void startDspThread() {
         dspRunning.store(true);
         dspThread = std::thread([this]{ dspLoop(); });
@@ -2968,10 +3065,16 @@ int LocalSdrShim::start(int fd, int vid, int pid,
             delete impl; return -1;
         }
         LOGI("USB device %d opened: %s", index, rtlsdr_get_device_name((uint32_t)index));
+        // Keep BOTH: the serial is how we find this same dongle again after a replug (indices
+        // renumber when another one is unplugged); the index is the fallback when it has no serial.
+        impl->usbIndex = index;
+        { char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
+          if (rtlsdr_get_device_usb_strings((uint32_t)index, mfr, prd, ser) == 0) impl->usbSerial = ser; }
     }
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
     // Offset tuning: physically tune HW_OFFSET_HZ above the logical centre.
     impl->tuneHw(centerFreq);
+    impl->lastGainTenthDb = gainTenthDb;   // re-applied if the dongle is replugged
     if (gainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
     else { rtlsdr_set_tuner_gain_mode(impl->dev, 1); rtlsdr_set_tuner_gain(impl->dev, gainTenthDb); }
     rtlsdr_reset_buffer(impl->dev);
@@ -3012,7 +3115,18 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         impl->rtlThread = std::thread([impl, bufLen]{
             vibeThreadName("vibe-rtl");
             rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, bufLen);
+            // ★ WE ONLY GET HERE WHEN THE IQ STOPS. Either we cancelled it, or the dongle was
+            // UNPLUGGED — and this used to be the same thing: the thread exited silently, nothing
+            // noticed, and the server carried on serving a page that could never show a signal
+            // again. On a desktop that is a puzzling black screen; on a headless Pi it needed a
+            // reboot to recover. Say so, and let the watchdog put it right.
+            if (!impl->stopping.load()) {
+                impl->deviceLost.store(true);
+                LOGE("RTL-SDR stopped delivering — device unplugged or failed");
+                impl->notifyDeviceState();
+            }
         });
+        impl->startHotplugWatch();
     }
 
     p = impl;
@@ -3271,6 +3385,8 @@ void LocalSdrShim::stopLocked() {
 
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.
+    impl->stopping.store(true);      // so the capture thread knows this is US, not an unplug
+    impl->stopHotplugWatch();
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
     if (impl->useSpy()) {
         impl->tcpRunning.store(false);

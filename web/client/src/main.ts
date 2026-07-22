@@ -247,6 +247,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onSummon: () => onSummoned(),
+    onDevice: (present) => showDeviceBanner(present),
     onHwInfo: (gains, rates, locked, maxFps, forceIdle) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
@@ -1275,6 +1276,31 @@ function flashHere() {
 window.addEventListener('hashchange', () => {
   if (location.hash === '#here') flashHere();
 });
+
+/**
+ * The server has no radio — the dongle was unplugged, or it failed.
+ *
+ * Say so, prominently. The alternative is what actually happened: the page kept serving, the
+ * waterfall went black, the controls still worked, and nothing anywhere explained why. The server
+ * watches for the dongle coming back and resumes on its own, so the message promises exactly that
+ * rather than telling anyone to restart something.
+ */
+function showDeviceBanner(present: boolean) {
+  const id = 'deviceBanner';
+  document.getElementById(id)?.remove();
+  if (present) return;
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText =
+    'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:9500;' +
+    'background:rgba(40,10,0,0.94);color:#ffb833;border:1px solid rgba(255,120,0,0.6);' +
+    'border-radius:8px;padding:10px 16px;font:13px ui-monospace,monospace;text-align:center;' +
+    'box-shadow:0 4px 18px rgba(0,0,0,0.6)';
+  el.innerHTML = 'No radio connected to this server<br>' +
+    '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
+    'It will resume automatically when it is plugged back in.</span>';
+  document.body.appendChild(el);
+}
 
 /** The server says the person at the host machine is looking for this tab. */
 function onSummoned() {

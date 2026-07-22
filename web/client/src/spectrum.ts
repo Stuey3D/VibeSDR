@@ -59,6 +59,8 @@ export interface RdsMeta {
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
+  /** The server's radio was unplugged (false) or came back (true). */
+  onDevice?: (present: boolean) => void;
   /** The person at the server is looking for this window. */
   onSummon?: () => void;
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
@@ -195,6 +197,11 @@ export class SpectrumClient {
         this.cb.onConfig?.(cfg);
         break;
       }
+      case 'device':
+        // The server has lost (or regained) its radio. Without this the page just stops updating
+        // and looks broken — a black waterfall with working controls, which tells the user nothing.
+        this.cb.onDevice?.(msg.present !== false);
+        break;
       case 'summon':
         // The host machine is looking for this tab. Handled by main.ts (flash + focus attempt).
         this.cb.onSummon?.();
