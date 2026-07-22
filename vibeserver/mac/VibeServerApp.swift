@@ -175,7 +175,79 @@ final class Server: ObservableObject {
 
     func openInBrowser() {
         guard running, let url = URL(string: address) else { return }
+        // Already listening from this Mac? Then a second tab is not what was wanted — the user is
+        // looking for the window they already have. Try to raise it; fall back to opening one.
+        if listeners > 0 && listenerIsLocal && focusExistingTab() { return }
         NSWorkspace.shared.open(url)
+    }
+
+    /// Find the tab already showing this server and bring it to the front.
+    ///
+    /// ★ Appending "#here" is doing real work, not decoration: changing only the FRAGMENT fires the
+    /// page's `hashchange` without reloading it, so the web client can flash "I am over here"
+    /// without losing its waterfall, its audio or its place. Reloading to say hello would be a
+    /// strange way to say it.
+    ///
+    /// AppleScript because there is no other way to ask a browser what it has open. It needs the
+    /// user's Automation consent (NSAppleEventsUsageDescription); if that is declined — or the
+    /// browser is one we cannot script, Firefox being the notable case — we return false and the
+    /// caller just opens a tab, which is the old behaviour and perfectly fine.
+    private func focusExistingTab() -> Bool {
+        let base = "http://localhost:\(port)"
+        // Chromium family and Safari have different tab models, so each gets its own dialect.
+        let chromium = ["Google Chrome", "Microsoft Edge", "Brave Browser", "Vivaldi", "Chromium"]
+        for app in chromium {
+            let src = """
+            tell application "System Events" to set present to (exists process "\(app)")
+            if present then
+              tell application "\(app)"
+                repeat with w in windows
+                  set i to 0
+                  repeat with t in tabs of w
+                    set i to i + 1
+                    if URL of t starts with "\(base)" then
+                      set URL of t to "\(base)/#here"
+                      set active tab index of w to i
+                      set index of w to 1
+                      activate
+                      return "yes"
+                    end if
+                  end repeat
+                end repeat
+              end tell
+            end if
+            return "no"
+            """
+            if runAppleScript(src) == "yes" { return true }
+        }
+
+        let safari = """
+        tell application "System Events" to set present to (exists process "Safari")
+        if present then
+          tell application "Safari"
+            repeat with w in windows
+              repeat with t in tabs of w
+                if URL of t starts with "\(base)" then
+                  set URL of t to "\(base)/#here"
+                  set current tab of w to t
+                  set index of w to 1
+                  activate
+                  return "yes"
+                end if
+              end repeat
+            end repeat
+          end tell
+        end if
+        return "no"
+        """
+        return runAppleScript(safari) == "yes"
+    }
+
+    private func runAppleScript(_ source: String) -> String? {
+        var err: NSDictionary?
+        let out = NSAppleScript(source: source)?.executeAndReturnError(&err)
+        if err != nil { return nil }        // no consent, or an unscriptable browser
+        return out?.stringValue
     }
 }
 

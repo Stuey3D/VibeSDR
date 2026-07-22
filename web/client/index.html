@@ -615,6 +615,25 @@ select.btn { padding: 6px 8px; }
 #status .bad { color: var(--red); }
 #rds { font-size: 11px; color: var(--amber); letter-spacing: 1px; min-height: 14px; }
 #rds .rt { color: var(--text-dim); }
+
+/* "I'm over here" — the flash when the menu-bar app raises this tab (see #here in main.ts).
+   A brief edge glow, not a full-screen white flash: this is a dark UI someone may be watching in
+   a dark room, and being dazzled is a poor way to be told where your window is. Pointer-events
+   none so it can never eat a click, and it removes itself when the animation ends. */
+#hereFlash {
+  position: fixed; inset: 0; z-index: 9000; pointer-events: none;
+  box-shadow: inset 0 0 0 3px var(--amber), inset 0 0 90px rgba(255,184,51,0.35);
+  animation: hereFlash 900ms ease-out forwards;
+}
+@keyframes hereFlash {
+  0%   { opacity: 0; }
+  15%  { opacity: 1; }
+  60%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #hereFlash { animation: none; opacity: 0.9; }
+}
 </style>
 
 <!-- Lock-screen / Now Playing artwork, composited at runtime from the same two

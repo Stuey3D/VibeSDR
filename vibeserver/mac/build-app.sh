@@ -40,6 +40,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSUIElement</key>               <true/>
   <!-- macOS asks before we can be reached on the LAN; explain why rather than letting the bare
        system prompt be the user's first experience of the app. -->
+  <!-- Asking a browser which tabs it has open is an Apple Event, and that needs consent. Used
+       only to raise an already-open VibeServer tab instead of piling up new ones. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>VibeServer asks your browser whether it already has this radio open, so it can bring that window to the front instead of opening another tab.</string>
   <key>NSLocalNetworkUsageDescription</key>
   <string>VibeServer shares this Mac's radio with your phone, watch and browser on your local network.</string>
 </dict>

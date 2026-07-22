@@ -1147,6 +1147,24 @@ function wantedFps(): number {
   return serverMaxFps > 0 ? Math.min(want, serverMaxFps) : want;
 }
 
+// ── "I'm over here" ──────────────────────────────────────────────────────────
+// The menu-bar app raises this tab by setting the URL fragment to #here. Changing only the
+// fragment fires hashchange WITHOUT reloading, so the waterfall, the audio and the tuned frequency
+// all survive being summoned — which is the whole point of finding this tab instead of opening a
+// new one.
+function flashHere() {
+  document.getElementById('hereFlash')?.remove();
+  const el = document.createElement('div');
+  el.id = 'hereFlash';
+  el.addEventListener('animationend', () => el.remove());
+  document.body.appendChild(el);
+  // Leave the URL clean, so a refresh or a bookmark does not carry the summons with it.
+  history.replaceState(null, '', location.pathname + location.search);
+}
+window.addEventListener('hashchange', () => {
+  if (location.hash === '#here') flashHere();
+});
+
 let lastInteraction = Date.now();
 let throttled = false;
 /** Listener's choice. Off = never ask the server to slow down, however long nobody touches it. */
