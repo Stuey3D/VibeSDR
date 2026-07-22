@@ -3298,6 +3298,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
       // Thin-remote passband from the wrist — both edges (Hz offsets from carrier), atomically.
       onBandwidth: (lo: number, hi: number) => onFilterBoth(lo, hi),
+      // SNR squelch relayed from the wrist (Buddy) — action it exactly like the phone's own control.
+      onSquelch: (v: number) => onSnrSquelch(v),
 
       // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
       // drives — so it moves the real waterfall, and the watch gets genuinely
@@ -4835,6 +4837,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
         signalMode={signalMode}
+        meterBus={meterBus.current}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}
         serverDspParams={serverDspParams}

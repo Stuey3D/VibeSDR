@@ -1882,9 +1882,9 @@ struct ContentView: View {
           .font(.system(size: 11, weight: .semibold, design: .rounded))
           .monospacedDigit()
           .hidden()
-        // Squelch CLOSED (signal below threshold → muting now): the readout flips to a breathing
-        // red "SQL"; OPEN → the meter figure returns. Same double-duty as the phone (no extra space).
-        if link.sql >= 0 && link.level < link.sql {
+        // Squelch CLOSED (gate muting now): the readout flips to a breathing red "SQL"; OPEN → the
+        // meter figure returns. Driven by the real gate state (with release tail), not level<sql.
+        if link.squelchClosed {
           BreathingSQL()
         } else {
           Text(link.meter.isEmpty ? "—" : link.meter)
@@ -1901,7 +1901,7 @@ struct ContentView: View {
     .padding(.vertical, 4)
     .background(alignment: .leading) {
       GeometryReader { geo in
-        let closed = link.sql >= 0 && link.level < link.sql
+        let closed = link.squelchClosed
         ZStack(alignment: .leading) {
           Color.black.opacity(0.55)                       // track + scrim in one
           LinearGradient(

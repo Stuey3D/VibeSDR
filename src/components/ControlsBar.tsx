@@ -113,7 +113,7 @@ export function createMeterBus(): MeterBus {
   };
   return bus;
 }
-function useMeters(bus?: MeterBus): MeterValues | null {
+export function useMeters(bus?: MeterBus): MeterValues | null {
   const [v, setV] = useState<MeterValues | null>(bus ? bus.value : null);
   useEffect(() => {
     if (!bus) return;

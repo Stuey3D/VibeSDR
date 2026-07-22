@@ -633,6 +633,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // ── Thin-remote server controls: the watch relays the tap; the phone runs the command. ──
   /// SDR passband — send both edges (Hz offsets from carrier); the phone calls setBandwidth.
   func setBandwidth(lo: Double, hi: Double) { send(["cmd": "bw", "lo": lo, "hi": hi]) }
+  /// SNR squelch relayed to the phone (it actions it). We track our own last-sent value to seed the
+  /// editor; the phone confirms by relaying the `sql` line position back on the row.
+  @Published var squelchSet = -999.0
+  func setSquelch(_ v: Double) { squelchSet = v; send(["cmd": "squelch", "val": v]) }
   /// FM-DX server toggles + antenna select.
   func setFmdxEq(_ on: Bool)  { send(["cmd": "fmdxEq",  "val": on]) }
   func setFmdxIms(_ on: Bool) { send(["cmd": "fmdxIms", "val": on]) }

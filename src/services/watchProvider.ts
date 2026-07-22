@@ -208,6 +208,7 @@ export interface WatchCommandHandlers {
   /** Thin-remote server controls the watch relays. Optional: only the SDR screen has a passband,
    *  only the FM-DX screen has cEQ/iMS/antenna. */
   onBandwidth?(lo: number, hi: number): void;
+  onSquelch?(v: number): void;
   onFmdxEq?(on: boolean): void;
   onFmdxIms?(on: boolean): void;
   onFmdxAntenna?(id: number): void;
@@ -436,6 +437,7 @@ class WatchProvider {
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
           // Thin-remote server controls — the watch relayed a tap, run the phone's command.
           case 'bw':      handlers.onBandwidth?.(Number(e.lo ?? 0), Number(e.hi ?? 0)); break;
+          case 'squelch': handlers.onSquelch?.(Number(e.val ?? -999)); break;
           case 'fmdxEq':  handlers.onFmdxEq?.(e.val === true); break;
           case 'fmdxIms': handlers.onFmdxIms?.(e.val === true); break;
           case 'fmdxAnt': handlers.onFmdxAntenna?.(Number(e.val ?? 0)); break;

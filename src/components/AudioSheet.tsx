@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
+import { meterText, useMeters, type MeterBus } from './ControlsBar';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -86,6 +87,9 @@ export interface AudioSheetProps {
   /** Meter display mode — squelch readouts follow it (S-units when 'smeter'), while the value SENT
    *  to the backend stays in its native unit. */
   signalMode?: 'snr' | 'smeter' | 'dbfs';
+  /** Live meter bus — so the squelch controls can show the CURRENT signal (this sheet covers the
+   *  signal bar, so you'd otherwise be setting the gate blind). */
+  meterBus?: MeterBus;
   isLocal?:  boolean;          // V4 local hardware
   /** FM-DX: only REC + Recordings apply (no client DSP / squelch / notch). */
   recordingOnly?: boolean;
@@ -131,7 +135,7 @@ export interface AudioSheetProps {
 }
 
 export default function AudioSheet({
-  visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', isLocal = false, recordingOnly = false,
+  visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb,
   recording = false, onRec, recSeconds = 0, onRecordings,
   snrSquelch = -999, onSnrSquelch,
@@ -149,6 +153,11 @@ export default function AudioSheet({
   const isOwrx = serverType === 'owrx';
   const isKiwi = serverType === 'kiwi';
   const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi;
+
+  // Live signal reading — this sheet covers the signal bar, so show the CURRENT level next to the
+  // squelch control (set the gate just above where speech sits / just below where noise shows).
+  const liveM = useMeters(meterBus);
+  const liveSig = liveM ? meterText(signalMode, liveM) : '';
 
   // Squelch readout in the DISPLAYED meter unit (S-units when the meter shows S-meter), while the
   // slider's value stays in the backend's NATIVE unit for the wire. dBm/dBFS → S (S9 = −73, 6 dB/S).
@@ -233,6 +242,15 @@ export default function AudioSheet({
               <Btn label="RECORDINGS" full onPress={onRecordings} />
             </BtnRow>
           )}
+
+          {/* Live signal — set the gate against what you can SEE (this sheet hides the meter bar). */}
+          {!recordingOnly && liveSig ? (
+            <View style={st.bwRow}>
+              <Text style={st.bwLabel}>SIGNAL</Text>
+              <View style={{ flex: 1 }} />
+              <Text style={[st.bwVal, { color: C.gold, fontWeight: '700' }]}>{liveSig}</Text>
+            </View>
+          ) : null}
 
           {/* OWRX server-side squelch (dB) + NR (threshold dB). Squelch left =
               Off (open); NR left = Off, slides up for more reduction. */}

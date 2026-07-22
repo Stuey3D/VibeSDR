@@ -306,6 +306,7 @@ struct ControlMenu: View {
   private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
   @State private var showWrist = false
   @State private var showBw = false
+  @State private var showSquelch = false
   @State private var showDab = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
@@ -412,6 +413,7 @@ struct ControlMenu: View {
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
+          tile(name: "SQL", value: link.squelchSet <= -999 ? "Off" : "≥\(Int(link.squelchSet))", h: h) { showSquelch = true }
           // DAB — only on a DAB profile. Programme picker (OWRX plays nothing until a service is
           // chosen; we auto-pick the first) + the speed-fix presets for the dablin chipmunk.
           if link.mode == "dab" {
@@ -508,6 +510,9 @@ struct ControlMenu: View {
       // Crown-driven LSB/USB edges with SYNC — Jr's editor, thin-remote. Relays both edges to the
       // phone (cmd:bw); the phone runs setBandwidth and echoes the result back.
       BandwidthView().environmentObject(link)
+    }
+    .sheet(isPresented: $showSquelch) {
+      SquelchView().environmentObject(link)
     }
   }
 
@@ -909,5 +914,37 @@ struct BandwidthView: View {
   private func kHz(_ hz: Double) -> String {
     let k = abs(hz) / 1000
     return k >= 10 ? String(format: "%.0fk", k) : String(format: "%.1fk", k)
+  }
+}
+
+/// SNR squelch editor (thin-remote): the crown sets the threshold (dB) and RELAYS it to the phone,
+/// which actions the gate and echoes the line position back on the row. 0 = Off. Tap Done to close.
+struct SquelchView: View {
+  @EnvironmentObject var link: WatchLink
+  @Environment(\.dismiss) private var dismiss
+  @State private var val = 0.0
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    VStack(spacing: 8) {
+      Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
+      Text(val < 0.5 ? "Off" : "≥ \(Int(val)) dB")
+        .font(.system(size: 24, weight: .bold, design: .rounded)).monospacedDigit()
+        .foregroundColor(val < 0.5 ? .secondary : .white)
+      // Live signal (mirrored from the phone), so you set the gate by SIGHT — when speech stops and
+      // noise shows, that reading is the level to sit just above.
+      Text("Signal now  \(link.meter.isEmpty ? "—" : link.meter)")
+        .font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundColor(.green)
+      Text("Mutes audio below this signal level.\nTurn the crown · tap Done.")
+        .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
+      Button("Done") { dismiss() }.buttonStyle(.borderedProminent).tint(.orange)
+    }
+    .padding()
+    .focusable(true)
+    .focused($focused)
+    .digitalCrownRotation($val, from: 0, through: 50, by: 1,
+                          sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
+    .onChange(of: val) { _, v in link.setSquelch(v < 0.5 ? -999 : v) }
+    .onAppear { val = link.squelchSet <= -999 ? 0 : link.squelchSet; focused = true }
   }
 }

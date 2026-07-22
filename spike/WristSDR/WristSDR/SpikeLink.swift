@@ -368,6 +368,7 @@ final class SpikeLink: ObservableObject {
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
     let mt = "\(Int(client.signalDb.rounded()))dB"
     if meter != mt { meter = mt }
+    evalSquelch()   // client-side gate on the live bar — see setSquelch
 
     // A new row was drawn → the spectrum is alive.
     if client.rowsPushed != lastRowsPushed {
@@ -495,12 +496,12 @@ final class SpikeLink: ObservableObject {
   /// companion's quantisation so the meter feels the same.
   func volume(delta: Int) {
     volume = min(1, max(0, volume + Double(delta) / 16))
-    if !muted { client?.setVolume(volume) }   // drives the engine's real output gain
+    applyVolume()   // drives the engine's real output gain (respects mute + squelch)
   }
 
   func setMuted(_ m: Bool) {
     muted = m
-    client?.setVolume(m ? 0 : volume)          // real mute/unmute, not just a glyph
+    applyVolume()   // real mute/unmute, not just a glyph (respects squelch)
   }
 
   func setMode(_ m: String) {
@@ -632,26 +633,33 @@ final class SpikeLink: ObservableObject {
   /// because each client seeds its own default (5) at start — see ContentView.applyTone.
   func setAutoContrast(_ v: Double) { client?.setAutoContrast(v) }
 
-  // ── Squelch ──────────────────────────────────────────────────────────────────
-  /// SNR squelch threshold in the meter's dB units (0–50). ≤ -999 = OFF/open.
-  @Published var snrSquelch = -999.0
-  /// Squelch line position on the signal bar (0..1), -1 = off. Drives the red line + breathing "SQL"
-  /// in ContentView; the gate is CLOSED (muting) when `level < sql`. Mirrors the phone's indicator.
-  @Published var sql = -1.0
+  // ── Squelch — a client-side audio gate on OUR OWN signal bar ────────────────────
+  // Set VISUALLY: point a needle at where the live bar hovers. Because the gate acts on the SAME
+  // `level` the bar shows, the units never matter — which is the whole reason squelch is a pain to set
+  // by number. Threshold, gate and line are all one 0..1 scale, so what you see is what you get.
+  @Published var sql = -1.0             // threshold as a 0..1 bar position, -1 = off (drives the line)
+  @Published var squelchClosed = false  // gate currently muting? drives the breathing "SQL" + bar dim
+  private var squelchOpenUntil = 0.0    // release tail (s) so voice gaps don't chatter the gate
 
-  func setSquelch(_ v: Double) {
-    snrSquelch = v
-    client?.setSquelch(v)
-    updateSquelchLine()
+  /// `pos`: 0..1 bar position; < 0 = off.
+  func setSquelch(_ pos: Double) {
+    sql = pos < 0 ? -1 : min(1, pos)
+    if sql < 0 { squelchClosed = false; squelchOpenUntil = 0; applyVolume() }
   }
-  /// Map the SNR threshold onto the level bar with the phone's `sigNorm` curve (Jr's meter mirrors it).
-  /// NB: approximate — may want on-device calibration, like the phone's line did.
-  private func updateSquelchLine() {
-    guard snrSquelch > -999 else { sql = -1; return }
-    let v = snrSquelch
-    if v <= 5 { sql = 0 } else if v >= 55 { sql = 1 }
-    else if v <= 35 { sql = 0.8 * (v - 5) / 30 } else { sql = 0.8 + 0.2 * (v - 35) / 20 }
+
+  /// Per-frame gate: mute when the live bar sits below the needle (with a 0.4 s release tail so the
+  /// gaps between words don't chatter it). Called from the frame update after `level` refreshes.
+  private func evalSquelch() {
+    guard sql >= 0 else { if squelchClosed { squelchClosed = false; applyVolume() }; return }
+    let now = ProcessInfo.processInfo.systemUptime
+    let open: Bool
+    if level >= sql { squelchOpenUntil = now + 0.4; open = true }
+    else            { open = now < squelchOpenUntil }
+    if squelchClosed == open { squelchClosed = !open; applyVolume() }
   }
+
+  /// Effective output gain: silenced by MUTE or a CLOSED squelch, else the user's volume.
+  private func applyVolume() { client?.setVolume((muted || squelchClosed) ? 0 : volume) }
 }
 
 /// A selectable waterfall palette: an id, a display name, and the gradient stops (used both to build

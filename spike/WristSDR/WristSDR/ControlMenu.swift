@@ -425,7 +425,7 @@ struct ControlMenu: View {
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
           // Squelch: SNR audio gate. Value = threshold in dB (Off = open).
-          tile(name: "SQL", value: link.snrSquelch <= -999 ? "Off" : "≥\(Int(link.snrSquelch))", h: h) { showSquelch = true }
+          tile(name: "SQL", value: link.sql < 0 ? "Off" : "On", h: h) { showSquelch = true }
           // (DAB tile removed — the programme picker + speed fix live on the main DAB screen now.)
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
@@ -1222,28 +1222,58 @@ struct ColourCrownPicker: View {
 
 /// SNR squelch editor — crown sets the threshold (dB) live so you hear the gate and see the line
 /// move as you turn; 0 = Off (open). Tap Done to close. The audio gate is sent to the server live.
+/// Visual squelch: a live signal bar you point a red needle at. Because the gate acts on the SAME
+/// bar (client-side, see SpikeLink.setSquelch), what you see is what you get — no numbers, no scale to
+/// guess. Crown moves the needle; ≤ 2% = Off. State word shows Passing/Muting live.
 struct SquelchView: View {
   @EnvironmentObject var link: SpikeLink
   @Environment(\.dismiss) private var dismiss
-  @State private var val = 0.0
+  @State private var pos = 0.0
   @FocusState private var focused: Bool
 
   var body: some View {
-    VStack(spacing: 8) {
+    VStack(spacing: 10) {
       Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
-      Text(val < 0.5 ? "Off" : "≥ \(Int(val)) dB")
-        .font(.system(size: 24, weight: .bold, design: .rounded)).monospacedDigit()
-        .foregroundColor(val < 0.5 ? .secondary : .white)
-      Text("Mutes audio below this signal level.\nTurn the crown · tap Done.")
+      Text(pos < 0.02 ? "Off" : (link.squelchClosed ? "Muting" : "Passing"))
+        .font(.system(size: 13, weight: .bold))
+        .foregroundColor(pos < 0.02 ? .secondary : (link.squelchClosed ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
+      SquelchBar(level: link.level, pos: pos)
+      Text("Point the needle just above the noise.\nTurn the crown · tap Done.")
         .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
       Button("Done") { dismiss() }.buttonStyle(.borderedProminent).tint(.orange)
     }
     .padding()
     .focusable(true)
     .focused($focused)
-    .digitalCrownRotation($val, from: 0, through: 50, by: 1,
+    .digitalCrownRotation($pos, from: 0, through: 1, by: 0.02,
                           sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
-    .onChange(of: val) { _, v in link.setSquelch(v < 0.5 ? -999 : v) }   // live: hear it + see the line
-    .onAppear { val = link.snrSquelch <= -999 ? 0 : link.snrSquelch; focused = true }
+    .onChange(of: pos) { _, p in link.setSquelch(p < 0.02 ? -1 : p) }
+    .onAppear { pos = link.sql < 0 ? 0 : link.sql; focused = true }
+  }
+}
+
+/// The live signal bar with a red squelch needle — the shared shape of the visual squelch control.
+/// White fill = the live signal; the red needle is the threshold you point at it.
+struct SquelchBar: View {
+  let level: Double
+  let pos: Double
+  var body: some View {
+    GeometryReader { geo in
+      let w = geo.size.width
+      ZStack(alignment: .leading) {
+        Capsule().fill(.white.opacity(0.15))
+        Capsule().fill(.white.opacity(0.9))
+          .frame(width: w * min(1, max(0, level)))
+          .animation(.easeOut(duration: 0.1), value: level)
+        if pos >= 0.02 {
+          let x = w * min(1, max(0, pos))
+          Rectangle().fill(.red).frame(width: 2).offset(x: x - 1)
+          Image(systemName: "arrowtriangle.down.fill")
+            .font(.system(size: 9)).foregroundColor(.red).offset(x: x - 5, y: -11)
+        }
+      }
+    }
+    .frame(height: 14)
+    .padding(.top, 10)   // headroom for the arrow
   }
 }
