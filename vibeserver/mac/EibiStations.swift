@@ -104,7 +104,11 @@ enum EibiStations {
 
     private static func parse(_ csv: String) -> [Entry] {
         var out: [Entry] = []
-        for line in csv.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+        // ★ isNewline, NOT ($0 == "\n" || "\r"). EiBi files use CRLF, and Swift merges "\r\n" into a
+        // SINGLE grapheme Character that equals neither "\n" nor "\r" — so the naive test split
+        // nothing and the whole file came back as one line, parsing to zero stations. isNewline
+        // recognises the CRLF grapheme (and LF, CR, and the Unicode line separators).
+        for line in csv.split(whereSeparator: { $0.isNewline }) {
             let f = line.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
             guard f.count >= 5, let khz = Double(f[0].trimmingCharacters(in: .whitespaces)), khz > 0 else { continue }
             let station = f[4].trimmingCharacters(in: .whitespaces)
