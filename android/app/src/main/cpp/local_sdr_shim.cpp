@@ -730,6 +730,11 @@ static std::atomic<bool>   g_vsCompressAudio{true};
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
 static std::atomic<int>    g_vsOpusBitrate{64000};
+// Client-requestable output bin count (waterfall width) — the FFT/BIN lever. Default = OUT_BINS
+// (full res, e.g. the web client). A small screen on a constrained link (the watch over Bluetooth)
+// asks for far fewer via /ws/user-spectrum?bins=N, cutting each SPEC frame from 22+OUT_BINS bytes to
+// 22+N. Clamped [128, OUT_BINS]. Single-occupant, so one global suffices.
+static std::atomic<int>    g_vsOutBins{OUT_BINS};
 
 // Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
 // single-client server, so lock contention is trivial.
@@ -1285,7 +1290,7 @@ struct LocalSdrShim::Impl {
             // applying zoom: each output bin covers `step` source bins; peak-hold
             // when downsampling (don't drop narrow carriers).
             double zoom = zoomFactor.load();
-            const int outBins = OUT_BINS;
+            const int outBins = g_vsOutBins.load();
             // Source bins per output bin. Written in terms of the DISPLAY span so it
             // stays correct when that is decoupled from the IQ rate (SpyServer).
             // Reduces to bins/(zoom*outBins) whenever displaySpan == sampleRate.
@@ -1435,7 +1440,7 @@ struct LocalSdrShim::Impl {
         int div = rateDivisor.load();
         if (div > 1 && (frameNo % (uint64_t)div) != 0) return;
 
-        const int outBins = OUT_BINS;
+        const int outBins = g_vsOutBins.load();
         const double srcBinHz = spyFftSpan / (double)n;
         const double step = (shownHz / (double)outBins) / srcBinHz;   // src bins / out bin
         // Signed source-bin offset of the display centre from the FFT centre.
@@ -1923,7 +1928,8 @@ struct LocalSdrShim::Impl {
         // must be built on the span it can actually SEE.
         const double span = displaySpan();
         double effective = span / zoomFactor.load();                  // zoom-aware span
-        double binBw = effective / (double)OUT_BINS;                  // we emit OUT_BINS bins
+        const int cfgBins = g_vsOutBins.load();
+        double binBw = effective / (double)cfgBins;                    // we emit cfgBins bins (the FFT/bin lever)
         char buf[384];
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
         // to this so you can't zoom out past the actual RTL bandwidth.
@@ -1934,7 +1940,7 @@ struct LocalSdrShim::Impl {
         snprintf(buf, sizeof buf,
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,\"mode\":\"%s\"}",
-            (long long)llround(viewCenter.load()), OUT_BINS, binBw, effective, span, mode.c_str());
+            (long long)llround(viewCenter.load()), cfgBins, binBw, effective, span, mode.c_str());
         sendText(sock, buf);
     }
 
@@ -2260,6 +2266,15 @@ struct LocalSdrShim::Impl {
             acceptDxcluster(sock, wsKey);
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
+            // FFT/bin lever: a spectrum client may ask for fewer output bins (?bins=N) to shrink each
+            // SPEC frame — the watch, ~200 px wide over Bluetooth, needs far fewer than the web's full
+            // res. No param → full res (OUT_BINS), so the web client is unaffected. Clamp [128, OUT_BINS].
+            if (wsSpec) {
+                const std::string bq = queryParam(reqLine, "bins");
+                int b = bq.empty() ? OUT_BINS : atoi(bq.c_str());
+                if (b < 128) b = 128; else if (b > OUT_BINS) b = OUT_BINS;
+                g_vsOutBins.store(b);
+            }
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
                      queryParam(reqLine, "codec") == "opus");
         } else if (reqLine.find("/connection") != std::string::npos) {
