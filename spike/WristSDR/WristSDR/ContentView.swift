@@ -312,6 +312,25 @@ struct ContentView: View {
         }
       } else { placeholder }
 
+      // ── DEBUG counter (Stuart's request) — live incoming rate + fps over the waterfall.
+      // Top-leading (clear of the settled clock pill and the band row), tiny, hit-testing off so it
+      // never eats a waterfall tap. Only while a feed is actually flowing.
+      if link.everGotRow {
+        VStack {
+          HStack {
+            Text(String(format: "%.0f k/s · %.0f fps", link.dbgKbps, link.dbgFps))
+              .font(.system(size: 11, weight: .medium, design: .monospaced))
+              .foregroundColor(.green.opacity(0.85))
+              .padding(.horizontal, 5).padding(.vertical, 2)
+              .background(Color.black.opacity(0.5), in: Capsule())
+            Spacer()
+          }
+          Spacer()
+        }
+        .padding(.leading, 8)
+        .allowsHitTesting(false)
+      }
+
       // STATUS CLUSTER — bottom-right, a vertical pill (method above quality) on its own scrim.
       // Method = what the watch is connected THROUGH (iPhone relay / WiFi / cellular / none);
       // quality = how well the server link is holding. See BRIEF-watch-status-glyphs.

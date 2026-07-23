@@ -168,6 +168,8 @@ final class UberClient: ObservableObject {
   @Published var signalDbfs: Double = .nan
   @Published var framesPerSec: Double = 0
   @Published var audioPerSec: Double = 0
+  /// DEBUG: total incoming KB/s (spectrum + audio), for the on-wrist counter.
+  @Published var kbps: Double = 0
 
   /// NONISOLATED, deliberately.
   ///
@@ -277,6 +279,8 @@ final class UberClient: ObservableObject {
 
   private var frameCount = 0
   private var audioCount = 0
+  private var specBytes  = 0        // DEBUG byte tallies for kbps
+  private var audioBytes = 0
   private var rateTimer: Timer?
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -296,6 +300,8 @@ final class UberClient: ObservableObject {
         guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
         self.audioPerSec  = Double(self.audioCount)
+        self.kbps = Double(self.specBytes + self.audioBytes) / 1024.0
+        self.specBytes = 0; self.audioBytes = 0
         let hadAudioThisSec = self.audioCount > 0
         let hadSpectrumThisSec = self.frameCount > 0
         self.frameCount = 0
@@ -734,6 +740,7 @@ final class UberClient: ObservableObject {
     // measurement was of nothing at all. Count the frame when the frame ARRIVES; whether we
     // like its format is a separate question.
     frameCount += 1
+    specBytes += d.count
     everHadFrames = true
     lastFrameAt = Date()
 
@@ -1032,7 +1039,8 @@ final class UberClient: ObservableObject {
       audioSock.onData = { [weak self] d in
         guard let self else { return }
         self.decodeVibeAudio(d)
-        Task { @MainActor in self.audioCount += 1 }
+        let n = d.count
+        Task { @MainActor in self.audioCount += 1; self.audioBytes += n }
       }
     } else {
       // UberSDR: `/ws`, tune rides the query string. Taken verbatim from VibePowerModule.audioWsURL.
@@ -1056,7 +1064,8 @@ final class UberClient: ObservableObject {
         // waterfall for the main thread.
         if let out = self.opus.decode(d) {
           self.audio.play(pcm: out.pcm, rate: out.rate, channels: out.channels)
-          Task { @MainActor in self.audioCount += 1 }
+          let n = d.count
+          Task { @MainActor in self.audioCount += 1; self.audioBytes += n }
         }
       }
     }

@@ -18,6 +18,7 @@ protocol SDRClient: AnyObject {
   var signalDbfs: Double { get }
   var rowsPushed: Int { get }
   var framesPerSec: Double { get }
+  var kbps: Double { get }   // DEBUG incoming KB/s (spectrum+audio)
   var status: String { get }
   /// How far Link Management has had to throttle the waterfall (1 = full rate). Drives the link
   /// glyph. A backend with no rate lever (OWRX) keeps the default 1 via the extension below.
@@ -93,6 +94,7 @@ protocol SDRClient: AnyObject {
 
 extension SDRClient {
   func wake() { resumeSpectrum(); reconnectIfNeeded() }
+  var kbps: Double { 0 }   // default for backends without a byte tally
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.

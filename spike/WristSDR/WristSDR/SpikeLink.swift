@@ -123,6 +123,9 @@ final class SpikeLink: ObservableObject {
   @Published var muted = false
 
   @Published var battery: Double = -1
+  /// DEBUG waterfall counter — live incoming KB/s + fps, mirrored from the client each tick.
+  @Published var dbgKbps = 0.0
+  @Published var dbgFps = 0.0
   /// A plain-English refusal/timeout from the backend (Kiwi full / password / blocked / no
   /// connection). nil = fine. ContentView shows a card so nobody waits on a dead connection.
   @Published var connectError: String? = nil
@@ -365,6 +368,8 @@ final class SpikeLink: ObservableObject {
     client.drainSpectrum(now: now)
     if connectError != client.lastError { connectError = client.lastError }
     if backendStatus != client.status { backendStatus = client.status }
+    if dbgFps != client.framesPerSec { dbgFps = client.framesPerSec }
+    if dbgKbps != client.kbps { dbgKbps = client.kbps }
     // ★ NEVER let a 0 blank the count. While we are CONNECTED, 0 is not a truthful listener
     // count — we are ourselves a client — so it only ever means "the server has not told us
     // yet". OWRX sends `clients` on CHANGE, so after a reconnect or a profile switch there may
