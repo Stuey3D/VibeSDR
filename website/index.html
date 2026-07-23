@@ -230,6 +230,23 @@
   section { position: relative; z-index: 2; }
   .band { border-top: 1px solid var(--line); padding: 72px 0; }
 
+
+  /* VibeServer "equation" credit: VibeDSP + UberSDR = VibeServer */
+  .vs-eq { display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 18px 22px; margin: 30px 0 10px; }
+  .vs-eq .eq-term { display: flex; flex-direction: column; align-items: center; gap: 8px;
+    text-decoration: none; color: inherit; }
+  .vs-eq .eq-term img { width: 78px; height: 78px; border-radius: 18px; display: block;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+  .vs-eq .eq-term b { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+    color: var(--phosphor); }
+  .vs-eq .eq-link:hover b { color: var(--ink); }
+  .vs-eq .eq-op { font-size: 30px; font-weight: 300; color: var(--muted); line-height: 78px; }
+  .vs-eq figcaption { flex-basis: 100%; text-align: center; margin-top: 6px; color: #C4CFC9;
+    font-size: clamp(15px, 2vw, 18px); }
+  .vs-eq figcaption a { color: var(--phosphor); text-decoration: none; }
+  .vs-eq figcaption a:hover { text-decoration: underline; }
+
   /* VibeServer macOS alpha callout */
   .mac-alpha { margin-top: 34px; padding: 26px 28px; border: 1px solid var(--phosphor-dim);
     border-radius: 14px; background: rgba(53,224,138,0.05); max-width: 60ch; }
@@ -399,6 +416,19 @@
   <div class="wrap">
     <p class="eyebrow">VibeServer · built in, free</p>
     <h2>No more e&#8209;waste. <span class="glow">Turn an old phone into a receiver.</span></h2>
+
+    <!-- The equation: our engine + UberSDR's networking = VibeServer. Credits UberSDR right in the
+         maths, and links back to ubersdr.org (Nathan features VibeSDR on his site — reciprocal). -->
+    <figure class="vs-eq" aria-label="VibeDSP plus UberSDR equals VibeServer">
+      <span class="eq-term"><img src="assets/family-vibedsp.png" alt="VibeDSP" /><b>VibeDSP</b></span>
+      <span class="eq-op">+</span>
+      <a class="eq-term eq-link" href="https://ubersdr.org" target="_blank" rel="noopener">
+        <img src="assets/logo_ubersdr.png" alt="UberSDR" /><b>UberSDR</b></a>
+      <span class="eq-op">=</span>
+      <span class="eq-term"><img src="assets/family-vibeserver.png" alt="VibeServer" /><b>VibeServer</b></span>
+      <figcaption>The lightweight power of <b>VibeDSP</b> meets the powerful networking of
+        <a href="https://ubersdr.org" target="_blank" rel="noopener">UberSDR</a>.</figcaption>
+    </figure>
     <p class="sub big">
       Got an Android phone gathering dust in a drawer? Give it a second life as your own personal SDR server. Plug in an RTL&#8209;SDR — <b>no drivers, no setup</b> — tap <b>Use as server</b>, and it's live. VibeServer even serves its own web page, so you're not tied to the app: point any browser on your desktop or laptop at it and tune from there too.
     </p>
