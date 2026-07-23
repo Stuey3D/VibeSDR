@@ -56,6 +56,7 @@ struct InstancePickerView: View {
   @State private var errored: Set<String> = []
   @State private var meta: [String: (dist: Double?, snr: Double?)] = [:]   // url -> live dist/snr
   @State private var showCustom = false
+  @State private var editFav: Favourite? = nil     // the custom server being edited (long-press)
   @StateObject private var mdns = VibeMdns()
   @State private var pinFor: VibeAd? = nil
   @State private var pinEntry = ""
@@ -78,6 +79,11 @@ struct InstancePickerView: View {
     .sheet(isPresented: $showCustom) { CustomServerSheet { name, url, type in
       favs.addCustom(name: name, url: url, type: type)
     } }
+    .sheet(item: $editFav) { fav in
+      CustomServerSheet(editing: fav) { name, url, type in
+        favs.updateCustom(oldUrl: fav.url, name: name, url: url, type: type)
+      }
+    }
     .sheet(item: $pinFor) { ad in vibePinSheet(ad) }
   }
 
@@ -143,25 +149,47 @@ struct InstancePickerView: View {
   // ── Favourites ────────────────────────────────────────────────────────────────
   @ViewBuilder private var favouritesSection: some View {
     let list = favs.sorted(meta: meta)
-    Section {
-      if list.isEmpty {
+    let customList = list.filter { $0.custom }      // servers YOU added by hand
+    let dirList = list.filter { !$0.custom }         // saved from a directory listing
+    if list.isEmpty {
+      Section {
         Text("No favourites yet — tap ♥ on a server below.")
           .font(.system(size: 12)).foregroundColor(Self.dim)
-      } else {
-        ForEach(list) { f in favRow(f) }
-          .onMove(perform: favs.sort == .manual ? { favs.move(from: $0, to: $1) } : nil)
+      } header: { favHeader("FAVOURITES", showSort: false) }
+    } else {
+      // CUSTOM SERVERS — the ones the user typed in. Grouped + labelled so they're distinct from
+      // directory-saved favourites; each is editable via long-press (see favRow's context menu).
+      if !customList.isEmpty {
+        Section {
+          ForEach(customList) { f in favRow(f) }
+            .onMove(perform: favs.sort == .manual ? { favs.moveInGroup(custom: true, from: $0, to: $1) } : nil)
+        } header: { favHeader("CUSTOM SERVERS", showSort: true) }
       }
-    } header: {
-      HStack {
-        Text("FAVOURITES").font(.system(size: 13, weight: .bold)).foregroundColor(Self.amber)
-        Spacer()
+      // FAVOURITES — saved from the directories (KiwiSDR / OWRX / FM-DX / UberSDR).
+      if !dirList.isEmpty {
+        Section {
+          ForEach(dirList) { f in favRow(f) }
+            .onMove(perform: favs.sort == .manual ? { favs.moveInGroup(custom: false, from: $0, to: $1) } : nil)
+        } header: { favHeader("FAVOURITES", showSort: customList.isEmpty) }
+        footer: {
+          if favs.sort == .manual {
+            Text("≡ Tap and hold a server to drag it into order").font(.system(size: 10)).foregroundColor(Self.dim)
+          }
+        }
+      }
+    }
+  }
+
+  /// A favourites subheading. `showSort` puts the sort-cycle control on this one — it lives on the
+  /// FIRST visible group (custom if present, else directory) so it never disappears.
+  @ViewBuilder private func favHeader(_ title: String, showSort: Bool) -> some View {
+    HStack {
+      Text(title).font(.system(size: 13, weight: .bold)).foregroundColor(Self.amber)
+      Spacer()
+      if showSort {
         Button { favs.sort = favs.sort.next } label: {
           Text("⇅ \(favs.sort.label)").font(.system(size: 10, weight: .semibold)).foregroundColor(Self.amber)
         }.buttonStyle(.plain)
-      }
-    } footer: {
-      if favs.sort == .manual {
-        Text("≡ Tap and hold a server to drag it into order").font(.system(size: 10)).foregroundColor(Self.dim)
       }
     }
   }
@@ -189,6 +217,16 @@ struct InstancePickerView: View {
         }.buttonStyle(.plain)
       }
     }.buttonStyle(.plain)
+    // Long-press to EDIT a custom server (name / address / type) instead of deleting + retyping it.
+    // Only custom servers are editable — a directory favourite's details come from the listing.
+    .contextMenu {
+      if f.custom {
+        Button { editFav = f } label: { Label("Edit", systemImage: "pencil") }
+      }
+      Button(role: .destructive) {
+        favs.remove(f.url)
+      } label: { Label("Delete", systemImage: "trash") }
+    }
   }
 
   private func favSubtitle(_ f: Favourite) -> String {
@@ -413,13 +451,26 @@ struct InstancePickerView: View {
 // ── Custom-server sheet ────────────────────────────────────────────────────────
 struct CustomServerSheet: View {
   @Environment(\.dismiss) private var dismiss
-  let onAdd: (_ name: String, _ url: String, _ type: ServerType) -> Void
-  @State private var url = ""
-  @State private var name = ""
-  @State private var auto = true
-  @State private var type: ServerType = .ubersdr
+  let onSubmit: (_ name: String, _ url: String, _ type: ServerType) -> Void
+  private let editing: Bool
+  @State private var url: String
+  @State private var name: String
+  @State private var auto: Bool
+  @State private var type: ServerType
   @State private var detecting = false
   @State private var detectMsg = ""
+
+  /// `editing` seeds the fields from an existing custom server; nil = a fresh add. When editing we
+  /// already know the type, so start with Auto-detect OFF (no need to re-probe) — the user can flip
+  /// it back on if they changed the address.
+  init(editing fav: Favourite? = nil, onSubmit: @escaping (_ name: String, _ url: String, _ type: ServerType) -> Void) {
+    self.onSubmit = onSubmit
+    self.editing = fav != nil
+    _url  = State(initialValue: fav?.url ?? "")
+    _name = State(initialValue: fav?.name ?? "")
+    _auto = State(initialValue: fav == nil)
+    _type = State(initialValue: fav?.serverType ?? .ubersdr)
+  }
 
   var body: some View {
     List {
@@ -438,11 +489,11 @@ struct CustomServerSheet: View {
         else if !detectMsg.isEmpty { Text(detectMsg).font(.system(size: 11)).foregroundColor(.orange) }
       }
       Section {
-        Button(auto ? "Detect & save" : "Save favourite") { save() }
+        Button(editing ? "Save changes" : (auto ? "Detect & save" : "Save favourite")) { save() }
           .disabled(url.trimmingCharacters(in: .whitespaces).isEmpty || detecting)
       }
     }
-    .navigationTitle("Custom server")
+    .navigationTitle(editing ? "Edit server" : "Custom server")
   }
 
   private func save() {
@@ -450,7 +501,7 @@ struct CustomServerSheet: View {
     guard !clean.isEmpty else { return }
     if !auto {
       let full = clean.contains("://") ? clean : "https://\(clean)"
-      onAdd(name.trimmingCharacters(in: .whitespaces), full.trimmedTrailingSlash, type); dismiss(); return
+      onSubmit(name.trimmingCharacters(in: .whitespaces), full.trimmedTrailingSlash, type); dismiss(); return
     }
     detecting = true; detectMsg = ""
     Task {
@@ -458,7 +509,7 @@ struct CustomServerSheet: View {
       let candidates: [String] = clean.contains("://") ? [clean] : ["http://\(clean)", "https://\(clean)"]
       for cand in candidates {
         if let t = await detectServerType(cand) {
-          await MainActor.run { onAdd(name.trimmingCharacters(in: .whitespaces), cand.trimmedTrailingSlash, t); dismiss() }
+          await MainActor.run { onSubmit(name.trimmingCharacters(in: .whitespaces), cand.trimmedTrailingSlash, t); dismiss() }
           return
         }
       }
@@ -468,7 +519,7 @@ struct CustomServerSheet: View {
       if !hasPort {
         await MainActor.run { detectMsg = "Scanning for VibeServer…" }
         if let found = await probeVibeServerPort(clean) {
-          await MainActor.run { onAdd(name.trimmingCharacters(in: .whitespaces), found, .vibeserver); dismiss() }
+          await MainActor.run { onSubmit(name.trimmingCharacters(in: .whitespaces), found, .vibeserver); dismiss() }
           return
         }
       }

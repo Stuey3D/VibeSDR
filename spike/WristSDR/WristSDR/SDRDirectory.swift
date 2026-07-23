@@ -347,6 +347,11 @@ struct Favourite: Codable, Identifiable, Hashable {
   var bestSnr: Double? = nil
   var host: String = ""            // VibeServer host:port (the url is a display key)
   var pin: String = ""             // VibeServer PIN, saved so it auto-fills next time
+  /// Manually-added (typed) server vs one saved from a directory listing. nil = a LEGACY entry saved
+  /// before this flag existed — fall back to a heuristic: directory entries carry coords, typed ones
+  /// don't. New entries set it explicitly, so the heuristic only ever applies to old stored data.
+  var isCustom: Bool? = nil
+  var custom: Bool { isCustom ?? (latitude == nil && longitude == nil) }
 }
 
 @MainActor
@@ -374,7 +379,8 @@ final class FavStore: ObservableObject {
       favourites.remove(at: i)
     } else {
       favourites.append(Favourite(name: s.name, url: s.url, serverType: s.serverType,
-                                  latitude: s.latitude, longitude: s.longitude, bestSnr: s.bestSnr))
+                                  latitude: s.latitude, longitude: s.longitude, bestSnr: s.bestSnr,
+                                  isCustom: false))    // saved from a directory listing
     }
     persist()
   }
@@ -385,7 +391,7 @@ final class FavStore: ObservableObject {
     if let i = favourites.firstIndex(where: { $0.url == url }) {
       favourites[i].host = host; favourites[i].pin = pin; favourites[i].name = name
     } else {
-      favourites.append(Favourite(name: name.isEmpty ? host : name, url: url, serverType: .vibeserver, host: host, pin: pin))
+      favourites.append(Favourite(name: name.isEmpty ? host : name, url: url, serverType: .vibeserver, host: host, pin: pin, isCustom: true))
     }
     persist()
   }
@@ -395,9 +401,25 @@ final class FavStore: ObservableObject {
 
   func addCustom(name: String, url: String, type: ServerType) {
     guard !favourites.contains(where: { $0.url == url }) else { return }
-    favourites.append(Favourite(name: name.isEmpty ? url : name, url: url, serverType: type, host: hostPort(url)))
+    favourites.append(Favourite(name: name.isEmpty ? url : name, url: url, serverType: type, host: hostPort(url), isCustom: true))
     persist()
   }
+
+  /// Edit a custom server in place — keeps its slot + visit count. Editing the URL changes the id, so
+  /// we mutate the existing element rather than remove+append (which would jump it to the bottom).
+  /// PIN is preserved (it's prompted/saved separately); only name/url/type change here.
+  func updateCustom(oldUrl: String, name: String, url: String, type: ServerType) {
+    guard let i = favourites.firstIndex(where: { $0.url == oldUrl }) else { return }
+    favourites[i].name = name.isEmpty ? url : name
+    favourites[i].url = url
+    favourites[i].serverType = type
+    favourites[i].host = hostPort(url)
+    favourites[i].isCustom = true
+    persist()
+  }
+
+  /// Delete a favourite (custom or directory-saved) by url.
+  func remove(_ url: String) { favourites.removeAll { $0.url == url }; persist() }
 
   /// Bump the Most-Used tally when a favourite is connected. No-op for non-favourites.
   func registerVisit(_ url: String) {
@@ -422,6 +444,18 @@ final class FavStore: ObservableObject {
 
   /// Persist a drag reorder (Manual mode).
   func move(from: IndexSet, to: Int) { favourites.move(fromOffsets: from, toOffset: to); persist() }
+
+  /// Drag reorder WITHIN one subheading group (custom vs directory). The two groups render as separate
+  /// sections, so a move's indices are group-relative — map them back onto the group's own slots in the
+  /// store, leaving the other group untouched. Manual sort returns `favourites` unchanged, so the
+  /// group's display order equals its slot order and this stays consistent.
+  func moveInGroup(custom: Bool, from: IndexSet, to: Int) {
+    let slots = favourites.indices.filter { favourites[$0].custom == custom }
+    var group = slots.map { favourites[$0] }
+    group.move(fromOffsets: from, toOffset: to)
+    for (slot, item) in zip(slots, group) { favourites[slot] = item }
+    persist()
+  }
 
   /// Favourites in the current sort order. `meta` carries live directory distance/snr by url.
   func sorted(meta: [String: (dist: Double?, snr: Double?)]) -> [Favourite] {

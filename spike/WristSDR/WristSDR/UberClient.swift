@@ -134,6 +134,16 @@ final class UberClient: ObservableObject {
   @Published var status = "starting"
   @Published var frequency: Double = 648_000        // Radio Caroline
   @Published var mode = "am"
+
+  /// RDS from VibeServer (WFM only), pushed on the spectrum socket as `{"type":"rds",...}` ~1/sec.
+  /// `rdsPs` is the 8-char station name — surfaced via `stationName` into the band strip in place of
+  /// the band label (exactly like Kiwi/FM-DX). ★ FLUSHED the instant the station is lost (server
+  /// sends ps="") or we retune / change mode / switch server, so it can NEVER persist onto a
+  /// different frequency or backend — the FM-DX stale-RDS bug Stuart called out.
+  @Published private(set) var rdsPs = ""
+  @Published private(set) var rdsText = ""
+  var stationName: String { rdsPs }
+  private func clearRds() { if !rdsPs.isEmpty || !rdsText.isEmpty { rdsPs = ""; rdsText = "" } }
   /// Passband edges as Hz offsets from the carrier (low negative = below). Mirrors the phone's
   /// MODE_BANDWIDTHS server defaults; the UI edits them and setBandwidth pushes them.
   @Published var bwLow: Double  = -5_000            // am default
@@ -250,6 +260,12 @@ final class UberClient: ObservableObject {
   private static func makeSession() -> URLSession {
     let c = URLSessionConfiguration.default
     c.waitsForConnectivity = true
+    // ★ BOUND THE WAIT. waitsForConnectivity means a request with no link WAITS — and the default
+    // resource timeout is SEVEN DAYS, so on resume (Wi-Fi still reassociating after bedtime/suspend)
+    // the /vibeserver/auth GET could hang effectively forever and connect() sat on "authenticating"
+    // with no way back. Cap it so a stalled auth FAILS in ~12s and the reconnect path can retry.
+    c.timeoutIntervalForRequest = 8
+    c.timeoutIntervalForResource = 12
     // The watch's own Wi-Fi/cellular — nothing is proxied through the phone.
     return URLSession(configuration: c)
   }
@@ -391,7 +407,20 @@ final class UberClient: ObservableObject {
     if isVibe {
       restoreVibeState()          // reopen where we left it (per host); else adopt the server's tune on config
       status = "authenticating"
-      if !(await resolveVibeAuth()) { return }   // status carries the reason (PIN wrong / locked / offline)
+      // ★ RESUME-SAFE. On a reconnect after suspend the first auth can fail transiently — the link is
+      // still coming back, DNS/route not settled. A single return left "reconnecting/authenticating"
+      // stuck on screen with no recovery until a force-quit. Retry a couple of times with a short
+      // backoff before giving up; the bounded session timeout (makeSession) keeps each try honest.
+      var ok = await resolveVibeAuth()
+      var tries = 0
+      while !ok, tries < 2, !goingIdle {
+        tries += 1
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard !goingIdle else { return }
+        status = "reconnecting"
+        ok = await resolveVibeAuth()
+      }
+      if !ok { return }           // status carries the reason (PIN wrong / locked / offline)
       openVibeSockets()
       return
     }
@@ -649,6 +678,7 @@ final class UberClient: ObservableObject {
     audio.stop()
     specOpened = false
     framesPerSec = 0
+    clearRds()            // never carry a station name across to the next server
     status = "idle"
   }
   private var goingIdle = false
@@ -661,6 +691,7 @@ final class UberClient: ObservableObject {
     audioSock.cancel()
     audio.stop()
     specOpened = false
+    clearRds()               // different server — start with no station name
     _ = rotateSession()      // fresh session id for the new server
     Task { await connect() }
   }
@@ -687,6 +718,11 @@ final class UberClient: ObservableObject {
     } else {
       // Audio is warm, only the spectrum socket died → reopen JUST the spectrum, NOW.
       if status.hasPrefix("background") { status = "live" }
+      // ★ The reopened spectrum socket dumps a burst that briefly starves audio over the weak watch
+      // link → a stutter (VibeServer only — UberSDR's audio is an independent server channel). Give
+      // audio a slightly bigger cushion to ride it out. One-shot: the next tune flushes it, so tuning
+      // stays snappy. 0.6s vs the usual 0.35s — deliberately modest to keep listening latency low.
+      if isVibe { audio.primeCushion(0.6) }
       specOpened = true
       specSock.cancel()
       openSpectrum()
@@ -903,6 +939,13 @@ final class UberClient: ObservableObject {
     guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
     let type = j["type"] as? String
     if type == "hwinfo" { onHwInfo(j); return }         // VibeServer: offered gains/rates + owner ceiling
+    if type == "rds" {
+      // Station naming from WFM RDS. An empty ps IS the "station lost" signal (the server change-detects
+      // and sends it once), so assigning it straight through clears the band strip — no stale name.
+      rdsPs   = (j["ps"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+      rdsText = (j["radiotext"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+      return
+    }
     guard type == "config" else { return }
     if let bc = j["binCount"] as? Int { binCount = bc }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
@@ -1034,8 +1077,16 @@ final class UberClient: ObservableObject {
       // VibeServer: /ws/audio. Ask for Opus — Jr decodes it (OpusDecoder), and it is ~4x lighter
       // than PCM, which is what makes VibeServer usable over Bluetooth. An OLD (pre-Opus) VibeServer
       // simply ignores the codec param and sends ADPCM, which decodeVibeAudio still handles.
+      // ★ user_session_id MUST match the spectrum socket's. VibeServer's single-occupant guard keys
+      // on it: our spectrum socket carries `uuid`, so the audio socket MUST carry the SAME uuid or
+      // the server sees two different clients and REFUSES the second as "busy" — which killed the
+      // spectrum entirely (audio claimed the slot anonymously, spectrum was turned away). 2026-07-23.
       let extra = authSuffix.isEmpty ? "" : "&" + authSuffix.dropFirst()
-      url = URL(string: "\(scheme)://\(host)/ws/audio?codec=opus\(extra)")
+      // ★ On a MONO output route (the watch speaker) ask for a fullband mono stream — the server folds
+      // stereo before encoding so all 64k lands in one channel. On AirPods (stereo) omit it and keep
+      // the stereo image. Re-requested on a route change via audio.onRouteChange (openVibeSockets).
+      let chParam = audio.outputIsMono ? "&channels=1" : ""
+      url = URL(string: "\(scheme)://\(host)/ws/audio?user_session_id=\(uuid)&codec=opus\(chParam)\(extra)")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
         self.decodeVibeAudio(d)
@@ -1114,6 +1165,14 @@ final class UberClient: ObservableObject {
   /// LAN, single-user, no 2/sec rate limit — open both sockets straight away (no UberSDR audio-ready dance).
   private func openVibeSockets() {
     specOpened = true          // suppress the UberSDR "audio never readied" fallback path
+    // Re-request the matching channel count when the output route flips (AirPods in/out). Only the
+    // audio socket carries the channels param, so reopen JUST that — spectrum is untouched. Rides the
+    // same-session takeover on the server, so the reclaim is instant. isVibe only.
+    audio.onRouteChange = { [weak self] _ in
+      guard let self, self.isVibe, !self.goingIdle else { return }
+      self.audioSock.cancel()
+      self.openAudio()
+    }
     openAudio()
     openSpectrum()
     audio.start { [weak self] ok, info in
@@ -1285,6 +1344,7 @@ final class UberClient: ObservableObject {
     let f = max(freqMin, min(freqMax, (base + Double(delta)) * step))
     guard f != frequency else { return }
     frequency = f
+    clearRds()            // moved off the old station — don't show its name on the new frequency
     saveVibeState()
     sendTuneThrottled()   // 100ms debounce — match the companion/main app (see sendTuneThrottled)
     sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
@@ -1308,6 +1368,7 @@ final class UberClient: ObservableObject {
   func setMode(_ m: String) {
     guard m != mode else { return }
     mode = m
+    clearRds()            // RDS is WFM-only; leaving/among modes must not leave a station name up
     // A mode change resets the passband to that mode's server default (the fresh socket below
     // applies the same default server-side; we just mirror it for the VFO lines / UI).
     if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
@@ -1335,6 +1396,7 @@ final class UberClient: ObservableObject {
     let f = max(freqMin, min(freqMax, hz))
     guard f != frequency else { return }
     frequency = f
+    clearRds()            // jumped bands — drop the old station's name immediately
     saveVibeState()
     sendTune()
     sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
@@ -1380,8 +1442,17 @@ final class UberClient: ObservableObject {
   }
   /// How far the controller has had to back off (1 = not throttled). Mirrors to SpikeLink for
   /// the link glyph — see LinkManager.adaptiveRung for why this is not `rateDivisor`.
-  var adaptiveRung: Int { linkMgr.adaptiveRung }
-  var linkSettling: Bool { linkMgr.settling }
+  /// VibeServer isn't rung-throttled (tick() is skipped for it), so linkMgr.adaptiveRung would sit
+  /// at its init value (2 = throttled amber) forever. Its lower fps is a DELIBERATE bins/fftRate
+  /// choice, not a symptom — the glyph must read healthy (1), never a throttled/red indicator.
+  var adaptiveRung: Int { isVibe ? 1 : linkMgr.adaptiveRung }
+  /// ★ VibeServer NEVER "settles": stepLinkManagement() guards on `!isVibe`, so linkMgr.tick() is
+  /// never called for it — and `settling` inits TRUE in adaptive/AUTO mode, so it would otherwise
+  /// stay true FOREVER (VibeServer showed a permanent "Initialising" pill + breathing/colour-cycling
+  /// link icon, including on every wrist-up). VibeServer sets bins/fftRate directly at both ends, so
+  /// there is no rate to "work out" — the honest answer is not-settling. UberSDR still settles (and
+  /// the 12s deadline in LinkManager.tick clears a stuck hold-band case there).
+  var linkSettling: Bool { isVibe ? false : linkMgr.settling }
 
   private func stepLinkManagement() {
     // UberSDR only: VibeServer has fftRate/bins and we own both ends there.

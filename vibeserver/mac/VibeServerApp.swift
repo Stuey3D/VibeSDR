@@ -84,7 +84,18 @@ final class Server: ObservableObject {
 
     private var timer: Timer?
 
-    init() { refreshDevices() }
+    init() {
+        refreshDevices()
+        // ★ Resolve the .local hostname ONCE, OFF THE MAIN THREAD. BOTH Host.current().name AND
+        // ProcessInfo.hostName can do a BLOCKING reverse-DNS lookup that stalls for up to ~30s on a
+        // slow/flaky network — and doing it synchronously on the menu path HUNG the whole app (the
+        // menu bar showed a connection but right-click drew nothing). Resolve it in the background;
+        // accessAddresses simply omits the .local line until it lands.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let h = ProcessInfo.processInfo.hostName
+            DispatchQueue.main.async { self?.localName = h }
+        }
+    }
 
     /// How many listeners are connected right now.
     ///
@@ -286,13 +297,19 @@ final class Server: ObservableObject {
         return best
     }
 
-    /// Every way in, best first — for the menu and for copying to a listener.
+    /// The Bonjour .local name, resolved ONCE in the background at init (see init) and cached here.
+    /// ★ Resolving it is a BLOCKING call — reading it must never be. Empty until it lands; the menu
+    /// then just gains the .local line, it never stalls waiting for it. Stable once set, so the menu
+    /// doesn't reshuffle (the flicker this replaced was Host.current().name re-resolving each open).
+    @Published var localName: String = ""
+
+    /// Every way in, best first — for the menu and for copying to a listener. STABLE (no live
+    /// lookups), so the menu doesn't reshuffle.
     var accessAddresses: [String] {
         guard running, port > 0 else { return [] }
         var out: [String] = []
         if let ip = lanIPv4() { out.append("\(ip):\(port)") }
-        // Bonjour name, as advertised. Host.current().name already carries the .local suffix.
-        if let h = Host.current().name, h.hasSuffix(".local") { out.append("\(h):\(port)") }
+        if !localName.isEmpty { out.append("\(localName):\(port)") }
         return out
     }
 

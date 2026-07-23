@@ -1192,6 +1192,13 @@ struct LocalSdrShim::Impl {
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
     // it. Jr's future VibeServer backend opts in. Single-occupant, so one flag suffices.
     std::atomic<bool> audioWantsOpus{false};
+    // ★ MONO-REQUEST. A client on a MONO output route (the watch built-in speaker) asks for mono via
+    // /ws/audio?channels=1. We then fold the demod's stereo to mono BEFORE Opus-encoding, so the full
+    // 64 kbps lands in ONE fullband channel instead of splitting across two band-limited channels the
+    // client would only downmix anyway — same bandwidth, clearly better on the speaker. Default off =
+    // send the demod's native channel count (stereo when the WFM pilot is locked). Reuses the exact
+    // channel-switch path the pilot lock/unlock already drives every day, so nothing new to break.
+    std::atomic<bool> audioForceMono{false};
     // VibeServer compressed-audio encoder — Opus (replaces IMA-ADPCM). Opus handles L/R stereo
     // natively, so there is no mid/side split; one encoder covers mono and stereo and reconfigures
     // itself on a channel change. Guarded: only the macOS core links libopus today.
@@ -1545,6 +1552,16 @@ struct LocalSdrShim::Impl {
     // consumer (its own web page, VibeSDR, Jr) is ours, so there is no third party to keep it for.
     void sendAudioPcm(const std::shared_ptr<net::Socket>& sock, const int16_t* pcm, int count, int ch) {
         if (count <= 0) return;
+
+        // Mono-request fold (see audioForceMono): stereo → mono BEFORE encoding. Covers both the Opus
+        // and PCM paths and the encoder rebuilds itself on the channel change, same as a pilot flip.
+        std::vector<int16_t> monoBuf;
+        if (audioForceMono.load() && ch == 2) {
+            monoBuf.resize((size_t)count);
+            for (int i = 0; i < count; i++)
+                monoBuf[i] = (int16_t)(((int)pcm[i*2] + (int)pcm[i*2+1]) / 2);
+            pcm = monoBuf.data(); ch = 1;
+        }
 
 #ifdef VIBE_HAVE_OPUS
         // Opus only when THIS client opted in (see acceptWs). A client that can't decode it — the
@@ -1965,8 +1982,15 @@ struct LocalSdrShim::Impl {
         while (got < n) { int r = s->recv(buf+got, n-got, true, net::NO_TIMEOUT); if (r <= 0) return false; got += (size_t)r; }
         return true;
     }
-    int recvWs(const std::shared_ptr<net::Socket>& s, std::string& out) {
-        uint8_t h[2]; if (!recvN(s, h, 2)) return -1;
+    // idleMs: if not NO_TIMEOUT, the FIRST header byte read honours this timeout. On timeout (the
+    // client is quiet but the socket is still open) returns -2, so the caller can run a heartbeat;
+    // a genuine close still returns -1. Default keeps the original blocking behaviour.
+    int recvWs(const std::shared_ptr<net::Socket>& s, std::string& out, int idleMs = net::NO_TIMEOUT) {
+        uint8_t h[2];
+        int r = s->recv(&h[0], 1, false, idleMs, nullptr);   // first byte, timeout-aware
+        if (r < 0) return -1;
+        if (r == 0) return s->isOpen() ? -2 : -1;            // -2 = idle (still open), -1 = closed
+        if (!recvN(s, &h[1], 1)) return -1;
         int opcode = h[0] & 0x0F; bool masked = h[1] & 0x80; uint64_t len = h[1] & 0x7F;
         if (len == 126) { uint8_t e[2]; if(!recvN(s,e,2)) return -1; len=(e[0]<<8)|e[1]; }
         else if (len == 127) { uint8_t e[8]; if(!recvN(s,e,8)) return -1; len=0; for(int i=0;i<8;i++) len=(len<<8)|e[i]; }
@@ -2278,7 +2302,8 @@ struct LocalSdrShim::Impl {
                 g_vsOutBins.store(b);
             }
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
-                     queryParam(reqLine, "codec") == "opus");
+                     queryParam(reqLine, "codec") == "opus",
+                     queryParam(reqLine, "channels") == "1");
         } else if (reqLine.find("/connection") != std::string::npos) {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
@@ -2460,7 +2485,7 @@ struct LocalSdrShim::Impl {
     }
 
     void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
-                  const std::string& session, bool wantsOpus) {
+                  const std::string& session, bool wantsOpus, bool forceMono = false) {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -2499,20 +2524,32 @@ struct LocalSdrShim::Impl {
             occupantSession = me;   // claim (or re-affirm) the slot for this client
         }
 
+        // ★ SAME-SESSION TAKEOVER. A client that resumes from background reconnects with its SAME
+        // stable session id, but its PREVIOUS socket may still be a ghost here (watchOS suspended it
+        // with no FIN, so our accept loop is still parked on it). The occupant check above lets the
+        // same id back in — but if we just overwrite the pointer, the ghost's loop lingers and can
+        // stall the reclaim. So grab the old same-role socket and CLOSE it: its loop unwinds at once,
+        // and its cleanup below won't touch the new pointer. This is takeover only for the SAME
+        // client (same id) — a DIFFERENT client is still refused as busy above.
+        std::shared_ptr<net::Socket> stale;
         if (isAudio) {
-            std::lock_guard<std::mutex> lk(clientMtx);
-            audioClient = sock;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              stale = audioClient;
+              audioClient = sock; }
+            audioForceMono.store(forceMono);
 #ifdef VIBE_HAVE_OPUS
             audioWantsOpus.store(wantsOpus);
             opusEnc.reset();   // fresh stream for the new listener — no carried-over frame remainder
-            LOGI("audio WS connected (codec=%s)", wantsOpus ? "opus" : "pcm");
+            LOGI("audio WS connected (codec=%s, channels=%s)", wantsOpus ? "opus" : "pcm",
+                 forceMono ? "mono" : "native");
 #else
             audioWantsOpus.store(false);   // no encoder in this build
-            LOGI("audio WS connected (pcm)");
+            LOGI("audio WS connected (pcm, channels=%s)", forceMono ? "mono" : "native");
 #endif
         } else {
-            std::lock_guard<std::mutex> lk(clientMtx);
-            specClient = sock;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              stale = specClient;
+              specClient = sock; }
             sendConfig(sock); sendHwInfo(sock);
             LOGI("spectrum WS connected");
             // ★ TELL A NEW CLIENT THE CURRENT STATE. The device message is otherwise only sent when
@@ -2522,12 +2559,39 @@ struct LocalSdrShim::Impl {
             if (deviceLost.load())
                 sendText(sock, "{\"type\":\"device\",\"present\":false}");
         }
+        // Boot the ghost (if any) now that the new socket has taken its place. Outside the lock:
+        // close() only flips the old socket's flags/fd; its own accept loop does the bookkeeping.
+        if (stale && stale != sock) stale->close();
 
+        // ★ APPLICATION-LEVEL LIVENESS PING. A clean disconnect (FIN) is caught below by recvWs
+        // returning -1 within a second. But a VANISHED peer — watchOS SUSPENDED Jr, or the link
+        // dropped with no FIN — leaves the kernel connection alive (it may even keep ACKing), so no
+        // TCP timeout fires and the server sat on a phantom "1 connection" indefinitely (Stuart,
+        // 2026-07-23). The audio socket is server→client only, so the client never sends and we'd
+        // block here forever. Instead, poll in 5s slices: when the client is quiet, PING it. A live
+        // client (browser, or Jr with the app actually running — including background audio) answers
+        // instantly and resets the clock; a suspended/gone one never does, so after 20s we drop it
+        // and free the single-occupant slot. Background-audio Jr keeps ponging, so it is NOT dropped.
+        auto monoMs = [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        };
+        int64_t lastRx = monoMs();
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
-            int op = recvWs(sock, payload);
+            int op = recvWs(sock, payload, 5000);
+            if (op == -2) {                                   // quiet slice — probe liveness
+                if (monoMs() - lastRx > 20000) {
+                    LOGI("%s WS idle >20s (no pong) — dropping stale peer", isAudio ? "audio" : "spectrum");
+                    break;
+                }
+                sendWs(sock, 0x9, nullptr, 0);                // ping
+                continue;
+            }
             if (op < 0 || op == 0x8) break;
+            lastRx = monoMs();                                // any frame (incl. pong) = alive
             if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
+            if (op == 0xA) continue;                          // pong — liveness only
             if (op == 0x1) handleControl(sock, payload);
         }
         { std::lock_guard<std::mutex> lk(clientMtx);

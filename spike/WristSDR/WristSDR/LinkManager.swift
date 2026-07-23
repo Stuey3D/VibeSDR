@@ -58,6 +58,8 @@ final class LinkManager {
 
   private var starvedSecs = 0
   private var healthySecs = 0
+  /// Live+settled seconds since connect, for the SETTLE DEADLINE (see tick()).
+  private var settleSecs = 0
   /// Recent per-second frame counts, for the RECOVERY test only.
   ///
   /// ★ `framesPerSec` is an INTEGER COUNT in a 1s window, and that quantisation is brutal at low
@@ -91,6 +93,14 @@ final class LinkManager {
   ///    really carrying, arriving at full rate just as the burst ends. 8s clears the measured
   ///    ~5s spike with margin, and the 5-sample average smooths what is left.
   private static let firstClimbAfter = 8
+  /// ★ HARD SETTLE DEADLINE. `settling` normally clears the instant we DECIDE — climb (good) or
+  ///   starve (poor). But a link whose fps parks in the HOLD BAND (between starveRatio and
+  ///   healthyRatio) triggers neither, so settling — and the "Initialising…" pill it drives — would
+  ///   stick FOREVER on a link that is actually working (seen live on VibeServer/Bluetooth: 8fps
+  ///   landed squarely in the dead band). After this many live+settled seconds, stop calling it
+  ///   initialising regardless: whatever rung we are on is now the honest reading. Outlasts the
+  ///   firstClimbAfter probe so a genuine climb still lands first when the link earns it.
+  private static let settleDeadline = 12
   /// Has this session ever genuinely starved? Distinguishes "cautious start" from "recovering".
   private var everStarved = false
   private static let starveRatio  = 0.6
@@ -155,6 +165,13 @@ final class LinkManager {
 
     guard live else { return }
     guard settled else { starvedSecs = 0; return }
+
+    // Settle deadline: give the link its window, then never report "initialising" again on this
+    // session — even if the rate parks in the hold band and no climb/starve decision ever fires.
+    if settling {
+      settleSecs += 1
+      if settleSecs >= Self.settleDeadline { settling = false }
+    }
 
     let expected = ladder[rung - 1]
     let ratio = expected > 0 ? fps / expected : 1

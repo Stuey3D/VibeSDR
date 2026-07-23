@@ -15,7 +15,17 @@ const KEY = 'vsdr_favourites';
 export type Favourite = {
   name: string; url: string; serverType?: BackendType;
   visits?: number; latitude?: number; longitude?: number; bestSnr?: number;
+  // custom = a server the user TYPED IN (vs one saved from a directory listing). Drives the picker's
+  // two subheadings and the edit affordance (only custom servers are editable). Optional: a LEGACY
+  // favourite saved before this flag has it undefined — favIsCustom() falls back to a coords heuristic
+  // (directory entries carry lat/lon; typed ones don't), so no migration write is needed.
+  custom?: boolean;
 };
+
+/** Is this a manually-added (typed) server, vs one saved from a directory? Handles legacy entries. */
+export function favIsCustom(f: Favourite): boolean {
+  return f.custom ?? (f.latitude == null && f.longitude == null);
+}
 
 export type FavSort = 'used' | 'alpha' | 'nearest' | 'snr' | 'type' | 'manual';
 const FAV_SORT_KEY = 'vibe.fav.sort';
@@ -61,7 +71,16 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
     ? current.filter(f => f.url !== fav.url)
     : [...current, { name: fav.name, url: fav.url, serverType: fav.serverType,
                      latitude: fav.latitude, longitude: fav.longitude, bestSnr: fav.bestSnr,
-                     visits: fav.visits ?? 0 }];
+                     visits: fav.visits ?? 0, custom: fav.custom }];
+  await saveFavourites(next);
+  return next;
+}
+
+/** Edit an existing favourite in place (keeps its slot + visits). Matches by the OLD url, since
+ *  editing the address changes the key. Used by the custom-server edit sheet. */
+export async function updateFavourite(oldUrl: string, patch: Partial<Favourite>): Promise<Favourite[]> {
+  const favs = await getFavourites();
+  const next = favs.map(f => (f.url === oldUrl ? { ...f, ...patch } : f));
   await saveFavourites(next);
   return next;
 }

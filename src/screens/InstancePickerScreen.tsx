@@ -85,6 +85,7 @@ import { watchTargetPending } from '../services/watchBoot';
 import { watchProvider } from '../services/watchProvider';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          repairVibeserverFavourites, saveFavourites, registerFavouriteVisit,
+         updateFavourite, favIsCustom,
          FavSort, getFavSort, setFavSort,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
@@ -286,6 +287,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
   const [tcpFavs,     setTcpFavs]       = useState<TcpFav[]>([]);
   const [tcpModal,    setTcpModal]      = useState(false);
+  // Editing a custom server (pencil on a custom favourite row): the favourite being edited + its
+  // draft name/url. url is the key, so editing it updates in place via updateFavourite(oldUrl,...).
+  const [editFav,     setEditFav]       = useState<Favourite | null>(null);
+  const [editName,    setEditName]      = useState('');
+  const [editUrl,     setEditUrl]       = useState('');
   // Auto-discovered RTL-TCP servers (mDNS/Bonjour) — live while the picker is focused.
   const [discovered,  setDiscovered]    = useState<DiscoveredServer[]>([]);
   const [tcpName,     setTcpName]       = useState('');
@@ -465,9 +471,28 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // reached; then keep the old default. connectFav re-detects on connect regardless.
   const favouriteCustomUrl = useCallback(async (url: string, name: string) => {
     const detected = await detectServerType(url).catch(() => null);
-    const next = await toggleFavourite({ name, url, serverType: detected ?? 'ubersdr' }, favourites);
+    const next = await toggleFavourite({ name, url, serverType: detected ?? 'ubersdr', custom: true }, favourites);
     setFavourites(next);
   }, [favourites]);
+
+  // Edit a custom server (pencil): open the sheet seeded from the favourite, and save the edits in
+  // place. If the address changed, drop the stored serverType so connectFav re-detects it fresh.
+  const openEditFav = useCallback((fav: Favourite) => {
+    setEditFav(fav);
+    setEditName(fav.name);
+    setEditUrl(fav.url);
+  }, []);
+  const saveEditFav = useCallback(async () => {
+    if (!editFav) return;
+    const url = editUrl.trim();
+    const name = editName.trim() || url;
+    if (!url) { setEditFav(null); return; }
+    const patch: Partial<Favourite> = { name, url, custom: true };
+    if (url !== editFav.url) patch.serverType = undefined;   // re-detect on next connect
+    const next = await updateFavourite(editFav.url, patch);
+    setFavourites(next);
+    setEditFav(null);
+  }, [editFav, editUrl, editName]);
 
   // Manual-mode drag reorder: the dragged list mixes headers/directories, but only favourite rows
   // can be picked up, so we persist just the new favourite order (by url) and let listData rebuild
@@ -1021,9 +1046,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // they just get in the way of that directory's actual server list (Stuart 2026-07-17).
     const showFavs = selectedDir === null;
     const instanceUrls = new Set(instances.map(i => i.url));
-    const favItems: ListItem[] = showFavs ? [
-      ...sortFavs(favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav), favSort, userLocRef.current, favMeta)
-          .map(f => ({ kind: 'custom' as const, fav: f })),
+    // Split favourites into CUSTOM SERVERS (typed by the user) and FAVOURITES (saved from a
+    // directory), each under its own subheading so the two are distinguishable. Directory-listing
+    // instances that happen to be favourited always belong with the directory group.
+    const sortedStored = showFavs
+      ? sortFavs(favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav), favSort, userLocRef.current, favMeta)
+      : [];
+    const customFavItems: ListItem[] = sortedStored.filter(favIsCustom)
+      .map(f => ({ kind: 'custom' as const, fav: f }));
+    const dirFavItems: ListItem[] = showFavs ? [
+      ...sortedStored.filter(f => !favIsCustom(f)).map(f => ({ kind: 'custom' as const, fav: f })),
       ...instances.filter(i => isFav(i.url)).filter(mInst).map(i => ({ kind: 'instance' as const, data: i })),
     ] : [];
     // In a directory, a favourited server still shows in its OWN group (don't vanish it) —
@@ -1031,9 +1063,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let rest = instances.filter(i => showFavs ? !isFav(i.url) : true).filter(mInst);
 
     const out: ListItem[] = [];
-    if (favItems.length) {
-      out.push({ kind: 'header', groupKey: '__fav', label: 'FAVOURITES', count: favItems.length, collapsible: false, collapsed: false });
-      out.push(...favItems);
+    if (customFavItems.length) {
+      out.push({ kind: 'header', groupKey: '__custom', label: 'CUSTOM SERVERS', count: customFavItems.length, collapsible: false, collapsed: false });
+      out.push(...customFavItems);
+    }
+    if (dirFavItems.length) {
+      out.push({ kind: 'header', groupKey: '__fav', label: 'FAVOURITES', count: dirFavItems.length, collapsible: false, collapsed: false });
+      out.push(...dirFavItems);
     }
 
     if (effectiveSort === 'country') {
@@ -1168,6 +1204,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               })()}
             </View>
             <View style={styles.rowRight}>
+              {favIsCustom(fav) && (
+                <TouchableOpacity style={{ padding: 4 }} onPress={() => openEditFav(fav)}>
+                  <Text style={{ fontSize: fs(16), color: C.goldDim }}>✎</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={{ padding: 4 }}
                 onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: fav.name, url: fav.url })}>
                 <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
@@ -1273,7 +1314,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </TouchableOpacity>
             <TouchableOpacity style={{ padding: 4 }}
               onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType,
-                latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined })}>
+                latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined,
+                custom: false })}>
               <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.textDim }}>{favoured ? '♥' : '♡'}</Text>
             </TouchableOpacity>
           </View>
@@ -1352,6 +1394,30 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               </TouchableOpacity>
               <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.amber }]} onPress={() => tcpModalConnect(true)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save & Connect</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit a saved custom server (pencil): change its name / address in place. Type re-detects on
+          the next connect if the address changed, so no type picker is needed here. */}
+      <Modal visible={!!editFav} transparent animationType="fade" onRequestClose={() => setEditFav(null)}>
+        <View style={styles.tcpBackdrop}>
+          <View style={[styles.tcpCard, { borderColor: C.amber }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>EDIT SERVER</Text>
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Name" placeholderTextColor={C.textDim}
+              value={editName} onChangeText={setEditName} autoCorrect={false} />
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
+              value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
+              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setEditFav(null)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.textDim }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.amber }]} onPress={saveEditFav}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save changes</Text>
               </TouchableOpacity>
             </View>
           </View>

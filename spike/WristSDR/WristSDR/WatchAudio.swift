@@ -87,7 +87,33 @@ final class WatchAudio {
   /// started. Anything less is a finding.
   private(set) var live = false
 
+  /// Is the current OUTPUT route mono? The built-in watch speaker is 48k MONO; AirPods/BT are
+  /// stereo. Drives Jr's audio request: on a mono route we ask VibeServer for a fullband mono Opus
+  /// stream (all 64k in one channel) instead of receiving stereo and downmixing a band-limited pair.
+  private(set) var outputIsMono = false
+  /// Fires (on the main thread) when the route's mono-ness CHANGES — plug/unplug AirPods — so the
+  /// client can re-request the matching channel count. Only the transition fires, so it's dedup'd.
+  var onRouteChange: ((Bool) -> Void)?
+
+  /// Re-read the output channel count and, if the mono/stereo-ness flipped, publish it. Called after
+  /// the engine starts and on every route reconfigure (AVAudioEngineConfigurationChange).
+  private func refreshRoute() {
+    let ch = engine.outputNode.outputFormat(forBus: 0).channelCount
+    guard ch > 0 else { return }                 // route not ready — don't guess
+    let mono = ch == 1
+    guard mono != outputIsMono else { return }
+    outputIsMono = mono
+    let cb = onRouteChange
+    DispatchQueue.main.async { cb?(mono) }
+  }
+
+  /// Kept so cold-start recovery can re-run start() with the original callback (see hookColdStart()).
+  private var startDone: ((Bool, String) -> Void)?
+  private var lifecycleHooked = false
+
   func start(_ done: @escaping (Bool, String) -> Void) {
+    startDone = done
+    hookColdStart()
     let session = AVAudioSession.sharedInstance()
     do {
       // .longFormAudio, AND THE ROUTE PICKER IS THE PRICE OF IT.
@@ -125,8 +151,31 @@ final class WatchAudio {
   /// launch activates cleanly, which is exactly what the force-quit did). A bounded backoff heals
   /// it. A genuinely route-less watch (older, no headphones) still fails ALL attempts and gives up
   /// gracefully — no spin. ~3 attempts over ~1.2 s.
+  /// ★ COLD-START RECOVERY. If the very first activate() is refused for the WHOLE retry window
+  /// (watchOS can hold it off for several seconds while the app is still settling on a fresh
+  /// connect), start() fails and — because startEngine() never ran — NONE of the lifecycle
+  /// observers exist. Audio then cannot heal on its own: it stays dead until a force-quit. That
+  /// was the "ages with no audio, then it sprang to life when I touched the watch" symptom.
+  /// Register ONE didBecomeActive hook here, independent of activation, that re-runs start()
+  /// whenever audio isn't live — so a glance at the wrist revives it. Guarded to register once.
+  private func hookColdStart() {
+    guard !lifecycleHooked else { return }
+    lifecycleHooked = true
+    NotificationCenter.default.addObserver(
+      forName: WKApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      guard let self, !self.live, let done = self.startDone else { return }
+      Vitals.crumb("AUDIO cold-start recovery: not live on didBecomeActive — retrying start()")
+      self.start(done)
+    }
+  }
+
   private func activateAttempt(_ session: AVAudioSession, attempt: Int, done: @escaping (Bool, String) -> Void) {
-    let maxAttempts = 3
+    // ★ Persist longer than the old 3/1.2s. A fresh VibeServer connect settles the app for a few
+    // seconds and watchOS refuses activate() the whole time — too short a window left JR silent
+    // until it happened to be re-kicked. 6 attempts with a rising backoff cover ~7.5s; a genuinely
+    // route-less watch still exhausts them and reports the refusal, just a few seconds later.
+    let maxAttempts = 6
     session.activate(options: []) { [weak self] ok, err in
       guard let self else { return }
 
@@ -160,7 +209,7 @@ final class WatchAudio {
         // reason JR asks the device-class question.)
         if attempt < maxAttempts {
           Vitals.crumb("AUDIO activate refused (attempt \(attempt)/\(maxAttempts)) — retrying")
-          let delay = 0.4 * Double(attempt)   // 0.4s, 0.8s
+          let delay = 0.5 * Double(attempt)   // 0.5s … 2.5s (rising)
           DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             self.activateAttempt(session, attempt: attempt + 1, done: done)
           }
@@ -357,6 +406,7 @@ final class WatchAudio {
     player.play()
     started = true
     startSilenceKeeper()
+    refreshRoute()          // publish the initial route (mono speaker vs stereo AirPods)
     watchSession()
     becomeNowPlaying()
     // Keep the app FRONTMOST longer on wrist-down — extends the default ~2 min return-to-clock timeout to
@@ -402,6 +452,7 @@ final class WatchAudio {
         // is exactly what lets the engine shut the hardware down. Restart the keeper against
         // the NEW format (it re-primes the cushion as it starts).
         self.startSilenceKeeper()
+        self.refreshRoute()     // route may have flipped mono↔stereo — re-request channels if so
       }
     }
   }
@@ -442,6 +493,19 @@ final class WatchAudio {
     }
     t.resume()
     keeper = t
+  }
+
+  /// ONE-SHOT extra cushion, for the wrist-up spectrum reconnect. The reopened spectrum socket dumps
+  /// a burst that briefly hogs the (weak) link and starves audio → a stutter. Topping the buffer up
+  /// once here gives audio the head start to ride that burst out. ★ This does NOT change targetQueued
+  /// or floorQueued, so it adds ZERO latency to the TUNE path — a tune flush()es to floorQueued and
+  /// rebuilds to the normal target regardless. The only cost is a touch more listening latency between
+  /// wrist-up and the next tune, which self-clears on that tune. Keep `seconds` modest (snappy > deep).
+  func primeCushion(_ seconds: Double) {
+    q.async { [weak self] in
+      guard let self, self.started, self.engine.isRunning else { return }
+      self.topUp(to: min(seconds, self.maxQueued))
+    }
   }
 
   /// Schedule silence until the queue holds `seconds`. Caller must be on `q`.
