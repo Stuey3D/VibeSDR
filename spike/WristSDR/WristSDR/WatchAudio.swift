@@ -115,6 +115,18 @@ final class WatchAudio {
       return
     }
 
+    activateAttempt(session, attempt: 1, done: done)
+  }
+
+  /// Activate the audio session, RETRYING a transient first-connect refusal.
+  ///
+  /// ★ watchOS often refuses the VERY FIRST activate() — before the app is fully foreground — even
+  /// on a speaker-capable watch. With no retry that left JR SILENT until a force-quit (a fresh
+  /// launch activates cleanly, which is exactly what the force-quit did). A bounded backoff heals
+  /// it. A genuinely route-less watch (older, no headphones) still fails ALL attempts and gives up
+  /// gracefully — no spin. ~3 attempts over ~1.2 s.
+  private func activateAttempt(_ session: AVAudioSession, attempt: Int, done: @escaping (Bool, String) -> Void) {
+    let maxAttempts = 3
     session.activate(options: []) { [weak self] ok, err in
       guard let self else { return }
 
@@ -142,8 +154,18 @@ final class WatchAudio {
         + "(0=unknown 1=unplugged 2=charging 3=full) model=\(dev.model) sys=\(dev.systemVersion)")
 
       guard ok else {
-        // watchOS says no route. On older watches with no headphones connected this is
-        // the EXPECTED answer, and it is the whole reason JR has a device-class question.
+        // A first-connect refusal is usually transient — retry with a short backoff before
+        // treating it as final. (On older watches with no headphones a refusal is the EXPECTED,
+        // permanent answer — the retries simply exhaust and we report it, which is the whole
+        // reason JR asks the device-class question.)
+        if attempt < maxAttempts {
+          Vitals.crumb("AUDIO activate refused (attempt \(attempt)/\(maxAttempts)) — retrying")
+          let delay = 0.4 * Double(attempt)   // 0.4s, 0.8s
+          DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            self.activateAttempt(session, attempt: attempt + 1, done: done)
+          }
+          return
+        }
         self.lastError = "activate refused: \(err?.localizedDescription ?? "no route")"
         DispatchQueue.main.async { done(false, self.lastError) }
         return
