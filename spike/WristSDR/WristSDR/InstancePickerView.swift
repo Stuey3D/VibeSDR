@@ -371,8 +371,7 @@ struct InstancePickerView: View {
   // ── Actions ───────────────────────────────────────────────────────────────────
   private func connect(url: String, name: String, type: ServerType) {
     guard type.connectable else { return }   // other protocols land as adapters are added
-    let host = URL(string: url)?.host ?? url.replacingOccurrences(of: "https://", with: "")
-      .replacingOccurrences(of: "http://", with: "").trimmedTrailingSlash
+    let host = hostPort(url)   // ★ preserve the port (URL.host drops it — broke non-default-port servers)
     favs.registerVisit(url)
     onConnect(SDRServer(name: name, url: url, host: host, serverType: type))
   }

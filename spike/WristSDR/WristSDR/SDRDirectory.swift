@@ -66,6 +66,21 @@ struct DirectoryMeta: Identifiable {
 /// Probe a custom URL's landing page to work out which backend it is — a Swift port of the phone's
 /// `detectServerType` (sdrTypes.ts). ORDER MATTERS (a later backend's page contains an earlier one's
 /// marker). VibeServer speaks the UberSDR protocol, so it maps to `.ubersdr` on the spike.
+/// "host:port" from a URL string, PRESERVING the port. URL.host DROPS the port, which broke
+/// connecting to a VibeServer on a non-default port (e.g. :48001): the /vibeserver/auth + WS then
+/// hit port 80 and hung on "checking PIN". Falls back to stripping the scheme when URL parsing fails.
+func hostPort(_ urlStr: String) -> String {
+  let clean = urlStr.trimmingCharacters(in: .whitespaces)
+  if let u = URL(string: clean), let h = u.host {
+    if let p = u.port { return "\(h):\(p)" }
+    return h
+  }
+  var s = clean
+  for pre in ["https://", "http://", "wss://", "ws://"] where s.hasPrefix(pre) { s.removeFirst(pre.count); break }
+  while s.hasSuffix("/") { s.removeLast() }
+  return s
+}
+
 func detectServerType(_ url: String) async -> ServerType? {
   var base = url.trimmingCharacters(in: .whitespaces)
   while base.hasSuffix("/") { base.removeLast() }
@@ -354,7 +369,7 @@ final class FavStore: ObservableObject {
 
   func addCustom(name: String, url: String, type: ServerType) {
     guard !favourites.contains(where: { $0.url == url }) else { return }
-    favourites.append(Favourite(name: name.isEmpty ? url : name, url: url, serverType: type))
+    favourites.append(Favourite(name: name.isEmpty ? url : name, url: url, serverType: type, host: hostPort(url)))
     persist()
   }
 
