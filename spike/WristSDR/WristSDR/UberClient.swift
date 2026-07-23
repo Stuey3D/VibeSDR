@@ -510,7 +510,13 @@ final class UberClient: ObservableObject {
     guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
     specOpenSeq &+= 1
     let seq = specOpenSeq
-    let url = URL(string: "\(scheme)://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(authSuffix)")!
+    // FFT/BIN lever (VibeServer only): ask for exactly our waterfall width instead of the server's
+    // full 4096. The server keeps its full sample rate and peak-holds its fine FFT down to this many
+    // bins as it crops for zoom — so zoomed out is coarse (UberSDR-style), zoomed in sharpens, and
+    // the wire cost is a flat ~128 bins/frame at every zoom. Cuts each SPEC frame ~32x. UberSDR
+    // ignores the param (it sends its own count, which we downsample as before).
+    let binsParam = isVibe ? "&bins=\(WaterfallBuffer.width)" : ""
+    let url = URL(string: "\(scheme)://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
