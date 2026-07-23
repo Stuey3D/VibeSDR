@@ -709,6 +709,9 @@ struct ContentView: View {
     .onChange(of: link.lastRowAt)   { _, _ in syncHint() }
     .onChange(of: link.lastStateAt) { _, _ in syncHint() }
     .onChange(of: scenePhase) { _, phase in
+      // ★ Record the REAL scene state up front — this is the honest "is the wrist up" signal the
+      // warning/glyph logic needs, independent of the lagging status string (see deliberatelyPaused).
+      link.sceneActive = (phase == .active)
       // YOU LEFT — the mode ends, and the spike drops its spectrum socket (audio keeps
       // playing in the background, which is the whole point of WKBackgroundModes=[audio]).
       guard phase == .active else {
@@ -1360,8 +1363,10 @@ struct ContentView: View {
   /// Driven by the row and state clocks, so it needs no timer of its own.
   private func syncHint() {
     let now = Date()
-    // Same reason as stalledMessage: a deliberate power-save suspend is not a rough link.
-    if link.isBackground { hint = nil; shownSince = nil; return }
+    // Same reason as stalledMessage: a deliberate power-save suspend is not a rough link. But ONLY
+    // when actually wrist-down — a wrist-up spectrum that can't recover on a weak link must still
+    // raise the hint (deliberatelyPaused, not isBackground).
+    if link.deliberatelyPaused { hint = nil; shownSince = nil; return }
     guard let c = rawHint else {
       // Healthy again — but a pill that flashed up for 200ms is worse than none, so
       // hold it for its minimum read time before retiring it.
@@ -1434,7 +1439,12 @@ struct ContentView: View {
                                                          : ("Connecting to the server…", true)
     case "retrying (ws)…":        return ("Reconnecting…", true)
     case "switching profile…":    return ("Switching profile…", true)
-    case "background · audio only": return ("Paused to save power · audio playing", true)
+    // Wrist DOWN = a genuine power-save pause (benign). Wrist UP but the status still says
+    // background = the spectrum is trying to come back on a weak link and can't — say THAT instead
+    // of blaming power-saving for a black screen the user is looking at.
+    case "background · audio only":
+      return link.deliberatelyPaused ? ("Paused to save power · audio playing", true)
+                                      : ("Spectrum reconnecting — signal weak…", true)
     case "no wifi — using phone": return ("No Wi‑Fi — going through your iPhone", true)
     case "refused":               return ("The server refused the connection", false)
     case "can't reach server":    return ("Can't reach that server", false)
@@ -1480,7 +1490,10 @@ struct ContentView: View {
     // full-screen "Lost the server". Alarming the user about the app's own deliberate action is
     // worse than saying nothing. Audio is still playing; the calm `connectionStatus` pill
     // ("Paused to save power") carries it instead. (Found on-wrist 2026-07-19.)
-    if link.isBackground { return nil }
+    // ★ deliberatelyPaused, not isBackground: only suppress when the wrist is ACTUALLY down. On
+    // wrist-up over a weak link the status still says "background" but the black screen is a real
+    // problem the user is staring at — let the stall message through. (Shower repro 2026-07-23.)
+    if link.deliberatelyPaused { return nil }
     // A reconnect is NOT a hard fault on the standalone watch — the audio keeps playing and the
     // spectrum socket is coming back. Let the soft "Reconnecting" pill (rawHint) own it instead
     // of throwing up the black "spectrum stopped" box. (The companion's hard overlay is for a

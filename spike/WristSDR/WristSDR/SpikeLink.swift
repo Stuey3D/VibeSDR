@@ -531,7 +531,20 @@ final class SpikeLink: ObservableObject {
 
   /// True while the spectrum has been intentionally dropped for wrist-down (audio keeps
   /// playing). Used by the scene handler to tell a real suspend from a quick glance-away.
+  /// ★ This reads the STATUS STRING, which LAGS: on wrist-up over a weak link the status stays
+  /// "background…" until the spectrum socket actually reconnects, so isBackground alone stays true
+  /// while you are looking at a black screen. Keep it for the RESUME logic (it means "the socket
+  /// was dropped, reopen it"); do NOT use it to suppress warnings — use `deliberatelyPaused`.
   var isBackground: Bool { client?.status.hasPrefix("background") ?? false }
+
+  /// Set by the scene handler: true while the app is foreground/active (wrist UP, screen on).
+  @Published var sceneActive = true
+
+  /// We are DELIBERATELY power-saving: the spectrum was dropped AND the wrist is actually down.
+  /// The WARNING + GLYPH logic keys off this, not isBackground — so a wrist-UP moment where the
+  /// spectrum simply cannot recover on a weak link reads honestly ("reconnecting", non-green)
+  /// instead of being mistaken for a deliberate pause. (The shower / erratic-link bug, 2026-07-23.)
+  var deliberatelyPaused: Bool { isBackground && !sceneActive }
 
   // ── Scene lifecycle passthroughs (the spike's socket watchdog) ──────────────
   func resume() { client?.resumeSpectrum() }
