@@ -30,6 +30,7 @@ import {
   View,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import SectionIcon from './SectionIcon';
 import {
   Canvas,
   Group,
@@ -104,6 +105,10 @@ export interface MeterValues {
    *  while the UberSDR gate compares raw SNR, so "fill < line" could redden while audio flowed (and
    *  miss real mutes). undefined = this backend can't say; fall back to geometry. */
   gate?: boolean;
+  /** Incoming SPECTRUM data rate (KB/s) and frame rate (fps) — the connection-meter readout. Audio
+   *  bytes are decoded natively on the phone, so this is the JS-visible (spectrum) rate. */
+  kbps?: number;
+  fps?:  number;
 }
 export interface MeterBus {
   value: MeterValues;
@@ -112,7 +117,7 @@ export interface MeterBus {
 }
 export function createMeterBus(): MeterBus {
   const bus: MeterBus = {
-    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0, sql: -1 },
+    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0, sql: -1, kbps: 0, fps: 0 },
     subs:  new Set(),
     emit(v: MeterValues) { bus.value = v; bus.subs.forEach(f => f(v)); },
   };
@@ -342,13 +347,21 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const m = useMeters(bus);
   const q = m ? m.link : 0;
   const dim = 'rgba(255,255,255,0.40)';
+  // Incoming rate readout — spectrum KB/s (the phone's audio is decoded natively, so JS can't see
+  // its bytes) + frame rate, the same "what's actually arriving" cue the web client shows. Only once
+  // a link exists, so a disconnected meter stays clean.
+  const showRate = !!m && q > 0 && (m.fps ?? 0) > 0;
+  const rateTxt  = showRate ? `${Math.round(m!.kbps ?? 0)}k/s · ${Math.round(m!.fps ?? 0)}fps` : '';
   return (
     <View style={pm.linkRow}>
       <PhoneGlyph color={dim} />
       <Text style={pm.linkArrows}>⇄</Text>
       <LinkBars q={q} />
       <Text style={pm.linkArrows}>⇄</Text>
-      <ServerGlyph color={dim} />
+      {/* The network-NODE triangle — the same server mark used everywhere else (menu, watch), not
+          the old server-rack box. */}
+      <SectionIcon name="instance" size={13} color={dim} />
+      {showRate ? <Text style={pm.linkRate}>{rateTxt}</Text> : null}
     </View>
   );
 }
@@ -469,6 +482,7 @@ const pm = StyleSheet.create({
   linkBar:  { width: 3, borderRadius: 1 },
   linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
   linkArrows: { color: 'rgba(255,255,255,0.40)', fontSize: 9, lineHeight: 11 },
+  linkRate:   { color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 11, marginLeft: 4, fontVariant: ['tabular-nums'] },
   phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
   phoneDot:   { width: 2.5, height: 1.5, borderRadius: 1 },

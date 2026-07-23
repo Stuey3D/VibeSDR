@@ -945,18 +945,16 @@ export default function MenuSheet({
                   <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
                 </BtnRow>
 
-                {/* AUTO LINK MANAGEMENT — asks the server for fewer waterfall frames when the
-                    connection cannot carry them, and climbs back when it recovers. The waterfall
-                    interpolates regardless, so a lower rate costs TIME RESOLUTION, not smooth
-                    scrolling — a stuttering link is ugly, a slower one mostly is not.
-                    AUTO is the default. FULL never throttles (may stutter). LOW DATA pins the
-                    floor for metered connections — a choice, so it never shows as a poor link. */}
-                {onLinkMode && (<>
-                  <SubLabel label="Link Management" />
+                {/* SIGNAL METER unit — SNR / S-units / dBFS. A DISPLAY choice (it only changes the
+                    frequency-pill readout), so it lives with the other display settings — moved here
+                    from CONTROLS. Link Management moved OUT to the SERVER section (it's a server control). */}
+                {onSignalMode && (<>
+                  <SubLabel label="Signal meter" />
                   <BtnRow>
-                    <Btn label="AUTO"     active={linkMode==='adaptive'} onPress={() => onLinkMode('adaptive')} />
-                    <Btn label="FULL"     active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
-                    <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
+                    {(['snr','smeter','dbfs'] as const).map(sm => (
+                      <Btn key={sm} label={sm==='smeter' ? 'S-METER' : sm.toUpperCase()}
+                        active={signalMode===sm} onPress={() => onSignalMode?.(sm)} />
+                    ))}
                   </BtnRow>
                 </>)}
 
@@ -974,15 +972,7 @@ export default function MenuSheet({
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
             <SectionLabel label="CONTROLS" icon="controls" />
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>SIGNAL</Text>
-              <BtnRow>
-                {(['snr','smeter','dbfs'] as const).map(m => (
-                  <Btn key={m} label={m==='smeter' ? 'S-METER' : m.toUpperCase()}
-                    active={signalMode===m} onPress={() => onSignalMode?.(m)} />
-                ))}
-              </BtnRow>
-            </View>
+            {/* SIGNAL METER unit moved to DISPLAY SETTINGS (it's a display choice). */}
             {/* DISPLAY STYLE row removed — accessibility skin (white/Atkinson)
                 is the single style now; amber/Nixie dropped for readability. */}
             <View style={styles.ctrlRow}>
@@ -1032,6 +1022,19 @@ export default function MenuSheet({
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="SERVER" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
+            {/* AUTO LINK MANAGEMENT — a SERVER control (it changes what the server sends): asks for
+                fewer waterfall frames when the link can't carry them, climbs back when it recovers.
+                AUTO default; FULL never throttles (may stutter); LOW DATA pins the floor for metered
+                connections. The waterfall interpolates regardless, so a lower rate costs TIME
+                RESOLUTION, not smooth scrolling. Moved here from Display settings. */}
+            {onLinkMode && (<>
+              <SubLabel label="Link Management" />
+              <BtnRow>
+                <Btn label="AUTO"     active={linkMode==='adaptive'} onPress={() => onLinkMode('adaptive')} />
+                <Btn label="FULL"     active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
+                <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
+              </BtnRow>
+            </>)}
             {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
                 (top-left of the spectrum) — they're the "which server am I on / how
                 do I leave" actions, and burying them here behind a settings-looking

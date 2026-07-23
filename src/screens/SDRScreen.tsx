@@ -2068,6 +2068,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
+      // Incoming spectrum data-rate + frame-rate → the connection meter's "NNk/s · NNfps" readout.
+      onLinkRate: (_rung: number, _settling: boolean, fps: number, kbps: number) => {
+        if (destroyed.current) return;
+        const b = meterBus.current;
+        b.emit({ ...b.value, fps, kbps });
+      },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio

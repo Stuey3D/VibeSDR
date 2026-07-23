@@ -63,7 +63,7 @@ export interface SDRCallbacks {
   onLink?:      (q: 0 | 1 | 2 | 3) => void;
   /** Adaptive link state: how far the controller has throttled (1 = full) and whether it is still
    *  working the link out. Lets the UI show a throttled-but-fine link honestly instead of red. */
-  onLinkRate?:  (adaptiveRung: number, settling: boolean, fps: number) => void;
+  onLinkRate?:  (adaptiveRung: number, settling: boolean, fps: number, kbps: number) => void;
   /** True from the moment a recovery starts (socket torn down) until the first
    *  frame arrives on the fresh one. The watch cannot infer this — from the wrist
    *  a recovery-in-progress and a dead phone look identical — so the phone, which
@@ -651,6 +651,7 @@ export class UberSDRClient {
         this.dbg(`SpecMsg#${specMsgCount} binary=${e.data instanceof ArrayBuffer} len=${e.data instanceof ArrayBuffer ? e.data.byteLength : (e.data as string).length}`);
       }
       if (e.data instanceof ArrayBuffer) {
+        this.specBytes += e.data.byteLength;   // for the connection-meter data-rate readout
         this._parseBinaryFrame(e.data);
       } else if (typeof e.data === 'string') {
         try {
@@ -804,6 +805,7 @@ export class UberSDRClient {
   private isVibeServer = false;
   private link: LinkManager | null = null;
   private specFrames = 0;              // frames counted in the current 1s window
+  private specBytes  = 0;              // spectrum bytes in the current 1s window (audio is native)
   private linkTimer: ReturnType<typeof setInterval> | null = null;
   private serverMaxFps = 0;            // the owner's ceiling, once hwinfo tells us
 
@@ -830,11 +832,13 @@ export class UberSDRClient {
     this.linkTimer = setInterval(() => {
       const fps = this.specFrames;
       this.specFrames = 0;
+      const kbps = this.specBytes / 1024;   // spectrum only — the phone's audio bytes are native
+      this.specBytes = 0;
       const live = this.spectrumWs?.readyState === WebSocket.OPEN;
       // `settled` guards a tune/zoom re-subscription, where frames legitimately pause — reading
       // that as a bad link would throttle every time the user moved the dial.
       this.link?.tick(fps, !!live, Date.now() - this.lastResubAt > 1500);
-      if (this.link) this.callbacks.onLinkRate?.(this.link.adaptiveRung, this.link.settling, fps);
+      if (this.link) this.callbacks.onLinkRate?.(this.link.adaptiveRung, this.link.settling, fps, kbps);
     }, 1000);
   }
 
