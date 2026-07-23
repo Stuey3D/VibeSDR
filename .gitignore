@@ -75,3 +75,6 @@ spike/WristSDR/build-*.log
 /build/
 vibeserver/mac/AppIcon.icns
 vibeserver/mac/Resources/
+
+# Notarised VibeServer release artefacts (attached to GitHub releases, not tracked)
+VibeServer-*.zip
