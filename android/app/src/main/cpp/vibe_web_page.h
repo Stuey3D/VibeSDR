@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (263.0 KB)
+// Source: web/client/  (263.2 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -199,7 +199,9 @@ html, body {
    middle had nowhere left to go — the search box is the most elastic thing in the bar
    (it's a text field; it can simply be narrower) and it was the least willing to give.
    Now it yields: 34em preferred, down to 20em under pressure. */
-#rightCol { justify-self: end; width: 34em; min-width: 20em; max-width: 46em; }
+/* Wider by 3em so the status line ('… KB/s · fps · ms · IDLE') and the search placeholder
+   ('… frequencies') stop clipping off the right edge now the data-rate/fps counter is in the line. */
+#rightCol { justify-self: end; width: 37em; min-width: 20em; max-width: 48em; }
 #sigWrap { width: 100%; }
 #findRow { display: flex; gap: 0.6em; align-items: stretch; width: 100%; }
 #findRow #bookmarksBtn { flex: 0 0 auto; white-space: nowrap; }
