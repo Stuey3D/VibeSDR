@@ -81,6 +81,32 @@ func hostPort(_ urlStr: String) -> String {
   return s
 }
 
+/// Probe VibeServer's port range (48000..48019) on a bare host for one carrying VibeServer, so a user
+/// can type just "192.168.1.5" and Jr finds the port — VibeServer picks the first FREE port, so it
+/// DRIFTS (48000 taken → 48001) and re-typing a changing port on a wrist is miserable. This scans the
+/// FULL DEFAULT RANGE (48000..48049). NOT a full 1-65535 scan: that is minutes + battery over the BT
+/// relay and an App-Store grey area, and a DELIBERATELY custom port is one the operator knows and can
+/// append (:port). Concurrent, short timeout; returns the first "http://host:port" that answers
+/// /vibeserver/auth, else nil.
+func probeVibeServerPort(_ host: String) async -> String? {
+  await withTaskGroup(of: String?.self) { group in
+    for port in 48000...48049 {
+      group.addTask {
+        let base = "http://\(host):\(port)"
+        guard let u = URL(string: base + "/vibeserver/auth") else { return nil }
+        var req = URLRequest(url: u); req.timeoutInterval = 2
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              j["required"] != nil else { return nil }   // /vibeserver/auth → {"required": …} identifies it
+        return base
+      }
+    }
+    for await r in group where r != nil { group.cancelAll(); return r }
+    return nil
+  }
+}
+
 func detectServerType(_ url: String) async -> ServerType? {
   var base = url.trimmingCharacters(in: .whitespaces)
   while base.hasSuffix("/") { base.removeLast() }

@@ -462,9 +462,19 @@ struct CustomServerSheet: View {
           return
         }
       }
+      // No luck on the default ports AND no port was typed → VibeServer may have drifted to another
+      // port in its range. Scan 48000..48049 so the user needn't chase a changing port.
+      let hasPort = clean.contains("://") || clean.range(of: #":\d+$"#, options: .regularExpression) != nil
+      if !hasPort {
+        await MainActor.run { detectMsg = "Scanning for VibeServer…" }
+        if let found = await probeVibeServerPort(clean) {
+          await MainActor.run { onAdd(name.trimmingCharacters(in: .whitespaces), found, .vibeserver); dismiss() }
+          return
+        }
+      }
       await MainActor.run {
         detecting = false; auto = false
-        detectMsg = "Couldn't reach the server — pick the type below and save."
+        detectMsg = "Couldn't find it. If you set a CUSTOM port, add it to the address (e.g. 192.168.1.5:8080), then pick the type below."
       }
     }
   }
