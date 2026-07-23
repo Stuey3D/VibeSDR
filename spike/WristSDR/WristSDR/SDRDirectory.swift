@@ -75,7 +75,10 @@ func detectServerType(_ url: String) async -> ServerType? {
   do {
     let (data, _) = try await URLSession.shared.data(for: req)
     let body = (String(data: data, encoding: .utf8) ?? "").lowercased()
-    if body.contains("vibeserver") { return .ubersdr }                          // UberSDR-protocol
+    // ★ VibeServer serves the UberSDR-style spectrum protocol BUT needs the VibeServer client mode
+    // (isVibe: /ws/audio + PIN + Opus/ADPCM). Returning .ubersdr made Jr run the UberSDR /ws register
+    // handshake, which VibeServer never answers — the "stuck on registering" bug. It IS a VibeServer.
+    if body.contains("vibeserver") { return .vibeserver }
     if body.contains("ubersdr") { return .ubersdr }
     if body.range(of: "kiwisdr|kiwi sdr|/kiwi/|kiwi_util|owrx_ws_open", options: .regularExpression) != nil { return .kiwi }
     if body.contains("openwebrx") { return .owrx }

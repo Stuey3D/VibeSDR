@@ -353,7 +353,13 @@ struct InstancePickerView: View {
     .fmdx: "logo_fmdx", .spyserver: "rtltcp", .rtltcp: "rtltcp",
   ]
   @ViewBuilder private func typeBadge(_ t: ServerType) -> some View {
-    if let name = Self.logoName[t], let img = UIImage(named: name) {
+    if t == .vibeserver {
+      // VibeServer's own mark — the network-node triangle (same glyph as the menu / connection
+      // meter / phone), not a borrowed UberSDR logo.
+      InstanceNodes()
+        .stroke(Color(red: 0.34, green: 1.0, blue: 0.52), lineWidth: 1.7)
+        .frame(width: 20, height: 20)
+    } else if let name = Self.logoName[t], let img = UIImage(named: name) {
       Image(uiImage: img).resizable().scaledToFit().frame(width: 22, height: 22)
     } else {
       Text(String(t.display.prefix(1)))

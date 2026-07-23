@@ -316,18 +316,17 @@ struct ContentView: View {
       // Top-leading (clear of the settled clock pill and the band row), tiny, hit-testing off so it
       // never eats a waterfall tap. Only while a feed is actually flowing.
       if link.everGotRow {
+        // CENTRED and dropped below the top chrome — the top corners are the watch's rounded bezel
+        // and ate the left-hand digits when it sat top-leading.
         VStack {
-          HStack {
-            Text(String(format: "%.0f k/s · %.0f fps", link.dbgKbps, link.dbgFps))
-              .font(.system(size: 11, weight: .medium, design: .monospaced))
-              .foregroundColor(.green.opacity(0.85))
-              .padding(.horizontal, 5).padding(.vertical, 2)
-              .background(Color.black.opacity(0.5), in: Capsule())
-            Spacer()
-          }
+          Text(String(format: "%.0f k/s · %.0f fps", link.dbgKbps, link.dbgFps))
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundColor(.green.opacity(0.85))
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(Color.black.opacity(0.5), in: Capsule())
+            .padding(.top, 34)
           Spacer()
         }
-        .padding(.leading, 8)
         .allowsHitTesting(false)
       }
 
