@@ -1018,10 +1018,11 @@ final class UberClient: ObservableObject {
 
     let url: URL?
     if isVibe {
-      // VibeServer: /ws/audio (ADPCM), no session id in the path. The auth suffix leads with "&", but this
-      // path has no query yet, so swap the first "&" for "?".
-      let q = authSuffix.isEmpty ? "" : "?" + authSuffix.dropFirst()
-      url = URL(string: "\(scheme)://\(host)/ws/audio\(q)")
+      // VibeServer: /ws/audio. Ask for Opus — Jr decodes it (OpusDecoder), and it is ~4x lighter
+      // than PCM, which is what makes VibeServer usable over Bluetooth. An OLD (pre-Opus) VibeServer
+      // simply ignores the codec param and sends ADPCM, which decodeVibeAudio still handles.
+      let extra = authSuffix.isEmpty ? "" : "&" + authSuffix.dropFirst()
+      url = URL(string: "\(scheme)://\(host)/ws/audio?codec=opus\(extra)")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
         self.decodeVibeAudio(d)
@@ -1123,6 +1124,14 @@ final class UberClient: ObservableObject {
     let format = d[1]
     let rate = Int(d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self) })
 
+    if format == 3 {                                   // Opus (VibeServer compressed audio)
+      let ch = max(1, Int(d[0]))
+      let packet = d.subdata(in: 6..<d.count)
+      if let pcm = opus.decodeRaw(packet, rate: Int32(rate), ch: Int32(ch)) {
+        audio.play(pcm: pcm, rate: Int32(rate), channels: Int32(ch))
+      }
+      return
+    }
     if format == 0 {
       let ch = max(1, Int(d[0]))
       let pcm = d.subdata(in: 6..<d.count).withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
