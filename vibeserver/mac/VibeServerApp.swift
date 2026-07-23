@@ -30,6 +30,9 @@ final class Server: ObservableObject {
     @AppStorage("pin")      var pin        = ""
     @AppStorage("port")     var wantedPort = 0        // 0 = first free 48000-48049
     @AppStorage("serveWeb") var serveWeb   = true
+    /// Advertise on the LAN via Bonjour so clients auto-discover us. Off = reachable only by typing
+    /// the address (a privacy choice — don't announce the radio to everyone on the network).
+    @AppStorage("advertise") var advertise = true
     // ── Link management ceilings ─────────────────────────────────────────────
     // What the OPERATOR is willing to spend on each listener. The server enforces these, and —
     // crucially — publishes them so an adaptive client can see the ceiling instead of reading it
@@ -147,6 +150,12 @@ final class Server: ObservableObject {
         refreshDevices()
     }
 
+    /// The operator flipped the Bonjour toggle — apply it live.
+    func applyAdvertise() {
+        if advertise, running, listeners == 0 { startAdvertising() } else { stopAdvertising() }
+        onChange?()
+    }
+
     func stop() {
         stopAdvertising()
         vs_stop()
@@ -203,7 +212,7 @@ final class Server: ObservableObject {
 
     private func startAdvertising() {
         stopAdvertising()
-        guard running, port > 0 else { return }
+        guard running, port > 0, advertise else { return }   // advertise=false → discoverable only by address
         let svc = NetService(domain: "local.", type: "_vibesdr._tcp.",
                              name: serviceName, port: Int32(port))
         svc.setTXTRecord(NetService.data(fromTXTRecord: [
@@ -559,6 +568,35 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            // ── The addresses to point a client at, and what the server is pushing right now. AT THE
+            // TOP because "how do I reach this / what's it doing" is the first question — and the
+            // reason a user typed the wrong port (couldn't see which one it bound). ──
+            Section("Connect") {
+                if server.running {
+                    if server.accessAddresses.isEmpty {
+                        Text("Starting…").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(server.accessAddresses, id: \.self) { a in
+                            HStack {
+                                Text(a).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                                Spacer()
+                                Button {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(a, forType: .string)
+                                } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless)
+                            }
+                        }
+                        Text("Point VibeSDR or Jr at one of these — INCLUDE THE PORT.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Now sending", value: server.status.clientConnected
+                        ? String(format: "spectrum %.0f · audio %.0f KB/s · %.0f fps",
+                                 server.status.specBytesPerSec/1024, server.status.audioBytesPerSec/1024, server.status.fftRate)
+                        : "nobody listening")
+                } else {
+                    Text("Not serving — start it from the menu-bar icon.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Radio") {
                 // ★ AT THE TOP, and always visible. A radio plugged in after launch is invisible
                 // until something rescans, and the only workaround was quitting the app — which is
@@ -584,6 +622,11 @@ struct SettingsView: View {
                 Text("Network listeners must enter this. This Mac never has to.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
+                Toggle("Advertise on the network", isOn: Binding(
+                    get: { server.advertise },
+                    set: { server.advertise = $0; server.applyAdvertise() }))
+                Text("On, clients auto-discover this server (Bonjour). Off, it's reachable only by typing its address — a privacy choice if you'd rather not announce the radio to everyone on the network.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Station search") {
                 // Off by default: it is a network fetch, and a headless/offline server should not
@@ -607,11 +650,13 @@ struct SettingsView: View {
                 }
                 Picker("Capture rate", selection: $server.lockedRate) {
                     Text("Listener chooses").tag(0.0)
-                    Text("Pinned · 2.4 MHz").tag(2_400_000.0)
-                    Text("Pinned · 1.8 MHz").tag(1_800_000.0)
-                    Text("Pinned · 1.2 MHz").tag(1_200_000.0)
-                    Text("Pinned · 960 kHz").tag(960_000.0)
+                    Text("Up to · 2.4 MHz").tag(2_400_000.0)
+                    Text("Up to · 1.8 MHz").tag(1_800_000.0)
+                    Text("Up to · 1.2 MHz").tag(1_200_000.0)
+                    Text("Up to · 960 kHz").tag(960_000.0)
                 }
+                Text("A CEILING, not a lock: a listener can still pick a LOWER rate (a narrower span, less server CPU) — they just cannot go above this. Single radio per user, so their choice affects only them.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Demod bandwidth", selection: $server.maxBwHz) {
                     Text("Uncapped").tag(0.0)
                     Text("Up to 200 kHz").tag(200_000.0)

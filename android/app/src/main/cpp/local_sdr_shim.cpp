@@ -2060,13 +2060,15 @@ struct LocalSdrShim::Impl {
         // can widen/narrow it (e.g. drop the rate to ease a struggling link) without
         // touching the server. setSampleRate restarts the IQ stream and pushes a
         // fresh config, so the client's waterfall span updates itself.
-        // A PINNED rate ignores the client outright. The client is also TOLD it is
-        // pinned (hwinfo.lockedRate) and hides its picker — this check is the
-        // enforcement, not the UI: an old client, or a hand-rolled one, must not be
-        // able to widen a span the host deliberately narrowed to save CPU.
+        // The rate cap is an UP-TO ceiling, NOT a lock: a listener may pick a LOWER rate (narrower
+        // span, less CPU) but never widen ABOVE the host's max. This is the enforcement (clamp),
+        // not the UI — an old or hand-rolled client that asks for more is clamped down, not obeyed.
         if (type == "sampleRate") {
-            if (g_serveOnLan.load() && g_vsLockedRate.load() > 0) return;
-            if (jsonNum(msg,"value",v) && v > 0) LocalSdrShim::instance().setSampleRate(v);
+            if (jsonNum(msg,"value",v) && v > 0) {
+                const double maxR = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
+                if (maxR > 0 && v > maxR) v = maxR;   // clamp to the ceiling; lower is allowed
+                LocalSdrShim::instance().setSampleRate(v);
+            }
             return;
         }
         if (type == "directSampling") {

@@ -2953,29 +2953,23 @@ function populateHw() {
     // isn't using.
     if (typeof savedIdx === 'number') spec!.setHwGain(hwGains[Number(g.value)] ?? 0, false);
   }
-  // The SERVER pinned the capture rate: hide the picker and say who set it.
-  // Offering a control whose every use is silently dropped is worse than offering
-  // none — the shim ignores a client's sampleRate outright when locked.
-  const pinned = hwLockedRate > 0;
+  // The server's capture-rate limit is an UP-TO CEILING, not a lock: keep the picker VISIBLE but
+  // offer only rates AT OR BELOW the cap. A listener can still pick lower (narrower span); the shim
+  // clamps anything above the cap. (Was: hide the picker entirely — wrong for an up-to cap.)
+  const cap = hwLockedRate > 0 ? hwLockedRate : Infinity;
   const rateRow = document.getElementById('rowRate');
   const rateLock = document.getElementById('rateLocked');
-  if (rateRow)  rateRow.hidden = pinned;
-  if (rateLock) {
-    rateLock.hidden = !pinned;
-    const val = rateLock.querySelector('.val');
-    if (pinned && val) {
-      const mhz = (hwLockedRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
-      val.textContent = `${mhz} MS/s · set by server`;
-    }
-  }
+  if (rateRow)  rateRow.hidden = false;
+  if (rateLock) rateLock.hidden = true;
 
-  if (hwRates.length && !pinned) {
+  if (hwRates.length) {
     const r = $<HTMLSelectElement>('rate');
     r.innerHTML = '';
     // ASCENDING. The server advertises 3.2 first, and an unsorted list made the highest
     // rate the one the <select> showed by default — see the default below for why that
     // was not merely untidy.
     for (const rate of [...hwRates].sort((a, b) => a - b)) {
+      if (rate > cap) continue;   // up-to cap: never offer a rate above the server's ceiling
       const o = document.createElement('option');
       o.value = String(rate);
       const mhz = `${(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s`;
