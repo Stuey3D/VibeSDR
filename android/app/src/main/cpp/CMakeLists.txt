@@ -71,7 +71,20 @@ target_include_directories(vibelocalsdr PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
     "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp"
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
+
+# ── libopus: compressed VibeServer audio (Opus), at parity with the macOS core ────────────────
+# Vendored per-ABI static lib built by tools/build_opus_android.sh. VIBE_HAVE_OPUS gates the Opus
+# path in local_sdr_shim.cpp; without the lib the shim falls back to raw PCM. Fail loudly if the
+# ABI's lib is missing so a stale checkout can't silently ship the PCM fallback.
+set(OPUS_A "${CMAKE_CURRENT_SOURCE_DIR}/opus/lib/${ANDROID_ABI}/libopus.a")
+if (NOT EXISTS "${OPUS_A}")
+    message(FATAL_ERROR "libopus missing for ABI '${ANDROID_ABI}' at ${OPUS_A} — run cpp/tools/build_opus_android.sh")
+endif()
+target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/opus/include")
+target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_OPUS)
+
 target_link_libraries(vibelocalsdr PRIVATE
     vibedsp
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librtlsdr.so"
+    "${OPUS_A}"
     log)

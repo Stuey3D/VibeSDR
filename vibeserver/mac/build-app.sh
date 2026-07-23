@@ -66,6 +66,10 @@ echo "==> Compiling the Swift app"
 LIBS=$(cd "$BUILD" && ls libvibeserver_core.a libvibedsp.a 2>/dev/null | sed "s|^|$BUILD/|")
 RTLSDR=$(grep -m1 '^RTLSDR_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 USBLIB=$(grep -m1 '^USB_LIB:'    "$BUILD/CMakeCache.txt" | cut -d= -f2)
+OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)
+# Prefer the STATIC archive next to whatever find_library picked, so the .app is self-contained (no
+# Homebrew dylib dependency at runtime) — same reasoning as librtlsdr/libusb above.
+_opusdir=$(dirname "$OPUSLIB"); [ -f "$_opusdir/libopus.a" ] && OPUSLIB="$_opusdir/libopus.a"
 
 swiftc \
   -O -target arm64-apple-macos14.0 \
@@ -74,7 +78,7 @@ swiftc \
   -I "$ROOT/vibeserver" \
   "$MAC/VibeServerApp.swift" \
   "$MAC/EibiStations.swift" \
-  $LIBS "$RTLSDR" "$USBLIB" \
+  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" \
   -lc++ \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
   -o "$APP/Contents/MacOS/VibeServer"

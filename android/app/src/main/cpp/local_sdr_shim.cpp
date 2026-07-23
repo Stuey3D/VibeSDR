@@ -76,6 +76,7 @@
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
+#include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
@@ -351,56 +352,8 @@ vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
 
 } // namespace
 
-// ── IMA-ADPCM encoder (VibeServer compressed audio, ~4:1) ───────────────────
-// Standard IMA/DVI tables. Each WS audio frame is self-contained: its 4-byte
-// preamble carries the seed predictor+index, so the client decodes it statelessly
-// (robust to a client that joins mid-stream). State still carries frame-to-frame
-// on the server so quality doesn't reset each frame.
-namespace {
-static const int kAdpcmStep[89] = {
-    7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
-    88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,
-    544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,
-    2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
-    10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767};
-static const int kAdpcmIndex[16] = {-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8};
-
-struct AdpcmState { int predictor = 0; int index = 0; };
-
-static inline int adpcmEncodeSample(int sample, AdpcmState& st) {
-    int step = kAdpcmStep[st.index];
-    int diff = sample - st.predictor;
-    int code = 0;
-    if (diff < 0) { code = 8; diff = -diff; }
-    int vpdiff = step >> 3;
-    if (diff >= step) { code |= 4; diff -= step; vpdiff += step; }
-    step >>= 1;
-    if (diff >= step) { code |= 2; diff -= step; vpdiff += step; }
-    step >>= 1;
-    if (diff >= step) { code |= 1;             vpdiff += step; }
-    if (code & 8) st.predictor -= vpdiff; else st.predictor += vpdiff;
-    if (st.predictor > 32767) st.predictor = 32767;
-    else if (st.predictor < -32768) st.predictor = -32768;
-    st.index += kAdpcmIndex[code & 15];
-    if (st.index < 0) st.index = 0; else if (st.index > 88) st.index = 88;
-    return code & 15;
-}
-
-// Append one channel block: [pred int16 LE][index u8][0 pad] + ceil(n/2) nibble
-// bytes (low nibble = first sample). Seeds the preamble from st's CURRENT value,
-// then advances st across the block.
-static void adpcmEncodeBlock(std::vector<uint8_t>& out, const int16_t* pcm, int n, AdpcmState& st) {
-    out.push_back((uint8_t)(st.predictor & 0xff));
-    out.push_back((uint8_t)((st.predictor >> 8) & 0xff));
-    out.push_back((uint8_t)st.index);
-    out.push_back(0);
-    for (int i = 0; i < n; i += 2) {
-        int lo = adpcmEncodeSample(pcm[i], st);
-        int hi = (i + 1 < n) ? adpcmEncodeSample(pcm[i + 1], st) : 0;
-        out.push_back((uint8_t)(lo | (hi << 4)));
-    }
-}
-} // namespace
+// (IMA-ADPCM removed — VibeServer compressed audio is now Opus; see opus_audio_encoder.h.
+//  Uncompressed stays raw int16 PCM as the safe, universal fallback.)
 
 // ── VibeServer server-side state (declared here so Impl members can see it) ──
 // LAN bind flag + PIN secret + compatibility limits + audio-codec toggle. The
@@ -774,6 +727,9 @@ static void bmSaveLocked() {
 static std::mutex  g_locMtx;
 static std::string g_locJson;
 static std::atomic<bool>   g_vsCompressAudio{true};
+// Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
+// is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
+static std::atomic<int>    g_vsOpusBitrate{64000};
 
 // Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
 // single-client server, so lock contention is trivial.
@@ -1227,10 +1183,16 @@ struct LocalSdrShim::Impl {
     int rdsPi = -1;
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
     std::atomic<bool> stereoDetected{false};
-    // VibeServer ADPCM encoder state. M = (L+R)/2 stays continuous across
-    // mono<->stereo transitions (mono also feeds it (L+R)/2), so the mid channel
-    // never resets; S = (L-R)/2 is only sent when a stereo pilot is locked.
-    AdpcmState adpcmM, adpcmS;
+    // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
+    // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
+    // it. Jr's future VibeServer backend opts in. Single-occupant, so one flag suffices.
+    std::atomic<bool> audioWantsOpus{false};
+    // VibeServer compressed-audio encoder — Opus (replaces IMA-ADPCM). Opus handles L/R stereo
+    // natively, so there is no mid/side split; one encoder covers mono and stereo and reconfigures
+    // itself on a channel change. Guarded: only the macOS core links libopus today.
+#ifdef VIBE_HAVE_OPUS
+    vibe::OpusAudioEncoder opusEnc;
+#endif
     // VibeServer wire-byte counters (cumulative), split spectrum vs audio, for the
     // sharing screen's live "what the server is pushing" readout. The rate is
     // computed as a delta between successive getVibeServerStatus() polls.
@@ -1565,46 +1527,46 @@ struct LocalSdrShim::Impl {
     }
     static void stereoCb(void* ctx, bool locked) { ((Impl*)ctx)->stereoDetected.store(locked); }
 
-    // Frame + send one block of interleaved int16 PCM to the audio client. On the
-    // VibeServer path with compression on it emits IMA-ADPCM (~4:1): mono as one
-    // block (format 1), stereo as M/S two-block (format 2, dropping S when the
-    // pilot is unlocked). Otherwise raw int16 exactly as UberSDR (format 0) — the
-    // loopback local-listen path always takes this branch.
+    // Frame + send one block of interleaved int16 PCM to the audio client.
+    //
+    // Two formats, both self-describing by the header's format byte [1]:
+    //   [1]=0  RAW int16 PCM  — the uncompressed/loopback path AND the universal safe fallback.
+    //   [1]=3  OPUS           — compressed VibeServer audio (~4x lighter than the old ADPCM at
+    //                           better quality; bitrate is the link-adaptive lever). Native stereo,
+    //                           no mid/side. Each WS frame carries ONE Opus packet.
+    //
+    // Header (both): [0]=channels(1|2), [1]=format, [2..5]=sampleRate u32 LE. PCM appends int16
+    // samples; Opus appends one packet. ADPCM (old formats 1/2) is retired — every VibeServer
+    // consumer (its own web page, VibeSDR, Jr) is ours, so there is no third party to keep it for.
     void sendAudioPcm(const std::shared_ptr<net::Socket>& sock, const int16_t* pcm, int count, int ch) {
         if (count <= 0) return;
-        bool compress = g_serveOnLan.load() && g_vsCompressAudio.load();
-        if (!compress) {
-            // header: [0]=channels, [1]=0 (raw), [2..5]=sampleRate u32 LE, int16 PCM
-            std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
-            frame[0] = (uint8_t)ch; frame[1] = 0;
-            uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
-            std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
-            sendWs(sock, 0x2, frame.data(), frame.size());
-            vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+
+#ifdef VIBE_HAVE_OPUS
+        // Opus only when THIS client opted in (see acceptWs). A client that can't decode it — the
+        // current web client — is never sent it, so nothing breaks; it gets PCM below.
+        if (audioWantsOpus.load()) {
+            opusEnc.setBitrate(g_vsOpusBitrate.load());
+            std::vector<std::vector<uint8_t>> packets;
+            opusEnc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
+            const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;   // always 48 kHz
+            for (auto& pkt : packets) {
+                std::vector<uint8_t> frame; frame.reserve(6 + pkt.size());
+                frame.push_back((uint8_t)ch); frame.push_back(3);               // [0]=ch, [1]=3 Opus
+                frame.push_back((uint8_t)(sr & 0xff));         frame.push_back((uint8_t)((sr >> 8) & 0xff));
+                frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
+                frame.insert(frame.end(), pkt.begin(), pkt.end());
+                sendWs(sock, 0x2, frame.data(), frame.size());
+                vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+            }
             return;
         }
-        bool stereo = (ch == 2 && stereoDetected.load());
-        // header: [0]=out channels, [1]=format (1 mono / 2 M/S), [2..5]=rate,
-        // [6..7]=u16 sample count per channel.
-        std::vector<uint8_t> frame; frame.reserve(8 + count);
-        frame.push_back(stereo ? 2 : 1);
-        frame.push_back(stereo ? 2 : 1);
-        uint32_t sr = (uint32_t)AUDIO_SR;
-        frame.push_back((uint8_t)(sr & 0xff)); frame.push_back((uint8_t)((sr >> 8) & 0xff));
-        frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
-        frame.push_back((uint8_t)(count & 0xff)); frame.push_back((uint8_t)((count >> 8) & 0xff));
-        std::vector<int16_t> mid((size_t)count), side;
-        if (ch == 2) {
-            for (int i = 0; i < count; i++) mid[i] = (int16_t)((pcm[2*i] + pcm[2*i+1]) >> 1);
-        } else {
-            std::memcpy(mid.data(), pcm, (size_t)count * 2);
-        }
-        adpcmEncodeBlock(frame, mid.data(), count, adpcmM);
-        if (stereo) {
-            side.resize((size_t)count);
-            for (int i = 0; i < count; i++) side[i] = (int16_t)((pcm[2*i] - pcm[2*i+1]) >> 1);
-            adpcmEncodeBlock(frame, side.data(), count, adpcmS);
-        }
+#endif
+        // No libopus in this build, or the client did not opt in → raw PCM (the safe fallback).
+        // header: [0]=channels, [1]=0 (raw), [2..5]=sampleRate u32 LE, int16 PCM
+        std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
+        frame[0] = (uint8_t)ch; frame[1] = 0;
+        uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
+        std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
         sendWs(sock, 0x2, frame.data(), frame.size());
         vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
     }
@@ -2298,7 +2260,8 @@ struct LocalSdrShim::Impl {
             acceptDxcluster(sock, wsKey);
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
-            acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"));
+            acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
+                     queryParam(reqLine, "codec") == "opus");
         } else if (reqLine.find("/connection") != std::string::npos) {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
@@ -2480,7 +2443,7 @@ struct LocalSdrShim::Impl {
     }
 
     void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
-                  const std::string& session) {
+                  const std::string& session, bool wantsOpus) {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -2522,7 +2485,14 @@ struct LocalSdrShim::Impl {
         if (isAudio) {
             std::lock_guard<std::mutex> lk(clientMtx);
             audioClient = sock;
-            LOGI("audio WS connected");
+#ifdef VIBE_HAVE_OPUS
+            audioWantsOpus.store(wantsOpus);
+            opusEnc.reset();   // fresh stream for the new listener — no carried-over frame remainder
+            LOGI("audio WS connected (codec=%s)", wantsOpus ? "opus" : "pcm");
+#else
+            audioWantsOpus.store(false);   // no encoder in this build
+            LOGI("audio WS connected (pcm)");
+#endif
         } else {
             std::lock_guard<std::mutex> lk(clientMtx);
             specClient = sock;

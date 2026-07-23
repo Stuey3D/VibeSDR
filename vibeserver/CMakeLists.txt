@@ -100,6 +100,24 @@ target_include_directories(vibeserver_core PUBLIC "${RTLSDR_INC}")
 # Use the REAL rtl-sdr.h, not the iOS no-op stub the shim falls back to.
 target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
 target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
+
+# ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
+# STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code
+# path in the shim; where it is undefined (the Android build has no libopus yet — UberSDR decode
+# there is ExoPlayer, not libopus) the shim falls back to raw PCM.
+find_library(OPUS_LIB NAMES opus libopus.a opus.a HINTS /opt/homebrew/lib /opt/homebrew/opt/opus/lib /usr/local/lib /usr/lib)
+find_path(OPUS_INC opus/opus.h HINTS /opt/homebrew/include /opt/homebrew/opt/opus/include /usr/local/include /usr/include)
+if(NOT OPUS_LIB OR NOT OPUS_INC)
+  message(FATAL_ERROR "libopus not found. On macOS: brew install opus")
+endif()
+get_filename_component(_opus_dir "${OPUS_LIB}" DIRECTORY)
+if(EXISTS "${_opus_dir}/libopus.a")
+  set(OPUS_LIB "${_opus_dir}/libopus.a")
+endif()
+message(STATUS "libopus:   ${OPUS_LIB}")
+target_include_directories(vibeserver_core PUBLIC "${OPUS_INC}")
+target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_OPUS)
+target_link_libraries(vibeserver_core PUBLIC "${OPUS_LIB}")
 target_link_libraries(vibeserver PRIVATE vibeserver_core)
 if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.

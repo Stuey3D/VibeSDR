@@ -192,7 +192,12 @@ async function connect(host: string, pin: string) {
   // two devices get two ids, which is exactly what we want to keep apart.
   const sid = uuid();
   const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8', auth)}`;
-  const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid, auth)}`;
+  // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
+  // heavier, but it just works. The native apps always have Opus; this gate is purely for the
+  // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
+  const wantOpus = await AudioPlayer.supportsOpus();
+  const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  if (wantOpus) console.info('[audio] requesting Opus (WebCodecs supported)');
 
   // The shim only rejects a bad PIN at WS-upgrade time (401), so surface that
   // as a splash error rather than silently retrying forever.

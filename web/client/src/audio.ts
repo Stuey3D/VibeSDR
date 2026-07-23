@@ -187,6 +187,11 @@ export class AudioPlayer {
    */
   private anchorEl: HTMLAudioElement | null = null;
   private ring: [Float32Array, Float32Array] | null = null;
+  // WebCodecs Opus decoder (VibeServer compressed audio). Lazily configured; reconfigured if the
+  // channel count changes (WFM stereo <-> mono). Decoded PCM lands in _onOpusData -> _playPcm.
+  private opusDec: AudioDecoder | null = null;
+  private opusCh = 0;
+  private opusTs = 0;
   private cap = 48000 * 2;
   private wPos = 0;
   private rPos = 0;
@@ -379,17 +384,79 @@ export class AudioPlayer {
     const channels = dv.getUint8(0);
     const format = dv.getUint8(1);
 
+    // format 3 = Opus (VibeServer compressed audio). Decoded ASYNCHRONOUSLY via WebCodecs — the
+    // decoded PCM lands in _onOpusData → _playPcm, same tail as the sync paths below.
+    if (format === 3) { this._decodeOpus(buf, channels); return; }
+
     let pcm: Int16Array;
     let ch: number;
     if (format === 0) {
       ch = channels;
       pcm = new Int16Array(buf, 6, (buf.byteLength - 6) >> 1);
     } else {
+      // formats 1/2 = legacy IMA-ADPCM (retired server-side; kept for any old stream).
       const d = decodeVibeAdpcmFrame(buf);
       ch = d.channels;
       pcm = d.pcm;
     }
+    this._playPcm(pcm, ch);
+  }
 
+  /** Does this browser decode Opus via WebCodecs? Awaited before we ask the server for Opus, so a
+   *  browser that can't (Safari <=16.3, Firefox <130, ancient WebViews) transparently gets PCM. */
+  static async supportsOpus(): Promise<boolean> {
+    try {
+      if (typeof AudioDecoder === 'undefined') return false;
+      const s = await AudioDecoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
+      return !!s.supported;
+    } catch { return false; }
+  }
+
+  private _ensureOpus(ch: number) {
+    if (this.opusDec && this.opusCh === ch) return;
+    if (this.opusDec) { try { this.opusDec.close(); } catch {} }
+    this.opusDec = new AudioDecoder({
+      output: (d) => this._onOpusData(d),
+      // A decode error must not kill audio silently — log it; the stream self-heals on the next
+      // key packet (every Opus packet is independently decodable).
+      error: (e) => console.warn('[audio] opus decode error', e),
+    });
+    this.opusDec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: ch });
+    this.opusCh = ch;
+    this.opusTs = 0;
+  }
+
+  private _decodeOpus(buf: ArrayBuffer, channels: number) {
+    this._ensureOpus(channels || 1);
+    // Copy the packet out of the frame (offset 6). Each Opus packet is a self-contained 20 ms frame.
+    const data = buf.slice(6);
+    try {
+      this.opusDec!.decode(new EncodedAudioChunk({
+        type: 'key', timestamp: this.opusTs, duration: 20000, data,
+      }));
+    } catch (e) { console.warn('[audio] opus enqueue failed', e); }
+    this.opusTs += 20000;   // 20 ms in microseconds
+  }
+
+  private _onOpusData(ad: AudioData) {
+    const ch = ad.numberOfChannels, frames = ad.numberOfFrames;
+    const pcm = new Int16Array(frames * ch);
+    const plane = new Float32Array(frames);
+    for (let c = 0; c < ch; c++) {
+      ad.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
+      for (let i = 0; i < frames; i++) {
+        let sm = Math.round(plane[i] * 32767);
+        sm = sm < -32768 ? -32768 : sm > 32767 ? 32767 : sm;
+        pcm[i * ch + c] = sm;   // interleaved for stereo, sequential for mono (ch===1)
+      }
+    }
+    ad.close();
+    this._playPcm(pcm, ch);
+  }
+
+  /** Common tail: record tap + int16 → float L/R + push to the worklet. Fed by PCM/ADPCM (sync)
+   *  and by the Opus decoder (async). `pcm` is interleaved for stereo, sequential for mono. */
+  private _playPcm(pcm: Int16Array, ch: number) {
     const frames = Math.floor(pcm.length / Math.max(1, ch));
     if (frames <= 0) return;
 
