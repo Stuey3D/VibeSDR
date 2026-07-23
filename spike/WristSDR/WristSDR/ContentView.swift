@@ -733,21 +733,15 @@ struct ContentView: View {
       suspendWork = nil
       crownUsedAt = Date()
       applyTone()          // re-assert our settings (harmless if nothing was torn down)
-      if link.isBackground {
-        // We dropped ONLY the spectrum socket for wrist-down; the AUDIO socket kept the server
-        // session warm. So reopen JUST the spectrum — fast (no /connection re-POST), and the
-        // last frames stay on screen through the ~one-RTT reopen, so it reads as INSTANT like
-        // the phone. Crucially we do NOT also call reconnectIfNeeded() here: its guards
-        // (status=="live" + lastFrameAt>3s) are both true right after a suspend, so it would
-        // cancel BOTH sockets and do a full re-handshake — tearing down the socket we just
-        // reopened and blipping the audio. That redundant full reconnect WAS the slow resume.
-        link.waterfall.reset()   // clear the stale queue/scroll clock; KEEPS the pixels on screen
-        link.resume()
-      } else {
-        // No explicit suspend (a long park that may have killed the sockets) — only then is a
-        // full reconnect warranted, and it's guarded to a genuine death.
-        link.reconnectIfNeeded()
-      }
+      // ONE recovery entry for every "came back" case — wake() resets the retry backoff and
+      // brings back only what actually died (nothing on a surviving glance, the spectrum socket
+      // alone when audio stayed warm, or a full reconnect if the whole pipe went). This replaced
+      // the old isBackground/else split, which after a LONGER background (into Settings, a suspend)
+      // left the status in limbo so neither resume() nor reconnectIfNeeded() fired promptly and the
+      // spectrum took an eternity to restore. waterfall.reset() keeps the pixels on screen through
+      // the reopen so it still reads as instant.
+      link.waterfall.reset()
+      link.wake()
       link.ping()
     }
     // Row draining runs on the ALWAYS-MOUNTED root, NOT the waterfall Canvas. The Canvas

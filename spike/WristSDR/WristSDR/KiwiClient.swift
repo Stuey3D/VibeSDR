@@ -40,6 +40,10 @@ protocol SDRClient: AnyObject {
   func resumeSpectrum()
   func reconnectIfNeeded()
   func suspend()
+  /// Foreground recovery. UberClient overrides with a targeted, backoff-resetting version; the
+  /// default keeps the other backends' previous behaviour (resume the spectrum, then a guarded full
+  /// reconnect) so this change is Uber-only for now. See UberClient.wake / the "eternity" fix.
+  func wake()
   func goIdle()
   // OWRX profile surface — REQUIREMENTS (not just extension members) so dynamic dispatch reaches
   // OwrxClient's real list through `any SDRClient`. UberSDR/Kiwi get the default-empty extension.
@@ -85,6 +89,10 @@ protocol SDRClient: AnyObject {
   /// SNR squelch (audio gate): mute below `minSnr` dB. ≤ -999 = OFF/open. Default no-op for backends
   /// with no squelch (FM-DX). UberSDR/VibeServer send it to radiod's audio gate.
   func setSquelch(_ minSnr: Double)
+}
+
+extension SDRClient {
+  func wake() { resumeSpectrum(); reconnectIfNeeded() }
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.

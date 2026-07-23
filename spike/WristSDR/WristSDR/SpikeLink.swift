@@ -549,6 +549,8 @@ final class SpikeLink: ObservableObject {
   // ── Scene lifecycle passthroughs (the spike's socket watchdog) ──────────────
   func resume() { client?.resumeSpectrum() }
   func reconnectIfNeeded() { client?.reconnectIfNeeded() }
+  /// Foreground recovery — see UberClient.wake (cures the slow spectrum restore after a background).
+  func wake() { client?.wake() }
   func suspend() { client?.suspend() }
 
   // ── Controls the ported views call ──────────────────────────────────────────

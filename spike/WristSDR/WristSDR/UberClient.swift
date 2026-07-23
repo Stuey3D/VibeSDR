@@ -654,6 +654,33 @@ final class UberClient: ObservableObject {
   }
 
   /// Wrist back up: the audio never stopped, so only the waterfall needs bringing home.
+  /// Foreground recovery — ONE entry for every "came back to the app" case, curing the slow
+  /// spectrum restore. Resets the retry backoff (so we never inherit the 2→10 s max built up during
+  /// an erratic session), then brings back ONLY what actually died: nothing if frames are still
+  /// flowing (a quick glance), the spectrum socket ALONE if audio is warm (the common case — fast,
+  /// one RTT, the pixels stay on screen), or a full reconnect if the whole pipe went. Replaces the
+  /// old resumeSpectrum-vs-reconnectIfNeeded branch, which after a LONGER background left the status
+  /// in limbo — neither path fired promptly and recovery fell to the slow accumulated retry backoff
+  /// (the "eternity", 2026-07-23).
+  func wake() {
+    guard !goingIdle, everHadFrames else { return }   // never got going — the initial connect owns it
+    specRetries = 0                                     // ★ fresh, immediate backoff — not the 10 s max
+    if framesPerSec > 0 { return }                      // spectrum still flowing — the glance survived
+    if audioPerSec == 0 {
+      // Whole pipe died (a long suspend killed audio too) — full reconnect. Fast: the session uuid
+      // is stable, so the server re-attaches us rather than cold-starting.
+      status = "reconnecting"
+      specSock.cancel(); audioSock.cancel()
+      Task { await connect() }
+    } else {
+      // Audio is warm, only the spectrum socket died → reopen JUST the spectrum, NOW.
+      if status.hasPrefix("background") { status = "live" }
+      specOpened = true
+      specSock.cancel()
+      openSpectrum()
+    }
+  }
+
   func resumeSpectrum() {
     guard status.hasPrefix("background") else { return }
     status = "live"
