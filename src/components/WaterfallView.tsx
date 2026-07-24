@@ -700,7 +700,14 @@ function WaterfallView({
     const now = Date.now();
     if (lastFrameTs.current > 0) {
       const dt = now - lastFrameTs.current;
-      avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
+      // ★ SEED FAST on a real rate change. A slow EMA (0.8/0.2) crawls to the new interval over ~10
+      // frames, and throughout the reveal glides at the WRONG duration — the "sluggish for a second
+      // then settles" on every rate change (Low Data toggle, interaction start/stop, server clamp;
+      // Stuart 2026-07-24). A big jump ⇒ snap toward it (like Jr's setExpectedRowRate); steady state
+      // stays smooth.
+      const jump = Math.abs(dt - avgFrameMs.current) > avgFrameMs.current * 0.4;
+      const a = jump ? 0.7 : 0.2;
+      avgFrameMs.current = avgFrameMs.current * (1 - a) + dt * a;
     }
     lastFrameTs.current = now;
     // INTERACTION boost — drives the SPECTRUM TRACE (follow every data frame directly) + peak hold.
