@@ -941,6 +941,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
   const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
+  const linkModeRef = useRef<'full'|'adaptive'|'lowData'>('adaptive');
+  useEffect(() => { linkModeRef.current = linkMode; }, [linkMode]);
   const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
@@ -2754,12 +2756,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             specPausedByBgRef.current = false;
             client.current?.resumeSpectrum();
           }
-          // ALWAYS restore full rate on wake, on every path. If the watch held the
-          // socket open through the lock we dropped the feed to quarter rate for
-          // it; failing to undo that anywhere leaves the phone's own waterfall
-          // crawling at 5fps.
+          // Restore rate on wake — but RESPECT Low Data. Hardcoding full rate here overrode the Low
+          // Data pin (5fps) after every idle-saver wake, snapping back to 10fps and staying there
+          // (Stuart 2026-07-24). Low Data → rung 2 (divisor 2 = 5fps); everything else → full.
           idleActiveRef.current = false;
-          client.current?.setRate(1);
+          client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1);
         }, 1200);
       }
     });

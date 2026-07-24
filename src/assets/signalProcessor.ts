@@ -168,7 +168,7 @@ export class SignalProcessor {
   }
 
   /** Process one raw dBFS frame. bins length may change between frames. */
-  process(bins: Float32Array, centerHz: number, bwHz: number): ProcessedFrame {
+  process(bins: Float32Array, centerHz: number, bwHz: number, interacting = false): ProcessedFrame {
     const n = bins.length;
     const s = this.settings;
     const now = Date.now();
@@ -227,7 +227,11 @@ export class SignalProcessor {
     // `(1-w)` = the new frame. w=0 is instant, w=0.9 is OWRX's own heaviest. Deliberately NOT
     // time-normalised: the weight IS the control (exactly like OWRX), so the feel matches theirs
     // instead of blurring to mush above a few frames (Stuart 2026-07-24: >3× was useless).
-    const w = s.avgFrames > 0 ? Math.min(0.9, s.avgFrames) : 0;
+    // ★ BYPASS while interacting: FFT smoothing (the EMA) inherently LAGS, so during a tune/zoom the
+    // averaged spectrum crawls to catch up to the new band — the "spectrum slows on tune, snaps on
+    // release" (Stuart 2026-07-24). Force instant (w=0) while the user is moving the view; resume
+    // smoothing when settled.
+    const w = (interacting || s.avgFrames <= 0) ? 0 : Math.min(0.9, s.avgFrames);
     if (w > 0) {
       const da = this.dbAvg!;
       const nw = 1 - w;

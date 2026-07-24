@@ -682,7 +682,10 @@ function WaterfallView({
     if (!fbins || fbins.length === 0 || cfg.width < 4) return;
 
     // 1. M9PSY pipeline + UberSDR auto-range
-    const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz);
+    // interacting → the processor bypasses FFT smoothing (its EMA lags and would slow the spectrum
+    // during a tune/zoom). Same interaction window as the boost below.
+    const interacting = cfg.smoothTune && Date.now() - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz, interacting);
 
     // While the phone is rendering, the watch BORROWS this row rather than
     // running its own SignalProcessor over 4096 bins on this same thread — that
