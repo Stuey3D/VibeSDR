@@ -308,9 +308,21 @@ export class SpectrumClient {
     });
     if (this.followVfo || opts?.recenter) {
       const n = this.cfg.binCount || 4096;
-      const bb = opts?.retarget
-        ? this.defaultSpanHz(this.mode) / n
-        : (this.view.binBandwidth || this.cfg.binBandwidth);
+      let bb: number;
+      if (opts?.retarget) {
+        // A discrete jump. DON'T slam to the tight per-mode default — that lands a broadcast in a
+        // ~20 kHz window that looks blocky/low-res (Stuart 2026-07-24). Instead: keep your current
+        // zoom if it's already sensible, and only zoom PART way in from a wide view — to a
+        // comfortable "landing" span, never all the way to the tight default. Clamp the preserved
+        // zoom to [default, landing] so a jump across bands can't carry an absurdly tight window.
+        const cur = (this.view.binBandwidth || this.cfg.binBandwidth) * n;
+        const dflt = this.defaultSpanHz(this.mode);
+        const landing = Math.min(this.cfg.maxBandwidth || Infinity, Math.max(dflt * 8, 200_000));
+        const span = Math.max(dflt, Math.min(cur || landing, landing));
+        bb = span / n;
+      } else {
+        bb = this.view.binBandwidth || this.cfg.binBandwidth;
+      }
       if (bb) this.zoom(this.frequency, bb);
     }
   }

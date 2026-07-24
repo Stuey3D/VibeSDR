@@ -213,7 +213,8 @@ html, body {
 #sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.06em; white-space: pre;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
 #linkStats { display: flex; align-items: center; gap: 0.7em; }
-#status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+#status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap;
+  padding-right: 0.2em; }   /* clear the trailing letter-spacing so the last glyph never clips */
 
 /* Link-quality bars — same semantics as the app: 3 green solid, 2 amber jitter,
    1 red stalling, ✕ disconnected. Driven by SPEC frame timing, not just RTT:

@@ -18,6 +18,7 @@
 
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
 import { getColorLUT } from '../../../src/assets/colormapUtils';
+import { WaterfallGL } from './wfgl';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -49,11 +50,22 @@ let RENDER_SCALE = 2;
 export function setRenderScale(max: number) { RENDER_SCALE = Math.max(1, Math.min(2, max)); }
 export function renderDpr(): number { return Math.min(RENDER_SCALE, window.devicePixelRatio || 1); }
 
+/** GPU ring height. Kept generously TALLER than any display so a window resize never reallocates it
+ *  (history preserved for free) — the display just shows more/fewer of its newest rows. Grows only if a
+ *  display is somehow taller than this. */
+const GL_RING_ROWS = 2560;
+
 export class Waterfall {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  /** Off-screen waterfall image; blitted to the visible canvas each frame. */
+  /** Off-screen waterfall image; blitted to the visible canvas each frame. Also carries the ring
+   *  DIMENSIONS (w × wfH) in GPU mode, where its pixels go unused. */
   private wf: HTMLCanvasElement;
+  /** GPU path: ring-texture renderer + its offscreen canvas. Null → CPU (2D) fallback. */
+  private gl: WaterfallGL | null = null;
+  private glCanvas: HTMLCanvasElement | null = null;
+  /** Ring width the GL texture is currently allocated at (= last frame's bin count). */
+  private glCols = 0;
   /** Ring head: the row index holding the NEWEST line. Walks backwards; see addRow/draw. */
   private head = 0;
   private wfCtx: CanvasRenderingContext2D;
@@ -177,12 +189,20 @@ export class Waterfall {
     this.specRatio = clampRatio(opts.specRatio ?? 0.25);
     this.paletteName = opts.palette ?? 'gqrx';
     this.lut = getColorLUT(this.paletteName);
+    // Try the GPU path. If WebGL isn't available (ancient browser/device) we silently keep the 2D
+    // path, which is the right fallback anyway — those devices don't want a heavy sharp waterfall.
+    try {
+      this.glCanvas = document.createElement('canvas');
+      this.gl = new WaterfallGL(this.glCanvas);
+      this.gl.setLUT(this.lut);
+    } catch { this.gl = null; this.glCanvas = null; }
     this.resize();
   }
 
   setPalette(name: string) {
     this.paletteName = name;
     this.lut = getColorLUT(name);
+    this.gl?.setLUT(this.lut);
     this.specGrad = null;   // gradient is built from the LUT — rebuild it
   }
 
@@ -245,6 +265,18 @@ export class Waterfall {
 
     this.canvas.width = w;
     this.canvas.height = h;
+    // GPU path: the ring texture (glCols × wfH) is the history; re-allocate it at the new height,
+    // which preserves the existing waterfall (WaterfallGL.ensureRing renders the old ring into the
+    // new). this.wf is only kept for its DIMENSIONS here — its 2D pixels go unused.
+    if (this.gl) {
+      // Only this.wf's DIMENSIONS matter here (w × wfH); the ring texture is taller and is NOT touched
+      // on resize, so the waterfall history survives a window drag. head is left alone. If the display
+      // grew taller than the ring, drawRow grows the ring on the next row.
+      this.wf.width = w;
+      this.wf.height = wfH;
+      this.rowImg = null;
+      return;
+    }
     // Preserve history across a resize where we can — a re-layout shouldn't
     // wipe the waterfall.
     const old = this.wf.width && this.wf.height
@@ -286,8 +318,8 @@ export class Waterfall {
    */
   clearHistory() {
     if (!this.wf.width || !this.wf.height) return;
-    this.wfCtx.fillStyle = '#000';
-    this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height);
+    if (this.gl) this.gl.clear();
+    else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
     this.head = 0;      // an all-black ring has no meaningful head
   }
 
@@ -377,13 +409,11 @@ export class Waterfall {
 
   /** Scroll down one line and draw the row blended t of the way from prev to cur. */
   private drawRow(t: number) {
-    const W = this.wf.width;
-    const H = this.wf.height;
-    if (!W || !H || !this.rowImg) return;
-
-    const prev = this.prevRow!;
-    const cur = this.curRow!;
-    const blend = this.blendRow!;
+    const wfH = this.wf.height;
+    const prev = this.prevRow;
+    const cur = this.curRow;
+    const blend = this.blendRow;
+    if (!wfH || !prev || !cur || !blend) return;
     const n = cur.length;
 
     if (t >= 1) {
@@ -400,8 +430,27 @@ export class Waterfall {
     // MEASURED on an M4 with the same page: Edge 38.7% CPU and 89°C against Safari's 5.2% and
     // 63°C. Instead the history is a RING: the newest row is written at a moving head and nothing
     // else ever moves. Cost per frame drops from "copy the whole canvas" to "write one row".
-    this.head = (this.head - 1 + this.wf.height) % this.wf.height;
 
+    // GPU path: upload the RAW n-wide row (dB indices) into the ring texture — palette and the
+    // peak-preserving bins→pixels downsample both happen on the GPU in the shader. No per-pixel JS.
+    // The ring is TALLER than the display (fixed/generous), so `head` walks its rows, not the display's
+    // — that's what lets a resize keep history (the ring is never touched).
+    if (this.gl) {
+      if (this.glCols !== n || this.gl.rows < wfH) {
+        this.gl.ensureRing(n, Math.max(GL_RING_ROWS, wfH));
+        this.glCols = n;
+      }
+      const rows = this.gl.rows;
+      this.head = (this.head - 1 + rows) % rows;
+      this.gl.pushRow(blend, this.head);
+      return;
+    }
+
+    // 2D fallback: peak-preserving downsample to canvas width + palette LUT + putImageData.
+    const H = wfH;
+    this.head = (this.head - 1 + H) % H;
+    const W = this.wf.width;
+    if (!this.rowImg) return;
     const img = this.rowImg.data;
     const lut = this.lut;
     for (let x = 0; x < W; x++) {
@@ -444,9 +493,17 @@ export class Waterfall {
     // The ring is unwrapped HERE, at present time, with two blits: head→bottom, then top→head.
     // Two GPU-side draws of untouched texture, versus the old full-canvas self-copy every frame.
     const wfH = this.wf.height;
-    const first = wfH - this.head;              // rows from head to the end of the buffer
-    if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
-    if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
+    if (this.gl && this.glCanvas && this.glCols > 0) {
+      // GPU path: the shader unwraps the ring from `head` and colours it on the GPU. One draw into
+      // the GL canvas, one blit onto the visible canvas — no per-row CPU work, dpr scaling is free.
+      this.gl.render(this.head, wfH, W, wfH);
+      ctx.drawImage(this.glCanvas, 0, 0, W, wfH, 0, specH, W, wfH);
+    } else {
+      // 2D fallback: unwrap the ring with two blits (head→bottom, then top→head).
+      const first = wfH - this.head;            // rows from head to the end of the buffer
+      if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
+      if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
+    }
 
     if (specH > 4 && this.spec && this._showSpec) {
       this._drawSpec(ctx, W, specH);

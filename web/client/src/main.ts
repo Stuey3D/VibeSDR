@@ -1080,7 +1080,9 @@ function updateStatus() {
   // The SPECTRUM is the bigger half of the link (~74 KB/s vs ~47 for audio), so
   // reporting only the audio understated the real traffic by more than half.
   const total = audioKbps + specKbps;
-  const idle = throttled ? ` · IDLE ${IDLE_FPS}fps` : '';
+  // Just "IDLE" — the fps counter to its left already shows the throttled rate, so "IDLE 5fps"
+  // duplicated it AND ran the row off the right edge (the E of IDLE clipped, Stuart 2026-07-24).
+  const idle = throttled ? ' · IDLE' : '';
   const el = $('status');
   // ★ The MEASURED arrival rate, not the rate we asked for. Ask the server for 5 fps and there was
   // previously nothing to confirm it had happened — nor to show a link failing to deliver what it
