@@ -2372,6 +2372,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           // see the phone's meter anyway — the watch gets its level above.
           if (appActiveRef.current) {
             meterBus.current.emit({
+              // ★ Spread the current value FIRST so this per-frame signal emit doesn't wipe kbps/fps —
+              // they're set ~1/sec by the rate emit, and rebuilding the object without them made the
+              // KB/FPS readout flash on then vanish on the next frame (Stuart 2026-07-24).
+              ...meterBus.current.value,
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
               link: meterBus.current.value.link,

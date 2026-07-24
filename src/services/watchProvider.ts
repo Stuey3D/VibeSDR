@@ -236,6 +236,10 @@ class WatchProvider {
   private sql = -1;
   private lastFmdxAt = 0;
   private pendingFmdx: string | null = null;
+  /// The last FM-DX blob actually sent, RETAINED so flushAll() can re-send it when the watch
+  /// reconnects/wakes. Without this, a Buddy that wakes while the phone is on FM-DX got no blob (FM-DX
+  /// has no rows either), never set isFmdx, and fell back to the "Open VibeSDR on iPhone" start screen.
+  private lastFmdx: string | null = null;
   private fmdxTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAir = '';
   private lastAirAt = 0;
@@ -533,6 +537,7 @@ class WatchProvider {
     const j = this.pendingFmdx;
     if (!j || !this.isActive) return;
     this.pendingFmdx = null;
+    this.lastFmdx = j;              // retain for a reconnect re-send (see flushAll)
     this.lastFmdxAt = Date.now();
     Native!.sendFmdx(j);
   }
@@ -812,6 +817,10 @@ class WatchProvider {
     this.flushStations();
     this.flushDab();
     this.flushFavs();
+    // ★ If the phone is on FM-DX, re-send the retained blob so a waking/reconnecting Buddy routes to
+    // the FM-DX screen instead of the "Open VibeSDR" start screen. Only when we OWN the fmdx screen —
+    // a stale blob must never leak onto an SDR session (isFmdx would wrongly hide the waterfall).
+    if (this.owns('fmdx') && this.lastFmdx && this.isActive) Native!.sendFmdx(this.lastFmdx);
   }
 
   private flushLogo() {
