@@ -240,8 +240,6 @@ export interface MenuSheetProps {
   onSpecSmoothing?:   (v: number) => void;
   avgFrames?:         number;
   onAvgFrames?:       (v: number) => void;
-  bgSubtract?:        boolean;
-  onBgSubtract?:      (v: boolean) => void;
   specFloor?:         number;
   onSpecFloor?:       (v: number) => void;
   specPeakScale?:     number;
@@ -514,7 +512,7 @@ export default function MenuSheet({
   wfSharpness = 5, onWfSharpness,
   specShow = true, onSpecShow,
   specSmoothing = 5, onSpecSmoothing,
-  avgFrames = 1, onAvgFrames, bgSubtract = false, onBgSubtract,
+  avgFrames = 1, onAvgFrames,
   specFloor = 0, onSpecFloor,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
@@ -900,20 +898,21 @@ export default function MenuSheet({
                        onPress={() => onSpatialSmooth?.(!spatialSmooth)} />
                 </BtnRow>
 
-                {/* Weak Signal — frame integration + background subtraction pull faint signals out
-                    of the noise (see signalProcessor). Integration costs time resolution. */}
-                <SubLabel label="Weak Signal" />
+                {/* FFT Smoothing — averages successive frames so faint signals build up above the
+                    noise, at the cost of waterfall response (weak-signal averaging). */}
+                <SubLabel label="FFT Smoothing" />
                 <View style={styles.sliderWrap}>
-                  <Text style={styles.sliderLabel}>Integrate</Text>
+                  <Text style={styles.sliderLabel}>Smoothing</Text>
                   <Slider style={{flex:1}} minimumValue={0} maximumValue={0.9} step={0.1}
                     value={avgFrames} onValueChange={onAvgFrames ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{avgFrames <= 0 ? 'off' : avgFrames.toFixed(1)}</Text>
                 </View>
-                <BtnRow>
-                  <Btn label="BACKGROUND SUBTRACT" active={bgSubtract}
-                       onPress={() => onBgSubtract?.(!bgSubtract)} />
-                </BtnRow>
+                <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
+                               fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 2 }}>
+                  Blends successive frames to lift weak signals out of the noise — at the cost of
+                  waterfall speed.
+                </Text>
 
                 {/* Spectrum Trace */}
                 <SubLabel label="Spectrum Trace" />

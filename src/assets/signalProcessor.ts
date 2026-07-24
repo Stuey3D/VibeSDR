@@ -70,13 +70,10 @@ export interface SignalProcessorSettings {
   specPeakScale:   number;
   /** 1–10 spectrum trace EMA smoothing frames (1 = instant). */
   smoothingFrames: number;
-  /** WEAK-SIGNAL INTEGRATION. OWRX-style per-frame EMA WEIGHT, 0–0.9 (0 = off/instant, 0.9 = heaviest,
-   *  OWRX's own cap). Noise averages down (~persistent-signal emerges); higher = more integration but
-   *  more blur/lag. The weight IS the control — not a frame count. Off by default. */
+  /** FFT SMOOTHING (weak-signal averaging). OWRX-style per-frame EMA WEIGHT, 0–0.9 (0 = off/instant,
+   *  0.9 = heaviest). Successive frames blend, so random noise averages down and a persistent weak
+   *  signal builds up above it; higher = more visibility but more lag. Off by default. */
   avgFrames:       number;
-  /** BACKGROUND SUBTRACTION. Remove the broad noise-floor SHAPE (antenna response / band slope) with
-   *  a wide spatial baseline, so narrow weak signals stand proud of a FLAT floor. Off by default. */
-  bgSubtract:      boolean;
   /** 5-tap spatial waterfall smooth on/off. */
   spatialSmooth:   boolean;
   /** Peak hold on/off. */
@@ -95,8 +92,7 @@ export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
   specFloor:       0,
   specPeakScale:   10,
   smoothingFrames: 5,
-  avgFrames:       0,        // averaging weight OFF by default (0…0.9, OWRX-style)
-  bgSubtract:      false,    // background subtraction OFF by default
+  avgFrames:       0,        // FFT-smoothing weight OFF by default (0…0.9, OWRX-style)
   spatialSmooth:   true,
   peakHold:        true,
   wfBrightness:    0,
@@ -128,7 +124,6 @@ export class SignalProcessor {
   private peakLine:   Float32Array | null = null;  // peak hold (dBFS)
   private tmp:        Float32Array | null = null;  // spatial smooth scratch
   private normRow:    Float32Array | null = null;  // 0–1 scratch for shader port
-  private bgPrefix:   Float64Array | null = null;  // prefix-sum scratch for background subtraction
   private outRow:     Uint8Array   | null = null;
   private outSpec:    Float32Array | null = null;
   private outPeak:    Float32Array | null = null;
@@ -189,7 +184,6 @@ export class SignalProcessor {
       this.peakLine   = null;
       this.tmp        = new Float32Array(n);
       this.normRow    = new Float32Array(n);
-      this.bgPrefix   = new Float64Array(n + 1);
       this.outRow     = new Uint8Array(n);
       this.outSpec    = new Float32Array(n);
       this.outPeak    = new Float32Array(n);
@@ -240,33 +234,6 @@ export class SignalProcessor {
       for (let i = 0; i < n; i++) da[i] = da[i] * w + bins[i] * nw;
     } else {
       this.dbAvg!.set(bins);
-    }
-    // BACKGROUND SUBTRACTION (spatial): subtract a WIDE moving-average baseline so the broad noise-
-    // floor shape (antenna response, band slope, humps) flattens while NARROW signals stand proud.
-    // Stateless (no temporal memory → no artefact on a tune). O(n) via a prefix sum; re-reference to
-    // the global mean so the overall level — and the auto-range below — still behaves.
-    if (s.bgSubtract) {
-      const da = this.dbAvg!;
-      const pre = this.bgPrefix!;
-      pre[0] = 0;
-      for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + da[i];
-      const ref = pre[n] / n;
-      // ★ The window MUST be far WIDER than any real signal, or the signal gets absorbed into its own
-      // baseline and subtracted away — a ~9 kHz AM (Caroline) nearly VANISHED with a narrow window
-      // (Stuart 2026-07-24). Size it in Hz (~50 kHz) so only the BROAD noise-floor shape/slope is
-      // removed. When the view is narrower than the window the baseline ≈ the global mean, so bg-sub
-      // then just removes a constant (harmless) and does real work only when zoomed out.
-      // ~18 kHz window: a middle ground (Stuart 2026-07-24) — wide enough a ~9 kHz AM mostly survives,
-      // narrow enough it still flattens a typical zoomed-in view. (1 kHz killed AM; 50 kHz did nothing.)
-      const perBinHz = bwHz > 0 ? bwHz / n : 0;
-      const winBins = perBinHz > 0 ? Math.min(n, Math.max(48, Math.round(18000 / perBinHz))) : n;
-      const half = winBins >> 1;
-      for (let i = 0; i < n; i++) {
-        const lo = i - half < 0 ? 0 : i - half;
-        const hi = i + half + 1 > n ? n : i + half + 1;
-        const baseline = (pre[hi] - pre[lo]) / (hi - lo);
-        da[i] = da[i] - baseline + ref;
-      }
     }
 
     // ── 2. Auto-range (UberSDR updateAutoRange, verbatim port) ──────────────

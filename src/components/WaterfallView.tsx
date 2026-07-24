@@ -85,6 +85,14 @@ const TICK_H   = 22;   // frequency ticker height
 // Derived from BAND_HEX (bandPlan.ts) so the phone's band plan and the WATCH's band
 // label can never drift apart. Same values as before: ham #CF0000, broadcast #0900FF,
 // utility #07BD00, cb #FF7700, all at 0.92.
+// FIXED ring depth (history frames). ★ MUST stay fixed across resize/rotation — reallocating it on a
+// size change wipes the ring, and the waterfall persisting through a rotation/resize with NO redraw is
+// a hero feature (the Mac app resizes fluidly where other SDR apps blank and rebuild). The DISPLAY
+// mapping (how many rows fill the view height, 1 row per point) is the separate `uVisibleRows` uniform,
+// so orientation changes the mapping — never the ring. Depth ≥ any view's point-height so 1 row = 1
+// point holds without the mapping exceeding the ring.
+const RING_ROWS = 1024;
+
 const BAND_COLS: Record<string, string> = {
   ham:       hexRgba(BAND_HEX.ham, 0.92),
   broadcast: hexRgba(BAND_HEX.broadcast, 0.92),
@@ -161,7 +169,6 @@ export interface WaterfallViewProps {
   autoContrast?:   number;        // 0–20, default 5 (10 is too dark)
   specSmoothing?:  number;        // 1–10 → smoothingFrames
   avgFrames?:      number;        // 0–0.9 averaging weight (0 = off), OWRX-style
-  bgSubtract?:     boolean;       // background subtraction (flatten noise-floor shape)
   specFloor?:      number;        // ±20 dB
   specPeakScale?:  number;        // 10 = 1.0×
   peakHold?:       boolean;
@@ -220,7 +227,8 @@ uniform float uHeadF;    // ABSOLUTE frame counter (next write index)
 uniform float uFrac;     // 0..1 progress through the current frame interval
 uniform float uN;        // lines per data frame (1/2/3 = native/20fps/30fps)
 uniform float uQuant;    // 1 = crisp whole-line steps (settled), 0 = continuous (boost)
-uniform float uRows;     // ring rows (256 frames)
+uniform float uRows;         // ring rows (FIXED history depth — never changes on resize)
+uniform float uVisibleRows;  // rows mapped across the view height (= pixel height ⇒ 1 row/point)
 uniform float uTexW;     // bins
 uniform float uDrawW;    // draw width (screen px)
 uniform float uDrawH;    // draw height incl. overscan row (screen px)
@@ -235,7 +243,7 @@ uniform float uContrast; // -1..1 S-curve mix
 // line at display row L is A = (uHeadF-2)*uN + R - L; its source frames are
 // f = floor(A/uN) and f+1 blended by frac(A/uN).
 half4 main(float2 xy) {
-  float Lc = xy.y / uDrawH * uRows;            // continuous display line
+  float Lc = xy.y / uDrawH * uVisibleRows;     // display line (1 row per point) — decoupled from ring
   float L  = uQuant > 0.5 ? floor(Lc) : Lc;    // whole-pixel rows when settled
   float R  = uFrac * uN;
   if (uQuant > 0.5) { R = floor(R + 0.0001); }
@@ -272,7 +280,7 @@ function WaterfallView({
   ituRegion = 1, fontFamily = 'Atkinson Hyperlegible',
   onPanDelta, onZoomDelta, onTapTune, onPinchZoom,
   specShow = true, specFrac = 0.26,
-  autoContrast = 5, specSmoothing = 5, avgFrames = 0, bgSubtract = false, specFloor = 0, specPeakScale = 10,
+  autoContrast = 5, specSmoothing = 5, avgFrames = 0, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
   frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
@@ -348,14 +356,14 @@ function WaterfallView({
       manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
       specFloor, specPeakScale,
       smoothingFrames: specSmoothing,
-      avgFrames, bgSubtract,
+      avgFrames,
       spatialSmooth, peakHold,
       wfBrightness, wfContrast,
       wfSharpness: Math.min(10, sharpBase * sharpMul),
     };
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
-      specSmoothing, avgFrames, bgSubtract, spatialSmooth, peakHold, wfBrightness, wfContrast,
+      specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
       wfSharpness, frameRate]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
@@ -378,8 +386,6 @@ function WaterfallView({
   // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
   const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
   const lastBinCount = useRef(0);
-  const lastRows     = useRef(0);          // ring depth last allocated (realloc on orientation change)
-  const rowsRef      = useRef(0); rowsRef.current = rows;   // current desired depth, for the hot path
   const [texReady, setTexReady] = useState(false);
   const texReadyRef  = useRef(false);
 
@@ -471,7 +477,8 @@ function WaterfallView({
     uFrac:     scrollFrac.value,
     uN:        uNSv.value,
     uQuant:    uQuantSv.value,
-    uRows:     rows,
+    uRows:        RING_ROWS,   // fixed ring depth (never changes on resize → no waterfall redraw)
+    uVisibleRows: rows,        // = point-height ⇒ 1 row per point (sharp, same scroll both orientations)
     uTexW:     uTexW.value,
     uDrawW:    width,
     uDrawH:    wfRenderH,
@@ -550,20 +557,20 @@ function WaterfallView({
   // reach 30/60 lines per second.
   const pushRow = useCallback((row: Uint8Array) => {
     const n = row.length;
-    const R = rowsRef.current;   // ring depth = waterfall pixel height (1 row per point)
-    if (n !== lastBinCount.current || R !== lastRows.current || !idxBuf.current) {
-      idxBuf.current  = new Uint8Array(n * R);
+    // Ring depth is FIXED (RING_ROWS) — realloc ONLY on a bin-count change, never on resize/rotation,
+    // so the buffered waterfall survives an orientation change with no redraw (the hero feature).
+    if (n !== lastBinCount.current || !idxBuf.current) {
+      idxBuf.current  = new Uint8Array(n * RING_ROWS);
       frameCount.current = 0;
       lastBinCount.current = n;
-      lastRows.current = R;
       uTexW.value = n;
     }
-    idxBuf.current.set(row, (frameCount.current % R) * n);
+    idxBuf.current.set(row, (frameCount.current % RING_ROWS) * n);
     frameCount.current += 1;
 
     const data = Skia.Data.fromBytes(idxBuf.current);
     const img = Skia.Image.MakeImage(
-      { width: n, height: R, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
+      { width: n, height: RING_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
       data,
       n,
     );
