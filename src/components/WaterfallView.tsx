@@ -714,15 +714,17 @@ function WaterfallView({
 
     // 2. Frame interval + interaction state (smooth tune)
     const now = Date.now();
-    if (lastFrameTs.current > 0) {
-      const dt = now - lastFrameTs.current;
-      avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;   // (interval seeding reverted — the
-      // jitter buffer is the real fix for tune/variable-rate slowdown; estimate tweaks destabilised it)
-    }
-    lastFrameTs.current = now;
     // INTERACTION boost — drives the SPECTRUM TRACE (follow every data frame directly) + peak hold.
     const boost = cfg.smoothTune &&
       now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    if (lastFrameTs.current > 0 && !boost) {
+      // Freeze the reveal-interval estimate DURING interaction: a tune/zoom re-subscribes and frames
+      // PAUSE, so the resume gap would spike the estimate and slow the scroll for a beat — the tune
+      // slowdown. The jitter buffer's prefill/hold covers the pause; the estimate re-converges after.
+      const dt = now - lastFrameTs.current;
+      avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
+    }
+    lastFrameTs.current = now;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
     // fps so the low-rate scroll is silky (no added latency; pure scroll interpolation). ★ NOT applied
     // to the spectrum trace: at ~10 fps the trace must keep its ~30 fps EASING TWEEN — making it follow
@@ -847,7 +849,11 @@ function WaterfallView({
   const enqueueFrame = useCallback((bins: Float32Array, status: SDRStatus) => {
     if (bgRef.current) return;
     const now = Date.now();
-    if (jbLastArrival.current > 0) {
+    // Freeze the arrival estimate DURING interaction — a tune/zoom pauses frames, and that resume gap
+    // would spike jbArrivalMs → the drain (and scroll) slows for a beat after every tune. The queue's
+    // prefill/hold covers the pause; the estimate re-converges once frames are flowing again.
+    const interacting = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    if (jbLastArrival.current > 0 && !interacting) {
       const dt = now - jbLastArrival.current;
       jbArrivalMs.current = jbArrivalMs.current * 0.8 + dt * 0.2;
     }
