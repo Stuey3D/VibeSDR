@@ -48,6 +48,11 @@ export interface LocalAudioPlayerProps {
   // the local-hardware path on loopback with no auth.
   host?:         string;
   authSuffix?:   string;
+  // The client's session id — MUST match the spectrum socket's user_session_id so
+  // VibeServer treats the audio + spectrum sockets as ONE occupant. Without it the
+  // audio socket is filed as an anonymous "anon:IP" occupant and collides with the
+  // spectrum socket's real id → the second socket is refused as "in use" (2026-07-24).
+  sessionId?:    string;
 }
 
 function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwidthHigh: number) {
@@ -56,7 +61,7 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
-    host = '127.0.0.1', authSuffix = '' }: LocalAudioPlayerProps,
+    host = '127.0.0.1', authSuffix = '', sessionId = '' }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -71,8 +76,14 @@ export default function LocalAudioPlayer(
     const { frequency: f, mode: m, bandwidthLow: bl, bandwidthHigh: bh } = tune.current;
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');
 
+    // Carry the session id on the audio socket so VibeServer matches it to the spectrum socket and
+    // counts the pair as ONE occupant (else the audio socket is an anonymous occupant and the second
+    // socket is refused "in use"). Both platforms turn a "&key=val…" suffix into "?key=val…", so fold
+    // the id in front of the PIN suffix and reuse the same string for the native pump and the JS WS.
+    const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '') + authSuffix;
+
     if (USE_NATIVE_PUMP) {
-      Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), authSuffix);
+      Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix);
       started.current = true;
       return () => { if (started.current) { Vibe?.stopLocalAudio?.(); started.current = false; } };
     }
@@ -80,9 +91,9 @@ export default function LocalAudioPlayer(
     // iOS: read /ws/audio in JS, push PCM through the external-PCM engine. For a
     // VibeServer the URL points at a LAN host and carries the PIN auth suffix.
     let closed = false;
-    // authSuffix is "&vs_nonce=…&vs_auth=…" (built to append to an existing
+    // combinedSuffix is "&user_session_id=…&vs_nonce=…&vs_auth=…" (built to append to an existing
     // query). /ws/audio has no query, so it needs a leading "?" instead of "&".
-    const authQ = authSuffix ? '?' + authSuffix.replace(/^&/, '') : '';
+    const authQ = combinedSuffix ? '?' + combinedSuffix.replace(/^&/, '') : '';
     const sock = new WebSocket(`ws://${host}:${port}/ws/audio${authQ}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;

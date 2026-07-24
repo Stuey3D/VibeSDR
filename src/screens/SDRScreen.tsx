@@ -5155,6 +5155,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           instanceName={instanceName}
           host={route.params.localHost}
           authSuffix={route.params.authSuffix}
+          sessionId={sessionUuid}
         />
       ) : null}
     </View>
