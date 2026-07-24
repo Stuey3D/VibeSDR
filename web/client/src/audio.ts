@@ -147,10 +147,63 @@ export class AudioPlayer {
    * `#anchor` still exists purely so the experiment can be repeated cheaply if the landscape
    * changes. Watch MEMORY for minutes, not CPU for seconds.
    */
-  private static _needsAnchor(): boolean {
-    if (!location.hash.includes('anchor') || location.hash.includes('noanchor')) return false;
+  /**
+   * `#nomediastream` — skip the MediaStream element and connect straight to ctx.destination
+   * (what the client did before Now Playing was added, afe54bd9).
+   *
+   * ★ IT DOES NOT GET YOU AIRPODS SPATIAL AUDIO. That was the reason it was written and the
+   * reason failed: tested 2026-07-25 on macOS + AirPods Max, "Spatialise Stereo" stayed
+   * Not Available with the MediaStream gone, while YouTube in the same Safari offered it. So the
+   * blocker is NOT the MediaStream/call-like classification (which is real, and is why Chromium
+   * won't attach its widget to `srcObject` — but it is not what gates spatialisation).
+   *
+   * ★ What it DOES do, found by accident: on CHROMIUM the media keys start working. With no
+   * element, Chromium registers the page's Media Session action handlers, so play/pause and
+   * next/prev reach us and the skip buttons genuinely tune. The card carries no artwork and no
+   * metadata, but the CONTROLS work — which is more than the default path gives Chromium, and it
+   * costs nothing (no anchor element, so none of the 13 GB leak above).
+   *
+   * On Safari it is a pure loss: the default path already gives a full card with metadata and
+   * artwork, and this throws that away for nothing. Hence a flag, not a default — until the
+   * Chromium half is confirmed against a no-flag baseline.
+   */
+  private static _isChromium(): boolean {
     const ua = navigator.userAgent;
     return /Chrome|Chromium|Edg\//.test(ua) && !/^((?!Chrome|Chromium).)*Safari/.test(ua);
+  }
+
+  /**
+   * Whether to route through the MediaStream element at all. THE TWO ENGINES WANT OPPOSITE
+   * THINGS, so this is decided per browser rather than picked once:
+   *
+   *   Safari   — YES. The element is what gives the full Now Playing card: title, frequency,
+   *              station name and artwork. Works today, keep it.
+   *   Chromium — NO. It has never attached its Global Media Controls to a `srcObject` element
+   *              (it treats MediaStream as call-like), so the element buys Chromium nothing —
+   *              and while it is present the media keys don't reach us either. Drop it and
+   *              Chromium registers the page's Media Session action handlers instead: the
+   *              transport buttons work and the skip keys genuinely tune. Metadata and artwork
+   *              still don't attach, but working controls beat a widget we never got.
+   *
+   * Overrides for A/B: `#mediastream` forces it on, `#nomediastream` forces it off.
+   */
+  private static _useMediaStream(): boolean {
+    if (location.hash.includes('nomediastream')) return false;
+    if (location.hash.includes('mediastream')) return true;
+    return !AudioPlayer._isChromium();
+  }
+
+  private static _needsAnchor(): boolean {
+    if (!location.hash.includes('anchor') || location.hash.includes('noanchor')) return false;
+    // `#anchor` alone is the Chromium Now Playing experiment (UA-gated, see above).
+    // `#anchor2` forces it on ANY browser — a DIAGNOSTIC for the Spatial Audio question:
+    // it puts a real <audio src=blob:> media element in the page while our radio audio goes
+    // out through ctx.destination. If macOS then offers Spatialise Stereo, the rule is
+    // "Safari spatialises media elements, not Web Audio", and the only real route is a muxed
+    // Opus/WebM stream into <audio src>. If it still doesn't, the browser cannot do it at all.
+    // NOTE the anchor is what leaked 13 GB on Chromium — keep it to Safari and to testing.
+    if (location.hash.includes('anchor2')) return true;
+    return AudioPlayer._isChromium();
   }
 
   private ws: WebSocket | null = null;
@@ -245,7 +298,12 @@ export class AudioPlayer {
       //   Playing to, and Safari's playout of it is clean.
       // #noanchor disables the Chromium media-session anchor — it is the ONLY Chromium-only code
       // we have, which makes it the first suspect for a Chromium-only leak.
-      if (AudioPlayer._needsAnchor()) {
+      if (!AudioPlayer._useMediaStream() && !AudioPlayer._needsAnchor()) {
+        // No element at all — audio goes straight to ctx.destination (_connectOutput).
+        // On Chromium this is what lets the Media Session action handlers register.
+        this.streamDest = null;
+        this.mediaEl = null;
+      } else if (AudioPlayer._needsAnchor()) {
         try {
           this.anchorEl = new Audio(silentLoopUrl());
           this.anchorEl.loop = true;

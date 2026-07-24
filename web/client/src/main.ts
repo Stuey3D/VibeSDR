@@ -787,6 +787,9 @@ function updateVts() {
   vts.classList.add('show');
   vts.classList.add('on');   // if it's showing at all, we're on the station
   setDecBoxOffset();
+  // The OS card shows the same station identity as this bar, so republish from the same place.
+  // Cheap: updateMediaSession() early-returns unless the station/frequency/mode/art changed.
+  updateMediaSession();
 }
 
 /**
@@ -805,6 +808,7 @@ async function resolveRdsLogo(name: string, iso: string) {
     if (logoQuery !== key) return;
     rdsLogoUrl = url || '';
     updateVts();
+    updateMediaSession();      // the logo arrives late; the card has to be told
   } catch {
     /* no logo — the monogram-less bar is fine */
   }
@@ -1325,22 +1329,37 @@ function initMediaSession() {
   updateMediaSession();
 }
 
+/** Last metadata actually published, so this is safe to call on every RDS frame. */
+let lastMediaKey = '';
+
 function updateMediaSession() {
   if (!('mediaSession' in navigator) || !spec) return;
+  navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
   const freq = `${(spec.frequency / 1e6).toFixed(3)} MHz`;
   const station = rdsName || $('vtsName').textContent || '';
   // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
   // you're listening on the phone or in the browser. If the station has an RDS
   // logo, prefer that — it's a picture of what you're actually hearing.
   const artSrc = rdsLogoUrl || artworkUrl;
-  if (!artSrc) return;
+  // ★ Publish only on a real change, so this can be called from updateVts() — i.e. on every RDS
+  // frame — without rebuilding MediaMetadata constantly. It USED to be called only when tuning,
+  // which had the effect exactly backwards: the station name and logo arrive SECONDS after the
+  // tune, so the card never showed them, and the next tune published the logo of the station you
+  // were LEAVING. That is the Heart logo flashing into the artwork for a split second on the way
+  // past. (Stuart, 2026-07-25.)
+  const key = `${station}|${freq}|${spec.mode}|${artSrc}`;
+  if (key === lastMediaKey) return;
+  lastMediaKey = key;
+  // Artwork is a BONUS, never a precondition. This used to `return` when artSrc was empty,
+  // which threw away the title and artist too — so a browser that hadn't decoded the baked-in
+  // image yet (or at all) got a blank card rather than a text-only one. Station and frequency
+  // are the parts worth having; publish them either way.
   navigator.mediaSession.metadata = new MediaMetadata({
     title: station && station !== '—' ? station : freq,
     artist: station && station !== '—' ? `${freq} · ${spec.mode.toUpperCase()}` : spec.mode.toUpperCase(),
     album: 'VibeSDR',
-    artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }],
+    ...(artSrc ? { artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }] } : {}),
   });
-  navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
 }
 
 // ── Idle power saving ────────────────────────────────────────────────────────
