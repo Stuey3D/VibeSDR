@@ -942,7 +942,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
   const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
   const linkModeRef = useRef<'full'|'adaptive'|'lowData'>('adaptive');
-  useEffect(() => { linkModeRef.current = linkMode; }, [linkMode]);
+  useEffect(() => {
+    linkModeRef.current = linkMode;
+    // PUSH the mode to the live client whenever it changes — including the async restore below, which
+    // otherwise only updated the UI and left the client in adaptive (came back showing "Low Data" but
+    // running 10fps, Stuart 2026-07-24). Idempotent with onLinkMode's own push (setMode no-ops if same).
+    const c = client.current as unknown as { linkMode?: string } | null;
+    if (c && 'linkMode' in c) c.linkMode = linkMode;
+  }, [linkMode]);
   const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
@@ -2409,6 +2416,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     client.current = c;
     // Apply the persisted VFO-lock follow mode to the fresh connection.
     c.setFollowMode(vfoLockedRef.current);
+    // Apply the persisted link mode too — the [linkMode] effect only fires on a CHANGE, so a mode
+    // restored before this client existed would be lost (UI shows Low Data, wire runs adaptive 10fps).
+    { const cc = c as unknown as { linkMode?: string }; if ('linkMode' in cc) cc.linkMode = linkModeRef.current; }
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.

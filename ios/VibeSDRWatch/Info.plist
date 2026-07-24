@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>167</string>
+	<string>168</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The FM-DX (servers.fmdx.org) and KiwiSDR (rx.linkfanel.net) directory APIs are http-only,
