@@ -51,6 +51,11 @@ const FLOOR_FREEZE_SPAN_HZ = 25_000;
 // wide-view floor. That cap is what still stops a busy, all-signal zoom dragging the floor up into
 // the signal and blowing the scale to white. Tunable; the auto-contrast is finnicky.
 const FLOOR_CLIMB_MAX = 12;
+// The DISPLAY WINDOW never shrinks below this many dB. On a dead band the ceiling (strongest bin)
+// collapses onto the noise floor and the scale "zooms in" on pure noise — noise fills the screen,
+// peaks blow up, waterfall goes bright. A minimum span caps that: the noise keeps its real (small)
+// height near the bottom and there's headroom above for a signal. The classic auto-scale fix.
+const MIN_RANGE_DB = 30;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -274,11 +279,15 @@ export class SignalProcessor {
         }
       }
     }
-    // Guard: never collapse the window below 10 dB
-    if (this.actualMaxDb - this.actualMinDb < 10) {
-      const mid = (this.actualMaxDb + this.actualMinDb) / 2;
-      this.actualMinDb = mid - 5;
-      this.actualMaxDb = mid + 5;
+    // MINIMUM WINDOW, ANCHORED AT THE FLOOR. On a quiet/no-signal band the ceiling (strongest bin)
+    // sits just above the noise, so the window collapses — and the OLD guard CENTRED a 10 dB window,
+    // which RAISED THE FLOOR up into the noise: the noise then filled the whole screen, peaks blew up,
+    // and the waterfall went bright ("the whole floor climbs", Stuart 2026-07-24). Instead keep the
+    // floor at the noise and raise only the CEILING to a minimum span, so noise stays low with headroom
+    // above it for a signal to rise into, and the waterfall maps that noise dark again. MIN_RANGE_DB is
+    // the one dial — bigger = noise sits lower / more headroom.
+    if (this.actualMaxDb - this.actualMinDb < MIN_RANGE_DB) {
+      this.actualMaxDb = this.actualMinDb + MIN_RANGE_DB;
     }
     const dbRange = this.actualMaxDb - this.actualMinDb;
 
