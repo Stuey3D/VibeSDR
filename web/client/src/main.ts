@@ -491,7 +491,11 @@ function loop() {
   // So: redraw them only when the view key actually changes. The waterfall itself still draws
   // every frame — it interpolates rows onto the render clock, which is what makes it scroll
   // smoothly rather than stepping.
-  const key = `${spec.frequency}|${spec.rfCenterHz()}|${spec.spanHz()}|${window.innerWidth}`;
+  // Key on the SAME span/centre drawScale/drawBands actually render from (wf.*), not spec.spanHz():
+  // the two diverge across a sample-rate change, so keying on spec's value left the axis showing a
+  // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
+  // VFO/rf-centre terms so tuning still forces a redraw.
+  const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
   if (key !== lastViewKey) {
     lastViewKey = key;
     drawScale();
