@@ -718,21 +718,24 @@ function WaterfallView({
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
     //    adjacent frames) and the reveal. JS just advances the fraction.
     pushRow(frame.row); // copies synchronously — no snapshot needed
-    // Interpolate UP to hold at LEAST the target scroll rate: synthesise round(target / dataFps) lines
-    // per data frame. So 5fps data (Low Data) still scrolls at the chosen 10/20/30 fps, while data
-    // that's already faster (Kiwi ~23fps) needs little or no interpolation. Clamp 1…8.
-    const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
-    const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
-    uNSv.value     = dynRows;
     uQuantSv.value = wfBoost ? 0 : 1;
     const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
     if (wfBoost) {
-      // Continuous reveal at panel rate (120Hz glide + temporal morph).
+      // Interaction / native rate: the 120Hz vsync glide already handles smoothness, so keep uN on the
+      // STABLE static multiplier. ★ Deriving it from the LIVE data rate here (which spikes and
+      // fluctuates during a gesture) made uN jump every frame — jerking the scroll AND pulsing the
+      // shader's temporal blend into a brighter noise band that settled back on release (Stuart
+      // 2026-07-24). The dynamic target-rate interpolation is for the SETTLED low-fps path only.
+      uNSv.value = cfg.rowsPerFrame;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
     } else {
-      // Discrete whole-line steps — display idles between them.
+      // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
+      // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
+      const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
+      const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
+      uNSv.value = dynRows;
       startRevealStepper(dynRows, dur);
     }
 
