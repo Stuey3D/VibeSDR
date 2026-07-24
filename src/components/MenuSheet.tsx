@@ -238,6 +238,10 @@ export interface MenuSheetProps {
   onSpecShow?:        (v: boolean) => void;
   specSmoothing?:     number;
   onSpecSmoothing?:   (v: number) => void;
+  avgFrames?:         number;
+  onAvgFrames?:       (v: number) => void;
+  bgSubtract?:        boolean;
+  onBgSubtract?:      (v: boolean) => void;
   specFloor?:         number;
   onSpecFloor?:       (v: number) => void;
   specPeakScale?:     number;
@@ -510,6 +514,7 @@ export default function MenuSheet({
   wfSharpness = 5, onWfSharpness,
   specShow = true, onSpecShow,
   specSmoothing = 5, onSpecSmoothing,
+  avgFrames = 1, onAvgFrames, bgSubtract = false, onBgSubtract,
   specFloor = 0, onSpecFloor,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
@@ -893,6 +898,21 @@ export default function MenuSheet({
                 <BtnRow>
                   <Btn label="SPATIAL SMOOTH" active={spatialSmooth}
                        onPress={() => onSpatialSmooth?.(!spatialSmooth)} />
+                </BtnRow>
+
+                {/* Weak Signal — frame integration + background subtraction pull faint signals out
+                    of the noise (see signalProcessor). Integration costs time resolution. */}
+                <SubLabel label="Weak Signal" />
+                <View style={styles.sliderWrap}>
+                  <Text style={styles.sliderLabel}>Integrate</Text>
+                  <Slider style={{flex:1}} minimumValue={1} maximumValue={16} step={1}
+                    value={avgFrames} onValueChange={onAvgFrames ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{avgFrames <= 1 ? 'off' : `${avgFrames}×`}</Text>
+                </View>
+                <BtnRow>
+                  <Btn label="BACKGROUND SUBTRACT" active={bgSubtract}
+                       onPress={() => onBgSubtract?.(!bgSubtract)} />
                 </BtnRow>
 
                 {/* Spectrum Trace */}

@@ -70,6 +70,13 @@ export interface SignalProcessorSettings {
   specPeakScale:   number;
   /** 1–10 spectrum trace EMA smoothing frames (1 = instant). */
   smoothingFrames: number;
+  /** WEAK-SIGNAL INTEGRATION. Temporal frame-averaging depth (1 = off/instant, up to ~16). Noise is
+   *  random so it averages down (~√N); a persistent weak carrier holds, so it emerges. Costs time
+   *  resolution (fast signals blur, slower response) — a user trade, off by default. Like OWRX. */
+  avgFrames:       number;
+  /** BACKGROUND SUBTRACTION. Remove the broad noise-floor SHAPE (antenna response / band slope) with
+   *  a wide spatial baseline, so narrow weak signals stand proud of a FLAT floor. Off by default. */
+  bgSubtract:      boolean;
   /** 5-tap spatial waterfall smooth on/off. */
   spatialSmooth:   boolean;
   /** Peak hold on/off. */
@@ -88,6 +95,8 @@ export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
   specFloor:       0,
   specPeakScale:   10,
   smoothingFrames: 5,
+  avgFrames:       1,        // integration OFF by default (opt-in weak-signal mode)
+  bgSubtract:      false,    // background subtraction OFF by default
   spatialSmooth:   true,
   peakHold:        true,
   wfBrightness:    0,
@@ -119,6 +128,7 @@ export class SignalProcessor {
   private peakLine:   Float32Array | null = null;  // peak hold (dBFS)
   private tmp:        Float32Array | null = null;  // spatial smooth scratch
   private normRow:    Float32Array | null = null;  // 0–1 scratch for shader port
+  private bgPrefix:   Float64Array | null = null;  // prefix-sum scratch for background subtraction
   private outRow:     Uint8Array   | null = null;
   private outSpec:    Float32Array | null = null;
   private outPeak:    Float32Array | null = null;
@@ -179,6 +189,7 @@ export class SignalProcessor {
       this.peakLine   = null;
       this.tmp        = new Float32Array(n);
       this.normRow    = new Float32Array(n);
+      this.bgPrefix   = new Float64Array(n + 1);
       this.outRow     = new Uint8Array(n);
       this.outSpec    = new Float32Array(n);
       this.outPeak    = new Float32Array(n);
@@ -210,6 +221,41 @@ export class SignalProcessor {
     }
     if (centerHz) this.prevCenterHz = centerHz;
 
+    // ── 1a. WEAK-SIGNAL PROCESSING → this.dbAvg ─────────────────────────────
+    // Both steps write this.dbAvg, which EVERYTHING downstream (auto-range, trace, waterfall) then
+    // reads — so integration and a flat baseline apply consistently across the whole display. With
+    // both off this is exactly `dbAvg = bins`, so default behaviour is unchanged.
+    //
+    // FRAME AVERAGING (integration): time-normalised EMA. Random noise averages down (~√N depth), a
+    // persistent weak carrier holds — so it emerges. The flush blocks above re-prime dbAvg = bins on a
+    // tune/band change, so integration restarts clean (no smear across a tune).
+    if (s.avgFrames > 1) {
+      const tc = (s.avgFrames - 1) / 10;                                   // integration time-constant, s
+      const alpha = Math.min(1, 1 - Math.exp(-dtSec / Math.max(0.01, tc)));
+      const da = this.dbAvg!;
+      for (let i = 0; i < n; i++) da[i] += alpha * (bins[i] - da[i]);
+    } else {
+      this.dbAvg!.set(bins);
+    }
+    // BACKGROUND SUBTRACTION (spatial): subtract a WIDE moving-average baseline so the broad noise-
+    // floor shape (antenna response, band slope, humps) flattens while NARROW signals stand proud.
+    // Stateless (no temporal memory → no artefact on a tune). O(n) via a prefix sum; re-reference to
+    // the global mean so the overall level — and the auto-range below — still behaves.
+    if (s.bgSubtract) {
+      const da = this.dbAvg!;
+      const pre = this.bgPrefix!;
+      pre[0] = 0;
+      for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + da[i];
+      const ref = pre[n] / n;
+      const half = Math.max(4, Math.min(96, n >> 3)) >> 1;   // wide enough to keep real signals intact
+      for (let i = 0; i < n; i++) {
+        const lo = i - half < 0 ? 0 : i - half;
+        const hi = i + half + 1 > n ? n : i + half + 1;
+        const baseline = (pre[hi] - pre[lo]) / (hi - lo);
+        da[i] = da[i] - baseline + ref;
+      }
+    }
+
     // ── 2. Auto-range (UberSDR updateAutoRange, verbatim port) ──────────────
     if (s.manualRange) {
       this.actualMinDb = s.manualRange.minDb;
@@ -222,8 +268,9 @@ export class SignalProcessor {
       hist.fill(0);
       let absoluteMax = -Infinity;
       let count = 0;
+      const src = this.dbAvg!;   // the PROCESSED signal (averaged / bg-subtracted), so the scale tracks what's shown
       for (let i = 0; i < n; i++) {
-        const db = bins[i];
+        const db = src[i];
         if (!isFinite(db)) continue;
         count++;
         if (db > absoluteMax) absoluteMax = db;
@@ -291,11 +338,8 @@ export class SignalProcessor {
     }
     const dbRange = this.actualMaxDb - this.actualMinDb;
 
-    // ── 3. Temporal EMA in dBFS (waterfall) — alpha 1.0 = raw passthrough ───
-    // (v1.5 used alpha 1.0 because UberSDR's shared channel pre-smooths; the
-    //  private user-spectrum WS is raw, but at 10 Hz raw looks correct. Hook
-    //  retained so a future setting can soften it.)
-    this.dbAvg.set(bins);
+    // ── 3. (was: waterfall temporal EMA) — now done in step 1a (avgFrames), so
+    //       this.dbAvg already holds the processed signal. Nothing to do here.
 
     // ── 4. Spatial 5-tap smooth [1,2,3,2,1]/9 (waterfall only) ──────────────
     const tmp = this.tmp!;

@@ -917,6 +917,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Waterfall / spectrum display settings
   const [specShow,      setSpecShow]      = useState(true);
   const [specSmoothing, setSpecSmoothing] = useState(5);
+  const [avgFrames,     setAvgFrames]     = useState(1);       // weak-signal integration (1 = off)
+  const [bgSubtract,    setBgSubtract]    = useState(false);   // background subtraction
   const [specFloor,     setSpecFloor]     = useState(0);
   const [specPeakScale, setSpecPeakScale] = useState(10);
   const [peakHold,      setPeakHold]      = useState(true);
@@ -1140,6 +1142,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const bool = (k: string, set: (v: boolean) => void) => { const v = p[k]; if (typeof v === 'boolean') set(v); };
           num('dbMin', setDbMin);                 num('dbMax', setDbMax);
           num('specSmoothing', setSpecSmoothing); num('specFloor', setSpecFloor);
+          num('avgFrames', setAvgFrames);         bool('bgSubtract', setBgSubtract);
           num('specPeakScale', setSpecPeakScale); num('wfBrightness', setWfBrightness);
           num('wfContrast', setWfContrast);       num('wfSharpness', setWfSharpness);
           num('autoContrast', setAutoContrast);   num('step', setStep);
@@ -1167,7 +1170,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
-      specRatioPortrait, specRatioLandscape,
+      specRatioPortrait, specRatioLandscape, avgFrames, bgSubtract,
     });
     latestPrefsJson.current = json;
     const key = prefsTarget.current === 'server'
@@ -1179,7 +1182,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
-      specRatioPortrait, specRatioLandscape, baseUrl]);
+      specRatioPortrait, specRatioLandscape, avgFrames, bgSubtract, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
   // override; THIS SERVER = per-instance override; GLOBAL = the shared blob.
@@ -4256,6 +4259,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         specShow={specShow}
         autoContrast={autoContrast}
         specSmoothing={specSmoothing}
+        avgFrames={avgFrames}
+        bgSubtract={bgSubtract}
         specFloor={specFloor}
         specPeakScale={specPeakScale}
         peakHold={peakHold}
@@ -4820,6 +4825,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}       onWfSharpness={setWfSharpness}
         specShow={specShow}             onSpecShow={setSpecShow}
         specSmoothing={specSmoothing}   onSpecSmoothing={setSpecSmoothing}
+        avgFrames={avgFrames}           onAvgFrames={setAvgFrames}
+        bgSubtract={bgSubtract}         onBgSubtract={setBgSubtract}
         specFloor={specFloor}           onSpecFloor={setSpecFloor}
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
