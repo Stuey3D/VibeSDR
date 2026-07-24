@@ -814,11 +814,57 @@ function WaterfallView({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Jitter buffer ──────────────────────────────────────────────────────────
+  // Queue arrivals and DRAIN them into handleFrame on a STEADY clock, so network / interaction
+  // arrival jitter never reaches the display — the reason Jr and the web client feel smooth at a
+  // variable/low frame rate where the phone (rendering per-arrival) juddered. targetDepth = 1 frame of
+  // banked latency (insurance against a late row); prefill/hold when dry, catch up when backed up.
+  const jbQueue       = useRef<Array<{ bins: Float32Array; status: SDRStatus }>>([]);
+  const jbArrivalMs   = useRef(150);   // measured arrival cadence (drives the drain rate)
+  const jbLastArrival = useRef(0);
+  const jbTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jbPrefill     = useRef(true);
+  const JB_TARGET_DEPTH = 1;
+  const JB_MAX_QUEUE    = 3;
+
+  const drainFrame = useCallback(() => {
+    jbTimer.current = null;
+    if (bgRef.current) { jbQueue.current.length = 0; jbPrefill.current = true; return; }
+    const q = jbQueue.current;
+    if (jbPrefill.current) {
+      if (q.length >= JB_TARGET_DEPTH) jbPrefill.current = false;
+      else return;                                   // hold until banked (a new arrival reschedules)
+    }
+    if (q.length === 0) { jbPrefill.current = true; return; }   // ran dry → hold, re-prefill
+    const f = q.shift()!;
+    handleFrame(f.bins, f.status);
+    // Reschedule at the arrival cadence (steady); a little faster if backed up, to catch up.
+    const dur = Math.max(40, Math.min(1000,
+      q.length > JB_TARGET_DEPTH ? jbArrivalMs.current * 0.6 : jbArrivalMs.current));
+    jbTimer.current = setTimeout(drainFrame, dur);
+  }, [handleFrame]);
+
+  const enqueueFrame = useCallback((bins: Float32Array, status: SDRStatus) => {
+    if (bgRef.current) return;
+    const now = Date.now();
+    if (jbLastArrival.current > 0) {
+      const dt = now - jbLastArrival.current;
+      jbArrivalMs.current = jbArrivalMs.current * 0.8 + dt * 0.2;
+    }
+    jbLastArrival.current = now;
+    const q = jbQueue.current;
+    q.push({ bins: bins.slice(), status: { ...status } });   // copy: the parent reuses its buffers
+    if (q.length > JB_MAX_QUEUE) q.shift();                   // bound the latency
+    if (!jbTimer.current) jbTimer.current = setTimeout(drainFrame, 0);  // kick the drain
+  }, [drainFrame]);
+
+  useEffect(() => () => { if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; } }, []);
+
   useEffect(() => {
     if (!frameSink) return;
-    frameSink.current = handleFrame;
+    frameSink.current = enqueueFrame;    // frames flow through the jitter buffer, not straight to render
     return () => { frameSink.current = null; };
-  }, [frameSink, handleFrame]);
+  }, [frameSink, enqueueFrame]);
 
   // (Palette switches need no rebuild anymore — the lutImage memo swaps the
   // 256×1 LUT texture and the shader recolours the whole history next draw.)
