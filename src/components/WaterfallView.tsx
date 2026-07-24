@@ -307,6 +307,11 @@ function WaterfallView({
   // touch; inside it the slide is boosted to native rate, outside it drops to
   // the selected fps and the spectrum tween smooths the trace at ~30fps.
   const SMOOTH_TUNE_TAIL_MS = 1000;
+  // Below this data rate (frame interval > ~66 ms ⇒ < ~15 fps) the discrete reveal stepper's few
+  // whole-line steps per frame visibly stutter, so glide CONTINUOUSLY like the watch does — even at
+  // rest, not just during interaction. Pure interpolation of the scroll, so it adds NO latency; the
+  // only cost is rendering between data frames. Fast rates keep the cheaper discrete stepping.
+  const LOW_FPS_GLIDE_MS = 66;
 
   // Pan sensitivity: how far the view travels per finger-pixel. 1.0 = 1:1.
   // Bumped slightly so the drag feels lighter (the 1:1 version felt heavy/treacly).
@@ -693,9 +698,13 @@ function WaterfallView({
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
     }
     lastFrameTs.current = now;
-    // Boost: native-rate slide + per-frame spectrum while the user interacts.
+    // Boost = the CONTINUOUS glide (vsync withTiming) instead of discrete whole-line steps. Use it
+    // while the user interacts, OR whenever the data rate is low enough that the stepper would stutter
+    // — at ~10 fps its 2-3 steps/frame chunk visibly, so glide continuously like the watch (no added
+    // latency; it just interpolates the scroll). Fast rates keep the cheaper discrete stepping.
+    const lowFps = avgFrameMs.current > LOW_FPS_GLIDE_MS;
     const boost = cfg.smoothTune &&
-      now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+      (now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS || lowFps);
 
     // 3. Waterfall (phase 2): ONE raw frame row into the ring — the shader
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
