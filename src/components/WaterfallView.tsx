@@ -698,22 +698,25 @@ function WaterfallView({
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
     }
     lastFrameTs.current = now;
-    // Boost = the CONTINUOUS glide (vsync withTiming) instead of discrete whole-line steps. Use it
-    // while the user interacts, OR whenever the data rate is low enough that the stepper would stutter
-    // — at ~10 fps its 2-3 steps/frame chunk visibly, so glide continuously like the watch (no added
-    // latency; it just interpolates the scroll). Fast rates keep the cheaper discrete stepping.
-    const lowFps = avgFrameMs.current > LOW_FPS_GLIDE_MS;
+    // INTERACTION boost — drives the SPECTRUM TRACE (follow every data frame directly) + peak hold.
     const boost = cfg.smoothTune &&
-      (now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS || lowFps);
+      now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
+    // fps so the low-rate scroll is silky (no added latency; pure scroll interpolation). ★ NOT applied
+    // to the spectrum trace: at ~10 fps the trace must keep its ~30 fps EASING TWEEN — making it follow
+    // each frame directly there looks jerky (Stuart 2026-07-24). Waterfall and trace want opposite
+    // things at a low data rate, so the flags are split.
+    const lowFps = avgFrameMs.current > LOW_FPS_GLIDE_MS;
+    const wfBoost = boost || (cfg.smoothTune && lowFps);
 
     // 3. Waterfall (phase 2): ONE raw frame row into the ring — the shader
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
     //    adjacent frames) and the reveal. JS just advances the fraction.
     pushRow(frame.row); // copies synchronously — no snapshot needed
     uNSv.value     = cfg.rowsPerFrame;
-    uQuantSv.value = boost ? 0 : 1;
+    uQuantSv.value = wfBoost ? 0 : 1;
     const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
-    if (boost) {
+    if (wfBoost) {
       // Continuous reveal at panel rate (120Hz glide + temporal morph).
       stopRevealStepper();
       scrollFrac.value = 0;
