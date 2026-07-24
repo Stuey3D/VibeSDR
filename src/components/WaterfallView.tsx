@@ -161,7 +161,7 @@ export interface WaterfallViewProps {
   specFrac?:       number;        // spectrum fraction of (height − BAND_H − TICK_H)
   autoContrast?:   number;        // 0–20, default 5 (10 is too dark)
   specSmoothing?:  number;        // 1–10 → smoothingFrames
-  avgFrames?:      number;        // 1–16 → weak-signal integration (1 = off)
+  avgFrames?:      number;        // 0–0.9 averaging weight (0 = off), OWRX-style
   bgSubtract?:     boolean;       // background subtraction (flatten noise-floor shape)
   specFloor?:      number;        // ±20 dB
   specPeakScale?:  number;        // 10 = 1.0×
@@ -273,7 +273,7 @@ function WaterfallView({
   ituRegion = 1, fontFamily = 'Atkinson Hyperlegible',
   onPanDelta, onZoomDelta, onTapTune, onPinchZoom,
   specShow = true, specFrac = 0.26,
-  autoContrast = 5, specSmoothing = 5, avgFrames = 1, bgSubtract = false, specFloor = 0, specPeakScale = 10,
+  autoContrast = 5, specSmoothing = 5, avgFrames = 0, bgSubtract = false, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
   frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,

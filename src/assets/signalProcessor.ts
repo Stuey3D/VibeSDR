@@ -70,9 +70,9 @@ export interface SignalProcessorSettings {
   specPeakScale:   number;
   /** 1–10 spectrum trace EMA smoothing frames (1 = instant). */
   smoothingFrames: number;
-  /** WEAK-SIGNAL INTEGRATION. Temporal frame-averaging depth (1 = off/instant, up to ~16). Noise is
-   *  random so it averages down (~√N); a persistent weak carrier holds, so it emerges. Costs time
-   *  resolution (fast signals blur, slower response) — a user trade, off by default. Like OWRX. */
+  /** WEAK-SIGNAL INTEGRATION. OWRX-style per-frame EMA WEIGHT, 0–0.9 (0 = off/instant, 0.9 = heaviest,
+   *  OWRX's own cap). Noise averages down (~persistent-signal emerges); higher = more integration but
+   *  more blur/lag. The weight IS the control — not a frame count. Off by default. */
   avgFrames:       number;
   /** BACKGROUND SUBTRACTION. Remove the broad noise-floor SHAPE (antenna response / band slope) with
    *  a wide spatial baseline, so narrow weak signals stand proud of a FLAT floor. Off by default. */
@@ -95,7 +95,7 @@ export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
   specFloor:       0,
   specPeakScale:   10,
   smoothingFrames: 5,
-  avgFrames:       1,        // integration OFF by default (opt-in weak-signal mode)
+  avgFrames:       0,        // averaging weight OFF by default (0…0.9, OWRX-style)
   bgSubtract:      false,    // background subtraction OFF by default
   spatialSmooth:   true,
   peakHold:        true,
@@ -229,11 +229,15 @@ export class SignalProcessor {
     // FRAME AVERAGING (integration): time-normalised EMA. Random noise averages down (~√N depth), a
     // persistent weak carrier holds — so it emerges. The flush blocks above re-prime dbAvg = bins on a
     // tune/band change, so integration restarts clean (no smear across a tune).
-    if (s.avgFrames > 1) {
-      const tc = (s.avgFrames - 1) / 10;                                   // integration time-constant, s
-      const alpha = Math.min(1, 1 - Math.exp(-dtSec / Math.max(0.01, tc)));
+    // OWRX-style averaging: a per-frame EMA WEIGHT `w` in [0, 0.9] — `w` = the history's share,
+    // `(1-w)` = the new frame. w=0 is instant, w=0.9 is OWRX's own heaviest. Deliberately NOT
+    // time-normalised: the weight IS the control (exactly like OWRX), so the feel matches theirs
+    // instead of blurring to mush above a few frames (Stuart 2026-07-24: >3× was useless).
+    const w = s.avgFrames > 0 ? Math.min(0.9, s.avgFrames) : 0;
+    if (w > 0) {
       const da = this.dbAvg!;
-      for (let i = 0; i < n; i++) da[i] += alpha * (bins[i] - da[i]);
+      const nw = 1 - w;
+      for (let i = 0; i < n; i++) da[i] = da[i] * w + bins[i] * nw;
     } else {
       this.dbAvg!.set(bins);
     }
@@ -247,7 +251,14 @@ export class SignalProcessor {
       pre[0] = 0;
       for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + da[i];
       const ref = pre[n] / n;
-      const half = Math.max(4, Math.min(96, n >> 3)) >> 1;   // wide enough to keep real signals intact
+      // ★ The window MUST be far WIDER than any real signal, or the signal gets absorbed into its own
+      // baseline and subtracted away — a ~9 kHz AM (Caroline) nearly VANISHED with a narrow window
+      // (Stuart 2026-07-24). Size it in Hz (~50 kHz) so only the BROAD noise-floor shape/slope is
+      // removed. When the view is narrower than the window the baseline ≈ the global mean, so bg-sub
+      // then just removes a constant (harmless) and does real work only when zoomed out.
+      const perBinHz = bwHz > 0 ? bwHz / n : 0;
+      const winBins = perBinHz > 0 ? Math.min(n, Math.max(64, Math.round(50000 / perBinHz))) : n;
+      const half = winBins >> 1;
       for (let i = 0; i < n; i++) {
         const lo = i - half < 0 ? 0 : i - half;
         const hi = i + half + 1 > n ? n : i + half + 1;

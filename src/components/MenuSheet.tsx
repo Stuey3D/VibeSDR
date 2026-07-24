@@ -905,10 +905,10 @@ export default function MenuSheet({
                 <SubLabel label="Weak Signal" />
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Integrate</Text>
-                  <Slider style={{flex:1}} minimumValue={1} maximumValue={16} step={1}
+                  <Slider style={{flex:1}} minimumValue={0} maximumValue={0.9} step={0.1}
                     value={avgFrames} onValueChange={onAvgFrames ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-                  <Text style={styles.sliderVal}>{avgFrames <= 1 ? 'off' : `${avgFrames}×`}</Text>
+                  <Text style={styles.sliderVal}>{avgFrames <= 0 ? 'off' : avgFrames.toFixed(1)}</Text>
                 </View>
                 <BtnRow>
                   <Btn label="BACKGROUND SUBTRACT" active={bgSubtract}

@@ -917,7 +917,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Waterfall / spectrum display settings
   const [specShow,      setSpecShow]      = useState(true);
   const [specSmoothing, setSpecSmoothing] = useState(5);
-  const [avgFrames,     setAvgFrames]     = useState(1);       // weak-signal integration (1 = off)
+  const [avgFrames,     setAvgFrames]     = useState(0);       // averaging weight 0…0.9 (0 = off), OWRX-style
   const [bgSubtract,    setBgSubtract]    = useState(false);   // background subtraction
   const [specFloor,     setSpecFloor]     = useState(0);
   const [specPeakScale, setSpecPeakScale] = useState(10);
