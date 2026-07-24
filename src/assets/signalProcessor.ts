@@ -46,6 +46,11 @@ const MAX_HISTORY_MS       = 5000;  // ceiling smoothing window (faster recovery
 // rides up to white. Past this we FREEZE the floor at its last wide-view value. Tunable —
 // the auto-contrast is admittedly finnicky (m9psy). See the freeze block below.
 const FLOOR_FREEZE_SPAN_HZ = 25_000;
+// When zoomed in, the display floor follows the LOCAL noise floor (so a quieter sub-band sits at its
+// real noise — no dead flat band below it) but may climb at most this far above the remembered
+// wide-view floor. That cap is what still stops a busy, all-signal zoom dragging the floor up into
+// the signal and blowing the scale to white. Tunable; the auto-contrast is finnicky.
+const FLOOR_CLIMB_MAX = 12;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -259,7 +264,13 @@ export class SignalProcessor {
           this.actualMinDb = avgMin + s.autoContrast;
           if (floorTrust) this.frozenFloorDb = avgMin;   // remember the trustworthy floor
         } else {
-          this.actualMinDb = this.frozenFloorDb + s.autoContrast;
+          // Zoomed in: hold the LOCAL floor (this frame's targetMin) so a quieter sub-band doesn't
+          // leave a dead flat band below the noise — but CAP it at frozenFloorDb + FLOOR_CLIMB_MAX so
+          // a busy all-signal zoom (where the 10th percentile has climbed into the signal) can't ride
+          // the scale up to white. Previously this hard-held frozenFloorDb, which is what produced the
+          // large flat area when zoomed into an active-but-not-full band (Stuart, 2026-07-24).
+          const cappedFloor = Math.min(targetMin, this.frozenFloorDb + FLOOR_CLIMB_MAX);
+          this.actualMinDb = cappedFloor + s.autoContrast;
         }
       }
     }
