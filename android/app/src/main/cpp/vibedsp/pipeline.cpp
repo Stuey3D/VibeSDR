@@ -1,5 +1,6 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
 #include "vibedsp.h"
+#include "simd_internal.h"   // stereoMatrixBlend / interleave2 (NEON)
 #include <cmath>
 #include <algorithm>
 
@@ -161,6 +162,9 @@ void RxPipeline::rebuildAudio() {
     // unit-ish audio level at the channel rate.
     am_.reset(); fm_.reset(); ssb_.reset(); audioLpf_.reset(); lmrLpf_.reset();
     useDeemph_ = false; stereo_ = false; useAgc_ = false;
+    // Only WFM decimates inside its audio filters; every other mode's post-chain
+    // runs at the channel rate, which is already as low as that mode needs.
+    audioDecim_ = 1; audFs_ = chFs_;
     switch (mode_) {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>();
                                                 useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
@@ -179,16 +183,47 @@ void RxPipeline::rebuildAudio() {
             // de-emphasis. Stereo path adds a 19 kHz pilot PLL, 38 kHz coherent
             // L-R recovery, a second 15 kHz LPF, and per-channel de-emphasis.
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * 75000.0)));
+            // ── DECIMATE INSIDE THE 15 kHz FILTERS ────────────────────────────
+            // These two FIRs were the single most expensive thing in WFM: ~176
+            // taps each, computed for every one of the ~320k channel samples a
+            // second, to produce audio that is only 15 kHz wide. A FIR that
+            // decimates only evaluates the outputs it keeps, so dropping to an
+            // ~80 kHz audio rate here costs a quarter of the MACs for exactly the
+            // same filter shape — and de-emphasis, the stereo matrix and the
+            // resampler all then run at a quarter of the rate too.
+            //
+            // The catch is folding: after decimation everything above audFs/2
+            // aliases in, and the MPX above 15 kHz is FULL of things we must not
+            // hear (19 kHz pilot, the 23-53 kHz L-R subcarrier, RDS at 57 kHz).
+            // So (a) keep the audio rate high enough that the pilot never folds,
+            // and (b) give these filters the DEEP (Blackman, ~74 dB) stopband —
+            // whatever leaks through folds into the audio permanently. The
+            // pilot-rejection and stereo-separation cases in test_pipeline guard
+            // both; check them before changing the 64 kHz floor.
+            // Take the LARGEST decimation that keeps the audio rate above 64 kHz —
+            // comfortably above twice the 15 kHz audio, and high enough that the
+            // 19 kHz pilot can never fold back down into it. Prefer a factor that
+            // divides the channel rate exactly: a non-integer audio rate leaves the
+            // resampler with a coprime L/M and a polyphase tap table megabytes wide,
+            // which costs more in cache misses than the decimation saves. Where no
+            // exact factor exists, the largest one still wins — it shrinks M, and
+            // therefore that table, by the same factor.
+            const int maxDec = std::max(1, (int)std::floor(chFs_ / 64000.0));
+            const long long chI = std::llround(chFs_);
+            audioDecim_ = maxDec;
+            for (int d = maxDec; d >= 2; --d) if (chI % d == 0) { audioDecim_ = d; break; }
+            audFs_ = chFs_ / audioDecim_;
+
             const double tau = deempTau_.load();   // 0=off / 50us EU/UK / 75us US
             useDeemph_ = (tau > 0.0);
-            if (useDeemph_) { deemph_.configure(tau, chFs_); deemph_.reset();
-                              deemphR_.configure(tau, chFs_); deemphR_.reset(); }
+            if (useDeemph_) { deemph_.configure(tau, audFs_); deemph_.reset();
+                              deemphR_.configure(tau, audFs_); deemphR_.reset(); }
             const double cut = 15000.0 / chFs_;
-            audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
-            lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
+            audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
+            lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
             pll_.configure(19000.0, chFs_); pll_.reset();
             stereoBlend_ = 0.0f;               // new tune starts mono, blends up
-            const int rch = (int)std::llround(chFs_);
+            const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
             stereo_ = true; lastStereo_ = false;
 
@@ -210,7 +245,7 @@ void RxPipeline::rebuildAudio() {
             break;
         }
     }
-    resamp_ = std::make_unique<RationalResampler>((int)std::llround(chFs_), outRate_);
+    resamp_ = std::make_unique<RationalResampler>((int)std::llround(audFs_), outRate_);
 
     baseBuf_.clear(); chBuf_.clear(); demodBuf_.clear(); audioBuf_.clear();
     dirty_ = false;
@@ -269,17 +304,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
         if (stereo_) {
             // ── WFM stereo MPX decode ────────────────────────────────────────
             // demodBuf_ is the MPX. L+R = LPF(mpx); L-R = LPF(mpx * 38kHz_ref).
-            lprBuf_.resize(nc); lmrBuf_.resize(nc);
-            ref57Buf_.resize(nc); bitClkBuf_.resize(nc);
-            for (int i = 0; i < nc; ++i) {
-                float r38 = 0.0f, r57 = 0.0f, bclk = 0.0f;
-                pll_.step(demodBuf_[i], &r38, &r57, &bclk);
-                lprBuf_[i] = demodBuf_[i];
-                lmrBuf_[i] = demodBuf_[i] * r38 * 2.0f;   // coherent gain comp
-                ref57Buf_[i] = r57; bitClkBuf_[i] = bclk;
-            }
+            // Only generate the 57 kHz reference and bit clock when something is
+            // actually listening for RDS — that is a third of the PLL's per-sample
+            // work, and with no subscriber it was being computed and thrown away.
+            const bool wantRds = (cb_.rdsPs || cb_.rdsText);
+            lprBuf_.assign(demodBuf_.begin(), demodBuf_.begin() + nc);   // L+R = MPX
+            lmrBuf_.resize(nc);
+            if (wantRds) { ref57Buf_.resize(nc); bitClkBuf_.resize(nc); }
+            pll_.processBlock(demodBuf_.data(), nc, lmrBuf_.data(),
+                              wantRds ? ref57Buf_.data() : nullptr,
+                              wantRds ? bitClkBuf_.data() : nullptr);
             // RDS (only meaningful once the pilot is locked).
-            if ((cb_.rdsPs || cb_.rdsText) && pll_.locked())
+            if (wantRds && pll_.locked())
                 rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), bitClkBuf_.data(), nc);
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
@@ -295,14 +331,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // so it won't chatter on an edge signal), else mono. The ramp does the
             // smoothing so the transition fades instead of screeching.
             const float target = (wantStereo && pll_.locked()) ? 1.0f : 0.0f;
-            const float ramp = (float)(1.0 / (chFs_ * 0.04));   // ~40 ms blend time constant
-            for (int i = 0; i < nm; ++i) {
-                stereoBlend_ += ramp * (target - stereoBlend_);
-                const float lpr = leftBuf_[i];
-                const float lmr = rightBuf_[i] * stereoBlend_;   // blended L-R
-                lprBuf_[i] = 0.5f * (lpr + lmr);                 // L
-                lmrBuf_[i] = 0.5f * (lpr - lmr);                 // R
-            }
+            const float ramp = (float)(1.0 / (audFs_ * 0.04));   // ~40 ms blend time constant
+            stereoBlend_ = stereoMatrixBlend(leftBuf_.data(), rightBuf_.data(),
+                                             lprBuf_.data(), lmrBuf_.data(),
+                                             nm, stereoBlend_, ramp, target);
             const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
             if (useDeemph_) {                  // off -> skip (tau=0)
                 deemph_.process(lprBuf_.data(), nm);
@@ -315,7 +347,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const int no = std::min(na, nb);
             if (no > 0) {
                 ilvBuf_.resize(no * 2);
-                for (int i = 0; i < no; ++i) { ilvBuf_[2*i] = audioBuf_[i]; ilvBuf_[2*i+1] = rOutBuf_[i]; }
+                interleave2(audioBuf_.data(), rOutBuf_.data(), ilvBuf_.data(), no);
                 cb_.audio(cb_.ctx, ilvBuf_.data(), no, 2, outRate_);
             }
             if (cb_.stereo && lk != lastStereo_) { lastStereo_ = lk; cb_.stereo(cb_.ctx, lk); }

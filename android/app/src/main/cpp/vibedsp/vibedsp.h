@@ -232,15 +232,37 @@ public:
     // ref38 (L-R detection), ref57 (RDS carrier), bitClk (RDS 1187.5 Hz data
     // clock = pilot/16, phase in [0,2*pi)).
     void step(float mpx, float* ref38, float* ref57, float* bitClk = nullptr);
+    // Block form — what the pipeline actually calls. Advances n MPX samples and
+    // writes the coherently-detected L-R (mpx * ref38 * 2), plus the RDS 57 kHz
+    // reference and bit clock (both may be null to skip the RDS work entirely).
+    // Same maths as step(), just without the per-sample call and null checks.
+    void processBlock(const float* mpx, int n, float* lmr, float* ref57, float* bitClk);
+private:
+    inline void advance(float mpx);          // one loop iteration (no trig)
+public:
     // Hysteretic lock: engages only on a sustained pilot, releases on loss — so
     // static noise (whose smoothed correlation occasionally spikes) can't toggle
     // stereo on/off. lockAmp() is the raw smoothed metric (for blend/diagnostics).
     bool locked() const { return lockState_; }
     float lockAmp() const { return lockAmp_; }
-    void reset() { phase_ = 0.0; dphase_ = w0_; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false; }
+    void reset() { phase_ = 0.0; df_ = 0.0; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false;
+                   oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0; }
 private:
-    double w0_ = 0.0, phase_ = 0.0, dphase_ = 0.0;
+    // The oscillator is a RECURSIVE ROTATOR (same trick as Nco/SsbDemod), not a
+    // sin/cos pair: it used to call std::sin AND std::cos in double precision on
+    // every MPX sample at the channel rate, which was the single most expensive
+    // thing in WFM. Now each sample is a complex multiply by exp(j*w0) times a
+    // small-angle correction, renormalised periodically to fight float drift.
+    double w0_ = 0.0, phase_ = 0.0, df_ = 0.0;   // df_ = VCO deviation from w0_
     double alpha_ = 0.0, beta_ = 0.0;
+    float rotC_ = 1.0f, rotS_ = 0.0f;   // exp(j*w0), the nominal per-sample step
+    float oscC_ = 1.0f, oscS_ = 0.0f;   // cos(phase_), sin(phase_) — running state
+    // The oscillator AT the sample just processed, i.e. before advance() rotated
+    // it on. The coherent references must be taken at the phase the MPX sample was
+    // observed at; using the post-advance phase lags the 38 kHz subcarrier by a
+    // whole channel sample (~43 degrees at 320 kHz) and wrecks stereo separation.
+    float outC_ = 1.0f, outS_ = 0.0f;
+    int   sinceNorm_ = 0;
     int cycle_ = 0;            // pilot-cycle counter within a bit (0..15)
     float lockAmp_ = 0.0f;
     float lockSmooth_ = 0.0005f;     // lock-metric 1-pole coeff (set by rate ~50ms)
@@ -472,6 +494,11 @@ private:
     std::vector<float> ref57Buf_, bitClkBuf_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
+    // WFM only: the rate the stereo audio post-chain runs at, = chFs_/audioDecim_.
+    // The 15 kHz filters decimate as they filter, so everything after them (blend,
+    // de-emphasis, resampling) costs a fraction of what it did at the channel rate.
+    double audFs_ = 0.0;
+    int    audioDecim_ = 1;
     std::vector<cf32> baseBuf_, chBuf_;
     std::vector<float> demodBuf_, lpfBuf_, audioBuf_;
 };

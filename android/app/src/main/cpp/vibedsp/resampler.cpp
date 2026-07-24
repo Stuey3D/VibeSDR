@@ -13,6 +13,36 @@ RationalResampler::RationalResampler(int inRate, int outRate) {
     L_ = outRate / g;
     M_ = inRate / g;
 
+    // ── Cap the interpolation factor ──────────────────────────────────────────
+    // L/M is the EXACT ratio, which is fine when the rates share a factor
+    // (320000 -> 48000 reduces to 3/20). But channel rates aren't always tidy:
+    // 2.048 MSPS decimated by 6 gives 341333 Hz, which is coprime with 48000, so
+    // L became 48000 and the polyphase tap table became L*phaseLen ~ 5.6 million
+    // floats — 22 MB of taps for a filter that needs a hundred. Every output then
+    // touched a cold branch and the resampler cost more than the entire rest of
+    // the chain. (Measured: WFM at 2.048 MSPS was ~40% dearer than at 1.92 MSPS
+    // purely because of this.)
+    //
+    // When the exact ratio is unreasonable, take the best rational approximation
+    // with L <= kMaxL instead. The rate error is parts-per-million — far below
+    // anything audible, and well inside what the audio jitter buffer already
+    // absorbs — while the tap table drops to a few kilobytes.
+    constexpr int kMaxL = 256;
+    if (L_ > kMaxL) {
+        const double target = (double)outRate / (double)inRate;
+        double bestErr = 1e30;
+        int bestL = 1, bestM = 1;
+        for (int l = 1; l <= kMaxL; ++l) {
+            const int m = (int)std::llround((double)l / target);
+            if (m < 1) continue;
+            const double err = std::fabs((double)l / (double)m - target) / target;
+            if (err < bestErr) { bestErr = err; bestL = l; bestM = m; if (err < 1e-7) break; }
+        }
+        const int g2 = gcd_(bestL, bestM);
+        L_ = bestL / g2;
+        M_ = bestM / g2;
+    }
+
     // Prototype low-pass at the L-upsampled rate. Cutoff must anti-alias both the
     // interpolation images (0.5/L) and the decimation (0.5/M); take the lower.
     const double cutoff = 0.5 / std::max(L_, M_) * 0.90;   // small guard margin
