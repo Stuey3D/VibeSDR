@@ -170,7 +170,7 @@ export interface WaterfallViewProps {
   wfBrightness?:   number;
   wfContrast?:     number;
   wfSharpness?:    number;
-  frameRate?:      'native' | '20fps' | '30fps';
+  frameRate?:      '10fps' | '20fps' | '30fps';   // TARGET scroll rate (minimum), interpolated up
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
@@ -301,6 +301,11 @@ function WaterfallView({
   // faster). 60fps existed briefly but 6-way interpolation smeared each data
   // line across six rows — unusably blurry in portrait; don't bring it back.
   // The smooth-tune boost overrides all of this with a vsync slide.
+  // TARGET scroll rate. The interpolation multiplier is now derived per-frame from this and the LIVE
+  // data rate (see handleFrame) so the chosen fps is a MINIMUM: at 5fps data '10fps' synthesises ×2 to
+  // hold a 10fps scroll; at Kiwi's ~23fps it's already above target so no interpolation happens. The
+  // static value here is just the nominal-at-10fps used for the interp-blur amount.
+  const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
   const ROWS_PER_FRAME = frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
@@ -641,9 +646,9 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: ROWS_PER_FRAME });
+                            smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: ROWS_PER_FRAME };
+                       smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
   const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
@@ -713,7 +718,12 @@ function WaterfallView({
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
     //    adjacent frames) and the reveal. JS just advances the fraction.
     pushRow(frame.row); // copies synchronously — no snapshot needed
-    uNSv.value     = cfg.rowsPerFrame;
+    // Interpolate UP to hold at LEAST the target scroll rate: synthesise round(target / dataFps) lines
+    // per data frame. So 5fps data (Low Data) still scrolls at the chosen 10/20/30 fps, while data
+    // that's already faster (Kiwi ~23fps) needs little or no interpolation. Clamp 1…8.
+    const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
+    const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
+    uNSv.value     = dynRows;
     uQuantSv.value = wfBoost ? 0 : 1;
     const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
     if (wfBoost) {
@@ -723,7 +733,7 @@ function WaterfallView({
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
     } else {
       // Discrete whole-line steps — display idles between them.
-      startRevealStepper(cfg.rowsPerFrame, dur);
+      startRevealStepper(dynRows, dur);
     }
 
     // 4. Spectrum + peak paths from normalised [0,1] traces

@@ -849,8 +849,12 @@ export class UberSDRClient {
 
   /** When the view last changed — frames pause across a re-subscription. */
   private lastResubAt = 0;
-  /** User preference, set by the app (Auto / Full rate / Low data). */
-  linkMode: LinkMode = 'adaptive';
+  /** User preference, set by the app (Auto / Full rate / Low data). A setter so changing it LIVE also
+   *  reconfigures the running controller — otherwise the LinkManager's own `mode` stays frozen at
+   *  whatever it was constructed with and the toggle is ignored (Low Data held 10fps, 2026-07-24). */
+  private _linkMode: LinkMode = 'adaptive';
+  get linkMode(): LinkMode { return this._linkMode; }
+  set linkMode(m: LinkMode) { this._linkMode = m; this.link?.setMode(m); }
   private lastFrameAt    = 0;
   private lastReconnectAt = 0;
   private pingSentAt     = 0;

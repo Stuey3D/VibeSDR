@@ -248,8 +248,8 @@ export interface MenuSheetProps {
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
   onPeakHold?:        (v: boolean) => void;
-  frameRate?:         'native' | '20fps' | '30fps';
-  onFrameRate?:       (v: 'native' | '20fps' | '30fps') => void;
+  frameRate?:         '10fps' | '20fps' | '30fps';
+  onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
@@ -946,16 +946,20 @@ export default function MenuSheet({
                   <Btn label="PEAK HOLD" active={peakHold} onPress={() => onPeakHold?.(!peakHold)} />
                 </BtnRow>
 
-                {/* Frame Interpolation */}
-                <SubLabel label="Frame Interpolation" />
-                {/* NATIVE = data rate (~10 lines/s, discrete rows); 20/30 =
-                    temporally interpolated 2×/3× line rate. Smooth-tune boost
-                    overrides to panel-native refresh while touching. */}
+                {/* Scroll Smoothness — a TARGET (minimum) scroll rate. The waterfall interpolates the
+                    live data rate UP to this, so 10fps holds a smooth 10fps scroll even when the data
+                    is only 5fps (Low Data); 20/30 are progressively smoother. The extra lines are
+                    interpolated between real frames, not new detail. */}
+                <SubLabel label="Scroll Smoothness" />
                 <BtnRow>
-                  <Btn label="NATIVE" active={frameRate==='native'} onPress={() => onFrameRate?.('native')} />
-                  <Btn label="20fps"  active={frameRate==='20fps'}  onPress={() => onFrameRate?.('20fps')} />
-                  <Btn label="30fps"  active={frameRate==='30fps'}  onPress={() => onFrameRate?.('30fps')} />
+                  <Btn label="10 FPS" active={frameRate==='10fps'} onPress={() => onFrameRate?.('10fps')} />
+                  <Btn label="20 FPS" active={frameRate==='20fps'} onPress={() => onFrameRate?.('20fps')} />
+                  <Btn label="30 FPS" active={frameRate==='30fps'} onPress={() => onFrameRate?.('30fps')} />
                 </BtnRow>
+                <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
+                               fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>
+                  Higher = smoother scrolling; the extra lines are interpolated, not new detail.
+                </Text>
 
                 {/* Power saving — IDLE SAVER: ⅓ server frame rate after 30s
                     without touch. (Smooth tune is always on — the 120 Hz boost

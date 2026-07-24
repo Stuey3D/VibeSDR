@@ -135,6 +135,18 @@ export class LinkManager {
    * re-subscription is in flight — frames legitimately pause there and it must not read as a bad
    * link. `live` is false when there is no working session to judge.
    */
+  /** Change the user mode LIVE (Auto / Full / Low Data). Applies the pinned rung immediately so the
+   *  rate change is felt at once rather than only on the next tick. Was never wired — toggling Low
+   *  Data updated the client field but not the running controller, so it stayed at the adaptive rate
+   *  (Stuart 2026-07-24: Low Data ignored, held 10fps). */
+  setMode(mode: LinkMode): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    if (mode === 'full')          this.set(1, false);
+    else if (mode === 'lowData')  this.set(this.lowDataRung, false);
+    else                          this.settling = true;   // adaptive: re-evaluate from here
+  }
+
   tick(fps: number, live: boolean, settled: boolean): void {
     if (this.ladder.length <= 1) return;          // backend has no lever (OWRX)
 
