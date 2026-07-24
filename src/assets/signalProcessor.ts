@@ -256,8 +256,10 @@ export class SignalProcessor {
       // (Stuart 2026-07-24). Size it in Hz (~50 kHz) so only the BROAD noise-floor shape/slope is
       // removed. When the view is narrower than the window the baseline ≈ the global mean, so bg-sub
       // then just removes a constant (harmless) and does real work only when zoomed out.
+      // ~18 kHz window: a middle ground (Stuart 2026-07-24) — wide enough a ~9 kHz AM mostly survives,
+      // narrow enough it still flattens a typical zoomed-in view. (1 kHz killed AM; 50 kHz did nothing.)
       const perBinHz = bwHz > 0 ? bwHz / n : 0;
-      const winBins = perBinHz > 0 ? Math.min(n, Math.max(64, Math.round(50000 / perBinHz))) : n;
+      const winBins = perBinHz > 0 ? Math.min(n, Math.max(48, Math.round(18000 / perBinHz))) : n;
       const half = winBins >> 1;
       for (let i = 0; i < n; i++) {
         const lo = i - half < 0 ? 0 : i - half;

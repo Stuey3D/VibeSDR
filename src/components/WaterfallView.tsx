@@ -698,21 +698,22 @@ function WaterfallView({
 
     // 2. Frame interval + interaction state (smooth tune)
     const now = Date.now();
-    if (lastFrameTs.current > 0) {
+    // INTERACTION boost — drives the SPECTRUM TRACE (follow every data frame directly) + peak hold.
+    const boost = cfg.smoothTune &&
+      now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    if (lastFrameTs.current > 0 && !boost) {
+      // ★ SEED FAST on a real rate change, but ONLY when settled. A slow EMA crawls to a new sustained
+      // rate over ~10 frames (the "sluggish then settles" on a Low Data toggle); a big jump snaps toward
+      // it (like Jr's setExpectedRowRate). ★ NOT during interaction: a tune re-subscribes and frames
+      // PAUSE, so that one-off gap would snap the estimate UP and glide everything slowly until release
+      // — the reverse bug (Stuart 2026-07-24). Freeze the estimate while interacting; it re-converges
+      // the moment frames resume.
       const dt = now - lastFrameTs.current;
-      // ★ SEED FAST on a real rate change. A slow EMA (0.8/0.2) crawls to the new interval over ~10
-      // frames, and throughout the reveal glides at the WRONG duration — the "sluggish for a second
-      // then settles" on every rate change (Low Data toggle, interaction start/stop, server clamp;
-      // Stuart 2026-07-24). A big jump ⇒ snap toward it (like Jr's setExpectedRowRate); steady state
-      // stays smooth.
       const jump = Math.abs(dt - avgFrameMs.current) > avgFrameMs.current * 0.4;
       const a = jump ? 0.7 : 0.2;
       avgFrameMs.current = avgFrameMs.current * (1 - a) + dt * a;
     }
     lastFrameTs.current = now;
-    // INTERACTION boost — drives the SPECTRUM TRACE (follow every data frame directly) + peak hold.
-    const boost = cfg.smoothTune &&
-      now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
     // fps so the low-rate scroll is silky (no added latency; pure scroll interpolation). ★ NOT applied
     // to the spectrum trace: at ~10 fps the trace must keep its ~30 fps EASING TWEEN — making it follow
