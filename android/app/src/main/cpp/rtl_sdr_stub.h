@@ -28,5 +28,10 @@ static inline int      rtlsdr_set_direct_sampling(rtlsdr_dev_t*, int)  { return 
 static inline int      rtlsdr_reset_buffer(rtlsdr_dev_t*)              { return 0; }
 static inline int      rtlsdr_read_async(rtlsdr_dev_t*, rtlsdr_read_async_cb_t, void*, uint32_t, uint32_t) { return 0; }
 static inline int      rtlsdr_cancel_async(rtlsdr_dev_t*)              { return 0; }
+// iOS has no USB SDR — the enumeration/open path reports "no devices" so the shim uses RTL-TCP only.
+static inline uint32_t    rtlsdr_get_device_count(void)                       { return 0; }
+static inline int         rtlsdr_open(rtlsdr_dev_t**, uint32_t)               { return -1; }
+static inline const char* rtlsdr_get_device_name(uint32_t)                    { return ""; }
+static inline int         rtlsdr_get_device_usb_strings(uint32_t, char*, char*, char*) { return -1; }
 
 } // extern "C"
