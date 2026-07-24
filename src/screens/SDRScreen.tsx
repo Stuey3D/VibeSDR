@@ -2770,6 +2770,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Data pin (5fps) after every idle-saver wake, snapping back to 10fps and staying there
           // (Stuart 2026-07-24). Low Data → rung 2 (divisor 2 = 5fps); everything else → full.
           idleActiveRef.current = false;
+          (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
           client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1);
         }, 1200);
       }
@@ -2795,7 +2796,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     lastInteractRef.current = Date.now();
     if (idleActiveRef.current) {
       idleActiveRef.current = false;
-      client.current?.setRate(1); // wake: full data rate immediately
+      // Un-pause the link controller FIRST, then wake to the user's rate — the controller resumes
+      // owning the rate (adaptive re-evaluates, Low Data re-pins). setRate(1) seeds full while it does.
+      (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
+      client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1); // wake: user's rate immediately
       watchProvider.setPowersave(false);
       setPowersaveUi(false);
     }
@@ -2805,7 +2809,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!idleSlow) {
       if (idleActiveRef.current) {
         idleActiveRef.current = false;
-        client.current?.setRate(1);
+        (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
+        client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1);
         watchProvider.setPowersave(false);
         setPowersaveUi(false);
       }
@@ -2821,6 +2826,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
+        // Pause the controller so it stops re-asserting its rung, THEN drop to the idle rate — else
+        // adaptive/Low Data would win the tick and hold the full rate under the powersave pill.
+        (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(true);
         client.current?.setRate(IDLE_DIVISOR);
         watchProvider.setPowersave(true);   // → Buddy 'powersave' pill
         setPowersaveUi(true);               // → phone pill

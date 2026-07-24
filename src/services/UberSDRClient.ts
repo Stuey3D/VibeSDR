@@ -837,7 +837,11 @@ export class UberSDRClient {
       const live = this.spectrumWs?.readyState === WebSocket.OPEN;
       // `settled` guards a tune/zoom re-subscription, where frames legitimately pause — reading
       // that as a bad link would throttle every time the user moved the dial.
-      this.link?.tick(fps, !!live, Date.now() - this.lastResubAt > 1500);
+      // PAUSED during idle powersave: the idle saver owns the rate then (setRate(IDLE_DIVISOR)), and a
+      // running controller would re-assert its own rung every second and win the fight — powersave pill
+      // showing while the wire held 10fps (Stuart 2026-07-24). Skip the tick's rate control while
+      // paused; still emit the meter so the readout tracks the real idle rate.
+      if (!this.linkPaused) this.link?.tick(fps, !!live, Date.now() - this.lastResubAt > 1500);
       if (this.link) this.callbacks.onLinkRate?.(this.link.adaptiveRung, this.link.settling, fps, kbps);
     }, 1000);
   }
@@ -846,6 +850,11 @@ export class UberSDRClient {
     if (this.linkTimer) { clearInterval(this.linkTimer); this.linkTimer = null; }
     this.link = null;
   }
+
+  /** Idle powersave freezes the adaptive/pinned controller so it stops fighting the idle saver's
+   *  directly-set rate. The saver calls setRate() itself; this just stops the controller re-asserting. */
+  private linkPaused = false;
+  setLinkPaused(p: boolean) { this.linkPaused = p; }
 
   /** When the view last changed — frames pause across a re-subscription. */
   private lastResubAt = 0;

@@ -100,6 +100,8 @@ export class UberSDRAdapter implements SDRBackend {
   resetView()                                   { this.client.resetView(); }
 
   setRate(divisor: number) { this.client.setRate(divisor); }
+  /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
+  setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }
   resumeSpectrum()         { this.client.resumeSpectrum(); }
   forceResubscribe(reason: string) { this.client.forceResubscribe(reason); }
