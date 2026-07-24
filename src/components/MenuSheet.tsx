@@ -898,22 +898,6 @@ export default function MenuSheet({
                        onPress={() => onSpatialSmooth?.(!spatialSmooth)} />
                 </BtnRow>
 
-                {/* FFT Smoothing — averages successive frames so faint signals build up above the
-                    noise, at the cost of waterfall response (weak-signal averaging). */}
-                <SubLabel label="FFT Smoothing" />
-                <View style={styles.sliderWrap}>
-                  <Text style={styles.sliderLabel}>Smoothing</Text>
-                  <Slider style={{flex:1}} minimumValue={0} maximumValue={0.9} step={0.1}
-                    value={avgFrames} onValueChange={onAvgFrames ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-                  <Text style={styles.sliderVal}>{avgFrames <= 0 ? 'off' : avgFrames.toFixed(1)}</Text>
-                </View>
-                <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
-                               fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 2 }}>
-                  Blends successive frames to lift weak signals out of the noise — at the cost of
-                  waterfall speed.
-                </Text>
-
                 {/* Spectrum Trace */}
                 <SubLabel label="Spectrum Trace" />
                 <BtnRow>

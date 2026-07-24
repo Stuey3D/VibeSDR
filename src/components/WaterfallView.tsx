@@ -763,14 +763,15 @@ function WaterfallView({
 
     // 4. Spectrum + peak paths from normalised [0,1] traces
     if (cfg.specShow && cfg.specH > 4) {
-      if (boost) {
-        // Full rate: trace follows every data frame directly.
-        stopSpecTween();
-        specDispRef.current = null;
-        swapPath(specPath, buildSpecPathRef.current(frame.spec));
-      } else {
-        // Settled: retarget the ~30fps tween — the displayed trace eases to
-        // this frame instead of jumping (data is only ~10Hz / ~3Hz idle).
+      // The trace ALWAYS eases via the ~30fps tween — including DURING interaction. The old boost
+      // path snapped the trace to each DATA frame, so it redrew only at the data rate: fine at
+      // 20/30fps, but at 5fps it juddered and looked slow on every tune/zoom (Stuart 2026-07-24,
+      // "the tune/zoom spectrum slowdown", "worse at 5 than 10fps"). The tween runs on the display
+      // clock regardless of the data rate, so the trace stays fluid at ANY rate — the way
+      // VibeServer/Jr do it. The view is pinned during a gesture, so the spectrum content barely
+      // shifts and the small easing lag is invisible; on release the tween eases to the new view.
+      {
+        // Retarget the tween at the latest frame.
         if (!specToRef.current || specToRef.current.length !== frame.spec.length) {
           specToRef.current = Float32Array.from(frame.spec);
         } else {
@@ -852,11 +853,20 @@ function WaterfallView({
   const enqueueFrame = useCallback((bins: Float32Array, status: SDRStatus) => {
     if (bgRef.current) return;
     const now = Date.now();
-    // Freeze the arrival estimate DURING interaction — a tune/zoom pauses frames, and that resume gap
-    // would spike jbArrivalMs → the drain (and scroll) slows for a beat after every tune. The queue's
-    // prefill/hold covers the pause; the estimate re-converges once frames are flowing again.
     const interacting = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
-    if (jbLastArrival.current > 0 && !interacting) {
+    // DURING interaction, BYPASS the buffer — tune/zoom must feel instant. The jitter buffer only
+    // exists to smooth steady-state scroll; holding a frame here costs up to a full arrival period
+    // (~200ms at 5fps) of lag on every crown move — the slowdown VibeServer/Jr don't have because
+    // they render straight through. Flush the queue and render this frame now; re-bank afterwards.
+    if (interacting) {
+      if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; }
+      jbQueue.current.length = 0;
+      jbPrefill.current = true;          // re-prefill once the gesture ends
+      jbLastArrival.current = now;       // don't let the resume gap spike jbArrivalMs
+      handleFrame(bins, status);         // consumed synchronously — parent's reused buffers are safe
+      return;
+    }
+    if (jbLastArrival.current > 0) {
       const dt = now - jbLastArrival.current;
       jbArrivalMs.current = jbArrivalMs.current * 0.8 + dt * 0.2;
     }
@@ -865,7 +875,7 @@ function WaterfallView({
     q.push({ bins: bins.slice(), status: { ...status } });   // copy: the parent reuses its buffers
     if (q.length > JB_MAX_QUEUE) q.shift();                   // bound the latency
     if (!jbTimer.current) jbTimer.current = setTimeout(drainFrame, 0);  // kick the drain
-  }, [drainFrame]);
+  }, [drainFrame, handleFrame, lastInteractAt]);
 
   useEffect(() => () => { if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; } }, []);
 

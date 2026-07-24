@@ -142,16 +142,27 @@ export class LinkManager {
   setMode(mode: LinkMode): void {
     if (this.mode === mode) return;
     this.mode = mode;
-    if (mode === 'full')          this.set(1, false);
-    else if (mode === 'lowData')  this.set(this.lowDataRung, false);
+    // FORCE the apply. The wire may already disagree with our rung: the adaptive start opens at
+    // rung 2 WITHOUT applying (the server sits at its default divisor 1 = full rate), so toggling
+    // Low Data while rung is still 2 would hit set()'s rung-unchanged guard and NEVER send the
+    // divisor — the controller thinks it is at 5fps while the wire holds 10 (Stuart 2026-07-24,
+    // "the FPS always climbs back to 10, like we aren't sending the divisor").
+    if (mode === 'full')          this.set(1, false, true);
+    else if (mode === 'lowData')  this.set(this.lowDataRung, false, true);
     else                          this.settling = true;   // adaptive: re-evaluate from here
   }
 
   tick(fps: number, live: boolean, settled: boolean): void {
     if (this.ladder.length <= 1) return;          // backend has no lever (OWRX)
 
-    if (this.mode === 'full')   { this.set(1, false); return; }
-    if (this.mode === 'lowData') { this.set(this.lowDataRung, false); return; }  // pinned by choice
+    // Pinned modes RE-ASSERT every tick (force), not just on a rung change. The app has other code
+    // paths that write the rate directly — idle-wake / markInteract call client.setRate(1) — and
+    // those desync us: the wire goes to divisor 1 (10fps) while our rung still reads 2, so a plain
+    // set() early-returns and never corrects it. Forcing the apply each second means nothing can
+    // hold a pinned mode off its rate for more than ~1s (Stuart 2026-07-24: Low Data held 5fps for
+    // ~30s then a wake knocked it back to 10 and it stuck).
+    if (this.mode === 'full')    { this.set(1, false, true); return; }
+    if (this.mode === 'lowData') { this.set(this.lowDataRung, false, true); return; }  // pinned by choice
 
     if (!live) return;
     if (!settled) { this.starvedSecs = 0; return; }
@@ -207,10 +218,10 @@ export class LinkManager {
     this.apply(this.rung, this.ladder[this.rung - 1]);
   }
 
-  private set(r: number, adaptive: boolean): void {
+  private set(r: number, adaptive: boolean, force = false): void {
     const clamped = Math.min(Math.max(1, r), this.ladder.length);
     this.adaptiveRung = adaptive ? clamped : 1;
-    if (clamped === this.rung) return;
+    if (clamped === this.rung && !force) return;
     this.rung = clamped;
     this.starvedSecs = 0; this.healthySecs = 0;
     this.recent = [];       // the old rung's counts say nothing about the new one
