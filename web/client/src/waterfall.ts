@@ -74,7 +74,20 @@ export class Waterfall {
   // saving free rather than a trade.
   //
   // At 20fps in = 20 rows/sec out, exactly one row per frame and this is a no-op.
-  private static readonly ROWS_PER_SEC = 20;
+  //
+  // ★ SCREEN-RELATIVE, NOT pixel-relative. `screenSpeed` is the user's Waterfall Speed in
+  // SCREEN rows/sec (10/20/30); `rowsPerSec` is the pixel-row emit rate = screenSpeed × dpr. Without
+  // the × dpr, Sharp (dpr 2) has twice the pixel rows for the same screen height, so a fixed pixel
+  // rate scrolled the SCREEN at half the speed — which is why "Sharp" felt slow and "Standard" fast
+  // (Stuart 2026-07-24, same class of bug as the iPhone portrait scroll). Recomputed on speed or dpr
+  // (Detail) change, so scroll speed is now independent of render resolution.
+  private screenSpeed = 20;
+  private rowsPerSec = 20;
+  setSpeed(screenRowsPerSec: number) {
+    this.screenSpeed = Math.max(1, screenRowsPerSec);
+    this.recomputeRate();
+  }
+  private recomputeRate() { this.rowsPerSec = this.screenSpeed * renderDpr(); }
   private prevRow: Uint8Array | null = null;   // last received row
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
@@ -320,12 +333,12 @@ export class Waterfall {
     // How many lines to synthesise before the next frame lands. Derived from the
     // OBSERVED arrival gap, so it adapts to whatever rate the server is running —
     // no need to be told, and it self-corrects across a throttle change.
-    const gap = this.lastArrival ? now - this.lastArrival : 1000 / Waterfall.ROWS_PER_SEC;
+    const gap = this.lastArrival ? now - this.lastArrival : 1000 / this.rowsPerSec;
     this.lastArrival = now;
 
     // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
     const clamped = Math.max(20, Math.min(1000, gap));
-    this.emitTotal = Math.max(1, Math.round(clamped / (1000 / Waterfall.ROWS_PER_SEC)));
+    this.emitTotal = Math.max(1, Math.round(clamped / (1000 / this.rowsPerSec)));
     this.emitInterval = clamped / this.emitTotal;
     this.emitStart = now;
     this.emitted = 0;

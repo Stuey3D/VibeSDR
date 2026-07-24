@@ -210,7 +210,8 @@ html, body {
 
 /* Readouts under the meter: signal on the left, link + bitrate on the right. */
 #sigLine { display: flex; align-items: center; justify-content: space-between; margin-top: 0.35em; gap: 0.6em; }
-#sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+#sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.06em; white-space: pre;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
 #linkStats { display: flex; align-items: center; gap: 0.7em; }
 #status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
 
@@ -678,6 +679,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 7px 0; font-size: 12px; flex-wrap: wrap;
 }
+/* `.mrow{display:flex}` overrode the UA `[hidden]{display:none}` (equal specificity, author wins), so
+   a hidden row — e.g. the pinned-rate row — still showed, giving a duplicate "SAMPLE RATE" label. */
+.mrow[hidden] { display: none; }
 .mrow label { color: var(--btn-text); flex: 0 0 auto; }
 /* The split is meaningless while the spectrum trace is hidden — show the control as inert. */
 .mrow.dim { opacity: .38; }
@@ -785,6 +789,10 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="sfBand" title="Band filter">ALL</button>
       <button class="btn" id="sfAge" title="Age filter">AGE</button>
     </span>
+    <!-- Image decoders (WEFAX/SSTV): PREV switches to the last completed image while live decode
+         continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
+    <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>
+    <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
@@ -1158,27 +1166,42 @@ select.btn { padding: 6px 8px; }
        idle saver. Some machines and some browsers simply cannot paint 20 fps of waterfall without
        breaking a sweat; asking the server for fewer frames costs time resolution and nothing else,
        because the waterfall interpolates onto the render clock either way. -->
+  <!-- WATERFALL SPEED — the on-screen scroll rate. The display interpolates rows onto its own clock,
+       so this is independent of the data rate; a high speed with a low data rate scrolls smoothly but
+       fills the gaps by interpolation (blurrier). Scroll rate is screen-relative (× dpr internally) so
+       Detail below never changes the speed. -->
   <div class="mrow">
-    <label>RESOLUTION</label>
-    <div class="seg" id="wfResSeg">
-      <button class="btn on" data-wfres="200">SHARP</button>
-      <button class="btn" data-wfres="100">STANDARD</button>
+    <label>WATERFALL SPEED</label>
+    <div class="seg" id="wfSpeedSeg">
+      <button class="btn" data-wfspeed="10">10</button>
+      <button class="btn on" data-wfspeed="20">20</button>
+      <button class="btn" data-wfspeed="30">30</button>
     </div>
   </div>
+  <div class="rowNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
+    a low data rate it fills the gaps by interpolation — smooth motion, less real detail.</div>
+  <!-- WATERFALL DATA RATE — real frames/sec from the SERVER. Auto = adaptive link management (brings in
+       as much as the link carries, up to the chosen Speed, capped at the server's 20). Speed options
+       above are filtered to >= this so you never ask for frames you'd only throw away. -->
   <div class="mrow">
-    <label>WATERFALL RATE</label>
+    <label>WATERFALL DATA RATE</label>
     <div class="seg" id="wfRateSeg">
-      <button class="btn on" data-wfrate="20">20</button>
+      <button class="btn on" data-wfrate="0">AUTO</button>
+      <button class="btn" data-wfrate="20">20</button>
       <button class="btn" data-wfrate="10">10</button>
       <button class="btn" data-wfrate="5">5</button>
     </div>
   </div>
-  <div class="rowNote">The waterfall interpolates onto the display, so a lower rate looks much the
-    same — it mainly cuts the incoming data rate. A higher rate reacts faster to brief signals.</div>
+  <div class="rowNote">How many real frames per second the server sends. Lower cuts the data used but can
+    miss brief signals. Auto adapts to the link, up to your chosen speed.</div>
   <div class="mrow">
     <label>IDLE SAVER</label>
     <div class="seg"><button class="btn on" id="idleSaver">ON</button></div>
   </div>
+  <!-- No Detail/Resolution control: WebGL renders at full crispness for free on the GPU, and a device
+       too old for WebGL falls back to the light half-res 2D path automatically — it wouldn't want a
+       CPU-intensive sharp waterfall anyway. Crispness is decided by capability, not a toggle. -->
+
   <div class="mrow">
     <label>RANGE</label>
     <div class="seg" id="wfCoarse">

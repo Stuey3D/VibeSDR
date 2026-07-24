@@ -383,7 +383,10 @@ let lastViewKey = '';
  * wanted when they turned the rate down because their machine was struggling.
  */
 function renderHz(): number {
-  return Math.min(60, Math.max(20, wantedFps() * 3));
+  // The render clock must also keep up with the waterfall's EMIT rate (Speed × dpr pixel rows/sec),
+  // or a high speed on a Retina canvas would out-run the draw loop and the scroll would stall.
+  const emit = wfSpeed * renderDpr();
+  return Math.min(60, Math.max(20, Math.max(wantedFps() * 3, emit)));
 }
 
 let lastRenderAt = 0;
@@ -922,9 +925,15 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
     sig.classList.remove('sqlClosed');
   }
 
-  $('sigLabel').textContent =
-    `${sigDb.toFixed(0)} dBFS · ${toSUnit(sigDb)} · SNR ${snrSmooth.toFixed(0)} dB`
-    + (sqlOn && sigDb < squelchDb ? ' · SQL' : '');
+  // FIXED-WIDTH fields so the row never shifts as values change length. The S-unit is the worst
+  // offender (S9+18 → S6 is 5→2 chars) and the row is centred, so any length change re-centres the
+  // whole line (Stuart 2026-07-24). Pad each field to its max width and reserve the SQL slot; with
+  // #sigLabel monospace + white-space:pre the line is now constant width.
+  const dbfsStr = `${sigDb.toFixed(0).padStart(4)} dBFS`;   // "-120 dBFS" .. "  -30 dBFS"
+  const suStr   = toSUnit(sigDb).padEnd(5);                 // "S9+60" .. "S6   "
+  const snrStr  = `SNR ${snrSmooth.toFixed(0).padStart(2)} dB`;
+  const sqlStr  = sqlOn && sigDb < squelchDb ? ' · SQL' : '      ';   // reserve the slot either way
+  $('sigLabel').textContent = `${dbfsStr} · ${suStr} · ${snrStr}${sqlStr}`;
 }
 
 /** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
@@ -1340,9 +1349,57 @@ function updateMediaSession() {
 // you leave it listening and walk away; it's the WATERFALL nobody is watching.
 
 const IDLE_AFTER_MS = 30_000;
-/** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps(). */
+/** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps().
+ *  DERIVED from the Speed + Data Rate controls (computeActiveFps); not set directly by the UI. */
 let activeFps = 20;
 const IDLE_FPS = 5;
+
+// ── Waterfall Speed (on-screen scroll) + Data Rate (server frames) ──────────────
+// Two separate axes. SPEED is the interpolated scroll rate (screen rows/sec); DATA RATE is how many
+// real frames/sec the server sends. AUTO data = bring in as much as we'll display, capped at server.
+let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
+let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
+
+/** The server's fps ceiling (its advertised max, else the built-in 20). */
+function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
+
+/** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
+ *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
+function computeActiveFps(): number {
+  return wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate;
+}
+
+/** Apply both controls: recompute the data rate, set the scroll speed, request the rate, refresh UI. */
+function applyWaterfallRates() {
+  activeFps = computeActiveFps();
+  wf?.setSpeed(wfSpeed);
+  spec?.setFftRate(wantedFps());
+  refreshSpeedSeg();
+  refreshDataRateSeg();
+  updateStatus();
+}
+
+/** Speed buttons are filtered to >= the chosen Data Rate (Data 20 hides Speed 10). AUTO shows all. */
+function refreshSpeedSeg() {
+  const seg = document.getElementById('wfSpeedSeg'); if (!seg) return;
+  const minSpeed = wfDataRate > 0 ? wfDataRate : 0;
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
+    const v = Number((b as HTMLButtonElement).dataset.wfspeed);
+    (b as HTMLButtonElement).hidden = v < minSpeed;
+    b.classList.toggle('on', v === wfSpeed);
+  }
+}
+
+/** Data-rate buttons above the server's ceiling are hidden; AUTO (0) is always available. */
+function refreshDataRateSeg() {
+  const seg = document.getElementById('wfRateSeg'); if (!seg) return;
+  const cap = serverFpsCap();
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
+    const v = Number((b as HTMLButtonElement).dataset.wfrate);
+    (b as HTMLButtonElement).hidden = v > cap;   // 0 (AUTO) is never > cap
+    b.classList.toggle('on', v === wfDataRate);
+  }
+}
 /** The owner's cap, from hwinfo. 0 = uncapped. */
 let serverMaxFps = 0;
 /** What we should be asking for right now: our own choice, clamped to the server's ceiling. */
@@ -1448,29 +1505,11 @@ let idleForced = false;
  * as the pinned sample rate and the enforced idle saver: never show a switch we would ignore.
  */
 function applyRateOptions() {
-  const seg = document.getElementById('wfRateSeg');
-  const row = seg?.parentElement;
-  if (!seg || !row) return;
-  const cap = serverMaxFps > 0 ? serverMaxFps : Infinity;
-
-  let offered = 0;
-  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
-    const v = Number(b.dataset.wfrate);
-    const ok = v <= cap;
-    b.hidden = !ok;
-    if (ok) offered++;
-  }
-  // Nothing to choose between — hide the row rather than present a single locked button.
-  row.hidden = offered <= 1;
-
-  // Our own choice cannot exceed the ceiling; fall back to the fastest still allowed.
-  if (activeFps > cap) {
-    activeFps = Number.isFinite(cap) ? cap : 20;
-    for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
-      b.classList.toggle('on', Number(b.dataset.wfrate) === activeFps);
-    }
-    spec?.setFftRate(wantedFps());
-  }
+  // The server ceiling changed (hwinfo). A manual data rate above it falls back to AUTO (which caps
+  // itself to the ceiling), then the segments re-filter and the request re-clamps.
+  const cap = serverFpsCap();
+  if (wfDataRate > cap) wfDataRate = 0;   // AUTO adapts to the new, lower ceiling
+  applyWaterfallRates();
 }
 
 function applyForcedIdle(forced: boolean) {
@@ -1867,8 +1906,17 @@ function initPanels() {
 // draws — no WASM, no DSP here. See decoders.ts for the wire formats.
 
 let decoders: DecoderClient | null = null;
-let decCtx: CanvasRenderingContext2D | null = null;
 let decImgWidth = 0;
+// Decoder image buffers (WEFAX/SSTV), mirroring the app's live/prev model. Lines always draw into the
+// OFFSCREEN live canvas; the visible #decImage shows either live or the last completed image (prev), so
+// a new transmission starting doesn't wipe an image you haven't saved — PREV switches to it while the
+// live decode keeps running underneath, and SAVE downloads whichever is shown.
+let decLiveCv: HTMLCanvasElement | null = null;   // offscreen: the live image being decoded
+let decLiveCtx: CanvasRenderingContext2D | null = null;
+let decPrevCv: HTMLCanvasElement | null = null;   // offscreen: the last completed image
+let decViewingPrev = false;
+let decLiveComplete = false;                       // the live image has hit onImageDone
+let decIsRgb = false;                              // for the save filename (sstv vs wefax handled by title)
 const spots: Spot[] = [];
 
 /** Skin BAND_COLOUR — markers coloured by band (verbatim from the app's map). */
@@ -2019,7 +2067,7 @@ function initDecoders(host: string, auth: AuthState) {
     },
     onImageStart: (w, h) => startDecImage(w, h),
     onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); setDecLive(true); },
-    onImageDone: () => { $('decStatus').textContent = 'image complete'; },
+    onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpot: (sp) => {
@@ -2079,6 +2127,8 @@ function initDecoders(host: string, auth: AuthState) {
   // Output box chrome.
   initSpotFilters();
   $('decClr').onclick = () => { $('decText').textContent = ''; };
+  $('decPrev').onclick = () => toggleDecPrev();
+  $('decSave').onclick = () => saveDecImage();
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
     $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
@@ -2145,6 +2195,13 @@ function showDecBox(what: string) {
   $('decText').classList.toggle('off', image || isSpots);
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
+  // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
+  // PREV/SAVE buttons entirely for text/spot decoders.
+  if (image) resetDecImages();
+  else {
+    $<HTMLButtonElement>('decPrev').style.display = 'none';
+    $<HTMLButtonElement>('decSave').style.display = 'none';
+  }
   setDecLive(false);
 }
 
@@ -2161,30 +2218,61 @@ function setDecLive(on: boolean) {
   }
 }
 
-function startDecImage(w: number, h: number) {
+/** Copy the live canvas onto the visible one (used when viewing live, and on return-to-live). */
+function blitToVisible(src: HTMLCanvasElement | null) {
   const c = $<HTMLCanvasElement>('decImage');
-  // WEFAX declares no height — the image grows until the transmission stops.
-  c.width = w || decImgWidth || 800;
-  c.height = h || 600;
-  decImgWidth = c.width;
-  decCtx = c.getContext('2d');
-  decCtx?.clearRect(0, 0, c.width, c.height);
+  if (!src) return;
+  if (c.width !== src.width || c.height !== src.height) { c.width = src.width; c.height = src.height; }
+  const ctx = c.getContext('2d');
+  ctx?.clearRect(0, 0, c.width, c.height);
+  ctx?.drawImage(src, 0, 0);
+}
+
+function updateDecImageButtons() {
+  const prevBtn = $<HTMLButtonElement>('decPrev');
+  const hasPrev = !!decPrevCv;
+  // PREV is only meaningful once a completed image has been banked. It flips to LIVE while viewing it.
+  prevBtn.style.display = hasPrev ? '' : 'none';
+  prevBtn.textContent = decViewingPrev ? 'LIVE' : 'PREV';
+  // SAVE is available whenever there is something to save (live has any content, or a prev exists).
+  $<HTMLButtonElement>('decSave').style.display = (decLiveCv || decPrevCv) ? '' : 'none';
+}
+
+function startDecImage(w: number, h: number) {
+  // A new transmission is starting. If the live image was COMPLETED, bank it as PREV so it isn't lost
+  // before the user saves it. An incomplete live image (partial, we retuned) is just replaced.
+  if (decLiveComplete && decLiveCv) {
+    decPrevCv = decLiveCv;
+    decLiveCv = null; decLiveCtx = null;
+  }
+  const cv = document.createElement('canvas');
+  cv.width = w || decImgWidth || 800;
+  cv.height = h || 600;
+  decImgWidth = cv.width;
+  decLiveCv = cv;
+  decLiveCtx = cv.getContext('2d');
+  decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
+  decLiveComplete = false;
+  if (!decViewingPrev) blitToVisible(decLiveCv);
+  updateDecImageButtons();
 }
 
 function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
-  const c = $<HTMLCanvasElement>('decImage');
-  if (!decCtx || c.width !== w) startDecImage(w, 0);
-  if (!decCtx) return;
+  decIsRgb = rgb;
+  if (!decLiveCtx || !decLiveCv || decLiveCv.width !== w) startDecImage(w, 0);
+  if (!decLiveCtx || !decLiveCv) return;
+  const cv = decLiveCv;
 
-  if (y >= c.height) {                     // grow downward rather than clip
-    const keep = decCtx.getImageData(0, 0, c.width, c.height);
-    c.height = y + 200;
-    decCtx = c.getContext('2d');
-    decCtx?.putImageData(keep, 0, 0);
-    if (!decCtx) return;
+  if (y >= cv.height) {                     // grow downward rather than clip
+    const keep = decLiveCtx.getImageData(0, 0, cv.width, cv.height);
+    cv.height = y + 200;
+    decLiveCtx = cv.getContext('2d');
+    decLiveCtx?.putImageData(keep, 0, 0);
+    if (!decLiveCtx) return;
+    if (!decViewingPrev) blitToVisible(cv);
   }
 
-  const img = decCtx.createImageData(w, 1);
+  const img = decLiveCtx.createImageData(w, 1);
   for (let x = 0; x < w; x++) {
     const o = x << 2;
     if (rgb) {
@@ -2197,7 +2285,57 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     }
     img.data[o + 3] = 255;
   }
-  decCtx.putImageData(img, 0, y);
+  decLiveCtx.putImageData(img, 0, y);
+  // Mirror the just-drawn line to the visible canvas when we're watching live.
+  if (!decViewingPrev) {
+    const vis = $<HTMLCanvasElement>('decImage');
+    if (vis.width !== cv.width || vis.height !== cv.height) blitToVisible(cv);
+    else vis.getContext('2d')?.putImageData(img, 0, y);
+  }
+}
+
+/** Bank the live image as saveable once it finishes; enable PREV on the next image start. */
+function markDecImageComplete() {
+  decLiveComplete = true;
+  updateDecImageButtons();
+}
+
+/** Toggle between the live image and the last completed (previous) image. */
+function toggleDecPrev() {
+  if (!decPrevCv && !decViewingPrev) return;
+  decViewingPrev = !decViewingPrev;
+  blitToVisible(decViewingPrev ? decPrevCv : decLiveCv);
+  updateDecImageButtons();
+}
+
+/** Save the currently-shown image to a PNG download (share sheet where available). */
+function saveDecImage() {
+  const src = decViewingPrev ? decPrevCv : decLiveCv;
+  if (!src) return;
+  const name = ($('decTitle').textContent || 'image').toLowerCase().replace(/[^a-z0-9]+/g, '') +
+    '_' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.png';
+  src.toBlob((blob) => {
+    if (!blob) return;
+    const file = new File([blob], name, { type: 'image/png' });
+    const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
+    if (nav.canShare?.({ files: [file] })) {
+      nav.share?.({ files: [file] }).catch(() => {});
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
+}
+
+/** Reset the image buffers — on decoder box open/switch. */
+function resetDecImages() {
+  decLiveCv = null; decLiveCtx = null; decPrevCv = null;
+  decViewingPrev = false; decLiveComplete = false;
+  const c = $<HTMLCanvasElement>('decImage');
+  c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+  updateDecImageButtons();
 }
 
 function renderSpots() {
@@ -2735,22 +2873,30 @@ function buildMenu() {
   // Persisted like the other preferences. Turning it back ON does not wait for the next idle
   // period to matter; turning it OFF must un-throttle immediately, or the user sits at 5 fps
   // wondering whether the switch did anything.
-  // ★ RESOLUTION — the biggest single lever on render cost. dpr 2 is FOUR TIMES the pixels of
-  // dpr 1, and everything (the row write, the two blits, the spectrum path, compositing) scales
-  // with pixel count. Sharp is the default; Standard is there for a machine or browser that is
-  // struggling, and on a waterfall the difference is far less visible than it would be on text.
-  segment('wfResSeg', 'wfres', (v) => {
-    setRenderScale(v / 100);
-    wf?.resize();          // rebuild the canvases at the new scale
-    drawScale(); drawBands();
-  }, 'wfRes');
-
-  // The listener's own rate cap. Applied immediately — a control that waits for the next idle
-  // period to take effect reads as broken.
-  segment('wfRateSeg', 'wfrate', (v) => {
-    activeFps = v > 0 ? v : 20;
-    spec?.setFftRate(wantedFps());
-  }, 'wfRate');
+  // Waterfall SPEED — on-screen scroll rate (10/20/30). Screen-relative (× dpr inside the waterfall),
+  // so render resolution no longer changes the speed.
+  for (const b of Array.from($('wfSpeedSeg').children) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      wfSpeed = Number(b.dataset.wfspeed);
+      savePref('wfSpeed', wfSpeed);
+      applyWaterfallRates();
+    };
+  }
+  // Waterfall DATA RATE — server frames/sec (AUTO/20/10/5). Applied immediately. Picking a data rate
+  // above the current Speed bumps the Speed up (you can't display slower than you receive).
+  for (const b of Array.from($('wfRateSeg').children) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      wfDataRate = Number(b.dataset.wfrate);
+      if (wfDataRate > 0 && wfSpeed < wfDataRate) { wfSpeed = wfDataRate; savePref('wfSpeed', wfSpeed); }
+      savePref('wfDataRate', wfDataRate);
+      applyWaterfallRates();
+    };
+  }
+  // Restore saved choices, then apply once.
+  { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
+  { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
+  if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
+  applyWaterfallRates();
 
   toggle('idleSaver', (on) => {
     if (idleForced) return;         // owner-enforced: the control is locked, not merely ignored

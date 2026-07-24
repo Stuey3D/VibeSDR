@@ -194,6 +194,18 @@ export class SpectrumClient {
           serverMode:     typeof msg.mode === 'string' ? msg.mode : this.cfg.serverMode,
         };
         this.cfg = cfg;
+        // ★ Never let the view be WIDER than the capture. On a sample-rate DROP the device span
+        // shrinks, but our old (wider) view span would persist and over-spread the axis — signals
+        // bunch toward the VFO and the ticker reads a span the dongle can't actually see (Stuart
+        // 2026-07-24). Clamp the held span to the new maxBandwidth and re-request so the server's
+        // crop matches. Runs even mid-gesture, because an over-wide view is never valid.
+        if (cfg.maxBandwidth > 0 && cfg.binCount > 0) {
+          const widestBinBw = cfg.maxBandwidth / cfg.binCount;   // binBw for the full-capture span
+          if (this.view.binBandwidth > widestBinBw * 1.001) {
+            this.view.binBandwidth = widestBinBw;
+            if (this.view.centerHz) this.zoom(this.view.centerHz, this.view.binBandwidth);
+          }
+        }
         // Adopt the server's view once our own sends have settled. While a
         // gesture is in flight our predicted view wins, otherwise the config
         // echoes fight the drag.

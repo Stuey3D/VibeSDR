@@ -68,6 +68,16 @@ private:
     WefaxFIR firI, firQ;
     double iPrev = 0, qPrev = 0;
 
+    // Live auto-level (contrast normalisation). The raw FM-demod comes out dark/low-contrast at the
+    // 48 kHz feed rate, so — like the completed-image post-process, but LIVE and server-side so every
+    // client (web/phone/watch) benefits — we track a running histogram of demod values and stretch the
+    // 2nd…98th percentile to full [0,255] as each line is emitted.
+    uint32_t levelHist[256] = {0};
+    uint64_t levelCount = 0;
+    uint8_t  levelLut[256];
+    bool     levelLutReady = false;
+    void updateAutoLevel(const uint8_t* line, int w);
+
     // Sample buffering
     std::vector<int16_t> samples;
     int sampIdx = 0;
