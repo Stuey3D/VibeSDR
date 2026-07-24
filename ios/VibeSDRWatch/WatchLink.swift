@@ -961,6 +961,15 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         isFmdx = true
         lastRowAt = Date()        // "the phone is talking to us" — same staleness clock
         everGotRow = true
+        // ★ An FM-DX blob is proof the phone is ALIVE and running a session — exactly like a row.
+        // FM-DX sends NO rows, so without this the Start screen — set in activate() whenever
+        // everGotRow is false (every fresh open), or by a prior silence watchdog — would NEVER clear
+        // on an FM-DX server, and Buddy sat on "Start VibeSDR". Same anti-hijack guard as handleRow:
+        // a DELIBERATELY-closed phone stays closed until the user reopens.
+        if !deliberatelyClosed, phoneClosed {
+          phoneClosed = false
+          if heartbeat == nil { startHeartbeat() }
+        }
       }
 
     case "air":
