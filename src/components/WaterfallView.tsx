@@ -79,7 +79,6 @@ import { BAND_PLAN, BAND_HEX, type Band } from '../constants/bandPlan';
 
 const BAND_H   = 20;   // band plan strip height
 const TICK_H   = 22;   // frequency ticker height
-const ROWS     = 256;  // waterfall history depth
 
 // Band type → colour. Indices match v1.5 BAND_COLS: ham=red, broadcast=blue,
 // utility=green, cb=orange. (Screenshot reference: 40m Ham red, 41m B/C blue.)
@@ -290,8 +289,14 @@ function WaterfallView({
   const specH    = specShow ? Math.round(below * Math.max(0.05, Math.min(0.65, specFrac))) : 0;
   const wfTop    = specTop + specH;
   const wfH      = height - wfTop;
-  const wfRenderH = wfH + Math.ceil(wfH / ROWS) + 2; // hide bottom-edge judder
-  const rowH      = wfRenderH / ROWS;
+  // ★ 1 DATA ROW = 1 SCREEN POINT. The ring depth tracks the waterfall's pixel height. A FIXED depth
+  // (was 256) stretched to fill a tall PORTRAIT waterfall made each row span ~2 points, so signals
+  // blurred and scrolled ~2× too fast vs landscape — present in EVERY version, masked by a high frame
+  // rate (Stuart 2026-07-24). Depth = height ⇒ every orientation renders 1-point rows: sharp, and the
+  // same points/sec scroll regardless of orientation.
+  const rows      = Math.min(1024, Math.max(64, Math.round(wfH)));   // cap the ring memory/copy cost
+  const wfRenderH = wfH + Math.ceil(wfH / rows) + 2; // hide bottom-edge judder
+  const rowH      = wfRenderH / rows;
 
   // Waterfall line rate. Settled rows are drawn as WHOLE-PIXEL pushes (no
   // subpixel translate — razor-sharp lines, and no fractional-pixel shimmer,
@@ -373,6 +378,8 @@ function WaterfallView({
   // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
   const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
   const lastBinCount = useRef(0);
+  const lastRows     = useRef(0);          // ring depth last allocated (realloc on orientation change)
+  const rowsRef      = useRef(0); rowsRef.current = rows;   // current desired depth, for the hot path
   const [texReady, setTexReady] = useState(false);
   const texReadyRef  = useRef(false);
 
@@ -464,13 +471,13 @@ function WaterfallView({
     uFrac:     scrollFrac.value,
     uN:        uNSv.value,
     uQuant:    uQuantSv.value,
-    uRows:     ROWS,
+    uRows:     rows,
     uTexW:     uTexW.value,
     uDrawW:    width,
     uDrawH:    wfRenderH,
     uSharp:    uSharpSv.value,
     uContrast: uContrastSv.value,
-  }), [width, wfRenderH]);
+  }), [width, wfRenderH, rows]);
 
   // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
   // Data frames arrive at ~10Hz (or ~3Hz under the idle divisor); setting the
@@ -543,18 +550,20 @@ function WaterfallView({
   // reach 30/60 lines per second.
   const pushRow = useCallback((row: Uint8Array) => {
     const n = row.length;
-    if (n !== lastBinCount.current || !idxBuf.current) {
-      idxBuf.current  = new Uint8Array(n * ROWS);
+    const R = rowsRef.current;   // ring depth = waterfall pixel height (1 row per point)
+    if (n !== lastBinCount.current || R !== lastRows.current || !idxBuf.current) {
+      idxBuf.current  = new Uint8Array(n * R);
       frameCount.current = 0;
       lastBinCount.current = n;
+      lastRows.current = R;
       uTexW.value = n;
     }
-    idxBuf.current.set(row, (frameCount.current % ROWS) * n);
+    idxBuf.current.set(row, (frameCount.current % R) * n);
     frameCount.current += 1;
 
     const data = Skia.Data.fromBytes(idxBuf.current);
     const img = Skia.Image.MakeImage(
-      { width: n, height: ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
+      { width: n, height: R, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
       data,
       n,
     );
@@ -698,22 +707,15 @@ function WaterfallView({
 
     // 2. Frame interval + interaction state (smooth tune)
     const now = Date.now();
+    if (lastFrameTs.current > 0) {
+      const dt = now - lastFrameTs.current;
+      avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;   // (interval seeding reverted — the
+      // jitter buffer is the real fix for tune/variable-rate slowdown; estimate tweaks destabilised it)
+    }
+    lastFrameTs.current = now;
     // INTERACTION boost — drives the SPECTRUM TRACE (follow every data frame directly) + peak hold.
     const boost = cfg.smoothTune &&
       now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
-    if (lastFrameTs.current > 0 && !boost) {
-      // ★ SEED FAST on a real rate change, but ONLY when settled. A slow EMA crawls to a new sustained
-      // rate over ~10 frames (the "sluggish then settles" on a Low Data toggle); a big jump snaps toward
-      // it (like Jr's setExpectedRowRate). ★ NOT during interaction: a tune re-subscribes and frames
-      // PAUSE, so that one-off gap would snap the estimate UP and glide everything slowly until release
-      // — the reverse bug (Stuart 2026-07-24). Freeze the estimate while interacting; it re-converges
-      // the moment frames resume.
-      const dt = now - lastFrameTs.current;
-      const jump = Math.abs(dt - avgFrameMs.current) > avgFrameMs.current * 0.4;
-      const a = jump ? 0.7 : 0.2;
-      avgFrameMs.current = avgFrameMs.current * (1 - a) + dt * a;
-    }
-    lastFrameTs.current = now;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
     // fps so the low-rate scroll is silky (no added latency; pure scroll interpolation). ★ NOT applied
     // to the spectrum trace: at ~10 fps the trace must keep its ~30 fps EASING TWEEN — making it follow
