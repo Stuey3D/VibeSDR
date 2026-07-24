@@ -53,6 +53,13 @@ export class UberSDRAdapter implements SDRBackend {
 
   get uuid(): string { return this.client.uuid; }
 
+  /** Link-management mode (Auto / Full / Low Data). FORWARD to the inner client — the app sets this on
+   *  the adapter, and without this getter/setter the toggle vanished (the adapter had no linkMode and no
+   *  `.inner`, so Low Data never reached the controller and held 10fps; Auto only "worked" as the
+   *  default). The client's own setter reconfigures the running LinkManager live. */
+  get linkMode(): UberSDRClient['linkMode'] { return this.client.linkMode; }
+  set linkMode(m: UberSDRClient['linkMode']) { this.client.linkMode = m; }
+
   /** Local hardware: thread the live device sample rate for panSpan()'s Fs window. */
   setLocalSampleRate(hz: number) { this.client.localSampleRate = hz; }
   // VibeServer PIN: the pre-computed "&vs_nonce=&vs_auth=" WS URL suffix.
