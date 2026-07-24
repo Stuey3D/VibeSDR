@@ -74,6 +74,9 @@ export class WaterfallGL {
   private rgba: Uint8Array | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
+    // preserveDrawingBuffer keeps the backbuffer valid for the drawImage composite that follows the
+    // render in the same frame. (Turning it off was tried to tame Chromium's GPU clocks but the win
+    // wasn't worth the risk of a blank waterfall — Safari, the primary target, is happy either way.)
     const gl = (canvas.getContext('webgl', { alpha: false, antialias: false, depth: false,
       preserveDrawingBuffer: true }) ||
       canvas.getContext('experimental-webgl', { alpha: false })) as WebGLRenderingContext | null;
