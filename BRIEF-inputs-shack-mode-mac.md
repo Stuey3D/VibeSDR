@@ -97,20 +97,30 @@ two user-set default layouts — a "handheld / no pointer" layout and a "pointer
 Example: iPad handheld → drums; snap on a Magic Keyboard trackpad → buttons, automatically. Android
 included AS A WHOLE (pointers work on all Android devices, not just tablets).
 
-**Layout picker = ICONS, platform-conditional** (shown when a pointer is detected). iOS can't detect
-back/forward side buttons, so that option simply isn't offered there:
-- **iOS/iPadOS — two icons:** scroll-wheel ↕ (simple vertical-scroll → single axis → tune OR zoom);
-  trackpad ↕↔ (up/down + left/right → up/down to one, left/right to the other). Tilt-wheels land HERE.
-- **Android — those two plus a third:** wheel + side-buttons icon (Android reads BUTTON_BACK/FORWARD),
-  enabling side-button tuning.
-- Where the app has already OBSERVED the hardware (e.g. seen a horizontal-scroll event), PRE-SELECT the
-  matching icon — a confirmation, not a cold question.
+**★ ONE QUESTION, NOT A LAYOUT MATRIX (Stuart 2026-07-24 — simplifies the whole brief).** Drop the
+per-device icon-layout picker. Ask the user exactly ONE thing:
 
-**Mappings:**
-- Up/down scroll only → that axis → tune OR zoom.
-- Up/down + left/right → up/down to zoom or VFO, left/right to the opposite.
-- Wheel + side buttons (Android) → side buttons → VFO or tuning.
-- ★ Side buttons chosen as TUNING get the SAME HiFi tap/hold semantics (tap = step, hold = scan).
+> **"What should the scroll wheel do?"  →  Zoom (default)  ·  Tune**
+
+That single vertical-axis choice DERIVES every other mapping — the user never configures the secondary
+inputs, and a person with a basic wheel-only mouse never sees an option that doesn't apply to them:
+- **Vertical scroll wheel / 2-finger vertical** → the chosen control (default **Zoom**).
+- **The OPPOSITE control auto-maps to whatever orthogonal input the device happens to have** —
+  horizontal tilt-wheel, AND/OR the side back/forward buttons. No separate setting; if the hardware
+  has it, it does the other thing; if it doesn't, nothing is lost.
+- **Trackpad (most Macs + iPads) mirrors the axes:** 2-finger up/down = the wheel choice (Zoom by
+  default), 2-finger left/right = the other (Tune). So the default out-of-box trackpad feel is
+  **vertical = zoom, horizontal = tune**.
+- ★ Side buttons (or a tilt-wheel) acting as TUNE get the SAME HiFi tap/hold semantics (tap = step,
+  hold = sweep).
+
+Rationale: the vertical wheel is the ONE input every pointing device shares, so it's the only thing
+worth asking about; everything else is orthogonal and can be assigned automatically. Wheel-only users
+answer one question and stop; trackpad/tilt/side-button users get the second control for free.
+
+Optional refinement (not required for v1): if the app has OBSERVED a horizontal-scroll or side-button
+event, it can surface a tiny "your mouse also has X — it's mapped to Tune" confirmation pill rather than
+a config screen. Learn-by-use, never a cold matrix.
 
 **Detection reality (researched):** pure up-front layout detection is NOT reliable.
 - Android (good): `MotionEvent` gives AXIS_VSCROLL + AXIS_HSCROLL and getButtonState()
