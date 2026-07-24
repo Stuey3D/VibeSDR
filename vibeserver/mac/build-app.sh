@@ -33,8 +33,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>        <string>VibeServer</string>
   <key>CFBundleIconFile</key>          <string>AppIcon</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
-  <key>CFBundleVersion</key>           <string>2</string>
+  <key>CFBundleShortVersionString</key><string>0.2.1</string>
+  <key>CFBundleVersion</key>           <string>3</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
@@ -67,8 +67,14 @@ LIBS=$(cd "$BUILD" && ls libvibeserver_core.a libvibedsp.a 2>/dev/null | sed "s|
 RTLSDR=$(grep -m1 '^RTLSDR_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 USBLIB=$(grep -m1 '^USB_LIB:'    "$BUILD/CMakeCache.txt" | cut -d= -f2)
 OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)
-# Prefer the STATIC archive next to whatever find_library picked, so the .app is self-contained (no
-# Homebrew dylib dependency at runtime) — same reasoning as librtlsdr/libusb above.
+# ★ FORCE THE STATIC ARCHIVE for EVERY Homebrew lib, next to whatever find_library cached. A notarised
+# hardened-runtime app that links a Homebrew DYLIB crashes on launch for everyone: absent on machines
+# without Homebrew, and even on the dev box the hardened runtime rejects it for a Team-ID mismatch
+# (0.2.0: dyld "Library not loaded: librtlsdr.0.dylib"). librtlsdr/libusb had NO .a preference here —
+# only opus did — so a stale cache pointing at the dylib shipped a broken app. Belt-and-braces even
+# after wiping the cmake cache.
+_rtldir=$(dirname "$RTLSDR"); [ -f "$_rtldir/librtlsdr.a" ]  && RTLSDR="$_rtldir/librtlsdr.a"
+_usbdir=$(dirname "$USBLIB"); [ -f "$_usbdir/libusb-1.0.a" ] && USBLIB="$_usbdir/libusb-1.0.a"
 _opusdir=$(dirname "$OPUSLIB"); [ -f "$_opusdir/libopus.a" ] && OPUSLIB="$_opusdir/libopus.a"
 
 swiftc \

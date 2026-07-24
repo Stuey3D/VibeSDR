@@ -79,19 +79,18 @@ add_executable(vibeserver
 # STATIC on purpose. A user drags one .app out of a DMG and it works — no Homebrew, no dylib
 # hunting, nothing to install. Prefer the static archives; fall back to whatever is found so a
 # dev machine still configures.
-find_library(RTLSDR_LIB NAMES rtlsdr librtlsdr.a rtlsdr.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
-find_library(USB_LIB    NAMES usb-1.0 libusb-1.0.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+# ★ STATIC ONLY. Restrict find_library to .a archives so it CANNOT pick a Homebrew dylib — a notarised
+# hardened-runtime app that links one crashes on launch for everyone (absent without Homebrew; rejected
+# for a Team-ID mismatch even on the dev box). The old NAMES-based find preferred the .dylib and the
+# swap-to-.a fallback was fragile; this is bulletproof.
+set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+find_library(RTLSDR_LIB NAMES rtlsdr HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_library(USB_LIB    NAMES usb-1.0 HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+set(CMAKE_FIND_LIBRARY_SUFFIXES ${_saved_suffixes})
 find_path(RTLSDR_INC rtl-sdr.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
-if(NOT RTLSDR_LIB OR NOT RTLSDR_INC)
-  message(FATAL_ERROR "librtlsdr not found. On macOS: brew install librtlsdr")
-endif()
-# Prefer the .a next to whatever find_library picked, so we bundle rather than link a dylib.
-get_filename_component(_rtl_dir "${RTLSDR_LIB}" DIRECTORY)
-if(EXISTS "${_rtl_dir}/librtlsdr.a")
-  set(RTLSDR_LIB "${_rtl_dir}/librtlsdr.a")
-endif()
-if(EXISTS "${_rtl_dir}/libusb-1.0.a")
-  set(USB_LIB "${_rtl_dir}/libusb-1.0.a")
+if(NOT RTLSDR_LIB OR NOT USB_LIB OR NOT RTLSDR_INC)
+  message(FATAL_ERROR "static librtlsdr/libusb not found. On macOS: brew install librtlsdr libusb")
 endif()
 message(STATUS "librtlsdr: ${RTLSDR_LIB}")
 message(STATUS "libusb:    ${USB_LIB}")
