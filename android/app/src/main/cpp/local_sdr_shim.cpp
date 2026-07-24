@@ -2524,6 +2524,11 @@ struct LocalSdrShim::Impl {
             occupantSession = me;   // claim (or re-affirm) the slot for this client
         }
 
+        // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
+        // (guarded by captureIdle), so whichever of the two sockets lands first does it. Only starts a
+        // capture thread (no join), so it's safe here.
+        resumeCaptureIdle();
+
         // ★ SAME-SESSION TAKEOVER. A client that resumes from background reconnects with its SAME
         // stable session id, but its PREVIOUS socket may still be a ghost here (watchOS suspended it
         // with no FIN, so our accept loop is still parked on it). The occupant check above lets the
@@ -2594,6 +2599,7 @@ struct LocalSdrShim::Impl {
             if (op == 0xA) continue;                          // pong — liveness only
             if (op == 0x1) handleControl(sock, payload);
         }
+        bool bothGone = false;
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (specClient == sock) specClient = nullptr;
           if (audioClient == sock) audioClient = nullptr;
@@ -2603,8 +2609,11 @@ struct LocalSdrShim::Impl {
           // clear an occupancy it never held.
           const bool specGone  = !specClient  || !specClient->isOpen();
           const bool audioGone = !audioClient || !audioClient->isOpen();
-          if (specGone && audioGone) occupantSession.clear(); }
+          if (specGone && audioGone) { occupantSession.clear(); bothGone = true; } }
         sock->close();
+        // No listeners → idle the dongle so an unattended server stops burning power. OUTSIDE the lock:
+        // pauseCaptureIdle() joins the capture thread, which must never happen under clientMtx.
+        if (bothGone) pauseCaptureIdle();
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
     }
 
@@ -2903,6 +2912,28 @@ struct LocalSdrShim::Impl {
                 LOGE("RTL-SDR stream stopped but the device is still present — restarting");
             }
         });
+    }
+
+    // ── Idle: stop the dongle when nobody is listening ────────────────────────────────────────────
+    // With no client connected the capture + DSP were still grinding the dongle IQ into the void
+    // (~3% CPU on an M4 — a real battery/thermal drain on a solar or old-Android appliance). Stop the
+    // capture when the last listener leaves; `dspLoop` then PARKS on the empty IQ queue at ~0 CPU. We
+    // set `restarting` for the whole paused period so the capture watchdog treats the stopped stream as
+    // deliberate (it `continue`s on `restarting`) and never false-alarms "dongle gone" or relaunches.
+    std::atomic<bool> captureIdle{false};
+    void pauseCaptureIdle() {
+        if (captureIdle.exchange(true)) return;               // already paused
+        if (useTcp()) { tcpRunning.store(false); }
+        else          { restarting.store(true); if (dev) rtlsdr_cancel_async(dev); }
+        if (rtlThread.joinable()) rtlThread.join();
+        { std::lock_guard<std::mutex> lk(iqMtx); iqQueue.clear(); iqQueuedSamples = 0; iqPrefilled = false; }
+        LOGI("no listeners — dongle capture paused (idle)");
+    }
+    void resumeCaptureIdle() {
+        if (!captureIdle.exchange(false)) return;             // wasn't paused
+        if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
+        else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
+        LOGI("listener connected — dongle capture resumed");
     }
 
     /** Tell every connected client whether we currently have a radio. They draw the message. */
