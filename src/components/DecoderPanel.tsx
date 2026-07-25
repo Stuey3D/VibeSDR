@@ -305,7 +305,8 @@ export default function DecoderPanel({
   // Stuart flagged the exception himself — a key that means something different depending on
   // where you are is the thing that has caused most of the confusion in this work. Space is
   // free, and "space activates the focused thing" is a convention rather than a rule to learn.
-  const [kbZone, setKbZone] = useState<null | 'header' | 'list'>(null);
+  const [kbZone, setKbZone] = useState<null | 'header' | 'list' | 'speed'>(null);
+  const [speedIdx, setSpeedIdx] = useState(0);
   const [hdrIdx, setHdrIdx] = useState(0);
   const [listIdx, setListIdx] = useState(0);
   const hdrSlots = useRef<Array<() => void>>([]);
@@ -381,10 +382,20 @@ export default function DecoderPanel({
       }
       if (!kbZoneRef.current) return;               // not ours until Tab says so
       if (k === 'Escape' || k === 'Backspace') {
+        // Deepest first: close the speed popup before anything else, without changing it.
+        if (kbZoneRef.current === 'speed') { setDabSpeedOpenRef.current(false); return; }
         // On DAB there is nothing to hand the keyboard back TO, so these step back to the
         // list rather than releasing and leaving the arrows tuning a locked VFO.
         if (isDabModeRef.current) { setKbZone('list'); return; }
         leave();
+        return;
+      }
+      // The popup is a dropdown: it owns every arrow while open, Space picks, Backspace leaves.
+      if (kbZoneRef.current === 'speed') {
+        if (k === 'ArrowLeft' || k === 'ArrowUp') { setSpeedIdx(i => Math.max(0, i - 1)); return; }
+        if (k === 'ArrowRight' || k === 'ArrowDown') { setSpeedIdx(i => Math.min(DAB_SPEEDS.length - 1, i + 1)); return; }
+        if (k === 'Space') { onDabSpeedRef.current(speedIdxRef.current); return; }
+        if (k === 'Tab') { setDabSpeedOpenRef.current(false); return; }
         return;
       }
       if (k === 'ArrowLeft' || k === 'ArrowRight') {
@@ -412,6 +423,13 @@ export default function DecoderPanel({
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
+  const speedIdxRef = useRef(speedIdx); speedIdxRef.current = speedIdx;
+  const setDabSpeedOpenRef = useRef(setDabSpeedOpen); setDabSpeedOpenRef.current = setDabSpeedOpen;
+  const onDabSpeedRef = useRef((i: number) => {});
+  onDabSpeedRef.current = (i: number) => {
+    const o = DAB_SPEEDS[i];
+    if (o) { onDabSpeed?.(o.v); setDabSpeedOpen(false); }
+  };
   const onSelectDabRef = useRef((i: number) => {
     const p = dabProgrammes[i];
     if (p) onSelectDab?.(p.id);
@@ -424,6 +442,18 @@ export default function DecoderPanel({
   // Idle timeout, matching the menus: a stray Tab must not leave the box holding the keyboard
   // while the user has walked away from it. Resets on every key it handles.
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ★ The SPEED FIX popup takes the arrows the moment it opens. The button EXPANDS the header
+  // to show the presets, but nothing could move the selector into them — Stuart: "the button
+  // expands the header for them but I cannot move the selector down to get to them." A
+  // control that opens a list has to hand the list the keys, or it has only half worked.
+  useEffect(() => {
+    if (!dabSpeedOpen) { setKbZone(z => (z === 'speed' ? 'header' : z)); return; }
+    const cur = DAB_SPEEDS.findIndex(o => Math.abs((dabSpeed ?? 1) - o.v) < 0.001);
+    setSpeedIdx(cur >= 0 ? cur : 0);
+    setKbZone('speed');
+    announce();
+  }, [dabSpeedOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Minimising hands the keyboard back — the list is not on screen to be walked.
   useEffect(() => { if (minimised && kbZone) leave(); }, [minimised]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -496,8 +526,9 @@ export default function DecoderPanel({
               // and said nothing about it — the CLR button responded to space, so it worked,
               // but nothing told you it would. A box that has the keyboard should say so
               // whatever it is showing. (Stuart, 2026-07-25.)
-              ? (isDabMode ? (kbZone === 'header' ? 'space to press · tab for stations'
-                                                   : 'space to select · tab for controls')
+              ? (kbZone === 'speed' ? 'space to set · backspace to cancel'
+                 : isDabMode ? (kbZone === 'header' ? 'space to press · tab for stations'
+                                                    : 'space to select · tab for controls')
                  : listLen > 0 ? 'space to select · tab to leave'
                  : 'space to press · tab to leave')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
@@ -689,7 +720,9 @@ export default function DecoderPanel({
                 const on = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
                 return (
                   <TouchableOpacity key={o.l}
-                    style={[dp.dabSpeedBtn, { borderColor: on ? dc.btnActT : dc.btnBdr }, on && { backgroundColor: dc.btnAct }]}
+                    style={[dp.dabSpeedBtn, { borderColor: on ? dc.btnActT : dc.btnBdr }, on && { backgroundColor: dc.btnAct },
+                            kbZone === 'speed' && speedIdx === DAB_SPEEDS.indexOf(o)
+                              && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                     onPress={() => { onDabSpeed?.(o.v); setDabSpeedOpen(false); }} activeOpacity={0.7}>
                     <Text style={[dp.dabSpeedBtnTxt, { color: on ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>{o.l}</Text>
                   </TouchableOpacity>
