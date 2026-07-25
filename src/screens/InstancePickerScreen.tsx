@@ -1193,9 +1193,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   hdrActions.current = [];
   ftrActions.current = [];
 
+  // ★★ The LENGTH has to come from state, not from the refs. The banks are cleared at the
+  // top of this render and only filled while the CHILDREN render — so reading their length
+  // here always gave zero, the nav's range was just the list, and focus stuck at its last
+  // index. Stuart saw exactly that: focus=12 of rows=13, unable to reach Manchester or the
+  // directories below it. The counts are published after each render and settle in one pass.
+  const [zoneCounts, setZoneCounts] = useState({ h: 0, f: 0 });
+  useEffect(() => {
+    const h = hdrActions.current.length, f = ftrActions.current.length;
+    if (h !== zoneCounts.h || f !== zoneCounts.f) setZoneCounts({ h, f });
+  });
+
   const navFocus = useListNav(
     listNavActive,
-    hdrActions.current.length + listData.length + ftrActions.current.length,
+    zoneCounts.h + listData.length + zoneCounts.f,
     (i) => {
       // Header, then the list, then the footer — the order they appear on screen.
       const hdr = hdrActions.current, ftr = ftrActions.current;
@@ -1628,6 +1639,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             {/* ★ TEMPORARY — see the note by `dbg`. Remove with it. */}
             <Text style={[styles.kbHint, { color: C.amber }]} numberOfLines={1}>
               dbg keys={dbg.keys} last={dbg.last} focus={navFocus} rows={listData.length}
+              {' '}h={zoneCounts.h} f={zoneCounts.f}
               {' '}active={listNavActive ? 'Y' : 'N'} sup={shortcutsSuppressed() ? 'Y' : 'N'}
               {' '}scr={screenFocused ? 'Y' : 'N'} conn={connecting ? 'Y' : 'N'}
             </Text>
