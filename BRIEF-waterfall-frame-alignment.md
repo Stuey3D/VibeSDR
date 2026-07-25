@@ -252,3 +252,12 @@ requested. ★ UNKNOWN and not yet checked: whether the Kiwi and OWRX protocols 
 per waterfall frame at all. If they do not, the adapter would have to infer it from its own
 outstanding-request bookkeeping (it knows what it asked for and when the server acked), which is
 weaker but probably good enough — an in-flight frame is by definition one sent before the ack.
+
+★★ **THE REAL UBERSDR HAS THIS BUG TOO** (Stuart, 2026-07-25). So it is PROTOCOL-INHERENT, not ours:
+a frame in flight inevitably carries the centre it was generated at, and any client that places rows
+against the current view will misplace it. Two consequences worth holding on to:
+- Nothing was done wrong here — the naive placement is the obvious implementation, and the reference
+  client makes the same choice.
+- On UberSDR we now handle something the reference does NOT, which is a genuine (if quiet) edge.
+It also means there is no upstream fix to wait for, and no reference behaviour to copy: extending it
+to Kiwi/OWRX is original work either way.
