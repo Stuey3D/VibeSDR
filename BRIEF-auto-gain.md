@@ -73,6 +73,14 @@ Three design consequences, all of which this case makes concrete:
    §5's cadence being slow enough not to pump, but not so slow it takes minutes to react to a
    band that has turned hostile.
 
+★ **Independently reproduced on OpenWebRX** with the same dongle and the same too-high gain.
+That is worth recording twice over. It confirms the effect is the FRONT END, not anything in
+VibeDSP — so no amount of DSP work would have found it. And it says that mainstream SDR software
+does not protect its users from this either: the operator is simply expected to know. That is the
+opportunity. Getting this right is a genuine differentiator rather than catching up, and the
+"limited by overload / limited by band noise" readout in §7 is the part that turns a hard-won
+piece of operator folklore into something the app just tells you.
+
 This is also the honest user need behind the whole feature, in Stuart's words: *"Sometimes I find
 it hard to set the gain and I am probably overloading the signals by giving it too much."* Too
 much gain is the default mistake, it is invisible until you know the symptoms, and the penalty is
