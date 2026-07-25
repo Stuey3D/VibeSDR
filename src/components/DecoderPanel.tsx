@@ -422,6 +422,8 @@ export default function DecoderPanel({
 
   useRepeatingKeys(panelOn, (k: string) => {
     {
+      // Any key the box acts on counts as activity — see armIdle.
+      if (kbZoneRef.current) armIdleRef.current();
       if (k === 'Tab') {
         // ★★ ON DAB, TAB MOVES BETWEEN LIST AND HEADER — it never releases the keyboard.
         // Zooming a multiplex only zooms into a wall of signals (Stuart), so handing the
