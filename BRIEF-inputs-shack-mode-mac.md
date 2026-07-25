@@ -478,6 +478,29 @@ dropped.
 ★ RULE FOR ANY FUTURE TV FLANK: include it only if it is *readable* (status, frequency, meters) or
 *actuable from a keyboard*. If its only affordance is touch or drag, it stays on the phone.
 
+### ★★ SETTLED: step rate moves to L1/R1, so the flank set is THREE (Stuart, 2026-07-25)
+
+The controller mapping (see below / memory `external_display_shack_mode`) forced a useful question: the
+flank set is **step rate, audio, menu, chat** = four, but a tvOS controller has only THREE free face
+buttons, because **B/circle is reserved by App Review** for backing out and exiting to Home (Play/Pause
+maps to X). Stuart's call: **put step rate on the SHOULDERS (L1/R1)**, leaving audio / menu / chat →
+A / X / Y with B untouched.
+
+★ This is better than an arithmetic fix, because it splits by ACTION TYPE:
+- **Step rate is a CYCLE through a fixed ladder** (five ordered rungs in StepPicker) — exactly what
+  paired shoulder buttons exist for. L1 down a rung, R1 up.
+- **Audio, menu and chat all OPEN A PANEL** — a momentary action, which is what a face button is for.
+
+★ Bonus on a room-scale display: shoulders are reachable WITHOUT LOOKING, so the most-adjusted
+parameter in the app never pulls focus off the waterfall. Step rate stays VISIBLE in the pill — it just
+carries an L1/R1 glyph rather than being a button you navigate to.
+
+★ CONSEQUENCE FOR THE TV LAYOUT: **flank group = three buttons, not four.** The four-button wording
+above is superseded for the controller case. Keyboard-only (state 3) may still show all four as
+on-screen buttons since a keyboard has no shoulders — decide whether the flank set is per-input-device
+or fixed at three for consistency. ★ Recommend FIXED AT THREE with step rate shown as a readout in the
+pill for both, so the TV layout does not change shape when a controller connects or drops.
+
 ★ **All transitions FADE.** Same reasoning as the drifting pill: this is a room-scale display being
 watched from a sofa, and anything that snaps reads as a fault. Fading also means a brief overlap is
 harmless, which keeps the state machine simple.
