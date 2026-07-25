@@ -77,6 +77,32 @@ const DAB_SPEEDS = [
   { v: 0.3333, l: '×0.33' }, { v: 0.25, l: '×0.25' },
 ];
 
+/**
+ * A scroll indicator that appears — in green — only while the ARROWS are driving this list.
+ *
+ * ★ Stuart's idea, and it answers the question the keyboard always raises: what are the arrows
+ * actually moving right now? The native indicator cannot be coloured on iOS (indicatorStyle is
+ * only default/black/white), so this is drawn rather than styled.
+ *
+ * ★ It also shows HOW FAR through a list you are, which the flash and the focus ring do not —
+ * useful on a long ensemble or a full spots table where the highlight alone tells you nothing
+ * about where you are in the whole.
+ */
+function KeyScrollBar({ visible, off, layout, content }: {
+  visible: boolean; off: number; layout: number; content: number;
+}) {
+  if (!visible || content <= layout || layout <= 0) return null;
+  const frac  = Math.max(0.08, layout / content);            // never a dot on a long list
+  const thumb = layout * frac;
+  const span  = layout - thumb;
+  const at    = span * Math.max(0, Math.min(1, off / Math.max(1, content - layout)));
+  return (
+    <View pointerEvents="none" style={dp.keyBarTrack}>
+      <View style={[dp.keyBarThumb, { height: thumb, transform: [{ translateY: at }] }]} />
+    </View>
+  );
+}
+
 const MORSE_QUALITIES: MorseQuality[] = ['all', 'low', 'medium', 'high'];
 const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
   all: 'ALL', low: 'LOW+', medium: 'MED+', high: 'HIGH',
@@ -252,6 +278,14 @@ export default function DecoderPanel({
   const aircraftRef = useRef<ScrollView | null>(null);
   const spotsRef = useRef<any>(null);
   const bodyScrollY = useRef(0);
+  // Only tracked while the bar is on screen — no re-render per frame the rest of the time.
+  const [scrollM, setScrollM] = useState({ off: 0, layout: 0, content: 1 });
+  const scrollMetrics = {
+    scrollEventThrottle: 16,
+    onScroll: (e: any) => setScrollM(m => ({ ...m, off: e?.nativeEvent?.contentOffset?.y ?? 0 })),
+    onLayout: (e: any) => setScrollM(m => ({ ...m, layout: e?.nativeEvent?.layout?.height ?? 0 })),
+    onContentSizeChange: (_w: number, h: number) => setScrollM(m => ({ ...m, content: Math.max(1, h) })),
+  };
 
   const dc = {
     border:  isWhite ? 'rgba(255,255,255,0.25)' : C.border,
@@ -752,7 +786,8 @@ export default function DecoderPanel({
             ref={outputRef}
             style={dp.body}
             contentContainerStyle={dp.bodyContent}
-            showsVerticalScrollIndicator
+            {...scrollMetrics}
+            showsVerticalScrollIndicator={false}
           >
             <Text style={[dp.output, { color: dc.output, fontFamily: t.font }]} selectable>
               {decoderText}
@@ -783,8 +818,13 @@ export default function DecoderPanel({
             </View>
           </View>
         )}
+        {/* ★ The green bar sits over the body — one instance for whichever list is showing. */}
+        <KeyScrollBar visible={kbZone === 'list' && !minimised}
+                      off={scrollM.off} layout={scrollM.layout} content={scrollM.content} />
+
         {!minimised && isDabMode && (
-          <ScrollView ref={dabScroll} style={dp.body} showsVerticalScrollIndicator>
+          <ScrollView ref={dabScroll} style={dp.body} showsVerticalScrollIndicator={false}
+                      {...scrollMetrics}>
             {dabProgrammes.map((p, pi) => {
               const active = p.id === activeDabId;
               const navOn = kbZone === 'list' && listIdx === pi;
@@ -810,6 +850,7 @@ export default function DecoderPanel({
           <FlatList
             ref={spotsRef}
             style={dp.body}
+            {...scrollMetrics}
             data={visibleSpots}
             keyExtractor={(s: SpotRow, i: number) => `${s.time}-${s.call}-${s.freqHz}-${i}`}
             renderItem={renderSpot}
@@ -834,6 +875,13 @@ export default function DecoderPanel({
 
 const dp = StyleSheet.create({
   // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
+  // Right edge of the body, inside the border. Thin enough to read as an indicator rather
+  // than a control — it is a signal, not something to grab.
+  keyBarTrack: {
+    position: 'absolute', right: 2, top: 40, bottom: 4, width: 3,
+    borderRadius: 2, backgroundColor: 'rgba(124,255,155,0.15)', zIndex: 5,
+  },
+  keyBarThumb: { width: 3, borderRadius: 2, backgroundColor: NAV_FOCUS },
   flash: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
     borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 8,
