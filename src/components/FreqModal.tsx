@@ -14,7 +14,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
-import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn } from './PanelNav';
+import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn, noteTouchInteraction } from './PanelNav';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -395,7 +395,11 @@ export default function FreqModal({
           paddingBottom: isLandscape ? kbHeight + 8 : 16 + (Platform.OS === 'android' ? kbHeight : 0),
         }]} pointerEvents="box-none"
       >
-        <View style={[st.modal, { borderColor: t.barBorder }]}>
+        <View style={[st.modal, { borderColor: t.barBorder }]}
+              // ★ Touching the card ends keyboard mode, so the [H]z / [T]une caps disappear
+              // rather than advertising shortcuts to someone using their thumb. A Modal is its
+              // own window, so SDRScreen's root touch sniff never sees this.
+              onTouchStart={noteTouchInteraction}>
           {hasBookmarks ? (
             <View style={st.segHeader}>
               {(['tune', 'bookmarks'] as const).map(m => (

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
-import { useListNav, NAV_FOCUS } from '../components/PanelNav';
+import { useListNav, NAV_FOCUS, noteTouchInteraction } from '../components/PanelNav';
 import {
   ActivityIndicator,
   Alert,
@@ -1547,7 +1547,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}
-                    onTouchStart={() => setKbHint(false)}>
+                    onTouchStart={() => { setKbHint(false); noteTouchInteraction(); }}>
       <IdentModal
         visible={!!identModal}
         initial={identPrefill}
