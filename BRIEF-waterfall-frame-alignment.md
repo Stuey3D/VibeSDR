@@ -261,3 +261,47 @@ against the current view will misplace it. Two consequences worth holding on to:
 - On UberSDR we now handle something the reference does NOT, which is a genuine (if quiet) edge.
 It also means there is no upstream fix to wait for, and no reference behaviour to copy: extending it
 to Kiwi/OWRX is original work either way.
+
+---
+
+## 11. ★★★ ON VIBESERVER WE OWN BOTH ENDS — which dissolves the whole conflict (Stuart, 2026-07-25)
+
+Every constraint above is an UBERSDR PROTOCOL constraint, not a real one:
+- `binCount` comes from the server because we do not own the server.
+- A wider span therefore costs resolution, because bins cannot be added.
+- The ring's bin scale changes when the server changes it, which invalidates absolute placement,
+  which is what restarted the waterfall on zoom (§9).
+
+**On VibeServer none of that holds.** We write both ends, and `RxPipeline::start(fs, fftSize,
+fftRate, outRate, cb)` ALREADY takes the FFT size as a parameter. So the server can be asked for a
+window WIDER than the viewport at a FIXED, FINE bin scale, with the FFT sized to match.
+
+★★★ Consequences, and they are not incremental:
+1. **Panning and sweeping cost nothing** — served entirely from the client-side buffer, no round trip,
+   so the data rate is flat by construction rather than by throttling.
+2. **Zoom costs nothing either** — it becomes pure client-side sampling inside the buffer.
+3. ★★ **And that removes the blocker.** The ring's bin scale NEVER CHANGES, so the ring is never
+   invalidated, so history survives zoom AND absolute-frequency placement works. The conflict
+   between correct alignment and zoom continuity (§9) existed ONLY because the server owned the
+   scale. All three problems were the same problem.
+
+### Design sketch
+- Server sends a window of, say, 4x the viewport at the viewport's bin resolution — allowing ~2
+  octaves of zoom-out and free panning within it before any renegotiation.
+- Client stores rows by absolute frequency (as §8/§9 attempted) — now safe, because the scale is
+  stable.
+- Renegotiate only when the view leaves the window or wants finer resolution than it holds.
+- Public backends (UberSDR, Kiwi, OWRX) keep today's behaviour; this is a VibeServer capability.
+
+### Costs to measure
+- **Bytes per frame scale with binCount**, so a 4x window at full resolution is 4x the frame size.
+  Unlike the UberSDR case this DOES cost bandwidth — but view reconfigurations disappear, so the
+  total during active tuning may be flat or lower. MEASURE, do not assume.
+- FFT cost is n log n; VibeDSP's FFT is a small share of the WFM budget (see the pi-bench figures),
+  but a 4x FFT on a Pi is not free.
+- Client memory: the ring is already 1 MB per 1024 bins; 4x is 4 MB.
+- ★ A tunable window factor is the obvious lever, and it maps onto the existing LOW DATA mode:
+  narrow window when metered, generous when not.
+
+★ This is the first genuine case of VibeServer doing something the public backends CANNOT, rather
+than merely matching them — worth noting for positioning as well as engineering.
