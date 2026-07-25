@@ -345,6 +345,22 @@ question "was the band actually busy just then?" is answered by measurement inst
 With one dongle only, fall back to the UTC 15-second grid: FT8 slot timing is deterministic, so
 the segmentation still works, you just cannot confirm how hard the band was being driven.
 
+★★ **80 m is strong here too, and that gives BOTH classes of aggressor from one rig.** 3573 kHz
+sits INSIDE the 4605-centred capture; 7074 kHz sits OUTSIDE it. That distinction is the whole test
+of whether a detector is any good:
+
+- **In-band aggressor (3573).** The floor lift and the victim's damage are both visible in the
+  same recording — a self-contained case, and the easy one.
+- **Out-of-band aggressor (7074).** Nothing about it appears in the captured spectrum at all; only
+  its damage does. ★ This is the case that catches naive implementations, because any measurement
+  scoped to the tuned channel — or even to the whole digitised span — misses it entirely while the
+  receiver is being flattened. If the algorithm handles only the in-band case it has not solved the
+  problem; §2.1 was out-of-band.
+
+★ Caveat: both are FT8, so they stress on the SAME UTC 15-second grid and timing alone cannot
+attribute the damage to one or the other. Use the second dongle to watch each band and attribute
+by observation, or capture at a time when only one of the two bands is open.
+
 ★ These are propagation-dependent — the Buzzer is an evening signal at Stuart's location. So
 CAPTURE AND KEEP. A good night's recording becomes a permanent regression fixture; the band will
 not reproduce it on demand.
