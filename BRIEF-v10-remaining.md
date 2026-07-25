@@ -44,9 +44,27 @@ Ordering is Stuart's call.
   fully scalable SDR client. Works from a 1" watch screen all the way up to a giant TV, and everything
   in between."*
 - Second angle: *"designed to bridge the gap between real, easy-to-use hardware and complex, highly
-  technical SDR software"* + the 80s-drums / 90s-HiFi-buttons body copy. ★ Terminology: hold-button =
-  "sweep"/"fast-tune", NEVER "scan" — reserve scan/scanner for the V11 auto-seek feature. (memory:
+  technical SDR software"* + the 80s-boombox-drums / **90s-CAR-STEREO-keys** body copy (updated
+  2026-07-25 — the keys read as car stereo, not separates, and both references are then PORTABLE like
+  the app; see BRIEF-inputs-shack-mode-mac.md). ★ Terminology: hold-button = "sweep"/"fast-tune",
+  NEVER "scan" — reserve scan/scanner for the V11 auto-seek feature. (memory:
   positioning_and_readme)
+
+★★ **"Mobile-first, fully scalable" is now EVIDENCED, and it is a stronger claim than it sounds**
+(Stuart, 2026-07-25). Most "scalable" clients mean a LAYOUT that reflows to the screen. VibeSDR
+adapts to the **INPUT available**, which is rarer and harder:
+
+| surface | input | control surface |
+|---|---|---|
+| 1" watch (Jr) | crown | its own dial + waterfall |
+| phone | touch | drums or tuner keys |
+| tablet / Mac | pointer + keyboard | hover-scoped drums, full shortcuts |
+| TV | keyboard only | the pill + flanks, and NO touch controls at all |
+
+Same app, same engine, and the controls do not merely resize — they CHANGE IDENTITY to match what the
+user is holding. The tagline's "from a 1 inch watch screen all the way up to a giant TV" stops being a
+size claim and becomes a demonstrable one. ★ Worth leading with this rather than the size range: the
+size range is the symptom, the input adaptation is the actual engineering.
 
 ## V11 (not now)
 Scanner (auto-seek), ADS-B own decoder, remote-control mesh.
