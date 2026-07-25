@@ -150,3 +150,37 @@ Latency note: server encodes with LAME `-reservoir 0` and flush-per-packet, so p
 
 ---
 73!
+
+---
+
+## ★★ FM-DX IS A SEPARATE SCREEN, AND THAT IS WHY IT KEEPS FALLING BEHIND (2026-07-25)
+
+Stuart, testing keyboard control: *"FM-DX is the ugly stepchild at the moment — as soon as you enter
+it, it drops all keyboard controls and it switches back to drums even though I have the buttons set."*
+Then, separately: *"FM-DX has no Android Auto controls."*
+
+★ These are not three bugs. They are one structural fact: **FM-DX runs on `TunerScreen`, not
+`SDRScreen`.** Every capability added to the main screen has to be added to it AGAIN, deliberately —
+and each time it has not been, FM-DX has quietly lost a feature the rest of the app gained. It is
+the only backend with its own screen, so it is the only one that can drift like this.
+
+★★ **THE RULE THIS IMPLIES:** anything added to `SDRScreen` needs a conscious decision about
+`TunerScreen` — even if the decision is "not there, and here is why". The failure mode is silence,
+not breakage, so it will not show up in testing unless someone goes looking on FM-DX specifically.
+
+### Outstanding on FM-DX, all from the same cause
+
+1. **No keyboard or controller support at all.** `TunerScreen` has no `VibeKeyDown` listener, so
+   entering FM-DX drops every shortcut. Includes: **no way to dismiss the FM-DX warning by keyboard.**
+2. **Ignores the drums/keys preference.** It hardcodes the drums rather than reading the shared
+   setting, so a user who has chosen the tuner keys gets drums back on this one backend.
+3. ★ **Stuart's design for the fix:** a simple header control — a picture of a drum which, tapped,
+   becomes a picture of buttons. **ONE toggle swapping both at once**, no menu. Worth doing properly
+   because *"some users will be using our app ONLY for FM-DX"* — for them this is not a corner of the
+   app, it is the whole app.
+4. **No Android Auto controls.** The main screen publishes media controls; FM-DX does not, so it is
+   missing in the car — which is precisely where an FM-DX user would want it.
+
+★ Sequencing note: (2) and (3) are the same change and should land together. (1) shares the PanelNav
+machinery already built (`BRIEF-controls-keyboard-and-gamepad.md`), so it is plumbing rather than
+design. (4) is its own piece and touches the native media session.
