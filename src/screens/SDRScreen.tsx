@@ -3000,6 +3000,45 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [zoomAnchorHz]);
   const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
   const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
+
+  // ── HiFi tuner keys (BRIEF-inputs §2) ───────────────────────────────────────
+  // One press = one step. The VFO key reuses the MEDIA-SKIP path deliberately:
+  // it already snaps to the step grid, clamps to the receiver's range and refuses
+  // to move in whole-profile modes (DAB/ADS-B, where a VFO can only drag you off
+  // the block). That also means the on-screen keys and the system media keys are
+  // the SAME action, which is what the brief asks for — press ▶ on a car stereo
+  // and you get exactly what the key on screen does.
+  const onVfoStep = useCallback((dir: -1 | 1) => {
+    mediaStepSkipRef.current?.(dir === 1 ? 'right' : 'left');
+  }, []);
+  // A third of an octave per press: a visible change without being coarse, and
+  // the hold-sweep covers distance quickly enough that bigger steps would only
+  // make fine adjustment awkward.
+  const onZoomStep = useCallback((dir: -1 | 1) => {
+    zoomBy(Math.pow(2, -dir / 3));
+  }, [zoomBy]);
+
+  // Per-control drum-or-keys. TWO independent settings, not one global switch —
+  // "VFO keys + zoom drum" is a real combination somebody will want, and the
+  // drums stay the default.
+  const [vfoKeys, setVfoKeys]   = useState(false);
+  const [zoomKeys, setZoomKeys] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_vfo_keys').then((v: string | null) => {
+      if (v === '1') setVfoKeys(true);
+    }).catch(() => {});
+    AsyncStorage.getItem('lsv_zoom_keys').then((v: string | null) => {
+      if (v === '1') setZoomKeys(true);
+    }).catch(() => {});
+  }, []);
+  const onVfoKeys = useCallback((on: boolean) => {
+    setVfoKeys(on);
+    AsyncStorage.setItem('lsv_vfo_keys', on ? '1' : '0').catch(() => {});
+  }, []);
+  const onZoomKeys = useCallback((on: boolean) => {
+    setZoomKeys(on);
+    AsyncStorage.setItem('lsv_zoom_keys', on ? '1' : '0').catch(() => {});
+  }, []);
   // Zoom extremes — each adapter clamps internally (UberSDR to its 6 kHz max-zoom
   // floor / full-span cap, OWRX/Kiwi to their own limits), so a tiny bandwidth =
   // full zoom in and a huge one = full span out.
@@ -4678,6 +4717,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           chatUnread={chatUnread}
           onVfoDelta={onVfoDelta}
           onBwDelta={onBwDelta}
+          vfoKeys={vfoKeys}
+          zoomKeys={zoomKeys}
+          onVfoStep={onVfoStep}
+          onZoomStep={onZoomStep}
           onMode={onMode}
           onStep={onStepOpen}
           onMenu={onMenuOpen}
@@ -4853,7 +4896,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         linkMode={linkMode}             onLinkMode={onLinkMode}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
-        hapticsEnabled={hapticsEnabled} onHaptics={onHaptics} hapticsHardware={hapticsHardware}
+        hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}
+          vfoKeys={vfoKeys}
+          zoomKeys={zoomKeys}
+          onVfoKeys={onVfoKeys}
+          onZoomKeys={onZoomKeys} hapticsHardware={hapticsHardware}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}

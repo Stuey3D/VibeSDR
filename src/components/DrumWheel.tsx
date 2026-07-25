@@ -43,6 +43,8 @@ import * as Haptics from 'expo-haptics';
 // ControlsBar's layouts into every drum instance.
 let _hapticsOn = true;
 export function setDrumHaptics(on: boolean) { _hapticsOn = on; }
+/** Same switch, read by the other controls that share the setting (TunerKeys). */
+export function getControlHaptics() { return _hapticsOn; }
 
 // ── TUNABLES (preview-widget parameters, 2026-06-10 session) ──────────────────
 
@@ -481,6 +483,15 @@ export default function DrumWheel({
 }
 
 // ── Icon path builders (unchanged) ─────────────────────────────────────────────
+
+/**
+ * The two panel legends: the radio glyph (tune) and the magnifier (zoom).
+ * Exported so TunerKeys labels its pairs with the SAME marks the drums use —
+ * two hand-drawn copies would drift apart the first time either is adjusted.
+ */
+export function buildGlyphPath(isTune: boolean, cx: number, cy: number, sz: number) {
+  return buildIconPath(isTune, cx, cy, sz);
+}
 
 function buildIconPath(isTune: boolean, cx: number, cy: number, sz: number) {
   const p = Skia.Path.Make();

@@ -160,6 +160,12 @@ export interface MenuSheetProps {
   hapticsEnabled?: boolean;
   onHaptics?:      (on: boolean) => void;
   hapticsHardware?: boolean;   // false → device has no haptic motor, hide toggle
+  /** Per-control drum-or-keys. Two independent settings — the drums are the
+   *  default, and either control can be swapped for the HiFi tuner keys. */
+  vfoKeys?:    boolean;
+  zoomKeys?:   boolean;
+  onVfoKeys?:  (on: boolean) => void;
+  onZoomKeys?: (on: boolean) => void;
 
   vtsName?:    string;
   vtsFreq?:    number;
@@ -485,6 +491,7 @@ export default function MenuSheet({
   mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics, hapticsHardware = true,
+  vfoKeys = false, zoomKeys = false, onVfoKeys, onZoomKeys,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   profiles = [], activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, serverType = 'ubersdr',
@@ -990,6 +997,24 @@ export default function MenuSheet({
                 {hapticsHardware && (
                   <Btn label="✦ HAPTICS" active={hapticsEnabled}     onPress={() => onHaptics?.(!hapticsEnabled)} />
                 )}
+              </BtnRow>
+            </View>
+            {/* Drum or HiFi tuner keys, per control. Deliberately two rows rather
+                than one switch: mixing them (keys to tune, drum to zoom) is a
+                real preference, and it is also the accessibility route — a
+                labelled target for anyone who cannot make a drag gesture. */}
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>TUNE</Text>
+              <BtnRow>
+                <Btn label="DRUM" active={!vfoKeys} onPress={() => onVfoKeys?.(false)} />
+                <Btn label="KEYS" active={vfoKeys}  onPress={() => onVfoKeys?.(true)} />
+              </BtnRow>
+            </View>
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>ZOOM</Text>
+              <BtnRow>
+                <Btn label="DRUM" active={!zoomKeys} onPress={() => onZoomKeys?.(false)} />
+                <Btn label="KEYS" active={zoomKeys}  onPress={() => onZoomKeys?.(true)} />
               </BtnRow>
             </View>
             {/* Lock-screen / car-stereo skip buttons: tune by step, or jump

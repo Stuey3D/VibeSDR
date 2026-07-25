@@ -416,6 +416,14 @@ button.btn {
 }
 button.btn:hover { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
 button.btn[hidden] { display: none; }
+/* Tap/hold keys: suppress the double-tap-zoom delay so a press registers at once,
+   and light the key while it is sweeping so the mode change is visible as well as
+   felt. Scoped to the four tap/hold keys, not all buttons. */
+#tuneDown, #tuneUp, #zoomIn, #zoomOut { touch-action: manipulation; user-select: none; }
+#tuneDown.sweeping, #tuneUp.sweeping, #zoomIn.sweeping, #zoomOut.sweeping {
+  background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx);
+  box-shadow: 0 0 10px rgba(80,255,120,0.35);
+}
 button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
 
 /* MUTE reads as a WARNING, not a mode: the amber "on" style looks like every

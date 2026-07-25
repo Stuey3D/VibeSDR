@@ -41,6 +41,10 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
+import TunerKeys from './TunerKeys';
+
+/** Guard for the keys' handler — never expected to run. */
+const noStep = (_d: -1 | 1) => {};
 import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
@@ -254,6 +258,14 @@ export interface ControlsBarProps {
   readOnly?: boolean;
   /** Time-limited receiver countdown shown beside the clock. */
   sessionLeft?: { text: string; urgent: boolean } | null;
+  /** Control mode per control — the drums are the default and stay untouched;
+   *  these swap EITHER control independently for the HiFi tuner keys. Four
+   *  combinations, two settings, no global switch (BRIEF-inputs §2). */
+  vfoKeys?:  boolean;
+  zoomKeys?: boolean;
+  /** One step in `dir`, for the keys. Only needed when the keys are shown. */
+  onVfoStep?:  (dir: -1 | 1) => void;
+  onZoomStep?: (dir: -1 | 1) => void;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -604,7 +616,7 @@ function useDrumSwipeGuard() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft }: any) {
+  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -758,8 +770,12 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
             pointerEvents={readOnly ? 'none' : 'auto'}
             style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
-        <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
-        {!singleDrum && <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
+        {vfoKeys
+          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} style={{ flex: 1 }} />
+          : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
+        {!singleDrum && (zoomKeys
+          ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} style={{ flex: 1 }} />
+          : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />)}
       </View>
 
       {/* Row 4 — clock · link quality · rec */}
@@ -806,7 +822,8 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -841,7 +858,9 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
-        <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
+        {vfoKeys
+          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} style={{ flex: 1 }} />
+          : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
         </Text>
@@ -914,7 +933,9 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       {/* Zoom drum (omitted for FM-DX single-drum tuner) */}
       {!singleDrum && (
         <View style={{ flex: 1, minWidth: s.r(80) }}>
-          <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />
+          {zoomKeys
+            ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} style={{ flex: 1 }} />
+            : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
         </View>
       )}
 
@@ -952,6 +973,10 @@ function ControlsBar({
   meterLabel,
   menuAsBack = false,
   freqFormat,
+  vfoKeys = false,
+  zoomKeys = false,
+  onVfoStep,
+  onZoomStep,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -999,6 +1024,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep,
   };
 
   return (

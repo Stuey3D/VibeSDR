@@ -1168,8 +1168,12 @@ function buildControls() {
 
   // No anchor = zoom about the LISTEN VFO: the station you're on stays put and the
   // span closes in around it.
-  $('zoomIn').onclick    = () => { spec!.zoomBy(2); updateViewOverlays(); };
-  $('zoomOut').onclick   = () => { spec!.zoomBy(0.5); updateViewOverlays(); };
+  // A click keeps its familiar octave; a sweep uses a quarter of one, or holding
+  // the key would cross the entire zoom range before you could let go.
+  const zoomStep = (f: number) => () => { spec!.zoomBy(f); updateViewOverlays(); };
+  const OCT = Math.pow(2, 0.25);
+  attachHoldSweep($('zoomIn'),  zoomStep(2),   zoomStep(OCT));
+  attachHoldSweep($('zoomOut'), zoomStep(0.5), zoomStep(1 / OCT));
   $('zoomReset').onclick = () => spec!.resetView();
 
   const lock = $<HTMLButtonElement>('lockBtn');
@@ -3320,11 +3324,72 @@ function formatStep(hz: number): string {
   return `${hz}Hz`;
 }
 
+// ── Tap = one step, hold = accelerating sweep ────────────────────────────────
+//
+// The same control law as the app's HiFi tuner keys, with the same constants, so
+// a button behaves identically whichever surface you are on (BRIEF-inputs §2).
+//
+// ★ TAP fires IMMEDIATELY on press, not on release, and ten fast taps are ten
+//   steps — no debounce, no accumulation.
+// ★ HOLD is the only special case: after HOLD_MS of UNBROKEN contact it begins
+//   auto-repeating and accelerates smoothly to a ceiling. Release stops it dead.
+//
+// ★★ Fast clicks can never be mistaken for a hold, and the guarantee is
+// STRUCTURAL rather than a heuristic: the timer is armed on press and cancelled
+// on EVERY release, so only one unbroken 350 ms can reach it. Nothing watches
+// click frequency and nothing looks across clicks. Do NOT add cross-click
+// debouncing — that is precisely what would break "rapid taps = rapid steps".
+const HOLD_MS = 350;
+const SWEEP_LO = 3;          // steps/sec when the sweep starts
+const SWEEP_HI = 22;         // steps/sec ceiling
+const SWEEP_RAMP_MS = 2500;  // LO -> HI, a continuous ramp rather than gears
+
+/**
+ * @param tap   what one press does — the decisive, familiar amount.
+ * @param sweep what each auto-repeat tick does. Usually the same as `tap`, but
+ *              zoom deliberately differs: a click wants a decisive octave, while
+ *              a sweep wants fine travel, or holding it would cross the whole
+ *              range in a blink.
+ */
+function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = tap) {
+  let holdT: number | null = null;
+  let tickT: number | null = null;
+  const stop = () => {
+    if (holdT !== null) { clearTimeout(holdT); holdT = null; }
+    if (tickT !== null) { clearTimeout(tickT); tickT = null; }
+    el.classList.remove('sweeping');
+  };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;            // ignore right/middle click
+    e.preventDefault();                    // no text selection, no double-tap zoom
+    stop();
+    tap();
+    holdT = window.setTimeout(() => {
+      holdT = null;
+      el.classList.add('sweeping');
+      const started = Date.now();
+      const tick = () => {
+        sweep();
+        // Rate recomputed per tick, so the acceleration is smooth.
+        const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
+        tickT = window.setTimeout(tick, 1000 / (SWEEP_LO + (SWEEP_HI - SWEEP_LO) * t));
+      };
+      tickT = window.setTimeout(tick, 1000 / SWEEP_LO);
+    }, HOLD_MS);
+  });
+  el.addEventListener('pointercancel', stop);
+  el.addEventListener('pointerleave', stop);
+  // ★ Release ANYWHERE ends it. Listening only on the element would leave a
+  // sweep running forever if the pointer drifted off the button before lifting,
+  // which is exactly what happens when you press hard and slide.
+  window.addEventListener('pointerup', stop);
+}
+
 function buildVfo() {
   const saved = prefs().step;
   if (typeof saved === 'number' && saved > 0) step = saved;
-  $('tuneDown').onclick = () => nudge(-step);
-  $('tuneUp').onclick   = () => nudge(step);
+  attachHoldSweep($('tuneDown'), () => nudge(-step));
+  attachHoldSweep($('tuneUp'),   () => nudge(step));
   $('stepBtn').onclick  = cycleStep;
   syncStep();
   renderFreq();
