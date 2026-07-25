@@ -14,7 +14,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
-import { useListNav, useKeyboardMode, NAV_FOCUS } from './PanelNav';
+import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn } from './PanelNav';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -320,29 +320,41 @@ export default function FreqModal({
   // picker: the bank is cleared at the top of this render and only filled while the children
   // render, so reading it here would always give zero and focus would stop at the first item.
   const bmSlots = useRef<Array<() => void>>([]);
+  const bmViews = useRef<any[]>([]);
   bmSlots.current = [];
   const [bmCount, setBmCount] = useState(0);
   useEffect(() => {
     if (bmSlots.current.length !== bmCount) setBmCount(bmSlots.current.length);
   });
 
+  // ★ The pane SCROLLS — a search for something common comes back with dozens of results —
+  // so focus has to drag the view with it. Without a reveal the caret walked off the bottom
+  // and the list stayed put: Stuart searched "china", got 62 results, and could reach none of
+  // them past the first screenful. Same measured reveal the menus use.
+  const bmScrollRef = useRef<ScrollView | null>(null);
+  const bmScrollY   = useRef(0);
+
   const bmNavFocus = useListNav(
     visible && cardMode === 'bookmarks',
     bmCount,
     (i) => bmSlots.current[i]?.(),
+    (i) => revealIn(bmScrollRef, { current: bmViews.current[i] }, -1, 90, bmScrollY),
   );
 
-  /** Claim the next slot; returns whether it currently has focus. Render order = JSX order. */
+  /**
+   * Claim the next slot. Returns whether it has focus, and a ref to attach so reveal can
+   * measure it. Render order = JSX order.
+   */
   const bmSlot = (onPress: () => void) => {
     const i = bmSlots.current.length;
     bmSlots.current.push(onPress);
-    return bmNavFocus === i;
+    return { on: bmNavFocus === i, ref: (r: any) => { bmViews.current[i] = r; } };
   };
   /** A bookmarks-pane button that takes part in that order. */
   const BmBtn = ({ onPress, style, children, ...rest }: any) => {
-    const on = bmSlot(onPress ?? (() => {}));
+    const { on, ref } = bmSlot(onPress ?? (() => {}));
     return (
-      <TouchableOpacity onPress={onPress}
+      <TouchableOpacity ref={ref} onPress={onPress}
         style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
         {children}
       </TouchableOpacity>
@@ -530,10 +542,13 @@ export default function FreqModal({
           {/* BOOKMARKS mode — search + band plan, EiBi, add current, saved list, transfer.
               Lifted verbatim from MenuSheet (§4.2). */}
           {cardMode === 'bookmarks' && (
-            <ScrollView style={{ maxHeight: bmMaxH }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
-              {(() => { const on = bmSlot(() => searchRef.current?.focus()); return (
+            <ScrollView ref={bmScrollRef} style={{ maxHeight: bmMaxH }}
+                        onScroll={(e) => { bmScrollY.current = e.nativeEvent.contentOffset.y; }}
+                        scrollEventThrottle={16}
+                        keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              {(() => { const { on, ref: slotRef } = bmSlot(() => searchRef.current?.focus()); return (
               <TextInput
-                ref={searchRef}
+                ref={(r: any) => { (searchRef as any).current = r; slotRef(r); }}
                 style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
                                           borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
                 value={searchQuery} onChangeText={setSearchQuery}
@@ -551,9 +566,9 @@ export default function FreqModal({
                     else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
                     onClose();
                   };
-                  const on = bmSlot(tune);
+                  const { on, ref: slotRef } = bmSlot(tune);
                   return (
-                  <TouchableOpacity key={i} activeOpacity={0.7}
+                  <TouchableOpacity key={i} ref={slotRef} activeOpacity={0.7}
                     style={[st.searchRow, on && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                     onPress={tune}>
                     <Text style={[st.searchFreq, { color: t.freqColor }]}>{r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}</Text>
@@ -578,8 +593,8 @@ export default function FreqModal({
               )}
 
               <Text style={[st.bmSub, { color: dimText }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
-              {(() => { const on = bmSlot(() => bmNameRef.current?.focus()); return (
-              <TextInput ref={bmNameRef}
+              {(() => { const { on, ref: slotRef } = bmSlot(() => bmNameRef.current?.focus()); return (
+              <TextInput ref={(r: any) => { (bmNameRef as any).current = r; slotRef(r); }}
                 style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
                                           borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
                 value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={dimText} maxLength={60} autoCorrect={false} />
