@@ -262,6 +262,12 @@ export default function FreqModal({
               autoCorrect={false}
               selectTextOnFocus
               onSubmitEditing={confirm}
+              // ★ A HARDWARE Enter does not fire onSubmitEditing here: the field is
+              // keyboardType="decimal-pad", which has no return key for RN to map it
+              // to. onKeyPress does see it, so the key that obviously ought to commit
+              // a typed frequency now does. (Stuart: "I cannot press enter to enter
+              // it and close the box".)
+              onKeyPress={e => { if (e.nativeEvent.key === 'Enter') confirm(); }}
               returnKeyType="done"
             />
             <Text style={[st.unitLabel, { color: unitText, fontFamily: t.font }]}>

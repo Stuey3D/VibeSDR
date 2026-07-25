@@ -22,13 +22,15 @@
  * Self-contained: renders its own full-screen catch-layer while expanded, so the
  * parent mounts it once and passes only the anchor offsets (§5.2) + handlers.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
 
 type Props = {
+  /** Bump to open the menu from outside (keyboard Esc). */
+  openToken?: number;
   top: number;               // anchor from the safe-area/panel top (§5.2)
   left: number;              // Math.max(margin, insets.left) — notch fix
   serverName: string;
@@ -55,9 +57,19 @@ const SEP_STRONG   = 'rgba(255,160,0,0.5)';   // divides the exit from the toggl
 export default function ServersChip({
   top, left, isFavourite, isDefault,
   onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef,
+  openToken = 0,
 }: Props) {
   const { theme: t } = useTheme();
   const [expanded, setExpanded] = useState(false);
+
+  // ★ Opened from OUTSIDE by bumping `openToken` — the keyboard's Esc, which per the
+  // brief opens the SERVERS menu when nothing else is open. A token rather than a
+  // boolean prop so the chip keeps owning its own state: the parent asks once, and
+  // closing it here does not have to be reported back and mirrored.
+  const lastToken = useRef(openToken);
+  useEffect(() => {
+    if (openToken !== lastToken.current) { lastToken.current = openToken; setExpanded(true); }
+  }, [openToken]);
 
   const amber = t.btnText;   // #ffb833
   const font  = t.font;      // Nixie One

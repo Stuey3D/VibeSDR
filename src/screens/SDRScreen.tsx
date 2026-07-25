@@ -4363,6 +4363,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // with no touchscreen at all. Away from the controls, the axis mapping above
   // applies. Rects are reported by ControlsBar in WINDOW coordinates, matching what
   // the native scroll event carries.
+  // Bumped to ask ServersChip to open — see its openToken prop.
+  const [serversToken, setServersToken] = useState(0);
+
   const ctrlRects = useRef<{ vfo?: { x: number; y: number; w: number; h: number };
                              zoom?: { x: number; y: number; w: number; h: number } }>({});
   const onControlRects = useCallback((r: { vfo?: any; zoom?: any }) => {
@@ -4422,7 +4425,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key; if (!k) return;
       const a = kbActions.current;
-      if (k === 'Escape') { if (panelOpenRef.current) closeAll(); return; }
+      // ★ Esc precedence, one rule in one place: something open -> close it;
+      // nothing open -> open the SERVERS menu (the brief's universal back/open key).
+      if (k === 'Escape') {
+        if (panelOpenRef.current) closeAll();
+        else setServersToken(t => t + 1);
+        return;
+      }
       // With a panel open the arrows and letters belong to it, not to tuning. Until
       // the in-panel layer exists they simply do nothing rather than tuning blind
       // underneath an open sheet.
@@ -5044,6 +5053,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onBack={onBackToPicker}
           onToggleFavourite={onToggleFavourite}
           onSetDefault={onSetDefault}
+          openToken={serversToken}
         />
       )}
 
