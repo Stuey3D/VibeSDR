@@ -15,6 +15,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
   NativeEventEmitter,
   NativeModules,
 } from 'react-native';
@@ -1158,6 +1159,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // user actually sees, scrollToIndex did nothing and the highlight moved off-screen below
   // the fold. Focus was working the whole time; it simply could not be seen.
   const dragRef = useRef<any>(null);
+  const listScrollY = useRef(0);
+  const onListScroll = useCallback((e: any) => {
+    listScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0;
+  }, []);
+  // Each footer row's own view, so reveal can measure it rather than guessing.
+  const ftrViews = useRef<Array<any>>([]);
   // ★★★ GATED ON SCREEN FOCUS, and this is not optional. A stack navigator keeps this
   // screen MOUNTED behind SDRScreen, so without the gate its key listener stayed live: an
   // Enter meant for the frequency box ALSO activated whichever row this list still had
@@ -1223,7 +1230,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const target: any = selectedDir !== null ? listRef.current : dragRef.current;
       // Header and footer rows sit outside the data, so scroll to the ends instead.
       if (i < hdrLen) { try { target?.scrollToOffset?.({ offset: 0, animated: true }); } catch {} return; }
-      if (i >= hdrLen + listData.length) { try { target?.scrollToEnd?.({ animated: true }); } catch {} return; }
+      if (i >= hdrLen + listData.length) {
+        // ★ NOT scrollToEnd. That jumps to the very bottom, so the FIRST footer rows — the
+        // call sign and the UberSDR directory — end up scrolled off the top and look skipped
+        // even though focus is on them. Stuart: "it's reachable but as the list scrolls it's
+        // just out of view." Measure the row and put it where it can be read instead.
+        const v = ftrViews.current[i - hdrLen - listData.length];
+        v?.measureInWindow?.((_x: number, y: number, _w: number, h: number) => {
+          const screenH = Dimensions.get('window').height;
+          if (y >= 100 && y + h <= screenH - 60) return;      // already readable
+          const want = Math.max(120, screenH / 2 - h / 2);
+          try { target?.scrollToOffset?.({ offset: Math.max(0, listScrollY.current + (y - want)), animated: true }); } catch {}
+        });
+        return;
+      }
       try { target?.scrollToIndex?.({ index: i - hdrLen, viewPosition: 0.5, animated: true }); }
       catch { /* index briefly out of range while the list rebuilds — harmless */ }
     },
@@ -1304,6 +1324,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const on = navFocus === globalIndex;
     return (
       <TouchableOpacity onPress={onPress}
+        ref={foot ? ((r: any) => { ftrViews.current[myIndex] = r; }) : undefined}
         style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
         {children}
       </TouchableOpacity>
@@ -1834,6 +1855,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           ) : (
             <FlatList
               ref={listRef}
+              onScroll={onListScroll}
+              scrollEventThrottle={16}
               data={listData}
               // ★★ WITHOUT THIS THE SELECTION BOX NEVER APPEARS. FlatList only re-renders
               // rows when `data` or `extraData` changes, and the focused index is external
@@ -1855,6 +1878,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         ) : (
           <DraggableFlatList
             ref={dragRef}
+            onScrollOffsetChange={(y: number) => { listScrollY.current = y; }}
             extraData={navFocus}   // same reason as the FlatList above
             data={listData}
             containerStyle={{ flex: 1 }}
