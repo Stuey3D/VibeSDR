@@ -6,6 +6,7 @@ import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 
@@ -42,6 +43,21 @@ const C = {
  * draws, so this needle sits exactly where that red line sits. `pos` < 0 = squelch off.
  * `onDrag` receives a 0..1 position, or -1 for off; SDRScreen converts to the backend's native unit.
  */
+// ── Keyboard-reachable slider (see PanelNav; same shape as MenuSheet's) ──────
+function NavSlider(props: React.ComponentProps<typeof Slider>) {
+  const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
+  const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
+  const { focused } = useNavRange((dir) => {
+    const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
+    if (next !== value) onValueChange?.(next);
+  });
+  return (
+    <Slider {...props}
+      minimumTrackTintColor={focused ? NAV_FOCUS : props.minimumTrackTintColor}
+      thumbTintColor={focused ? NAV_FOCUS : props.thumbTintColor} />
+  );
+}
+
 function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   level: number; pos: number; gate?: boolean;
   onDrag?: (x: number) => void; onDragEnd?: () => void;
@@ -55,6 +71,18 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   // pageX minus a measured origin is target-independent and cannot do that.
   const bar = useRef<View>(null);
   const geo = useRef({ x: 0, w: 1 });
+  // ★ Keyboard / D-pad adjustment. `onDrag` wants a WINDOW x, not a value, so the
+  // equivalent x is synthesised from the same measured geometry the drag uses — the
+  // one place that conversion already lives. Squelch is a threshold you set by eye on
+  // a live bar, so a keypress nudging it by 4% of the bar matches how it is dragged.
+  const posRef = useRef(pos); posRef.current = pos;
+  const { focused } = useNavRange((dir) => {
+    const g = geo.current;
+    const from = posRef.current >= 0 ? posRef.current : 0.5;
+    const next = Math.max(0, Math.min(1, from + dir * 0.04));
+    onDrag?.(g.x + next * g.w);
+    onDragEnd?.();
+  });
   const measure = useCallback(() => {
     bar.current?.measureInWindow((x, _y, width) => { geo.current = { x, w: Math.max(1, width) }; });
   }, []);
@@ -152,14 +180,17 @@ function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }
   );
 }
 function BtnRow({ children }: { children: React.ReactNode }) {
-  return <View style={st.btnRow}>{children}</View>;
+  return <NavRow><View style={st.btnRow}>{children}</View></NavRow>;
 }
 function Btn({ label, active, onPress, full, style }: {
   label: string; active?: boolean; onPress?: () => void; full?: boolean; style?: object;
 }) {
+  const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity
-      style={[st.btn, active && st.btnActive, full && st.btnFull, style]}
+      ref={viewRef as any}
+      style={[st.btn, active && st.btnActive, full && st.btnFull, style,
+              focused && st.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
@@ -170,8 +201,11 @@ function SubLabel({ label }: { label: string }) {
   return <Text style={st.subLabel}>{label}</Text>;
 }
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
   return (
-    <TouchableOpacity style={[st.btn, active && st.btnActive]} onPress={onPress} hitSlop={4} activeOpacity={0.7}>
+    <TouchableOpacity ref={viewRef as any}
+      style={[st.btn, active && st.btnActive, focused && st.btnFocused]}
+      onPress={onPress} hitSlop={4} activeOpacity={0.7}>
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -302,6 +336,10 @@ export default function AudioSheet({
     else if (nrMode === 'serv') setNrMode('off');
   }, [serverDspEnabled]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keyboard / D-pad navigation — shared machinery (PanelNav). Buttons, sliders and
+  // the squelch bar all register themselves; the game controller drives this unchanged.
+  const { navCtx, scrollRef } = usePanelNav(visible);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            onDismiss={onDismiss}
@@ -322,7 +360,8 @@ export default function AudioSheet({
           </Text>
         </View>
 
-        <ScrollView style={st.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={scrollRef} style={st.scroll} keyboardShouldPersistTaps="handled">
+        <NavCtx.Provider value={navCtx}>
 
           {/* NR / NB (UberSDR client-side DSP) + REC — REC stays for all backends */}
           <BtnRow>
@@ -363,7 +402,7 @@ export default function AudioSheet({
           {isOwrx && (<>
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={-130} maximumValue={-20} step={1}
                 value={owrxSql <= -130 ? -130 : owrxSql}
                 onValueChange={(v: number) => { const db = v <= -130 ? -150 : v; setOwrxSql(db); onOwrxSquelch?.(db); }}
@@ -373,7 +412,7 @@ export default function AudioSheet({
             </View>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={30} step={1}
                 value={owrxNr}
                 onValueChange={(v: number) => { setOwrxNr(v); onOwrxNr?.(v); }}
@@ -403,7 +442,7 @@ export default function AudioSheet({
           {onLocalNR && (
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={20} step={1}
                 value={localNR}
                 onValueChange={(v: number) => onLocalNR?.(v)}
@@ -466,7 +505,7 @@ export default function AudioSheet({
           {!isOwrx && isFmMode && (
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>FM SQL</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={100} step={1}
                 value={fmSquelch <= -999 ? 0 : Math.round((fmSquelch + 48) * 99 / 68 + 1)}
                 onValueChange={(v: number) => {
@@ -522,7 +561,7 @@ export default function AudioSheet({
                     return (
                       <View key={p.name} style={st.bwRow}>
                         <Text style={st.bwLabel} numberOfLines={1}>{fmtParamName(p.name)}</Text>
-                        <Slider style={st.bwSlider}
+                        <NavSlider style={st.bwSlider}
                           minimumValue={min} maximumValue={max} step={step}
                           value={Math.max(min, Math.min(max, num))}
                           onValueChange={(v: number) => onServerDspParam?.(p.name, fmtDspVal(v, step))}
@@ -536,6 +575,7 @@ export default function AudioSheet({
             )}
           </>)}
 
+                </NavCtx.Provider>
         </ScrollView>
 
         <TouchableOpacity style={[st.closeBtn, { borderColor: t.btnBorder }]} onPress={onClose}>
@@ -567,6 +607,7 @@ const st = StyleSheet.create({
     fontWeight: 'bold', letterSpacing: 2,
   },
 
+  btnFocused:    { borderColor: NAV_FOCUS, borderWidth: 2 },
   btnRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   btn: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,

@@ -203,9 +203,16 @@ export function usePanelNav(visible: boolean) {
   const focusedRef = useRef(focused);
   useEffect(() => { focusedRef.current = focused; }, [focused]);
 
-  // Row ids restart with each opening, so a panel reopened after its rows changed
-  // does not inherit a sequence that no longer matches the tree.
-  useEffect(() => { if (!visible) rowSeq.current = 0; }, [visible]);
+  // ★ Row numbers are assigned in TREE order, not mount order, by resetting the
+  // sequence at the start of every render pass. React renders children in order, so
+  // each <NavRow> (and each own-row value control) takes its number as it is reached
+  // — which means a CONDITIONALLY rendered row or slider appearing mid-session lands
+  // in its VISUAL position rather than at the end of the focus order.
+  //
+  // Caching the number per component instance, as this first did, got that wrong: the
+  // AUTO/MANUAL waterfall sliders mount after the panel is already open, so they
+  // sorted last and arrow-down reached them out of order until the panel was reopened.
+  rowSeq.current = 0;
 
   const register = useCallback((e: NavEntry) => {
     entries.current.push(e);
@@ -230,9 +237,10 @@ export function usePanelNav(visible: boolean) {
 /** One row of the grid. Up/down moves between rows, left/right within one. */
 export function NavRow({ children }: { children: React.ReactNode }) {
   const nav = React.useContext(NavCtx);
-  const rowRef = useRef<number>(-1);
-  if (rowRef.current < 0) rowRef.current = nav ? nav.nextRow() : -1;
-  return <RowCtx.Provider value={rowRef.current}>{children}</RowCtx.Provider>;
+  // Taken fresh each render, NOT cached — that is what makes the ordering follow the
+  // tree rather than mount history. See the note in usePanelNav.
+  const row = nav ? nav.nextRow() : -1;
+  return <RowCtx.Provider value={row}>{children}</RowCtx.Provider>;
 }
 
 /**
@@ -280,9 +288,7 @@ export function useNavRange(onAdjust: (dir: -1 | 1) => void) {
   // ★ Sliders live in ordinary layout Views, not <NavRow>s, so there is usually no
   // row in context. A value control is always full width, so it takes a row of its
   // own — which also means up/down naturally steps onto and off it.
-  const rowRef = useRef<number>(-1);
-  if (rowRef.current < 0) rowRef.current = ctxRow >= 0 ? ctxRow : (nav ? nav.nextRow() : -1);
-  const row = rowRef.current;
+  const row = ctxRow >= 0 ? ctxRow : (nav ? nav.nextRow() : -1);
   const idRef = useRef<number>(-1);
   if (idRef.current < 0) idRef.current = nextNavButtonId();
   const id = idRef.current;
