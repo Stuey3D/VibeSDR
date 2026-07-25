@@ -284,3 +284,28 @@ most-recent N. Works for every backend. See BRIEF/[[jr_bookmarks]] for the full 
 buttons_hifi_tuner_design · external_display_shack_mode · audio_visualiser_panel · mac_native_build ·
 vibeserver_mac_standalone · rtlsdr_mac_ipad_usb · jr_bookmarks · positioning_and_readme · v10_scope.
 </content>
+
+---
+
+## ★★ POSITIONING — the two control schemes are two PORTABLE radios (Stuart, 2026-07-25)
+
+Built, and the framing changed on contact with the result. The plan was to sell the keys as a "90s
+HiFi separates tuner"; what they actually look like is CAR STEREO buttons — and that is better,
+because a car stereo is PORTABLE, like a boombox, where a separates tuner is furniture. VibeSDR is
+portable, so both controls now point the same way:
+
+- **Drums — the 80s boombox.** Analogue, tactile; you hunt with your thumb.
+- **Keys — the 90s car stereo.** Discrete, glanceable; works from real hardware buttons.
+
+★ This is not styling. The keys are wired into the media-control path, so a car's steering-wheel or
+head-unit skip buttons literally drive them — the VFO key and a car stereo's skip button are the
+same code path. "Tune without looking" describes the implementation.
+
+★ They also divide by JOB rather than by era, which is the honest reason to ship both: the drums win
+for hunting across a signal, the keys for covering distance. Stuart, having been reluctant to offer
+any alternative to the drums at all: *"these tuning buttons feel sublime for large tunes... I think I
+actually prefer them to the drums"*, and *"we've not got 1 but 2 amazing feeling control schemes that
+feel like their real life counterparts."*
+
+★ The reference that landed closest was a Kenwood Excelon CAR head unit — symbols backlit through
+the key faces — which is why the look went where it did rather than towards separates.

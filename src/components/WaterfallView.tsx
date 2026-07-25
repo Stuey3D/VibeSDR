@@ -392,6 +392,8 @@ function WaterfallView({
   // Shader uniforms driven from the UI thread (no React render per change)
   const uHead       = useSharedValue(0); // ABSOLUTE frame counter (next write)
   const uTexW       = useSharedValue(1024);
+  // The live view, readable from pushRow (a stable callback, not re-created per render).
+  const viewRef = useRef({ centerHz: 0, bwHz: 0 });
   const uSharpSv    = useSharedValue(0);
   const uContrastSv = useSharedValue(0);
   const uNSv        = useSharedValue(2); // lines per data frame
@@ -550,12 +552,15 @@ function WaterfallView({
 
   useEffect(() => stopSpecTween, [stopSpecTween]); // clear on unmount
 
+  // pushRow reads the view from a ref, so keep it current.
+  useEffect(() => { viewRef.current = { centerHz, bwHz }; }, [centerHz, bwHz]);
+
   // ── Row push + line ticker (whole-pixel waterfall advance) ─────────────────
   // pushRow advances the waterfall by exactly one pixel row: ring write,
   // incremental display shift, colourise, new SkImage. The line ticker emits
   // duplicate pushes of the latest data row between frames so the fps modes
   // reach 30/60 lines per second.
-  const pushRow = useCallback((row: Uint8Array) => {
+  const pushRow = useCallback((row: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0) => {
     const n = row.length;
     // Ring depth is FIXED (RING_ROWS) — realloc ONLY on a bin-count change, never on resize/rotation,
     // so the buffered waterfall survives an orientation change with no redraw (the hero feature).
@@ -565,7 +570,45 @@ function WaterfallView({
       lastBinCount.current = n;
       uTexW.value = n;
     }
-    idxBuf.current.set(row, (frameCount.current % RING_ROWS) * n);
+    // ── In-flight frame alignment (BRIEF-waterfall-frame-alignment) ──────────
+    // The renderer places rows against the CURRENT view, so a frame still in
+    // flight when the view moves gets drawn as though the predicted centre had
+    // already come true — leaving the signal beside the VFO until a zoom flushed
+    // the disagreement. Shift the row by the gap between its OWN centre and the
+    // view's, so it lands where it belongs.
+    //
+    // ★ Deliberately done at WRITE time, in the existing view-relative ring, and
+    // NOT by storing rows at absolute frequencies. Absolute placement was built
+    // and reverted (see the brief §9): it invalidates the ring whenever the bin
+    // scale changes, which restarted the whole waterfall on every zoom — a visual
+    // feature that is not negotiable — and merely clearing the ring per scale
+    // change was already enough to make the zoom drum feel sticky. This costs one
+    // offset and touches nothing on zoom.
+    //
+    // ★ Accepted limitation: history cannot be retro-corrected, so panning while
+    // data flows leaves a slight kink where the alignment changed rather than
+    // today's smooth-but-wrong re-labelling. In-flight offsets are a few bins, so
+    // the vacated edge strip is invisible.
+    const slot = (frameCount.current % RING_ROWS) * n;
+    const v = viewRef.current;
+    let off = 0;
+    if (rowHzPerBin > 0 && rowCenterHz > 0 && v.centerHz > 0 && v.bwHz > 0) {
+      // ★ Only a frame at the SAME bin scale may be shifted. Shifting one from a
+      // different span silently draws the right signal at the wrong width, so a
+      // mismatch is drawn unshifted (as it is today) rather than moved.
+      const viewHzPerBin = v.bwHz / n;
+      if (Math.abs(rowHzPerBin - viewHzPerBin) <= viewHzPerBin * 1e-6) {
+        off = Math.round((rowCenterHz - v.centerHz) / rowHzPerBin);
+        if (Math.abs(off) >= n) off = 0;   // no overlap at all — nothing to place
+      }
+    }
+    if (off === 0) {
+      idxBuf.current.set(row, slot);
+    } else {
+      idxBuf.current.fill(0, slot, slot + n);           // vacated edge = floor
+      if (off > 0) idxBuf.current.set(row.subarray(0, n - off), slot + off);
+      else         idxBuf.current.set(row.subarray(-off), slot);
+    }
     frameCount.current += 1;
 
     const data = Skia.Data.fromBytes(idxBuf.current);
@@ -739,7 +782,12 @@ function WaterfallView({
     // 3. Waterfall (phase 2): ONE raw frame row into the ring — the shader
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
     //    adjacent frames) and the reveal. JS just advances the fraction.
-    pushRow(frame.row); // copies synchronously — no snapshot needed
+    // ★ trueCenterHz = the frame's REAL bin centre; passing the PREDICTED centre is
+    // what asserted the prediction had already come true.
+    pushRow(frame.row,
+            fstatus.trueCenterHz ?? fstatus.centerHz,
+            fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0);
+    // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
     const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
     if (wfBoost) {
