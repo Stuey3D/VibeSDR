@@ -33,8 +33,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>        <string>VibeServer</string>
   <key>CFBundleIconFile</key>          <string>AppIcon</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3.1</string>
-  <key>CFBundleVersion</key>           <string>5</string>
+  <key>CFBundleShortVersionString</key><string>0.3.3</string>
+  <key>CFBundleVersion</key>           <string>7</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
