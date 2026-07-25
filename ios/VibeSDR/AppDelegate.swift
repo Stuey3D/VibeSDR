@@ -93,6 +93,43 @@ class VibeKeyWindow: UIWindow {
     if !handled { super.pressesEnded(presses, with: event) }
   }
 
+  // ── Pointer scroll (mouse wheel / trackpad) ────────────────────────────────
+  // ★ There is no scroll event in React Native. The way to receive an indirect
+  // scroll on iPadOS/Mac is a UIPanGestureRecognizer with allowedScrollTypesMask
+  // set — it then reports wheel and two-finger trackpad scrolling as a pan.
+  //
+  // ★ allowedTouchTypes is emptied so it can NEVER recognise a real finger: a
+  // recogniser on the window that swallowed direct touches would break every
+  // gesture in the app, the drums included. cancelsTouchesInView is off for the
+  // same reason — this observes, it does not intercept.
+  private var lastScroll: CGPoint = .zero
+
+  func installScrollRecognizer() {
+    let pan = UIPanGestureRecognizer(target: self, action: #selector(onScroll(_:)))
+    pan.allowedScrollTypesMask = .all
+    pan.allowedTouchTypes = []            // indirect input only — never a finger
+    pan.cancelsTouchesInView = false
+    addGestureRecognizer(pan)
+  }
+
+  @objc private func onScroll(_ g: UIPanGestureRecognizer) {
+    switch g.state {
+    case .began:
+      lastScroll = .zero
+    case .changed:
+      let t = g.translation(in: self)
+      // Deltas, not absolutes: JS accumulates its own, exactly as the drums do.
+      let dx = t.x - lastScroll.x
+      let dy = t.y - lastScroll.y
+      lastScroll = t
+      if dx != 0 || dy != 0 {
+        VibePowerModule.emitScroll(Double(dx), Double(dy))
+      }
+    default:
+      lastScroll = .zero
+    }
+  }
+
   // A cancelled press must release a sweep too, or a held arrow could stick.
   override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     for p in presses {
@@ -134,6 +171,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     // Reuses RN's high-level start path, but hosts the root view in the scene's
     // window (sets rootViewController + makeKeyAndVisible internally).
     factory.startReactNative(withModuleName: "main", in: window, launchOptions: launchOptions)
+    window.installScrollRecognizer()
     self.window = window
     appDelegate.window = window
 

@@ -166,6 +166,10 @@ export interface MenuSheetProps {
   zoomKeys?:   boolean;
   onVfoKeys?:  (on: boolean) => void;
   onZoomKeys?: (on: boolean) => void;
+  /** The ONE pointing-device question: what the vertical scroll wheel does. The
+   *  opposite control falls to whatever orthogonal axis the hardware has. */
+  wheelAction?:   'zoom' | 'tune';
+  onWheelAction?: (m: 'zoom' | 'tune') => void;
 
   vtsName?:    string;
   vtsFreq?:    number;
@@ -492,6 +496,7 @@ export default function MenuSheet({
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics, hapticsHardware = true,
   vfoKeys = false, zoomKeys = false, onVfoKeys, onZoomKeys,
+  wheelAction = 'zoom', onWheelAction,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   profiles = [], activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, serverType = 'ubersdr',
@@ -1015,6 +1020,17 @@ export default function MenuSheet({
               <BtnRow>
                 <Btn label="DRUM" active={!zoomKeys} onPress={() => onZoomKeys?.(false)} />
                 <Btn label="KEYS" active={zoomKeys}  onPress={() => onZoomKeys?.(true)} />
+              </BtnRow>
+            </View>
+            {/* ★ ONE question for pointing devices, not a layout matrix. The vertical
+                wheel is the only input every device has, so it is the only thing worth
+                asking; the OTHER control lands automatically on whatever orthogonal
+                axis exists (horizontal wheel, tilt wheel, trackpad left/right). */}
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>WHEEL</Text>
+              <BtnRow>
+                <Btn label="ZOOM" active={wheelAction === 'zoom'} onPress={() => onWheelAction?.('zoom')} />
+                <Btn label="TUNE" active={wheelAction === 'tune'} onPress={() => onWheelAction?.('tune')} />
               </BtnRow>
             </View>
             {/* Lock-screen / car-stereo skip buttons: tune by step, or jump

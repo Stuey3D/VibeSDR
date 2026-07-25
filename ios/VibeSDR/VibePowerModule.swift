@@ -55,7 +55,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             // Hardware keyboard (see VibeKeyWindow in AppDelegate.swift). Key DOWN and UP
             // are separate events on purpose: the arrows reuse the tuner keys' press/hold
             // semantics, and a sweep needs to know when the key was released.
-            "VibeKeyDown", "VibeKeyUp"]
+            "VibeKeyDown", "VibeKeyUp", "VibeScroll"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -67,6 +67,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// Called from VibeKeyWindow. No-ops harmlessly before JS has subscribed.
   static func emitKey(_ name: String, _ key: String) {
     shared?.sendEvent(withName: name, body: ["key": key])
+  }
+
+  /// Pointer scroll deltas (mouse wheel / trackpad), in points.
+  static func emitScroll(_ dx: Double, _ dy: Double) {
+    shared?.sendEvent(withName: "VibeScroll", body: ["dx": dx, "dy": dy])
   }
 
   override init() {

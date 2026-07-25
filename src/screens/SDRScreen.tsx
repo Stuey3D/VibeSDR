@@ -4335,6 +4335,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
+  // ── Pointer scroll (BRIEF-inputs-shack-mode-mac.md §3) ──────────────────────
+  //
+  // ★ ONE question, not a layout matrix: "what should the scroll wheel do?" —
+  // Zoom (default) or Tune. The vertical wheel is the only input EVERY pointing
+  // device has, so it is the only thing worth asking about; the opposite control
+  // then falls to whatever orthogonal axis the hardware happens to have
+  // (horizontal wheel, tilt wheel, trackpad left/right). A basic wheel-only mouse
+  // answers one question and never sees an inapplicable option.
+  const [wheelAction, setWheelAction] = useState<'zoom' | 'tune'>('zoom');
+  const wheelActionRef = useRef<'zoom' | 'tune'>('zoom');
+  useEffect(() => { wheelActionRef.current = wheelAction; }, [wheelAction]);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_wheel').then((v: string | null) => {
+      if (v === 'tune' || v === 'zoom') setWheelAction(v);
+    }).catch(() => {});
+  }, []);
+  const onWheelAction = useCallback((m: 'zoom' | 'tune') => {
+    setWheelAction(m);
+    AsyncStorage.setItem('lsv_wheel', m).catch(() => {});
+  }, []);
+
   // ── Hardware keyboard, global layer (BRIEF-inputs-shack-mode-mac.md §6) ──────
   //
   // Arrows tune and zoom; letters open panels; Esc closes. Key events arrive from
@@ -4406,13 +4427,36 @@ export default function SDRScreen({ route, navigation }: Props) {
         default: break;
       }
     });
+    // Scroll: accumulate deltas until they cross a notch, then act. A wheel emits
+    // large discrete jumps and a trackpad a smooth stream — accumulating handles
+    // both without the wheel feeling laggy or the trackpad firing hundreds of steps.
+    const scrollAcc = { x: 0, y: 0 };
+    const NOTCH = 26;   // points of scroll per step, tuned against a wheel detent
+    const scroll = emitter.addListener('VibeScroll', (e: { dx: number; dy: number }) => {
+      if (panelOpenRef.current) return;      // a sheet's own scrolling wins
+      const a = kbActions.current;
+      const vertIsZoom = wheelActionRef.current === 'zoom';
+      scrollAcc.y += e.dy ?? 0;
+      scrollAcc.x += e.dx ?? 0;
+      while (Math.abs(scrollAcc.y) >= NOTCH) {
+        const dir = scrollAcc.y > 0 ? -1 : 1;   // scroll up (negative dy) = in/up
+        scrollAcc.y -= Math.sign(scrollAcc.y) * NOTCH;
+        if (vertIsZoom) a.onZoomStep(dir as -1 | 1); else a.onVfoStep(dir as -1 | 1);
+      }
+      while (Math.abs(scrollAcc.x) >= NOTCH) {
+        const dir = scrollAcc.x > 0 ? 1 : -1;   // scroll right = up the band / in
+        scrollAcc.x -= Math.sign(scrollAcc.x) * NOTCH;
+        if (vertIsZoom) a.onVfoStep(dir as -1 | 1); else a.onZoomStep(dir as -1 | 1);
+      }
+    });
+
     const up = emitter.addListener('VibeKeyUp', (e: { key: string }) => {
       const k = e?.key;
       if (k === 'ArrowLeft' || k === 'ArrowRight') kb.vfo.release();
       if (k === 'ArrowUp'   || k === 'ArrowDown')  kb.zoom.release();
     });
     return () => {
-      down.remove(); up.remove();
+      down.remove(); up.remove(); scroll.remove();
       kb.vfo.release(); kb.zoom.release();   // never leave a sweep running
     };
   }, []);
@@ -5118,7 +5162,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           vfoKeys={vfoKeys}
           zoomKeys={zoomKeys}
           onVfoKeys={onVfoKeys}
-          onZoomKeys={onZoomKeys} hapticsHardware={hapticsHardware}
+          onZoomKeys={onZoomKeys}
+          wheelAction={wheelAction}
+          onWheelAction={onWheelAction} hapticsHardware={hapticsHardware}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
