@@ -1129,6 +1129,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
+  // ★ The hint appears WHEN A KEY IS PRESSED and goes away on touch (Stuart). It is a
+  // subtitle in style — quiet prose under the title — but not a permanent one: a touch user
+  // never needs it, and showing it to them would be teaching a lesson nobody asked for.
+  const [kbHint, setKbHint] = useState(false);
+  useEffect(() => {
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
+    return () => sub.remove();
+  }, []);
+
   // ── Keyboard / D-pad navigation of the server list ──────────────────────────
   //
   // ★ This is the screen that has to work with NO TOUCH AT ALL: mirrored to a TV over
@@ -1402,7 +1412,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}
+                    onTouchStart={() => setKbHint(false)}>
       <IdentModal
         visible={!!identModal}
         initial={identPrefill}
@@ -1515,10 +1526,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 bordered strip of glyphs. It reads as part of the page instead of an alert,
                 and it costs no list rows. Scoped to THIS screen's actions; the full
                 scrollable shortcut reference lives in the main menu. */}
-            <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
-              To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
-              F favourite · D default · E edit · S sort
-            </Text>
+            {kbHint && (
+              <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
+                To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
+                F favourite · D default · E edit · S sort
+              </Text>
+            )}
           </View>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
