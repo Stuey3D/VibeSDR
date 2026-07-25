@@ -50,17 +50,24 @@ Working HF RTTY at 4582 kHz, started at **22 dB** gain and had to come all the w
 - **Voices audible across the RTTY.** A broadcast station that is nowhere near 4582 kHz, arriving
   there anyway. That is not a receiver "hearing too much" — it is the front end mixing strong
   out-of-band signals together and *manufacturing* a product that lands on the tuned frequency.
-- **Stripes of overload across the waterfall, "one minute there, next gone."** The interfering
-  signal was fading in and out, so the overload came and went with it.
+- ★★ **Stripes of overload across the ENTIRE spectrum, "one minute there, next gone."** Not a
+  spur in one place — horizontal bands spanning the whole visible width, appearing and vanishing
+  as the interferer faded. That is the *whole noise floor lifting at once*: broadband
+  desensitisation, the front end being driven into compression by total power it cannot handle.
+  It is exactly the signature §4's median-bin test is built to catch, and it is visible in the
+  data we already compute — a sudden rise in the MEDIAN across the band with no corresponding
+  rise in the peak.
 
 Three design consequences, all of which this case makes concrete:
 
 1. ★ **The right gain was 14 dB below where he started, and nothing was clipping.** An auto-gain
    that only avoids hitting the rails would have sat happily at 22 dB and produced exactly this.
    §4's noise-floor test is not a refinement — it is the whole point.
-2. ★ **The culprit is OUT of channel.** The signal that caused this was not the one being
-   listened to, so the detector must look at the full captured spectrum, not the demodulated
-   channel. The waterfall FFT already does; a channel-power measurement never would.
+2. ★ **The culprit is OUT of channel, and the damage is BROADBAND.** The signal responsible was
+   not the one being listened to, and the harm it did was spread across the whole spectrum rather
+   than confined to a product. So the detector must watch the full captured band — the waterfall
+   FFT already does, and a channel-power measurement never would — and it must track the median
+   over TIME, because the tell is a floor that lifts and falls rather than one that sits high.
 3. ★ **The correct gain changes with propagation.** It was right until the interferer faded up.
    That is the argument for a continuously running loop rather than set-and-forget — and for
    §5's cadence being slow enough not to pump, but not so slow it takes minutes to react to a
@@ -100,6 +107,12 @@ transmitter that is exactly how an RTL-SDR fails.
   from §2 and there is nothing further to win.
 - Median rises **faster** than the peak → the receiver is manufacturing noise and intermod.
   **Back off**, immediately and by more than one step.
+
+★ Watch it over time as well as against gain. Overload driven by a *fading* interferer shows up
+as the median lifting and dropping across the whole band while the wanted signal sits still —
+the "stripes across the entire spectrum" of §2.1. A gain that is correct at one moment can be
+wrong a minute later, so a broadband floor excursion is itself a reason to back off, without
+waiting to try a gain step.
 
 That single comparison is the heart of the feature, it needs no knowledge of the mode, and it
 would have correctly refused to keep climbing on the night this was raised.
