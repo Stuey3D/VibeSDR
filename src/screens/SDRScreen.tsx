@@ -822,6 +822,38 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (v.binBandwidth > 0) c.zoom(c.getStatus().frequency, v.binBandwidth);
   }, []);
 
+  // ── UNLOCKED: the VFO travels to the edge, then the band slides under it ────
+  //
+  // Unlocked used to mean "the view never moves", so tuning walked the VFO clean
+  // off the screen and the floating recentre pill was the rescue. That is a
+  // fallback, not a behaviour. Now the VFO travels across the span (which is what
+  // makes unlocked worth having — you can see where you came from), and once it
+  // reaches the edge the SPECTRUM PANS UNDER IT so it stays put at the edge.
+  //
+  // ★ The data cost falls out of the geometry: while the VFO is mid-span nothing
+  // is sent at all, and view sends only happen once it is riding the edge. Locked
+  // mode pays a view send on EVERY step by definition, which is what made a fast
+  // sweep spike the link. So unlocked is now the cheaper mode as well as the more
+  // informative one.
+  const VFO_EDGE = 0.92;   // fraction of half-span at which panning starts
+  const keepVfoAtEdge = useCallback((hz: number) => {
+    const c = client.current; if (!c) return;
+    if (vfoLockedRef.current) return;        // locked already recentres every tune
+    const v = c.getView();
+    const span = (v.binBandwidth || 0) * (v.binCount || 0);
+    if (!(span > 0) || !v.centerHz) return;
+    const limit = (span / 2) * VFO_EDGE;
+    const off = hz - v.centerHz;
+    if (Math.abs(off) <= limit) return;      // still comfortably on screen — no send
+    let target = hz - Math.sign(off) * limit;
+    // Don't pan past the band edges; the walls are what stop the view sliding off
+    // into empty spectrum the receiver cannot reach.
+    const sp = c.panSpan();
+    if (sp?.movable) target = Math.max(sp.loHz, Math.min(sp.hiHz, target));
+    if (Math.abs(target - v.centerHz) < (v.binBandwidth || 1)) return;  // sub-bin, skip
+    c.pan(target);
+  }, []);
+
   // ── VFO lock / waterfall panning (BRIEF-vfo-lock-and-panning) ───────────────
   // Default locked = today's behaviour (view follows the VFO). Unlocked lets the
   // waterfall pan freely. Persisted in lsv_vfo_lock; mirrored to the client as
@@ -1488,8 +1520,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.setAudioServiceId?.(id);
     setActiveDabId(id);
   };
-  const mediaStepSkipRef = useRef<((dir: 'left' | 'right') => void) | null>(null);
-  mediaStepSkipRef.current = (dir: 'left' | 'right') => {
+  // `recenter` differs by CALLER and matters a great deal. A media-control skip is
+  // a discrete jump to somewhere else, so centring the view on arrival is right. A
+  // held tuner key is a SWEEP across the band, and recentring every step makes the
+  // server retune its centre and resend the view configuration on every step — so
+  // the data rate climbs with the sweep's acceleration (measured: 10 -> 40 KB/s and
+  // 10 -> 30 fps, worsening the longer the key was held). The drum has always
+  // tuned WITHOUT recentring for exactly this reason; the VFO simply travels across
+  // the visible span, and the existing "centre on VFO" pill covers it running off
+  // the edge.
+  const mediaStepSkipRef = useRef<((dir: 'left' | 'right', recenter?: boolean) => void) | null>(null);
+  mediaStepSkipRef.current = (dir: 'left' | 'right', recenter = true) => {
     const c = client.current; if (!c) return;
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
@@ -1502,7 +1543,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const [loHz, hiHz] = c.caps.freqRange;
     const newHz = Math.max(loHz, Math.min(hiHz, snapped));
     if (newHz === cur) return;
-    c.tune(newHz, undefined, { recenter: true });   // media-control skip = discrete jump
+    // Discrete jump → centre it. Sweep → travel across the span like the drum.
+    if (recenter) c.tune(newHz, undefined, { recenter: true });
+    else          c.tune(newHz);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
   };
   useEffect(() => {
@@ -2954,8 +2997,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const newHz   = Math.max(loHz, Math.min(hiHz, snapped + steps * s));
     if (newHz === cur) return;
     c.tune(newHz);
+    keepVfoAtEdge(newHz);          // same edge-follow as the keys — one behaviour
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
-  }, []);
+  }, [keepVfoAtEdge]);
 
   // ── BW drum ───────────────────────────────────────────────────────────────
 
@@ -3008,15 +3052,85 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the block). That also means the on-screen keys and the system media keys are
   // the SAME action, which is what the brief asks for — press ▶ on a car stereo
   // and you get exactly what the key on screen does.
+  // ── The tuner keys' VFO step ────────────────────────────────────────────────
+  // Written out rather than reusing mediaStepSkipRef, because a HELD KEY and a
+  // media-control skip turn out to differ in three ways, all of which bit:
+  //   1. hands-on — a key under your finger must suppress band-aware mode/step
+  //      defaults (see `handsOn`); a car-stereo skip should adopt them.
+  //   2. recentring — a skip is a discrete jump and should centre; a sweep should
+  //      travel across the span like the drum.
+  //   3. ★ SEND RATE — and this is the one that actually hurt. A skip is one
+  //      command. A sweep accelerates to ~22 steps/sec, and EVERY tune fires a
+  //      per-event audio tune plus (with VFO lock on, which forces a recentre
+  //      regardless of 2) a view send. That saturates the 30/sec view coalescer
+  //      in UberSDRClient and floods the link with config echoes: measured
+  //      10 -> 40 KB/s and 10 -> 30 fps, climbing the longer the key was held,
+  //      with the link meter going amber then red before it settled.
+  //      ★ This is the SAME failure the early GPU-waterfall prototype had when a
+  //      flicked drum coasted up the band (Stuart), which is what the view
+  //      coalescer was added to cure. A sweep simply outruns it, so the sends
+  //      have to be coalesced HERE too.
+  // The frequency itself stays exact and the readout updates on every step — only
+  // the network sends are thinned, plus a guaranteed trailing send so the radio
+  // always ends up where the display says it is.
+  // ★ 90ms ≈ 11 sends/sec — a DELIBERATE happy medium, arrived at by trying both
+  // ends (Stuart, on air):
+  //   unthrottled (~22/sec) → ~30 fps and 40 KB/s, link meter into amber and red
+  //   150ms      (~7/sec)  → cheap, but "the VFO wobbles like mad": the readout
+  //                          and the VFO marker update on EVERY step while the
+  //                          view only pans 7 times a second, so the marker
+  //                          visibly jitters against the spectrum underneath it
+  //   90ms       (~11/sec) → ~20 fps, and the marker tracks smoothly
+  // The wobble is the real constraint here, not the bitrate: sends have to stay
+  // frequent enough that the view keeps up with a display that is moving at full
+  // step rate. Lower this and the jitter comes back.
+  const SWEEP_SEND_MS = 90;
+  const sweepTune = useRef<{ hz: number | null; sentAt: number; timer: ReturnType<typeof setTimeout> | null }>(
+    { hz: null, sentAt: 0, timer: null });
+
   const onVfoStep = useCallback((dir: -1 | 1) => {
-    mediaStepSkipRef.current?.(dir === 1 ? 'right' : 'left');
-  }, []);
+    markInteract();
+    const c = client.current; if (!c) return;
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;   // DAB/ADS-B: nothing to tune
+    const s = stepRef.current; if (!(s > 0)) return;
+
+    // Accumulate on our OWN running target, not getStatus().frequency — that
+    // lags by a round trip while sends are being thinned, and re-basing each step
+    // on a stale value makes a fast sweep crawl or stutter. A gap re-bases.
+    const st = sweepTune.current;
+    const now = Date.now();
+    if (st.hz == null || now - st.sentAt > 400) st.hz = c.getStatus().frequency;
+    const snapped = dir === 1
+      ? (Math.floor(st.hz / s) + 1) * s
+      : (Math.ceil(st.hz / s) - 1) * s;
+    const [loHz, hiHz] = c.caps.freqRange;
+    const hz = Math.max(loHz, Math.min(hiHz, snapped));
+    if (hz === st.hz) return;                    // already against the band edge
+    st.hz = hz;
+    setStatus((prev: SDRStatus) => ({ ...prev, frequency: hz }));   // readout is immediate
+
+    const flush = () => {
+      st.timer = null;
+      st.sentAt = Date.now();
+      if (st.hz == null) return;
+      client.current?.tune(st.hz);
+      keepVfoAtEdge(st.hz);        // unlocked: slide the band under the VFO at the edge
+    };
+    if (now - st.sentAt >= SWEEP_SEND_MS) {
+      if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+      flush();
+    } else if (!st.timer) {
+      // Trailing send — the last step of a sweep must always reach the radio.
+      st.timer = setTimeout(flush, SWEEP_SEND_MS - (now - st.sentAt));
+    }
+  }, [markInteract]);
   // A third of an octave per press: a visible change without being coarse, and
   // the hold-sweep covers distance quickly enough that bigger steps would only
   // make fine adjustment awkward.
   const onZoomStep = useCallback((dir: -1 | 1) => {
+    markInteract();
     zoomBy(Math.pow(2, -dir / 3));
-  }, [zoomBy]);
+  }, [zoomBy, markInteract]);
 
   // Per-control drum-or-keys. TWO independent settings, not one global switch —
   // "VFO keys + zoom drum" is a real combination somebody will want, and the
