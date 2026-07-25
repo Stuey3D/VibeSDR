@@ -18,6 +18,25 @@ const BW_MUTED = 'rgba(255,255,255,0.92)';
 // NavItem is a render prop rather than a wrapper component because every button in
 // this panel has bespoke inline styling; this way focus is threaded in without any
 // of that being rewritten.
+/**
+ * A row inside the digital/decoders dropdown.
+ *
+ * ★ The generic NavItem reveals against the SHEET's ScrollView, but these rows live in their
+ * own nested list — so focusing one scrolled the sheet while the list it was in stayed put,
+ * and the caret walked off the bottom of the dropdown. This scrolls the list it is actually
+ * in, using the y each row already records on layout.
+ */
+function MoreItem({ onPress, onReveal, children }: {
+  onPress?: () => void;
+  onReveal: () => void;
+  children: (focused: boolean, ref: React.MutableRefObject<View | null>) => React.ReactNode;
+}) {
+  const { focused, viewRef } = useNavButton(onPress);
+  const rev = useRef(onReveal); rev.current = onReveal;
+  useEffect(() => { if (focused) rev.current(); }, [focused]);
+  return <>{children(focused, viewRef)}</>;
+}
+
 function NavItem({ onPress, children }: {
   onPress?: () => void;
   children: (focused: boolean, ref: React.MutableRefObject<View | null>) => React.ReactNode;
@@ -316,7 +335,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             {moreOpen && (
               <ScrollView ref={moreScroll} style={[st.moreList, { borderColor: t.btnBorder }]} keyboardShouldPersistTaps="handled">
                 {others.map(m => (
-                  <NavRow key={m.id}><NavItem onPress={() => pick(m.id)}>{(navFocused, navRef) => (
+                  <NavRow key={m.id}><MoreItem onPress={() => pick(m.id)}
+                    onReveal={() => {
+                      const y = itemY.current[m.id];
+                      if (y != null) moreScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
+                    }}>{(navFocused, navRef) => (
                   <TouchableOpacity
                     ref={navRef as any}
                     // ★ Focus is a background TINT here, not a border. moreItem has only
@@ -332,7 +355,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                       {m.id === activeDecoder || m.id === current ? '✓ ' : ''}{m.label.toUpperCase()}
                     </Text>
                   </TouchableOpacity>
-                  )}</NavItem></NavRow>
+                  )}</MoreItem></NavRow>
                 ))}
               </ScrollView>
             )}

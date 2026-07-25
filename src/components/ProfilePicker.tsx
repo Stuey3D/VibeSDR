@@ -15,6 +15,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { useRef } from 'react';
 import { useListNav, useKeyboardMode, NAV_FOCUS } from './PanelNav';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
@@ -91,11 +92,24 @@ export default function ProfilePicker({
     () => sdrGroups.flatMap((g) => g.items.map((it) => it.id)),
     [sdrGroups],
   );
+  // ★ The list SCROLLS — a server with many profiles overflows it — so focus has to drag the
+  // view with it, exactly as the bookmarks pane needed. Without a reveal the caret walks off
+  // the bottom of the dropdown and the list stays where it was.
+  const listScroll = useRef<ScrollView | null>(null);
+  const itemViews  = useRef<any[]>([]);
+
   const navFocus = useListNav(open, flatProfiles.length, (i) => {
     const id = flatProfiles[i];
     if (id != null) { onSelectProfile?.(id); setOpen(false); onPicked?.(); }
   },
-    undefined,
+    (i) => {
+      const v = itemViews.current[i];
+      v?.measureLayout?.(
+        (listScroll.current as any)?.getInnerViewNode?.(),
+        (_x: number, y: number) => listScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true }),
+        () => {},
+      );
+    },
     undefined,
     // Backspace leaves WITHOUT switching — a profile change retunes a shared SDR for
     // everyone on it, so backing out has to be as easy as opening.
@@ -150,7 +164,7 @@ export default function ProfilePicker({
         </TouchableOpacity>
 
         {open && (
-          <ScrollView style={s.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+          <ScrollView ref={listScroll} style={s.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
             {sdrGroups.flatMap((g) => {
               const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
               return [
@@ -165,6 +179,7 @@ export default function ProfilePicker({
                   return (
                     <TouchableOpacity
                       key={it.id}
+                      ref={(r: any) => { itemViews.current[flatProfiles.indexOf(it.id)] = r; }}
                       style={[s.item, serverActive && !active && s.itemInUse,
                               flatProfiles[navFocus] === it.id
                                 && s.itemFocused]}
