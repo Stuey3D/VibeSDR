@@ -4,6 +4,34 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## Unreleased
+
+### Fixed — the app tuned 1005 MHz when a Dutch keyboard asked for 100.5
+
+With thanks to **HansVanEijsden (Zwolle, NL)**, who spotted this in the
+[FMDX.org](https://fmdx.org) Discord and reported it precisely: *"In Dutch locale, `.`
+becomes `,` as default separator"* — keyboard, screenshot and locale, all in one message.
+That is a report you can act on immediately, and it turned out to matter more than it
+looked.
+
+The frequency box did not merely refuse the comma. It **deleted** it. Typing `100,5` left
+`1005`, so asking for 100.5 MHz tuned you to 1005 MHz — silently, and plausibly enough that
+you would blame the radio rather than the app. The web client did exactly the same.
+
+Both now accept whichever separator the keyboard offers and normalise it as you type, so
+the field reads `100.5` whatever your layout. Where both separators appear — `1,234.5`,
+typically pasted — the comma is treated as a thousands separator and dropped. Station search
+had a quieter version of the same fault, matching your typing against a formatted frequency
+it could never equal; that is fixed too, for the frequency only, since a station name is
+perfectly entitled to contain a comma.
+
+★ Worth recording why this survived so long: iOS chooses the decimal separator from the
+**Region** setting rather than the keyboard language, so it is invisible on a UK or US
+device no matter which keyboards are installed. It took someone actually living with a
+Dutch locale to see it.
+
+---
+
 ## v9.0.2 — the CONTINUE button that couldn't be pressed (2026-07-19)
 
 ### Fixed — VibeSDR was unusable on small screens
