@@ -22,6 +22,8 @@ import {
   View,
 } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
+import { NativeEventEmitter, NativeModules } from 'react-native';
+import { NAV_FOCUS, captureRegion, useAnnounce, PANEL_IDLE_MS } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
@@ -289,6 +291,119 @@ export default function DecoderPanel({
     }
   }, [decoderText, minimised]);
 
+  // ── Keyboard: the decoder box takes the keyboard on TAB ─────────────────────
+  //
+  // ★ This box floats above a LIVE screen, so it cannot simply listen: while it holds the
+  // keyboard the main screen must stop acting on keys, or up/down would retune the radio
+  // underneath the list you are reading. Tab hands it over and Tab hands it back.
+  //
+  // ★★ TWO AXES, NO SUB-MODES. Left/right move along the header controls, up/down move
+  // through the list, and whichever you last used is what SPACE activates. That avoids a
+  // nested "now you are in the header" state, which would be one more invisible mode.
+  //
+  // ★★★ SPACE, NOT ENTER, everywhere in here. Enter is the tune box across the whole app and
+  // Stuart flagged the exception himself — a key that means something different depending on
+  // where you are is the thing that has caused most of the confusion in this work. Space is
+  // free, and "space activates the focused thing" is a convention rather than a rule to learn.
+  const [kbZone, setKbZone] = useState<null | 'header' | 'list'>(null);
+  const [hdrIdx, setHdrIdx] = useState(0);
+  const [listIdx, setListIdx] = useState(0);
+  const hdrSlots = useRef<Array<() => void>>([]);
+  hdrSlots.current = [];
+  const [hdrCount, setHdrCount] = useState(0);
+  useEffect(() => {
+    if (hdrSlots.current.length !== hdrCount) setHdrCount(hdrSlots.current.length);
+  });
+
+  // The list this box is showing, if any. ADS-B and spots have nothing to select — Stuart:
+  // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
+  // Space does nothing rather than pretending to.
+  const listLen = isDabMode ? dabProgrammes.length : 0;
+
+  // ★ The flash. Tab-in is otherwise invisible, and invisible focus has looked like a broken
+  // keyboard three times over in this work. It announces itself once and then gets out of the
+  // way, which is what a real control does when it lights up. (Stuart's idea.)
+  const { value: flash, flash: announce, flashThen } = useAnnounce();
+
+  const leave = useCallback(() => { setKbZone(null); captureRegion(null); }, []);
+  // ★ On a TIMEOUT, flash once more and let it be seen before closing — an announcement of
+  // departure, so the box handing the keyboard back is deliberate rather than mysterious.
+  const leaveAnnounced = useCallback(() => { flashThen(leave); }, [flashThen, leave]);
+
+  useEffect(() => () => { captureRegion(null); }, []);   // never leave it captured on unmount
+
+  useEffect(() => {
+    if (!panelOn) { leave(); return; }
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key;
+      if (k === 'Tab') {
+        setKbZone(z => {
+          if (z) { captureRegion(null); return null; }
+          captureRegion('decoder');
+          setHdrIdx(0); announce();
+          return 'header';
+        });
+        return;
+      }
+      if (!kbZoneRef.current) return;               // not ours until Tab says so
+      if (k === 'Escape' || k === 'Backspace') { leave(); return; }
+      if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        setKbZone('header');
+        setHdrIdx(i => Math.max(0, Math.min(hdrSlots.current.length - 1, i + (k === 'ArrowRight' ? 1 : -1))));
+        return;
+      }
+      if (k === 'ArrowUp' || k === 'ArrowDown') {
+        if (listLenRef.current <= 0) return;
+        setKbZone('list');
+        setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
+        return;
+      }
+      if (k === 'Space') {
+        if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
+        else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
+      }
+    });
+    return () => sub.remove();
+  }, [panelOn, leave, announce]);
+
+  // Refs so the listener above, installed once, never reads a stale value.
+  const kbZoneRef = useRef(kbZone);   kbZoneRef.current = kbZone;
+  const hdrIdxRef = useRef(hdrIdx);   hdrIdxRef.current = hdrIdx;
+  const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
+  const listLenRef = useRef(listLen); listLenRef.current = listLen;
+  const onSelectDabRef = useRef((i: number) => {
+    const p = dabProgrammes[i];
+    if (p) onSelectDab?.(p.id);
+  });
+  onSelectDabRef.current = (i: number) => {
+    const p = dabProgrammes[i];
+    if (p) onSelectDab?.(p.id);
+  };
+
+  // Idle timeout, matching the menus: a stray Tab must not leave the box holding the keyboard
+  // while the user has walked away from it. Resets on every key it handles.
+  const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (kbZone === null) { if (idleRef.current) clearTimeout(idleRef.current); return; }
+    if (idleRef.current) clearTimeout(idleRef.current);
+    idleRef.current = setTimeout(() => leaveAnnounced(), PANEL_IDLE_MS);
+    return () => { if (idleRef.current) clearTimeout(idleRef.current); };
+  }, [kbZone, hdrIdx, listIdx, leaveAnnounced]);
+
+  /** A header control that takes part in the left/right order. */
+  const HBtn = ({ onPress, style, children, ...rest }: any) => {
+    const i = hdrSlots.current.length;
+    hdrSlots.current.push(onPress ?? (() => {}));
+    const on = kbZone === 'header' && hdrIdx === i;
+    return (
+      <TouchableOpacity onPress={onPress}
+        style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
+        {children}
+      </TouchableOpacity>
+    );
+  };
+
   if (!panelOn) return null;
 
   const title = isDabMode
@@ -301,7 +416,13 @@ export default function DecoderPanel({
     <Animated.View
       style={[dp.wrap, { bottom: bottomOffset, opacity, transform: [{ translateY: slideY }] }]}
     >
-      <View style={[dp.inner, { borderColor: dc.border }]}>
+      <View style={[dp.inner, { borderColor: kbZone ? NAV_FOCUS : dc.border }]}>
+
+        {/* ★ Arrival / departure flash. A border that brightens once and fades, so taking the
+            keyboard and handing it back are both announced. pointerEvents none — it is a
+            signal, never a target. */}
+        <Animated.View pointerEvents="none"
+          style={[dp.flash, { opacity: flash }]} />
 
         {/* Header */}
         <TouchableOpacity
@@ -324,24 +445,26 @@ export default function DecoderPanel({
               thing you actually want to read there. */}
           <Text style={[dp.status, dp.statusGrow, { color: dc.status, fontFamily: t.font }]}
                 numberOfLines={1}>
-            {isDabMode ? (dabEnsemble || 'reading multiplex…') : decoderStatus}
+            {kbZone && isDabMode ? 'space to select · tab to leave'
+              : isDabMode ? (dabEnsemble || 'reading multiplex…')
+              : decoderStatus}
           </Text>
 
           {/* EXPAND LEADS, and stays outside the filter run. It changes how each row is DRAWN;
               MODE/BAND/AGE change WHICH rows are listed. Sitting it between two cyclers read as
               a fourth filter. */}
           {isSpotsMode && spotsKind === 'digi' && (
-            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); setSpotsExpanded(v => !v); }}>
               <Text style={[dp.hbtnTxt, {
                 color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 {spotsExpanded ? 'COLLAPSE' : 'EXPAND'}
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
           {/* Spots filter cyclers (skin sf-mode / sf-band / sf-age dropdowns) */}
           {isSpotsMode && spotsKind === 'digi' && (
-            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfMode(SF_MODES[(SF_MODES.indexOf(sfMode) + 1) % SF_MODES.length]);
@@ -350,10 +473,10 @@ export default function DecoderPanel({
                 color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 {sfMode === 'ALL' ? 'MODE' : sfMode}
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
           {isSpotsMode && (
-            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfBand(SF_BANDS[(SF_BANDS.indexOf(sfBand) + 1) % SF_BANDS.length]);
@@ -362,10 +485,10 @@ export default function DecoderPanel({
                 color: sfBand !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 {sfBand === 'ALL' ? 'BAND' : sfBand}
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
           {isSpotsMode && (
-            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 const i = SF_AGES.findIndex(a => a.minutes === sfAge);
@@ -375,33 +498,33 @@ export default function DecoderPanel({
                 color: sfAge > 0 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 {SF_AGES.find(a => a.minutes === sfAge)?.label ?? 'AGE'}
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
 
           {/* CLR — text decoders (skin _clearB) */}
           {!isImageMode && !isSpotsMode && !isDabMode && (
-            <TouchableOpacity hitSlop={6}
+            <HBtn hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onClear?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>CLR</Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
 
           {/* DAB speed correction (§4.5) — opens the SPEED FIX popup (separate preset
               buttons), a popup like the spots filters. Highlighted when not Off. */}
           {isDabMode && onDabSpeed && (
-            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); setDabSpeedOpen(o => !o); }}>
               <Text style={[dp.hbtnTxt, {
                 color: Math.abs((dabSpeed ?? 1) - 1) > 0.001 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
                 SPEED FIX
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
 
           {/* Morse quality filter (skin lsv-dec-sf-quality) */}
           {activeDecoder === 'morse' && (
-            <TouchableOpacity hitSlop={6}
+            <HBtn hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
@@ -411,25 +534,25 @@ export default function DecoderPanel({
               <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>
                 {MORSE_QUALITY_LABELS[morseQuality]}
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
 
           {/* PREV/LIVE + SAVE — image decoders (skin _prevB/_saveB) */}
           {isImageMode && hasPrev && (
-            <TouchableOpacity hitSlop={6}
+            <HBtn hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onTogglePrev?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>
                 {viewingPrev ? 'LIVE' : 'PREV'}
               </Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
           {isImageMode && (
-            <TouchableOpacity hitSlop={6}
+            <HBtn hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onSave?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>SAVE</Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
           {isImageMode && !!imageInfo && (
             <Text style={[dp.status, { color: dc.status, fontFamily: t.font }]} numberOfLines={1}>
@@ -523,10 +646,13 @@ export default function DecoderPanel({
         )}
         {!minimised && isDabMode && (
           <ScrollView style={dp.body} showsVerticalScrollIndicator>
-            {dabProgrammes.map((p) => {
+            {dabProgrammes.map((p, pi) => {
               const active = p.id === activeDabId;
+              const navOn = kbZone === 'list' && listIdx === pi;
               return (
-                <TouchableOpacity key={p.id} style={[dp.dabRow, { borderBottomColor: dc.hdrBdr }]}
+                <TouchableOpacity key={p.id}
+                  style={[dp.dabRow, { borderBottomColor: dc.hdrBdr },
+                          navOn && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                   onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
                   <StationLogo name={p.name} />
                   <Text style={[dp.dabName, { color: active ? dc.btnActT : dc.output, fontFamily: t.font }]}
@@ -566,6 +692,11 @@ export default function DecoderPanel({
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const dp = StyleSheet.create({
+  // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
+  flash: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 8,
+  },
   wrap: {
     position: 'absolute', left: 8, right: 8,
     zIndex: 200,

@@ -22,7 +22,7 @@
 // open the servers menu when nothing is), and one owner for that rule is what keeps
 // the precedence honest.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NativeEventEmitter, NativeModules, ScrollView, View } from 'react-native';
+import { Animated, NativeEventEmitter, NativeModules, ScrollView, View } from 'react-native';
 
 export type NavEntry = {
   id: number;
@@ -138,6 +138,42 @@ export function useSuppressShortcuts(active = true) {
     return () => { externalContent = Math.max(0, externalContent - 1); };
   }, [active]);
 }
+
+// ── Arrival and departure announcements ──────────────────────────────────────
+//
+// ★ Stuart's design: the highlight FLASHES ONCE on arrival, sits steady while in use, and on
+// an idle timeout flashes once more and fades as it closes. You get an announcement of
+// arrival AND departure.
+//
+// ★★ The departure half is the valuable one. A menu that simply vanishes after a timeout
+// reads as a fault — you did not ask it to close and nothing said why. A flash on the way out
+// makes the close deliberate rather than mysterious, and costs nothing to read.
+export const ANNOUNCE_MS = 450;
+
+export function useAnnounce() {
+  const value = useRef(new Animated.Value(0)).current;
+  const flash = useCallback(() => {
+    value.setValue(1);
+    Animated.timing(value, { toValue: 0, duration: ANNOUNCE_MS, useNativeDriver: true }).start();
+  }, [value]);
+  /** Flash, then run `after` once it has been seen — for closing on a timeout. */
+  const flashThen = useCallback((after: () => void) => {
+    value.setValue(1);
+    Animated.timing(value, { toValue: 0, duration: ANNOUNCE_MS, useNativeDriver: true })
+      .start(() => after());
+  }, [value]);
+  return { value, flash, flashThen };
+}
+
+// ── Region capture ───────────────────────────────────────────────────────────
+//
+// ★ The decoder box floats ABOVE the live screen rather than covering it, so it is not a
+// "panel" in the sense SDRScreen means — the waterfall is still there and the arrows still
+// tune. When the keyboard is handed to the box (Tab), the main screen has to stop acting on
+// keys entirely, or up and down would retune the radio underneath the list being read.
+let region: string | null = null;
+export const regionCaptured = () => region !== null;
+export function captureRegion(name: string | null) { region = name; }
 
 // ── Owner stack ──────────────────────────────────────────────────────────────
 const owners: object[] = [];

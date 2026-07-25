@@ -85,7 +85,7 @@ import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
-import { shortcutsSuppressed } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -4448,6 +4448,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Third-party page on screen (compatibility mode) — every shortcut is off, Esc
       // included, so nothing of ours can fire under a page we did not write. See PanelNav.
       if (shortcutsSuppressed()) return;
+      // ★ The decoder box has taken the keyboard (Tab). It floats above a LIVE screen, so
+      // without this the arrows would keep tuning the radio underneath the list being read.
+      if (regionCaptured()) return;
       const a = kbActions.current;
       // ★ Esc precedence, one rule in one place: something open -> close it;
       // nothing open -> open the SERVERS menu (the brief's universal back/open key).
