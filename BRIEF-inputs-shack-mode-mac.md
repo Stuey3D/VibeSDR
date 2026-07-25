@@ -497,6 +497,33 @@ deadzone to tune, and a new sweep curve to validate, all to duplicate something 
 waterfall pan is worth having where a stick exists but can never be core, since panning has no Siri
 Remote equivalent at all.
 
+### ★★★ THE STICKS ARE A TUNING DIAL — rotate them, do not deflect them (Stuart)
+
+★★ **I MISREAD THE ORIGINAL PROPOSAL and argued against the wrong thing.** I read "sticks for tune/zoom"
+as deflection = rate, a velocity control. Stuart meant **CIRCLING the stick clockwise/anticlockwise —
+angle accumulating into steps — to emulate an old tuning dial with the little finger dimple.**
+
+★ That dissolves the main objection above. Rotation is **not a second control law: it is the DRUM law**,
+which already exists and is already tuned — accumulate angular delta, convert to steps, with the
+debounce settled on the GPU-waterfall prototype. Nothing new to validate.
+
+★★ **AND IT UNIFIES WITH THE SIRI REMOTE.** The remote's clickpad reports continuous analogue x/y (see
+the tvOS findings), so a finger circling it yields angular motion — **the SAME handler**: read x/y,
+compute angle, accumulate delta. ONE implementation serves the remote's touch surface AND a stick,
+rather than two features. Missed while thinking of sticks as velocity.
+
+★ The nostalgia lineage now completes: **80s boombox drums → 90s car stereo keys → the tuning dial with
+the finger dimple.** A third era of radio control, on the surface that suits it. Feeds the website story.
+
+★ TWO LIMITS, neither fatal:
+- **A stick SELF-CENTRES**, so there is no coasting or inertia — displacement tuning, not a weighted
+  flywheel you can spin. Fine: the drums are the same, and the flick-coast was removed deliberately.
+- **Small physical radius** = coarser angular resolution than a drum, and a deadzone near centre where
+  angle is meaningless. Wants a **minimum-radius gate** before it starts counting.
+
+★ THE D-PAD DECISION STANDS as the FLOOR — it is what guarantees the minimum control set on any
+hardware. Rotation is the ENHANCEMENT tier, now with a real reason to exist rather than being a fallback.
+
 ### ★★★ THE MINIMUM CONTROL SET: directions + confirm + back. The rest are ACCELERATORS.
 
 Prompted by Stuart asking whether half a Nintendo Switch Joy-Con still gives full control. Apple has
