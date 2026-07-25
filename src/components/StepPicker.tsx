@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { STEPS_HZ } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
+import { useListNav, NAV_FOCUS } from './PanelNav';
 
 function stepLabel(hz: number): string {
   if (hz >= 1_000_000) return (hz / 1_000_000) + ' MHz';
@@ -30,6 +31,18 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
 
+  // Keyboard / D-pad navigation. The steps are a wrapped grid and CLOSE is the last
+  // entry, so arrows walk the ladder and then land on CLOSE — no separate rule for it.
+  // Shared machinery, so the game controller's D-pad drives this unchanged.
+  const navFocus = useListNav(
+    visible,
+    stepList.length + 1,
+    (i) => {
+      if (i >= stepList.length) { onClose(); return; }
+      onSelect(stepList[i]); onClose();
+    },
+  );
+
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
@@ -42,7 +55,7 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
             TUNING STEP
           </Text>
           <View style={st.grid}>
-            {stepList.map(hz => (
+            {stepList.map((hz, i) => (
               <TouchableOpacity
                 key={hz}
                 style={[
@@ -50,6 +63,9 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
                   { borderColor: isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)',
                     paddingVertical: isWhite ? 14 : 12 },
                   hz === currentStep && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+                  // Focus outranks 'active' so the caret is never hidden on the
+                  // step you are already using — the one you most need to see.
+                  navFocus === i && { borderColor: NAV_FOCUS, borderWidth: 2 },
                 ]}
                 onPress={() => { onSelect(hz); onClose(); }}
                 hitSlop={4} activeOpacity={0.75}
@@ -66,7 +82,8 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
             ))}
           </View>
           <TouchableOpacity
-            style={[st.closeBtn, { borderColor: t.btnBorder }]}
+            style={[st.closeBtn, { borderColor: t.btnBorder },
+                    navFocus === stepList.length && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
             onPress={onClose} activeOpacity={0.75}
           >
             <Text style={[st.closeBtnText, { fontFamily: t.font, color: t.btnText }]}>

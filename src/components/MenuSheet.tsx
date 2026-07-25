@@ -8,6 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -286,6 +287,7 @@ const C = {
   divider:      'rgba(255,255,255,0.12)',  // a11y section rules
   gold:         '#ffe566',                 // active text
   goldDim:      'rgba(255,229,102,0.70)',  // active border
+  focus:        '#7CFF9B',                 // keyboard/D-pad focus — matches btnFocused
   muted:        'rgba(255,255,255,0.92)',  // base button/value text — white
   btnBg:        'rgba(20,18,14,0.85)',
   active:       'rgba(255,200,0,0.12)',
@@ -390,26 +392,14 @@ function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIco
 //
 // Rows come from BtnRow via context, which gives the natural 2-D shape: up/down
 // moves between rows, left/right within one.
-type NavEntry = { id: number; row: number; y: number; press?: () => void };
-
-const NavCtx = React.createContext<{
-  register: (e: NavEntry) => () => void;
-  focused: number;
-  nextRow: () => number;
-} | null>(null);
-const RowCtx = React.createContext<number>(-1);
-
-let nextBtnId = 1;
-
+// ★ The machinery itself now lives in PanelNav.tsx — it is shared with StepPicker,
+// AudioSheet and ModeSelector, and is what a game controller's D-pad will drive
+// (BRIEF-controls-keyboard-and-gamepad.md). MenuSheet keeps only the wiring.
 function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean }) {
-  const nav = React.useContext(NavCtx);
-  // One row id per mounted BtnRow, stable for its lifetime.
-  const rowRef = useRef<number>(-1);
-  if (rowRef.current < 0) rowRef.current = nav ? nav.nextRow() : -1;
   return (
-    <RowCtx.Provider value={rowRef.current}>
+    <NavRow>
       <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>
-    </RowCtx.Provider>
+    </NavRow>
   );
 }
 
@@ -417,25 +407,14 @@ function Btn({ label, active, danger, onPress, full, style, icon }: {
   label: string; active?: boolean; danger?: boolean;
   onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
 }) {
-  const nav = React.useContext(NavCtx);
-  const row = React.useContext(RowCtx);
-  const idRef = useRef<number>(-1);
-  if (idRef.current < 0) idRef.current = nextBtnId++;
-  const id = idRef.current;
-  const viewRef = useRef<View | null>(null);
-  const yRef = useRef(0);
-  const pressRef = useRef(onPress); pressRef.current = onPress;
-
-  useEffect(() => {
-    if (!nav || row < 0) return;
-    return nav.register({ id, row, y: yRef.current, press: () => pressRef.current?.() });
-  }, [nav, row, id]);
-
-  const focused = !!nav && nav.focused === id;
+  // ★ Scroll-into-view is now MEASURED against the ScrollView's content node
+  // (revealIn, inside useNavButton) rather than estimated as `row * 46`, which
+  // assumed a uniform row height and was wrong for anything nested or unevenly
+  // sized.
+  const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity
       ref={viewRef as any}
-      onLayout={e => { yRef.current = e.nativeEvent.layout.y; }}
       style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull,
               icon && { flexDirection: 'row', gap: 7 }, style,
               focused && styles.btnFocused]}
@@ -446,6 +425,34 @@ function Btn({ label, active, danger, onPress, full, style, icon }: {
         {label}
       </Text>
     </TouchableOpacity>
+  );
+}
+
+// ── Keyboard-reachable slider ────────────────────────────────────────────────
+// ★ Sliders used to be SKIPPED by keyboard focus entirely — only Btn registered, so
+// the caret jumped straight past every slider and they were unreachable, not merely
+// awkward. NavSlider registers as a value control: focus lands on it, left/right
+// nudges it by one `step`, up/down leaves.
+//
+// ★ No wrapper View, deliberately. These sliders are laid out with `flex:1` inside
+// rows, and wrapping them would change the layout of all twelve. Focus is shown by
+// re-tinting the thumb and track instead, which is layout-free — and on a slider the
+// thumb IS where the eye already is.
+function NavSlider(props: React.ComponentProps<typeof Slider>) {
+  const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
+  // A slider with no explicit step still has to move by SOMETHING; a twentieth of
+  // the range is a sane nudge and matches how these read on screen.
+  const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
+  const { focused } = useNavRange((dir) => {
+    const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
+    if (next !== value) onValueChange?.(next);
+  });
+  return (
+    <Slider
+      {...props}
+      minimumTrackTintColor={focused ? C.focus : props.minimumTrackTintColor}
+      thumbTintColor={focused ? C.focus : props.thumbTintColor}
+    />
   );
 }
 
@@ -617,67 +624,11 @@ export default function MenuSheet({
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
   // ── Keyboard navigation of the sheet ────────────────────────────────────────
-  // Up/down between rows, left/right within a row, Enter to activate. Esc is NOT
-  // handled here — SDRScreen already closes panels on Esc, and one owner for that
-  // rule is what keeps the precedence honest.
-  const navEntries = useRef<NavEntry[]>([]);
-  const rowSeq = useRef(0);
-  const [focused, setFocused] = useState(-1);
-  const scrollRef = useRef<ScrollView | null>(null);
-
-  const navRegister = useCallback((e: NavEntry) => {
-    navEntries.current.push(e);
-    return () => { navEntries.current = navEntries.current.filter(x => x.id !== e.id); };
-  }, []);
-  const navNextRow = useCallback(() => rowSeq.current++, []);
-  const navCtx = useMemo(() => ({ register: navRegister, focused, nextRow: navNextRow }),
-                         [navRegister, focused, navNextRow]);
-
-  useEffect(() => {
-    // ★ `visible`, NOT `open`. An earlier version said `open` and type-checked
-    // perfectly, because TypeScript's DOM lib declares a global `open`
-    // (window.open) — so tsc saw a valid symbol while at runtime it was undefined,
-    // and the screen crash-looped. tsc passing is not proof a name is in scope
-    // when the DOM lib is loaded.
-    if (!visible) { setFocused(-1); return; }
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      const k = e?.key;
-      // Sorted by row then id = the reading order of the JSX, without anyone
-      // having to declare it.
-      const all = [...navEntries.current].sort((a, b) => a.row - b.row || a.id - b.id);
-      if (!all.length) return;
-      const cur = all.findIndex(x => x.id === focusedRef.current);
-      const move = (next: number) => {
-        const t = all[Math.max(0, Math.min(all.length - 1, next))];
-        if (!t) return;
-        setFocused(t.id);
-        // Keep focus on screen. y is the button's offset inside its row, so this is
-        // approximate — good enough to follow, and it never fights the user's own
-        // scrolling because it only runs on a key press.
-        scrollRef.current?.scrollTo({ y: Math.max(0, t.row * 46 - 120), animated: true });
-      };
-      if (k === 'Enter') { all[cur]?.press?.(); return; }
-      if (cur < 0) { move(0); return; }          // first key press just takes focus
-      const row = all[cur].row;
-      switch (k) {
-        case 'ArrowDown': {
-          const i = all.findIndex(x => x.row > row);
-          move(i < 0 ? all.length - 1 : i); break;
-        }
-        case 'ArrowUp': {
-          const prev = [...all].reverse().find(x => x.row < row);
-          move(prev ? all.indexOf(prev) : 0); break;
-        }
-        case 'ArrowRight': if (all[cur + 1]?.row === row) move(cur + 1); break;
-        case 'ArrowLeft':  if (cur > 0 && all[cur - 1].row === row) move(cur - 1); break;
-        default: break;
-      }
-    });
-    return () => sub.remove();
-  }, [visible]);
-  const focusedRef = useRef(focused);
-  useEffect(() => { focusedRef.current = focused; }, [focused]);
+  // Up/down between rows, left/right within a row, Enter to activate. The machinery
+  // is shared (PanelNav.tsx); attach `scrollRef` to the ScrollView and the buttons
+  // register themselves. Esc is NOT handled here — SDRScreen already closes panels
+  // on Esc, and one owner for that rule is what keeps the precedence honest.
+  const { navCtx, scrollRef } = usePanelNav(visible);
 
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
   // server order on purpose — they're SDR-type ordered and re-sorting risks the
@@ -918,7 +869,7 @@ export default function MenuSheet({
                     can swallow the needle whatever colour it is */}
                 <View style={styles.bwRow}>
                   <Text style={styles.bwLabel}>VFO GLOW</Text>
-                  <Slider style={styles.bwSlider}
+                  <NavSlider style={styles.bwSlider}
                     minimumValue={1} maximumValue={10} step={1}
                     value={vfoIntensity}
                     onValueChange={(v: number) => onVfoIntensity?.(v)}
@@ -931,7 +882,7 @@ export default function MenuSheet({
                     so the needle keeps contrast on bright palettes */}
                 <View style={styles.bwRow}>
                   <Text style={styles.bwLabel}>VFO FROST</Text>
-                  <Slider style={styles.bwSlider}
+                  <NavSlider style={styles.bwSlider}
                     minimumValue={0} maximumValue={10} step={1}
                     value={vfoFrost}
                     onValueChange={(v: number) => onVfoFrost?.(v)}
@@ -946,7 +897,7 @@ export default function MenuSheet({
                 {hasBgImage && (
                   <View style={styles.bwRow}>
                     <Text style={styles.bwLabel}>BACKDROP</Text>
-                    <Slider style={styles.bwSlider}
+                    <NavSlider style={styles.bwSlider}
                       minimumValue={0} maximumValue={10} step={1}
                       value={bgOpacity}
                       onValueChange={(v: number) => onBgOpacity?.(v)}
@@ -966,7 +917,7 @@ export default function MenuSheet({
                 {wfCoarse === 'auto' && (
                   <View style={styles.sliderWrap}>
                     <Text style={styles.sliderLabel}>Auto Range</Text>
-                    <Slider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
+                    <NavSlider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
                       value={autoContrast} onValueChange={onAutoContrast ?? (() => {})}
                       minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                     <Text style={styles.sliderVal}>{autoContrast}</Text>
@@ -977,7 +928,7 @@ export default function MenuSheet({
                     {/* Manual dB window — floor/ceiling kept ≥5dB apart */}
                     <View style={styles.sliderWrap}>
                       <Text style={styles.sliderLabel}>Floor</Text>
-                      <Slider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
+                      <NavSlider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
                         value={Math.min(dbMin, dbMax - 5)}
                         onValueChange={(v: number) => onDbMin?.(Math.min(v, dbMax - 5))}
                         minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
@@ -985,7 +936,7 @@ export default function MenuSheet({
                     </View>
                     <View style={styles.sliderWrap}>
                       <Text style={styles.sliderLabel}>Ceiling</Text>
-                      <Slider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
+                      <NavSlider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
                         value={Math.max(dbMax, dbMin + 5)}
                         onValueChange={(v: number) => onDbMax?.(Math.max(v, dbMin + 5))}
                         minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
@@ -998,21 +949,21 @@ export default function MenuSheet({
                 <SubLabel label="Waterfall — Fine" />
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Brightness</Text>
-                  <Slider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={wfBrightness} onValueChange={onWfBrightness ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(wfBrightness > 0 ? '+' : '') + wfBrightness} dB</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Contrast</Text>
-                  <Slider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
                     value={wfContrast} onValueChange={onWfContrast ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(wfContrast > 0 ? '+' : '') + wfContrast}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Sharpness</Text>
-                  <Slider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
                     value={wfSharpness} onValueChange={onWfSharpness ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{wfSharpness}</Text>
@@ -1030,21 +981,21 @@ export default function MenuSheet({
                 </BtnRow>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Smoothing</Text>
-                  <Slider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
                     value={specSmoothing} onValueChange={onSpecSmoothing ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{specSmoothing}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Floor</Text>
-                  <Slider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={specFloor} onValueChange={onSpecFloor ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Peak Scale</Text>
-                  <Slider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
                     value={specPeakScale} onValueChange={onSpecPeakScale ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(specPeakScale / 10).toFixed(1)}×</Text>
@@ -1331,7 +1282,7 @@ const styles = StyleSheet.create({
   btnActive:     { backgroundColor: C.active, borderColor: C.goldDim },
   // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
   // setting is on"). Focus is where the keyboard is, not what is selected.
-  btnFocused:    { borderColor: '#7CFF9B', borderWidth: 2 },
+  btnFocused:    { borderColor: C.focus, borderWidth: 2 },
   btnSelected:   { borderColor: C.goldDim }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },

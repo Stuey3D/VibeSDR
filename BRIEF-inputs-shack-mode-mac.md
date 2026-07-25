@@ -276,9 +276,19 @@ open the app instead."* Not built, but closer than it looks:
 
 ★ Pass the server address in the URL so the app connects to the right server — deep linking already exists
 (memory `v52beta1_deep_linking`).
-★ **Keep "Open in Browser" as a SECONDARY menu item** (`:497`), do not replace it: the web client is still
-how the browser engines get tested, and it would be missed immediately. If the app is present, "Open in
-VibeSDR" becomes the primary.
+★★ **THE MENU BAR INTERACTION (Stuart):** *"Left click the icon to open VibeSDR, right click to bring up
+the options, and under 'Open VibeSDR' you have 'Open in Browser' too."* So:
+- **LEFT click** = the primary action, straight into VibeSDR. No menu.
+- **RIGHT click** = the options menu, with **Open VibeSDR** first and **Open in Browser** beneath it
+  (`:497` keeps its item, it is merely demoted). The web client is still how the browser engines get
+  tested, and losing it would be felt immediately.
+- ★ **FALLBACK: if VibeSDR is NOT installed, left click must open the BROWSER** — i.e. left click means
+  "open the best available client", not "open VibeSDR or fail silently". A dead icon is the worst outcome.
+
+★ IMPLEMENTATION GOTCHA for the left/right split: **assigning `statusItem.menu` makes LEFT click show the
+menu too**, which is exactly what we are trying to avoid. The clean pattern is to leave `menu` nil, set
+`button.sendAction(on: [.leftMouseUp, .rightMouseUp])`, branch on `NSApp.currentEvent?.type`, and for the
+right-click case assign the menu, `button.performClick(nil)`, then clear it again.
 
 ## 7. The Mac app — effectively free
 
