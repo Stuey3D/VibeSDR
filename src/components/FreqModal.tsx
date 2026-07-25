@@ -14,7 +14,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
-import { useListNav, useKeyboardMode } from './PanelNav';
+import { useListNav, useKeyboardMode, NAV_FOCUS } from './PanelNav';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -157,6 +157,8 @@ export default function FreqModal({
   // Live VTS while typing (see vtsLookup). null → show the tuned station instead.
   const [draftVts, setDraftVts] = useState<{ name: string; freq: number } | null>(null);
   const inputRef          = useRef<TextInput>(null);
+  const searchRef         = useRef<TextInput>(null);
+  const bmNameRef         = useRef<TextInput>(null);
 
   // ── Bookmarks mode (relocated from MenuSheet §4.2) ──────────────────────────
   const [cardMode, setCardMode]         = useState<'tune' | 'bookmarks'>('tune');
@@ -303,18 +305,43 @@ export default function FreqModal({
   // Bookmark results: arrow through them and Enter to tune. Up/Down reach us even while the
   // search box has focus (see typingPassthrough in AppDelegate), so you can type to filter
   // and step straight down into the list without dismissing the keyboard first.
+  // ★ ONE ordered focus space for the WHOLE bookmarks pane, not just the results. Slots are
+  // claimed during render in JSX order — the search field, each result, the EiBi toggle, the
+  // name field, the save row, each saved bookmark, the transfer buttons — so the order is
+  // whatever is actually on screen and cannot drift from it.
+  //
+  // The LENGTH comes from state rather than the ref, for the same reason as the server
+  // picker: the bank is cleared at the top of this render and only filled while the children
+  // render, so reading it here would always give zero and focus would stop at the first item.
+  const bmSlots = useRef<Array<() => void>>([]);
+  bmSlots.current = [];
+  const [bmCount, setBmCount] = useState(0);
+  useEffect(() => {
+    if (bmSlots.current.length !== bmCount) setBmCount(bmSlots.current.length);
+  });
+
   const bmNavFocus = useListNav(
     visible && cardMode === 'bookmarks',
-    searchResults.length,
-    (i) => {
-      const r = searchResults[i];
-      if (!r) return;
-      setSearchQuery('');
-      if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
-      else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
-      onClose();
-    },
+    bmCount,
+    (i) => bmSlots.current[i]?.(),
   );
+
+  /** Claim the next slot; returns whether it currently has focus. Render order = JSX order. */
+  const bmSlot = (onPress: () => void) => {
+    const i = bmSlots.current.length;
+    bmSlots.current.push(onPress);
+    return bmNavFocus === i;
+  };
+  /** A bookmarks-pane button that takes part in that order. */
+  const BmBtn = ({ onPress, style, children, ...rest }: any) => {
+    const on = bmSlot(onPress ?? (() => {}));
+    return (
+      <TouchableOpacity onPress={onPress}
+        style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
+        {children}
+      </TouchableOpacity>
+    );
+  };
 
   // Read through a ref so the listener above never captures a stale `value`.
   const confirmRef = useRef(confirm); confirmRef.current = confirm;
@@ -496,25 +523,31 @@ export default function FreqModal({
               Lifted verbatim from MenuSheet (§4.2). */}
           {cardMode === 'bookmarks' && (
             <ScrollView style={{ maxHeight: bmMaxH }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              {(() => { const on = bmSlot(() => searchRef.current?.focus()); return (
               <TextInput
-                style={[st.searchInput, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
+                ref={searchRef}
+                style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
+                                          borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
                 value={searchQuery} onChangeText={setSearchQuery}
                 placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={dimText}
                 autoCorrect={false} autoCapitalize="none" spellCheck={false} clearButtonMode="while-editing" />
+              ); })()}
               {searchQuery.trim().length > 0 && (searchResults.length === 0 ? (
                 <Text style={[st.bmMsg, { color: dimText }]}>No results for “{searchQuery.trim()}”</Text>
               ) : (<>
                 <Text style={[st.bmHint, { color: dimText }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
-                {searchResults.map((r: SearchResult, i: number) => (
+                {searchResults.map((r: SearchResult, i: number) => {
+                  const tune = () => {
+                    setSearchQuery('');
+                    if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
+                    else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
+                    onClose();
+                  };
+                  const on = bmSlot(tune);
+                  return (
                   <TouchableOpacity key={i} activeOpacity={0.7}
-                    style={[st.searchRow,
-                            bmNavFocus === i && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
-                    onPress={() => {
-                      setSearchQuery('');
-                      if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
-                      else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
-                      onClose();
-                    }}>
+                    style={[st.searchRow, on && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
+                    onPress={tune}>
                     <Text style={[st.searchFreq, { color: t.freqColor }]}>{r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}</Text>
                     <Text style={[st.searchMode, { color: dimText }]}>{r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}</Text>
                     {!r.isBand && r.bm?.name ? <StationLogo name={r.bm.name} itu={r.bm.itu} /> : null}
@@ -522,7 +555,8 @@ export default function FreqModal({
                       {!r.isBand && r.bm?.flag ? r.bm.flag + ' ' : ''}{r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
                     </Text>
                   </TouchableOpacity>
-                ))}
+                  );
+                })}
               </>))}
 
               {onEibiToggle && (
@@ -536,32 +570,36 @@ export default function FreqModal({
               )}
 
               <Text style={[st.bmSub, { color: dimText }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
-              <TextInput style={[st.searchInput, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
+              {(() => { const on = bmSlot(() => bmNameRef.current?.focus()); return (
+              <TextInput ref={bmNameRef}
+                style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
+                                          borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
                 value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={dimText} maxLength={60} autoCorrect={false} />
+              ); })()}
               <View style={st.bmSegRow}>
-                <TouchableOpacity style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS SERVER</Text></TouchableOpacity>
-                <TouchableOpacity style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL SERVERS</Text></TouchableOpacity>
+                <BmBtn style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS SERVER</Text></BmBtn>
+                <BmBtn style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL SERVERS</Text></BmBtn>
               </View>
-              <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
+              <BmBtn style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
                 <Text style={[st.bmBtnText, { color: t.freqColor }]}>★ SAVE BOOKMARK</Text>
-              </TouchableOpacity>
+              </BmBtn>
 
               <Text style={[st.bmSub, { color: dimText }]}>Saved ({userBookmarks.length})</Text>
               {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
               {userBookmarks.map((b: UserBookmark, i: number) => (
                 <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
-                  <TouchableOpacity style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode); onClose(); }}>
+                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode); onClose(); }}>
                     <Text style={[st.bmName2, { color: t.freqColor }]} numberOfLines={1}>{b.name}</Text>
                     <Text style={[st.bmFreq2, { color: dimText }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
-                  </TouchableOpacity>
+                  </BmBtn>
                   <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: dimText }]}>✕</Text></TouchableOpacity>
                 </View>
               ))}
 
               <Text style={[st.bmSub, { color: dimText }]}>Transfer</Text>
               <View style={st.bmSegRow}>
-                <TouchableOpacity style={[st.bmSeg, { borderColor: bdrDim }]} onPress={onExportBookmarks}><Text style={[st.bmSegText, { color: dimText }]}>⇧ EXPORT JSON</Text></TouchableOpacity>
-                <TouchableOpacity style={[st.bmSeg, { borderColor: bmImportOpen ? bdrBrt : bdrDim }]} onPress={() => { setBmImportOpen(p => !p); setBmImportMsg(''); }}><Text style={[st.bmSegText, { color: bmImportOpen ? t.freqColor : dimText }]}>⇩ PASTE</Text></TouchableOpacity>
+                <BmBtn style={[st.bmSeg, { borderColor: bdrDim }]} onPress={onExportBookmarks}><Text style={[st.bmSegText, { color: dimText }]}>⇧ EXPORT JSON</Text></BmBtn>
+                <BmBtn style={[st.bmSeg, { borderColor: bmImportOpen ? bdrBrt : bdrDim }]} onPress={() => { setBmImportOpen(p => !p); setBmImportMsg(''); }}><Text style={[st.bmSegText, { color: bmImportOpen ? t.freqColor : dimText }]}>⇩ PASTE</Text></BmBtn>
               </View>
               {onPickImportFile && (
                 <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} onPress={async () => { const msg = await onPickImportFile(bmAll); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }}>
