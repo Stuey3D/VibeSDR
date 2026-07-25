@@ -402,6 +402,10 @@ brightness would be a horrible bug.
 
 ★ **Burn-in: move the pill.** A static element on an otherwise black OLED for hours is exactly the
 burn-in case. Reposition it periodically (a minute or two) within the safe area, and:
-- **FADE between positions, never jump** — a jump in the corner of the eye reads as a glitch.
+- ★ **Move it LIKE A SCREENSAVER** (Stuart) — a slow crossfade, on a timescale you do not
+  consciously notice. That is the whole feel: ambient, unhurried, never an event. A two-second
+  fade every minute would still read as *something happening* in the corner of a dark room;
+  aim for a long dwell and a fade slow enough that you only notice it has moved, never that it
+  is moving. Never a jump — a jump in peripheral vision reads as a glitch.
 - Keep it DIM and low-contrast, not full white; brightness drives burn-in as much as duration.
 - Vary the position properly (walk around the screen), rather than alternating between two spots.
