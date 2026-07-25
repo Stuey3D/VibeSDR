@@ -60,7 +60,10 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
 
 function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   level: number; pos: number; gate?: boolean;
-  onDrag?: (x: number) => void; onDragEnd?: () => void;
+  /** ★ A NORMALISED value: 0..1 along the bar, or -1 for off. NOT a coordinate — the
+   *  parameter was called `x` and that misreading cost a real bug (see the nav note below). */
+  onDrag?: (v: number) => void;
+  onDragEnd?: () => void;
 }) {
   // The bar's position in WINDOW coordinates, measured on layout.
   //
@@ -71,18 +74,6 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   // pageX minus a measured origin is target-independent and cannot do that.
   const bar = useRef<View>(null);
   const geo = useRef({ x: 0, w: 1 });
-  // ★ Keyboard / D-pad adjustment. `onDrag` wants a WINDOW x, not a value, so the
-  // equivalent x is synthesised from the same measured geometry the drag uses — the
-  // one place that conversion already lives. Squelch is a threshold you set by eye on
-  // a live bar, so a keypress nudging it by 4% of the bar matches how it is dragged.
-  const posRef = useRef(pos); posRef.current = pos;
-  const { focused } = useNavRange((dir) => {
-    const g = geo.current;
-    const from = posRef.current >= 0 ? posRef.current : 0.5;
-    const next = Math.max(0, Math.min(1, from + dir * 0.04));
-    onDrag?.(g.x + next * g.w);
-    onDragEnd?.();
-  });
   const measure = useCallback(() => {
     bar.current?.measureInWindow((x, _y, width) => { geo.current = { x, w: Math.max(1, width) }; });
   }, []);
@@ -115,6 +106,26 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
     setHeld(v); onDrag?.(v);
   }, [onDrag]);
 
+  // ★★ Keyboard / D-pad adjustment, in VALUES — not coordinates.
+  //
+  // The first attempt synthesised a fake pageX and pushed it through onDrag. That was
+  // wrong twice over: `onDrag` is TYPED `(x: number)` but `apply` actually hands it the
+  // NORMALISED value, so once the bar had been measured it received something like 182
+  // where 0..1 was expected — clamped to maximum, squelching everything, with every later
+  // press recomputing from that. Stuart: "it jumped to the right edge, squelched everything
+  // and then I couldn't get back out." A misleading parameter name, believed rather than
+  // checked against the one line that calls it.
+  //
+  // ★ LEFT AT ZERO TURNS IT OFF, mirroring the drag gesture (drag off the left edge = off).
+  // Without it there is no keyboard way back out of a squelch you have just applied.
+  const { focused: navFocused } = useNavRange((dir) => {
+    const cur = held ?? pos;
+    if (dir < 0 && cur >= 0 && cur <= 0.001) { setHeld(-1); onDrag?.(-1); onDragEnd?.(); return; }
+    const base = cur < 0 ? 0 : cur;
+    const next = Math.max(0, Math.min(1, base + dir * 0.04));
+    setHeld(next); onDrag?.(next); onDragEnd?.();
+  });
+
   const pan = useMemo(() => PanResponder.create({
     // CAPTURE phase, not bubble. The sheet is inside a ScrollView, and a ScrollView claims a touch
     // the moment it moves more than a few pixels — so a drag that starts with any vertical
@@ -133,7 +144,9 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   }), [onDrag, onDragEnd, apply, measure]);
 
   return (
-    <View ref={bar} style={st.sqlBarWrap} {...(onDrag ? pan.panHandlers : {})}
+    <View ref={bar}
+          style={[st.sqlBarWrap, navFocused && st.sqlBarFocused]}
+          {...(onDrag ? pan.panHandlers : {})}
           hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
           onLayout={measure}>
       <View style={st.sqlBarTrack}>
@@ -248,7 +261,8 @@ export interface AudioSheetProps {
   kiwiSquelch?:  number;  onKiwiSquelch?:  (v: number) => void;
   /** Squelch dragged to a 0..1 position on the meter (-1 = dragged off / Off). SDRScreen owns the
    *  position→native-unit conversion, since it owns the forward mapping the red line is drawn from. */
-  onSquelchDrag?: (x: number) => void;
+  /** Normalised 0..1 along the meter, or -1 for off. Not a coordinate. */
+  onSquelchDrag?: (v: number) => void;
   /** The drag gesture ended — releases the frozen noise floor. */
   onSquelchDragEnd?: () => void;
   fmSquelch?:    number;  onFmSquelch?:    (v: number) => void;
@@ -608,6 +622,10 @@ const st = StyleSheet.create({
   },
 
   btnFocused:    { borderColor: NAV_FOCUS, borderWidth: 2 },
+  // The bar has no border of its own, so focus is a ring drawn around it rather than a
+  // thickened edge — and it must be visible, since without it you cannot tell the arrows
+  // are about to move the squelch rather than the focus.
+  sqlBarFocused: { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 6, margin: -2 },
   btnRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   btn: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
