@@ -15,7 +15,19 @@ void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
     // pilot, L+R) lands well above 2.4 kHz, so a wide transition is fine.
     const double cut = 2400.0 / mpxRate;
     std::vector<float> taps = designLowpass(cut, cut);
-    lpf_ = std::make_unique<RealFir>(taps);
+    // ★ DECIMATE. The RDS baseband is +/-2.4 kHz, but everything here ran at the channel
+    // rate — a ~412-tap FIR and 16 parallel timing hypotheses, all at ~300 kHz, to recover
+    // 1187.5 bits per second. That is why RDS cost more than the whole rest of the WFM
+    // chain put together (pi-bench on a 32-bit Pi: 101% of a core -> 190% with RDS on).
+    //
+    // A decimating FIR only evaluates the outputs it keeps, so this divides BOTH the filter
+    // and the biphase loop by decim_ for exactly the same filter shape.
+    //
+    // The floor is set by the timing hypotheses, not by bandwidth: NPH phases must resolve
+    // 1/NPH of a bit period (842 us / 16 = 53 us), so the rate must stay above ~19 kHz.
+    // Targeting 40 kHz leaves a 2x margin and still ~17 samples per biphase symbol.
+    decim_ = std::max(1, (int)std::floor(mpxRate / 40000.0));
+    lpf_ = std::make_unique<RealFir>(taps, decim_);
     const double groupDelay = (taps.size() - 1) / 2.0;     // samples
     const double bitStep = 2.0 * M_PI * kRdsBit / mpxRate; // bit-phase per sample
     groupDelayPhase_ = std::fmod(groupDelay * bitStep, 2.0 * M_PI);
@@ -25,6 +37,7 @@ void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
 
 void RdsDemod::reset() {
     if (lpf_) lpf_->reset();
+    bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
     for (int p = 0; p < NPH; ++p) { acc_[p] = 0.0f; prevPhC_[p] = 0.0f; prevSym_[p] = 0; dec_[p].reset(); }
 }
@@ -36,16 +49,39 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* bitClk
     for (int i = 0; i < n; ++i) xbuf_[i] = mpx[i] * ref57[i] * 2.0f;
     sbuf_.resize(lpf_->maxOut(n));
     const int ns = lpf_->process(xbuf_.data(), n, sbuf_.data());
+    // Subsample the bit clock at EXACTLY the inputs the decimator kept. RealFir starts its
+    // phase at decim and emits when it counts down to zero, so mirroring that counter here
+    // — with the same starting value and stepped over the same samples — lines bclk_ up
+    // with sbuf_ sample for sample, across block boundaries too.
+    bclk_.clear();
+    for (int i = 0; i < n; ++i)
+        if (--bphase_ == 0) { bphase_ = decim_; bclk_.push_back(bitClk[i]); }
+    const int nb = std::min(ns, (int)bclk_.size());
 
     const float twoPi = 2.0f * (float)M_PI;
     const float phaseStep = twoPi / NPH;
-    for (int i = 0; i < ns; ++i) {
+    for (int i = 0; i < nb; ++i) {
         const float s = sbuf_[i];
-        // Base symbol phase for this filtered sample (LPF delay compensated).
-        float base = bitClk[i] - (float)groupDelayPhase_;
+        // Base symbol phase for this filtered sample (LPF delay compensated). The group
+        // delay is still expressed at the INPUT rate, which is right: bclk_ holds the bit
+        // clock as it was at the input sample the decimator kept.
+        float base = bclk_[i] - (float)groupDelayPhase_;
+        // ★ Wrap ONCE per sample, not once per phase hypothesis.
+        //
+        // This loop used to call std::fmod inside the inner p-loop: 16 libm calls per
+        // sample, at the channel rate — ~5 MILLION fmod calls a second, per listener with
+        // RDS open. On a 32-bit Pi that alone was most of a core (pi-bench: WFM stereo
+        // 101% -> 190% with RDS on).
+        //
+        // It was never needed. bitClk arrives in [0, 2*pi) by construction (StereoPLL
+        // builds it as (cycle*2pi + phase)/16 with cycle 0..15), so one wrap of `base`
+        // leaves it in [0, 2*pi). Subtracting p*phaseStep — which is < 2*pi — can then
+        // only ever push it below zero ONCE, so a single conditional add finishes the job.
+        // Identical result, no libm.
+        base = std::fmod(base, twoPi);
+        if (base < 0.0f) base += twoPi;
         for (int p = 0; p < NPH; ++p) {
             float phC = base - p * phaseStep;
-            phC = std::fmod(phC, twoPi);
             if (phC < 0.0f) phC += twoPi;
             // Biphase matched integration: +1 first half-bit, -1 second.
             acc_[p] += s * ((phC < (float)M_PI) ? 1.0f : -1.0f);

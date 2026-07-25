@@ -372,8 +372,14 @@ public:
     void process(const float* mpx, const float* ref57, const float* bitClk, int n);
 private:
     static constexpr int NPH = 16;
-    std::unique_ptr<RealFir> lpf_;     // isolate the RDS baseband after downconvert
+    std::unique_ptr<RealFir> lpf_;     // isolate the RDS baseband after downconvert (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
+    // RDS baseband is +/-2.4 kHz but arrives at the CHANNEL rate (~300 kHz) — over a
+    // hundred times oversampled. The LPF decimates by this, so both it and the biphase
+    // loop below run at ~40 kHz instead. bclk_ is the bit clock subsampled to match.
+    int   decim_ = 1;
+    int   bphase_ = 1;                 // mirrors RealFir's decimation phase
+    std::vector<float> bclk_;
     float acc_[NPH] = {0};
     float prevPhC_[NPH] = {0};
     int   prevSym_[NPH] = {0};

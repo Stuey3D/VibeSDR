@@ -16,6 +16,32 @@ access amendment) and `files/BRIEF-vibeserver-macos.md` (the shared web config p
 2. **Pi ISO appliance** — headless, field-portable, no screen. **This brief.** Everything below is
    ISO-only; none of it belongs in VibeServer's own configuration.
 
+### ★ 1.1 The base image is 64-bit. Not a preference — a requirement. (Stuart, 2026-07-25)
+
+Raspberry Pi OS **Lite, 64-bit (arm64)**. A 32-bit userland silently costs roughly a factor of
+three, because `vibedsp/simd_internal.h` gates every hand-written NEON kernel on `__aarch64__` —
+on armhf the dot products, the FM discriminator's 4-wide atan2 and the rest all fall back to
+scalar C. The CPU has NEON either way; we simply don't reach it.
+
+MEASURED, `tools/pi-bench`, same commit, WFM at 2.4 MSPS, % of ONE core:
+
+| | 32-bit Pi (piaware, gcc 10.2) | this M-series Mac |
+|---|---|---|
+| WFM (stereo) | 101.0% | 3.0% |
+| WFM (stereo + RDS) | 189.9% | 5.4% |
+
+That 32-bit box **cannot sustain a single broadcast-FM listener in real time**, let alone one with
+RDS open. The ratio to the Mac is ~34-37x and uniform across modes, so this is the scalar path
+being slow, not any one thing misbehaving.
+
+Consequences for this brief:
+- The ISO build MUST pin an arm64 base and the acceptance criteria (§8) MUST assert it. The failure
+  is silent: everything works, just three times slower, and nobody notices until capacity is short.
+- `tools/pi-bench` prints `DSP path : NEON (aarch64)` or a loud SCALAR warning. Run it in the image
+  build and FAIL the build on SCALAR.
+- Pi 3 and Pi Zero 2 W are arm64-capable, so nothing in the target hardware range forces 32-bit.
+  Only the OS choice does.
+
 ## 2. First boot
 
 1. Boot. If **no network connection is established**, VibeServer raises an **open Wi-Fi hotspot**
@@ -309,6 +335,10 @@ forces AP mode on next boot.
 
 ## 8. Acceptance criteria (draft)
 
+0. **`uname -m` on the built image reports `aarch64`, and `tools/pi-bench` reports
+   `DSP path : NEON (aarch64)`.** Numbered zero because it gates the meaning of every capacity
+   figure below it, and because it fails SILENTLY — a 32-bit image works perfectly, just ~3x
+   slower. See §1.1. The image build should refuse to publish on SCALAR.
 1. Cold boot with no known network → `VibeServer` AP appears; joining it, `http://vibeserver.local/`
    loads the config page on iOS, Android and macOS, and the documented IP works on a host where
    `.local` does not resolve.
