@@ -357,6 +357,20 @@ export default function DecoderPanel({
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key;
       if (k === 'Tab') {
+        // ★★ ON DAB, TAB MOVES BETWEEN LIST AND HEADER — it never releases the keyboard.
+        // Zooming a multiplex only zooms into a wall of signals (Stuart), so handing the
+        // arrows back to the main screen gains nothing. But the header still holds SPEED FIX,
+        // which is very much wanted, so Tab has to reach it rather than leave.
+        //
+        // ★ I first removed Tab here entirely, having conflated "leaving the box" with
+        // "reaching the header". They are different things, and on DAB only one of them is
+        // useful.
+        if (isDabModeRef.current) {
+          setKbZone(z => (z === 'header' ? 'list' : 'header'));
+          setHdrIdx(0);
+          announce();
+          return;
+        }
         setKbZone(z => {
           if (z) { captureRegion(null); return null; }
           captureRegion('decoder');
@@ -366,7 +380,13 @@ export default function DecoderPanel({
         return;
       }
       if (!kbZoneRef.current) return;               // not ours until Tab says so
-      if (k === 'Escape' || k === 'Backspace') { leave(); return; }
+      if (k === 'Escape' || k === 'Backspace') {
+        // On DAB there is nothing to hand the keyboard back TO, so these step back to the
+        // list rather than releasing and leaving the arrows tuning a locked VFO.
+        if (isDabModeRef.current) { setKbZone('list'); return; }
+        leave();
+        return;
+      }
       if (k === 'ArrowLeft' || k === 'ArrowRight') {
         setKbZone('header');
         setHdrIdx(i => Math.max(0, Math.min(hdrSlots.current.length - 1, i + (k === 'ArrowRight' ? 1 : -1))));
@@ -391,6 +411,7 @@ export default function DecoderPanel({
   const hdrIdxRef = useRef(hdrIdx);   hdrIdxRef.current = hdrIdx;
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
+  const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
   const onSelectDabRef = useRef((i: number) => {
     const p = dabProgrammes[i];
     if (p) onSelectDab?.(p.id);
@@ -475,7 +496,10 @@ export default function DecoderPanel({
               // and said nothing about it — the CLR button responded to space, so it worked,
               // but nothing told you it would. A box that has the keyboard should say so
               // whatever it is showing. (Stuart, 2026-07-25.)
-              ? (listLen > 0 ? 'space to select · tab to leave' : 'space to press · tab to leave')
+              ? (isDabMode ? (kbZone === 'header' ? 'space to press · tab for stations'
+                                                   : 'space to select · tab for controls')
+                 : listLen > 0 ? 'space to select · tab to leave'
+                 : 'space to press · tab to leave')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               : decoderStatus}
           </Text>
