@@ -181,8 +181,25 @@ decision.** Any fix must keep continuity, not trade it away.
    Rare enough to afford ~10-20 ms.
 3. ★ THE CATCH: while zoomed in beyond the ring's scale, incoming rows are downsampled into a coarse
    grid — losing the detail the user zoomed in FOR. So the re-base must be prompt, and a zoom-drum
-   spin will trigger several. Resampling per scale change is NOT affordable at drum rates; that is
-   the crux to solve.
+   spin will trigger several.
+★★ AND IT IS WORSE THAN A THEORY: the reverted attempt only CLEARED the ring on a scale change, and
+that alone was enough to make Stuart report that "zoom feels sticky". Resampling is strictly more
+expensive than clearing, so per-scale-change ring work is DEFINITIVELY off the table at drum rates.
+**Any viable fix must not touch the ring on zoom at all.**
+
+### ★ The small fix that respects every constraint (recommended, not yet built)
+Do NOT store rows by absolute frequency. Keep the ring exactly as it is — view-relative — and simply
+SHIFT THE INCOMING ROW AT WRITE TIME by `(trueCenterHz - viewCenterHz) / hzPerBin` bins, filling the
+vacated edge with the floor.
+- Fixes the in-flight misalignment, which is the actual reported symptom ("signal beside the VFO
+  until you zoom").
+- Nothing touches the ring on a scale change, so the hero feature AND the drum's feel are untouched.
+- No shader change, no extra memory: one offset in the existing `set()` call.
+- ★ LIMITATION, accepted deliberately: it cannot retro-correct history, so panning while data flows
+  leaves a slight kink where the alignment changed, instead of today's smooth-but-wrong re-labelling.
+  In-flight offsets are only a few bins, so the vacated edge strip is invisible.
+This is the inverse of the reverted attempt: accept that history is approximate, and correct only
+the frames arriving now.
 
 ### Facts established, worth not re-deriving
 - ★ `binCount` is NOT requestable — it comes from the server (`status.binCount = floats.length`).
