@@ -445,7 +445,12 @@ export default function DecoderPanel({
               thing you actually want to read there. */}
           <Text style={[dp.status, dp.statusGrow, { color: dc.status, fontFamily: t.font }]}
                 numberOfLines={1}>
-            {kbZone && isDabMode ? 'space to select · tab to leave'
+            {kbZone
+              // ★ Shown for EVERY decoder, not just DAB. On RTTY the box took the keyboard
+              // and said nothing about it — the CLR button responded to space, so it worked,
+              // but nothing told you it would. A box that has the keyboard should say so
+              // whatever it is showing. (Stuart, 2026-07-25.)
+              ? (listLen > 0 ? 'space to select · tab to leave' : 'space to press · tab to leave')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               : decoderStatus}
           </Text>
@@ -561,7 +566,7 @@ export default function DecoderPanel({
           )}
 
           {/* Minimise / restore (skin _minB: − / □) */}
-          <TouchableOpacity
+          <HBtn
             hitSlop={8}
             style={[dp.hbtn, { borderColor: dc.btnBdr }]}
             onPress={(e: any) => { e?.stopPropagation(); setMinimised((p: boolean) => !p); }}
@@ -569,7 +574,7 @@ export default function DecoderPanel({
             <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>
               {minimised ? '□' : '−'}
             </Text>
-          </TouchableOpacity>
+          </HBtn>
 
           {/* Close — stops the decoder and dismisses the panel (see dismissDecoderPanel).
               ★ NOT shown for DAB or ADS-B: there the whole profile IS the decoder, so closing the
@@ -577,13 +582,13 @@ export default function DecoderPanel({
               Every other decoder is something layered ON a mode you can happily return to, on
               every server type — hence no backend condition here. */}
           {!isDabMode && !isAircraftMode && (
-            <TouchableOpacity
+            <HBtn
               hitSlop={8}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onClose(); }}
             >
               <Text style={[dp.hbtnTxt, { color: dc.close, fontFamily: t.font }]}>×</Text>
-            </TouchableOpacity>
+            </HBtn>
           )}
         </TouchableOpacity>
 
