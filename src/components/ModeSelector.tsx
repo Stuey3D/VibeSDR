@@ -5,7 +5,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
-import { NavCtx, NavRow, usePanelNav, useNavButton, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import GainSlider from './GainSlider';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
@@ -26,6 +26,27 @@ const BW_MUTED = 'rgba(255,255,255,0.92)';
  * and the caret walked off the bottom of the dropdown. This scrolls the list it is actually
  * in, using the y each row already records on layout.
  */
+/**
+ * A bandwidth slider that takes part in the focus order.
+ *
+ * ★ Each takes its OWN row rather than sharing one with SYNC between them: a focused range
+ * consumes left/right to change its value, so if all three shared a row you could never move
+ * between them. Up and down step slider → SYNC → slider, which still reads left to right.
+ */
+function NavSlider(props: React.ComponentProps<typeof Slider>) {
+  const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
+  const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
+  const { focused, viewRef } = useNavRange((dir) => {
+    const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
+    if (next !== value) onValueChange?.(next);
+  });
+  return (
+    <Slider ref={viewRef as any} {...props}
+      minimumTrackTintColor={focused ? NAV_FOCUS : props.minimumTrackTintColor}
+      thumbTintColor={focused ? NAV_FOCUS : props.thumbTintColor} />
+  );
+}
+
 function MoreItem({ onPress, onReveal, children }: {
   onPress?: () => void;
   onReveal: () => void;
@@ -278,7 +299,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         {showBw && (
           <View style={st.bwMirrorRow}>
             <Text style={st.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
-            <Slider style={st.bwHalfSlider}
+            <NavSlider style={st.bwHalfSlider}
               minimumValue={-bwEdgeMax} maximumValue={0} step={bwStep}
               value={Math.max(-bwEdgeMax, Math.min(0, filterLow))}
               onValueChange={(v: number) => {
@@ -295,7 +316,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               <Text style={[st.bwSyncTxt, bwSync && { color: BW_GOLD }]}>SYNC</Text>
             </TouchableOpacity>
             )}</NavItem></NavRow>
-            <Slider style={st.bwHalfSlider}
+            <NavSlider style={st.bwHalfSlider}
               minimumValue={0} maximumValue={bwEdgeMax} step={bwStep}
               value={Math.min(bwEdgeMax, Math.max(0, filterHigh))}
               onValueChange={(v: number) => {
