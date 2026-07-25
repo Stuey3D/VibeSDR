@@ -239,6 +239,47 @@ hum). It's the natural phone-side panel in shack mode (§5). Does NOT provide in
 
 ---
 
+## 7a. ★★ VibeServer's menu bar should open VibeSDR, not the browser (Stuart, 2026-07-25)
+
+Two related points, both of which tighten §7 into something already half-working.
+
+★ **The dongle question is SETTLED IN PRACTICE, not just in plan.** *"We have already got the RTL-SDR link
+into the app on macOS without having to build a separate Mac app, with VibeServer."* So §7's reasoning is
+now proven rather than projected: VibeServer owns the hardware, the client stays on the free
+Designed-for-iPad path, and **Catalyst is unnecessary** — which kills the last argument for a separate Mac
+target. One codebase covers the Mac *including local USB*, which the iOS build alone cannot do (see memory
+`feedback_ios_rtlsdr_dext` — local USB is Android-only on mobile). ★ VibeServer IS the answer to the dext
+problem on the Mac.
+
+★★ **NEW FEATURE: VibeServer detects VibeSDR and hands off to the app.** *"VibeServer can detect if VibeSDR
+is installed on the Mac, and when the menu bar is clicked, rather than opening in the web browser it can
+open the app instead."* Not built, but closer than it looks:
+
+- The URL scheme is **already registered** — `ios/VibeSDR/Info.plist:25-31` declares `vibesdr` and
+  `com.vibesdr.app`. ★ And an iPad-app-on-Mac DOES register `CFBundleURLTypes`, so this works on the free
+  Designed-for-iPad path with no Catalyst.
+- Detection is one call:
+  `NSWorkspace.shared.urlForApplication(toOpen: URL(string: "vibesdr://")!)` — **nil ⇒ not installed.**
+
+★★ TWO THINGS TO INHERIT RATHER THAN REINVENT, both already solved in `vibeserver/mac/VibeServerApp.swift`:
+
+1. **SUMMON, DON'T RELAUNCH.** `openInBrowser()` at `:346-350` already handles exactly this shape — if a
+   local client is listening it calls `vs_summon()` and activates, instead of re-opening the URL, because
+   asking a running app to open something spawns a blank tab (Edge did; Safari happened not to — see the
+   comment at `:358`). The app path wants the same logic: if VibeSDR is already running and connected,
+   summon it; open the `vibesdr://` URL only when cold. ★ Also note the deliberate avoidance of AppleScript
+   there (`:341-345`): an Automation consent prompt is too high a price for a convenience. Same rule holds.
+2. ★★ **THE COLD-START TRAP IS DOCUMENTED AND WILL BITE.** Launching VibeSDR with a URL from cold needs the
+   URL threaded through `connectionOptions` — `getInitialURL()` returns **null** on cold start (memory
+   `ios_scene_launch_url`). Since VibeServer launching the app cold is THE main path for this feature, verify
+   that first.
+
+★ Pass the server address in the URL so the app connects to the right server — deep linking already exists
+(memory `v52beta1_deep_linking`).
+★ **Keep "Open in Browser" as a SECONDARY menu item** (`:497`), do not replace it: the web client is still
+how the browser engines get tested, and it would be missed immediately. If the app is present, "Open in
+VibeSDR" becomes the primary.
+
 ## 7. The Mac app — effectively free
 
 The "Mac app" is the iOS/iPadOS VibeSDR app (Designed-for-iPad) running on Apple Silicon — the same
