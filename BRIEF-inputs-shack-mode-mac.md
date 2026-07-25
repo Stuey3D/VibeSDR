@@ -515,11 +515,44 @@ rather than two features. Missed while thinking of sticks as velocity.
 ★ The nostalgia lineage now completes: **80s boombox drums → 90s car stereo keys → the tuning dial with
 the finger dimple.** A third era of radio control, on the surface that suits it. Feeds the website story.
 
-★ TWO LIMITS, neither fatal:
-- **A stick SELF-CENTRES**, so there is no coasting or inertia — displacement tuning, not a weighted
-  flywheel you can spin. Fine: the drums are the same, and the flick-coast was removed deliberately.
-- **Small physical radius** = coarser angular resolution than a drum, and a deadzone near centre where
-  angle is meaningless. Wants a **minimum-radius gate** before it starts counting.
+#### ★★★ PUSH TO THE RIM, THEN ROTATE — and neutral is a CLUTCH (Stuart)
+
+*"Push to the full edge of the stick's travel then rotate. Maximum movement for maximum precision. Also
+acts like a lock — sticks in neutral, the control deactivates. You have to WANT to make it work, not
+accidentally knock it and knock your tuning off."*
+
+★ Better than the "minimum-radius gate" I had suggested: same physics used POSITIVELY rather than
+defensively. Angular resolution for a given positional jitter is **ε/r**, so precision **scales with
+radius** — at the rim you get the finest control the hardware can give. It earns three things at once:
+
+1. ★★ **The hardware supplies a GUIDE RAIL.** Sticks have a circular gate at maximum travel, so circling
+   at full deflection is a TACTILE motion — the thumb rides the rim and can feel it. Exactly what a real
+   tuning dial's rim does, so the metaphor is physical, not merely visual.
+2. **The deadzone problem disappears** — angle is never counted near centre, which is precisely where
+   angle is meaningless.
+3. ★★ **The CLUTCH is the best part.** Neutral = disengaged, so tuning requires deliberate intent and a
+   knock cannot drift the frequency. Philosophically consistent with the existing VFO lock: the app does
+   not let the band move by accident.
+
+★ IMPLIED DIVISION OF LABOUR, state it explicitly: **D-pad = GROSS movement** (hold-sweep across a
+band); **stick rim = PRECISION** (settling onto a signal). Sustained full-deflection circling would tire
+a thumb over a long sweep, but that is not its job — same reasoning as drums-versus-keys.
+
+★★ FOUR IMPLEMENTATION DETAILS THAT DECIDE WHETHER IT FEELS RIGHT:
+1. ★ **Entry angle becomes the ZERO REFERENCE.** Engagement captures the current angle and only the
+   DELTA from there counts — otherwise entering at the top would jump the tuning by 90 degrees.
+2. **Shortest-arc unwrapping** at the ±180 degree crossing, or one lap sends you flying. The drums
+   already solve this.
+3. **Hysteresis on the threshold** — engage ~0.9 of travel, disengage ~0.7. A single threshold chatters
+   on a slightly sloppy circle.
+4. ★★ **Engagement is PER-DEVICE, rotation is SHARED.** The Siri Remote has no rim and no deflection, so
+   there it is finger-down to engage, lift to release — the same explicit-intent pattern, a different
+   trigger. So: ONE rotation handler taking an `engaged` flag, supplied by RADIUS on a stick and by TOUCH
+   on the remote or a drum.
+
+★ ONE REMAINING LIMIT, not fatal: **a stick SELF-CENTRES**, so there is no coasting or inertia —
+displacement tuning, not a weighted flywheel you can spin. Fine: the drums are the same, and the
+flick-coast was removed deliberately.
 
 ★ THE D-PAD DECISION STANDS as the FLOOR — it is what guarantees the minimum control set on any
 hardware. Rotation is the ENHANCEMENT tier, now with a real reason to exist rather than being a fallback.
