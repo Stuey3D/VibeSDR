@@ -300,6 +300,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
         : '';
       if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
+      rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
       updateVts();
     },
     onStatus: (s, detail) => {
@@ -694,6 +695,19 @@ let rdsName = '';
 let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
+// ★ The frequency the RDS data above belongs to. RDS identifies ONE carrier, so the
+// moment you tune away it is stale — but it used to be cleared only on a MODE change,
+// never on a frequency change, so the name and logo followed you up the band. That was
+// invisible while the OS media card was only refreshed at the instant of tuning; now
+// that the card tracks the station live, a stale name sits there in plain sight.
+let rdsFreq = -1;
+
+/** Drop RDS state if the dial has moved off the station it came from. */
+function expireRdsIfRetuned() {
+  if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
+  rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+  rdsFreq = -1;
+}
 
 /**
  * Logos for the bookmark LIST, resolved lazily and remembered.
@@ -709,6 +723,7 @@ const bmLogos = new Map<string, string | null>();
 let logoQuery = '';     // guards against a stale async logo landing late
 
 function updateVts() {
+  expireRdsIfRetuned();
   if (!spec) return;
   const hz = spec.frequency;
   // Region-aware, ham before broadcast before utility — the app's VTS ordering.
@@ -745,7 +760,16 @@ function updateVts() {
   // Nothing known here — hide it rather than show an empty bar.
   if (!name) {
     vts.classList.remove('show', 'on');
+    // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
+    // element when there is no RDS name, so a stale value left in the DOM came back as
+    // the OS Now Playing title — the old station's name sitting on the card long after
+    // tuning away. Hiding an element does not empty it.
+    $('vtsName').textContent = '';
     setDecBoxOffset();
+    // ...and still republish. This early return used to skip the card update entirely,
+    // so the one case that most needed correcting — tuned onto nothing — was the one
+    // case that never refreshed.
+    updateMediaSession();
     return;
   }
 
