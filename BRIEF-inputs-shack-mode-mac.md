@@ -309,3 +309,30 @@ feel like their real life counterparts."*
 
 ★ The reference that landed closest was a Kenwood Excelon CAR head unit — symbols backlit through
 the key faces — which is why the look went where it did rather than towards separates.
+
+---
+
+## ★★ SHACK MODE — AirPlay latency TESTED, and it is a non-issue (Stuart, 2026-07-25)
+
+Impromptu test on real hardware: VibeSDR on an iPhone, **basic AirPlay MIRRORING** to an Apple TV on
+a Sony set, driven by the hardware-keyboard controls built the same day. Verdict: *"everything was
+super responsive... makes our shack mode so much more viable."*
+
+★ **This removes the feature's biggest risk before a line of scene code was written.** The worry was
+that AirPlay latency would make big-screen control feel disconnected and undermine the whole idea.
+It does not — with a keyboard in the loop it is responsive. That could not have been settled by
+reasoning; it needed the TV.
+
+★★ **And there is a shippable shack mode TODAY with no code at all:** mirroring + a Bluetooth
+keyboard already gives the big-screen panorama with hands-on-keys control. Worth DOCUMENTING as a
+supported setup rather than leaving users to discover it. It also means the separate-scene work below
+is an ENHANCEMENT on something already usable, not a prerequisite for anything working.
+
+★ Keep the distinction straight: mirroring shows the SAME screen on both. Stuart's gate — RF
+waterfall on the TV with the controls on the phone, INDEPENDENTLY — still needs a second
+`UIWindowScene`. What is proven is that the transport is not the obstacle.
+
+★ Implementation note for when that is built: `AppDelegate.swift` already has a `SceneDelegate`
+conforming to `UIWindowSceneDelegate`, so the machinery is in the right shape. The blocker to check
+FIRST is the `UIApplicationSceneManifest` in `Info.plist` — declaring an external-display scene means
+editing the one file `expo prebuild` regenerates, and the pbxproj is hand-maintained here too.
