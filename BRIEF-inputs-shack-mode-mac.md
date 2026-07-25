@@ -574,6 +574,39 @@ notes). But **an iPad or Apple TV with a DualSense connected DOES have haptics �
 CONTROLLER.** The visibility rule must become "device motor **OR** connected controller with a haptics
 profile", or the toggle vanishes exactly where this feature is most used.
 
+##### ★★ THE FIRST-DETECT PILL FOR THE STICK (Stuart's design)
+
+*"If a user tries to tune by pushing the stick up/down/left/right they get a little pill with a stick
+animation showing push to the edge then rotate, showing rotation clockwise and anticlockwise, and maybe
+a simple number going up and down to show what each does."*
+
+★ **The trigger is the right one**: it fires when the user has just revealed the misconception WITH THEIR
+THUMB — an answer to a question they actually asked, rather than a tutorial on connect that nobody reads.
+
+★★ **TRAP: the trigger needs a DWELL, or it fires on CORRECT use.** Pushing to the rim PASSES THROUGH a
+cardinal deflection on the way, so "deflected in a direction" alone would pop the pill every time someone
+engages properly. Condition must be **deflected + held + NO angular delta accumulating for ~400 ms** —
+the user pushing and WAITING for something to happen. That is the actual signature of the misconception.
+
+★ **The number is the cleverest part**, because rotation DIRECTION is the one thing a diagram of a circle
+cannot convey on its own — clockwise-equals-up is arbitrary until something shows it, and a rising/falling
+number needs no language at all (also dodges localisation).
+★ Considered and REJECTED: showing the REAL frequency instead of an abstract number (would teach step
+size too). Stuart's simple number is better here because **this pill also appears on the TV at sofa
+distance**, where two or three legible digits beat a nine-digit readout with one digit moving.
+
+★ **TWO VARIANTS, OR ONE COVERING BOTH — decide.** If the right stick zooms, the same misconception
+applies there and a rising NUMBER would be the wrong illustration. Either one generic pill teaching "rim
+then rotate", or a per-stick pill showing tune vs zoom.
+
+★★ **TIE THE ANIMATION TO THE HAPTIC** — visual emphasis at the moment the stick reaches the rim, the same
+instant the ENGAGE CLUNK fires. Seeing and feeling the engagement together is what makes the CLUTCH click
+as a concept rather than being two separate things to learn.
+
+★ Note it SIDESTEPS the drums-on-TV question rather than reopening it: a stick animation is TRANSIENT and
+INSTRUCTIONAL, not a control you reach for, so it neither reflows the layout nor invites a touch that
+cannot land.
+
 #### ★★★ PUSH TO THE RIM, THEN ROTATE — and neutral is a CLUTCH (Stuart)
 
 *"Push to the full edge of the stick's travel then rotate. Maximum movement for maximum precision. Also
