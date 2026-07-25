@@ -515,6 +515,31 @@ rather than two features. Missed while thinking of sticks as velocity.
 ★ The nostalgia lineage now completes: **80s boombox drums → 90s car stereo keys → the tuning dial with
 the finger dimple.** A third era of radio control, on the surface that suits it. Feeds the website story.
 
+#### ★★★ THE WHOLE SCHEME IN ONE LINE (Stuart): D-PAD = THE KEYS. STICKS = THE DRUMS.
+
+*"So D-pad will act like the keyboard arrows do now and map to the 90s car stereo buttons. Analogue
+sticks map to the drums."*
+
+★ The controller needs **NO NEW CONTROL IDENTITY** — it supplies the two schemes already built and
+validated on device. D-pad = the tuner keys (discrete tap-step / hold-sweep, `createHoldSweep`);
+sticks = the drums (rotational displacement, rim-engaged).
+★ Worth noticing: **a controller is the only surface that offers BOTH schemes AT ONCE**, one under each
+thumb — gross stepping and fine rotation simultaneously, with no toggle. More than the phone or the
+keyboard gives alone.
+
+★★ **OPEN TENSION, deliberately not resolved — Stuart's call.** The hard exclusion below says the drums
+and keys never appear on the TV, its rule being *"include it only if it is readable or actuable from a
+keyboard; if its only affordance is touch or drag it stays on the phone."* **A connected controller makes
+them ACTUABLE**, so the rule's own logic would readmit them — and a drum visibly rotating on the TV in
+step with the thumb on the rim would teach the mapping instantly and is the app's signature visual.
+★ Against that: the principle settled for the flank set — **the TV layout must not change shape when a
+controller connects or drops.** Drums appearing on a Bluetooth event is exactly the reflow that reads as
+a glitch from across a room.
+★ MY LEAN (not a decision): keep them OFF, and let the GLYPHS be the only controller-dependent element,
+because glyphs are ADDITIVE AND SMALL where a drum is STRUCTURAL — and the drums' feedback is already
+carried by the waterfall and the frequency readout moving. But it is a taste call about the signature
+visual, so it is Stuart's.
+
 #### ★★★ PUSH TO THE RIM, THEN ROTATE — and neutral is a CLUTCH (Stuart)
 
 *"Push to the full edge of the stick's travel then rotate. Maximum movement for maximum precision. Also
