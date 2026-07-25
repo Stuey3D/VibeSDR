@@ -84,6 +84,7 @@ import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
+import { shortcutsSuppressed } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -4430,6 +4431,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
     const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key; if (!k) return;
+      // ★ Third-party page on screen (compatibility mode) — every shortcut is off, Esc
+      // included, so nothing of ours can fire under a page we did not write. See PanelNav.
+      if (shortcutsSuppressed()) return;
       const a = kbActions.current;
       // ★ Esc precedence, one rule in one place: something open -> close it;
       // nothing open -> open the SERVERS menu (the brief's universal back/open key).

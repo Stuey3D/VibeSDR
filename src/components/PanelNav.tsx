@@ -79,10 +79,38 @@ function useIdleClose(active: boolean, onTimeout?: () => void) {
       timer = setTimeout(() => { if (keyboardMode) cb.current?.(); }, PANEL_IDLE_MS);
     };
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => { keyboardMode = true; arm(); });
+    const sub = emitter.addListener('VibeKeyDown', () => {
+      if (shortcutsSuppressed()) return;
+      keyboardMode = true; arm();
+    });
     if (keyboardMode) arm();   // opened BY the keyboard — start counting immediately
     return () => { if (timer) clearTimeout(timer); sub.remove(); };
   }, [active, !!onTimeout]);   // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+// ── External content: shortcuts OFF ──────────────────────────────────────────
+//
+// ★★ While a page WE DO NOT CONTROL is on screen — a receiver's own web UI in compatibility
+// mode — every VibeSDR shortcut is suppressed. This is a safety rule, not tidiness: our keys
+// firing underneath someone else's page is worse than them not working, because the user is
+// looking at that page and attributing what happens to it. We cannot know what a key means
+// there, so we must not guess. (Stuart, 2026-07-25.)
+//
+// ★ OUR OWN maps are deliberately NOT suppressed — Stuart: "our maps are super simple so they
+// can be accessed". The rule is about AUTHORSHIP, not about the fact that it is a WebView.
+//
+// A counter, not a boolean: overlays can stack, and the last one to close must not switch
+// shortcuts back on while another is still up.
+let externalContent = 0;
+export const shortcutsSuppressed = () => externalContent > 0;
+
+/** Call from any component that displays third-party content for as long as it is shown. */
+export function useSuppressShortcuts(active = true) {
+  useEffect(() => {
+    if (!active) return;
+    externalContent++;
+    return () => { externalContent = Math.max(0, externalContent - 1); };
+  }, [active]);
 }
 
 // ── Owner stack ──────────────────────────────────────────────────────────────
@@ -134,7 +162,8 @@ function useNavKeys(opts: {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key;
-      if (!k || !isTopOwner(tok.current)) return;   // a panel above us owns the keys
+      if (!k || shortcutsSuppressed()) return;      // third-party page on screen — see above
+      if (!isTopOwner(tok.current)) return;        // a panel above us owns the keys
       const { getEntries: get, setFocused: set, onBack: back } = cbRef.current;
       // ★ BACKSPACE STEPS OUT of a sub-panel. Multi-level menus (Display Settings,
       // Bookmarks) had a ‹ BACK row but no keyboard way to reach it, so a keyboard-only

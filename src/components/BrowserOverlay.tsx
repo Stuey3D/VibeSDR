@@ -9,6 +9,8 @@
  */
 
 import React, { useRef, useState } from 'react';
+import { NativeEventEmitter, NativeModules } from 'react-native';
+import { useSuppressShortcuts } from './PanelNav';
 import {
   ActivityIndicator, Modal, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
@@ -28,6 +30,22 @@ export interface BrowserOverlayProps {
 }
 
 export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel }: BrowserOverlayProps) {
+  // ★★ THIS IS SOMEONE ELSE'S PAGE. Every VibeSDR keyboard and controller shortcut is
+  // switched off for as long as it is open — see PanelNav. Firing our own actions under a
+  // page we did not write is worse than doing nothing, because the user is looking at that
+  // page and will read whatever happens as the page's doing.
+  useSuppressShortcuts();
+
+  // ★ Say so, rather than being silently dead. Shown only if a key is actually pressed:
+  // someone driving by touch never sees it, and someone reaching for the keyboard gets an
+  // answer at the exact moment they ask the question. (Stuart, 2026-07-25.)
+  const [keyNote, setKeyNote] = React.useState(false);
+  React.useEffect(() => {
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', () => setKeyNote(true));
+    return () => sub.remove();
+  }, []);
+
   const webRef = useRef<WebView>(null);
   const [canBack, setCanBack] = useState(false);
   const [canFwd,  setCanFwd]  = useState(false);
@@ -52,7 +70,19 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
       {/* SafeAreaView (native, measures the modal's own window) — the
           useSafeAreaInsets hook returns 0 inside an RN Modal, which clipped
           the bar under the Dynamic Island. */}
-      <SafeAreaView style={styles.root} edges={['top']}>
+      <SafeAreaView style={styles.root} edges={['top']}
+                    onTouchStart={() => setKeyNote(false)}>
+        {/* ★ Only when a key is pressed — see keyNote. Sits under the bar so it reads as
+            part of this page's chrome rather than an alert over the receiver's own UI. */}
+        {keyNote && (
+          <View style={styles.keyNote}>
+            <Text style={styles.keyNoteText}>
+              This is the receiver's own web page, so VibeSDR's keyboard and controller
+              shortcuts are switched off here. To use compatibility mode please use the
+              touchscreen — or the trackpad if you're on a Mac.
+            </Text>
+          </View>
+        )}
         <View style={styles.bar}>
           <TouchableOpacity onPress={onClose} hitSlop={12} activeOpacity={0.7}>
             <Text style={styles.back}>{backLabel ?? '← SDR'}</Text>
@@ -120,6 +150,13 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
 }
 
 const styles = StyleSheet.create({
+  // Amber, matching the app's own notices, and full-width so it cannot be mistaken for
+  // part of the receiver's page underneath.
+  keyNote: {
+    backgroundColor: 'rgba(60,40,0,0.96)', paddingHorizontal: 12, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255,200,0,0.45)',
+  },
+  keyNoteText: { color: '#ffe566', fontSize: 12, lineHeight: 17 },
   root:  { flex: 1, backgroundColor: '#000' },
   progressTrack: { height: 3, backgroundColor: 'rgba(255,160,0,0.12)' },
   progressFill:  { height: 3, backgroundColor: '#FFB833' },
