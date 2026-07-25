@@ -234,6 +234,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
   const [customUrl,   setCustomUrl]     = useState('');
+  const customInputRef = useRef<TextInput | null>(null);
   const [connecting,  setConnecting]    = useState(false);
   const [filter,      setFilter]        = useState('');
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
@@ -1246,8 +1247,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const k = e?.key;
       if (k === 'S') { cycleFavSort(); return; }
       if (k === 'Backspace') {
-        // Step OUT = collapse the group the focus is standing in. Walks BACK to the
-        // nearest header, so it works from any row inside the group, not just its top.
+        // ★ Deepest first: inside a DIRECTORY, Backspace leaves it and returns to the
+        // chooser — the same "step out one level" meaning it has everywhere else. Without
+        // this a directory could be entered by keyboard and only left by touch.
+        if (selectedDir !== null) {
+          setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false);
+          return;
+        }
+        // Otherwise step out = collapse the group the focus is standing in. Walks BACK to
+        // the nearest header, so it works from any row inside the group, not just its top.
         for (let j = Math.min(navFocusRef.current, listData.length - 1); j >= 0; j--) {
           const h = listData[j];
           if (h?.kind === 'header') { if (h.collapsible && !h.collapsed) toggleGroup(h.groupKey); return; }
@@ -1270,9 +1278,26 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
     });
     return () => sub.remove();
-  }, [listNavActive, listData, toggleGroup, cycleFavSort, handleToggleFav, handleSetDefault, handleClearDefault, defaultInst, openEditFav]);
+  }, [listNavActive, listData, selectedDir, toggleGroup, cycleFavSort, handleToggleFav, handleSetDefault, handleClearDefault, defaultInst, openEditFav]);
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
+
+  /**
+   * Claim a place in the focus order for something that ISN'T a row — the custom URL field
+   * and its CONNECT button. Called during render, in JSX order, exactly like ChooserRow.
+   *
+   * ★ The URL box is the one control on this screen you MOST want a keyboard for — it is
+   * where an IP address gets typed — and it was the one thing focus walked straight past,
+   * because it is a TextInput rather than a Touchable. Enter on it focuses the field.
+   */
+  const chooserSlot = (onPress: () => void, zone?: 'footer') => {
+    const foot = zone === 'footer';
+    const bank = foot ? ftrActions.current : hdrActions.current;
+    const i = bank.length;
+    bank.push(onPress);
+    const globalIndex = foot ? hdrActions.current.length + listData.length + i : i;
+    return navFocus === globalIndex;
+  };
 
   /** A chooser row that takes part in the screen's single focus order. */
   const ChooserRow = ({ style, onPress, zone, children, ...rest }: any) => {
@@ -1671,10 +1696,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         )}
 
         {/* Custom URL — chooser only */}
-        {selectedDir === null && (
+        {selectedDir === null && (() => {
+        const urlFocused = chooserSlot(() => customInputRef.current?.focus());
+        return (
         <View ref={tourRef('customUrl')} collapsable={false} style={styles.customRow}>
           <TextInput
-            style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: C.border }]}
+            ref={customInputRef}
+            style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: urlFocused ? NAV_FOCUS : C.border },
+                    urlFocused && { borderWidth: 2 }]}
             placeholder="Custom URL  e.g. sdr.example.com"
             placeholderTextColor={C.textDim}
             value={customUrl}
@@ -1765,7 +1794,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
-        )}
+        ); })()}
 
         {/* Filter + Sort toggle — directory view only */}
         {selectedDir !== null && (
