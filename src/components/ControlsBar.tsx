@@ -27,8 +27,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
-} from 'react-native';
+  View, ViewStyle,} from 'react-native';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
 import {
@@ -45,6 +44,30 @@ import TunerKeys from './TunerKeys';
 
 /** Guard for the keys' handler — never expected to run. */
 const noStep = (_d: -1 | 1) => {};
+
+export type Rect = { x: number; y: number; w: number; h: number };
+
+/**
+ * Wraps a control slot and reports its SCREEN rect, so a pointer scroll landing on
+ * it can drive that control (BRIEF-inputs §3: "hover decides the target"). Measured
+ * in WINDOW coordinates because that is what the native scroll event reports; a
+ * layout-relative box would be wrong the moment anything above it moved.
+ */
+function ControlSlot({ report, style, children }: {
+  report?: (r: Rect) => void; style?: ViewStyle; children: React.ReactNode;
+}) {
+  const ref = useRef<View | null>(null);
+  const measure = useCallback(() => {
+    ref.current?.measureInWindow((x, y, w, h) => {
+      if (w > 0 && h > 0) report?.({ x, y, w, h });
+    });
+  }, [report]);
+  return (
+    <View ref={ref} style={style} onLayout={measure} collapsable={false}>
+      {children}
+    </View>
+  );
+}
 import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
@@ -271,6 +294,9 @@ export interface ControlsBarProps {
   /** Steps/sec ceiling for the VFO sweep — derived from step size + visible span
    *  so signals cross the screen at a consistent rate. */
   vfoSweepRate?: () => number;
+  /** Screen rects of the two control slots, so a pointer scroll can be
+   *  HOVER-SCOPED to whichever control it is over. */
+  onControlRects?: (r: { vfo?: Rect; zoom?: Rect }) => void;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -621,7 +647,8 @@ function useDrumSwipeGuard() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
+  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  onControlRects }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -775,12 +802,18 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
             pointerEvents={readOnly ? 'none' : 'auto'}
             style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
-        {vfoKeys
-          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
-          : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
-        {!singleDrum && (zoomKeys
-          ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} style={{ flex: 1 }} />
-          : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />)}
+        <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ vfo: r })}>
+          {vfoKeys
+            ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} />
+            : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
+        </ControlSlot>
+        {!singleDrum && (
+          <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
+            {zoomKeys
+              ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} />
+              : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} />}
+          </ControlSlot>
+        )}
       </View>
 
       {/* Row 4 — clock · link quality · rec */}
@@ -984,6 +1017,7 @@ function ControlsBar({
   onZoomStep,
   onZoomSweep,
   vfoSweepRate,
+  onControlRects,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -1031,7 +1065,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
-    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onControlRects,
   };
 
   return (

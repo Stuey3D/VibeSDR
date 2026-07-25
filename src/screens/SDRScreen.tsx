@@ -4356,6 +4356,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_wheel', m).catch(() => {});
   }, []);
 
+  // ★ HOVER DECIDES THE TARGET. A scroll or two-finger swipe with the pointer OVER a
+  // control drives THAT control, whatever the wheel setting says — over the VFO drum
+  // it tunes, over the zoom drum it zooms. This is what makes a plain wheel mouse
+  // fully usable without configuring anything, and it means the drums are operable
+  // with no touchscreen at all. Away from the controls, the axis mapping above
+  // applies. Rects are reported by ControlsBar in WINDOW coordinates, matching what
+  // the native scroll event carries.
+  const ctrlRects = useRef<{ vfo?: { x: number; y: number; w: number; h: number };
+                             zoom?: { x: number; y: number; w: number; h: number } }>({});
+  const onControlRects = useCallback((r: { vfo?: any; zoom?: any }) => {
+    if (r.vfo)  ctrlRects.current.vfo  = r.vfo;
+    if (r.zoom) ctrlRects.current.zoom = r.zoom;
+  }, []);
+
   // ── Hardware keyboard, global layer (BRIEF-inputs-shack-mode-mac.md §6) ──────
   //
   // Arrows tune and zoom; letters open panels; Esc closes. Key events arrive from
@@ -4432,21 +4446,38 @@ export default function SDRScreen({ route, navigation }: Props) {
     // both without the wheel feeling laggy or the trackpad firing hundreds of steps.
     const scrollAcc = { x: 0, y: 0 };
     const NOTCH = 26;   // points of scroll per step, tuned against a wheel detent
-    const scroll = emitter.addListener('VibeScroll', (e: { dx: number; dy: number }) => {
+    const scroll = emitter.addListener('VibeScroll',
+                                       (e: { dx: number; dy: number; x: number; y: number }) => {
       if (panelOpenRef.current) return;      // a sheet's own scrolling wins
       const a = kbActions.current;
+      // Which control is the pointer over, if any?
+      const inRect = (r?: { x: number; y: number; w: number; h: number }) =>
+        !!r && e.x >= r.x && e.x <= r.x + r.w && e.y >= r.y && e.y <= r.y + r.h;
+      const over: 'vfo' | 'zoom' | null =
+        inRect(ctrlRects.current.vfo) ? 'vfo'
+        : inRect(ctrlRects.current.zoom) ? 'zoom' : null;
+
       const vertIsZoom = wheelActionRef.current === 'zoom';
       scrollAcc.y += e.dy ?? 0;
       scrollAcc.x += e.dx ?? 0;
+      // Over a control, BOTH axes drive it — a wheel-only mouse and a trackpad swipe
+      // must both work, and while hovering there is no second control to assign.
+      const act = (dir: -1 | 1) => {
+        if (over === 'vfo')  { a.onVfoStep(dir);  return; }
+        if (over === 'zoom') { a.onZoomStep(dir); return; }
+        a.onZoomStep(dir);
+      };
       while (Math.abs(scrollAcc.y) >= NOTCH) {
-        const dir = scrollAcc.y > 0 ? -1 : 1;   // scroll up (negative dy) = in/up
+        const dir = (scrollAcc.y > 0 ? -1 : 1) as -1 | 1;   // scroll up = in / up-band
         scrollAcc.y -= Math.sign(scrollAcc.y) * NOTCH;
-        if (vertIsZoom) a.onZoomStep(dir as -1 | 1); else a.onVfoStep(dir as -1 | 1);
+        if (over) act(dir);
+        else if (vertIsZoom) a.onZoomStep(dir); else a.onVfoStep(dir);
       }
       while (Math.abs(scrollAcc.x) >= NOTCH) {
-        const dir = scrollAcc.x > 0 ? 1 : -1;   // scroll right = up the band / in
+        const dir = (scrollAcc.x > 0 ? 1 : -1) as -1 | 1;   // scroll right = up / in
         scrollAcc.x -= Math.sign(scrollAcc.x) * NOTCH;
-        if (vertIsZoom) a.onVfoStep(dir as -1 | 1); else a.onZoomStep(dir as -1 | 1);
+        if (over) act(dir);
+        else if (vertIsZoom) a.onVfoStep(dir); else a.onZoomStep(dir);
       }
     });
 
@@ -4983,6 +5014,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onZoomStep={onZoomStep}
           onZoomSweep={onZoomSweep}
           vfoSweepRate={vfoSweepRate}
+          onControlRects={onControlRects}
           onMode={onMode}
           onStep={onStepOpen}
           onMenu={onMenuOpen}

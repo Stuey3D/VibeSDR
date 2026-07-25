@@ -70,8 +70,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   /// Pointer scroll deltas (mouse wheel / trackpad), in points.
-  static func emitScroll(_ dx: Double, _ dy: Double) {
-    shared?.sendEvent(withName: "VibeScroll", body: ["dx": dx, "dy": dy])
+  static func emitScroll(_ dx: Double, _ dy: Double, _ x: Double, _ y: Double) {
+    shared?.sendEvent(withName: "VibeScroll", body: ["dx": dx, "dy": dy, "x": x, "y": y])
   }
 
   override init() {

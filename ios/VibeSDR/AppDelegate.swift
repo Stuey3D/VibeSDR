@@ -123,7 +123,11 @@ class VibeKeyWindow: UIWindow {
       let dy = t.y - lastScroll.y
       lastScroll = t
       if dx != 0 || dy != 0 {
-        VibePowerModule.emitScroll(Double(dx), Double(dy))
+        // ★ Location included so JS can HOVER-SCOPE: a scroll over the VFO drum
+        // drives that drum, over the zoom drum drives that one. Without the
+        // pointer position the mapping can only be global.
+        let p = g.location(in: self)
+        VibePowerModule.emitScroll(Double(dx), Double(dy), Double(p.x), Double(p.y))
       }
     default:
       lastScroll = .zero
