@@ -1544,18 +1544,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 bordered strip of glyphs. It reads as part of the page instead of an alert,
                 and it costs no list rows. Scoped to THIS screen's actions; the full
                 scrollable shortcut reference lives in the main menu. */}
-            {kbHint && (
-              <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
-                To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
-                F favourite · D default · E edit · S sort
-              </Text>
-            )}
           </View>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
             <Text style={{ fontSize: fs(22), color: C.textDim }}>⚙</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ★ Full width, BELOW the title row — inside headerLeft it competed with the cog
+            for space and was clipped underneath it in portrait. (Stuart, 2026-07-25.) */}
+        {kbHint && (
+          <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
+            To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
+            F favourite · D default · E edit · S sort
+          </Text>
+        )}
 
         {/* Default banner */}
         {defaultInst && (
@@ -1733,6 +1736,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             <FlatList
               ref={listRef}
               data={listData}
+              // ★★ WITHOUT THIS THE SELECTION BOX NEVER APPEARS. FlatList only re-renders
+              // rows when `data` or `extraData` changes, and the focused index is external
+              // state — so focus was moving correctly and invisibly, which is exactly what
+              // Stuart saw, and why an Enter could connect to a server he could not see.
+              extraData={navFocus}
               style={{ flex: 1 }}
               keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
@@ -1747,6 +1755,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           )
         ) : (
           <DraggableFlatList
+            extraData={navFocus}   // same reason as the FlatList above
             data={listData}
             containerStyle={{ flex: 1 }}
             onDragEnd={({ data }) => handleFavDragEnd(data)}
@@ -1971,7 +1980,8 @@ function snrColor(snr: number, C: any): string {
 const styles = StyleSheet.create({
   // A subtitle, not a callout: no border and no fill, so it sits quietly under the title
   // and never competes with the server list for attention.
-  kbHint: { fontSize: 10, letterSpacing: 0.5, marginTop: 2, opacity: 0.85 },
+  kbHint: { fontSize: 10, letterSpacing: 0.5, opacity: 0.85,
+            paddingHorizontal: 12, paddingTop: 4, paddingBottom: 2 },
   safe:          { flex: 1 },
   flex:          { flex: 1 },
   header:        { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 8, borderBottomWidth: 1 },
