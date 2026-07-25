@@ -366,3 +366,42 @@ lighting. The two features only make sense together.
 ★ Consequence for the design: treat "TV mode" as a UI state of the FOREGROUND app (dim/blank the
 phone surface, disable the idle timer so it does not lock itself), not as something that survives
 locking. If (2) turns out to work, it is a bonus on top.
+
+### ★★ TV MODE on the phone — the detail (Stuart, 2026-07-25)
+
+*"If we detect a user has not interacted with the iPhone screen when mirroring and only used the
+keyboard, black the screen out but just put a small pill 'External display in use, tap to wake iPhone
+display'... the iPhone stays awake with our app open anyway so no risk of accidental sleeping and
+locking... however I'd like to make the onscreen element move about a bit to prevent OLED burn-in
+during prolonged usage."*
+
+**Entry condition** — all three, so it can never surprise someone who is using the phone:
+- an external display is in use (mirroring or a separate scene), AND
+- no touch on the phone for N seconds, AND
+- recent KEYBOARD activity — proof someone is driving it another way.
+Both signals already exist: `markInteract()` for touches, and the new key events.
+★ VERIFY: does AirPlay MIRRORING report `UIScreen.screens.count > 1`? A separate scene certainly
+does; mirroring historically did, but confirm before relying on it as the trigger.
+
+**Exit** — any touch anywhere. The pill says so: *"External display in use — tap to wake iPhone
+display."*
+
+**No sleep risk.** The app already holds the idle timer, so the phone will not lock itself out from
+under a session. Worth asserting that explicitly in TV mode rather than relying on it.
+
+★★ **STOP RENDERING, do not merely cover.** A black overlay with our Skia canvas still drawing
+underneath keeps ProMotion pinned high and the GPU busy — that saves the backlight and almost nothing
+else. TV mode must UNMOUNT the phone-side waterfall/spectrum so the display genuinely idles and
+ProMotion can fall to its floor. On a separate scene the TV keeps its own render; under mirroring
+there is only one render, so this applies to the separate-scene version.
+
+★★ **Dim it ourselves.** `UIScreen.brightness` is writable with no permission, so TV mode can drop
+the phone to minimum and restore the user's value on wake. All-black OLED at minimum brightness is
+close to off. Remember to restore on exit AND on backgrounding — leaving someone's phone at minimum
+brightness would be a horrible bug.
+
+★ **Burn-in: move the pill.** A static element on an otherwise black OLED for hours is exactly the
+burn-in case. Reposition it periodically (a minute or two) within the safe area, and:
+- **FADE between positions, never jump** — a jump in the corner of the eye reads as a glitch.
+- Keep it DIM and low-contrast, not full white; brightness drives burn-in as much as duration.
+- Vary the position properly (walk around the screen), rather than alternating between two spots.
