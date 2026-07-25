@@ -540,6 +540,20 @@ because glyphs are ADDITIVE AND SMALL where a drum is STRUCTURAL — and the dru
 carried by the waterfall and the frequency readout moving. But it is a taste call about the signature
 visual, so it is Stuart's.
 
+★★ **AND THERE IS NO PREFERENCE TO ASK (Stuart).** *"The only thing we don't have to do is ask the user
+what they prefer, as they have both at once."* A setting you never have to ask beats one you get right:
+no preference UI, no persistence, no per-device default, no wrong answer to recover from. ★ The PHONE
+only forces the drums-or-keys choice because of SCREEN SPACE — the controller shows that was always a
+SPATIAL constraint, not a design one.
+★★ **THIS COLLAPSES THE OPEN TENSION ABOVE.** The only real reason to put a drum on the TV would be to
+show WHICH scheme is active — but there is no mode to communicate, both being live under both thumbs
+permanently. No state, nothing to indicate, so the widget has no informational job left and the case for
+pill-plus-glyphs only gets stronger. Stuart's own point argues the side I was leaning to.
+★ ONE DISCOVERABILITY RISK, created by the clutch: a user who rotates WITHOUT pushing to the rim gets
+nothing and may conclude it is broken. So the **first-detect pill** (already listed for keyboard and
+pointer) needs a CONTROLLER variant teaching the rim explicitly — *"push the stick to the edge, then
+rotate to tune."* The one place the clutch costs something, and a single pill pays for it.
+
 #### ★★★ PUSH TO THE RIM, THEN ROTATE — and neutral is a CLUTCH (Stuart)
 
 *"Push to the full edge of the stick's travel then rotate. Maximum movement for maximum precision. Also
