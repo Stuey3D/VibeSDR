@@ -5,7 +5,8 @@ import {
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
-import { NavCtx, NavRow, usePanelNav, useNavButton, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
+import { NativeEventEmitter, NativeModules } from 'react-native';
 import GainSlider from './GainSlider';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
@@ -178,7 +179,28 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Each grid is a NavRow,
   // so up/down moves between grids and left/right within one.
-  const { navCtx, scrollProps } = usePanelNav(visible, { onTimeout: onClose });
+  // ★ [D] AGAIN OPENS THE DECODERS LIST. D opens this card from the main screen, so pressing
+  // it again to reach the long digital/decoder list is the obvious follow-through — and it
+  // saves arrowing past the whole mode grid to get there. Backspace leaves it without
+  // choosing, like every other dropdown.
+  //
+  // No double-fire on the way in: SDRScreen ignores letters once a panel is open, and this
+  // listener only exists while the card is visible.
+  const kbSeen = useKeyboardMode();
+  useEffect(() => {
+    if (!visible) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      if (e?.key === 'D' && others.length > 0) setMoreOpen(o => !o);
+    });
+    return () => sub.remove();
+  }, [visible, others.length]);
+
+  const { navCtx, scrollProps } = usePanelNav(visible, {
+    onTimeout: onClose,
+    // Backspace closes the decoder list first; only then does it mean anything else.
+    onBack: () => { if (moreOpen) setMoreOpen(false); },
+  });
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
@@ -279,6 +301,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                       navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
               onPress={() => setMoreOpen(o => !o)}
               activeOpacity={0.8}>
+              {kbSeen && (
+                <View style={st.keyCap}><Text style={st.keyCapText}>D</Text></View>
+              )}
               <Text style={[st.moreHeadText, { fontFamily: t.font },
                             { color: activeDecInOthers ? DEC_COL : currentInOthers ? t.btnActiveText : t.btnText }]} numberOfLines={1}>
                 {activeDecInOthers ? activeDecInOthers.label.toUpperCase()
@@ -494,6 +519,9 @@ const st = StyleSheet.create({
   btnText:      { textAlign: 'center' },
   mapsWrap:     { marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)' },
   moreWrap:     { marginTop: 12 },
+  // A real view, not styled text: iOS drops borders on nested Text runs.
+  keyCap:       { borderWidth: 1, borderColor: NAV_FOCUS, borderRadius: 3, paddingHorizontal: 3, marginRight: 6 },
+  keyCapText:   { color: NAV_FOCUS, fontSize: 11, fontWeight: '700' as const },
   moreHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     borderWidth: 1, borderRadius: 3, paddingVertical: 10, paddingHorizontal: 12,
