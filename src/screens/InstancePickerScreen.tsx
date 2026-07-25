@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useListNav, NAV_FOCUS } from '../components/PanelNav';
 import {
@@ -1151,7 +1151,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // Scrolling uses the FlatList's own scrollToIndex, which sidesteps the measurement
   // problem the panels hit entirely — the list already knows where its rows are.
   const listRef = useRef<FlatList<ListItem> | null>(null);
-  const listNavActive = !tcpModal && !editFav && !connecting;
+  // ★★★ GATED ON SCREEN FOCUS, and this is not optional. A stack navigator keeps this
+  // screen MOUNTED behind SDRScreen, so without the gate its key listener stayed live: an
+  // Enter meant for the frequency box ALSO activated whichever row this list still had
+  // focused, and the app silently connected to a stranger's receiver. Stuart hit exactly
+  // that — "went to enter a frequency and suddenly found myself connected to M9PSY".
+  //
+  // ★ Any screen-level key listener needs this. Mounted is not the same as on screen, which
+  // is the second time that distinction has bitten in this work.
+  const screenFocused = useIsFocused();
+  const listNavActive = screenFocused && !tcpModal && !editFav && !connecting;
 
   const navFocus = useListNav(
     listNavActive,

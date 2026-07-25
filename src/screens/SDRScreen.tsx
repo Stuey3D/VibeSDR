@@ -36,6 +36,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useIsFocused } from '@react-navigation/native';
 import type { RootStackParamList }     from '../../App';
 import { splashBridge }                 from '../../App';
 
@@ -4400,6 +4401,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const panelOpenRef = useRef(anyPanelOpen);
   useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
 
+  const screenFocused = useIsFocused();
+  const screenFocusedRef = useRef(screenFocused);
+  useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
+
   const kbRef = useRef<{ vfo: ReturnType<typeof createHoldSweep>;
                          zoom: ReturnType<typeof createHoldSweep> } | null>(null);
   const kbActions = useRef({ onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
@@ -4431,6 +4436,11 @@ export default function SDRScreen({ route, navigation }: Props) {
 
     const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key; if (!k) return;
+      // ★ Not the screen on top — a stack navigator keeps this MOUNTED behind whatever is
+      // above it, and a listener that keeps firing there acts on a screen the user cannot
+      // see. The mirror of the bug that had the picker connecting to servers from behind
+      // this one; cheap insurance against it happening the other way round.
+      if (!screenFocusedRef.current) return;
       // ★ Third-party page on screen (compatibility mode) — every shortcut is off, Esc
       // included, so nothing of ours can fire under a page we did not write. See PanelNav.
       if (shortcutsSuppressed()) return;
