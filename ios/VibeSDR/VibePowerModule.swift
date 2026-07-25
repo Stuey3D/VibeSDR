@@ -1804,6 +1804,20 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // logo while playing, a muted-speaker glyph + minutes-to-disconnect while
   // muted, a disconnected glyph once the data saver has dropped the stream.
   private var lastArtworkKey = ""
+  /// Draw an image centred in `rect`, PRESERVING ITS ASPECT RATIO.
+  ///
+  /// ★ Drawing straight into a square `rect` stretched every non-square mark. The FM-DX
+  /// logo is 163x84 (~1.94:1), so its ring was squashed into an ellipse — and that same
+  /// stretch was most of the blur too, since it scaled 84px up to 162px vertically. OWRX
+  /// (601x512) was subtly squashed for the same reason. Fitting fixes the shape AND leaves
+  /// the scale near 1:1, so it costs nothing and there is no reason to draw any other way.
+  private func drawAspectFit(_ img: UIImage, in rect: CGRect) {
+    guard img.size.width > 0, img.size.height > 0 else { return }
+    let s = min(rect.width / img.size.width, rect.height / img.size.height)
+    let w = img.size.width * s, h = img.size.height * s
+    img.draw(in: CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+  }
+
   private func refreshArtwork() {
     guard let base = UIImage(named: "artwork_base") else { return }
     let key = reconnectFailed ? "fail"
@@ -1835,11 +1849,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         icon.withTintColor(amber, renderingMode: .alwaysOriginal).draw(in: rect)
       } else if npArtworkType == "fmdx", let icon = UIImage(named: "logo_fmdx") {
         // FM-DX brand mark (green, already coloured) centred on the album base.
-        let side = min(rect.width, rect.height) * 0.9
-        let box = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
-        icon.draw(in: box)
+        drawAspectFit(icon, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05))
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
-        overlay.draw(in: rect)
+        drawAspectFit(overlay, in: rect)
       }
       // FM-DX: inlay the resolved station logo bottom-LEFT (mirrors the FM-DX
       // mark bottom-right). Aspect-fit onto a rounded dark tile so any favicon reads.

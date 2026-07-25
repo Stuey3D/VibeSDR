@@ -1953,7 +1953,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
                     if (overlayId != 0) {
                         android.graphics.BitmapFactory.decodeResource(resources, overlayId)?.let {
-                            canvas.drawBitmap(it, null, dst, null)
+                            canvas.drawBitmap(it, null, aspectFit(it.width, it.height, dst), null)
                         }
                     }
                 }
@@ -1962,6 +1962,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         } catch (e: Exception) {
             Log.w(TAG, "artwork composite failed: ${e.message}")
         }
+    }
+
+    /** Centre a source of [w]x[h] inside [dst], PRESERVING ITS ASPECT RATIO.
+     *
+     *  ★ drawBitmap(src, null, dst, null) STRETCHES to fill, and dst is square — so every
+     *  non-square mark was distorted. The FM-DX logo is 163x84 (~1.94:1), so its ring became
+     *  an ellipse, and that stretch was most of its blur too (84px scaled up to ~162px).
+     *  OWRX (601x512) was subtly squashed the same way. Fitting fixes the shape and leaves
+     *  the scale near 1:1, so there is no reason to draw any other way. */
+    private fun aspectFit(w: Int, h: Int, dst: android.graphics.RectF): android.graphics.RectF {
+        if (w <= 0 || h <= 0) return dst
+        val s = minOf(dst.width() / w, dst.height() / h)
+        val fw = w * s; val fh = h * s
+        val cx = dst.centerX(); val cy = dst.centerY()
+        return android.graphics.RectF(cx - fw / 2f, cy - fh / 2f, cx + fw / 2f, cy + fh / 2f)
     }
 
     /** Inset a (black line-art) bitmap on the dark rounded box, tinted so it reads
