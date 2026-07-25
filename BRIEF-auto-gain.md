@@ -42,6 +42,35 @@ optimum. Two lessons, and they are the foundation of this design:
    MPX level reflects the station's pilot injection, not the signal level or the SNR. Anything
    downstream of a limiter is blind to gain by construction.
 
+### ★★ 2.1 The case that proves it: voices on 4582 kHz (Stuart, 2026-07-25)
+
+Working HF RTTY at 4582 kHz, started at **22 dB** gain and had to come all the way down to
+**8 dB**. The symptoms:
+
+- **Voices audible across the RTTY.** A broadcast station that is nowhere near 4582 kHz, arriving
+  there anyway. That is not a receiver "hearing too much" — it is the front end mixing strong
+  out-of-band signals together and *manufacturing* a product that lands on the tuned frequency.
+- **Stripes of overload across the waterfall, "one minute there, next gone."** The interfering
+  signal was fading in and out, so the overload came and went with it.
+
+Three design consequences, all of which this case makes concrete:
+
+1. ★ **The right gain was 14 dB below where he started, and nothing was clipping.** An auto-gain
+   that only avoids hitting the rails would have sat happily at 22 dB and produced exactly this.
+   §4's noise-floor test is not a refinement — it is the whole point.
+2. ★ **The culprit is OUT of channel.** The signal that caused this was not the one being
+   listened to, so the detector must look at the full captured spectrum, not the demodulated
+   channel. The waterfall FFT already does; a channel-power measurement never would.
+3. ★ **The correct gain changes with propagation.** It was right until the interferer faded up.
+   That is the argument for a continuously running loop rather than set-and-forget — and for
+   §5's cadence being slow enough not to pump, but not so slow it takes minutes to react to a
+   band that has turned hostile.
+
+This is also the honest user need behind the whole feature, in Stuart's words: *"Sometimes I find
+it hard to set the gain and I am probably overloading the signals by giving it too much."* Too
+much gain is the default mistake, it is invisible until you know the symptoms, and the penalty is
+signals that appear to exist and do not.
+
 ## 3. What to measure — ADC domain, so it is band-agnostic
 
 This must work for HF, airband, FM broadcast, ADS-B and anything else, so the decision is made
@@ -137,6 +166,10 @@ and keep them as fixtures.
 2. With a strong local transmitter present, it backs off before the noise floor rises, and a weak
    adjacent signal remains decodable — the case the tuner's own AGC fails.
 3. No audible pumping over a 10-minute session on a fading signal.
+3a. ★ The 4582 kHz case (§2.1) is reproduced and fixed: with a strong out-of-band interferer
+    present, the algorithm lands near 8 dB rather than 22 dB, and no intermodulation product
+    appears in the tuned channel. If it cannot pass this, it has not solved the problem that was
+    actually reported.
 4. Never changes gain during a recording or mid-decoder-frame.
 5. Measurably beats both "Auto (tuner)" and a fixed mid-table gain on the stored fixtures from
    §8, on at least: FM RDS group rate, and HF SSB intelligibility at a fixed volume.
