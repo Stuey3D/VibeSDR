@@ -275,7 +275,41 @@ variation, costs nothing, and works today. It is strictly weaker — there is no
 reference, so intermod must still be inferred rather than observed — but it is enough to develop
 against before the second dongle exists.
 
-### 8.3 Offline fixtures
+### ★★ 8.3 The reference signals (Stuart, 2026-07-25)
+
+Do not test on "a station". Test on signals that are **known, continuous and DECODABLE**, so the
+score is objective rather than "does it look cleaner". Stuart's set, all receivable at his
+location:
+
+| kHz | signal | role |
+|---|---|---|
+| 4582 | RTTY | the original overload case (§2.1) |
+| 4608.1 | WEFAX | image integrity — tearing and line-sync loss are visible and unambiguous |
+| 4625 | "The Buzzer" (UVB-76) | ★ **the AGGRESSOR** — strong, continuous, always on. Evenings. |
+| 5357 | FT8 (60 m) | ★ **the VICTIM** — weak, and objectively scored |
+| 3573 | FT8 (80 m) | second victim, different band edge |
+
+★ **They all fit in ONE capture.** Centred on ~4605 kHz: 2.048 MSPS reaches everything except 80 m
+FT8; **2.4 MSPS reaches all five**. So a single recording carries five different modulations
+through the same front end at the same instant — and combined with §8.1's reference channel, the
+same five through TWO front ends at two gains at the same instant. (2.4 MSPS is the noisier rate
+on an RTL, but coverage matters more than a dB here, and both channels suffer it equally.)
+
+★★ **The decisive experiment: Buzzer as aggressor, FT8 as victim.** A strong continuous carrier to
+drive the front end, and a weak signal with a genuinely objective score — FT8 gives decoded
+message COUNT and a reported SNR per decode, both numbers, both repeatable. Sweep gain and plot
+FT8 decodes against it. The peak of that curve is the correct gain, measured rather than judged,
+and the algorithm's answer can be graded against it directly. If FT8 decode count falls while the
+Buzzer stays put, the receiver is eating its own weak signals — which is the entire failure mode
+this feature exists to prevent.
+
+Note VibeSDR already has the FT8 decoder (ft8_lib), so the metric needs no new machinery.
+
+★ These are propagation-dependent — the Buzzer is an evening signal at Stuart's location. So
+CAPTURE AND KEEP. A good night's recording becomes a permanent regression fixture; the band will
+not reproduce it on demand.
+
+### 8.4 Offline fixtures
 
 For the parts that CAN be judged from a recording — does the floor estimator correctly identify a
 capture already known to be overloaded, does a percentile beat a median on a packed band:
