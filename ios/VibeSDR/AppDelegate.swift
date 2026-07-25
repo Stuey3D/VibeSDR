@@ -42,6 +42,68 @@ class AppDelegate: ExpoAppDelegate {
 
 // MARK: - Scene lifecycle (iOS 26+ mandatory)
 
+/// A window that reports HARDWARE KEY presses to JS.
+///
+/// ★ Deliberately the WINDOW rather than a first-responder view. Key presses travel UP
+/// the responder chain, so anything that genuinely wants a key — a focused text field,
+/// RN's own text input — consumes it first and never reaches here. That gives the
+/// brief's "text-input focus WINS" rule for free, instead of having to suppress global
+/// shortcuts whenever a field has focus. It also means we never fight React Native for
+/// first responder, which is a fight nobody wins.
+///
+/// Down and up are separate events on purpose: the arrow keys reuse the tuner keys'
+/// tap-steps / hold-sweeps semantics, and a sweep has to know when the key was let go.
+class VibeKeyWindow: UIWindow {
+  private static func name(for key: UIKey) -> String? {
+    switch key.keyCode {
+    case .keyboardLeftArrow:  return "ArrowLeft"
+    case .keyboardRightArrow: return "ArrowRight"
+    case .keyboardUpArrow:    return "ArrowUp"
+    case .keyboardDownArrow:  return "ArrowDown"
+    case .keyboardReturnOrEnter, .keypadEnter: return "Enter"
+    case .keyboardEscape:     return "Escape"
+    case .keyboardTab:        return "Tab"
+    case .keyboardSpacebar:   return "Space"
+    default:
+      // Letters come through as their characters; ignore anything with modifiers so
+      // system shortcuts (Cmd-Q and friends) are left entirely alone.
+      guard key.modifierFlags.isEmpty else { return nil }
+      let c = key.charactersIgnoringModifiers.uppercased()
+      return (c.count == 1 && c >= "A" && c <= "Z") ? c : nil
+    }
+  }
+
+  override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    var handled = false
+    for p in presses {
+      guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      VibePowerModule.emitKey("VibeKeyDown", n)
+      handled = true
+    }
+    if !handled { super.pressesBegan(presses, with: event) }
+  }
+
+  override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    var handled = false
+    for p in presses {
+      guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      VibePowerModule.emitKey("VibeKeyUp", n)
+      handled = true
+    }
+    if !handled { super.pressesEnded(presses, with: event) }
+  }
+
+  // A cancelled press must release a sweep too, or a held arrow could stick.
+  override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    for p in presses {
+      if let k = p.key, let n = VibeKeyWindow.name(for: k) {
+        VibePowerModule.emitKey("VibeKeyUp", n)
+      }
+    }
+    super.pressesCancelled(presses, with: event)
+  }
+}
+
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
 
@@ -54,7 +116,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     guard let appDelegate = UIApplication.shared.delegate as? AppDelegate,
           let factory = appDelegate.reactNativeFactory else { return }
 
-    let window = UIWindow(windowScene: windowScene)
+    let window = VibeKeyWindow(windowScene: windowScene)
 
     // Cold-start deep link (vibesdr://). Under the scene lifecycle the launch URL
     // arrives HERE, in connectionOptions — never in didFinishLaunchingWithOptions.

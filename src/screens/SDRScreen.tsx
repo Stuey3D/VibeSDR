@@ -83,7 +83,7 @@ import { useTheme }                                     from '../contexts/ThemeC
 import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
-import { sweepTargetRate } from '../components/TunerKeys';
+import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -3136,10 +3136,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       st.timer = setTimeout(flush, SWEEP_SEND_MS - (now - st.sentAt));
     }
   }, [markInteract]);
-  // A third of an octave per press: a visible change without being coarse, and
-  // the hold-sweep covers distance quickly enough that bigger steps would only
-  // make fine adjustment awkward.
+  // ★ A TAP must move a WHOLE LADDER RUNG. The server snaps binBandwidth to a ladder,
+  // so a fractional request is snapped straight back and nothing happens — the symptom
+  // was a single tap making the waterfall lurch and return, with only a double tap
+  // actually zooming (Stuart, on air). One octave is the rung the menu ± buttons have
+  // always used.
   const onZoomStep = useCallback((dir: -1 | 1) => {
+    markInteract();
+    zoomBy(dir === 1 ? 0.5 : 2);
+  }, [zoomBy, markInteract]);
+  // ★ A HELD sweep wants the opposite: small compounding factors, which DO cross rungs
+  // cumulatively and give a smooth ramp instead of leaping an octave per tick.
+  const onZoomSweep = useCallback((dir: -1 | 1) => {
     markInteract();
     zoomBy(Math.pow(2, -dir / 3));
   }, [zoomBy, markInteract]);
@@ -4327,6 +4335,88 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
+  // ── Hardware keyboard, global layer (BRIEF-inputs-shack-mode-mac.md §6) ──────
+  //
+  // Arrows tune and zoom; letters open panels; Esc closes. Key events arrive from
+  // VibeKeyWindow (AppDelegate.swift), which reports them from the WINDOW so that
+  // anything genuinely wanting a key — a focused text field — consumes it first and
+  // never reaches us. So there is no need to suppress shortcuts while typing.
+  //
+  // ★ Arrows reuse the tuner keys' control law via createHoldSweep, NOT a second
+  // implementation: tap = one step, hold = the accelerating sweep, with the same
+  // constants tuned on air. A held arrow key is exactly a held tuner key.
+  //
+  // NOT YET DONE (deliberately, see the brief): the IN-PANEL layer — arrows
+  // navigating an open menu or the bookmarks grid, Tab switching frequency-box tabs,
+  // H/K/M choosing units. That touches every panel's internals. Also pending: Esc
+  // OPENING the servers menu when nothing is open, which needs a prop on ServersChip
+  // (it owns its own open state). Esc currently only closes.
+  const anyPanelOpen = menuOpen || stepOpen || chatOpen ||
+                       freqModalOpen || modeSelOpen || audioSheetOpen;
+  const panelOpenRef = useRef(anyPanelOpen);
+  useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
+
+  const kbRef = useRef<{ vfo: ReturnType<typeof createHoldSweep>;
+                         zoom: ReturnType<typeof createHoldSweep> } | null>(null);
+  const kbActions = useRef({ onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+                             onMenuOpen, onStepOpen, onAudioOpen, onModeOpen,
+                             onFreqOpen, openChat });
+  kbActions.current = { onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+                        onMenuOpen, onStepOpen, onAudioOpen, onModeOpen,
+                        onFreqOpen, openChat };
+
+  useEffect(() => {
+    // Built once and driven through the ref, so a re-render never rebuilds a sweeper
+    // mid-keypress and orphans its timers (the same reason useHoldSweep does this).
+    if (!kbRef.current) {
+      kbRef.current = {
+        vfo:  createHoldSweep((d) => kbActions.current.onVfoStep(d),
+                              () => kbActions.current.vfoSweepRate()),
+        zoom: createHoldSweep((d) => kbActions.current.onZoomStep(d), undefined, undefined,
+                              (d) => kbActions.current.onZoomSweep(d)),
+      };
+    }
+    const kb = kbRef.current;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+
+    const closeAll = () => {
+      setMenuOpen(false); setStepOpen(false); setChatOpen(false);
+      setFreqModalOpen(false); setModeSelOpen(false); setAudioSheetOpen(false);
+    };
+
+    const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key; if (!k) return;
+      const a = kbActions.current;
+      if (k === 'Escape') { if (panelOpenRef.current) closeAll(); return; }
+      // With a panel open the arrows and letters belong to it, not to tuning. Until
+      // the in-panel layer exists they simply do nothing rather than tuning blind
+      // underneath an open sheet.
+      if (panelOpenRef.current) return;
+      switch (k) {
+        case 'ArrowLeft':  kb.vfo.press(-1);  break;
+        case 'ArrowRight': kb.vfo.press(1);   break;
+        case 'ArrowUp':    kb.zoom.press(1);  break;   // in
+        case 'ArrowDown':  kb.zoom.press(-1); break;   // out
+        case 'Enter': a.onFreqOpen(); break;
+        case 'D': a.onModeOpen();  break;              // demodulator box
+        case 'M': a.onMenuOpen();  break;
+        case 'S': a.onStepOpen();  break;              // step rate
+        case 'A': a.onAudioOpen(); break;
+        case 'C': a.openChat();    break;
+        default: break;
+      }
+    });
+    const up = emitter.addListener('VibeKeyUp', (e: { key: string }) => {
+      const k = e?.key;
+      if (k === 'ArrowLeft' || k === 'ArrowRight') kb.vfo.release();
+      if (k === 'ArrowUp'   || k === 'ArrowDown')  kb.zoom.release();
+    });
+    return () => {
+      down.remove(); up.remove();
+      kb.vfo.release(); kb.zoom.release();   // never leave a sweep running
+    };
+  }, []);
+
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
   // the instance list. Fail-safe: always skippable; a target that can't be
@@ -4847,6 +4937,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           zoomKeys={zoomKeys}
           onVfoStep={onVfoStep}
           onZoomStep={onZoomStep}
+          onZoomSweep={onZoomSweep}
           vfoSweepRate={vfoSweepRate}
           onMode={onMode}
           onStep={onStepOpen}

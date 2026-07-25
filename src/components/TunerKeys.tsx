@@ -93,59 +93,95 @@ export function sweepTargetRate(stepHz: number, spanHz: number): number {
 }
 
 /**
- * Press/hold-to-sweep, shared by the HiFi keys and anywhere else a "tune" or
- * "zoom" mapping lands (the ◀▶ step buttons, mouse side buttons, arrow keys).
- * Returns handlers to spread onto a Pressable.
+ * The press/hold control law, with no React in it, so every surface that lands a
+ * "tune" or "zoom" mapping shares ONE implementation: the on-screen keys, the
+ * hardware arrow keys, mouse side buttons. The law was tuned at length on air
+ * (see the constants above) and is far too easy to get subtly wrong twice.
+ */
+export function createHoldSweep(
+  fire: (dir: -1 | 1) => void,
+  targetRate?: () => number,
+  onSweepChange?: (dir: -1 | 1 | 0) => void,
+  /** What each auto-repeat tick does, when it must differ from a tap.
+   *  ★ Zoom needs this: the server snaps binBandwidth to a LADDER, so a tap has to
+   *  move a WHOLE RUNG or the request is snapped straight back and nothing happens
+   *  (symptom: a single tap makes the waterfall lurch and return, and only a double
+   *  tap zooms). A held sweep wants the opposite — small compounding factors, which
+   *  do cross rungs cumulatively and give the smooth ramp. Hence two magnitudes. */
+  fireSweep?: (dir: -1 | 1) => void,
+) {
+  const sweepFire = fireSweep ?? fire;
+  let holdT: ReturnType<typeof setTimeout> | null = null;
+  let tickT: ReturnType<typeof setTimeout> | null = null;
+  let heldDir: -1 | 1 | 0 = 0;
+
+  const release = () => {
+    if (holdT) { clearTimeout(holdT); holdT = null; }
+    if (tickT) { clearTimeout(tickT); tickT = null; }
+    if (heldDir !== 0) { heldDir = 0; onSweepChange?.(0); }
+  };
+
+  const press = (dir: -1 | 1) => {
+    release();                    // cancel anything armed by a previous press
+    fire(dir);                    // ★ the step happens NOW, not on release
+    if (getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    holdT = setTimeout(() => {
+      holdT = null;
+      heldDir = dir;
+      onSweepChange?.(dir);
+      // ★ A heavier thump at the step→sweep transition, so the change of mode is FELT.
+      if (getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const started = Date.now();
+      const tick = () => {
+        sweepFire(dir);
+        // Rate AND ceiling recomputed every tick: the ramp is continuous (no gears)
+        // and a step-rate or zoom change mid-sweep is picked up at once.
+        const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
+        const hi = Math.max(SWEEP_LO, targetRate ? targetRate() : SWEEP_HI);
+        tickT = setTimeout(tick, 1000 / (SWEEP_LO + (hi - SWEEP_LO) * t));
+      };
+      tickT = setTimeout(tick, 1000 / SWEEP_LO);
+    }, HOLD_MS);
+  };
+
+  return { press, release };
+}
+
+/**
+ * React wrapper around createHoldSweep for the on-screen keys.
  */
 export function useHoldSweep(
   fire: (dir: -1 | 1) => void,
   disabled = false,
-  /** Steps/sec the ramp climbs to. Re-read at every tick, so changing the step
-   *  rate or zooming mid-sweep takes effect immediately. */
+  /** Steps/sec the ramp climbs to. Re-read at every tick. */
   targetRate?: () => number,
+  /** Per-tick action when it must differ from a tap — see createHoldSweep. */
+  fireSweep?: (dir: -1 | 1) => void,
 ) {
-  const holdT  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const tickT  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sweeping, setSweeping] = useState<-1 | 1 | 0>(0);
+  const fireRef  = useRef(fire);       fireRef.current  = fire;
+  const rateRef  = useRef(targetRate); rateRef.current  = targetRate;
+  const sweepRef = useRef(fireSweep);  sweepRef.current = fireSweep;
 
-  const stop = useCallback(() => {
-    if (holdT.current) { clearTimeout(holdT.current); holdT.current = null; }
-    if (tickT.current) { clearTimeout(tickT.current); tickT.current = null; }
-    setSweeping(0);
-  }, []);
+  // Built ONCE and driven through refs, so a re-render never rebuilds a sweeper
+  // mid-press and orphans its timers.
+  const sweep = useMemo(() => createHoldSweep(
+    (d) => fireRef.current(d),
+    () => (rateRef.current ? rateRef.current() : SWEEP_HI),
+    setSweeping,
+    (d) => (sweepRef.current ?? fireRef.current)(d),
+  ), []);
 
-  // Belt and braces: a component unmounting mid-press must not leave a timer
-  // walking the VFO up the band forever.
-  useEffect(() => stop, [stop]);
+  // A component unmounting mid-press must not leave a timer walking the VFO up the
+  // band forever.
+  useEffect(() => sweep.release, [sweep]);
 
   const press = useCallback((dir: -1 | 1) => {
     if (disabled) return;
-    stop();                       // cancel anything still armed from a previous press
-    fire(dir);                    // ★ the step happens NOW, not on release
-    if (getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    sweep.press(dir);
+  }, [disabled, sweep]);
 
-    holdT.current = setTimeout(() => {
-      holdT.current = null;
-      setSweeping(dir);
-      // ★ A heavier thump at the step→sweep transition, so the change of mode is
-      // FELT rather than only seen.
-      if (getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const started = Date.now();
-      const tick = () => {
-        fire(dir);
-        // Rate is recomputed every tick, so the ramp is continuous — no gears —
-        // and the ceiling is re-read too, so changing step rate or zoom mid-sweep
-        // is picked up straight away.
-        const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
-        const hi = Math.max(SWEEP_LO, targetRate ? targetRate() : SWEEP_HI);
-        const rate = SWEEP_LO + (hi - SWEEP_LO) * t;
-        tickT.current = setTimeout(tick, 1000 / rate);
-      };
-      tickT.current = setTimeout(tick, 1000 / SWEEP_LO);
-    }, HOLD_MS);
-  }, [disabled, fire, stop, targetRate]);
-
-  return { press, release: stop, sweeping };
+  return { press, release: sweep.release, sweeping };
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -159,20 +195,22 @@ interface Props {
   onStep: (dir: -1 | 1) => void;
   /** Steps/sec the sweep ramps to — see sweepTargetRate. Omit for the fixed cap. */
   sweepRate?: () => number;
+  /** Per-tick action while sweeping, when it must differ from a tap (zoom). */
+  onSweepStep?: (dir: -1 | 1) => void;
   width?: number;
   style?: ViewStyle;
   disabled?: boolean;
 }
 
 export default function TunerKeys({
-  type, height, onStep, sweepRate, width: widthProp = 0, style, disabled = false,
+  type, height, onStep, sweepRate, onSweepStep, width: widthProp = 0, style, disabled = false,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
 
   const [down, setDown] = useState<-1 | 1 | 0>(0);
-  const { press, release, sweeping } = useHoldSweep(onStep, disabled, sweepRate);
+  const { press, release, sweeping } = useHoldSweep(onStep, disabled, sweepRate, onSweepStep);
 
   const onDown = useCallback((dir: -1 | 1) => { setDown(dir); press(dir); }, [press]);
   const onUp   = useCallback(() => { setDown(0); release(); }, [release]);
