@@ -454,6 +454,10 @@ export function useListNav(
   onActivate: (index: number) => void,
   reveal?: (index: number) => void,
   onTimeout?: () => void,
+  /** ★ Backspace — leave WITHOUT choosing. A dropdown is the top owner while it is open, so
+   *  without this its Backspace hit a handler that had none and the panel behind never saw
+   *  it: there was no keyboard way out of a list except by picking something. (Stuart.) */
+  onBack?: () => void,
 ) {
   // ★ Focus is held as an ENTRY ID, because that is what the shared core compares
   // against; the INDEX is derived for the caller. Holding the index here instead
@@ -482,7 +486,7 @@ export function useListNav(
     return out;
   }, [length]);
 
-  useNavKeys({ visible, getEntries, focusedRef, setFocused: setFocusedId, flat: true });
+  useNavKeys({ visible, getEntries, focusedRef, setFocused: setFocusedId, flat: true, onBack });
   useIdleClose(visible, onTimeout);
 
   const focused = focusedId < 0 ? -1 : focusedId - base.current;

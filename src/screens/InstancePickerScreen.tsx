@@ -1175,11 +1175,33 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const screenFocused = useIsFocused();
   const listNavActive = screenFocused && !tcpModal && !editFav && !connecting;
 
+  // ★★ ONE index space for the WHOLE screen. The chooser (custom URL, discovered,
+  // DIRECTORIES) is the list's ListHeaderComponent, so it was never in `listData` and none
+  // of it was reachable — Stuart could only get to favourites and custom servers. Two
+  // separate navigations would mean two focus rings and a rule for moving between them; a
+  // single space means Down simply walks off the header into the list, which is what a
+  // reader expects because that is how the screen is laid out.
+  //
+  // The header rows append their action DURING RENDER, in JSX order, exactly as PanelNav's
+  // rows do — so the order cannot drift from what is on screen the way a parallel array can.
+  // ★ THREE zones, because the screen has three: the header chooser, the server list, then
+  // the footer (call sign + DIRECTORIES). The footer renders AFTER the items, so a single
+  // counter would have handed footer rows the same indices as list rows. Header rows are
+  // numbered first, the list keeps the middle, and the footer is offset past both.
+  const hdrActions = useRef<Array<() => void>>([]);
+  const ftrActions = useRef<Array<() => void>>([]);
+  hdrActions.current = [];
+  ftrActions.current = [];
+
   const navFocus = useListNav(
     listNavActive,
-    listData.length,
+    hdrActions.current.length + listData.length + ftrActions.current.length,
     (i) => {
-      const it = listData[i];
+      // Header, then the list, then the footer — the order they appear on screen.
+      const hdr = hdrActions.current, ftr = ftrActions.current;
+      if (i < hdr.length) { hdr[i]?.(); return; }
+      if (i >= hdr.length + listData.length) { ftr[i - hdr.length - listData.length]?.(); return; }
+      const it = listData[i - hdr.length];
       if (!it) return;
       if (it.kind === 'header') { if (it.collapsible) toggleGroup(it.groupKey); return; }
       if (it.kind === 'custom') { connectFav(it.fav); return; }
@@ -1192,8 +1214,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     (i) => {
       // viewPosition 0.5 keeps focus mid-screen, which reads far better from across a
       // room than nudging it just inside the edge. Whichever list is actually mounted.
+      const hdrLen = hdrActions.current.length;
       const target: any = selectedDir !== null ? listRef.current : dragRef.current;
-      try { target?.scrollToIndex?.({ index: i, viewPosition: 0.5, animated: true }); }
+      // Header and footer rows sit outside the data, so scroll to the ends instead.
+      if (i < hdrLen) { try { target?.scrollToOffset?.({ offset: 0, animated: true }); } catch {} return; }
+      if (i >= hdrLen + listData.length) { try { target?.scrollToEnd?.({ animated: true }); } catch {} return; }
+      try { target?.scrollToIndex?.({ index: i - hdrLen, viewPosition: 0.5, animated: true }); }
       catch { /* index briefly out of range while the list rebuilds — harmless */ }
     },
   );
@@ -1237,6 +1263,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
+  /** A chooser row that takes part in the screen's single focus order. */
+  const ChooserRow = ({ style, onPress, zone, children, ...rest }: any) => {
+    const foot = zone === 'footer';
+    const bank = foot ? ftrActions.current : hdrActions.current;
+    const myIndex = bank.length;
+    bank.push(onPress ?? (() => {}));
+    // The footer is numbered past the header AND the whole list — by the time it renders,
+    // the header count is final, because React renders the header first.
+    const globalIndex = foot ? hdrActions.current.length + listData.length + myIndex : myIndex;
+    const on = navFocus === globalIndex;
+    return (
+      <TouchableOpacity onPress={onPress}
+        style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
+        {children}
+      </TouchableOpacity>
+    );
+  };
+
   const renderItem = ({ item, index, getIndex, drag, isActive }: {
     item: ListItem; index?: number; getIndex?: () => number | undefined;
     drag?: () => void; isActive?: boolean;
@@ -1246,7 +1290,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // could never render, however correct the focus was. The plain FlatList passes `index`.
     // Two list components, two contracts, one renderItem shared between them.
     const idx = index ?? getIndex?.();
-    const navOn = idx != null && idx === navFocus;
+    const navOn = idx != null && (idx + hdrActions.current.length) === navFocus;
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
       // ★ Headers are navigable (Enter collapses them) but had NO focus styling, so the
@@ -1803,7 +1847,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     Android only: iOS has no USB host SDR. */}
                 {Platform.OS === 'android' && (<>
                   <SectionHeader label="RTL-SDR" fs={fs} F={F} C={C} />
-                  <TouchableOpacity
+                  <ChooserRow
                     style={[styles.row, { borderColor: C.amber }]}
                     onPress={() => connectLocal()}
                   >
@@ -1815,9 +1859,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     </View>
                     <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
                     <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
-                  </TouchableOpacity>
+                  </ChooserRow>
                   {rtlTcpServerSupported && (
-                    <TouchableOpacity
+                    <ChooserRow
                       style={[styles.row, { borderColor: C.amber }]}
                       onPress={() => navigation.navigate('ServerMode', {})}
                     >
@@ -1828,7 +1872,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         </Text>
                       </View>
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
-                    </TouchableOpacity>
+                    </ChooserRow>
                   )}
                 </>)}
 
@@ -1838,7 +1882,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 <View style={{ marginTop: Platform.OS === 'android' ? 10 : 0 }}>
                   <SectionHeader label="CUSTOM SERVER" fs={fs} F={F} C={C} />
                   {tcpFavs.map((f) => (
-                    <TouchableOpacity key={`${f.host}:${f.port}`}
+                    <ChooserRow key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.amber }]}
                       onPress={() => connectDetected(
                         (f.proto ?? 'rtltcp') as BackendType, f.host, f.port, f.name)}
@@ -1862,9 +1906,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         ])}>
                         <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim, paddingHorizontal: 8 }}>✕</Text>
                       </TouchableOpacity>
-                    </TouchableOpacity>
+                    </ChooserRow>
                   ))}
-                  <TouchableOpacity
+                  <ChooserRow
                     style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
                     onPress={() => setTcpModal(true)}
                   >
@@ -1874,7 +1918,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         name + address of any SDR server — we work out the type
                       </Text>
                     </View>
-                  </TouchableOpacity>
+                  </ChooserRow>
                 </View>
 
                 {/* DISCOVERED — RTL-TCP servers found automatically on the local
@@ -1883,7 +1927,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   <View style={{ marginTop: 10 }}>
                     <SectionHeader label="DISCOVERED" fs={fs} F={F} C={C} />
                     {discoveredNew.map((s) => (
-                      <TouchableOpacity key={`disc-${s.host}:${s.port}`}
+                      <ChooserRow key={`disc-${s.host}:${s.port}`}
                         style={[styles.row, { borderColor: C.amber }]}
                         onPress={() => s.proto === 'vibeserver'
                           ? openVibeServer(s.host, s.port, s.name, s.pin)
@@ -1903,7 +1947,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                           onPress={() => saveDiscovered(s)}>
                           <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, paddingHorizontal: 8 }}>☆</Text>
                         </TouchableOpacity>
-                      </TouchableOpacity>
+                      </ChooserRow>
                     ))}
                   </View>
                 )}
@@ -1913,7 +1957,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <View style={{ marginTop: 14 }}>
                 {/* KiwiSDR call sign — saved once, sent automatically on every Kiwi connect.
                     Sits above the directories because that's where Kiwi lives; tap to add/edit. */}
-                <TouchableOpacity
+                <ChooserRow zone="footer"
                   style={[styles.row, { borderColor: C.border, marginBottom: 12 }]}
                   onPress={() => { setIdentPrefill(kiwiIdentValue); setIdentModal({}); }}
                 >
@@ -1926,10 +1970,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   <View style={styles.rowRight}>
                     <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim }}>✎</Text>
                   </View>
-                </TouchableOpacity>
+                </ChooserRow>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
                 {DIRECTORIES.map(d => (
-                  <TouchableOpacity
+                  <ChooserRow zone="footer"
                     key={d.id}
                     style={[styles.row, { borderColor: C.border, marginBottom: 6 }]}
                     onPress={() => openDirectory(d.id)}
@@ -1948,7 +1992,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       ))}
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
                     </View>
-                  </TouchableOpacity>
+                  </ChooserRow>
                 ))}
                 <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, lineHeight: fs(15),
                                paddingHorizontal: 6, paddingTop: 10, paddingBottom: 4 }}>

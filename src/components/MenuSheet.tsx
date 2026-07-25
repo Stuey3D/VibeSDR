@@ -428,6 +428,20 @@ function Btn({ label, active, danger, onPress, full, style, icon }: {
   );
 }
 
+function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
+  return (
+    <TouchableOpacity ref={viewRef as any} hitSlop={4}
+      style={[styles.swatch, { backgroundColor: hex },
+              active && styles.swatchActive,
+              // Focus outranks the active ring, or you cannot see where you are on the
+              // colour you already have selected.
+              focused && { borderColor: C.focus, borderWidth: 3 }]}
+      onPress={onPress}
+    />
+  );
+}
+
 function CmapHeaderBtn({ open, onPress, children }: {
   open: boolean; onPress: () => void; children: React.ReactNode;
 }) {
@@ -732,6 +746,9 @@ export default function MenuSheet({
       const y = cmapY.current[cmapSorted[i]];
       if (y != null) cmapScroll.current?.scrollTo({ y: Math.max(0, y - 40), animated: true });
     },
+    undefined,
+    // Backspace leaves the list WITHOUT applying a colour; Enter picks and closes.
+    () => setCmapOpen(false),
   );
 
   // Deepest-first, so Backspace peels one layer at a time rather than jumping to the top.
@@ -912,20 +929,19 @@ export default function MenuSheet({
 
                 {/* VFO Needle Colour — colour swatches */}
                 <SubLabel label="VFO Needle Colour" />
-                <View style={styles.swatchRow}>
+                {/* ★ The swatches are a ROW of choices, so they register as one NavRow and
+                    left/right walks them — they were bare Touchables that focus skipped. */}
+                <NavRow><View style={styles.swatchRow}>
                   {([
                     {hex:'#ff2020',label:'Red'},    {hex:'#00ff44',label:'Green'},
                     {hex:'#4499ff',label:'Blue'},   {hex:'#ffdd00',label:'Yellow'},
                     {hex:'#00eeff',label:'Cyan'},   {hex:'#ff8800',label:'Orange'},
                     {hex:'#ffffff',label:'White'},  {hex:'#cc44ff',label:'Purple'},
                   ]).map(c => (
-                    <TouchableOpacity key={c.hex} hitSlop={4}
-                      style={[styles.swatch, { backgroundColor: c.hex },
-                        vfoNeedle === c.hex && styles.swatchActive]}
-                      onPress={() => onVfoNeedle?.(c.hex)}
-                    />
+                    <SwatchBtn key={c.hex} hex={c.hex} active={vfoNeedle === c.hex}
+                               onPress={() => onVfoNeedle?.(c.hex)} />
                   ))}
-                </View>
+                </View></NavRow>
 
                 {/* VFO Intensity — needle + glow brightness; bright palettes
                     can swallow the needle whatever colour it is */}
