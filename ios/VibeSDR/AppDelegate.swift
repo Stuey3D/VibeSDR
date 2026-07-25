@@ -101,7 +101,13 @@ class VibeKeyWindow: UIWindow {
   /// Keys the APP still needs to hear while the user is typing. Enter commits a typed
   /// frequency or sends a chat line; Escape backs out. Everything else — letters, arrows
   /// (which move the caret), Backspace (which deletes) — belongs to the field alone.
-  private static let typingPassthrough: Set<String> = ["Enter", "Escape"]
+  ///
+  /// ★ UP and DOWN are mirrored too, and LEFT/RIGHT deliberately are not. In a search box
+  /// there is only one line, so up/down have no caret meaning and are exactly how you would
+  /// expect to step from the query into the results beneath it — whereas left/right move the
+  /// caret and must stay the field's. `super` is still called either way, so a multiline box
+  /// keeps its line-to-line caret movement regardless.
+  private static let typingPassthrough: Set<String> = ["Enter", "Escape", "ArrowUp", "ArrowDown"]
 
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     let typing = isTypingInTextField

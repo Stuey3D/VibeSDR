@@ -14,6 +14,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
+import { useListNav } from './PanelNav';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -229,6 +230,40 @@ export default function FreqModal({
     return () => sub.remove();
   }, [visible]);
 
+  // ★ TAB SWITCHES THE CARD (Stuart: "add the tab bar switching to the frequency box").
+  // Tab is the obvious key for a tab bar and has no other job in this card, so it needs no
+  // modifier and cannot collide with typing — the native side withholds it from us whenever
+  // a field has focus anyway.
+  useEffect(() => {
+    if (!visible || !hasBookmarks) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      if (e?.key !== 'Tab') return;
+      setCardMode(m => {
+        const next = m === 'tune' ? 'bookmarks' : 'tune';
+        if (next === 'bookmarks') Keyboard.dismiss();
+        return next;
+      });
+    });
+    return () => sub.remove();
+  }, [visible, hasBookmarks]);
+
+  // Bookmark results: arrow through them and Enter to tune. Up/Down reach us even while the
+  // search box has focus (see typingPassthrough in AppDelegate), so you can type to filter
+  // and step straight down into the list without dismissing the keyboard first.
+  const bmNavFocus = useListNav(
+    visible && cardMode === 'bookmarks',
+    searchResults.length,
+    (i) => {
+      const r = searchResults[i];
+      if (!r) return;
+      setSearchQuery('');
+      if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
+      else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
+      onClose();
+    },
+  );
+
   // Read through a ref so the listener above never captures a stale `value`.
   const confirmRef = useRef(confirm); confirmRef.current = confirm;
 
@@ -404,7 +439,9 @@ export default function FreqModal({
               ) : (<>
                 <Text style={[st.bmHint, { color: dimText }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
                 {searchResults.map((r: SearchResult, i: number) => (
-                  <TouchableOpacity key={i} style={st.searchRow} activeOpacity={0.7}
+                  <TouchableOpacity key={i} activeOpacity={0.7}
+                    style={[st.searchRow,
+                            bmNavFocus === i && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                     onPress={() => {
                       setSearchQuery('');
                       if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
