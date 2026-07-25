@@ -336,3 +336,33 @@ waterfall on the TV with the controls on the phone, INDEPENDENTLY — still need
 conforming to `UIWindowSceneDelegate`, so the machinery is in the right shape. The blocker to check
 FIRST is the `UIApplicationSceneManifest` in `Info.plist` — declaring an external-display scene means
 editing the one file `expo prebuild` regenerates, and the pbxproj is hand-maintained here too.
+
+### ★★ The real reason for a separate scene: POWER, not layout (Stuart, 2026-07-25)
+
+*"The issue is power — the iPhone screen off to save battery and you lose the screen too. In theory
+our shack mode with a separate waterfall could allow the iPhone screen to be turned off and the app
+controlled purely by keyboard."*
+
+★ Mirroring COUPLES the two displays: lose one, lose both. So the phone must stay lit to feed a TV
+that is doing all the actual displaying — burning battery to show a screen nobody is looking at. A
+separate `UIWindowScene` decouples them, and THAT is the justification for building it. Not a nicer
+layout — a phone that costs almost nothing to leave running.
+
+★ It also completes the keyboard work: if the phone does not need looking at, it does not need
+lighting. The two features only make sense together.
+
+**Two versions, and only one is certain — build the reliable one first:**
+
+1. ★ **RELIABLE — phone foreground, screen BLACK and DIM.** A minimal control surface, or nothing
+   but a status line. On an OLED iPhone an all-black screen at minimum brightness draws very little,
+   so most of the saving is there, the session never drops, and the keyboard does everything.
+2. ★ **UNCERTAIN — true device LOCK with the TV still rendering.** An external-display scene keeps
+   rendering while the app is FOREGROUND; once the device locks the app is backgrounded and arbitrary
+   GPU rendering is very likely suspended. Video apps are not a precedent — `AVPlayer` has explicit
+   external-playback support, whereas we would be asking for continued Skia rendering. We already
+   know from [[ios_background_audio]] that background audio keeps the app ALIVE without granting
+   rendering, so the precedent is discouraging. TEST it once the scene exists; do not design for it.
+
+★ Consequence for the design: treat "TV mode" as a UI state of the FOREGROUND app (dim/blank the
+phone surface, disable the idle timer so it does not lock itself), not as something that survives
+locking. If (2) turns out to work, it is a bonus on top.
