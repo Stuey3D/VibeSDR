@@ -80,8 +80,30 @@ function toDisplay(hz: number, unit: Unit): string {
   return (hz / 1e6).toFixed(6);
 }
 
+/**
+ * Accept whatever decimal separator the user's keyboard actually gives us.
+ *
+ * ★ A Dutch keyboard — and most of Europe — puts a COMMA on the decimal pad, and the
+ * old `replace(/[^0-9.]/g, '')` simply DELETED it: `100,5` became `1005`, so asking for
+ * 100.5 MHz tuned you to 1005 MHz. Silently wrong, which is far worse than refusing the
+ * input, and invisible to anyone testing on a UK/US keyboard.
+ *
+ * We cannot choose which key the system keyboard offers — decimal-pad follows the device
+ * locale — so instead we accept the comma and normalise it to a point, both for parsing
+ * and in the field itself, so the user sees a `.` whatever their layout.
+ *
+ * If BOTH separators appear the comma must be a THOUSANDS separator (`1,234.5`, e.g.
+ * pasted), so it is dropped rather than treated as the decimal point.
+ */
+export function normaliseDecimal(s: string): string {
+  const hasComma = s.includes(','), hasDot = s.includes('.');
+  if (hasComma && hasDot) return s.replace(/,/g, '');
+  if (hasComma) return s.replace(/,/g, '.');
+  return s;
+}
+
 function fromDisplay(val: string, unit: Unit): number {
-  const n = parseFloat(val.replace(/[^0-9.]/g, ''));
+  const n = parseFloat(normaliseDecimal(val).replace(/[^0-9.]/g, ''));
   if (isNaN(n) || n <= 0) return 0;
   if (unit === 'hz')  return Math.round(n);
   if (unit === 'khz') return Math.round(n * 1000);
@@ -125,7 +147,10 @@ export default function FreqModal({
   );
 
   // As the user types, resolve the nearest station to the DRAFT frequency.
-  const onChangeValue = (v: string) => {
+  const onChangeValue = (raw: string) => {
+    // ★ Normalise AS THEY TYPE, not just on parse, so the field shows a `.` even on a
+    // keyboard whose decimal key is a comma — which is what the user actually asked for.
+    const v = normaliseDecimal(raw);
     setValue(v);
     if (!vtsLookup) return;
     const hz = fromDisplay(v, unit);

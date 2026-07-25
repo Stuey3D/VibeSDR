@@ -3498,8 +3498,20 @@ function initFreqEntry() {
     };
   }
 
+  // ★ Accept whatever decimal separator the keyboard gives. A Dutch (and most European)
+  // layout puts a COMMA on `inputmode="decimal"`, and stripping it turned 100,5 into 1005
+  // — so the listener was tuned to 1005 MHz having asked for 100.5. Silently wrong, and
+  // invisible to anyone testing on a UK/US layout. Both separators present means the comma
+  // is a thousands separator (1,234.5) and is dropped instead.
+  const normaliseDecimal = (t: string) => {
+    const hasComma = t.includes(','), hasDot = t.includes('.');
+    if (hasComma && hasDot) return t.replace(/,/g, '');
+    if (hasComma) return t.replace(/,/g, '.');
+    return t;
+  };
   const go = () => {
-    const v = parseFloat($<HTMLInputElement>('freqInput').value.replace(/[^\d.]/g, ''));
+    const raw = normaliseDecimal($<HTMLInputElement>('freqInput').value);
+    const v = parseFloat(raw.replace(/[^\d.]/g, ''));
     if (!isFinite(v) || v <= 0) { $('freqMsg').textContent = 'Enter a frequency'; return; }
     spec!.tune(clampTune(v * UNIT_DIV[freqUnit]), undefined, { recenter: true, retarget: true });
     renderFreq();
@@ -3509,6 +3521,16 @@ function initFreqEntry() {
   $('freqGo').onclick = go;
   $<HTMLInputElement>('freqInput').onkeydown = (e) => {
     if (e.key === 'Enter') { go(); e.preventDefault(); }
+  };
+  // Normalise in the field too, so the user SEES a `.` whatever their layout offers.
+  $<HTMLInputElement>('freqInput').oninput = (e) => {
+    const el = e.target as HTMLInputElement;
+    const v = normaliseDecimal(el.value);
+    if (v !== el.value) {
+      const at = el.selectionStart;
+      el.value = v;
+      if (at != null) el.setSelectionRange(at, at);   // 1:1 substitution, so the caret holds
+    }
   };
 
   $('freqShare').onclick = shareFrequency;
