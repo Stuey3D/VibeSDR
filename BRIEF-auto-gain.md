@@ -357,7 +357,33 @@ of whether a detector is any good:
   receiver is being flattened. If the algorithm handles only the in-band case it has not solved the
   problem; §2.1 was out-of-band.
 
-★ Caveat: both are FT8, so they stress on the SAME UTC 15-second grid and timing alone cannot
+### ★★ 8.3.2 The real aggressor: Radio Romania
+
+Stuart receives Radio Romania International **by holding the coax in his hand, in the attic**.
+That is an enormous signal — no antenna, no matching, no ground, and still overwhelming. It is
+almost certainly the culprit in §2.1: "voices audible across the RTTY" and a broadcast station
+that strong are very likely the same fact. Worth confirming by listening to what the intermod
+product actually says.
+
+This makes it the **primary aggressor**, ahead of FT8:
+
+- **Broadcast power, so it overloads at any gain worth using.** The condition where "just turn the
+  gain down" stops being a nuisance and starts being mandatory.
+- **Out of band relative to the 4.6 MHz victims**, so it exercises the hard case from §8.3.1.
+- **Continuous**, so it gives no built-in chopper the way FT8 does — but it is
+  **SCHEDULE-DRIVEN**, and switches on and off at broadcast schedule boundaries. That is a coarse
+  chopper: capture across a start or an end time and the aggressor appears or vanishes while
+  everything else stays put. Slower than FT8's 15 seconds, but a much bigger step.
+- ★ **VibeSDR already carries the EiBi schedules** (used for live station bookmarks), so the test
+  harness can know in advance when a strong broadcaster starts and stops — the on/off boundary can
+  be scheduled rather than stumbled upon.
+
+★ The ideal capture is therefore across an RRI schedule boundary, with the 4.6 MHz victims in
+band: the front end goes from hammered to clear with nothing else changing, at a fixed gain. If
+the weak signals' SNR jumps when the broadcaster leaves the air, that is desensitisation measured
+against a step change the transmitter made for us.
+
+★ Caveat: FT8 on 80 m and 40 m both stress on the SAME UTC 15-second grid and timing alone cannot
 attribute the damage to one or the other. Use the second dongle to watch each band and attribute
 by observation, or capture at a time when only one of the two bands is open.
 
