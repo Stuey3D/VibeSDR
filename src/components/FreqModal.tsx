@@ -118,8 +118,21 @@ function fromDisplay(val: string, unit: Unit): number {
  * box a live indicator rather than a label: when you tab into the bookmark search the boxes
  * disappear, which answers "why did my key do nothing" before it is asked. (Stuart's idea.)
  */
-function KeyCap({ letter, color }: { letter: string; color: string }) {
-  return <Text style={[st.keyCap, { color, borderColor: color }]}>{letter}</Text>;
+function KeyCap({ letter, color, label, font, textStyle }: {
+  letter: string; color: string; label: string; font?: string; textStyle?: any;
+}) {
+  // ★ A VIEW, not a nested <Text>. iOS renders nested Text as attributed-string runs and
+  // simply DROPS borderWidth on them — so the letter drew and the box never did, which is
+  // exactly what Stuart saw ("the boxes around the keys are not showing"). The cap has to be
+  // a real view to have a real border, so the label becomes a row rather than one string.
+  return (
+    <View style={st.keyCapRow}>
+      <View style={[st.keyCap, { borderColor: color }]}>
+        <Text style={[textStyle, { color, fontFamily: font }]}>{letter}</Text>
+      </View>
+      <Text style={[textStyle, { color, fontFamily: font }]}>{label}</Text>
+    </View>
+  );
 }
 
 export default function FreqModal({
@@ -342,15 +355,16 @@ export default function FreqModal({
                 <TouchableOpacity key={m}
                   style={[st.segTab, { borderBottomColor: cardMode === m ? t.freqColor : 'transparent' }]}
                   onPress={() => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); }} activeOpacity={0.7}>
-                  <Text style={[st.segTabText, { fontFamily: t.font, color: cardMode === m ? t.freqColor : dimText }]}>
-                    {kbSeen && visible ? (
-                      <>
-                        <KeyCap letter={m === 'tune' ? 'T' : 'B'}
-                                color={cardMode === m ? t.freqColor : dimText} />
-                        {m === 'tune' ? 'UNE' : 'OOKMARKS'}
-                      </>
-                    ) : (m === 'tune' ? 'TUNE' : 'BOOKMARKS')}
-                  </Text>
+                  {kbSeen ? (
+                    <KeyCap letter={m === 'tune' ? 'T' : 'B'}
+                            label={m === 'tune' ? 'UNE' : 'OOKMARKS'}
+                            color={cardMode === m ? t.freqColor : dimText}
+                            font={t.font} textStyle={st.segTabText} />
+                  ) : (
+                    <Text style={[st.segTabText, { fontFamily: t.font, color: cardMode === m ? t.freqColor : dimText }]}>
+                      {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
+                    </Text>
+                  )}
                 </TouchableOpacity>
               ))}
             </View>
@@ -414,19 +428,21 @@ export default function FreqModal({
                 ]}
                 onPress={() => switchUnit(u)}
               >
-                <Text style={[
-                  st.unitBtnText,
-                  { fontFamily: t.font, color: dimText },
-                  unit === u && { color: t.btnActiveText },
-                ]}>
-                  {showKeyCaps ? (
-                    <>
-                      <KeyCap letter={u === 'hz' ? 'H' : u === 'khz' ? 'K' : 'M'}
-                              color={unit === u ? t.btnActiveText : dimText} />
-                      {u === 'hz' ? 'z' : u === 'khz' ? 'Hz' : 'Hz'}
-                    </>
-                  ) : (u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz')}
-                </Text>
+                {showKeyCaps ? (
+                  <KeyCap
+                    letter={u === 'hz' ? 'H' : u === 'khz' ? 'K' : 'M'}
+                    label={u === 'hz' ? 'z' : 'Hz'}
+                    color={unit === u ? t.btnActiveText : dimText}
+                    font={t.font} textStyle={st.unitBtnText} />
+                ) : (
+                  <Text style={[
+                    st.unitBtnText,
+                    { fontFamily: t.font, color: dimText },
+                    unit === u && { color: t.btnActiveText },
+                  ]}>
+                    {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
+                  </Text>
+                )}
               </TouchableOpacity>
             ))}
           </View>
@@ -572,9 +588,10 @@ export default function FreqModal({
 const st = StyleSheet.create({
   // Small enough to sit inside a label without changing its metrics — the boxes must not
   // reflow the row as they appear and disappear.
+  keyCapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   keyCap: {
-    borderWidth: 1, borderRadius: 3, paddingHorizontal: 3,
-    overflow: 'hidden', fontWeight: '700',
+    borderWidth: 1, borderRadius: 3, paddingHorizontal: 3, marginRight: 1,
+    alignItems: 'center', justifyContent: 'center',
   },
   backdrop:     { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.58)' },
   // Anchor near the bottom (over the control pill) so it's thumb-reachable on
