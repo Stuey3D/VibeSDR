@@ -68,6 +68,15 @@ export function classifyFault(error: any): FaultOwner {
       || /is not a function|is not an object|undefined is not|null is not/.test(text)
       || /property '[^']*' doesn'?t exist|cannot read propert/.test(text)) return 'app';
 
+  // ★ React invariant violations are OURS, categorically — no server can cause one.
+  // "Rendered more hooks than during the previous render" shipped as 'unknown', so the
+  // dialog hedged about whether the receiver was at fault when the answer was never in
+  // doubt: a hook had been placed after an early return. Saying "likely us" when we know
+  // it is us is the same failure as blaming the server, just quieter. (2026-07-25.)
+  if (/rendered (more|fewer) hooks|rules of hooks|hooks can only be called/.test(text)
+      || /invalid hook call|maximum update depth|too many re-?renders/.test(text)
+      || /objects are not valid as a react child|element type is invalid/.test(text)) return 'app';
+
   // Genuine transport or far-end failures.
   if (/websocket|socket|network request failed|network error|timed ?out|timeout/.test(text)
       || /econnreset|econnrefused|enotfound|etimedout|dns|tls|ssl|handshake/.test(text)

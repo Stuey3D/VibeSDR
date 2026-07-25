@@ -1127,8 +1127,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, [allGroupsOpen, collapsibleKeys]);
 
 
-  if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
-
+  // ★★ HOOKS MUST SIT ABOVE THE EARLY RETURN BELOW. These were originally added just
+  // before renderItem — i.e. AFTER `if (!modeReady) return` — so on the first render
+  // they did not run and on the next they did: "Rendered more hooks than during the
+  // previous render", which took the whole screen down. An early return part-way down a
+  // long component is exactly where this is easy to miss.
   // ★ The hint appears WHEN A KEY IS PRESSED and goes away on touch (Stuart). It is a
   // subtitle in style — quiet prose under the title — but not a permanent one: a touch user
   // never needs it, and showing it to them would be teaching a lesson nobody asked for.
@@ -1208,6 +1211,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     });
     return () => sub.remove();
   }, [listNavActive, listData, toggleGroup, cycleFavSort, handleToggleFav, handleSetDefault, handleClearDefault, defaultInst, openEditFav]);
+
+  if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
   const renderItem = ({ item, index, drag, isActive }: { item: ListItem; index?: number; drag?: () => void; isActive?: boolean }) => {
     const navOn = index != null && index === navFocus;

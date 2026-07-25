@@ -73,8 +73,10 @@ export default function ProfilePicker({
     });
   }, [profiles, sdrUsage]);
 
-  if (!profiles.length) return null;
-
+  // ★ ABOVE the `if (!profiles.length) return null` guard, deliberately: hooks after an
+  // early return run on some renders and not others, which is the "Rendered more hooks
+  // than during the previous render" crash. `open` is false when there are no profiles,
+  // so the nav is inert anyway — it just has to be CALLED every time.
   // ★ Keyboard / D-pad navigation of the dropdown. The list is GROUPED, so navigation runs
   // over a flattened array of the selectable profiles only — the SDR header rows are labels,
   // not choices, and stopping on one would be a dead step.
@@ -89,6 +91,8 @@ export default function ProfilePicker({
     const id = flatProfiles[i];
     if (id != null) { onSelectProfile?.(id); setOpen(false); onPicked?.(); }
   });
+
+  if (!profiles.length) return null;
 
   return (
     <View style={s.wrap}>
