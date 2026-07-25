@@ -496,6 +496,7 @@ export default function FreqModal({
           {profiles.length > 0 && (
             <View style={st.profiles}>
               <ProfilePicker
+                active={visible && cardMode === 'tune'}
                 profiles={profiles}
                 activeProfileId={activeProfileId}
                 sdrUsage={sdrUsage}

@@ -13,12 +13,15 @@
  * being to turn "am I about to interrupt someone?" into something you can see rather
  * than guess.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import { useListNav } from './PanelNav';
+import { useListNav, useKeyboardMode, NAV_FOCUS } from './PanelNav';
+import { NativeEventEmitter, NativeModules } from 'react-native';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 
 export interface ProfilePickerProps {
+  /** True only while the tune card is on screen — see the note by the P shortcut. */
+  active?: boolean;
   profiles: { id: string; name: string }[];
   activeProfileId?: string;
   /** From /status.json: which SDR each profile belongs to, and whether it's in use. */
@@ -30,6 +33,7 @@ export interface ProfilePickerProps {
 }
 
 export default function ProfilePicker({
+  active = false,
   profiles, activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, onPicked,
 }: ProfilePickerProps) {
   const { theme } = useTheme();
@@ -90,7 +94,31 @@ export default function ProfilePicker({
   const navFocus = useListNav(open, flatProfiles.length, (i) => {
     const id = flatProfiles[i];
     if (id != null) { onSelectProfile?.(id); setOpen(false); onPicked?.(); }
-  });
+  },
+    undefined,
+    undefined,
+    // Backspace leaves WITHOUT switching — a profile change retunes a shared SDR for
+    // everyone on it, so backing out has to be as easy as opening.
+    () => setOpen(false),
+  );
+
+  // ★ [P] OPENS IT. Stuart's call, and the right one: arrowing all the way down the tune
+  // card to reach a dropdown is a lot of presses for something you want in one. Once open it
+  // behaves like every other dropdown — up/down, Enter to choose, Backspace to leave.
+  //
+  // ★★ Gated on `active`, which the card passes as "visible AND on the tune tab". A modal's
+  // children can stay MOUNTED while hidden, so listening on mount alone would have this
+  // grabbing P from the rest of the app — the same trap that killed the keyboard app-wide
+  // earlier today.
+  const kbSeen = useKeyboardMode();
+  useEffect(() => {
+    if (!active) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      if (e?.key === 'P') setOpen(o => !o);
+    });
+    return () => sub.remove();
+  }, [active]);
 
   if (!profiles.length) return null;
 
@@ -110,7 +138,11 @@ export default function ProfilePicker({
       )}
 
       <View style={s.drop}>
-        <TouchableOpacity style={s.dropHead} onPress={() => setOpen((o) => !o)} activeOpacity={0.7}>
+        <TouchableOpacity style={[s.dropHead, open && { borderColor: NAV_FOCUS }]}
+                          onPress={() => setOpen((o) => !o)} activeOpacity={0.7}>
+          {kbSeen && (
+            <View style={s.keyCap}><Text style={s.keyCapText}>P</Text></View>
+          )}
           <Text style={s.dropHeadText} numberOfLines={1}>
             {profiles.find((p) => p.id === activeProfileId)?.name ?? 'Select profile'}
           </Text>
@@ -170,6 +202,9 @@ const styles = (t: ThemeTokens) => StyleSheet.create({
   etiquetteLead: { color: t.snrColor, fontWeight: 'bold' },
   drop:          { borderWidth: 1, borderColor: t.barBorder, borderRadius: 8,
                    overflow: 'hidden' },
+  // A real view, not styled text: iOS drops borders on nested Text runs.
+  keyCap: { borderWidth: 1, borderColor: '#7CFF9B', borderRadius: 3, paddingHorizontal: 3, marginRight: 6 },
+  keyCapText: { color: '#7CFF9B', fontSize: 11, fontWeight: '700' as const },
   dropHead:      { flexDirection: 'row', alignItems: 'center', gap: 8,
                    paddingHorizontal: 10, paddingVertical: 10, backgroundColor: t.barBg },
   dropHeadText:  { flex: 1, color: t.freqColor, fontFamily: t.font, fontSize: 13 },
