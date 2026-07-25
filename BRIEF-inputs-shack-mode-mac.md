@@ -554,6 +554,26 @@ nothing and may conclude it is broken. So the **first-detect pill** (already lis
 pointer) needs a CONTROLLER variant teaching the rim explicitly — *"push the stick to the edge, then
 rotate to tune."* The one place the clutch costs something, and a single pill pays for it.
 
+★★ **HAPTIC DETENTS — feel the clicks as you rotate (Stuart).** Completes the metaphor: a real tuning
+dial has detents. `GCController.haptics` gives a `GCDeviceHaptics`, from which you create a
+`CHHapticEngine` per **locality** — and `GCHapticsLocality` has separate **`leftHandle` / `rightHandle`**
+(tvOS 14+, iOS 14+, MacCatalyst 14+). ★ So the detent fires from the SIDE BEING ROTATED: left stick tune
+clicks the LEFT grip, right stick zoom the RIGHT. The click feels like it comes from the dial under the
+thumb rather than the whole controller buzzing — the difference between feeling real and feeling gimmicky.
+★★ **IT ALSO SOLVES THE DISCOVERABILITY RISK ABOVE without the pill:** a distinct **ENGAGE CLUNK** when
+the rim is reached tells the user the clutch has bitten. TWO distinct events — a firm clunk on
+engage/release, a light tick per detent while rotating.
+★★ **THE RATE POLICY ALREADY EXISTS AND IS BETTER THAN A RATE CAP** — `DrumWheel.tsx:122-142`:
+`gap > 90ms → ImpactFeedbackStyle.Rigid` (deliberate, slow click), `else → selectionAsync()` (lighter
+tick when moving fast). It DOWNGRADES rather than DROPS, so fast rotation becomes a fine TEXTURE instead
+of a buzz or a silence. Maps straight onto CoreHaptics as sharpness/intensity on a
+`CHHapticTransientEvent`, so the tuning already done carries over rather than being re-derived.
+★★ **A REAL CATCH TO FIX WHEN BUILDING THIS:** the `✦ HAPTICS` toggle (`MenuSheet.tsx:1115`) is gated on
+whether **THE DEVICE** has a haptic motor — which is why it is hidden on iPads (see AboutOverlay 5.2.2
+notes). But **an iPad or Apple TV with a DualSense connected DOES have haptics — the motor is in the
+CONTROLLER.** The visibility rule must become "device motor **OR** connected controller with a haptics
+profile", or the toggle vanishes exactly where this feature is most used.
+
 #### ★★★ PUSH TO THE RIM, THEN ROTATE — and neutral is a CLUTCH (Stuart)
 
 *"Push to the full edge of the stick's travel then rotate. Maximum movement for maximum precision. Also
