@@ -352,7 +352,7 @@ export default function AudioSheet({
 
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Buttons, sliders and
   // the squelch bar all register themselves; the game controller drives this unchanged.
-  const { navCtx, scrollRef } = usePanelNav(visible, { onTimeout: onClose });
+  const { navCtx, scrollProps } = usePanelNav(visible, { onTimeout: onClose });
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
@@ -374,7 +374,7 @@ export default function AudioSheet({
           </Text>
         </View>
 
-        <ScrollView ref={scrollRef} style={st.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView {...scrollProps} style={st.scroll} keyboardShouldPersistTaps="handled">
         <NavCtx.Provider value={navCtx}>
 
           {/* NR / NB (UberSDR client-side DSP) + REC — REC stays for all backends */}

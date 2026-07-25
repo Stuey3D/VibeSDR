@@ -89,13 +89,34 @@ class VibeKeyWindow: UIWindow {
   /// RN's TextInput is backed by a UITextField, so conformance to UITextInput is a reliable
   /// test. The walk costs a hierarchy traversal per key press, which is nothing — key
   /// presses are a human-speed event.
-  private var isTypingInTextField: Bool {
+  private func focusedTextInput() -> UIResponder? {
     func find(_ v: UIView) -> UIResponder? {
       if v.isFirstResponder { return v }
       for s in v.subviews { if let r = find(s) { return r } }
       return nil
     }
-    return find(self) is UITextInput
+    let r = find(self)
+    return r is UITextInput ? r : nil
+  }
+
+  private var isTypingInTextField: Bool { focusedTextInput() != nil }
+
+  /// ★★ Is the focused field a NUMBER PAD? If so, a letter can never be valid input there,
+  /// so it is ours to use as a shortcut rather than the field's to swallow.
+  ///
+  /// This is what makes [H]z / [K]Hz / [M]Hz and [T]une / [B]ookmarks work while the
+  /// frequency box has focus. Without it those keys vanished into a field that could not
+  /// accept them anyway — the letters did nothing at all, which is exactly what Stuart saw.
+  /// A normal keyboard (chat, server names, the bookmark box) is untouched: there a letter
+  /// is real input and must stay the field's.
+  private var focusedFieldIsNumeric: Bool {
+    guard let traits = focusedTextInput() as? UITextInputTraits else { return false }
+    switch traits.keyboardType {
+    case .some(.numberPad), .some(.decimalPad), .some(.numbersAndPunctuation), .some(.phonePad):
+      return true
+    default:
+      return false
+    }
   }
 
   /// Keys the APP still needs to hear while the user is typing. Enter commits a typed
@@ -111,9 +132,13 @@ class VibeKeyWindow: UIWindow {
 
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     let typing = isTypingInTextField
+    // A NUMBER PAD cannot use letters, so they stay ours even while it has focus.
+    let numeric = typing && focusedFieldIsNumeric
     for p in presses {
       guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
-      if typing && !VibeKeyWindow.typingPassthrough.contains(n) { continue }
+      let mine = VibeKeyWindow.typingPassthrough.contains(n)
+              || (numeric && n.count == 1 && n >= "A" && n <= "Z")
+      if typing && !mine { continue }
       VibePowerModule.emitKey("VibeKeyDown", n)
     }
     // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must
@@ -125,9 +150,13 @@ class VibeKeyWindow: UIWindow {
 
   override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     let typing = isTypingInTextField
+    // A NUMBER PAD cannot use letters, so they stay ours even while it has focus.
+    let numeric = typing && focusedFieldIsNumeric
     for p in presses {
       guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
-      if typing && !VibeKeyWindow.typingPassthrough.contains(n) { continue }
+      let mine = VibeKeyWindow.typingPassthrough.contains(n)
+              || (numeric && n.count == 1 && n >= "A" && n <= "Z")
+      if typing && !mine { continue }
       VibePowerModule.emitKey("VibeKeyUp", n)
     }
     if typing { super.pressesEnded(presses, with: event); return }

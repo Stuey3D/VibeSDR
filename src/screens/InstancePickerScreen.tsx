@@ -1227,10 +1227,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const navOn = index != null && index === navFocus;
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
+      // ★ Headers are navigable (Enter collapses them) but had NO focus styling, so the
+      // caret walked through them invisibly and the keys looked dead until it happened to
+      // land on a server row. A header is often the FIRST row, so that was the usual case.
+      const hdrFocus = navOn ? { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 4 } : null;
       // The FAVOURITES header carries a tappable sort chip (Most Used / A–Z / Nearest / SNR / Manual).
       if (item.groupKey === '__fav') {
         return (
-          <View>
+          <View style={hdrFocus}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 6 }}>
               <View style={{ flex: 1 }}>
                 <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
@@ -1248,13 +1252,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         );
       }
       return (
-        <SectionHeader
+        <View style={hdrFocus}><SectionHeader
           label={item.count > 0 ? `${item.label}  (${item.count})` : item.label}
           fs={fs} F={F} C={C}
           collapsible={item.collapsible}
           collapsed={item.collapsed}
           onToggle={item.collapsible ? () => toggleGroup(item.groupKey) : undefined}
-        />
+        /></View>
       );
     }
 

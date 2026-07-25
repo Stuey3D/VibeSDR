@@ -178,7 +178,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Each grid is a NavRow,
   // so up/down moves between grids and left/right within one.
-  const { navCtx, scrollRef } = usePanelNav(visible, { onTimeout: onClose });
+  const { navCtx, scrollProps } = usePanelNav(visible, { onTimeout: onClose });
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
@@ -187,7 +187,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       <View style={[st.sheet, { borderTopColor: t.barBorder }]} onTouchStart={noteTouchInteraction}>
         {/* Scrolls when the content (decoders + callout + extensions + maps) overflows on a
             small screen (§7). Capped so big screens render static as before. */}
-        <ScrollView ref={scrollRef} style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
+        <ScrollView {...scrollProps} style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled">
         <NavCtx.Provider value={navCtx}>
         <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>

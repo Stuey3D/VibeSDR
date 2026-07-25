@@ -111,6 +111,17 @@ function fromDisplay(val: string, unit: Unit): number {
   return Math.round(n * 1e6);
 }
 
+/**
+ * A boxed shortcut letter: [H]z, [T]une.
+ *
+ * ★ Shown ONLY while that letter actually does something — see `lettersArmed`. That makes the
+ * box a live indicator rather than a label: when you tab into the bookmark search the boxes
+ * disappear, which answers "why did my key do nothing" before it is asked. (Stuart's idea.)
+ */
+function KeyCap({ letter, color }: { letter: string; color: string }) {
+  return <Text style={[st.keyCap, { color, borderColor: color }]}>{letter}</Text>;
+}
+
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit,
@@ -151,7 +162,10 @@ export default function FreqModal({
   const onChangeValue = (raw: string) => {
     // ★ Normalise AS THEY TYPE, not just on parse, so the field shows a `.` even on a
     // keyboard whose decimal key is a comma — which is what the user actually asked for.
-    const v = normaliseDecimal(raw);
+    // ★★ And STRIP anything that is not a digit or a point. keyboardType only constrains the
+    // ON-SCREEN keyboard; a hardware keyboard can type whatever it likes, so the field
+    // happily accepted letters. A frequency has no letters in it. (Stuart, 2026-07-25.)
+    const v = normaliseDecimal(raw).replace(/[^0-9.]/g, '');
     setValue(v);
     if (!vtsLookup) return;
     const hz = fromDisplay(v, unit);
@@ -194,6 +208,8 @@ export default function FreqModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, currentHz]);
 
+  // Read through a ref so the key listener never captures a stale `value`/`unit`.
+  const switchUnitRef = useRef<(u: Unit) => void>(() => {});
   const switchUnit = (u: Unit) => {
     const hz = fromDisplay(value, unit);
     setUnitState(u);
@@ -201,6 +217,7 @@ export default function FreqModal({
     AsyncStorage.setItem('lsv_fq_unit', u).catch(() => {});
     if (hz > 0) setValue(toDisplay(hz, u));
   };
+  switchUnitRef.current = switchUnit;
 
   // ★ Guarded, because Enter can now arrive from two places at once — the hardware key
   // mirrored by VibeKeyWindow, and onSubmitEditing from the on-screen keyboard. Tuning
@@ -234,19 +251,41 @@ export default function FreqModal({
   // Tab is the obvious key for a tab bar and has no other job in this card, so it needs no
   // modifier and cannot collide with typing — the native side withholds it from us whenever
   // a field has focus anyway.
+  // ★★ LETTER SHORTCUTS, not Tab (Stuart). Tab was the wrong key: with the frequency field
+  // focused it moves the caret inside the box rather than reaching us. Letters are free here
+  // because a frequency has no letters in it — the native side hands them over precisely
+  // because the focused field is a number pad.
+  //
+  //   [T]une / [B]ookmarks · [H]z / [K]Hz / [M]Hz
+  //
+  // ★ And the boxes are a LIVE INDICATOR, not decoration: they show only while the letters
+  // actually work, so when you are typing into the bookmark search they vanish. That answers
+  // "why did my key do nothing" before it is asked.
+  // Boxes appear only once a key has actually been pressed — a touch user never sees them.
+  const [kbSeen, setKbSeen] = useState(false);
+  useEffect(() => { if (!visible) setKbSeen(false); }, [visible]);
+  const lettersArmed = visible && cardMode === 'tune';
+  const showKeyCaps = kbSeen && lettersArmed && !lockUnit;
   useEffect(() => {
-    if (!visible || !hasBookmarks) return;
+    if (!visible) return;
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      if (e?.key !== 'Tab') return;
-      setCardMode(m => {
-        const next = m === 'tune' ? 'bookmarks' : 'tune';
+      const k = e?.key;
+      setKbSeen(true);
+      if (hasBookmarks && (k === 'T' || k === 'B')) {
+        const next = k === 'T' ? 'tune' : 'bookmarks';
         if (next === 'bookmarks') Keyboard.dismiss();
-        return next;
-      });
+        setCardMode(next);
+        return;
+      }
+      // Unit keys only while the tune card is up — in bookmarks you are typing a search.
+      if (cardMode !== 'tune' || lockUnit) return;
+      if (k === 'H') switchUnitRef.current('hz');
+      else if (k === 'K') switchUnitRef.current('khz');
+      else if (k === 'M') switchUnitRef.current('mhz');
     });
     return () => sub.remove();
-  }, [visible, hasBookmarks]);
+  }, [visible, hasBookmarks, cardMode, lockUnit]);
 
   // Bookmark results: arrow through them and Enter to tune. Up/Down reach us even while the
   // search box has focus (see typingPassthrough in AppDelegate), so you can type to filter
@@ -304,7 +343,13 @@ export default function FreqModal({
                   style={[st.segTab, { borderBottomColor: cardMode === m ? t.freqColor : 'transparent' }]}
                   onPress={() => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); }} activeOpacity={0.7}>
                   <Text style={[st.segTabText, { fontFamily: t.font, color: cardMode === m ? t.freqColor : dimText }]}>
-                    {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
+                    {kbSeen && visible ? (
+                      <>
+                        <KeyCap letter={m === 'tune' ? 'T' : 'B'}
+                                color={cardMode === m ? t.freqColor : dimText} />
+                        {m === 'tune' ? 'UNE' : 'OOKMARKS'}
+                      </>
+                    ) : (m === 'tune' ? 'TUNE' : 'BOOKMARKS')}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -374,7 +419,13 @@ export default function FreqModal({
                   { fontFamily: t.font, color: dimText },
                   unit === u && { color: t.btnActiveText },
                 ]}>
-                  {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
+                  {showKeyCaps ? (
+                    <>
+                      <KeyCap letter={u === 'hz' ? 'H' : u === 'khz' ? 'K' : 'M'}
+                              color={unit === u ? t.btnActiveText : dimText} />
+                      {u === 'hz' ? 'z' : u === 'khz' ? 'Hz' : 'Hz'}
+                    </>
+                  ) : (u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz')}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -519,6 +570,12 @@ export default function FreqModal({
 }
 
 const st = StyleSheet.create({
+  // Small enough to sit inside a label without changing its metrics — the boxes must not
+  // reflow the row as they appear and disappear.
+  keyCap: {
+    borderWidth: 1, borderRadius: 3, paddingHorizontal: 3,
+    overflow: 'hidden', fontWeight: '700',
+  },
   backdrop:     { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.58)' },
   // Anchor near the bottom (over the control pill) so it's thumb-reachable on
   // big phones; the auto-opened keyboard then sits just below it.

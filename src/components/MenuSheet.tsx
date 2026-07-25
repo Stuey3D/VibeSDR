@@ -428,6 +428,15 @@ function Btn({ label, active, danger, onPress, full, style, icon }: {
   );
 }
 
+function CmapHeaderBtn({ open, onPress, children }: {
+  open: boolean; onPress: () => void; children: React.ReactNode;
+}) {
+  const { focused, viewRef } = useNavButton(onPress);
+  return (
+    <View ref={viewRef} style={focused ? styles.dropHeaderFocused : undefined}>{children}</View>
+  );
+}
+
 // ── Keyboard-reachable slider ────────────────────────────────────────────────
 // ★ Sliders used to be SKIPPED by keyboard focus entirely — only Btn registered, so
 // the caret jumped straight past every slider and they were unreachable, not merely
@@ -634,7 +643,7 @@ export default function MenuSheet({
   // pane states are declared further down; the ref is refreshed every render, so the
   // closure never sees a stale one.
   const paneBack = useRef<() => void>(() => {});
-  const { navCtx, scrollRef } = usePanelNav(visible, {
+  const { navCtx, scrollProps } = usePanelNav(visible, {
     onBack: () => paneBack.current(),
     onTimeout: onClose,
   });
@@ -777,7 +786,7 @@ export default function MenuSheet({
           <View style={styles.handle} />
 
           <NavCtx.Provider value={navCtx}>
-          <ScrollView ref={scrollRef} style={styles.scroll}
+          <ScrollView {...scrollProps} style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
             keyboardShouldPersistTaps="handled"
@@ -859,6 +868,10 @@ export default function MenuSheet({
                     pill strip hardcoded names like 'sonar'/'green' that never
                     existed in the tables → silent gqrx fallback.) */}
                 <SubLabel label="Colour Map" />
+                {/* ★ The OPENER must be registered too. It was a bare TouchableOpacity, so the
+                    arrows walked straight past it and there was no keyboard way to open the
+                    colour list at all — which read as "it skips the dropdown". */}
+                <NavRow><CmapHeaderBtn open={cmapOpen} onPress={() => setCmapOpen((o: boolean) => !o)}>
                 <TouchableOpacity style={styles.dropHeader}
                   onPress={() => setCmapOpen((o: boolean) => !o)} activeOpacity={0.7}>
                   <Text style={styles.dropHeaderText}>
@@ -866,6 +879,7 @@ export default function MenuSheet({
                   </Text>
                   <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
+                </CmapHeaderBtn></NavRow>
                 {cmapOpen && (
                   <ScrollView ref={cmapScroll} style={[styles.dropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
@@ -1319,6 +1333,7 @@ const styles = StyleSheet.create({
   // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
   // setting is on"). Focus is where the keyboard is, not what is selected.
   btnFocused:    { borderColor: C.focus, borderWidth: 2 },
+  dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },
   // Dropdown rows are a dense list with only a divider, so focus is a background tint —
   // a 2px border would shift every row as focus moved down it.
   dropItemFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },

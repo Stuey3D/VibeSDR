@@ -233,6 +233,7 @@ export function revealIn(
   viewRef: React.MutableRefObject<View | null>,
   fallbackRow = -1,
   margin = 120,
+  scrollY: React.MutableRefObject<number> = { current: 0 },
 ) {
   const sv = scrollRef.current, v = viewRef.current;
   if (!sv) return;
@@ -240,23 +241,25 @@ export function revealIn(
     if (fallbackRow < 0) return;
     sv.scrollTo({ y: Math.max(0, fallbackRow * EST_ROW_H - margin), animated: true });
   };
-  // ★★ Under the NEW ARCHITECTURE, measureLayout() with a NODE HANDLE is a no-op — it
-  // neither measures nor reliably calls the failure callback, so reveal silently fell back
-  // to the `row * 46` estimate. That estimate is roughly right near the TOP of the menu and
-  // progressively wronger further down, which is exactly the reported symptom: focus
-  // sometimes walks off the bottom of the screen and the menu does not follow.
-  //
-  // Fabric wants the inner view's REF (an instance), not a handle. `getInnerViewRef()`
-  // exists for precisely this; the legacy node path is kept for the old renderer.
-  const innerRef  = (sv as any).getInnerViewRef?.();
-  const innerNode = (sv as any).getInnerViewNode?.();
-  const target = innerRef ?? innerNode;
-  if (!v || target == null) { estimate(); return; }
-  (v as any).measureLayout?.(
-    target,
-    (_x: number, y: number) => sv.scrollTo({ y: Math.max(0, y - margin), animated: true }),
-    estimate,   // measurement can fail mid-unmount — fall back rather than lose it
-  );
+  // ★★★ measureLayout PROVED UNRELIABLE HERE. First with a node handle (a no-op under the
+  // New Architecture), then with getInnerViewRef() — and the menu still did not follow the
+  // focus. Rather than keep guessing at which handle Fabric accepts, this now uses
+  // measureInWindow, which is the same on both renderers and needs no inner-view handle at
+  // all: measure the button and the ScrollView in WINDOW space, and the difference is how
+  // far the button sits from the top of the viewport. Add the current scroll offset and you
+  // have the content position, with no framework-version guesswork in it.
+  if (!v) { estimate(); return; }
+  const svAny = sv as any;
+  svAny.measureInWindow?.((_sx: number, svY: number, _sw: number, svH: number) => {
+    (v as any).measureInWindow?.((_bx: number, bY: number, _bw: number, bH: number) => {
+      if (!(svH > 0)) { estimate(); return; }
+      const rel = bY - svY;                       // distance from the top of the viewport
+      if (rel >= 0 && rel + bH <= svH) return;    // already fully visible — do not jump
+      // Centre it: from across a room, a row nudged just inside the edge is easy to lose.
+      const target = scrollY.current + rel - (svH - bH) / 2;
+      sv.scrollTo({ y: Math.max(0, target), animated: true });
+    });
+  });
 }
 
 // ── Shape 1: the 2-D grid (MenuSheet, AudioSheet) ────────────────────────────
@@ -267,6 +270,9 @@ type NavCtxValue = {
   /** The panel's ScrollView, so buttons can reveal themselves without being
    *  handed it individually — module-scoped button components cannot see it. */
   scrollRef: React.MutableRefObject<ScrollView | null>;
+  /** Live scroll offset, kept by onScroll — measureInWindow gives viewport-relative
+   *  positions, so the offset is what turns one into a content position. */
+  scrollY: React.MutableRefObject<number>;
 };
 export const NavCtx = React.createContext<NavCtxValue | null>(null);
 export const RowCtx = React.createContext<number>(-1);
@@ -282,6 +288,7 @@ export function usePanelNav(
   const entries   = useRef<NavEntry[]>([]);
   const rowSeq    = useRef(0);
   const scrollRef = useRef<ScrollView | null>(null);
+  const scrollY   = useRef(0);
   const [focused, setFocused] = useState(-1);
   const focusedRef = useRef(focused);
   useEffect(() => { focusedRef.current = focused; }, [focused]);
@@ -312,11 +319,17 @@ export function usePanelNav(
   });
   useIdleClose(visible, opts?.onTimeout);
 
-  const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, nextRow, scrollRef }),
+  const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, nextRow, scrollRef, scrollY }),
                                      [register, focused, nextRow]);
-  // `scrollRef` is attached to the panel's ScrollView by the caller; it is optional,
-  // and a panel that does not scroll simply never sets it.
-  return { navCtx, focused, scrollRef };
+  // ★ `scrollProps` MUST be spread onto the panel's ScrollView. It carries the ref and the
+  // onScroll that keeps `scrollY` current — without the offset, reveal cannot convert a
+  // viewport position into a content position and the panel will not follow the focus.
+  const scrollProps = useMemo(() => ({
+    ref: scrollRef,
+    scrollEventThrottle: 16,
+    onScroll: (e: any) => { scrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
+  }), []);
+  return { navCtx, focused, scrollRef, scrollProps };
 }
 
 /** One row of the grid. Up/down moves between rows, left/right within one. */
@@ -350,7 +363,7 @@ export function useNavButton(onPress?: () => void) {
     return nav.register({
       id, row,
       press:  () => pressRef.current?.(),
-      reveal: () => revealIn(nav.scrollRef, viewRef, row),
+      reveal: () => revealIn(nav.scrollRef, viewRef, row, 120, nav.scrollY),
     });
   }, [nav, row, id]);
 
@@ -386,7 +399,7 @@ export function useNavRange(onAdjust: (dir: -1 | 1) => void) {
     return nav.register({
       id, row,
       adjust: (dir: -1 | 1) => adjRef.current?.(dir),
-      reveal: () => revealIn(nav.scrollRef, viewRef, row),
+      reveal: () => revealIn(nav.scrollRef, viewRef, row, 120, nav.scrollY),
     });
   }, [nav, row, id]);
 
