@@ -1237,8 +1237,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  const renderItem = ({ item, index, drag, isActive }: { item: ListItem; index?: number; drag?: () => void; isActive?: boolean }) => {
-    const navOn = index != null && index === navFocus;
+  const renderItem = ({ item, index, getIndex, drag, isActive }: {
+    item: ListItem; index?: number; getIndex?: () => number | undefined;
+    drag?: () => void; isActive?: boolean;
+  }) => {
+    // ★★ DraggableFlatList hands renderItem `getIndex()`, NOT `index` — so on the DEFAULT
+    // screen (which is the draggable list) `index` was always undefined and the highlight
+    // could never render, however correct the focus was. The plain FlatList passes `index`.
+    // Two list components, two contracts, one renderItem shared between them.
+    const idx = index ?? getIndex?.();
+    const navOn = idx != null && idx === navFocus;
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
       // ★ Headers are navigable (Enter collapses them) but had NO focus styling, so the

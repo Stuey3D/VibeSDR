@@ -14,7 +14,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
-import { useListNav } from './PanelNav';
+import { useListNav, useKeyboardMode } from './PanelNav';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -274,9 +274,10 @@ export default function FreqModal({
   // ★ And the boxes are a LIVE INDICATOR, not decoration: they show only while the letters
   // actually work, so when you are typing into the bookmark search they vanish. That answers
   // "why did my key do nothing" before it is asked.
-  // Boxes appear only once a key has actually been pressed — a touch user never sees them.
-  const [kbSeen, setKbSeen] = useState(false);
-  useEffect(() => { if (!visible) setKbSeen(false); }, [visible]);
+  // ★ GLOBAL keyboard mode, not local state. You press Enter to OPEN this card, so a local
+  // flag was always one keypress behind and the caps only appeared after an arrow — exactly
+  // what Stuart reported. Asking the app-wide flag means they are there the moment it opens.
+  const kbSeen = useKeyboardMode();
   const lettersArmed = visible && cardMode === 'tune';
   const showKeyCaps = kbSeen && lettersArmed && !lockUnit;
   useEffect(() => {
@@ -284,7 +285,6 @@ export default function FreqModal({
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key;
-      setKbSeen(true);
       if (hasBookmarks && (k === 'T' || k === 'B')) {
         const next = k === 'T' ? 'tune' : 'bookmarks';
         if (next === 'bookmarks') Keyboard.dismiss();

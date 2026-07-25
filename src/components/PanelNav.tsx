@@ -65,8 +65,34 @@ export const nextNavButtonId = () => nextNavId++;
 export const PANEL_IDLE_MS = 10_000;
 
 let keyboardMode = false;
+const kbListeners = new Set<(on: boolean) => void>();
+const setKeyboardMode = (on: boolean) => {
+  if (keyboardMode === on) return;
+  keyboardMode = on;
+  kbListeners.forEach(f => f(on));
+};
 /** Any pointer/touch interaction — a present user, so idle-close is wrong. */
-export function noteTouchInteraction() { keyboardMode = false; }
+export function noteTouchInteraction() { setKeyboardMode(false); }
+
+/**
+ * Is the user driving by keyboard RIGHT NOW? Global, deliberately.
+ *
+ * ★ A panel cannot answer this from its own state: you press Enter to OPEN it, so by the
+ * time its listener mounts the keypress has already happened and it looks like a touch
+ * user until you press something else. Stuart: "if I have hit the enter button to go into
+ * the frequency entry box then the boxes around the keys should be there already."
+ */
+export function useKeyboardMode(): boolean {
+  const [on, setOn] = useState(keyboardMode);
+  useEffect(() => {
+    setOn(keyboardMode);
+    kbListeners.add(setOn);
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', () => setKeyboardMode(true));
+    return () => { kbListeners.delete(setOn); sub.remove(); };
+  }, []);
+  return on;
+}
 
 function useIdleClose(active: boolean, onTimeout?: () => void) {
   const cb = useRef(onTimeout); cb.current = onTimeout;
@@ -81,7 +107,7 @@ function useIdleClose(active: boolean, onTimeout?: () => void) {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', () => {
       if (shortcutsSuppressed()) return;
-      keyboardMode = true; arm();
+      setKeyboardMode(true); arm();
     });
     if (keyboardMode) arm();   // opened BY the keyboard — start counting immediately
     return () => { if (timer) clearTimeout(timer); sub.remove(); };
@@ -249,8 +275,16 @@ export function revealIn(
   // far the button sits from the top of the viewport. Add the current scroll offset and you
   // have the content position, with no framework-version guesswork in it.
   if (!v) { estimate(); return; }
+  // ★★★ A ScrollView has NO measureInWindow of its own — its public surface is scrollTo,
+  // getScrollableNode, getInnerViewRef and friends. So the previous version's callback
+  // simply never ran and reveal did nothing at all. `getNativeScrollRef()` hands back the
+  // underlying host view, which does measure. THIRD attempt at this: node handle, inner
+  // view ref, and now the native scroll ref — the lesson being to check that a method
+  // exists before building on it rather than assuming the component forwards it.
   const svAny = sv as any;
-  svAny.measureInWindow?.((_sx: number, svY: number, _sw: number, svH: number) => {
+  const host = svAny.getNativeScrollRef?.() ?? svAny;
+  if (typeof host?.measureInWindow !== 'function') { estimate(); return; }
+  host.measureInWindow((_sx: number, svY: number, _sw: number, svH: number) => {
     (v as any).measureInWindow?.((_bx: number, bY: number, _bw: number, bH: number) => {
       if (!(svH > 0)) { estimate(); return; }
       const rel = bY - svY;                       // distance from the top of the viewport
@@ -329,7 +363,7 @@ export function usePanelNav(
     scrollEventThrottle: 16,
     onScroll: (e: any) => { scrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
   }), []);
-  return { navCtx, focused, scrollRef, scrollProps };
+  return { navCtx, focused, scrollRef, scrollProps, scrollY };
 }
 
 /** One row of the grid. Up/down moves between rows, left/right within one. */

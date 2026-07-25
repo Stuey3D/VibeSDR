@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -643,7 +643,7 @@ export default function MenuSheet({
   // pane states are declared further down; the ref is refreshed every render, so the
   // closure never sees a stale one.
   const paneBack = useRef<() => void>(() => {});
-  const { navCtx, scrollProps } = usePanelNav(visible, {
+  const { navCtx, scrollProps, scrollRef, scrollY: scrollYRef } = usePanelNav(visible, {
     onBack: () => paneBack.current(),
     onTimeout: onClose,
   });
@@ -714,6 +714,16 @@ export default function MenuSheet({
   // last-in-wins, opening the dropdown automatically takes the arrows away from the menu
   // behind it and gives them back on close — no mode flag, no precedence rule to maintain.
   // Reveal uses the y each row already records via onLayout, so it needs no measurement.
+  // ★ When the dropdown OPENS, scroll the menu so the list is actually visible. It expands
+  // downward, so opening one near the foot of the sheet left a single row showing with the
+  // rest below the fold — you were navigating a list you could not see. (Stuart.)
+  const cmapAnchor = useRef<View | null>(null);
+  useEffect(() => {
+    if (!cmapOpen) return;
+    const id = setTimeout(() => revealIn(scrollRef, cmapAnchor, -1, 40, scrollYRef), 80);
+    return () => clearTimeout(id);
+  }, [cmapOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   const cmapFocus = useListNav(
     cmapOpen,
     cmapSorted.length,
@@ -871,6 +881,7 @@ export default function MenuSheet({
                 {/* ★ The OPENER must be registered too. It was a bare TouchableOpacity, so the
                     arrows walked straight past it and there was no keyboard way to open the
                     colour list at all — which read as "it skips the dropdown". */}
+                <View ref={cmapAnchor} collapsable={false}>
                 <NavRow><CmapHeaderBtn open={cmapOpen} onPress={() => setCmapOpen((o: boolean) => !o)}>
                 <TouchableOpacity style={styles.dropHeader}
                   onPress={() => setCmapOpen((o: boolean) => !o)} activeOpacity={0.7}>
@@ -897,6 +908,7 @@ export default function MenuSheet({
                     ))}
                   </ScrollView>
                 )}
+                </View>
 
                 {/* VFO Needle Colour — colour swatches */}
                 <SubLabel label="VFO Needle Colour" />
