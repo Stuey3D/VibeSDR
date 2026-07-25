@@ -323,6 +323,28 @@ no new machinery.
 ★ Align to the UTC 15-second grid rather than hunting for the edges: the slot boundaries are known
 in advance, which makes the on/off segmentation exact instead of inferred.
 
+### ★★ 8.3.1 The aggressor does not have to be in the capture — 40 m FT8 (7074 kHz)
+
+40 m is Stuart's best band, so **7074 kHz FT8 is the strongest aggressor available**. It does not
+fit alongside the 4.6 MHz references: that would need ~2.5 MHz of span and an RTL is only
+dependable to 2.4 MSPS.
+
+★ **It does not need to.** Front-end overload is caused by TOTAL POWER AT THE ANTENNA PORT,
+whether or not that part of the spectrum is being digitised. A strong 40 m signal desensitises the
+receiver while you are tuned to 4625 and capturing a single megahertz around it. That is not a
+compromise, it is the REALISTIC case — the thing hurting you is normally out of band, exactly as
+in §2.1 where broadcast voices landed on 4582 from well outside the tuned range. A test where the
+aggressor is conveniently inside the capture is the easier problem.
+
+★★ **And this is what the second dongle is really for.** Point dongle A at the victims (~4605 kHz,
+1.024 MSPS is plenty) and dongle B at the aggressor (7074 kHz). Same antenna, same splitter, same
+instant. Then correlate: does A's Buzzer SNR dip whenever B sees an FT8 slot? That gives an
+independently observed aggressor rather than one inferred from the clock — and it means the
+question "was the band actually busy just then?" is answered by measurement instead of assumption.
+
+With one dongle only, fall back to the UTC 15-second grid: FT8 slot timing is deterministic, so
+the segmentation still works, you just cannot confirm how hard the band was being driven.
+
 ★ These are propagation-dependent — the Buzzer is an evening signal at Stuart's location. So
 CAPTURE AND KEEP. A good night's recording becomes a permanent regression fixture; the band will
 not reproduce it on demand.
