@@ -285,9 +285,14 @@ location:
 |---|---|---|
 | 4582 | RTTY | the original overload case (§2.1) |
 | 4608.1 | WEFAX | image integrity — tearing and line-sync loss are visible and unambiguous |
-| 4625 | "The Buzzer" (UVB-76) | ★ **the AGGRESSOR** — strong, continuous, always on. Evenings. |
-| 5357 | FT8 (60 m) | ★ **the VICTIM** — weak, and objectively scored |
-| 3573 | FT8 (80 m) | second victim, different band edge |
+| 4625 | "The Buzzer" (UVB-76) | ★ **the VICTIM** — weak here, continuous, narrowband |
+| 5357 | FT8 (60 m) | ★ **the AGGRESSOR** — dominant here, and self-chopping |
+| 3573 | FT8 (80 m) | second aggressor, different band edge |
+
+★ **Roles are QTH-specific — identify them, do not assume.** This brief first had these the other
+way round on the reasonable guess that a Russian military transmitter would dominate a ham band.
+At Stuart's location it is the reverse: the Buzzer is fairly weak and FT8 dominates. Before any
+test run, look at the waterfall and decide which signal is strong and which is weak *here*.
 
 ★ **They all fit in ONE capture.** Centred on ~4605 kHz: 2.048 MSPS reaches everything except 80 m
 FT8; **2.4 MSPS reaches all five**. So a single recording carries five different modulations
@@ -295,15 +300,28 @@ through the same front end at the same instant — and combined with §8.1's ref
 same five through TWO front ends at two gains at the same instant. (2.4 MSPS is the noisier rate
 on an RTL, but coverage matters more than a dB here, and both channels suffer it equally.)
 
-★★ **The decisive experiment: Buzzer as aggressor, FT8 as victim.** A strong continuous carrier to
-drive the front end, and a weak signal with a genuinely objective score — FT8 gives decoded
-message COUNT and a reported SNR per decode, both numbers, both repeatable. Sweep gain and plot
-FT8 decodes against it. The peak of that curve is the correct gain, measured rather than judged,
-and the algorithm's answer can be graded against it directly. If FT8 decode count falls while the
-Buzzer stays put, the receiver is eating its own weak signals — which is the entire failure mode
-this feature exists to prevent.
+★★ **The decisive experiment: FT8 is a built-in chopper.** FT8 transmits in 15-second slots
+aligned to UTC, so a dominant FT8 signal stresses the front end for 15 seconds, stops for 15, and
+repeats — a square-wave aggressor we neither have to generate nor control.
 
-Note VibeSDR already has the FT8 decoder (ft8_lib), so the metric needs no new machinery.
+So: **measure the Buzzer's SNR during FT8 slots versus during the gaps, within ONE capture at ONE
+fixed gain.** If the weak signal's SNR drops in step with the FT8 cycle, the receiver is being
+desensitised by the strong one. That is a direct measurement of the entire failure mode, and it
+is *self-calibrating* — the comparison is between two moments seconds apart in the same recording,
+on the same hardware, at the same temperature, through the same antenna. Nothing left to confound.
+
+Then sweep gain and plot that SNR drop against it. **The gain at which the drop disappears is the
+correct gain, measured rather than judged**, and the algorithm's answer can be graded against it
+directly.
+
+The Buzzer is the better victim precisely because it is continuous and narrowband: its SNR can be
+measured every few milliseconds from a single FFT bin, where FT8 yields one number per 15 seconds.
+FT8's decode count and per-decode SNR remain a useful second metric on the aggressor side — is the
+strong signal ALSO being damaged — and VibeSDR already ships the decoder (ft8_lib), so that needs
+no new machinery.
+
+★ Align to the UTC 15-second grid rather than hunting for the edges: the slot boundaries are known
+in advance, which makes the on/off segmentation exact instead of inferred.
 
 ★ These are propagation-dependent — the Buzzer is an evening signal at Stuart's location. So
 CAPTURE AND KEEP. A good night's recording becomes a permanent regression fixture; the band will
