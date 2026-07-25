@@ -583,10 +583,25 @@ a simple number going up and down to show what each does."*
 ★ **The trigger is the right one**: it fires when the user has just revealed the misconception WITH THEIR
 THUMB — an answer to a question they actually asked, rather than a tutorial on connect that nobody reads.
 
-★★ **TRAP: the trigger needs a DWELL, or it fires on CORRECT use.** Pushing to the rim PASSES THROUGH a
-cardinal deflection on the way, so "deflected in a direction" alone would pop the pill every time someone
-engages properly. Condition must be **deflected + held + NO angular delta accumulating for ~400 ms** —
-the user pushing and WAITING for something to happen. That is the actual signature of the misconception.
+★★ **TRAP: the trigger must not fire on CORRECT use.** Pushing to the rim PASSES THROUGH a cardinal
+deflection on the way, so "deflected in a direction" alone would pop the pill every time someone engages
+properly. My first fix was a DWELL (deflected + held + no angular delta for ~400 ms).
+
+★★★ **Stuart's fix is better: require the attempt REPEATED a couple of times.** *"Only fire the pill when
+a user tries the same movement a couple of times, as a user has to push to the edge to activate rotation,
+so we don't want false positives."* The reason it beats the dwell alone: **a dwell cannot tell "waiting for
+it to work" from "PAUSED MID-GESTURE".** Someone who pushes to the rim and pauses half a second to think
+before rotating is doing it CORRECTLY — and the dwell would lecture them. Repetition cannot be mistaken
+that way: nobody pushes, gives up, and pushes again twice unless it is not working.
+
+★ **The two COMBINE rather than compete.** The dwell DEFINES a failed attempt (pushed to a direction,
+held, released, never rotated); the COUNT is the confidence threshold, firing on the 2nd-3rd such attempt.
+One is the detector, the other the gate.
+★ **RESET the counter on any successful rotation** — once someone has tuned they have understood, and
+stray deflections later must not accumulate toward a lecture they no longer need.
+★ **Do NOT require the SAME direction.** Someone pushing up, then left, then down is arguably the MOST
+confused user, not the least: they are systematically exploring for the one that works. Counting ANY
+failed attempt catches them; same-direction-only would miss them entirely.
 
 ★ **The number is the cleverest part**, because rotation DIRECTION is the one thing a diagram of a circle
 cannot convey on its own — clockwise-equals-up is arbitrary until something shows it, and a rising/falling
