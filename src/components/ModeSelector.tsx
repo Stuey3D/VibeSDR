@@ -5,6 +5,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
+import { NavCtx, NavRow, usePanelNav, useNavButton, NAV_FOCUS } from './PanelNav';
 import GainSlider from './GainSlider';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
@@ -12,6 +13,18 @@ type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
+// ── Keyboard / D-pad navigation (shared machinery — PanelNav) ────────────────
+// NavItem is a render prop rather than a wrapper component because every button in
+// this panel has bespoke inline styling; this way focus is threaded in without any
+// of that being rewritten.
+function NavItem({ onPress, children }: {
+  onPress?: () => void;
+  children: (focused: boolean, ref: React.MutableRefObject<View | null>) => React.ReactNode;
+}) {
+  const { focused, viewRef } = useNavButton(onPress);
+  return <>{children(focused, viewRef)}</>;
+}
+
 function fmtHz(hz: number) {
   return hz >= 1000 ? (hz / 1000).toFixed(1) + ' kHz' : hz + ' Hz';
 }
@@ -26,11 +39,14 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
   return <Text style={[dst.subLabel, small && { fontSize: 9, opacity: 0.7 }]}>{label}</Text>;
 }
 function OptRow({ children }: { children: React.ReactNode }) {
-  return <View style={dst.optRow}>{children}</View>;
+  return <NavRow><View style={dst.optRow}>{children}</View></NavRow>;
 }
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
   return (
-    <TouchableOpacity style={[dst.seg, active && dst.segActive]} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity ref={viewRef as any}
+      style={[dst.seg, active && dst.segActive, focused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+      onPress={onPress} activeOpacity={0.7}>
       <Text style={[dst.segText, active && dst.segTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -160,6 +176,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 
   const pick = (id: string) => { onSelect(id as Mode); onClose(); };
 
+  // Keyboard / D-pad navigation — shared machinery (PanelNav). Each grid is a NavRow,
+  // so up/down moves between grids and left/right within one.
+  const { navCtx, scrollRef } = usePanelNav(visible);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
@@ -167,8 +187,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
         {/* Scrolls when the content (decoders + callout + extensions + maps) overflows on a
             small screen (§7). Capped so big screens render static as before. */}
-        <ScrollView style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
+        <ScrollView ref={scrollRef} style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled">
+        <NavCtx.Provider value={navCtx}>
         <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
           DEMODULATOR
         </Text>
@@ -183,15 +204,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             />
           </View>
         ) : null}
-        <View style={st.grid}>
+        <NavRow><View style={st.grid}>
           {common.map(m => (
+            <NavItem key={m.id} onPress={() => pick(m.id)}>{(navFocused, navRef) => (
             <TouchableOpacity
-              key={m.id}
+              ref={navRef as any}
               style={[
                 st.btn,
                 { borderColor: isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)',
                   paddingVertical: isWhite ? 12 : 10 },
                 m.id === current && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+                navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 },
               ]}
               onPress={() => pick(m.id)}
             >
@@ -204,8 +227,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 {m.label.toUpperCase()}
               </Text>
             </TouchableOpacity>
+            )}</NavItem>
           ))}
-        </View>
+        </View></NavRow>
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -222,11 +246,14 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               }}
               minimumTrackTintColor={BW_MUTED} maximumTrackTintColor={BW_GOLD}
               thumbTintColor={BW_GOLD} />
-            <TouchableOpacity hitSlop={6}
-              style={[st.bwSyncBtn, bwSync && { borderColor: BW_GOLD, backgroundColor: 'rgba(255,200,0,0.12)' }]}
+            <NavRow><NavItem onPress={() => setBwSync(p => !p)}>{(navFocused, navRef) => (
+            <TouchableOpacity hitSlop={6} ref={navRef as any}
+              style={[st.bwSyncBtn, bwSync && { borderColor: BW_GOLD, backgroundColor: 'rgba(255,200,0,0.12)' },
+                      navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
               onPress={() => setBwSync(p => !p)} activeOpacity={0.7}>
               <Text style={[st.bwSyncTxt, bwSync && { color: BW_GOLD }]}>SYNC</Text>
             </TouchableOpacity>
+            )}</NavItem></NavRow>
             <Slider style={st.bwHalfSlider}
               minimumValue={0} maximumValue={bwEdgeMax} step={bwStep}
               value={Math.min(bwEdgeMax, Math.max(0, filterHigh))}
@@ -243,10 +270,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         {/* Combo dropdown: all the digital / decoder modes the server offers */}
         {others.length > 0 && (
           <View style={st.moreWrap}>
+            <NavRow><NavItem onPress={() => setMoreOpen(o => !o)}>{(navFocused, navRef) => (
             <TouchableOpacity
+              ref={navRef as any}
               style={[st.moreHead, { borderColor: t.btnBorder },
                       currentInOthers && { borderColor: t.btnActiveBdr, backgroundColor: t.btnActiveBg },
-                      activeDecInOthers && { borderColor: DEC_COL, backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                      activeDecInOthers && { borderColor: DEC_COL, backgroundColor: 'rgba(80,220,100,0.14)' },
+                      navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
               onPress={() => setMoreOpen(o => !o)}
               activeOpacity={0.8}>
               <Text style={[st.moreHeadText, { fontFamily: t.font },
@@ -257,12 +287,18 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               </Text>
               <Text style={[st.moreChevron, { color: t.btnText }]}>{moreOpen ? '▴' : '▾'}</Text>
             </TouchableOpacity>
+            )}</NavItem></NavRow>
             {moreOpen && (
               <ScrollView ref={moreScroll} style={[st.moreList, { borderColor: t.btnBorder }]} keyboardShouldPersistTaps="handled">
                 {others.map(m => (
+                  <NavRow key={m.id}><NavItem onPress={() => pick(m.id)}>{(navFocused, navRef) => (
                   <TouchableOpacity
-                    key={m.id}
-                    style={[st.moreItem, { borderBottomColor: t.barBorder }]}
+                    ref={navRef as any}
+                    // ★ Focus is a background TINT here, not a border. moreItem has only
+                    // a hairline BOTTOM border, so adding a 2px border on all sides would
+                    // shift every row in the list as focus moved down it.
+                    style={[st.moreItem, { borderBottomColor: t.barBorder },
+                            navFocused && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                     onPress={() => pick(m.id)}
                     onLayout={e => { itemY.current[m.id] = e.nativeEvent.layout.y; }}
                     activeOpacity={0.7}>
@@ -271,6 +307,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                       {m.id === activeDecoder || m.id === current ? '✓ ' : ''}{m.label.toUpperCase()}
                     </Text>
                   </TouchableOpacity>
+                  )}</NavItem></NavRow>
                 ))}
               </ScrollView>
             )}
@@ -294,23 +331,26 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
               CLIENT DECODERS
             </Text>
-            <View style={st.grid}>
+            <NavRow><View style={st.grid}>
               {/* No MORSE — the decoder was dropped (too heavy), so it's not offered. */}
               {(['rtty', 'navtex', 'wefax', 'sstv'] as DecId[]).map(k => {
                 const active = decoderControls.decMode === k && decoderControls.decOn;
                 const selected = decoderControls.decMode === k && !decoderControls.decOn;
                 return (
-                  <TouchableOpacity key={k}
+                  <NavItem key={k} onPress={() => decoderControls.onDecToggle(k)}>{(navFocused, navRef) => (
+                  <TouchableOpacity ref={navRef as any}
                     style={[st.btn, { borderColor: (active || selected) ? DEC_COL : t.btnBorder, paddingVertical: 10 },
-                            active && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                            active && { backgroundColor: 'rgba(80,220,100,0.14)' },
+                            navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                     onPress={() => decoderControls.onDecToggle(k)} activeOpacity={0.8}>
                     <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (active || selected) ? DEC_COL : t.btnText }]}>
                       {k.toUpperCase()}
                     </Text>
                   </TouchableOpacity>
+                  )}</NavItem>
                 );
               })}
-            </View>
+            </View></NavRow>
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={dst.callout}>
                 <RttySettingsRows s={decoderControls.rttySettings} onChange={decoderControls.onRttySettings} />
@@ -334,33 +374,41 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
               {spotsControls.label}
             </Text>
-            <View style={st.grid}>
-              <TouchableOpacity style={[st.btn, { borderColor: spotsControls.spotsKind === 'digi' ? DEC_COL : t.btnBorder, paddingVertical: 10 },
-                                        spotsControls.spotsKind === 'digi' && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+            <NavRow><View style={st.grid}>
+              <NavItem onPress={() => spotsControls.onSpotsToggle('digi')}>{(nf, nr) => (
+              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'digi' ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                                        spotsControls.spotsKind === 'digi' && { backgroundColor: 'rgba(80,220,100,0.14)' },
+                                        nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                 onPress={() => spotsControls.onSpotsToggle('digi')} activeOpacity={0.8}>
                 <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'digi' ? DEC_COL : t.btnText }]}>DIGITAL SPOTS</Text>
-              </TouchableOpacity>
+              </TouchableOpacity>)}</NavItem>
               {spotsControls.showCwStt && (
-                <TouchableOpacity style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? DEC_COL : t.btnBorder, paddingVertical: 10 },
-                                          spotsControls.spotsKind === 'cw' && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                <NavItem onPress={() => spotsControls.onSpotsToggle('cw')}>{(nf, nr) => (
+                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                                          spotsControls.spotsKind === 'cw' && { backgroundColor: 'rgba(80,220,100,0.14)' },
+                                          nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                   onPress={() => spotsControls.onSpotsToggle('cw')} activeOpacity={0.8}>
                   <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'cw' ? DEC_COL : t.btnText }]}>CW SPOTS</Text>
-                </TouchableOpacity>
+                </TouchableOpacity>)}</NavItem>
               )}
               {spotsControls.showCwStt && (
-                <TouchableOpacity style={[st.btn, { borderColor: (spotsControls.sttActive || spotsControls.sttSelected) ? DEC_COL : t.btnBorder, paddingVertical: 10 },
-                                          spotsControls.sttActive && { backgroundColor: 'rgba(80,220,100,0.14)' }]}
+                <NavItem onPress={spotsControls.onSttToggle}>{(nf, nr) => (
+                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: (spotsControls.sttActive || spotsControls.sttSelected) ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                                          spotsControls.sttActive && { backgroundColor: 'rgba(80,220,100,0.14)' },
+                                          nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                   onPress={spotsControls.onSttToggle} activeOpacity={0.8}>
                   <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (spotsControls.sttActive || spotsControls.sttSelected) ? DEC_COL : t.btnText }]}>STT</Text>
-                </TouchableOpacity>
+                </TouchableOpacity>)}</NavItem>
               )}
               {spotsControls.showMap && (
-                <TouchableOpacity style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+                <NavItem onPress={() => spotsControls.onSpotsMap?.()}>{(nf, nr) => (
+                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                                  nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                   onPress={() => spotsControls.onSpotsMap?.()} activeOpacity={0.8}>
                   <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
-                </TouchableOpacity>
+                </TouchableOpacity>)}</NavItem>
               )}
-            </View>
+            </View></NavRow>
           </View>
         )}
 
@@ -371,16 +419,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
               OPENWEBRX
             </Text>
-            <View style={st.grid}>
-              <TouchableOpacity style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+            <NavRow><View style={st.grid}>
+              <NavItem onPress={owrxPages.onMap}>{(nf, nr) => (
+              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                                nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                 onPress={owrxPages.onMap} activeOpacity={0.8}>
                 <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+              </TouchableOpacity>)}</NavItem>
+              <NavItem onPress={owrxPages.onFiles}>{(nf, nr) => (
+              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                                nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                 onPress={owrxPages.onFiles} activeOpacity={0.8}>
                 <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🖼 FILES</Text>
-              </TouchableOpacity>
-            </View>
+              </TouchableOpacity>)}</NavItem>
+            </View></NavRow>
           </View>
         )}
 
@@ -391,24 +443,29 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
               SERVER MAPS
             </Text>
-            <View style={st.grid}>
+            <NavRow><View style={st.grid}>
               {([['hfdl', '✈ HFDL'], ['digi', '📡 DIGITAL'], ['cw', '⊟ CW']] as const).map(([k, label]) => (
-                <TouchableOpacity key={k}
-                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 }]}
+                <NavItem key={k} onPress={() => onServerMap(k)}>{(nf, nr) => (
+                <TouchableOpacity ref={nr as any}
+                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                          nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                   onPress={() => onServerMap(k)} activeOpacity={0.8}>
                   <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</Text>
-                </TouchableOpacity>
+                </TouchableOpacity>)}</NavItem>
               ))}
-            </View>
+            </View></NavRow>
           </View>
         )}
 
-        <TouchableOpacity
-          style={[st.closeBtn, { borderColor: t.btnBorder }]}
+        <NavRow><NavItem onPress={onClose}>{(nf, nr) => (
+        <TouchableOpacity ref={nr as any}
+          style={[st.closeBtn, { borderColor: t.btnBorder },
+                  nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
           onPress={onClose}
         >
           <Text style={[st.closeBtnText, { fontFamily: t.font, color: t.btnText }]}>CLOSE</Text>
-        </TouchableOpacity>
+        </TouchableOpacity>)}</NavItem></NavRow>
+                </NavCtx.Provider>
         </ScrollView>
       </View>
     </Modal>
