@@ -272,7 +272,12 @@ be silently dropped. Controller support goes into the **existing** files, exactl
 
 ## 4. Build order
 
-### Phase 1 — keyboard panel navigation (Stuart tests before phase 2 starts)
+### Phase 1 — keyboard panel navigation ✅ BUILT 2026-07-25, AWAITING DEVICE TEST
+
+Done: `PanelNav.tsx` extracted (grid + list shapes, owner arbitration, measured reveal);
+MenuSheet rewired onto it; **sliders fixed** (they were SKIPPED entirely — Stuart found it);
+StepPicker, AudioSheet (incl. the squelch bar) and ModeSelector all navigable. `tsc` clean.
+★ NOT yet verified on device — see §4.1 for what to try.
 
 Main-screen keyboard control already ships. What is missing is navigation *inside* the panels.
 
@@ -290,6 +295,21 @@ Main-screen keyboard control already ships. What is missing is navigation *insid
 ★ Test each panel as it lands. A crash-loop already cost a session once: `if (!open)` type-checked because
 the DOM lib declares a global `open`, and the prop was `visible`. **A clean `tsc` is NOT proof a name is
 in scope.**
+
+#### 4.1 ★ What to test before phase 2
+
+1. **MenuSheet** — arrows walk every row; **sliders now take focus** and left/right change
+   them (they used to be skipped). Toggle waterfall AUTO/MANUAL and check the sliders that
+   appear land in the right place in the order, not at the end.
+2. **StepPicker / ModeSelector** — arrows walk the wrapped grids in reading order; CLOSE is
+   the last stop. In ModeSelector open DIGITAL/DECODERS and walk the dropdown — focus there
+   is a background tint, not a border, deliberately.
+3. **AudioSheet** — the squelch bar takes focus and left/right nudges it 4% per press.
+4. ★ **Scroll-to-focus** — the one part that could not be verified without a device. It now
+   MEASURES instead of estimating; if focus moves without the panel scrolling to follow,
+   `getInnerViewNode()` is unavailable and it is silently using the old estimate.
+5. **One panel at a time owns the keys** — open a picker over the menu and confirm only the
+   top one moves.
 
 ### Phase 2 — game controller (built on phase 1's machinery)
 
