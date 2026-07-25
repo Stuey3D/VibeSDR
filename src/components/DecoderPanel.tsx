@@ -273,6 +273,11 @@ export default function DecoderPanel({
   const bodyScroll = {
     scrollEventThrottle: 32,
     onScroll: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
+    // ★ Resync from reality when the list settles or the user drags it. Without this, a target
+    // that ran past the end leaves the arrows pressing against a wall — you would have to key
+    // back through the overshoot before anything moved.
+    onMomentumScrollEnd: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
+    onScrollEndDrag:     (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
   };
 
   const dc = {
@@ -470,9 +475,14 @@ export default function DecoderPanel({
           const sv: any = aircraftRef.current ?? spotsRef.current ?? outputRef.current;
           if (!sv) return;
           setKbZone('list');
+          // ★★ NOT ANIMATED, deliberately. An animated scroll emits onScroll frames while it
+          // runs, and this ref is updated from those — so with key repeat each step computed
+          // its next target from a MID-FLIGHT position and the list oscillated. Stepping
+          // straight there removes the whole class: the repeat rate is what makes it look like
+          // scrolling, and it does so more smoothly than fighting an animation.
           bodyScrollY.current = Math.max(0, bodyScrollY.current + (k === 'ArrowDown' ? 90 : -90));
-          if (sv.scrollToOffset) sv.scrollToOffset({ offset: bodyScrollY.current, animated: true });
-          else sv.scrollTo?.({ y: bodyScrollY.current, animated: true });
+          if (sv.scrollToOffset) sv.scrollToOffset({ offset: bodyScrollY.current, animated: false });
+          else sv.scrollTo?.({ y: bodyScrollY.current, animated: false });
           return;
         }
         setKbZone('list');
