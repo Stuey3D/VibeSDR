@@ -628,7 +628,13 @@ export default function MenuSheet({
   // is shared (PanelNav.tsx); attach `scrollRef` to the ScrollView and the buttons
   // register themselves. Esc is NOT handled here — SDRScreen already closes panels
   // on Esc, and one owner for that rule is what keeps the precedence honest.
-  const { navCtx, scrollRef } = usePanelNav(visible);
+  // ★ BACKSPACE = ‹ BACK. The sub-panels (Display Settings, Bookmarks, the colour-map
+  // and profile dropdowns) each have a BACK row, but a keyboard-only user had no way to
+  // reach it — you could get INTO a sub-panel and not out. Read through a ref because the
+  // pane states are declared further down; the ref is refreshed every render, so the
+  // closure never sees a stale one.
+  const paneBack = useRef<() => void>(() => {});
+  const { navCtx, scrollRef } = usePanelNav(visible, { onBack: () => paneBack.current() });
 
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
   // server order on purpose — they're SDR-type ordered and re-sorting risks the
@@ -691,6 +697,18 @@ export default function MenuSheet({
   const [bmName,         setBmName]         = useState('');
   const [bmAll,          setBmAll]          = useState(false);
   const [bmImportOpen,   setBmImportOpen]   = useState(false);
+
+  // Deepest-first, so Backspace peels one layer at a time rather than jumping to the top.
+  paneBack.current = () => {
+    if (bmImportOpen)     { setBmImportOpen(false); return; }
+    if (cmapOpen)         { setCmapOpen(false); return; }
+    if (profileOpen)      { setProfileOpen(false); return; }
+    if (dabOpen)          { setDabOpen(false); return; }
+    if (bookmarksOpen)    { setBookmarksOpen(false); return; }
+    if (dispSettingsOpen) { setDispSettingsOpen(false); return; }
+    // Nothing nested open — leave the menu itself to Esc, which SDRScreen owns.
+  };
+
   const [bmImportText,   setBmImportText]   = useState('');
   const [bmImportMsg,    setBmImportMsg]    = useState('');
   useEffect(() => {

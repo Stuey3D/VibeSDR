@@ -64,6 +64,10 @@ class VibeKeyWindow: UIWindow {
     case .keyboardEscape:     return "Escape"
     case .keyboardTab:        return "Tab"
     case .keyboardSpacebar:   return "Space"
+    // Backspace steps OUT of a sub-panel (Display Settings, Bookmarks…), which
+    // otherwise had no keyboard way back. Safe to claim because a focused text
+    // field takes precedence — see `isTypingInTextField`.
+    case .keyboardDeleteOrBackspace: return "Backspace"
     default:
       // Letters come through as their characters; ignore anything with modifiers so
       // system shortcuts (Cmd-Q and friends) are left entirely alone.
@@ -73,23 +77,55 @@ class VibeKeyWindow: UIWindow {
     }
   }
 
+  /// ★★ A FOCUSED TEXT FIELD OWNS THE KEYBOARD.
+  ///
+  /// This window claims keys before the responder chain sees them, and it used to claim
+  /// them unconditionally — so while the user was typing, every letter was swallowed and
+  /// never reached the field. Chat was completely dead, and Enter never arrived either, so
+  /// a typed frequency could not be committed. DIGITS still worked, because `name(for:)`
+  /// ignores them, which is exactly why the bug looked partial and confusing rather than
+  /// total. (Stuart, 2026-07-25.)
+  ///
+  /// RN's TextInput is backed by a UITextField, so conformance to UITextInput is a reliable
+  /// test. The walk costs a hierarchy traversal per key press, which is nothing — key
+  /// presses are a human-speed event.
+  private var isTypingInTextField: Bool {
+    func find(_ v: UIView) -> UIResponder? {
+      if v.isFirstResponder { return v }
+      for s in v.subviews { if let r = find(s) { return r } }
+      return nil
+    }
+    return find(self) is UITextInput
+  }
+
+  /// Keys the APP still needs to hear while the user is typing. Enter commits a typed
+  /// frequency or sends a chat line; Escape backs out. Everything else — letters, arrows
+  /// (which move the caret), Backspace (which deletes) — belongs to the field alone.
+  private static let typingPassthrough: Set<String> = ["Enter", "Escape"]
+
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-    var handled = false
+    let typing = isTypingInTextField
     for p in presses {
       guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      if typing && !VibeKeyWindow.typingPassthrough.contains(n) { continue }
       VibePowerModule.emitKey("VibeKeyDown", n)
-      handled = true
     }
+    // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must
+    // still receive them. We are observing here, not intercepting.
+    if typing { super.pressesBegan(presses, with: event); return }
+    let handled = presses.contains { $0.key.flatMap(VibeKeyWindow.name(for:)) != nil }
     if !handled { super.pressesBegan(presses, with: event) }
   }
 
   override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-    var handled = false
+    let typing = isTypingInTextField
     for p in presses {
       guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      if typing && !VibeKeyWindow.typingPassthrough.contains(n) { continue }
       VibePowerModule.emitKey("VibeKeyUp", n)
-      handled = true
     }
+    if typing { super.pressesEnded(presses, with: event); return }
+    let handled = presses.contains { $0.key.flatMap(VibeKeyWindow.name(for:)) != nil }
     if !handled { super.pressesEnded(presses, with: event) }
   }
 

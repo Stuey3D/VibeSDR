@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Keyboard, KeyboardAvoidingView, Modal, Platform,
+  Keyboard, KeyboardAvoidingView, Modal, NativeEventEmitter, NativeModules, Platform,
   Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import { ScrollView } from 'react-native';
@@ -201,11 +201,36 @@ export default function FreqModal({
     if (hz > 0) setValue(toDisplay(hz, u));
   };
 
+  // ★ Guarded, because Enter can now arrive from two places at once — the hardware key
+  // mirrored by VibeKeyWindow, and onSubmitEditing from the on-screen keyboard. Tuning
+  // twice on one press would be a real (if brief) double retune of the server.
+  const confirming = useRef(false);
   const confirm = () => {
+    if (confirming.current) return;
+    confirming.current = true;
+    setTimeout(() => { confirming.current = false; }, 0);
     const hz = fromDisplay(value, unit);
     if (hz >= minHz && hz <= maxHz) { onConfirm(hz); onClose(); }
     Keyboard.dismiss();
   };
+
+  // ★★ A HARDWARE Enter has to come from the NATIVE key stream, not from the TextInput.
+  // The field is keyboardType="decimal-pad", which has no return key for RN to map, so
+  // onSubmitEditing never fires — and onKeyPress did not save it either, because
+  // VibeKeyWindow was swallowing Enter before the field ever saw it. The window now
+  // mirrors Enter through while typing, so listening here is what actually works.
+  // (Stuart: "the enter button isnt working on frequency typing still".)
+  useEffect(() => {
+    if (!visible) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      if (e?.key === 'Enter') confirmRef.current();
+    });
+    return () => sub.remove();
+  }, [visible]);
+
+  // Read through a ref so the listener above never captures a stale `value`.
+  const confirmRef = useRef(confirm); confirmRef.current = confirm;
 
   const dimText  = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(150,100,30,0.65)';
   const unitText = isWhite ? '#b0b8c8' : '#886600';
@@ -287,12 +312,9 @@ export default function FreqModal({
               autoCorrect={false}
               selectTextOnFocus
               onSubmitEditing={confirm}
-              // ★ A HARDWARE Enter does not fire onSubmitEditing here: the field is
-              // keyboardType="decimal-pad", which has no return key for RN to map it
-              // to. onKeyPress does see it, so the key that obviously ought to commit
-              // a typed frequency now does. (Stuart: "I cannot press enter to enter
-              // it and close the box".)
-              onKeyPress={e => { if (e.nativeEvent.key === 'Enter') confirm(); }}
+              // ★ A hardware Enter is handled by the VibeKeyDown listener above, NOT here.
+              // onKeyPress was tried and never fired: VibeKeyWindow was swallowing Enter
+              // before the field could see it, so there was nothing to hear.
               returnKeyType="done"
             />
             <Text style={[st.unitLabel, { color: unitText, fontFamily: t.font }]}>

@@ -82,11 +82,13 @@ function useNavKeys(opts: {
   setFocused: (id: number) => void;
   /** Flat lists (and wrapped grids) move on left/right as well as up/down. */
   flat?: boolean;
+  /** Backspace — step OUT of a sub-panel. See the note on the key handler. */
+  onBack?: () => void;
 }) {
-  const { visible, getEntries, focusedRef, setFocused, flat } = opts;
+  const { visible, getEntries, focusedRef, setFocused, flat, onBack } = opts;
   const tok = useNavOwner(visible);
-  const cbRef = useRef({ getEntries, setFocused });
-  cbRef.current = { getEntries, setFocused };
+  const cbRef = useRef({ getEntries, setFocused, onBack });
+  cbRef.current = { getEntries, setFocused, onBack };
 
   useEffect(() => {
     // ★ `visible`, NOT `open`. An earlier version of this said `open` and
@@ -99,7 +101,12 @@ function useNavKeys(opts: {
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key;
       if (!k || !isTopOwner(tok.current)) return;   // a panel above us owns the keys
-      const { getEntries: get, setFocused: set } = cbRef.current;
+      const { getEntries: get, setFocused: set, onBack: back } = cbRef.current;
+      // ★ BACKSPACE STEPS OUT of a sub-panel. Multi-level menus (Display Settings,
+      // Bookmarks) had a ‹ BACK row but no keyboard way to reach it, so a keyboard-only
+      // user could enter a sub-panel and not get out. Safe to claim: the native side only
+      // sends Backspace when NO text field has focus, so it still deletes while typing.
+      if (k === 'Backspace') { back?.(); return; }
       // Sorted by row then id = the reading order of the JSX, without anyone
       // having to declare it.
       const all = [...get()].sort((a, b) => a.row - b.row || a.id - b.id);
@@ -195,7 +202,7 @@ export const RowCtx = React.createContext<number>(-1);
  * Grid navigation for a panel whose buttons register themselves via NavCtx.
  * Wrap the content in `<NavCtx.Provider value={navCtx}>` and rows in `<NavRow>`.
  */
-export function usePanelNav(visible: boolean) {
+export function usePanelNav(visible: boolean, opts?: { onBack?: () => void }) {
   const entries   = useRef<NavEntry[]>([]);
   const rowSeq    = useRef(0);
   const scrollRef = useRef<ScrollView | null>(null);
@@ -225,6 +232,7 @@ export function usePanelNav(visible: boolean) {
     getEntries: useCallback(() => entries.current, []),
     focusedRef,
     setFocused,
+    onBack: opts?.onBack,
   });
 
   const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, nextRow, scrollRef }),
