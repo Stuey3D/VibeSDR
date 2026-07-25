@@ -478,6 +478,25 @@ dropped.
 ★ RULE FOR ANY FUTURE TV FLANK: include it only if it is *readable* (status, frequency, meters) or
 *actuable from a keyboard*. If its only affordance is touch or drag, it stays on the phone.
 
+### ★★★ SETTLED: NO ANALOGUE STICKS — the D-pad does tune/zoom, like the arrow keys (Stuart)
+
+★ Right for a stronger reason than simplicity: **it is the only mapping that satisfies Apple's floor
+with ONE code path.** tvOS MANDATES that the Siri Remote works; the remote has no sticks, but its
+clickpad reports as **`dpad` on `GCMicroGamepad`, the same element name `GCExtendedGamepad` uses.** So a
+single D-pad handler covers the Siri Remote, every game controller, and the keyboard arrows — all on the
+already-shipped, device-validated `createHoldSweep` law (tap = step, hold = ramp to sweep, with
+`sweepTargetRate` step-awareness). The D-pad also drives menu navigation: one device, both jobs, no
+modes.
+
+★ Put the other way: had tune/zoom lived on the sticks, we would STILL have needed the D-pad path for
+the remote. Sticks were additive complexity that removed no obligation — a second control law, a
+deadzone to tune, and a new sweep curve to validate, all to duplicate something already working.
+
+★ The door stays open rather than closed: a stick, if present, can MIRROR the D-pad, and a velocity law
+(deflection = rate) could be added later as an enhancement rather than a redesign. Right-stick =
+waterfall pan is worth having where a stick exists but can never be core, since panning has no Siri
+Remote equivalent at all.
+
 ### ★★ SETTLED: step rate moves to L1/R1, so the flank set is THREE (Stuart, 2026-07-25)
 
 The controller mapping (see below / memory `external_display_shack_mode`) forced a useful question: the
