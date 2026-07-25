@@ -31,20 +31,27 @@ export interface BrowserOverlayProps {
 
 export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel }: BrowserOverlayProps) {
   // ★★ THIS IS SOMEONE ELSE'S PAGE. Every VibeSDR keyboard and controller shortcut is
-  // switched off for as long as it is open — see PanelNav. Firing our own actions under a
+  // switched off for as long as it is SHOWING — see PanelNav. Firing our own actions under a
   // page we did not write is worse than doing nothing, because the user is looking at that
   // page and will read whatever happens as the page's doing.
-  useSuppressShortcuts();
+  //
+  // ★★★ GATED ON `url`, and that is the whole point. This component is rendered
+  // UNCONDITIONALLY by SDRScreen for the admin pages and merely returns null when it has no
+  // url (see below) — so an ungated call suppressed every shortcut in the app, permanently,
+  // the moment the screen mounted. MOUNTED IS NOT THE SAME AS VISIBLE, and the failure mode
+  // was silent and total: the keyboard simply stopped working everywhere. (2026-07-25.)
+  useSuppressShortcuts(!!url);
 
   // ★ Say so, rather than being silently dead. Shown only if a key is actually pressed:
   // someone driving by touch never sees it, and someone reaching for the keyboard gets an
   // answer at the exact moment they ask the question. (Stuart, 2026-07-25.)
   const [keyNote, setKeyNote] = React.useState(false);
   React.useEffect(() => {
+    if (!url) { setKeyNote(false); return; }   // same reason: no page, no listener
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', () => setKeyNote(true));
     return () => sub.remove();
-  }, []);
+  }, [url]);
 
   const webRef = useRef<WebView>(null);
   const [canBack, setCanBack] = useState(false);
