@@ -246,6 +246,16 @@ export default function DecoderPanel({
   const isWhite = t.name === 'white';
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
+
+  // ★ Expanding changes every row's height at once, so any preserved offset points somewhere
+  // different afterwards. Going to the top is a DEFINED position rather than a guessed one —
+  // and spots are newest-first, so the top is where you would want to be anyway.
+  const didMountSpots = useRef(false);
+  useEffect(() => {
+    if (!didMountSpots.current) { didMountSpots.current = true; return; }
+    bodyScrollY.current = 0;
+    requestAnimationFrame(() => spotsRef.current?.scrollToOffset?.({ offset: 0, animated: false }));
+  }, [spotsExpanded]);
   const opacity  = useRef(new Animated.Value(0)).current;
   const slideY   = useRef(new Animated.Value(20)).current;
   const outputRef = useRef<ScrollView>(null);
@@ -846,7 +856,16 @@ export default function DecoderPanel({
             initialNumToRender={12}
             maxToRenderPerBatch={12}
             windowSize={5}
-            removeClippedSubviews
+            // ★★ removeClippedSubviews is OFF, deliberately. Spot rows change height when
+            // EXPAND is toggled, and with clipping on, iOS mis-estimates the content size,
+            // corrects it, the correction moves the offset, and the list oscillates — Stuart:
+            // "scrolling rapidly and getting stuck bouncing up and down". It is a documented
+            // problem with dynamic row heights, and the memory it saves on a list this short is
+            // not worth a list that cannot be read.
+            removeClippedSubviews={false}
+            // A stable key per spot rather than one including the index, so a row keeps its
+            // identity across the re-render that expanding causes.
+            extraData={spotsExpanded}
             ListEmptyComponent={
               <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: t.font }]}>
                 waiting for spots…
