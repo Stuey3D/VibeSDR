@@ -1158,6 +1158,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // Scrolling uses the FlatList's own scrollToIndex, which sidesteps the measurement
   // problem the panels hit entirely — the list already knows where its rows are.
   const listRef = useRef<FlatList<ListItem> | null>(null);
+  // ★★ The DEFAULT screen is the DraggableFlatList, with the whole chooser (custom URL,
+  // discovered, directories) as its ListHeaderComponent — so `listData` is the server rows
+  // BELOW that header. reveal() only ever had the plain FlatList's ref, so on the screen the
+  // user actually sees, scrollToIndex did nothing and the highlight moved off-screen below
+  // the fold. Focus was working the whole time; it simply could not be seen.
+  const dragRef = useRef<any>(null);
   // ★★★ GATED ON SCREEN FOCUS, and this is not optional. A stack navigator keeps this
   // screen MOUNTED behind SDRScreen, so without the gate its key listener stayed live: an
   // Enter meant for the frequency box ALSO activated whichever row this list still had
@@ -1185,8 +1191,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     },
     (i) => {
       // viewPosition 0.5 keeps focus mid-screen, which reads far better from across a
-      // room than nudging it just inside the edge.
-      try { listRef.current?.scrollToIndex({ index: i, viewPosition: 0.5, animated: true }); }
+      // room than nudging it just inside the edge. Whichever list is actually mounted.
+      const target: any = selectedDir !== null ? listRef.current : dragRef.current;
+      try { target?.scrollToIndex?.({ index: i, viewPosition: 0.5, animated: true }); }
       catch { /* index briefly out of range while the list rebuilds — harmless */ }
     },
   );
@@ -1770,6 +1777,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           )
         ) : (
           <DraggableFlatList
+            ref={dragRef}
             extraData={navFocus}   // same reason as the FlatList above
             data={listData}
             containerStyle={{ flex: 1 }}
