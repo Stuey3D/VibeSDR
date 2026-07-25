@@ -153,3 +153,45 @@ renegotiated.
 ★ SCOPE WARNING: this is a render-path change on a PROTECTED SURFACE (the zoom drum's waterfall,
 [[feedback_zoom_drum]]). It wants doing deliberately, with the §6 test cases run by hand before and
 after — not bolted on at the end of a session.
+
+---
+
+## 9. ★★ ATTEMPTED 2026-07-25 AND REVERTED — read before trying again
+
+§8's plan was implemented (ring widened to 1.5x the view, rows written at the bin offset their own
+centre gives, shader sampling a sub-range via new `uViewStart`/`uViewBins` uniforms). It DID fix the
+alignment and made history slide correctly under a pan. It was reverted anyway, because it destroyed
+a feature Stuart will not compromise on:
+
+★★ **THE WATERFALL HISTORY MUST SURVIVE A ZOOM.** Absolute placement means a row is only meaningful
+at the bin scale it was stored at, so a scale change invalidates the buffer — and the implementation
+cleared it. Every zoom restarted the waterfall. Stuart: *"that's a visual element of our app I am not
+going to compromise on"*, and zoom is a constant action (worse than rotation, which was unaffected).
+
+★★ **THE DEEPER POINT, and why §8 was still incomplete.** Today's waterfall is deliberately "ALWAYS
+THE CURRENT VIEW": history is implicitly re-labelled by whatever the view now is. That is exactly WHY
+a zoom instantly rescales the whole history and stays continuous — and it is the same property that
+makes an in-flight frame land at the wrong offset. **The bug and the hero feature are the same design
+decision.** Any fix must keep continuity, not trade it away.
+
+### The route that could satisfy both (NOT yet attempted)
+1. Hold the ring at a FIXED bin scale and let the shader stretch for zoom — it now can, given
+   `uViewStart`/`uViewBins`. Small zooms become free magnification with history intact.
+2. RESAMPLE the ring (nearest-neighbour, 1024 rows) only when the scale has drifted far — say >1.5x.
+   Rare enough to afford ~10-20 ms.
+3. ★ THE CATCH: while zoomed in beyond the ring's scale, incoming rows are downsampled into a coarse
+   grid — losing the detail the user zoomed in FOR. So the re-base must be prompt, and a zoom-drum
+   spin will trigger several. Resampling per scale change is NOT affordable at drum rates; that is
+   the crux to solve.
+
+### Facts established, worth not re-deriving
+- ★ `binCount` is NOT requestable — it comes from the server (`status.binCount = floats.length`).
+  So `span = binBandwidth x binCount` means a wider span ALWAYS costs resolution, and there is no
+  "more bins for more bandwidth" option. Bytes per frame are FIXED regardless of span.
+- ★★ Therefore the data-rate spike on tuning was never bigger frames — it was MORE FRAMES, one per
+  view reconfiguration. **Data rate is proportional to frame rate, full stop.** Over-fetching a
+  margin from the server would cost resolution but NOT bandwidth.
+- The 1.5x-wide ring costs 1.5 MB instead of 1 MB, and no resolution at all on its own: the view
+  still shows the same bins. Resolution only enters if the SERVER is asked for a wider span.
+- `trueCenterHz` is already plumbed through to the renderer (the watch uses it); the phone's own
+  render deliberately does not.
