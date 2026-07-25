@@ -141,7 +141,12 @@ would have correctly refused to keep climbing on the night this was raised.
 ## 4.1 ★ Prior art: ka9q-radio, and the one thing it does not have to solve
 
 Phil Karn's `radiod` (ka9q-radio) is the best-regarded automatic gain in the amateur SDR world,
-and Stuart rates the RX888 running under it. What it actually does, from `src/rx888.c`:
+and Stuart rates the gain behaviour of the RX888 he hears on UberSDR.
+
+★ ATTRIBUTION UNVERIFIED: whether that good behaviour is `radiod`'s AGC or something UberSDR does
+on top of it has NOT been established — Stuart's own words were "unless the auto gain is
+UberSDR's, I dunno". Do not repeat the claim as fact without checking. What follows is read
+directly from `radiod`'s source and IS factual about `radiod`:
 
 - Measures **IF power** — summed squared samples after DC removal, exponentially smoothed.
 - Targets the midpoint of `AGC_UPPER_LIMIT` −15 dBFS and `AGC_LOWER_LIMIT` −26 dBFS, so
