@@ -340,6 +340,19 @@ export default function DecoderPanel({
   //
   // ★ Once per appearance, so Tab still releases it and does not immediately snatch it back:
   // a user who wants the waterfall's zoom on a DAB ensemble can still have it.
+  // ★ The list SCROLLS, so focus has to drag it — the same fault the profile list had. Uses
+  // the y each row reports on layout rather than a measurement API: it is the position within
+  // the scroll content, which is exactly what scrollTo wants, and it cannot silently no-op the
+  // way measureLayout did three times over.
+  const dabScroll = useRef<ScrollView | null>(null);
+  const dabY = useRef<Record<number, number>>({});
+  useEffect(() => {
+    if (kbZone !== 'list') return;
+    const p = dabProgrammes[listIdx];
+    const y = p ? dabY.current[p.id] : undefined;
+    if (y != null) dabScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
+  }, [listIdx, kbZone, dabProgrammes]);
+
   const autoTaken = useRef(false);
   useEffect(() => {
     const want = isDabMode && panelOn && !minimised;
@@ -732,12 +745,13 @@ export default function DecoderPanel({
           </View>
         )}
         {!minimised && isDabMode && (
-          <ScrollView style={dp.body} showsVerticalScrollIndicator>
+          <ScrollView ref={dabScroll} style={dp.body} showsVerticalScrollIndicator>
             {dabProgrammes.map((p, pi) => {
               const active = p.id === activeDabId;
               const navOn = kbZone === 'list' && listIdx === pi;
               return (
                 <TouchableOpacity key={p.id}
+                  onLayout={(e) => { dabY.current[p.id] = e.nativeEvent.layout.y; }}
                   style={[dp.dabRow, { borderBottomColor: dc.hdrBdr },
                           navOn && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                   onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
