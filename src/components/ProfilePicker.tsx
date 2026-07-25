@@ -96,19 +96,21 @@ export default function ProfilePicker({
   // view with it, exactly as the bookmarks pane needed. Without a reveal the caret walks off
   // the bottom of the dropdown and the list stays where it was.
   const listScroll = useRef<ScrollView | null>(null);
-  const itemViews  = useRef<any[]>([]);
+  // ★ The y each row reports on layout, NOT measureLayout. This file used measureLayout with
+  // getInnerViewNode() — which is a no-op under the New Architecture, established earlier the
+  // same day and then repeated here. onLayout gives the position within the scroll content
+  // directly, which is exactly what scrollTo wants, and it is what the decoder list already
+  // does successfully.
+  const itemY = useRef<Record<string, number>>({});
 
   const navFocus = useListNav(open, flatProfiles.length, (i) => {
     const id = flatProfiles[i];
     if (id != null) { onSelectProfile?.(id); setOpen(false); onPicked?.(); }
   },
     (i) => {
-      const v = itemViews.current[i];
-      v?.measureLayout?.(
-        (listScroll.current as any)?.getInnerViewNode?.(),
-        (_x: number, y: number) => listScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true }),
-        () => {},
-      );
+      const id = flatProfiles[i];
+      const y = id != null ? itemY.current[id] : undefined;
+      if (y != null) listScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
     },
     undefined,
     // Backspace leaves WITHOUT switching — a profile change retunes a shared SDR for
@@ -179,7 +181,7 @@ export default function ProfilePicker({
                   return (
                     <TouchableOpacity
                       key={it.id}
-                      ref={(r: any) => { itemViews.current[flatProfiles.indexOf(it.id)] = r; }}
+                      onLayout={(e) => { itemY.current[it.id] = e.nativeEvent.layout.y; }}
                       style={[s.item, serverActive && !active && s.itemInUse,
                               flatProfiles[navFocus] === it.id
                                 && s.itemFocused]}
