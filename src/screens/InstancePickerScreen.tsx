@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
-import { useListNav, NAV_FOCUS } from '../components/PanelNav';
+import { useListNav, NAV_FOCUS, shortcutsSuppressed } from '../components/PanelNav';
 import {
   ActivityIndicator,
   Alert,
@@ -1136,9 +1136,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // subtitle in style — quiet prose under the title — but not a permanent one: a touch user
   // never needs it, and showing it to them would be teaching a lesson nobody asked for.
   const [kbHint, setKbHint] = useState(false);
+  // ★ TEMPORARY DIAGNOSTIC (2026-07-25). Three builds of guessing at why the selection box
+  // never appears; this puts the actual state on screen so one screenshot settles it.
+  // REMOVE once the cause is found.
+  const [dbg, setDbg] = useState({ keys: 0, last: '' });
   useEffect(() => {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      setKbHint(true);
+      setDbg(d => ({ keys: d.keys + 1, last: e?.key ?? '?' }));
+    });
     return () => sub.remove();
   }, []);
 
@@ -1554,10 +1561,18 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         {/* ★ Full width, BELOW the title row — inside headerLeft it competed with the cog
             for space and was clipped underneath it in portrait. (Stuart, 2026-07-25.) */}
         {kbHint && (
-          <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
-            To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
-            F favourite · D default · E edit · S sort
-          </Text>
+          <>
+            <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
+              To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
+              F favourite · D default · E edit · S sort
+            </Text>
+            {/* ★ TEMPORARY — see the note by `dbg`. Remove with it. */}
+            <Text style={[styles.kbHint, { color: C.amber }]} numberOfLines={1}>
+              dbg keys={dbg.keys} last={dbg.last} focus={navFocus} rows={listData.length}
+              {' '}active={listNavActive ? 'Y' : 'N'} sup={shortcutsSuppressed() ? 'Y' : 'N'}
+              {' '}scr={screenFocused ? 'Y' : 'N'} conn={connecting ? 'Y' : 'N'}
+            </Text>
+          </>
         )}
 
         {/* Default banner */}
