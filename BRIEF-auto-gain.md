@@ -378,6 +378,25 @@ This makes it the **primary aggressor**, ahead of FT8:
   harness can know in advance when a strong broadcaster starts and stops — the on/off boundary can
   be scheduled rather than stumbled upon.
 
+★★ **The rig configuration, concretely.** Radio Romania sits around 7200 kHz — outside the
+victims' capture, as it should be. But it lands close to 40 m FT8, so **one dongle can watch both
+aggressors**:
+
+| dongle | centre | rate | sees |
+|---|---|---|---|
+| **A — victims** | 4590 kHz | 2.048 MSPS | 3573 FT8 (80 m, in-band aggressor), 4582 RTTY, 4608.1 WEFAX, 4625 Buzzer, 5357 FT8 (60 m) |
+| **B — aggressors** | 7140 kHz | 2.048 MSPS | 7074 FT8 (40 m), ~7200 Radio Romania |
+
+Five victims and both out-of-band aggressors, on one antenna, at one instant. 2.4 MSPS each also
+covers it, but two dongles at 2.4 on a shared USB 2 controller drop samples — use separate
+controllers if you want the wider span, otherwise 2.048 is the safer choice and loses nothing here.
+
+★ Note this is a DIFFERENT use of the second dongle from §8.1's reference channel: there, both
+dongles watch the same spectrum at two gains; here they watch different spectrum to observe cause
+and effect together. Both are worth running — §8.1 grades the detector, this configuration proves
+what actually caused the damage. Confirm Radio Romania's frequency from the schedule on the night;
+it moves seasonally.
+
 ★ The ideal capture is therefore across an RRI schedule boundary, with the 4.6 MHz victims in
 band: the front end goes from hammered to clear with nothing else changing, at a fixed gain. If
 the weak signals' SNR jumps when the broadcaster leaves the air, that is desensitisation measured
