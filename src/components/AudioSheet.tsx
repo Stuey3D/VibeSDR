@@ -47,12 +47,15 @@ const C = {
 function NavSlider(props: React.ComponentProps<typeof Slider>) {
   const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
   const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
-  const { focused } = useNavRange((dir) => {
+  // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
+  // row-height ESTIMATE, which is why a slider landed barely in view at the foot of the sheet
+  // while every button centred correctly — the buttons attach theirs and the sliders did not.
+  const { focused, viewRef } = useNavRange((dir) => {
     const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
     if (next !== value) onValueChange?.(next);
   });
   return (
-    <Slider {...props}
+    <Slider ref={viewRef as any} {...props}
       minimumTrackTintColor={focused ? NAV_FOCUS : props.minimumTrackTintColor}
       thumbTintColor={focused ? NAV_FOCUS : props.thumbTintColor} />
   );
@@ -118,7 +121,7 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   //
   // ★ LEFT AT ZERO TURNS IT OFF, mirroring the drag gesture (drag off the left edge = off).
   // Without it there is no keyboard way back out of a squelch you have just applied.
-  const { focused: navFocused } = useNavRange((dir) => {
+  const { focused: navFocused, viewRef: navViewRef } = useNavRange((dir) => {
     const cur = held ?? pos;
     if (dir < 0 && cur >= 0 && cur <= 0.001) { setHeld(-1); onDrag?.(-1); onDragEnd?.(); return; }
     const base = cur < 0 ? 0 : cur;
@@ -144,7 +147,7 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
   }), [onDrag, onDragEnd, apply, measure]);
 
   return (
-    <View ref={bar}
+    <View ref={(r: any) => { (bar as any).current = r; (navViewRef as any).current = r; }}
           style={[st.sqlBarWrap, navFocused && st.sqlBarFocused]}
           {...(onDrag ? pan.panHandlers : {})}
           hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}

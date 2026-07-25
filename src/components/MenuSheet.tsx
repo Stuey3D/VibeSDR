@@ -466,12 +466,16 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
   // A slider with no explicit step still has to move by SOMETHING; a twentieth of
   // the range is a sane nudge and matches how these read on screen.
   const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
-  const { focused } = useNavRange((dir) => {
+  // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
+  // row-height ESTIMATE, which is why a slider landed barely in view at the foot of the sheet
+  // while every button centred correctly — the buttons attach theirs and the sliders did not.
+  const { focused, viewRef } = useNavRange((dir) => {
     const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
     if (next !== value) onValueChange?.(next);
   });
   return (
     <Slider
+      ref={viewRef as any}
       {...props}
       minimumTrackTintColor={focused ? C.focus : props.minimumTrackTintColor}
       thumbTintColor={focused ? C.focus : props.thumbTintColor}
