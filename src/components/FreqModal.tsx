@@ -257,6 +257,12 @@ export default function FreqModal({
     if (!visible) return;
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      // ★★ ONLY ON THE TUNE CARD. This card has two Enter listeners — this one, which
+      // commits a typed frequency, and the bookmarks pane's, which activates whatever the
+      // focus is on. Ungated, both fired: highlighting the bookmarks SEARCH BOX and pressing
+      // Enter tuned and closed the card instead of entering the field. Stuart: "it closes the
+      // card down like I've just pressed enter to tune." It was doing exactly that.
+      if (cardModeRef.current !== 'tune') return;
       if (e?.key === 'Enter') confirmRef.current();
     });
     return () => sub.remove();
@@ -345,6 +351,8 @@ export default function FreqModal({
 
   // Read through a ref so the listener above never captures a stale `value`.
   const confirmRef = useRef(confirm); confirmRef.current = confirm;
+  // Read through a ref: the listener above is installed once, on `visible` alone.
+  const cardModeRef = useRef(cardMode); cardModeRef.current = cardMode;
 
   const dimText  = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(150,100,30,0.65)';
   const unitText = isWhite ? '#b0b8c8' : '#886600';
