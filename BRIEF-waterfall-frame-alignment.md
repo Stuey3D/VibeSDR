@@ -305,3 +305,48 @@ window WIDER than the viewport at a FIXED, FINE bin scale, with the FFT sized to
 
 ★ This is the first genuine case of VibeServer doing something the public backends CANNOT, rather
 than merely matching them — worth noting for positioning as well as engineering.
+
+---
+
+## 12. ★★★ MEASURED ON A REAL UBERSDR (2026-07-25) — and it closes the question
+
+Probed Stuart's own receiver directly (`stuey3d.tunnel.ubersdr.org`) with a harness that speaks the
+real protocol, sweeping in 9 kHz steps and reading each frame's OWN centre out of the binary8 header
+(`[14..21]` frequency u64 LE). Getting in needs `POST /connection` with a genuine UUID
+`user_session_id` FIRST — the WS closes 1006 without it — and note the server sends NO JSON geometry
+at all in binary8 mode; the centre is in the frame header.
+
+| | measured |
+|---|---|
+| Server settles after a request | **within ONE frame**, typically 20-60 ms |
+| Frames that deviate | exactly **one**, and only if a frame was already in flight |
+| Deviation size | exactly **one step** (-9000 Hz) |
+| Persistent deviation | **none, ever** |
+
+★★★ **So the misalignment is transient and one step wide, lasting ~50 ms.** The existing behaviour —
+draw frames under the predicted geometry — is very nearly right, and is the SMOOTH choice.
+
+### ★★ Why the §9 write-time shift made it WORSE (build 184, reverted)
+`emit.centerHz` is overridden to the PREDICTED centre while `_inFlight()`, and `VIEW_SETTLE_MS` is
+300 ms of SEND QUIET. A sweep sends every 90 ms, so `_inFlight()` is PERMANENTLY true and the
+prediction runs several steps ahead of the server. The shift then displaced EVERY row by that growing
+gap: at 9 kHz with 100 Hz/bin one step is 90 bins, so two steps behind shoves 180 of 1024 bins
+sideways and leaves a black band. Absolutely correct, visually much worse — Stuart saw a ~22 kHz
+error and a ticker apparently in the wrong place.
+
+★ THE LESSON: the offset is only valid against the geometry the row will actually be DRAWN with. While
+in flight that geometry is the PREDICTION, which is deliberately ahead of reality — so "correcting"
+towards the truth moves the data away from the axis, which is also drawn from the prediction.
+
+### VERDICT: leave it alone
+Do not re-attempt this. The pre-existing behaviour costs ~one step of misplacement for ~50 ms after a
+request, and only when a frame was in flight. Every fix tried so far costs more than that:
+- absolute placement → restarts the waterfall on zoom, and makes zoom sticky (§9);
+- write-time shift → large displacement plus black bands during any sweep (above).
+The one refinement the data DOES support is to DROP a stale frame rather than shift it (one frame in
+ten, and the line ticker duplicates the last row anyway) — but during a sweep every frame is stale,
+so dropping would freeze the waterfall. Not worth it for 50 ms.
+
+★ Kept for reuse: the probe harness lives in the session scratchpad; rebuilding it is ~40 lines given
+the notes above. It is the right tool for any future spectrum-geometry question — measuring the real
+server took minutes and settled what three rounds of reasoning from screenshots could not.
