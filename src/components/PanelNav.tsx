@@ -165,6 +165,68 @@ export function useAnnounce() {
   return { value, flash, flashThen };
 }
 
+// ── Key repeat ───────────────────────────────────────────────────────────────
+//
+// ★ iOS does NOT auto-repeat `pressesBegan` for a held key, so every step needed its own
+// press. Stuart is driving this from one of those handheld rubber keyboards, where repeated
+// presses are genuinely hard work — and a long list is a lot of presses.
+//
+// ★★ A DELAY BEFORE IT STARTS is what keeps a single tap a single step. Without it, holding
+// for a fraction too long would overshoot, which on a list is worse than pressing again.
+// It then accelerates once, because the case that needs speed is a long list rather than a
+// short one, and a constant fast rate would make short moves twitchy.
+const REPEAT_DELAY_MS = 380;   // hold this long before it starts repeating at all
+const REPEAT_MS       = 110;   // steady rate
+const REPEAT_FAST_MS  = 55;    // after REPEAT_RAMP_MS of holding
+const REPEAT_RAMP_MS  = 1200;
+
+/**
+ * Subscribe to keys with auto-repeat for `repeatKeys`. Everything else fires once.
+ *
+ * ★ Repeat stops on key UP, on any OTHER key, and on unmount. A repeat that outlives its key
+ * would walk a list on its own, which is the kind of fault that looks like a possessed app.
+ */
+export function useRepeatingKeys(
+  active: boolean,
+  handler: (k: string) => void,
+  repeatKeys: readonly string[],
+) {
+  const hRef = useRef(handler); hRef.current = handler;
+  const keysRef = useRef(repeatKeys); keysRef.current = repeatKeys;
+  useEffect(() => {
+    if (!active) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    let held: string | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let startedAt = 0;
+    const stop = () => { if (timer) clearTimeout(timer); timer = null; held = null; };
+    const tick = () => {
+      if (!held) return;
+      hRef.current(held);
+      const elapsed = Date.now() - startedAt;
+      timer = setTimeout(tick, elapsed > REPEAT_RAMP_MS ? REPEAT_FAST_MS : REPEAT_MS);
+    };
+    const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key;
+      if (!k) return;
+      if (k === held) return;      // a re-fired down for the key already held: ignore
+      stop();
+      hRef.current(k);
+      if (keysRef.current.includes(k)) {
+        held = k;
+        startedAt = Date.now();
+        timer = setTimeout(tick, REPEAT_DELAY_MS);
+      }
+    });
+    const up = emitter.addListener('VibeKeyUp', (e: { key: string }) => {
+      if (e?.key === held) stop();
+    });
+    return () => { stop(); down.remove(); up.remove(); };
+  }, [active]);   // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export const NAV_REPEAT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const;
+
 // ── Region capture ───────────────────────────────────────────────────────────
 //
 // ★ The decoder box floats ABOVE the live screen rather than covering it, so it is not a
@@ -214,16 +276,14 @@ function useNavKeys(opts: {
   const cbRef = useRef({ getEntries, setFocused, onBack });
   cbRef.current = { getEntries, setFocused, onBack };
 
-  useEffect(() => {
-    // ★ `visible`, NOT `open`. An earlier version of this said `open` and
-    // type-checked perfectly, because TypeScript's DOM lib declares a global
-    // `open` (window.open) — tsc saw a valid symbol while at runtime it was
-    // undefined, and the screen crash-looped. A clean tsc is NOT proof a name is
-    // in scope when the DOM lib is loaded.
-    if (!visible) { setFocused(-1); return; }
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      const k = e?.key;
+  // ★ `visible`, NOT `open`. An earlier version of this said `open` and type-checked
+  // perfectly, because TypeScript's DOM lib declares a global `open` (window.open) — tsc saw
+  // a valid symbol while at runtime it was undefined, and the screen crash-looped. A clean
+  // tsc is NOT proof a name is in scope when the DOM lib is loaded.
+  useEffect(() => { if (!visible) setFocused(-1); }, [visible, setFocused]);
+
+  useRepeatingKeys(visible, (k: string) => {
+    {
       if (!k || shortcutsSuppressed()) return;      // third-party page on screen — see above
       if (!isTopOwner(tok.current)) return;        // a panel above us owns the keys
       const { getEntries: get, setFocused: set, onBack: back } = cbRef.current;
@@ -271,9 +331,8 @@ function useNavKeys(opts: {
         case 'ArrowLeft':  if (flat) prevRowFrom(); else if (cur > 0 && all[cur - 1].row === row) move(cur - 1); break;
         default: break;
       }
-    });
-    return () => sub.remove();
-  }, [visible, focusedRef, tok]);
+    }
+  }, NAV_REPEAT_KEYS);
 }
 
 // ── Measured scroll-into-view ────────────────────────────────────────────────

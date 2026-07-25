@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
 import { NativeEventEmitter, NativeModules } from 'react-native';
-import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, PANEL_IDLE_MS } from './PanelNav';
+import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
@@ -375,11 +375,10 @@ export default function DecoderPanel({
     announce();
   }, [isDabMode, panelOn, minimised, announce]);
 
-  useEffect(() => {
-    if (!panelOn) { leave(); return; }
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      const k = e?.key;
+  useEffect(() => { if (!panelOn) leave(); }, [panelOn, leave]);
+
+  useRepeatingKeys(panelOn, (k: string) => {
+    {
       if (k === 'Tab') {
         // ★★ ON DAB, TAB MOVES BETWEEN LIST AND HEADER — it never releases the keyboard.
         // Zooming a multiplex only zooms into a wall of signals (Stuart), so handing the
@@ -436,9 +435,8 @@ export default function DecoderPanel({
         if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
         else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
       }
-    });
-    return () => sub.remove();
-  }, [panelOn, leave, announce]);
+    }
+  }, NAV_REPEAT_KEYS);
 
   // Refs so the listener above, installed once, never reads a stale value.
   const kbZoneRef = useRef(kbZone);   kbZoneRef.current = kbZone;
