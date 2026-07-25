@@ -227,3 +227,28 @@ exist — it just costs zoom continuity. Do not attempt it again without a plan 
   still shows the same bins. Resolution only enters if the SERVER is asked for a wider span.
 - `trueCenterHz` is already plumbed through to the renderer (the watch uses it); the phone's own
   render deliberately does not.
+
+---
+
+## 10. ★★ THE FIX IS UBERSDR-ONLY — Kiwi and OWRX get nothing (found 2026-07-25)
+
+`trueCenterHz` is set in exactly ONE place: `UberSDRClient.ts:1117` (`emit.trueCenterHz = frequency`).
+`KiwiAdapter` and the OWRX adapter NEVER set it. So on those backends it is `undefined`, the
+renderer's `?? centerHz` fallback returns the predicted centre, the computed offset is zero, and
+**the §9 alignment fix is completely inert.**
+
+★ This matters for interpreting test results. Stuart validated build 183 on his OWN KIWISDR (MLA30+,
+Moulton) and reported it "solved" — but what improved there was the SWEEP work (send coalescing,
+the band-default/handsOn fix, the adaptive sweep rate, unlocked edge-follow). The residual
+*"very occasional signal next to VFO"* he still sees is the ORIGINAL bug, untouched on Kiwi. It is
+not flakiness in the fix; the fix is not running.
+
+Properly fixed on: **UberSDR and VibeServer / local hardware** (both go through UberSDRClient).
+Not fixed on: **KiwiSDR, OpenWebRX**.
+
+### To extend it
+Each adapter must report the REAL centre of the frame it is emitting, not the one that was
+requested. ★ UNKNOWN and not yet checked: whether the Kiwi and OWRX protocols disclose the centre
+per waterfall frame at all. If they do not, the adapter would have to infer it from its own
+outstanding-request bookkeeping (it knows what it asked for and when the server acked), which is
+weaker but probably good enough — an in-flight frame is by definition one sent before the ack.
