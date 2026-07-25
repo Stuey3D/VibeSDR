@@ -61,6 +61,9 @@ export interface DecoderPanelProps {
   /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
    *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
   dabProgrammes?:  { id: number; name: string }[];
+  /** Ensemble (multiplex) label from OWRX's `ensemble_label`. Shown in the header
+   *  beside DAB, mirroring the watch's DabView. Empty until the ensemble decodes. */
+  dabEnsemble?:    string;
   activeDabId?:    number;
   onSelectDab?:    (id: number) => void;
   dabSpeed?:       number;
@@ -198,7 +201,7 @@ export default function DecoderPanel({
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
-  dabProgrammes = [], activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
+  dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
 }: DecoderPanelProps) {
   const isDabMode = dabProgrammes.length > 0;
   const isSpotsMode = !isDabMode && spotsKind !== null;
@@ -314,10 +317,14 @@ export default function DecoderPanel({
             {title}
           </Text>
 
-          {/* Status text — directly after title (skin layout) */}
+          {/* Status text — directly after title (skin layout).
+              ★ DAB has no "listening…" state to report: it is not hunting for a signal,
+              the multiplex either decodes or it does not. So that slot carries the
+              MULTIPLEX NAME instead, matching the watch's DabView, which is the one
+              thing you actually want to read there. */}
           <Text style={[dp.status, dp.statusGrow, { color: dc.status, fontFamily: t.font }]}
                 numberOfLines={1}>
-            {decoderStatus}
+            {isDabMode ? (dabEnsemble || 'reading multiplex…') : decoderStatus}
           </Text>
 
           {/* EXPAND LEADS, and stays outside the filter run. It changes how each row is DRAWN;

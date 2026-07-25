@@ -4697,6 +4697,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           imageRef={decoderImageRef}
           onImageStatus={setDecoderStatus}
           dabProgrammes={dabProgrammes.map((p) => ({ id: p.id, name: p.name }))}
+          dabEnsemble={dabEnsemble}
           activeDabId={activeDabId}
           onSelectDab={(id) => {
           client.current?.setAudioServiceId?.(id); setActiveDabId(id);
