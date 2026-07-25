@@ -66,3 +66,10 @@ target_compile_options(vibedsp_bench_wfm PRIVATE -O2 -Wall)
 add_executable(vibedsp_rds_snr_probe rds_snr_probe.cpp ${DSP_SRC})
 target_include_directories(vibedsp_rds_snr_probe PRIVATE ${DSP})
 target_compile_options(vibedsp_rds_snr_probe PRIVATE -O2 -Wall)
+
+# Offline IQ probe. The app records decoded AUDIO, which cannot show anything about RDS
+# (57 kHz, discarded by the 15 kHz audio filter). This runs the real pipeline over an
+# rtl_sdr capture so a real station can be diagnosed repeatedly, off the air.
+add_executable(vibedsp_iq_probe iq_probe.cpp ${DSP_SRC})
+target_include_directories(vibedsp_iq_probe PRIVATE ${DSP})
+target_compile_options(vibedsp_iq_probe PRIVATE -O2 -Wall)
