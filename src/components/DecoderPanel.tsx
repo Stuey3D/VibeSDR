@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
 import { NativeEventEmitter, NativeModules } from 'react-native';
-import { NAV_FOCUS, captureRegion, useAnnounce, PANEL_IDLE_MS } from './PanelNav';
+import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, PANEL_IDLE_MS } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
@@ -353,7 +353,17 @@ export default function DecoderPanel({
     if (y != null) dabScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
   }, [listIdx, kbZone, dabProgrammes]);
 
+  // ★★ A TOUCH HANDS THE KEYBOARD BACK. The box was staying in keyboard mode when Stuart went
+  // back to fingers — capture is a mode, and a mode you cannot leave by doing the obvious
+  // thing is a trap. Any touch drops it; the next key press takes it again, so switching
+  // between hand and keyboard needs no thought and no gesture of its own.
+  const kbActive = useKeyboardMode();
   const autoTaken = useRef(false);
+  useEffect(() => {
+    if (kbActive) return;
+    autoTaken.current = false;    // let DAB re-take it on the next key press
+    if (kbZoneRef.current) leave();
+  }, [kbActive, leave]);
   useEffect(() => {
     const want = isDabMode && panelOn && !minimised;
     if (!want) { autoTaken.current = false; return; }
@@ -505,7 +515,8 @@ export default function DecoderPanel({
     <Animated.View
       style={[dp.wrap, { bottom: bottomOffset, opacity, transform: [{ translateY: slideY }] }]}
     >
-      <View style={[dp.inner, { borderColor: kbZone ? NAV_FOCUS : dc.border }]}>
+      <View style={[dp.inner, { borderColor: kbZone ? NAV_FOCUS : dc.border }]}
+            onTouchStart={noteTouchInteraction}>
 
         {/* ★ Arrival / departure flash. A border that brightens once and fades, so taking the
             keyboard and handing it back are both announced. pointerEvents none — it is a

@@ -85,7 +85,7 @@ import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
-import { shortcutsSuppressed, regionCaptured } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured, noteTouchInteraction } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -4611,7 +4611,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       style={styles.root}
       // Capture-phase touch sniff (returns false — never steals the touch):
       // marks interaction for smooth tune / idle saver on any Pressable UI.
-      onStartShouldSetResponderCapture={() => { markInteract(); return false; }}
+      // ★ Also the app's answer to "the user has gone back to fingers": this fires on real
+      // touches only, so it is where keyboard mode ends — the decoder box hands the keyboard
+      // back and its green highlight clears, rather than staying lit over a screen nobody is
+      // driving with a keyboard any more. (Stuart, 2026-07-26.)
+      onStartShouldSetResponderCapture={() => { markInteract(); noteTouchInteraction(); return false; }}
       // Real layout height — Android's Dimensions window height disagrees
       // with the laid-out root (status/nav bar handling), which pushed every
       // pillBottom-anchored overlay (spec-ratio popup, VTS bar, decoder
