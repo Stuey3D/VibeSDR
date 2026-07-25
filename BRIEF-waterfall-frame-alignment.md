@@ -187,7 +187,7 @@ that alone was enough to make Stuart report that "zoom feels sticky". Resampling
 expensive than clearing, so per-scale-change ring work is DEFINITIVELY off the table at drum rates.
 **Any viable fix must not touch the ring on zoom at all.**
 
-### ★ The small fix that respects every constraint (recommended, not yet built)
+### ★★ BUILT AND VALIDATED — build 183, code landed in `7e37a92`
 Do NOT store rows by absolute frequency. Keep the ring exactly as it is — view-relative — and simply
 SHIFT THE INCOMING ROW AT WRITE TIME by `(trueCenterHz - viewCenterHz) / hzPerBin` bins, filling the
 vacated edge with the floor.
@@ -200,6 +200,21 @@ vacated edge with the floor.
   In-flight offsets are only a few bins, so the vacated edge strip is invisible.
 This is the inverse of the reverted attempt: accept that history is approximate, and correct only
 the frames arriving now.
+
+★★ **OUTCOME: it works.** Stuart on device (build 183), including the protected surface:
+*"bitrate doesn't spike, zooming feels good and tuning still feels nice too."* So the position to
+hold is **in-flight frames correct, history approximate** — not a stepping stone to absolute
+placement, which is ruled out above.
+
+★ HOUSEKEEPING: the code for this landed inside commit `7e37a92`, whose message is about POSITIONING
+— swept in by a careless `git add -A`. Not rewritten, because the branch was already pushed and the
+Pi has a clone off it. If you are archaeology-ing this fix later, `git show 7e37a92 --
+src/components/WaterfallView.tsx` is where it is, and this section is the real commit message.
+
+### What is still NOT fixed, and may not be fixable
+"Ticker moves but the signals stick" during a PAN. That needs HISTORY to move, which needs absolute
+placement, which is what broke zoom. The reverted attempt fixed both, so the ceiling is known to
+exist — it just costs zoom continuity. Do not attempt it again without a plan for §9's crux.
 
 ### Facts established, worth not re-deriving
 - ★ `binCount` is NOT requestable — it comes from the server (`status.binCount = floats.length`).
