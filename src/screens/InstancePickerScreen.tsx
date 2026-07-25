@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import { useListNav, NAV_FOCUS } from '../components/PanelNav';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +15,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  NativeEventEmitter,
   NativeModules,
 } from 'react-native';
 // safe-area-context SafeAreaView — RN's own is iOS-only, which put the
@@ -1127,7 +1129,89 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  const renderItem = ({ item, drag, isActive }: { item: ListItem; drag?: () => void; isActive?: boolean }) => {
+  // ★ KEYBOARD HINT BAR (Stuart's idea). This screen is the one place with room to teach
+  // the scheme, and the right moment to do it is the moment a key is pressed — not on a
+  // timer, and never for someone using touch, who would just lose a strip of list to a
+  // lesson they did not ask for. A touch dismisses it again.
+  const [kbHint, setKbHint] = useState(false);
+  useEffect(() => {
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
+    return () => sub.remove();
+  }, []);
+
+  // ── Keyboard / D-pad navigation of the server list ──────────────────────────
+  //
+  // ★ This is the screen that has to work with NO TOUCH AT ALL: mirrored to a TV over
+  // AirPlay with the phone face-down, this is where you choose a receiver, so a list you
+  // cannot reach by keyboard makes the whole shack-mode idea moot.
+  //
+  // Scrolling uses the FlatList's own scrollToIndex, which sidesteps the measurement
+  // problem the panels hit entirely — the list already knows where its rows are.
+  const listRef = useRef<FlatList<ListItem> | null>(null);
+  const listNavActive = !tcpModal && !editFav && !connecting;
+
+  const navFocus = useListNav(
+    listNavActive,
+    listData.length,
+    (i) => {
+      const it = listData[i];
+      if (!it) return;
+      if (it.kind === 'header') { if (it.collapsible) toggleGroup(it.groupKey); return; }
+      if (it.kind === 'custom') { connectFav(it.fav); return; }
+      // `connect` covers the directory backends; a SpyServer row reaches the app by a
+      // different path, so it is left to touch rather than mistyping the call.
+      const st = it.data.serverType;
+      if (st === 'spyserver') return;
+      connect(it.data.url, it.data.name, undefined, it.data.longitude, st);
+    },
+    (i) => {
+      // viewPosition 0.5 keeps focus mid-screen, which reads far better from across a
+      // room than nudging it just inside the edge.
+      try { listRef.current?.scrollToIndex({ index: i, viewPosition: 0.5, animated: true }); }
+      catch { /* index briefly out of range while the list rebuilds — harmless */ }
+    },
+  );
+
+  // ★ Row shortcuts (Stuart): F favourites the focused server, D sets/clears it as the
+  // default, S cycles the sort. Letters are safe here because the native side withholds
+  // them whenever a text field has focus, so the custom-server box still types normally.
+  const navFocusRef = useRef(navFocus); navFocusRef.current = navFocus;
+  useEffect(() => {
+    if (!listNavActive) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key;
+      if (k === 'S') { cycleFavSort(); return; }
+      if (k === 'Backspace') {
+        // Step OUT = collapse the group the focus is standing in. Walks BACK to the
+        // nearest header, so it works from any row inside the group, not just its top.
+        for (let j = Math.min(navFocusRef.current, listData.length - 1); j >= 0; j--) {
+          const h = listData[j];
+          if (h?.kind === 'header') { if (h.collapsible && !h.collapsed) toggleGroup(h.groupKey); return; }
+        }
+        return;
+      }
+      const it = listData[navFocusRef.current];
+      if (!it || it.kind === 'header') return;
+      const fav: Favourite = it.kind === 'custom'
+        ? it.fav
+        : { name: it.data.name, url: it.data.url, serverType: it.data.serverType };
+      if (k === 'F') { void handleToggleFav(fav); return; }
+      // ★ E edits a CUSTOM server. Directory rows are not ours to edit — their address
+      // comes from the directory — so E is deliberately inert on them rather than
+      // opening a sheet whose changes could not be saved.
+      if (k === 'E') { if (it.kind === 'custom') openEditFav(it.fav); return; }
+      if (k === 'D') {
+        const isDef = defaultInst?.url === fav.url;
+        if (isDef) handleClearDefault(); else handleSetDefault({ name: fav.name, url: fav.url });
+      }
+    });
+    return () => sub.remove();
+  }, [listNavActive, listData, toggleGroup, cycleFavSort, handleToggleFav, handleSetDefault, handleClearDefault, defaultInst, openEditFav]);
+
+  const renderItem = ({ item, index, drag, isActive }: { item: ListItem; index?: number; drag?: () => void; isActive?: boolean }) => {
+    const navOn = index != null && index === navFocus;
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
       // The FAVOURITES header carries a tappable sort chip (Most Used / A–Z / Nearest / SNR / Manual).
@@ -1167,7 +1251,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const canDrag = favSort === 'manual' && !!drag;
       const body = (
           <TouchableOpacity
-            style={[styles.row, { borderColor: C.borderBright, backgroundColor: isActive ? 'rgba(255,160,0,0.22)' : 'rgba(255,100,100,0.06)' }]}
+            style={[styles.row, { borderColor: navOn ? NAV_FOCUS : C.borderBright,
+                                  borderWidth: navOn ? 2 : 1,
+                                  backgroundColor: isActive ? 'rgba(255,160,0,0.22)' : 'rgba(255,100,100,0.06)' }]}
             onPress={() => connectFav(fav)}
             onLongPress={canDrag ? drag : undefined}
             delayLongPress={180}
@@ -1247,6 +1333,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
             isFull && { opacity: 0.4 },
+            // Focus LAST so it wins over default/favourite colouring — the caret must never
+            // be hidden by the very rows you are most likely to be standing on.
+            navOn && { borderColor: NAV_FOCUS, borderWidth: 2 },
           ]}
           onPress={() => {
             // SpyServer isn't a web backend: its "url" is spyserver://host:port and
@@ -1599,6 +1688,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         </View>
         )}
 
+        {/* ★ Keyboard hints — only once a key has actually been pressed. See kbHint. */}
+        {kbHint && (
+          <View style={[styles.kbHint, { borderColor: C.border }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 0.5 }}>
+              ↑↓ move · ⏎ connect · ⌫ collapse · F favourite · D default · E edit · S sort
+            </Text>
+          </View>
+        )}
+
         {/* Body: directory list when one is open, else the chooser */}
         {selectedDir !== null ? (
           loading ? (
@@ -1614,8 +1712,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </View>
           ) : (
             <FlatList
+              ref={listRef}
               data={listData}
               style={{ flex: 1 }}
+              onTouchStart={() => setKbHint(false)}
               keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
@@ -1851,6 +1951,13 @@ function snrColor(snr: number, C: any): string {
 }
 
 const styles = StyleSheet.create({
+  // A single line, deliberately: on a TV this is read from across a room, and a block of
+  // instructions would cost list rows for something you learn once.
+  kbHint: {
+    borderWidth: 1, borderRadius: 4, paddingVertical: 5, paddingHorizontal: 8,
+    marginHorizontal: 12, marginBottom: 6, alignItems: 'center',
+    backgroundColor: 'rgba(124,255,155,0.07)',
+  },
   safe:          { flex: 1 },
   flex:          { flex: 1 },
   header:        { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 8, borderBottomWidth: 1 },
