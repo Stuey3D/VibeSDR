@@ -73,6 +73,19 @@ Three design consequences, all of which this case makes concrete:
    §5's cadence being slow enough not to pump, but not so slow it takes minutes to react to a
    band that has turned hostile.
 
+★★ **This is not an RTL-SDR defect — it is physics, and every receiver has it.** Stuart has seen
+the same overload signature across all the SDRs he has used: worst on the RTLs, but the SDRplays
+"weren't immune" either. So this feature must NOT be written as "work around the RTL's bad AGC".
+It is front-end protection for whatever hardware VibeSDR is driving, now or later — local RTL,
+SpyServer, SDRplay, a future backend — and it must decide from MEASUREMENTS that any device
+provides, never from a device-specific gain table. Per-device code should be confined to
+enumerating what gain steps exist and applying one; everything above that is common.
+
+★ Note that not every device presents a single gain control. SDRplay has an LNA state *and* IF
+gain, and the right move differs between them — reducing the LNA helps overload, reducing IF gain
+mostly does not. The abstraction therefore wants an ordered list of "front-end states, least to
+most gain" that the device layer supplies, rather than a scalar in dB.
+
 ★ **Independently reproduced on OpenWebRX** with the same dongle and the same too-high gain.
 That is worth recording twice over. It confirms the effect is the FRONT END, not anything in
 VibeDSP — so no amount of DSP work would have found it. And it says that mainstream SDR software
@@ -194,4 +207,6 @@ and keep them as fixtures.
 4. Never changes gain during a recording or mid-decoder-frame.
 5. Measurably beats both "Auto (tuner)" and a fixed mid-table gain on the stored fixtures from
    §8, on at least: FM RDS group rate, and HF SSB intelligibility at a fixed volume.
-6. Works unchanged on a tuner whose gain table differs from the R820T's.
+6. Works unchanged on a tuner whose gain table differs from the R820T's, and on a device with
+   more than one gain stage (e.g. an SDRplay's LNA state plus IF gain) — no algorithm change,
+   only a different ordered list of front-end states from the device layer.
