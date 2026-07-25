@@ -332,6 +332,25 @@ export default function DecoderPanel({
 
   useEffect(() => () => { captureRegion(null); }, []);   // never leave it captured on unmount
 
+  // ★★ DAB TAKES THE KEYBOARD WITHOUT TAB. On DAB the VFO is LOCKED to the multiplex, so
+  // there is nothing to tune and the box IS the interface — the programme list is the only
+  // thing on screen worth moving through. Making the user press Tab first would be asking
+  // them to hand over a keyboard the main screen has no use for. (Stuart, 2026-07-26.)
+  //
+  // ★ Once per appearance, so Tab still releases it and does not immediately snatch it back:
+  // a user who wants the waterfall's zoom on a DAB ensemble can still have it.
+  const autoTaken = useRef(false);
+  useEffect(() => {
+    const want = isDabMode && panelOn && !minimised;
+    if (!want) { autoTaken.current = false; return; }
+    if (autoTaken.current) return;
+    autoTaken.current = true;
+    captureRegion('decoder');
+    setKbZone('list');
+    setListIdx(0);
+    announce();
+  }, [isDabMode, panelOn, minimised, announce]);
+
   useEffect(() => {
     if (!panelOn) { leave(); return; }
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
@@ -384,12 +403,18 @@ export default function DecoderPanel({
   // Idle timeout, matching the menus: a stray Tab must not leave the box holding the keyboard
   // while the user has walked away from it. Resets on every key it handles.
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Minimising hands the keyboard back — the list is not on screen to be walked.
+  useEffect(() => { if (minimised && kbZone) leave(); }, [minimised]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (kbZone === null) { if (idleRef.current) clearTimeout(idleRef.current); return; }
     if (idleRef.current) clearTimeout(idleRef.current);
+    // ★ DAB keeps the keyboard: it was never borrowed from anything, so timing out would
+    // strand the user with arrows that tune a locked VFO and a list they can no longer reach.
+    if (isDabMode) return;
     idleRef.current = setTimeout(() => leaveAnnounced(), PANEL_IDLE_MS);
     return () => { if (idleRef.current) clearTimeout(idleRef.current); };
-  }, [kbZone, hdrIdx, listIdx, leaveAnnounced]);
+  }, [kbZone, hdrIdx, listIdx, isDabMode, leaveAnnounced]);
 
   /** A header control that takes part in the left/right order. */
   const HBtn = ({ onPress, style, children, ...rest }: any) => {
