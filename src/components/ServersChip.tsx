@@ -22,7 +22,8 @@
  * Self-contained: renders its own full-screen catch-layer while expanded, so the
  * parent mounts it once and passes only the anchor offsets (§5.2) + handlers.
  */
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useListNav, noteTouchInteraction } from './PanelNav';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
@@ -31,6 +32,10 @@ import SectionIcon from './SectionIcon';
 type Props = {
   /** Bump to open the menu from outside (keyboard Esc). */
   openToken?: number;
+  /** Bump to CLOSE it from outside — Esc again, via SDRScreen's one closeAll rule. */
+  closeToken?: number;
+  /** Report open/closed so SDRScreen's Esc precedence counts this as a panel. */
+  onExpandedChange?: (open: boolean) => void;
   top: number;               // anchor from the safe-area/panel top (§5.2)
   left: number;              // Math.max(margin, insets.left) — notch fix
   serverName: string;
@@ -58,6 +63,8 @@ export default function ServersChip({
   top, left, isFavourite, isDefault,
   onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef,
   openToken = 0,
+  closeToken = 0,
+  onExpandedChange,
 }: Props) {
   const { theme: t } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -70,6 +77,15 @@ export default function ServersChip({
   useEffect(() => {
     if (openToken !== lastToken.current) { lastToken.current = openToken; setExpanded(true); }
   }, [openToken]);
+
+  // ★ Esc AGAIN closes. SDRScreen owns the Esc rule ("something open → close it"), so this
+  // menu has to be visible to that rule rather than handling Esc itself — two owners for one
+  // key is how precedence bugs start. It reports its state up and takes a close token back.
+  const lastClose = useRef(closeToken);
+  useEffect(() => {
+    if (closeToken !== lastClose.current) { lastClose.current = closeToken; setExpanded(false); }
+  }, [closeToken]);
+  useEffect(() => { onExpandedChange?.(expanded); }, [expanded]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const amber = t.btnText;   // #ffb833
   const font  = t.font;      // Nixie One
@@ -93,9 +109,24 @@ export default function ServersChip({
     </Canvas>
   );
 
+  // ★ Keyboard navigation of the expanded menu. Built from the rows ACTUALLY RENDERED —
+  // the favourite row is conditional, so a fixed index list would put focus one row out
+  // whenever it is absent. Order matches the JSX below exactly.
+  const rows = useMemo(() => {
+    const r: Array<() => void> = [onHeader];
+    if (canFavourite) r.push(onToggleFavourite);
+    r.push(onSetDefault, collapse);
+    return r;
+  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, collapse]);
+
+  // Idle-close: a stray key must not leave this sitting over the waterfall with the phone
+  // face-down. Touch cancels it — see PanelNav.
+  const navFocus = useListNav(expanded, rows.length, (i) => rows[i]?.(), undefined, collapse);
+  const rowFocus = (i: number) => (navFocus === i ? styles.rowFocused : null);
+
   return (
     // Full-screen, box-none so only the chip / dropdown / catch-layer take touches.
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none" onTouchStart={noteTouchInteraction}>
       {/* Catch-layer: swallows the outside tap so dismissing never tunes/pans the
           waterfall, and carries a faint backdrop tint. Behind the dropdown. */}
       {expanded && (
@@ -128,7 +159,7 @@ export default function ServersChip({
           // ── Expanded dropdown ───────────────────────────────────────────────
           <View style={[styles.menu, { borderColor: AMBER_BORDER }]}>
             {/* Header = the exit, at the chip's x-anchor (tap-tap same spot) */}
-            <Pressable onPress={onHeader} style={styles.row}
+            <Pressable onPress={onHeader} style={[styles.row, rowFocus(0)]}
               accessibilityRole="button" accessibilityLabel="Back to server list">
               <SectionIcon name="instance" size={GLYPH} color={amber} />
               <Text style={[styles.chevron, { color: amber, fontFamily: font }]}>‹</Text>
@@ -138,7 +169,7 @@ export default function ServersChip({
             <View style={[styles.sep, { backgroundColor: SEP_STRONG }]} />
 
             {canFavourite && (
-              <Pressable onPress={onToggleFavourite} style={styles.row}
+              <Pressable onPress={onToggleFavourite} style={[styles.row, rowFocus(1)]}
                 accessibilityRole="button"
                 accessibilityLabel={isFavourite ? 'Remove from favourites' : 'Favourite this server'}>
                 <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>{isFavourite ? '♥' : '♡'}</Text>
@@ -146,7 +177,7 @@ export default function ServersChip({
               </Pressable>
             )}
 
-            <Pressable onPress={onSetDefault} style={styles.row}
+            <Pressable onPress={onSetDefault} style={[styles.row, rowFocus(canFavourite ? 2 : 1)]}
               accessibilityRole="button"
               accessibilityLabel={isDefault ? 'Clear default server' : 'Set as default server'}>
               <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>{isDefault ? '★' : '☆'}</Text>
@@ -154,7 +185,7 @@ export default function ServersChip({
             </Pressable>
 
             {/* Collapse handle — the non-exit escape from an accidental open */}
-            <Pressable onPress={collapse} style={styles.collapse} hitSlop={8}
+            <Pressable onPress={collapse} style={[styles.collapse, rowFocus(canFavourite ? 3 : 2)]} hitSlop={8}
               accessibilityRole="button" accessibilityLabel="Close server menu">
               <View style={[styles.grab, { backgroundColor: SEP }]} />
               <Text style={[styles.collapseChevron, { color: amber, fontFamily: font }]}>⌃</Text>
@@ -206,6 +237,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 4,
     shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
   },
+  // Focus is a tint, not a border: these rows sit flush in a small dropdown and a
+  // border would shift the whole menu as focus moved.
+  rowFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 9,
     paddingVertical: 11, paddingHorizontal: 13,

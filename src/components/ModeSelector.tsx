@@ -5,7 +5,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
-import { NavCtx, NavRow, usePanelNav, useNavButton, NAV_FOCUS } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 import GainSlider from './GainSlider';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
@@ -178,13 +178,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Each grid is a NavRow,
   // so up/down moves between grids and left/right within one.
-  const { navCtx, scrollRef } = usePanelNav(visible);
+  const { navCtx, scrollRef } = usePanelNav(visible, { onTimeout: onClose });
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <Pressable style={st.backdrop} onPress={onClose} />
-      <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
+      <Pressable style={st.backdrop} onPress={onClose} onTouchStart={noteTouchInteraction} />
+      <View style={[st.sheet, { borderTopColor: t.barBorder }]} onTouchStart={noteTouchInteraction}>
         {/* Scrolls when the content (decoders + callout + extensions + maps) overflows on a
             small screen (§7). Capped so big screens render static as before. */}
         <ScrollView ref={scrollRef} style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}

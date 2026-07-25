@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -634,7 +634,10 @@ export default function MenuSheet({
   // pane states are declared further down; the ref is refreshed every render, so the
   // closure never sees a stale one.
   const paneBack = useRef<() => void>(() => {});
-  const { navCtx, scrollRef } = usePanelNav(visible, { onBack: () => paneBack.current() });
+  const { navCtx, scrollRef } = usePanelNav(visible, {
+    onBack: () => paneBack.current(),
+    onTimeout: onClose,
+  });
 
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
   // server order on purpose — they're SDR-type ordered and re-sorting risks the
@@ -762,7 +765,7 @@ export default function MenuSheet({
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <View style={StyleSheet.absoluteFill}>
+      <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOp }]} />
         </TouchableWithoutFeedback>

@@ -6,7 +6,7 @@ import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 
@@ -338,13 +338,13 @@ export default function AudioSheet({
 
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Buttons, sliders and
   // the squelch bar all register themselves; the game controller drives this unchanged.
-  const { navCtx, scrollRef } = usePanelNav(visible);
+  const { navCtx, scrollRef } = usePanelNav(visible, { onTimeout: onClose });
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            onDismiss={onDismiss}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <Pressable style={st.backdrop} onPress={onClose} />
+      <Pressable style={st.backdrop} onPress={onClose} onTouchStart={noteTouchInteraction} />
       <View style={[st.sheet, {
         borderTopColor: t.barBorder,
         // Landscape: keep clear of the Dynamic Island and don't sprawl the full

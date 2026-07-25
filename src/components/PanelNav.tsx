@@ -51,6 +51,40 @@ export const NAV_FOCUS = '#7CFF9B';
 let nextNavId = 1;
 export const nextNavButtonId = () => nextNavId++;
 
+// ── Keyboard-mode idle timeout ───────────────────────────────────────────────
+//
+// ★ A menu opened by a stray key press must not sit there forever. On touch you always
+// know a panel is open, because you opened it with your hand and the screen is in front of
+// you — but with the phone face-down driving a TV, an accidental key leaves a sheet over
+// everything with nothing to dismiss it. (Stuart: "if no input has been taken after a few
+// seconds then the menu times out… incase a button was pressed by accident".)
+//
+// ★★ ONLY IN KEYBOARD MODE. A touch means a person is present and looking, so it cancels
+// the timer outright and the menu behaves exactly as it always has. The flag flips back on
+// the next key press, so alternating between hand and keyboard needs no mode switch.
+export const PANEL_IDLE_MS = 10_000;
+
+let keyboardMode = false;
+/** Any pointer/touch interaction — a present user, so idle-close is wrong. */
+export function noteTouchInteraction() { keyboardMode = false; }
+
+function useIdleClose(active: boolean, onTimeout?: () => void) {
+  const cb = useRef(onTimeout); cb.current = onTimeout;
+  useEffect(() => {
+    if (!active || !onTimeout) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const arm = () => {
+      if (timer) clearTimeout(timer);
+      // Re-checked when it FIRES, not when armed: a touch part-way through must call it off.
+      timer = setTimeout(() => { if (keyboardMode) cb.current?.(); }, PANEL_IDLE_MS);
+    };
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', () => { keyboardMode = true; arm(); });
+    if (keyboardMode) arm();   // opened BY the keyboard — start counting immediately
+    return () => { if (timer) clearTimeout(timer); sub.remove(); };
+  }, [active, !!onTimeout]);   // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 // ── Owner stack ──────────────────────────────────────────────────────────────
 const owners: object[] = [];
 const isTopOwner = (tok: object) => owners.length > 0 && owners[owners.length - 1] === tok;
@@ -212,7 +246,10 @@ export const RowCtx = React.createContext<number>(-1);
  * Grid navigation for a panel whose buttons register themselves via NavCtx.
  * Wrap the content in `<NavCtx.Provider value={navCtx}>` and rows in `<NavRow>`.
  */
-export function usePanelNav(visible: boolean, opts?: { onBack?: () => void }) {
+export function usePanelNav(
+  visible: boolean,
+  opts?: { onBack?: () => void; onTimeout?: () => void },
+) {
   const entries   = useRef<NavEntry[]>([]);
   const rowSeq    = useRef(0);
   const scrollRef = useRef<ScrollView | null>(null);
@@ -244,6 +281,7 @@ export function usePanelNav(visible: boolean, opts?: { onBack?: () => void }) {
     setFocused,
     onBack: opts?.onBack,
   });
+  useIdleClose(visible, opts?.onTimeout);
 
   const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, nextRow, scrollRef }),
                                      [register, focused, nextRow]);
@@ -339,6 +377,7 @@ export function useListNav(
   length: number,
   onActivate: (index: number) => void,
   reveal?: (index: number) => void,
+  onTimeout?: () => void,
 ) {
   // ★ Focus is held as an ENTRY ID, because that is what the shared core compares
   // against; the INDEX is derived for the caller. Holding the index here instead
@@ -368,6 +407,7 @@ export function useListNav(
   }, [length]);
 
   useNavKeys({ visible, getEntries, focusedRef, setFocused: setFocusedId, flat: true });
+  useIdleClose(visible, onTimeout);
 
   const focused = focusedId < 0 ? -1 : focusedId - base.current;
 

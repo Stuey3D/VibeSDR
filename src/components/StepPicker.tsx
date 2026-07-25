@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { STEPS_HZ } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
-import { useListNav, NAV_FOCUS } from './PanelNav';
+import { useListNav, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 
 function stepLabel(hz: number): string {
   if (hz >= 1_000_000) return (hz / 1_000_000) + ' MHz';
@@ -41,12 +41,14 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
       if (i >= stepList.length) { onClose(); return; }
       onSelect(stepList[i]); onClose();
     },
+    undefined,
+    onClose,   // keyboard-mode idle close — see PanelNav
   );
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <View style={StyleSheet.absoluteFill}>
+      <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           <View style={st.backdrop} />
         </TouchableWithoutFeedback>

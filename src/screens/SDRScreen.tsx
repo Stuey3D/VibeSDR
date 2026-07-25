@@ -4389,8 +4389,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   // H/K/M choosing units. That touches every panel's internals. Also pending: Esc
   // OPENING the servers menu when nothing is open, which needs a prop on ServersChip
   // (it owns its own open state). Esc currently only closes.
+  // ★ The servers menu COUNTS as a panel. Without it, a second Esc bumped the open token
+  // again instead of closing — the chip owns its own open state, so Esc could open it and
+  // never shut it. It now reports up, and closeAll sends it a close token.
+  const [serversOpen, setServersOpen] = useState(false);
+  const [serversCloseToken, setServersCloseToken] = useState(0);
   const anyPanelOpen = menuOpen || stepOpen || chatOpen ||
-                       freqModalOpen || modeSelOpen || audioSheetOpen;
+                       freqModalOpen || modeSelOpen || audioSheetOpen || serversOpen;
   const panelOpenRef = useRef(anyPanelOpen);
   useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
 
@@ -4420,6 +4425,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const closeAll = () => {
       setMenuOpen(false); setStepOpen(false); setChatOpen(false);
       setFreqModalOpen(false); setModeSelOpen(false); setAudioSheetOpen(false);
+      setServersCloseToken(t => t + 1);
     };
 
     const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
@@ -5055,6 +5061,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onToggleFavourite={onToggleFavourite}
           onSetDefault={onSetDefault}
           openToken={serversToken}
+          closeToken={serversCloseToken}
+          onExpandedChange={setServersOpen}
         />
       )}
 
