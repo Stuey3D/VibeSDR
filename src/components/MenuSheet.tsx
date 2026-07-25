@@ -22,7 +22,9 @@ import {
   TouchableWithoutFeedback,
   View,
   useWindowDimensions,
-} from 'react-native';
+
+  NativeEventEmitter,
+  NativeModules,} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
@@ -379,18 +381,64 @@ function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIco
   );
 }
 
+// ── Keyboard navigation (BRIEF-inputs §6, in-panel layer) ─────────────────────
+//
+// ★ The primitives learn about focus; the 1000-line sheet is not restructured.
+// Every Btn registers itself on mount, so the navigable grid is derived from the
+// JSX that already exists — mount order IS reading order — and new menu rows are
+// automatically navigable without anyone remembering to wire them up.
+//
+// Rows come from BtnRow via context, which gives the natural 2-D shape: up/down
+// moves between rows, left/right within one.
+type NavEntry = { id: number; row: number; y: number; press?: () => void };
+
+const NavCtx = React.createContext<{
+  register: (e: NavEntry) => () => void;
+  focused: number;
+  nextRow: () => number;
+} | null>(null);
+const RowCtx = React.createContext<number>(-1);
+
+let nextBtnId = 1;
+
 function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean }) {
-  return <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>;
+  const nav = React.useContext(NavCtx);
+  // One row id per mounted BtnRow, stable for its lifetime.
+  const rowRef = useRef<number>(-1);
+  if (rowRef.current < 0) rowRef.current = nav ? nav.nextRow() : -1;
+  return (
+    <RowCtx.Provider value={rowRef.current}>
+      <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>
+    </RowCtx.Provider>
+  );
 }
 
 function Btn({ label, active, danger, onPress, full, style, icon }: {
   label: string; active?: boolean; danger?: boolean;
   onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
 }) {
+  const nav = React.useContext(NavCtx);
+  const row = React.useContext(RowCtx);
+  const idRef = useRef<number>(-1);
+  if (idRef.current < 0) idRef.current = nextBtnId++;
+  const id = idRef.current;
+  const viewRef = useRef<View | null>(null);
+  const yRef = useRef(0);
+  const pressRef = useRef(onPress); pressRef.current = onPress;
+
+  useEffect(() => {
+    if (!nav || row < 0) return;
+    return nav.register({ id, row, y: yRef.current, press: () => pressRef.current?.() });
+  }, [nav, row, id]);
+
+  const focused = !!nav && nav.focused === id;
   return (
     <TouchableOpacity
+      ref={viewRef as any}
+      onLayout={e => { yRef.current = e.nativeEvent.layout.y; }}
       style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull,
-              icon && { flexDirection: 'row', gap: 7 }, style]}
+              icon && { flexDirection: 'row', gap: 7 }, style,
+              focused && styles.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
       {icon && <SectionIcon name={icon} size={15} color={active ? C.gold : C.muted} />}
@@ -568,6 +616,69 @@ export default function MenuSheet({
   const isLocal = !!onLocalHardware;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
+  // ── Keyboard navigation of the sheet ────────────────────────────────────────
+  // Up/down between rows, left/right within a row, Enter to activate. Esc is NOT
+  // handled here — SDRScreen already closes panels on Esc, and one owner for that
+  // rule is what keeps the precedence honest.
+  const navEntries = useRef<NavEntry[]>([]);
+  const rowSeq = useRef(0);
+  const [focused, setFocused] = useState(-1);
+  const scrollRef = useRef<ScrollView | null>(null);
+
+  const navRegister = useCallback((e: NavEntry) => {
+    navEntries.current.push(e);
+    return () => { navEntries.current = navEntries.current.filter(x => x.id !== e.id); };
+  }, []);
+  const navNextRow = useCallback(() => rowSeq.current++, []);
+  const navCtx = useMemo(() => ({ register: navRegister, focused, nextRow: navNextRow }),
+                         [navRegister, focused, navNextRow]);
+
+  useEffect(() => {
+    // ★ `visible`, NOT `open`. An earlier version said `open` and type-checked
+    // perfectly, because TypeScript's DOM lib declares a global `open`
+    // (window.open) — so tsc saw a valid symbol while at runtime it was undefined,
+    // and the screen crash-looped. tsc passing is not proof a name is in scope
+    // when the DOM lib is loaded.
+    if (!visible) { setFocused(-1); return; }
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key;
+      // Sorted by row then id = the reading order of the JSX, without anyone
+      // having to declare it.
+      const all = [...navEntries.current].sort((a, b) => a.row - b.row || a.id - b.id);
+      if (!all.length) return;
+      const cur = all.findIndex(x => x.id === focusedRef.current);
+      const move = (next: number) => {
+        const t = all[Math.max(0, Math.min(all.length - 1, next))];
+        if (!t) return;
+        setFocused(t.id);
+        // Keep focus on screen. y is the button's offset inside its row, so this is
+        // approximate — good enough to follow, and it never fights the user's own
+        // scrolling because it only runs on a key press.
+        scrollRef.current?.scrollTo({ y: Math.max(0, t.row * 46 - 120), animated: true });
+      };
+      if (k === 'Enter') { all[cur]?.press?.(); return; }
+      if (cur < 0) { move(0); return; }          // first key press just takes focus
+      const row = all[cur].row;
+      switch (k) {
+        case 'ArrowDown': {
+          const i = all.findIndex(x => x.row > row);
+          move(i < 0 ? all.length - 1 : i); break;
+        }
+        case 'ArrowUp': {
+          const prev = [...all].reverse().find(x => x.row < row);
+          move(prev ? all.indexOf(prev) : 0); break;
+        }
+        case 'ArrowRight': if (all[cur + 1]?.row === row) move(cur + 1); break;
+        case 'ArrowLeft':  if (cur > 0 && all[cur - 1].row === row) move(cur - 1); break;
+        default: break;
+      }
+    });
+    return () => sub.remove();
+  }, [visible]);
+  const focusedRef = useRef(focused);
+  useEffect(() => { focusedRef.current = focused; }, [focused]);
+
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
   // server order on purpose — they're SDR-type ordered and re-sorting risks the
   // user tapping the wrong profile and disturbing an SDR in active use.
@@ -679,7 +790,8 @@ export default function MenuSheet({
           <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,4,2,0.60)' }]} />
           <View style={styles.handle} />
 
-          <ScrollView style={styles.scroll}
+          <NavCtx.Provider value={navCtx}>
+          <ScrollView ref={scrollRef} style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
             keyboardShouldPersistTaps="handled"
@@ -1141,6 +1253,7 @@ export default function MenuSheet({
             <View style={{ height: 24 }} />
             </>)}
           </ScrollView>
+          </NavCtx.Provider>
 
           <TouchableOpacity
             style={[styles.closeBtn, { marginBottom: sheetInsets.bottom + 12 }]}
@@ -1216,6 +1329,9 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   btnActive:     { backgroundColor: C.active, borderColor: C.goldDim },
+  // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
+  // setting is on"). Focus is where the keyboard is, not what is selected.
+  btnFocused:    { borderColor: '#7CFF9B', borderWidth: 2 },
   btnSelected:   { borderColor: C.goldDim }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
