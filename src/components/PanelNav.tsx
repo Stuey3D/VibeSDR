@@ -177,10 +177,20 @@ export function revealIn(
     if (fallbackRow < 0) return;
     sv.scrollTo({ y: Math.max(0, fallbackRow * EST_ROW_H - margin), animated: true });
   };
-  const node = (sv as any).getInnerViewNode?.();
-  if (!v || node == null) { estimate(); return; }
+  // ★★ Under the NEW ARCHITECTURE, measureLayout() with a NODE HANDLE is a no-op — it
+  // neither measures nor reliably calls the failure callback, so reveal silently fell back
+  // to the `row * 46` estimate. That estimate is roughly right near the TOP of the menu and
+  // progressively wronger further down, which is exactly the reported symptom: focus
+  // sometimes walks off the bottom of the screen and the menu does not follow.
+  //
+  // Fabric wants the inner view's REF (an instance), not a handle. `getInnerViewRef()`
+  // exists for precisely this; the legacy node path is kept for the old renderer.
+  const innerRef  = (sv as any).getInnerViewRef?.();
+  const innerNode = (sv as any).getInnerViewNode?.();
+  const target = innerRef ?? innerNode;
+  if (!v || target == null) { estimate(); return; }
   (v as any).measureLayout?.(
-    node,
+    target,
     (_x: number, y: number) => sv.scrollTo({ y: Math.max(0, y - margin), animated: true }),
     estimate,   // measurement can fail mid-unmount — fall back rather than lose it
   );

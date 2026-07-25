@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -698,6 +698,20 @@ export default function MenuSheet({
   const [bmAll,          setBmAll]          = useState(false);
   const [bmImportOpen,   setBmImportOpen]   = useState(false);
 
+  // ★ The colour-map dropdown gets its OWN list nav. Because PanelNav's owner stack is
+  // last-in-wins, opening the dropdown automatically takes the arrows away from the menu
+  // behind it and gives them back on close — no mode flag, no precedence rule to maintain.
+  // Reveal uses the y each row already records via onLayout, so it needs no measurement.
+  const cmapFocus = useListNav(
+    cmapOpen,
+    cmapSorted.length,
+    (i) => { const n = cmapSorted[i]; if (n) { onColormap(n); setCmapOpen(false); } },
+    (i) => {
+      const y = cmapY.current[cmapSorted[i]];
+      if (y != null) cmapScroll.current?.scrollTo({ y: Math.max(0, y - 40), animated: true });
+    },
+  );
+
   // Deepest-first, so Backspace peels one layer at a time rather than jumping to the top.
   paneBack.current = () => {
     if (bmImportOpen)     { setBmImportOpen(false); return; }
@@ -854,7 +868,8 @@ export default function MenuSheet({
                               keyboardShouldPersistTaps="handled">
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
-                        style={[styles.dropItem, name === colormap && styles.dropItemActive]}
+                        style={[styles.dropItem, name === colormap && styles.dropItemActive,
+                                cmapFocus === cmapSorted.indexOf(name) && styles.dropItemFocused]}
                         onLayout={e => { cmapY.current[name] = e.nativeEvent.layout.y; }}
                         onPress={() => { onColormap(name); setCmapOpen(false); }}
                         activeOpacity={0.7}>
@@ -1301,6 +1316,9 @@ const styles = StyleSheet.create({
   // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
   // setting is on"). Focus is where the keyboard is, not what is selected.
   btnFocused:    { borderColor: C.focus, borderWidth: 2 },
+  // Dropdown rows are a dense list with only a divider, so focus is a background tint —
+  // a 2px border would shift every row as focus moved down it.
+  dropItemFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
   btnSelected:   { borderColor: C.goldDim }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },

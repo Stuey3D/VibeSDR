@@ -15,6 +15,7 @@
  */
 import { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { useListNav } from './PanelNav';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 
 export interface ProfilePickerProps {
@@ -74,6 +75,21 @@ export default function ProfilePicker({
 
   if (!profiles.length) return null;
 
+  // ★ Keyboard / D-pad navigation of the dropdown. The list is GROUPED, so navigation runs
+  // over a flattened array of the selectable profiles only — the SDR header rows are labels,
+  // not choices, and stopping on one would be a dead step.
+  //
+  // Because PanelNav's owner stack is last-in-wins, opening this takes the arrows away from
+  // whatever is behind and hands them back on close, with no precedence rule to maintain.
+  const flatProfiles = useMemo(
+    () => sdrGroups.flatMap((g) => g.items.map((it) => it.id)),
+    [sdrGroups],
+  );
+  const navFocus = useListNav(open, flatProfiles.length, (i) => {
+    const id = flatProfiles[i];
+    if (id != null) { onSelectProfile?.(id); setOpen(false); onPicked?.(); }
+  });
+
   return (
     <View style={s.wrap}>
       <Text style={s.label}>PROFILE</Text>
@@ -113,7 +129,9 @@ export default function ProfilePicker({
                   return (
                     <TouchableOpacity
                       key={it.id}
-                      style={[s.item, serverActive && !active && s.itemInUse]}
+                      style={[s.item, serverActive && !active && s.itemInUse,
+                              flatProfiles[navFocus] === it.id
+                                && s.itemFocused]}
                       onPress={() => { onSelectProfile?.(it.id); setOpen(false); onPicked?.(); }}
                       activeOpacity={0.7}
                     >
@@ -163,6 +181,9 @@ const styles = (t: ThemeTokens) => StyleSheet.create({
   badgeInUse:    { color: '#0b0b0b', backgroundColor: '#f5a524' },
   item:          { paddingHorizontal: 14, paddingVertical: 9 },
   itemInUse:     { backgroundColor: 'rgba(245,165,36,0.10)' },
+  // Focus is a background tint, not a border: these rows are a dense list and a border
+  // would shift every row as focus moved down it.
+  itemFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
   itemText:      { color: t.btnText, fontFamily: t.font, fontSize: 13 },
   itemTextInUse: { color: '#f5a524' },
   itemTextActive:{ color: '#3ddc84', fontWeight: 'bold' },
