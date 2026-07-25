@@ -4401,6 +4401,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const panelOpenRef = useRef(anyPanelOpen);
   useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
 
+  // Read through a ref: the key listener is installed once and must not capture a stale value.
+  const controlsHiddenRef = useRef(controlsHidden);
+  useEffect(() => { controlsHiddenRef.current = controlsHidden; }, [controlsHidden]);
+
   const screenFocused = useIsFocused();
   const screenFocusedRef = useRef(screenFocused);
   useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
@@ -4448,8 +4452,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Esc precedence, one rule in one place: something open -> close it;
       // nothing open -> open the SERVERS menu (the brief's universal back/open key).
       if (k === 'Escape') {
-        if (panelOpenRef.current) closeAll();
-        else setServersToken(t => t + 1);
+        if (panelOpenRef.current) { closeAll(); return; }
+        // ★★ HIDDEN CONTROLS ARE A TRAP WITHOUT THIS. Hiding them removes the servers chip
+        // and every button, leaving only a touch-only ▲ chevron — so a keyboard-driven user
+        // (the whole point of shack mode) had no way back at all. Stuart found it on the TV:
+        // "an unrecoverable situation… nothing brings back the controls."
+        //
+        // It sits between the two existing cases because it IS the deeper state: Esc backs
+        // out of the most-hidden thing first, and only opens the servers menu once there is
+        // nothing left to back out of.
+        if (controlsHiddenRef.current) { setControlsHidden(false); return; }
+        setServersToken(t => t + 1);
         return;
       }
       // With a panel open the arrows and letters belong to it, not to tuning. Until
