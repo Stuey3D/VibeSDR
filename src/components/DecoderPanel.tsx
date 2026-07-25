@@ -249,6 +249,9 @@ export default function DecoderPanel({
   const opacity  = useRef(new Animated.Value(0)).current;
   const slideY   = useRef(new Animated.Value(20)).current;
   const outputRef = useRef<ScrollView>(null);
+  const aircraftRef = useRef<ScrollView | null>(null);
+  const spotsRef = useRef<any>(null);
+  const bodyScrollY = useRef(0);
 
   const dc = {
     border:  isWhite ? 'rgba(255,255,255,0.25)' : C.border,
@@ -358,6 +361,12 @@ export default function DecoderPanel({
   // thing is a trap. Any touch drops it; the next key press takes it again, so switching
   // between hand and keyboard needs no thought and no gesture of its own.
   const kbActive = useKeyboardMode();
+  // ★★ WHO OWNS THE ARROWS BY DEFAULT. On DAB and ADS-B the box IS the screen — a locked
+  // multiplex or an aircraft table — so it takes the arrows outright. On the HF decoders the
+  // waterfall is in ACTIVE USE and tune/zoom are the primary controls, so the box only
+  // borrows them when you deliberately Tab in. Stuart's framing, and it is the right split:
+  // secondary functions should take the controls only while you are actually looking at them.
+  const autoOwn = isDabMode || isAircraftMode;
   const autoTaken = useRef(false);
   useEffect(() => {
     if (kbActive) return;
@@ -365,7 +374,7 @@ export default function DecoderPanel({
     if (kbZoneRef.current) leave();
   }, [kbActive, leave]);
   useEffect(() => {
-    const want = isDabMode && panelOn && !minimised;
+    const want = autoOwn && panelOn && !minimised;
     if (!want) { autoTaken.current = false; return; }
     if (autoTaken.current) return;
     autoTaken.current = true;
@@ -373,7 +382,7 @@ export default function DecoderPanel({
     setKbZone('list');
     setListIdx(0);
     announce();
-  }, [isDabMode, panelOn, minimised, announce]);
+  }, [autoOwn, panelOn, minimised, announce]);
 
   useEffect(() => { if (!panelOn) leave(); }, [panelOn, leave]);
 
@@ -388,17 +397,21 @@ export default function DecoderPanel({
         // ★ I first removed Tab here entirely, having conflated "leaving the box" with
         // "reaching the header". They are different things, and on DAB only one of them is
         // useful.
-        if (isDabModeRef.current) {
+        if (autoOwnRef.current) {
+          // Owned outright: Tab moves between the list and the header, never out.
           setKbZone(z => (z === 'header' ? 'list' : 'header'));
           setHdrIdx(0);
           announce();
           return;
         }
+        // ★ Borrowed: Tab once into the LIST, again into the HEADER, again to hand it back.
+        // The list first because scrolling what you are reading is the common case; the
+        // header controls are the occasional one. (Stuart.)
         setKbZone(z => {
-          if (z) { captureRegion(null); return null; }
-          captureRegion('decoder');
-          setHdrIdx(0); announce();
-          return 'header';
+          if (z === null) { captureRegion('decoder'); announce(); return 'list'; }
+          if (z === 'list') { setHdrIdx(0); announce(); return 'header'; }
+          captureRegion(null);
+          return null;
         });
         return;
       }
@@ -406,9 +419,9 @@ export default function DecoderPanel({
       if (k === 'Escape' || k === 'Backspace') {
         // Deepest first: close the speed popup before anything else, without changing it.
         if (kbZoneRef.current === 'speed') { setDabSpeedOpenRef.current(false); return; }
-        // On DAB there is nothing to hand the keyboard back TO, so these step back to the
-        // list rather than releasing and leaving the arrows tuning a locked VFO.
-        if (isDabModeRef.current) { setKbZone('list'); return; }
+        // Where the box OWNS the arrows there is nothing to hand them back to, so these step
+        // back to the list rather than leaving them tuning a locked VFO.
+        if (autoOwnRef.current) { setKbZone('list'); return; }
         leave();
         return;
       }
@@ -426,7 +439,17 @@ export default function DecoderPanel({
         return;
       }
       if (k === 'ArrowUp' || k === 'ArrowDown') {
-        if (listLenRef.current <= 0) return;
+        // ★ No selectable list (ADS-B, spots, a text decoder) — Stuart: "nothing to select,
+        // just scroll". So the arrows move the body itself rather than doing nothing.
+        if (listLenRef.current <= 0) {
+          const sv: any = aircraftRef.current ?? spotsRef.current ?? outputRef.current;
+          if (!sv) return;
+          setKbZone('list');
+          bodyScrollY.current = Math.max(0, bodyScrollY.current + (k === 'ArrowDown' ? 90 : -90));
+          if (sv.scrollToOffset) sv.scrollToOffset({ offset: bodyScrollY.current, animated: true });
+          else sv.scrollTo?.({ y: bodyScrollY.current, animated: true });
+          return;
+        }
         setKbZone('list');
         setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
         return;
@@ -444,6 +467,7 @@ export default function DecoderPanel({
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
+  const autoOwnRef = useRef(autoOwn); autoOwnRef.current = autoOwn;
   const speedIdxRef = useRef(speedIdx); speedIdxRef.current = speedIdx;
   const setDabSpeedOpenRef = useRef(setDabSpeedOpen); setDabSpeedOpenRef.current = setDabSpeedOpen;
   const onDabSpeedRef = useRef((i: number) => {});
@@ -481,12 +505,14 @@ export default function DecoderPanel({
   useEffect(() => {
     if (kbZone === null) { if (idleRef.current) clearTimeout(idleRef.current); return; }
     if (idleRef.current) clearTimeout(idleRef.current);
-    // ★ DAB keeps the keyboard: it was never borrowed from anything, so timing out would
-    // strand the user with arrows that tune a locked VFO and a list they can no longer reach.
-    if (isDabMode) return;
+    // ★ Where the box OWNS the arrows they were never borrowed, so timing out would strand
+    // the user with arrows that tune a locked VFO and a list they can no longer reach. Where
+    // it BORROWED them, the timeout is the point: on an HF waterfall you want tune and zoom
+    // back as soon as you stop reading the decoder.
+    if (autoOwn) return;
     idleRef.current = setTimeout(() => leaveAnnounced(), PANEL_IDLE_MS);
     return () => { if (idleRef.current) clearTimeout(idleRef.current); };
-  }, [kbZone, hdrIdx, listIdx, isDabMode, leaveAnnounced]);
+  }, [kbZone, hdrIdx, listIdx, autoOwn, leaveAnnounced]);
 
   /** A header control that takes part in the left/right order. */
   const HBtn = ({ onPress, style, children, ...rest }: any) => {
@@ -548,11 +574,15 @@ export default function DecoderPanel({
               // and said nothing about it — the CLR button responded to space, so it worked,
               // but nothing told you it would. A box that has the keyboard should say so
               // whatever it is showing. (Stuart, 2026-07-25.)
-              ? (kbZone === 'speed' ? 'space to set · backspace to cancel'
-                 : isDabMode ? (kbZone === 'header' ? 'space to press · tab for stations'
-                                                    : 'space to select · tab for controls')
-                 : listLen > 0 ? 'space to select · tab to leave'
-                 : 'space to press · tab to leave')
+              // ★ Always says where Tab goes NEXT, so the cycle is discoverable by using it
+              // rather than by being remembered. The wording differs by zone AND by whether
+              // the box owns the arrows or merely borrowed them.
+              ? (kbZone === 'speed'  ? 'space to set · backspace to cancel'
+                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'space to press · tab for stations'
+                                                               : 'space to press · tab for the list')
+                                                  : 'space to press · tab to leave')
+                 : listLen > 0        ? 'space to select · tab for controls'
+                 : 'scroll with ↑↓ · tab for controls')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               : decoderStatus}
           </Text>
@@ -714,7 +744,7 @@ export default function DecoderPanel({
             sizes to its content. */}
         {!minimised && isAircraftMode && (
           <View style={[dp.bodyContent, { height: 200 }]}>
-            <AircraftPanel aircraft={aircraft!} />
+            <AircraftPanel aircraft={aircraft!} scrollRef={aircraftRef} />
           </View>
         )}
         {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
@@ -778,6 +808,7 @@ export default function DecoderPanel({
         {/* Spots table — virtualized; newest first; tap frequency to tune */}
         {!minimised && isSpotsMode && (
           <FlatList
+            ref={spotsRef}
             style={dp.body}
             data={visibleSpots}
             keyExtractor={(s: SpotRow, i: number) => `${s.time}-${s.call}-${s.freqHz}-${i}`}
