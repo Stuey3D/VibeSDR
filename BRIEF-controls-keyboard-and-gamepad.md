@@ -272,7 +272,29 @@ be silently dropped. Controller support goes into the **existing** files, exactl
 
 ## 4. Build order
 
-### Phase 1 — keyboard panel navigation ✅ BUILT 2026-07-25, AWAITING DEVICE TEST
+### Phase 1 — keyboard panel navigation ✅ BUILT AND FIELD-TESTED 2026-07-25 (build 220)
+
+Covered: MenuSheet, StepPicker, AudioSheet, ModeSelector, the SERVER PICKER (header chooser +
+list + footer directories, one focus order), the servers chip, the frequency card (both tabs),
+dropdowns, sliders and the squelch bar.
+
+★ The tune card is COMPLETE as it stands: H/K/M reach the units, Enter tunes, and SHARE is
+deliberately excluded because it hands off to a system sheet we do not control — Stuart's call
+and the right one.
+
+★★ WHAT THE BUGS IN THIS PHASE HAD IN COMMON, worth reading before the controller work:
+- **Mounted is not on screen.** Twice. A guard on a mounted-but-blank overlay killed the
+  keyboard app-wide; a picker still mounted behind the SDR screen connected to a stranger's
+  receiver. Any screen-level key listener needs a focus gate.
+- **Read the one line that calls it.** `onDrag(x)` was typed as a coordinate and passed a
+  normalised value; believing the parameter name applied full squelch with no way back.
+- **Check the method exists.** `measureLayout` with a node handle, then `getInnerViewRef`, then
+  a ScrollView that has no `measureInWindow` at all — three builds spent assuming a component
+  forwards something.
+- **A list needs `extraData`, and DraggableFlatList passes `getIndex()` not `index`.** Focus was
+  correct and invisible for several rounds because of these two.
+- ★ **Measure, do not reason.** One on-screen debug line found in a single screenshot what three
+  readings of the source had not. Reach for it sooner.
 
 Done: `PanelNav.tsx` extracted (grid + list shapes, owner arbitration, measured reveal);
 MenuSheet rewired onto it; **sliders fixed** (they were SKIPPED entirely — Stuart found it);
