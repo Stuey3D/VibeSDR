@@ -138,6 +138,41 @@ waiting to try a gain step.
 That single comparison is the heart of the feature, it needs no knowledge of the mode, and it
 would have correctly refused to keep climbing on the night this was raised.
 
+## 4.1 ★ Prior art: ka9q-radio, and the one thing it does not have to solve
+
+Phil Karn's `radiod` (ka9q-radio) is the best-regarded automatic gain in the amateur SDR world,
+and Stuart rates the RX888 running under it. What it actually does, from `src/rx888.c`:
+
+- Measures **IF power** — summed squared samples after DC removal, exponentially smoothed.
+- Targets the midpoint of `AGC_UPPER_LIMIT` −15 dBFS and `AGC_LOWER_LIMIT` −26 dBFS, so
+  **≈ −20.5 dBFS RMS**. (§3 arrived at ≈ −20 dBFS independently, which is reassuring.)
+- Corrects proportionally: `new_gain = rf_gain - (new_dBFS - target_level)`, snapped to the
+  hardware's discrete steps.
+- Counts hard clipping (`overranges`, samples at ±32767) and uses the −15 dBFS upper threshold as
+  a preventive limit.
+- Runs once a second.
+
+**Adopt:** the level target, the proportional correction, the snap-to-available-steps, and the
+roughly one-second cadence. There is no reason to re-derive any of that.
+
+★★ **But it does not need an intermod test, and we do.** The RX888 is a 16-bit DIRECT-SAMPLING
+receiver — no tuner, no mixer, so its dominant failure mode really is ADC headroom, and managing
+level is very nearly the whole job. An RTL-SDR or an SDRplay has a mixer-based front end that
+generates intermodulation and desensitises **long before any sample reaches the rails** — that is
+exactly the 4582 kHz case in §2.1, where 22 dB was badly overloaded and nothing was clipping. A
+pure level-targeting AGC will sit there contentedly.
+
+So: ka9q's loop for level, PLUS §4's median-versus-peak test for the failure it cannot see. The
+two are complementary, not alternatives.
+
+★ Worth noting that even the RX888 under `radiod` is widely reported as hard to get right, so
+"copy the best implementation" is not on its own a solution. That is the argument for §7's
+readout: telling the operator *which limit they are against* is the part nobody does.
+
+★ **Licence: ka9q-radio is GPL-3.0.** Same trap as FM-DX Webserver (see `README.md` credits): the
+App Store exception rests on Stuart being sole copyright holder, so incorporating third-party GPL
+code would break it. Read it, learn from it, credit it — do not copy it.
+
 ## 5. The loop
 
 1. **Coarse:** from a cold start (or a band change) set gain from the peak/RMS targets in §3.
