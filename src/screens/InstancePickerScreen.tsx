@@ -1129,17 +1129,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  // ★ KEYBOARD HINT BAR (Stuart's idea). This screen is the one place with room to teach
-  // the scheme, and the right moment to do it is the moment a key is pressed — not on a
-  // timer, and never for someone using touch, who would just lose a strip of list to a
-  // lesson they did not ask for. A touch dismisses it again.
-  const [kbHint, setKbHint] = useState(false);
-  useEffect(() => {
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
-    return () => sub.remove();
-  }, []);
-
   // ── Keyboard / D-pad navigation of the server list ──────────────────────────
   //
   // ★ This is the screen that has to work with NO TOUCH AT ALL: mirrored to a TV over
@@ -1522,6 +1511,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               VibeSDR
             </Text>
             <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v{APP_VERSION}</Text>
+            {/* ★ Keyboard hint as a SUBTITLE (Stuart) — prose under the title rather than a
+                bordered strip of glyphs. It reads as part of the page instead of an alert,
+                and it costs no list rows. Scoped to THIS screen's actions; the full
+                scrollable shortcut reference lives in the main menu. */}
+            <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
+              To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
+              F favourite · D default · E edit · S sort
+            </Text>
           </View>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
@@ -1688,15 +1685,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         </View>
         )}
 
-        {/* ★ Keyboard hints — only once a key has actually been pressed. See kbHint. */}
-        {kbHint && (
-          <View style={[styles.kbHint, { borderColor: C.border }]}>
-            <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 0.5 }}>
-              ↑↓ move · ⏎ connect · ⌫ collapse · F favourite · D default · E edit · S sort
-            </Text>
-          </View>
-        )}
-
         {/* Body: directory list when one is open, else the chooser */}
         {selectedDir !== null ? (
           loading ? (
@@ -1715,7 +1703,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               ref={listRef}
               data={listData}
               style={{ flex: 1 }}
-              onTouchStart={() => setKbHint(false)}
               keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
@@ -1951,13 +1938,9 @@ function snrColor(snr: number, C: any): string {
 }
 
 const styles = StyleSheet.create({
-  // A single line, deliberately: on a TV this is read from across a room, and a block of
-  // instructions would cost list rows for something you learn once.
-  kbHint: {
-    borderWidth: 1, borderRadius: 4, paddingVertical: 5, paddingHorizontal: 8,
-    marginHorizontal: 12, marginBottom: 6, alignItems: 'center',
-    backgroundColor: 'rgba(124,255,155,0.07)',
-  },
+  // A subtitle, not a callout: no border and no fill, so it sits quietly under the title
+  // and never competes with the server list for attention.
+  kbHint: { fontSize: 10, letterSpacing: 0.5, marginTop: 2, opacity: 0.85 },
   safe:          { flex: 1 },
   flex:          { flex: 1 },
   header:        { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 8, borderBottomWidth: 1 },
