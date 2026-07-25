@@ -236,7 +236,12 @@ public:
     // writes the coherently-detected L-R (mpx * ref38 * 2), plus the RDS 57 kHz
     // reference and bit clock (both may be null to skip the RDS work entirely).
     // Same maths as step(), just without the per-sample call and null checks.
-    void processBlock(const float* mpx, int n, float* lmr, float* ref57, float* bitClk);
+    // ref57/ref57q are the IN-PHASE and QUADRATURE 57 kHz references. RDS detection
+    // needs both: with only the in-phase term, any phase error between our pilot-derived
+    // carrier and the station's subcarrier scales the recovered data by cos(theta) — and
+    // kills it outright at 90 degrees. All four may be null to skip that work.
+    void processBlock(const float* mpx, int n, float* lmr,
+                      float* ref57, float* ref57q, float* bitClk);
 private:
     inline void advance(float mpx);          // one loop iteration (no trig)
 public:
@@ -336,6 +341,12 @@ public:
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
+    // Arbitration support: RdsDemod runs NPH timing hypotheses, and a MISALIGNED one can
+    // still stumble into block sync and emit rubbish through the shared callbacks — which
+    // is how a good station ends up reporting a two-character name. So only the best
+    // hypothesis is allowed to speak, judged on these.
+    bool synced() const { return synced_; }
+    int  recentGood() const;          // good blocks within the last kRateWindow
     void pushBit(int bit);            // one recovered data bit (post differential)
 
     // Exposed for the DSP layer / tests (encoder round-trip).
@@ -345,14 +356,59 @@ public:
 
 private:
     void parseGroup();
+    // ── Weak-signal block recovery ───────────────────────────────────────────
+    // Sync used to LATCH on a single block-A syndrome, and any one bad bit threw a
+    // block away. Both are costly on a marginal signal, and both have standard
+    // answers (EN 50067 / IEC 62106); the shape of the fix here follows the approach
+    // taken by redsea (Oona Räisänen, MIT) — see the notes in rds.cpp. Our own code.
+    //
+    // 1. Burst-error correction. The 10-bit checkword is a shortened cyclic code, so
+    //    a syndrome identifies a correctable error PATTERN, not merely "bad". We
+    //    precompute syndrome -> error-vector for 1- and 2-bit bursts at every offset.
+    // 2. Rhythm sync. A real block stream arrives on a 26-bit grid in the cyclic
+    //    order A,B,C/C',D — so require several pulses that agree on that grid before
+    //    declaring sync, instead of trusting one match that noise can fake.
+    struct SyncPulse { uint8_t seq; uint64_t bitPos; };
+    static const uint32_t* errorTable();     // 1024 syndromes -> error vector (0 = none)
+    static int seqOfOffset(uint16_t offsetIdx);
+    // Returns whether the block is trustworthy; `repaired` reports whether that took
+    // an actual correction (a clean CRC match does not).
+    bool tryCorrect(uint16_t offsetIdx, uint32_t& block26, bool& repaired) const;
+    void notePulse(int seq);                 // candidate block boundary while unsynced
+    static constexpr int kSyncPulses = 6;    // ring of recent candidates
+    static constexpr int kSyncNeeded = 3;    // agreeing pulses required to declare sync
+    static constexpr int kRateWindow = 50;   // blocks considered when dropping sync
+    static constexpr int kRateDrop   = 25;   // ...and how many may be bad
+    SyncPulse pulses_[kSyncPulses] = {};
+    int pulseCount_ = 0;
+    uint64_t bitPos_ = 0;                    // bits pushed since reset (the grid)
+    uint64_t badHist_ = 0;                   // 1 = block failed, newest in bit 0
+    int blocksSeen_ = 0;
     uint32_t reg_ = 0;
     bool synced_ = false;
-    int bitsLeft_ = 0, nextBlk_ = 0, badRun_ = 0;
+    int bitsLeft_ = 0, nextBlk_ = 0;
     uint16_t blk_[4] = {0, 0, 0, 0};
     bool blkOk_[4] = {false, false, false, false};
     char ps_[9] = {0};
     char rt_[65] = {0};
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
+    // ── Confirmation by repetition ────────────────────────────────────────────
+    // Burst correction buys extra blocks, but a MIS-correction produces a block that
+    // looks valid and isn't — and a wrong station name on screen is worse than no name
+    // at all. RDS repeats everything continuously, so nothing is committed until the
+    // same value arrives twice: PI (present in every group) gates the whole group, and
+    // each PS/RadioText segment gates itself. Costs one extra group (~87 ms) on first
+    // lock and makes a single bad block invisible instead of visible.
+    // ★ Confirmation is only charged where it is EARNED. A block whose checkword
+    // matches exactly is already strongly verified, so it commits at once; only a block
+    // that needed burst correction has to wait for a repeat. Taxing every update made
+    // strong stations visibly sluggish to refresh RadioText for no safety gain, because
+    // on a strong station nothing is being corrected in the first place.
+    bool grpRepaired_ = false;
+    uint16_t piLast_ = 0;   bool piSeen_ = false;
+    uint16_t psCand_[4] = {0, 0, 0, 0};       bool psSeen_[4] = {false, false, false, false};
+    uint32_t rtCand_[16] = {0};               bool rtSeen_[16] = {false};
+    uint8_t  eccCand_ = 0;  bool eccSeen_ = false;
     Callbacks cb_{};
 };
 
@@ -362,17 +418,18 @@ private:
 // reference and pilot-locked bit clock (no separate timing loop). Original code.
 class RdsDemod {
 public:
-    // The bit clock is frequency-accurate (pilot-locked) but its symbol-boundary
-    // phase is unknown, so we run NPH timing-phase hypotheses in parallel, each
-    // feeding its own RdsDecoder; only the aligned one achieves block sync and
-    // emits PS/RadioText via the shared callbacks.
+    // Complex (I/Q) coherent downconvert of the 57 kHz subcarrier, a decimating
+    // baseband filter, an early/late timing loop that tracks the symbol phase, and
+    // differential detection — feeding ONE RdsDecoder.
     void configure(double mpxRate, const RdsDecoder::Callbacks& cb);
     void reset();
-    // Per-block: mpx samples + the PLL's coherent ref57 and bitClk arrays.
-    void process(const float* mpx, const float* ref57, const float* bitClk, int n);
+    using Callbacks = RdsDecoder::Callbacks;
+    // Per-block: mpx samples + the PLL's coherent 57 kHz references (in-phase AND
+    // quadrature) and the bit clock.
+    void process(const float* mpx, const float* ref57, const float* ref57q,
+                 const float* bitClk, int n);
 private:
-    static constexpr int NPH = 16;
-    std::unique_ptr<RealFir> lpf_;     // isolate the RDS baseband after downconvert (decimating)
+    std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
     // RDS baseband is +/-2.4 kHz but arrives at the CHANNEL rate (~300 kHz) — over a
     // hundred times oversampled. The LPF decimates by this, so both it and the biphase
@@ -380,12 +437,44 @@ private:
     int   decim_ = 1;
     int   bphase_ = 1;                 // mirrors RealFir's decimation phase
     std::vector<float> bclk_;
-    float acc_[NPH] = {0};
-    float prevPhC_[NPH] = {0};
-    int   prevSym_[NPH] = {0};
+
+    // ── Why the phase hypotheses stayed ──────────────────────────────────────
+    // The bit clock is FREQUENCY-accurate (the pilot divided by 16) but its symbol
+    // boundary PHASE is unknown, so NPH integrators run at NPH fixed phases and only the
+    // aligned one achieves block sync. That looks wasteful, and on 2026-07-25 it was
+    // replaced by three early/late gates driving a timing loop and a single decoder. It
+    // measured beautifully on synthetic signals and was a DISASTER on air: a strong
+    // station took ~30 SECONDS to produce a name instead of being immediate.
+    //
+    // ★ The brute force has a virtue worth more than the cycles: ZERO ACQUISITION TIME.
+    // One hypothesis is always already aligned — no loop to pull in, no transient, and
+    // nothing to re-acquire after a fade. A timing loop must find the phase before the
+    // first bit is right, and every slip while it hunts breaks the differential chain and
+    // costs block sync. Do not "optimise" this away again without measuring TIME TO FIRST
+    // NAME on a real station: the synthetic tests cannot see this failure at all.
+    //
+    // What DID survive that attempt, because it is a real win: detection is now complex
+    // (I/Q) and DIFFERENTIAL — the decision is Re{A_k * conj(A_(k-1))}, so the carrier
+    // phase cancels algebraically. The old real-only detector scaled by cos(theta) against
+    // the station's actual subcarrier phase and died completely near 90 degrees. Measured
+    // in rds_snr_probe: total failure at 80-90 degrees where this is flat. That, not noise,
+    // is why some perfectly strong stations produced nothing.
+    static constexpr int NPH = 16;
+    // Per-hypothesis callback trampoline: carries which hypothesis spoke, so the demod
+    // can drop everything except the winner.
+    struct Slot { RdsDemod* self; int idx; };
+    Slot slots_[NPH] = {};
+    Callbacks user_{};                 // where the winner's output actually goes
+    int bestIdx() const;
+    float accI_[NPH] = {0};
+    float accQ_[NPH] = {0};
+    float prevPh_[NPH] = {0};
+    float prevAI_[NPH] = {0};
+    float prevAQ_[NPH] = {0};
+    bool  havePrev_[NPH] = {false};
     bool  started_ = false;
     RdsDecoder dec_[NPH];
-    std::vector<float> xbuf_, sbuf_;
+    std::vector<float> xI_, xQ_, sI_, sQ_;
 };
 
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
@@ -497,7 +586,7 @@ private:
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;
-    std::vector<float> ref57Buf_, bitClkBuf_;
+    std::vector<float> ref57Buf_, ref57qBuf_, bitClkBuf_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
     // WFM only: the rate the stereo audio post-chain runs at, = chFs_/audioDecim_.

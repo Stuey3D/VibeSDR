@@ -60,7 +60,7 @@ static std::vector<int> buildDiffBits(uint16_t PI, const char* PS, int reps) {
 
 // One run at a given noise level. `noise` is the per-component Gaussian-ish sigma
 // added to the IQ, with the carrier at unit amplitude.
-static Cap runAt(double noise, double rdsLevel, bool stereoOn) {
+static Cap runAt(double noise, double rdsLevel, bool stereoOn, double subcarrierPhase = 0.0) {
     const uint16_t PI = 0xC79F;
     const char* PS = "RDSTEST!";
     auto m = buildDiffBits(PI, PS, 60);
@@ -94,7 +94,7 @@ static Cap runAt(double noise, double rdsLevel, bool stereoOn) {
         if (k >= 0 && k < (int)m.size()) {
             const double phInBit = (t * 1187.5 - k) * 2.0 * M_PI;
             const double manch = ((phInBit < M_PI) ? 1.0 : -1.0) * (m[k] ? 1.0 : -1.0);
-            rds = rdsLevel * manch * std::cos(2.0 * M_PI * 57000.0 * t);
+            rds = rdsLevel * manch * std::cos(2.0 * M_PI * 57000.0 * t + subcarrierPhase);
         }
         const double mpx = mono + pilot + diff + rds;
         ph += 2.0 * M_PI * (fc + 75000.0 * mpx) / fs;
@@ -119,12 +119,29 @@ static Cap runAt(double noise, double rdsLevel, bool stereoOn) {
 int main() {
     std::printf("\nRDS weak-signal probe — 2.18 s of WFM per point, PS=\"RDSTEST!\"\n");
     std::printf("stereo L-R present, RDS at 5%% MPX (a typical real injection level)\n\n");
-    std::printf("  %-10s %-8s %-10s %s\n", "IQ noise", "PS ok?", "callbacks", "recovered");
-    const double levels[] = { 0.0, 0.10, 0.30, 0.60, 0.90, 1.20, 1.60, 2.00 };
+    std::printf("  (max possible 0A groups in this run: ~24)\n");
+    std::printf("  %-10s %-8s %-10s %s\n", "IQ noise", "PS ok?", "groups", "recovered");
+    const double levels[] = { 0.0, 0.20, 0.40, 0.60, 0.90, 1.20, 1.60, 2.00 };
     for (double nz : levels) {
         const Cap c = runAt(nz, 0.05, true);
         const bool ok = (c.psCalls > 0 && std::strcmp(c.ps, "RDSTEST!") == 0);
         std::printf("  %-10.2f %-8s %-10d \"%s\"\n", nz, ok ? "yes" : "NO", c.psCalls, c.ps);
+    }
+
+    // ── Subcarrier phase error ───────────────────────────────────────────────
+    // The probe above transmits RDS exactly in phase with the reference we derive from
+    // the pilot, which is the ONE condition a real signal never guarantees: the standard
+    // ties RDS to the third harmonic of the pilot only within a tolerance, receive
+    // filters add phase of their own, and multipath rotates it continuously. A real-only
+    // detector scales by cos(theta) and vanishes at 90 degrees, so this sweep is where a
+    // complex detector earns its keep — and a clean-phase test cannot show it at all.
+    std::printf("  subcarrier phase error, at IQ noise 0.60\n");
+    std::printf("  %-10s %-8s %-10s %s\n", "phase", "PS ok?", "groups", "recovered");
+    const double degs[] = { 0.0, 30.0, 60.0, 80.0, 90.0, 120.0, 150.0 };
+    for (double d : degs) {
+        const Cap c = runAt(0.60, 0.05, true, d * M_PI / 180.0);
+        const bool ok = (c.psCalls > 0 && std::strcmp(c.ps, "RDSTEST!") == 0);
+        std::printf("  %-10.0f %-8s %-10d \"%s\"\n", d, ok ? "yes" : "NO", c.psCalls, c.ps);
     }
     std::printf("\n");
     return 0;

@@ -365,6 +365,7 @@ cd modules/vibe-local-sdr && ./build_ios.sh
 | **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
 | **radio-browser.info** | Community station directory used to look up FM-DX / RDS station logos |
 | **Konrad Kosmatka** | librdsparser — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
+| **Oona Räisänen (windytan)** | [redsea](https://github.com/windytan/redsea) (MIT) — the reference for VibeDSP's weak-signal RDS block recovery. Its approach of syndrome-table burst correction, rhythm-based sync acquisition (several boundaries agreeing on the 26-bit grid, in cyclic offset order) and error-rate rather than error-run sync dropping is what VibeDSP's own implementation follows. No redsea code is used — VibeDSP shares none of its dependencies — but the ideas are hers |
 | **Osmocom / librtlsdr** | RTL-SDR USB driver (Android local hardware + rtl_tcp) |
 | **Mark Borgerding (KissFFT)** | BSD-licensed FFT vendored in the VibeDSP engine |
 | **Karlis Goba (ft8_lib)** | FT8 / FT4 decoding |

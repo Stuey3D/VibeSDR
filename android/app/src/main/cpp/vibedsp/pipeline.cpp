@@ -310,13 +310,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const bool wantRds = (cb_.rdsPs || cb_.rdsText);
             lprBuf_.assign(demodBuf_.begin(), demodBuf_.begin() + nc);   // L+R = MPX
             lmrBuf_.resize(nc);
-            if (wantRds) { ref57Buf_.resize(nc); bitClkBuf_.resize(nc); }
+            if (wantRds) { ref57Buf_.resize(nc); ref57qBuf_.resize(nc); bitClkBuf_.resize(nc); }
             pll_.processBlock(demodBuf_.data(), nc, lmrBuf_.data(),
-                              wantRds ? ref57Buf_.data() : nullptr,
+                              wantRds ? ref57Buf_.data()  : nullptr,
+                              wantRds ? ref57qBuf_.data() : nullptr,
                               wantRds ? bitClkBuf_.data() : nullptr);
             // RDS (only meaningful once the pilot is locked).
             if (wantRds && pll_.locked())
-                rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), bitClkBuf_.data(), nc);
+                rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), ref57qBuf_.data(),
+                                  bitClkBuf_.data(), nc);
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R

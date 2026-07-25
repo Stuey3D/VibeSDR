@@ -83,19 +83,22 @@ void StereoPLL::step(float mpx, float* ref38, float* ref57, float* bitClk) {
 }
 
 void StereoPLL::processBlock(const float* mpx, int n, float* lmr,
-                             float* ref57, float* bitClk) {
+                             float* ref57, float* ref57q, float* bitClk) {
     // The loop filter is a feedback path, so this cannot be vectorised across
     // samples — but it no longer has to be: with the trig gone each iteration is
     // a handful of multiplies. The vectorised work either side of it (the FM
     // discriminator feeding this, the stereo matrix consuming it) is where NEON
     // pays. Splitting the RDS references out of the loop keeps the common case —
     // stereo playing, no RDS subscriber — down to the L-R detection alone.
-    if (ref57 && bitClk) {
+    if (ref57 && ref57q && bitClk) {
         for (int i = 0; i < n; ++i) {
             advance(mpx[i]);
             const float c = outC_, s = outS_;
             lmr[i]   = mpx[i] * (-2.0f * s * c) * 2.0f;   // detect + coherent gain comp
-            ref57[i] = c * (4.0f * c * c - 3.0f);
+            // Triple-angle identities — the third harmonic of the pilot, still from the
+            // one sin/cos pair, no extra trig.
+            ref57[i]  = c * (4.0f * c * c - 3.0f);        // cos(3*phase)
+            ref57q[i] = s * (3.0f - 4.0f * s * s);        // sin(3*phase)
             bitClk[i] = (float)((cycle_ * 2.0 * M_PI + phase_) / 16.0);
         }
     } else {

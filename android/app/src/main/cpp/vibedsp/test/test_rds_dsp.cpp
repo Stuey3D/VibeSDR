@@ -55,7 +55,7 @@ static void testDirect() {
     const double R = 640000.0;          // a typical WFM channel rate
     auto m = buildDiffBits(0xABCD, "DIRECT12", 20);
     const int N = (int)((m.size() + 4) / 1187.5 * R);
-    std::vector<float> mpx(N), ref57(N), bitClk(N);
+    std::vector<float> mpx(N), ref57(N), ref57q(N), bitClk(N);
     for (int i = 0; i < N; ++i) {
         const double t = i / R;
         const int k = (int)std::floor(t * 1187.5);
@@ -67,6 +67,7 @@ static void testDirect() {
         const double car = std::cos(2.0 * M_PI * 57000.0 * t);
         mpx[i]    = (float)(0.05 * manch * car);
         ref57[i]  = (float)car;
+        ref57q[i] = (float)std::sin(2.0 * M_PI * 57000.0 * t);
         bitClk[i] = (float)std::fmod(2.0 * M_PI * 1187.5 * t, 2.0 * M_PI);
     }
     Cap cap;
@@ -74,7 +75,8 @@ static void testDirect() {
     RdsDecoder::Callbacks cb; cb.ctx = &cap; cb.ps = onPs;
     demod.configure(R, cb);
     for (int o = 0; o < N; o += 8192)
-        demod.process(mpx.data() + o, ref57.data() + o, bitClk.data() + o, std::min(8192, N - o));
+        demod.process(mpx.data() + o, ref57.data() + o, ref57q.data() + o,
+                      bitClk.data() + o, std::min(8192, N - o));
     std::printf("  direct PS=\"%s\" (calls=%d)\n", cap.ps, cap.psCalls);
     check(std::strcmp(cap.ps, "DIRECT12") == 0, "direct RdsDemod recovers PS");
 }
