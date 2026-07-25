@@ -409,3 +409,78 @@ burn-in case. Reposition it periodically (a minute or two) within the safe area,
   is moving. Never a jump — a jump in peripheral vision reads as a glitch.
 - Keep it DIM and low-contrast, not full white; brightness drives burn-in as much as duration.
 - Vary the position properly (walk around the screen), rather than alternating between two spots.
+
+### ★★★ WHERE THE CONTROLS LIVE — the three states (Stuart, 2026-07-25)
+
+★ **The principle: exactly ONE control surface exists at any moment, and it lives wherever the user's
+hands are.** Never both. TV space is valuable and duplicating the controls wastes it on something the
+user is already touching somewhere else. The TV's UI grows precisely as the phone's shrinks.
+
+| state | phone | TV |
+|---|---|---|
+| **1. Big screen only** (user chooses this deliberately) | — | waterfall **+ a compact control ISLAND**, sized proportionately, fully keyboard-driven |
+| **2. Both screens** (phone in hand, TV for the panorama) | the **main island** | waterfall + **frequency and signal meter ONLY** — no controls |
+| **3. Keyboard only** (detected → phone goes to the powersave mode above) | black, drifting pill | waterfall + frequency/signal bar **+ the 4 extra buttons fade IN around it** |
+
+**State 1 — big screen only.** A size-proportionate island on the TV, fully controllable from the
+keyboard. ★ **DROP the drums and the tuning keys**: they are touch controls and there is no touch on a
+television, so they would be decoration occupying the most valuable space on screen. Keep the MIDDLE
+section — frequency, mode, signal — and move the status sections UNDERNEATH it. A compact pill.
+
+**State 2 — both screens.** The main island stays on the PHONE, where the hands are. The TV carries
+only the frequency and the signal meter: the two things you glance at, and nothing you would reach
+for.
+
+**State 3 — keyboard only.** Detected as in the TV-mode spec above. The phone's controls **fade out**
+as it blacks down, and the **4 extra buttons fade IN** around the TV's frequency/signal bar — step
+rate, audio, menu, chat. So the TV gains exactly what the phone gave up, at the moment it gives it up.
+
+### ★★★ The governing structure: a PERMANENT PILL, progressively FLANKED (Stuart)
+
+*"On the TV at all times the SNR and Frequency box — it's a small self-contained pill, and depending
+how the user is using the app is if the rest of the controls then flank it."*
+
+★ This is the right structure, and it supersedes thinking of the three states as three layouts. There
+is **one anchor that is always present** — the frequency + SNR pill, self-contained, centred — and the
+rest of the controls **flank it** according to how the app is being used:
+
+| how it is being used | what flanks the pill |
+|---|---|
+| phone in hand (state 2) | nothing — the pill alone |
+| keyboard only (state 3) | the 4 extra buttons — step, audio, menu, chat |
+| big screen only (state 1) | the full compact island: middle section, status underneath |
+
+★★ Why this is better than switching layouts: **the pill never moves.** Nothing reflows, and nothing
+appears where the eye was not already resting — which matters enormously on a display watched from
+across a room. Transitions become purely ADDITIVE around a fixed centre: flanks fade in, flanks fade
+out, anchor untouched. It also means there is only ever one thing to get right visually, and the
+states differ by what surrounds it rather than by what it is.
+
+★ So implement it as: always render the pill; render flank groups conditionally with a fade. Not a
+state machine over layouts — a fixed anchor with optional neighbours.
+
+### ★★ THE ONE HARD EXCLUSION: tuning and zoom controls NEVER go to the big screen (Stuart)
+
+*"The only thing that should never go to the big screen is the tuning/zoom controls, since they are all
+on keyboard and these are a dead element on non-touch screens or without a mouse."*
+
+★ The drums AND the tuner keys are excluded from the TV in EVERY state, including big-screen-only.
+They are direct-manipulation controls: a drum needs a drag, a key needs a press. A television has
+neither, so on the TV they are a **dead element** — pixels that look interactive, are not, and occupy
+the most valuable space on the screen. Worse than useless, because they invite a reach that cannot
+land.
+
+★ And nothing is lost, which is what makes the exclusion clean rather than a compromise: tuning and
+zoom are ENTIRELY covered by the keyboard (arrows, with the same tap-step / hold-sweep law) and by a
+pointer if one is present. The function moves to the input device; only the on-screen widget is
+dropped.
+
+★ RULE FOR ANY FUTURE TV FLANK: include it only if it is *readable* (status, frequency, meters) or
+*actuable from a keyboard*. If its only affordance is touch or drag, it stays on the phone.
+
+★ **All transitions FADE.** Same reasoning as the drifting pill: this is a room-scale display being
+watched from a sofa, and anything that snaps reads as a fault. Fading also means a brief overlap is
+harmless, which keeps the state machine simple.
+
+★ Needs a user-facing control for state 1 ("big screen only"), since it is deliberate rather than
+detected. States 2 and 3 follow automatically from what the user is touching.
