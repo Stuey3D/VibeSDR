@@ -497,6 +497,28 @@ deadzone to tune, and a new sweep curve to validate, all to duplicate something 
 waterfall pan is worth having where a stick exists but can never be core, since panning has no Siri
 Remote equivalent at all.
 
+### ★★★ THE MINIMUM CONTROL SET: directions + confirm + back. The rest are ACCELERATORS.
+
+Prompted by Stuart asking whether half a Nintendo Switch Joy-Con still gives full control. Apple has
+supported single Joy-Cons since **iOS 16** (either half usable alone), and the wrinkle is that **each
+half has one of the two things, not both**:
+
+- **Left Joy-Con** — its four buttons ARE the directions, so a genuine D-pad, plus SL/SR and minus. But
+  **no spare face buttons**, because the four ARE the D-pad.
+- **Right Joy-Con** — ABXY, but **no D-pad at all**. Only the stick for directions — the exact case the
+  no-sticks decision above designed out.
+
+★ So the rule that makes "any controller works" actually true: **guarantee the app is fully operable
+from directions + confirm + back alone**, and treat the shoulders (step rate) and the face buttons (the
+three flanks) as SHORTCUTS. This is already sound, because audio, menu and chat are all reachable from
+inside the menu — the flank buttons are accelerators to things that have another route.
+
+★★ **Consequence: stick-mirrors-D-pad is NOT optional decoration — it is what makes the right Joy-Con
+work at all.** Keep it, but as a COMPATIBILITY feature rather than a feel feature.
+
+★ It also helps that iOS, iPadOS and tvOS all offer system-wide and per-app controller remapping, so
+genuinely exotic hardware is something the user can fix themselves.
+
 ### ★★ SETTLED: step rate moves to L1/R1, so the flank set is THREE (Stuart, 2026-07-25)
 
 The controller mapping (see below / memory `external_display_shack_mode`) forced a useful question: the
