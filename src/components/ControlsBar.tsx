@@ -266,6 +266,9 @@ export interface ControlsBarProps {
   /** One step in `dir`, for the keys. Only needed when the keys are shown. */
   onVfoStep?:  (dir: -1 | 1) => void;
   onZoomStep?: (dir: -1 | 1) => void;
+  /** Steps/sec ceiling for the VFO sweep — derived from step size + visible span
+   *  so signals cross the screen at a consistent rate. */
+  vfoSweepRate?: () => number;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -616,7 +619,7 @@ function useDrumSwipeGuard() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep }: any) {
+  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep, vfoSweepRate }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -771,7 +774,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             pointerEvents={readOnly ? 'none' : 'auto'}
             style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
         {vfoKeys
-          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} style={{ flex: 1 }} />
+          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
           : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
         {!singleDrum && (zoomKeys
           ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} style={{ flex: 1 }} />
@@ -823,7 +826,7 @@ const por = StyleSheet.create({
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  vfoKeys, zoomKeys, onVfoStep, onZoomStep }: any) {
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, vfoSweepRate }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -859,7 +862,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
         {vfoKeys
-          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} style={{ flex: 1 }} />
+          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
           : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
@@ -977,6 +980,7 @@ function ControlsBar({
   zoomKeys = false,
   onVfoStep,
   onZoomStep,
+  vfoSweepRate,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -1024,7 +1028,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
-    vfoKeys, zoomKeys, onVfoStep, onZoomStep,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep, vfoSweepRate,
   };
 
   return (

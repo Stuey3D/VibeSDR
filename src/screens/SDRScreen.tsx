@@ -83,6 +83,7 @@ import { useTheme }                                     from '../contexts/ThemeC
 import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
+import { sweepTargetRate } from '../components/TunerKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -3084,6 +3085,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // The wobble is the real constraint here, not the bitrate: sends have to stay
   // frequent enough that the view keeps up with a display that is moving at full
   // step rate. Lower this and the jitter comes back.
+  // Sweep ceiling: constant SCREEN-CROSSING time, not a constant step rate. Reads
+  // the live step and visible span, so changing either mid-sweep is picked up on
+  // the next tick. See sweepTargetRate in TunerKeys for why this also makes the
+  // VFO wobble a constant fraction of screen width.
+  const vfoSweepRate = useCallback(() => {
+    const c = client.current;
+    const v = c?.getView();
+    const span = (v?.binBandwidth || 0) * (v?.binCount || 0);
+    return sweepTargetRate(stepRef.current, span);
+  }, []);
+
   const SWEEP_SEND_MS = 90;
   const sweepTune = useRef<{ hz: number | null; sentAt: number; timer: ReturnType<typeof setTimeout> | null }>(
     { hz: null, sentAt: 0, timer: null });
@@ -4835,6 +4847,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           zoomKeys={zoomKeys}
           onVfoStep={onVfoStep}
           onZoomStep={onZoomStep}
+          vfoSweepRate={vfoSweepRate}
           onMode={onMode}
           onStep={onStepOpen}
           onMenu={onMenuOpen}

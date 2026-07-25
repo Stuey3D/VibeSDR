@@ -88,3 +88,68 @@ Reuse that comparison rather than inventing a second notion of "same span".
 3. Unlock and pan — the waterfall must stay where you put it and NOT snap back to the VFO.
 4. Zoom during a fast tune — no jump when the view re-asserts.
 5. VibeServer capture-recentre (same span, new centre) — still adopts, still no snap-back.
+
+---
+
+## 7. ★ The margin buffer — a SEPARATE, later idea (Stuart, 2026-07-25)
+
+Distinct from §3, and worth not conflating. §3 fixes WHERE frames are drawn; this fixes the fact
+that a newly exposed edge has **no data at all**, because the server was never asked for it. Correct
+placement cannot invent spectrum you were never sent.
+
+Stuart's proposal: request a chunk WIDER than the visible span and hold it, so a pan is served from
+the local buffer first and only reaches the server when it runs out. Also thins the view-send spikes.
+
+★ It is not free, and the trade is real: the server sends a fixed `binCount` across whatever span is
+asked for, so over-fetching means either coarser bins for the same bandwidth (a blurrier screen) or
+more bins for more bandwidth, continuously — in exchange for removing occasional spikes.
+
+★★ **DECISION (Stuart, 2026-07-25): take the slightly higher data rate and keep CLEAN bins by
+default; the existing LOW DATA link mode selects the cheap coarse variant instead.** That maps the
+trade onto a control users already understand (Link Management: FULL / AUTO / LOW DATA) rather than
+inventing a new setting, and it puts the blurrier picture behind an explicit "I am on metered data"
+choice.
+
+★ SEQUENCING: do §3 first and re-measure. §3 costs nothing and is expected to remove the
+stuck-signals symptom on its own — when the view pans, rows placed by their own centre SLIDE with
+the pan instead of freezing, which is what "the ticker moves but the signals stick" actually is.
+Only then judge the buffer, on data-rate grounds alone rather than as a fix.
+
+---
+
+## 8. ★★ CORRECTION to §7's sequencing — the buffer is the MECHANISM, not a later optimisation
+
+Found while looking at how to implement §3 in the GPU waterfall (2026-07-25).
+
+**§3 cannot be implemented as written.** `WaterfallView`'s SkSL samples the ring with a SINGLE
+GLOBAL x mapping — `tx = clamp(xy.x / uDrawW * uTexW, ...)` — and the ring is 1024 rows of raw bins.
+There is nowhere to put a PER-ROW offset, which is what "place each frame by its own centre"
+requires. Shifting rows at write time does not work either: it aligns each row to whatever the view
+was when it arrived, so after a pan a signal appears at different x in old and new rows and the
+trace BENDS.
+
+**So the fix is to store rows by ABSOLUTE FREQUENCY in a window WIDER than the view**, and give the
+shader one offset for where the view currently sits inside it. That is §7's margin buffer. Three
+results from one mechanism:
+
+1. Alignment correct BY CONSTRUCTION — a signal stays vertical through tunes and pans. No in-flight
+   misplacement, no resync, no zoom-to-fix. (This is §3's goal, reached structurally.)
+2. Panning and small tunes are FREE — served from the margin, no server round trip.
+3. ★ The data rate goes FLAT. The spikes are not throttled, they stop existing: a tune inside the
+   margin needs no new server view at all.
+
+★★ **WHY FLAT MATTERS — Stuart's argument, and it is the strongest one here (2026-07-25):**
+*"UberSDR already sends very little data and I would rather a consistent data rate from the server
+than low when not tuning with a massive spike when tuning. If a server has a dodgy internet
+connection or is very close to its user capacity and we hammer a massive spike of data, that could
+cause breakup and stutter for ALL users, not just us."*
+So a flat rate is SERVER ETIQUETTE, not merely efficiency — the same value as
+`kiwi_reconnect_etiquette` and `owrx_profile_etiquette`. A slightly higher steady baseline is
+preferable to a low one punctuated by bursts, because the bursts are what hurt other people.
+Combined with §7's decision (clean bins by default, LOW DATA selects the coarse variant), the
+default should be a steady, slightly-wider request rather than a narrow one that is constantly
+renegotiated.
+
+★ SCOPE WARNING: this is a render-path change on a PROTECTED SURFACE (the zoom drum's waterfall,
+[[feedback_zoom_drum]]). It wants doing deliberately, with the §6 test cases run by hand before and
+after — not bolted on at the end of a session.

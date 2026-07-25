@@ -55,15 +55,55 @@ const G = (a: number) => hsl(GLOW_HUE, 100, 45, Math.min(1, a * GLOW_INT));
 // that is exactly what would break "rapid taps = rapid steps".
 const HOLD_MS   = 350;    // unbroken contact before a sweep starts
 const SWEEP_LO  = 3;      // steps/sec at the moment the sweep begins
-const SWEEP_HI  = 22;     // steps/sec ceiling
-const SWEEP_RAMP_MS = 2500; // time from LO to HI — a smooth ramp, NOT gears
+const SWEEP_HI  = 25;     // hard ceiling on steps/sec (feel + send rate)
+const SWEEP_RAMP_MS = 2500; // time from LO to the target — a smooth ramp, NOT gears
+
+// ★★ THE CEILING IS NOT A FIXED STEP RATE — it is a constant SCREEN-CROSSING TIME.
+//
+// A fixed 22 steps/sec means the frequency rate is whatever the step size makes it,
+// and that ranges over three orders of magnitude: at 100 Hz you crawl at 2.2 kHz/s,
+// at 9 kHz you cover 198 kHz/s and cross the entire MW broadcast band in five
+// seconds (Stuart: "it moves too fast"). Same control, completely different
+// meaning. What should be constant is how fast SIGNALS MOVE ACROSS THE SCREEN.
+//
+// So the target rate is derived from the visible span: cross it in SWEEP_SPAN_SECS.
+//   stepsPerSec = span / (SWEEP_SPAN_SECS * stepHz), clamped to [SWEEP_LO, SWEEP_HI]
+//
+// ★ It also fixes the VFO wobble, and provably rather than by luck. The wobble is
+// the readout (which moves every step) running ahead of the view (which is
+// coalesced to ~11 sends/sec), so the error is stepHz * stepsPerSecond * interval.
+// Substitute the law above and stepHz CANCELS: the error is span/SWEEP_SPAN_SECS *
+// interval — a constant ~2% of screen width at any step size and any zoom. A flat
+// "cap the kHz/sec" rule would not do that; it would still wobble at coarse steps.
+// And at coarse steps the rate drops BELOW the send rate, so every step gets its
+// own send and the coalescer never engages at all — zero wobble exactly where it
+// used to be worst.
+//
+// One case is beyond help: a 9 kHz step inside a 20 kHz span crosses the screen in
+// under a second even at SWEEP_LO, because the step is simply coarse relative to
+// the window. The floor stops it going slower than one step per third of a second,
+// which is as far as this can sensibly go.
+const SWEEP_SPAN_SECS = 4;
+
+/** Target steps/sec so the sweep crosses `spanHz` in SWEEP_SPAN_SECS. */
+export function sweepTargetRate(stepHz: number, spanHz: number): number {
+  if (!(stepHz > 0) || !(spanHz > 0)) return SWEEP_HI;
+  const want = spanHz / (SWEEP_SPAN_SECS * stepHz);
+  return Math.max(SWEEP_LO, Math.min(SWEEP_HI, want));
+}
 
 /**
  * Press/hold-to-sweep, shared by the HiFi keys and anywhere else a "tune" or
  * "zoom" mapping lands (the ◀▶ step buttons, mouse side buttons, arrow keys).
  * Returns handlers to spread onto a Pressable.
  */
-export function useHoldSweep(fire: (dir: -1 | 1) => void, disabled = false) {
+export function useHoldSweep(
+  fire: (dir: -1 | 1) => void,
+  disabled = false,
+  /** Steps/sec the ramp climbs to. Re-read at every tick, so changing the step
+   *  rate or zooming mid-sweep takes effect immediately. */
+  targetRate?: () => number,
+) {
   const holdT  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickT  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sweeping, setSweeping] = useState<-1 | 1 | 0>(0);
@@ -93,14 +133,17 @@ export function useHoldSweep(fire: (dir: -1 | 1) => void, disabled = false) {
       const started = Date.now();
       const tick = () => {
         fire(dir);
-        // Rate is recomputed every tick, so the ramp is continuous — no gears.
+        // Rate is recomputed every tick, so the ramp is continuous — no gears —
+        // and the ceiling is re-read too, so changing step rate or zoom mid-sweep
+        // is picked up straight away.
         const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
-        const rate = SWEEP_LO + (SWEEP_HI - SWEEP_LO) * t;
+        const hi = Math.max(SWEEP_LO, targetRate ? targetRate() : SWEEP_HI);
+        const rate = SWEEP_LO + (hi - SWEEP_LO) * t;
         tickT.current = setTimeout(tick, 1000 / rate);
       };
       tickT.current = setTimeout(tick, 1000 / SWEEP_LO);
     }, HOLD_MS);
-  }, [disabled, fire, stop]);
+  }, [disabled, fire, stop, targetRate]);
 
   return { press, release: stop, sweeping };
 }
@@ -114,20 +157,22 @@ interface Props {
   height: number;
   /** One step in `dir`. Fired on press, and repeatedly while sweeping. */
   onStep: (dir: -1 | 1) => void;
+  /** Steps/sec the sweep ramps to — see sweepTargetRate. Omit for the fixed cap. */
+  sweepRate?: () => number;
   width?: number;
   style?: ViewStyle;
   disabled?: boolean;
 }
 
 export default function TunerKeys({
-  type, height, onStep, width: widthProp = 0, style, disabled = false,
+  type, height, onStep, sweepRate, width: widthProp = 0, style, disabled = false,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
 
   const [down, setDown] = useState<-1 | 1 | 0>(0);
-  const { press, release, sweeping } = useHoldSweep(onStep, disabled);
+  const { press, release, sweeping } = useHoldSweep(onStep, disabled, sweepRate);
 
   const onDown = useCallback((dir: -1 | 1) => { setDown(dir); press(dir); }, [press]);
   const onUp   = useCallback(() => { setDown(0); release(); }, [release]);
