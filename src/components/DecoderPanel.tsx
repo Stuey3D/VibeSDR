@@ -77,32 +77,6 @@ const DAB_SPEEDS = [
   { v: 0.3333, l: '×0.33' }, { v: 0.25, l: '×0.25' },
 ];
 
-/**
- * A scroll indicator that appears — in green — only while the ARROWS are driving this list.
- *
- * ★ Stuart's idea, and it answers the question the keyboard always raises: what are the arrows
- * actually moving right now? The native indicator cannot be coloured on iOS (indicatorStyle is
- * only default/black/white), so this is drawn rather than styled.
- *
- * ★ It also shows HOW FAR through a list you are, which the flash and the focus ring do not —
- * useful on a long ensemble or a full spots table where the highlight alone tells you nothing
- * about where you are in the whole.
- */
-function KeyScrollBar({ visible, off, layout, content }: {
-  visible: boolean; off: number; layout: number; content: number;
-}) {
-  if (!visible || content <= layout || layout <= 0) return null;
-  const frac  = Math.max(0.08, layout / content);            // never a dot on a long list
-  const thumb = layout * frac;
-  const span  = layout - thumb;
-  const at    = span * Math.max(0, Math.min(1, off / Math.max(1, content - layout)));
-  return (
-    <View pointerEvents="none" style={dp.keyBarTrack}>
-      <View style={[dp.keyBarThumb, { height: thumb, transform: [{ translateY: at }] }]} />
-    </View>
-  );
-}
-
 const MORSE_QUALITIES: MorseQuality[] = ['all', 'low', 'medium', 'high'];
 const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
   all: 'ALL', low: 'LOW+', medium: 'MED+', high: 'HIGH',
@@ -278,13 +252,17 @@ export default function DecoderPanel({
   const aircraftRef = useRef<ScrollView | null>(null);
   const spotsRef = useRef<any>(null);
   const bodyScrollY = useRef(0);
-  // Only tracked while the bar is on screen — no re-render per frame the rest of the time.
-  const [scrollM, setScrollM] = useState({ off: 0, layout: 0, content: 1 });
-  const scrollMetrics = {
-    scrollEventThrottle: 16,
-    onScroll: (e: any) => setScrollM(m => ({ ...m, off: e?.nativeEvent?.contentOffset?.y ?? 0 })),
-    onLayout: (e: any) => setScrollM(m => ({ ...m, layout: e?.nativeEvent?.layout?.height ?? 0 })),
-    onContentSizeChange: (_w: number, h: number) => setScrollM(m => ({ ...m, content: Math.max(1, h) })),
+  // ★ Offset tracked in a REF, never state. The removed green bar kept it in state and set it
+  // on every scroll frame — and onContentSizeChange fired when a spot row expanded, which is
+  // the likely source of the list scrolling wildly on EXPAND. A ref costs nothing and cannot
+  // feed back into a render.
+  //
+  // Reading the real offset also keeps arrow-scrolling honest: a counter of our own drifts the
+  // moment the list is flicked by hand or clamps at its end, and then the arrows appear dead
+  // until you press them back through the difference.
+  const bodyScroll = {
+    scrollEventThrottle: 32,
+    onScroll: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
   };
 
   const dc = {
@@ -367,6 +345,7 @@ export default function DecoderPanel({
   // ★ On a TIMEOUT, flash once more and let it be seen before closing — an announcement of
   // departure, so the box handing the keyboard back is deliberate rather than mysterious.
   const leaveAnnounced = useCallback(() => { flashThen(leave); }, [flashThen, leave]);
+  const leaveAnnouncedRef = useRef(leaveAnnounced); leaveAnnouncedRef.current = leaveAnnounced;
 
   useEffect(() => () => { captureRegion(null); }, []);   // never leave it captured on unmount
 
@@ -523,6 +502,19 @@ export default function DecoderPanel({
   // Idle timeout, matching the menus: a stray Tab must not leave the box holding the keyboard
   // while the user has walked away from it. Resets on every key it handles.
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ★★ RESET ON EVERY KEY THE BOX HANDLES, not on a changed index. The timer used to restart
+  // when the focused INDEX moved — fine on a selectable list, useless on ADS-B, spots or a
+  // text decoder, where the arrows scroll the BODY and no index exists to change. So the one
+  // case where you scroll continuously was the one case where scrolling did not count as
+  // activity, and the box released the keyboard mid-scroll.
+  const armIdle = useCallback(() => {
+    if (idleRef.current) clearTimeout(idleRef.current);
+    idleRef.current = null;
+    if (autoOwnRef.current || !kbZoneRef.current) return;
+    idleRef.current = setTimeout(() => leaveAnnouncedRef.current(), PANEL_IDLE_MS);
+  }, []);
+  const armIdleRef = useRef(armIdle); armIdleRef.current = armIdle;
   // ★ The SPEED FIX popup takes the arrows the moment it opens. The button EXPANDS the header
   // to show the presets, but nothing could move the selector into them — Stuart: "the button
   // expands the header for them but I cannot move the selector down to get to them." A
@@ -788,8 +780,8 @@ export default function DecoderPanel({
             ref={outputRef}
             style={dp.body}
             contentContainerStyle={dp.bodyContent}
-            {...scrollMetrics}
-            showsVerticalScrollIndicator={false}
+            {...bodyScroll}
+            showsVerticalScrollIndicator
           >
             <Text style={[dp.output, { color: dc.output, fontFamily: t.font }]} selectable>
               {decoderText}
@@ -820,13 +812,8 @@ export default function DecoderPanel({
             </View>
           </View>
         )}
-        {/* ★ The green bar sits over the body — one instance for whichever list is showing. */}
-        <KeyScrollBar visible={kbZone === 'list' && !minimised}
-                      off={scrollM.off} layout={scrollM.layout} content={scrollM.content} />
-
         {!minimised && isDabMode && (
-          <ScrollView ref={dabScroll} style={dp.body} showsVerticalScrollIndicator={false}
-                      {...scrollMetrics}>
+          <ScrollView ref={dabScroll} style={dp.body} showsVerticalScrollIndicator {...bodyScroll}>
             {dabProgrammes.map((p, pi) => {
               const active = p.id === activeDabId;
               const navOn = kbZone === 'list' && listIdx === pi;
@@ -852,7 +839,7 @@ export default function DecoderPanel({
           <FlatList
             ref={spotsRef}
             style={dp.body}
-            {...scrollMetrics}
+            {...bodyScroll}
             data={visibleSpots}
             keyExtractor={(s: SpotRow, i: number) => `${s.time}-${s.call}-${s.freqHz}-${i}`}
             renderItem={renderSpot}
@@ -877,13 +864,6 @@ export default function DecoderPanel({
 
 const dp = StyleSheet.create({
   // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
-  // Right edge of the body, inside the border. Thin enough to read as an indicator rather
-  // than a control — it is a signal, not something to grab.
-  keyBarTrack: {
-    position: 'absolute', right: 2, top: 40, bottom: 4, width: 3,
-    borderRadius: 2, backgroundColor: 'rgba(124,255,155,0.15)', zIndex: 5,
-  },
-  keyBarThumb: { width: 3, borderRadius: 2, backgroundColor: NAV_FOCUS },
   flash: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
     borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 8,
