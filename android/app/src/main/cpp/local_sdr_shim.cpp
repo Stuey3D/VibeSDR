@@ -912,6 +912,7 @@ struct LocalSdrShim::Impl {
     // manual gain would otherwise have the AGC switched back on for them a second after
     // connecting — a fix for one person's problem becoming another's bug (Stuart).
     bool sdrpAgcWanted = true;
+    bool sdrpSettling = true;      // true while the AGC is being kicked and settling
     bool useSdrplay() const { return (bool)sdrp; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
@@ -1417,6 +1418,11 @@ struct LocalSdrShim::Impl {
             // nothing next to the spectrum.
             // ★ ~1 s after the stream starts, cycle the AGC once. Off, then on: the API only
             // starts the loop on a TRANSITION, and assignment before Init is not one.
+            // ★ Settling window: the AGC kick plus a few frames either side, reported to the
+            // client so the waterfall's bounce is EXPLAINED rather than looking like a fault.
+            // ★ An unexplained transient reads as a defect; a labelled one reads as a radio
+            // settling, and the difference is entirely in whether we said so (Stuart).
+            if (useSdrplay()) sdrpSettling = (n < 40);
             if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 2 && n > 10) {
                 if (++sdrpAgcKick == 1) sdrp->setIfAgc(false);
                 else                    sdrp->setIfAgc(true);
@@ -1424,9 +1430,10 @@ struct LocalSdrShim::Impl {
             if (n % 2 == 0 && useSdrplay()) {
                 char gb[160];
                 snprintf(gb, sizeof gb,
-                    "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d}",
+                    "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
+                    "\"settling\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
-                    sdrp->overloaded() ? 1 : 0);
+                    sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
                 sendText(sock, gb);
             }
             // ★ The Advanced RDS payload runs FASTER than the metadata — a constellation

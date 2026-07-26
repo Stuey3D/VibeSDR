@@ -83,6 +83,13 @@ void vs_status(VsStatus* out);
 void vs_summon(void);
 
 int  vs_device_count(void);
+/** ★ Non-zero when the SDRplay API stopped answering — typically a system-wide lock left
+ *  held by a process that crashed inside it. Reported so a host can SAY SO: enumeration
+ *  used to block the caller forever, which hung the app at launch with no icon, no crash
+ *  report and nothing for the user to act on (2026-07-26). */
+int  vs_sdrplay_api_stuck(void);
+/** Permit one more SDRplay probe after the API was written off. User-initiated only. */
+void vs_sdrplay_retry(void);
 
 /** Display name of device `index`, or "" if there is no such device. Valid until the next call. */
 const char* vs_device_name(int index);

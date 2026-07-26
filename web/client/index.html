@@ -236,6 +236,10 @@ html, body {
            border-radius: 3px; border: 1px solid rgba(255,180,50,0.5); color: var(--amber);
            line-height: 1.2; }
 #sqlChip.set { display: inline-block; }
+#initChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+            border-radius: 3px; border: 1px solid rgba(120,200,255,0.5); color: #7fc4ff;
+            line-height: 1.2; animation: sqlBreathe 1.5s ease-in-out infinite; }
+#initChip.set { display: inline-block; }
 #sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
                   animation: sqlBreathe 1.5s ease-in-out infinite; }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
@@ -1135,6 +1139,10 @@ select.btn { padding: 6px 8px; }
                 <i></i><i></i><i></i>
               </span>
               <span id="sqlChip" title="Squelch">SQL</span>
+              <!-- ★ Same chip language as SQL. The radio's gain control settles for a second
+                   after it starts, which bounces the waterfall — saying so turns a transient
+                   that looks like a fault into one that looks like a radio waking up. -->
+              <span id="initChip" title="The receiver's gain control is settling">SETTLING</span>
               <span id="status">—</span>
             </span>
           </div>

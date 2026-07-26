@@ -34,6 +34,10 @@ final class Server: ObservableObject {
     /// said "no radio found" over a perfectly working waterfall, which is precisely the kind
     /// of false alarm that destroys trust in every later warning (Stuart, 2026-07-26).
     @Published var activeDevice = ""
+    /// ★ The SDRplay API is not answering. Shown, not waited on — see vs_sdrplay_api_stuck.
+    @Published var sdrplayStuck = false
+    /// Starting is asynchronous now, so the menu can say so instead of appearing frozen.
+    @Published var starting = false
     /// Whether the radio in use is an RSP. Its capabilities differ enough from a dongle's
     /// that several menus would otherwise misrepresent it.
     var isSdrplayActive: Bool {
@@ -150,6 +154,7 @@ final class Server: ObservableObject {
 
     func refreshDevices() {
         deviceCount = Int(vs_device_count())
+        sdrplayStuck = vs_sdrplay_api_stuck() != 0
         var found = (0..<max(0, deviceCount)).map { String(cString: vs_device_name(Int32($0))) }
         // A radio we are already serving will not enumerate — keep it in the list, because it
         // is the most present radio there is.
@@ -176,6 +181,9 @@ final class Server: ObservableObject {
     /// serving happily, pressing Refresh must not drop the listener — the button means "look
     /// again", not "start over".
     func rescan() {
+        // ★ An explicit Refresh is the user saying "I have fixed it" — the one moment it is
+        // right to re-probe an API we had written off.
+        vs_sdrplay_retry()
         refreshDevices()
         if !running && deviceCount > 0 { start() }
     }
@@ -284,21 +292,43 @@ final class Server: ObservableObject {
         let locJson = locationJson()
 
         // The C strings must outlive the call, so hold them across it.
-        mode.withCString { modePtr in
-          pin.withCString { pinPtr in
-            locJson.withCString { locPtr in
-                cfg.mode = modePtr
-                cfg.pin  = pinPtr
-                cfg.locationJson = locJson.isEmpty ? nil : locPtr
-                var err = [CChar](repeating: 0, count: 256)
-                let p = vs_start(&cfg, &err, 256)
-                if p > 0 { port = Int(p); running = true; refreshEibi() }
-                else     { lastError = String(cString: err); running = false }
+        // ★★ OFF THE MAIN THREAD. Starting a radio can legitimately take seconds — and on an
+        // SDRplay it can take FOREVER: sdrplay_api_SelectDevice waits on a SYSTEM-WIDE lock,
+        // so a process that crashed inside the API leaves every later caller blocked. Doing
+        // that on the main thread froze the whole app the moment "Start serving" was pressed,
+        // with no icon, no crash report and nothing to act on (Stuart, 2026-07-26).
+        // ★ A hang is worse than a failure: a failure can be SHOWN.
+        starting = true
+        lastError = nil
+        let modeS = mode, pinS = pin
+        DispatchQueue.global(qos: .userInitiated).async {
+            var cfg2 = cfg
+            var port2 = -1
+            var errStr = ""
+            modeS.withCString { modePtr in
+              pinS.withCString { pinPtr in
+                locJson.withCString { locPtr in
+                    cfg2.mode = modePtr
+                    cfg2.pin  = pinPtr
+                    cfg2.locationJson = locJson.isEmpty ? nil : locPtr
+                    var err = [CChar](repeating: 0, count: 256)
+                    port2 = Int(vs_start(&cfg2, &err, 256))
+                    if port2 <= 0 { errStr = String(cString: err) }
+                }
+              }
             }
-          }
+            DispatchQueue.main.async {
+                self.starting = false
+                if port2 > 0 {
+                    self.port = port2; self.running = true; self.refreshEibi()
+                    self.startPolling(); self.startAdvertising()
+                } else {
+                    self.lastError = errStr.isEmpty ? "could not start" : errStr
+                    self.running = false
+                }
+                self.refreshDevices()
+            }
         }
-        if running { startPolling(); startAdvertising() }
-        refreshDevices()
     }
 
     /// The operator flipped the Bonjour toggle — apply it live.

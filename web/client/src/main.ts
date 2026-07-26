@@ -287,7 +287,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       applyRateOptions();
       populateHw();
     },
-    onRspStat: (sys, lna, ifgr, overload) => {
+    onRspStat: (sys, lna, ifgr, overload, settling) => {
+      $('initChip').classList.toggle('set', settling);
       // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
       // dongle where it has to be guessed from the spectrum.
       $<HTMLElement>('rspOverload').hidden = !overload;

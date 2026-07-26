@@ -123,6 +123,10 @@ void vs_set_stations(const char* json) {
     LocalSdrShim::instance().setStationsJson(json ? json : "");
 }
 
+void vs_sdrplay_retry(void) { vibe::SdrplaySource::retryApi(); }
+
+int vs_sdrplay_api_stuck(void) { return vibe::SdrplaySource::apiUnresponsive() ? 1 : 0; }
+
 int vs_device_count(void) {
     return rtlCount() + vibe::SdrplaySource::deviceCount();
 }

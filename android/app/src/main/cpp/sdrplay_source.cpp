@@ -7,6 +7,9 @@
 #include <cstring>
 #include <mutex>
 #include <vector>
+#include <atomic>
+#include <future>
+#include <chrono>
 
 namespace vibe {
 
@@ -119,19 +122,82 @@ bool SdrplaySource::available() {
     return true;
 }
 
+// ★★★ NEVER BLOCK THE CALLER. sdrplay_api_LockDeviceApi() takes a SYSTEM-WIDE shared mutex,
+// so ANY other process holding it — including one that has crashed or been killed while
+// inside the API — blocks us forever. This is not hypothetical: it hung VibeServer at launch
+// with no menu bar icon and no crash report, because enumeration runs from Server.init() on
+// the main thread (2026-07-26).
+// ★★ A HANG IS THE WORST FAILURE MODE. It is worse than a crash: there is no report, nothing
+// to see, and nothing to tell the user — so the API is called behind a TIMEOUT and a failure
+// to answer is reported as a fact rather than waited on indefinitely.
+static std::atomic<bool> g_apiHung{false};
+// ★★ ONCE IT IS KNOWN WEDGED, STOP ASKING. A deadline makes a hang SURVIVABLE; it does not
+// make it harmless. The status poll ran once a second, so every second spawned another
+// detached thread onto a lock that never frees — they pile up, and the wait itself still
+// costs the caller its full timeout each time. Polling a stuck lock forever was the real
+// bug; the timeout only hid it (Stuart, 2026-07-26: "hanging again due to the api").
+// ★ Cleared by an explicit Refresh, which is the user saying "I have fixed it, try again" —
+// the only signal that actually means anything here.
+std::atomic<bool> g_apiGiveUp{false};
+
+/** True if the SDRplay API stopped answering. Surfaced to the operator rather than hidden. */
+bool SdrplaySource::apiUnresponsive() { return g_apiHung.load() || g_apiGiveUp.load(); }
+
+void SdrplaySource::retryApi() {
+    // The operator has pressed Refresh — they are asserting the API is healthy again, which
+    // is the only signal worth acting on. One more attempt is allowed.
+    g_apiGiveUp.store(false);
+    g_apiHung.store(false);
+}
+
+namespace {
+/** Run an API call with a deadline. Returns false if it did not answer in time. */
+template <typename F>
+bool withTimeout(F&& fn, int ms) {
+    // ★ The worker is DETACHED deliberately: if the API never returns, joining would inherit
+    // the very hang we are avoiding. A leaked blocked thread is a far smaller problem than a
+    // frozen application, and it unblocks itself if the API ever recovers.
+    auto promise = std::make_shared<std::promise<void>>();
+    auto fut = promise->get_future();
+    std::thread([promise, fn = std::forward<F>(fn)]() mutable {
+        fn();
+        promise->set_value();
+    }).detach();
+    if (fut.wait_for(std::chrono::milliseconds(ms)) == std::future_status::ready) {
+        g_apiHung.store(false);
+        return true;
+    }
+    g_apiHung.store(true);
+    return false;
+}
+}  // namespace
+
 int SdrplaySource::deviceCount() {
-    std::string err;
-    if (!apiOpen(err)) return 0;
-    sdrplay_api_DeviceT devs[SDRPLAY_MAX_DEVICES];
-    unsigned int n = 0;
-    api().Lock();
-    api().GetDevices(devs, &n, SDRPLAY_MAX_DEVICES);
-    api().Unlock();
-    apiClose();
-    return (int)n;
+    if (g_apiGiveUp.load()) return 0;      // wedged and already reported — do not re-block
+    int out = 0;
+    withTimeout([&out]{
+        std::string err;
+        if (!apiOpen(err)) return;
+        sdrplay_api_DeviceT devs[SDRPLAY_MAX_DEVICES];
+        unsigned int n = 0;
+        api().Lock();
+        api().GetDevices(devs, &n, SDRPLAY_MAX_DEVICES);
+        api().Unlock();
+        apiClose();
+        out = (int)n;
+    }, 2000);
+    if (g_apiHung.load()) g_apiGiveUp.store(true);
+    return out;
 }
 
 std::string SdrplaySource::deviceName(int index) {
+    if (g_apiGiveUp.load()) return "";
+    std::string name;
+    withTimeout([&name, index]{ name = deviceNameLocked(index); }, 2000);
+    return name;
+}
+
+std::string SdrplaySource::deviceNameLocked(int index) {
     std::string err;
     if (!apiOpen(err)) return "";
     sdrplay_api_DeviceT devs[SDRPLAY_MAX_DEVICES];
@@ -234,7 +300,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     // which is not "fast" but "undefined behaviour dressed as a default".
     // ★ Before Init, so the struct handed to the API is already coherent: a starting IF
     // reduction, a target, and real loop dynamics.
-    ch->tunerParams.gain.gRdB = 40;
+    ch->tunerParams.gain.gRdB = 59;      // least gain until the AGC has settled — see setIfAgc
     setIfAgcSetPoint(-30);
     setIfAgcDynamics(500, 500, 200, 5);
     setGainTenthDb(gainTenthDb);
@@ -457,9 +523,27 @@ void SdrplaySource::setIfAgc(bool on) {
     // ★ A guard that tests for a state the system is never in is the same as no guard at all,
     // and it reads as though the case were handled.
     if (on) {
-        ch->tunerParams.gain.gRdB = 40;      // mid reduction — a sane place for the loop to start
+        // ★★ MINIMUM GAIN during the handover, not mid. Two reasons, and both matter:
+        // there is a brief window with the AGC disengaged where a strong signal could
+        // overload (Stuart), and starting the loop at minimum gain makes it ramp UP to its
+        // target rather than starting hot and clipping on the way down. Approaching from
+        // the quiet side is always the safe direction for an automatic gain control.
+        ch->tunerParams.gain.gRdB = 59;      // 59 dB of reduction = least gain
         if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                                 sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+        // ★★★ ENABLING IS ALWAYS A TRANSITION. The API starts the loop on a CHANGE, so
+        // "enable" when it is already enabled does nothing at all — and that is precisely
+        // how the fix kept coming undone: the client re-sends its saved settings on connect,
+        // which cancelled the start-up kick and then performed a no-op enable, leaving the
+        // AGC inert again (Stuart, 2026-07-26 — "now its stuck again").
+        // ★ Make the operation IDEMPOTENT IN EFFECT rather than in bytes written: force the
+        // register through DISABLE first, so asking for AGC always yields a running AGC no
+        // matter what state it was in or who asked.
+        if (open_ && agc.enable != sdrplay_api_AGC_DISABLE) {
+            agc.enable = sdrplay_api_AGC_DISABLE;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+        }
     }
     agc.enable = on ? sdrplay_api_AGC_50HZ : sdrplay_api_AGC_DISABLE;
     // ★ The setpoint is set separately (setIfAgcSetPoint) and NOT forced here — it is a
@@ -603,6 +687,9 @@ bool SdrplaySource::hasRfNotch() const { return false; }
 bool SdrplaySource::hasDabNotch() const { return false; }
 bool SdrplaySource::hasBiasT() const { return false; }
 std::string SdrplaySource::model() const { return ""; }
+bool SdrplaySource::apiUnresponsive() { return false; }
+void SdrplaySource::retryApi() {}
+std::string SdrplaySource::deviceNameLocked(int) { return ""; }
 float SdrplaySource::systemGainDb() const { return 0.0f; }
 int SdrplaySource::currentIfGr() const { return 0; }
 int SdrplaySource::currentLnaState() const { return 0; }

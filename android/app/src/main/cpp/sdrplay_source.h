@@ -38,6 +38,17 @@ public:
     static bool available();
     static int  deviceCount();
     static std::string deviceName(int index);
+    /** ★ The API stopped answering — a stale system-wide lock held by another process, often
+     *  one that crashed inside the API. Reported so it can be SHOWN rather than waited on:
+     *  a hang has no crash report and nothing for the user to act on. */
+    static bool apiUnresponsive();
+    /** Allow one more attempt after the API was written off. Called from an explicit
+     *  user-initiated Refresh, never automatically — retrying a wedged system lock on a
+     *  timer is what caused the pile-up in the first place. */
+    static void retryApi();
+private:
+    static std::string deviceNameLocked(int index);
+public:
 
     bool open(int index, double sampleRateHz, double centreHz, int gainTenthDb,
               std::string& err);
