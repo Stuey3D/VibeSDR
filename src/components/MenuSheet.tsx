@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -405,15 +405,18 @@ function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean })
   );
 }
 
-function Btn({ label, active, danger, onPress, full, style, icon }: {
+function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
   label: string; active?: boolean; danger?: boolean;
   onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
+  /** Keep OUT of the keyboard focus order — used for buttons that open the receiver's own
+   *  pages, where none of our shortcuts apply. See useNavButton. */
+  skipNav?: boolean;
 }) {
   // ★ Scroll-into-view is now MEASURED against the ScrollView's content node
   // (revealIn, inside useNavButton) rather than estimated as `row * 46`, which
   // assumed a uniform row height and was wrong for anything nested or unevenly
   // sized.
-  const { focused, viewRef } = useNavButton(onPress);
+  const { focused, viewRef } = useNavButton(onPress, skipNav);
   return (
     <TouchableOpacity
       ref={viewRef as any}
@@ -663,6 +666,7 @@ export default function MenuSheet({
   // pane states are declared further down; the ref is refreshed every render, so the
   // closure never sees a stale one.
   const paneBack = useRef<() => void>(() => {});
+  const kbInUse = useKeyboardMode();
   const { navCtx, scrollProps, scrollRef, scrollY: scrollYRef } = usePanelNav(visible, {
     onBack: () => paneBack.current(),
     onTimeout: onClose,
@@ -1202,18 +1206,20 @@ export default function MenuSheet({
               {/* MAP + FILES relocated to the demodulator menu (they're "what's on this
                  signal" content, with the other maps). ADMIN stays — it's server settings. */}
               <SectionLabel label="OPENWEBRX" icon="server" />
+              {kbInUse && <Text style={styles.kbSkipNote}>Server pages are skipped on a keyboard — they are the receiver's own, and we cannot guarantee how a keyboard behaves there. Tap to open one.</Text>}
               <BtnRow>
-                <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
+                <Btn label="⚙ ADMIN" full skipNav={kbInUse} onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
             </>) : isLocal || isKiwi ? null : (<>
               <SectionLabel label="SERVER ADMIN" icon="admin" />
+              {kbInUse && <Text style={styles.kbSkipNote}>Server pages are skipped on a keyboard — they are the receiver's own, and we cannot guarantee how a keyboard behaves there. Tap to open one.</Text>}
               <BtnRow>
-                <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
-                <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
+                <Btn label="ADMIN"      skipNav={kbInUse} onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
+                <Btn label="NOISE"      skipNav={kbInUse} onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
               </BtnRow>
               <BtnRow>
-                <Btn label="CONDITIONS" onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
-                <Btn label="LISTENERS"  onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
+                <Btn label="CONDITIONS" skipNav={kbInUse} onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
+                <Btn label="LISTENERS"  skipNav={kbInUse} onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
               </BtnRow>
             </>)}
 
@@ -1370,6 +1376,8 @@ const styles = StyleSheet.create({
   // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
   // setting is on"). Focus is where the keyboard is, not what is selected.
   btnFocused:    { borderColor: C.focus, borderWidth: 2 },
+  // Dim and small: an explanation, not a warning — nothing has gone wrong.
+  kbSkipNote:    { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 },
   dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },
   // Dropdown rows are a dense list with only a divider, so focus is a background tint —
   // a 2px border would shift every row as focus moved down it.

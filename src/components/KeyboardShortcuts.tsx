@@ -92,7 +92,8 @@ const SECTIONS: Section[] = [
   {
     title: 'COMPATIBILITY MODE',
     body: [
-      "Every VibeSDR shortcut switches off while a receiver's own web page is showing. It is not our page, so we cannot know what a key would mean there — use the touchscreen, or a trackpad on a Mac. The app says so on screen if you press a key.",
+      "A receiver's own pages — compatibility mode, and the server admin pages in the menu — cannot be reached from the keyboard at all. They are not our pages, so we cannot know whether or how a keyboard will work on them, and taking you somewhere the keys stop working would be worse than not going.",
+      'The admin buttons are simply skipped as the highlight moves past them, and the compatibility-mode button is greyed while you are using a keyboard. Touching it wakes it up — the tap is proof you are back on the touchscreen — and the next tap goes through.',
     ],
   },
 ];

@@ -500,7 +500,7 @@ export function NavRow({ children }: { children: React.ReactNode }) {
  * `onPress` is read through a ref, so a button whose handler changes every render
  * does not need to re-register (which would reorder it and scramble reading order).
  */
-export function useNavButton(onPress?: () => void) {
+export function useNavButton(onPress?: () => void, skip?: boolean) {
   const nav = React.useContext(NavCtx);
   const row = React.useContext(RowCtx);
   const idRef = useRef<number>(-1);
@@ -511,15 +511,18 @@ export function useNavButton(onPress?: () => void) {
   const pressRef = useRef(onPress); pressRef.current = onPress;
 
   useEffect(() => {
-    if (!nav || row < 0) return;
+    // ★ `skip` means DO NOT REGISTER — the caret passes over as though the control were not
+    // there. Registering and disabling it would still stop focus on a dead row, which is worse
+    // than absence: it reads as the keyboard having failed rather than as a deliberate choice.
+    if (!nav || row < 0 || skip) return;
     return nav.register({
       id, row,
       press:  () => pressRef.current?.(),
       reveal: () => revealIn(nav.scrollRef, viewRef, row, 120, nav.scrollY),
     });
-  }, [nav, row, id]);
+  }, [nav, row, id, skip]);
 
-  return { focused: !!nav && nav.focused === id, viewRef, id };
+  return { focused: !skip && !!nav && nav.focused === id, viewRef, id };
 }
 
 /**

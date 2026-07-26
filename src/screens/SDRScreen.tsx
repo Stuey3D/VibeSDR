@@ -86,7 +86,7 @@ import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBa
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
-import { shortcutsSuppressed, regionCaptured, noteTouchInteraction } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -4414,6 +4414,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const controlsHiddenRef = useRef(controlsHidden);
   useEffect(() => { controlsHiddenRef.current = controlsHidden; }, [controlsHidden]);
 
+  const kbInUse = useKeyboardMode();
   const screenFocused = useIsFocused();
   const screenFocusedRef = useRef(screenFocused);
   useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
@@ -4897,8 +4898,18 @@ export default function SDRScreen({ route, navigation }: Props) {
                 onPress={() => { setCompatWarn(false); navigation.goBack(); }} activeOpacity={0.85}>
                 <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>CANCEL</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
+              {/* ★★ GREYED WHILE A KEYBOARD IS IN USE (Stuart). Compatibility mode is the
+                  receiver's OWN web page, where none of our shortcuts apply and we cannot know
+                  what a key would do — so rather than letting the keyboard carry someone into a
+                  place the keyboard does not work, the way in is closed while they are using one.
+                  ★ TOUCHING IT WAKES IT UP: the tap itself is the proof they are back on the
+                  touchscreen, so the button enables and the second tap goes through. No setting
+                  to find, no mode to leave — the gesture that would use it is the gesture that
+                  unlocks it. */}
+              <TouchableOpacity
+                style={[styles.serverLostBtn, { alignSelf: 'stretch' }, kbInUse && { opacity: 0.4 }]}
                 onPress={() => {
+                  if (kbInUse) { noteTouchInteraction(); return; }   // first tap: back to touch
                   setCompatWarn(false);
                   let u = (baseUrl || '').trim().replace(/\/+$/, '')
                     .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
@@ -4907,6 +4918,13 @@ export default function SDRScreen({ route, navigation }: Props) {
                 }} activeOpacity={0.85}>
                 <Text style={styles.serverLostBtnText}>CONTINUE</Text>
               </TouchableOpacity>
+              {kbInUse && (
+                <Text style={[styles.serverLostBody, { fontSize: 11, textAlign: 'center' }]}>
+                  Blocked while you are using a keyboard: this is the receiver's own page, and we
+                  cannot guarantee whether or how a keyboard will work on it. Tap CONTINUE to
+                  switch back to touch.
+                </Text>
+              )}
             </View>
           </View>
         </View>
