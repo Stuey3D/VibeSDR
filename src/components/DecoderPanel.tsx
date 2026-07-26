@@ -861,7 +861,17 @@ export default function DecoderPanel({
             style={dp.body}
             {...bodyScroll}
             data={visibleSpots}
-            keyExtractor={(s: SpotRow, i: number) => `${s.time}-${s.call}-${s.freqHz}-${i}`}
+            // ★★ NO INDEX IN THE KEY. Spots are newest-first, so a burst PREPENDS rows and
+            // every index shifts — with the index in the key, every existing row got a new
+            // identity, the whole list was treated as new, and the scroll position went with
+            // it. On UberSDR a burst is every band at once, which is why it looked violent.
+            keyExtractor={(sp: SpotRow) => `${sp.time}-${sp.call}-${sp.freqHz}`}
+            // ★ And this is the property built for exactly this: content added ABOVE must not
+            // move what you are looking at. Within 40px of the top it still follows the live
+            // feed, so sitting at the top behaves as before — it is only reading further down
+            // that is now left alone. (Stuart's diagnosis: "all the bursts of new contacts try
+            // and pull that list rapidly to the top again".)
+            maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 40 }}
             renderItem={renderSpot}
             initialNumToRender={12}
             maxToRenderPerBatch={12}
