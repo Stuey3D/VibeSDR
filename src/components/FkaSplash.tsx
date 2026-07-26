@@ -33,6 +33,7 @@ const KEYS: { k: string; what: string }[] = [
   { k: '−  +', what: 'zoom out and in' },
   { k: 'shift + arrow', what: 'move through menus and lists' },
   { k: 'alt/option/⌥ + tab', what: 'in and out of the decoder box' },
+  { k: 'enter', what: 'selects, wherever space would' },
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
@@ -74,7 +75,7 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
           <Text style={[s.title, { fontFamily: t.font }]}>YOUR ARROW KEYS ARE ELSEWHERE</Text>
           <Text style={[s.body, { fontFamily: t.font }]}>
             iOS Full Keyboard Access is switched on, so the system is taking the arrow keys and
-            Tab before VibeSDR can see them. Leave it on — these do the same jobs:
+            Tab and the space bar before VibeSDR can see them. Leave it on — these do the same jobs:
           </Text>
           <View style={s.table}>
             {KEYS.map((r) => (

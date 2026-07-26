@@ -149,7 +149,8 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
   // ── Keyboard ────────────────────────────────────────────────────────────────
   //
   // ★ Its own handler rather than the shared list navigation, because the key map here is
-  // deliberately different: SPACE plays, and BACKSPACE deletes. Enter is not used at all —
+  // deliberately different: SPACE plays, and BACKSPACE deletes. ★ Enter plays too, because
+  // iOS Full Keyboard Access swallows the space bar — see the note in DecoderPanel. Originally —
   // it opens the frequency box everywhere else in the app, and a list where Enter meant
   // "play" would be the same context-dependent key that has caused most of the trouble.
   //
@@ -177,7 +178,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
       try { listRef.current?.scrollToIndex({ index: next, viewPosition: 0.5, animated: true }); } catch {}
       return;
     }
-    if (k === 'Space') { const r = rs[i]; if (r) kb.current.togglePlay(r); return; }
+    if (k === 'Space' || k === 'Enter') { const r = rs[i]; if (r) kb.current.togglePlay(r); return; }
     if (k === 'Backspace' || k === 'Delete') { const r = rs[i]; if (r) kb.current.remove(r); }
   }, NAV_REPEAT_KEYS);
 

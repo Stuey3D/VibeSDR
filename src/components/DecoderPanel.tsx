@@ -331,7 +331,18 @@ export default function DecoderPanel({
   // through the list, and whichever you last used is what SPACE activates. That avoids a
   // nested "now you are in the header" state, which would be one more invisible mode.
   //
-  // ★★★ SPACE, NOT ENTER, everywhere in here. Enter is the tune box across the whole app and
+  // ★★ ENTER WORKS TOO, added 2026-07-26. iOS Full Keyboard Access uses SPACE to activate the
+  // focused element, so under FKA the space bar never reaches us and the box became unusable —
+  // a list you can move through and cannot select from. Stuart: "space is not working in FKA
+  // mode, so all those places you didn't want Enter, unfortunately it is needed."
+  //
+  // ★ The conflict that ruled Enter out does not actually arise HERE: the main screen stops
+  // acting on keys whenever this box owns them (see region capture), so while the user is in
+  // the list there is no tune box for Enter to open. Space stays the documented key because it
+  // is what the on-screen hint has room for and what works in the normal case; Enter is a
+  // silent second door, which is what you want for a fallback.
+  //
+  // ★ SPACE, NOT ENTER, was the original rule. Enter is the tune box across the whole app and
   // Stuart flagged the exception himself — a key that means something different depending on
   // where you are is the thing that has caused most of the confusion in this work. Space is
   // free, and "space activates the focused thing" is a convention rather than a rule to learn.
@@ -459,7 +470,7 @@ export default function DecoderPanel({
       if (kbZoneRef.current === 'speed') {
         if (k === 'ArrowLeft' || k === 'ArrowUp') { setSpeedIdx(i => Math.max(0, i - 1)); return; }
         if (k === 'ArrowRight' || k === 'ArrowDown') { setSpeedIdx(i => Math.min(DAB_SPEEDS.length - 1, i + 1)); return; }
-        if (k === 'Space') { onDabSpeedRef.current(speedIdxRef.current); return; }
+        if (k === 'Space' || k === 'Enter') { onDabSpeedRef.current(speedIdxRef.current); return; }
         if (k === 'Tab') { setDabSpeedOpenRef.current(false); return; }
         return;
       }
@@ -489,7 +500,7 @@ export default function DecoderPanel({
         setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
         return;
       }
-      if (k === 'Space') {
+      if (k === 'Space' || k === 'Enter') {
         if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
         else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
       }
@@ -625,11 +636,11 @@ export default function DecoderPanel({
               // ★ Always says where Tab goes NEXT, so the cycle is discoverable by using it
               // rather than by being remembered. The wording differs by zone AND by whether
               // the box owns the arrows or merely borrowed them.
-              ? (kbZone === 'speed'  ? 'space to set · backspace to cancel'
-                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'space to press · tab for stations'
-                                                               : 'space to press · tab for the list')
-                                                  : 'space to press · tab to leave')
-                 : listLen > 0        ? 'space to select · tab for controls'
+              ? (kbZone === 'speed'  ? 'space/enter to set · backspace to cancel'
+                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'space/enter to press · tab for stations'
+                                                               : 'space/enter to press · tab for the list')
+                                                  : 'space/enter to press · tab to leave')
+                 : listLen > 0        ? 'space/enter to select · tab for controls'
                  : 'scroll with ↑↓ · tab for controls')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               : decoderStatus}
