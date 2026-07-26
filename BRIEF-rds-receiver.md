@@ -205,3 +205,45 @@ and repeat. That is now a well-posed hardware question, not a software mystery.
 ★ Consequence: **auto-gain (`BRIEF-auto-gain.md`) is an RDS fix**, not a nice-to-have — one
 control, two opposite failures. And BER gives it a real objective to hill-climb on instead of
 a spectral heuristic.
+
+### ★★ THE ADVANCED RDS BOX — field inventory (Stuart, 2026-07-26)
+
+"Make an advanced RDS decoder box that has those cluster lines, the PI code and all the
+other RDS data we discard." Today the parser handles group types 0 (PS), 2 (RadioText) and
+1 (ECC) and drops everything else.
+
+**★ TIER 1 — FREE. Already decoded, already error-checked, then thrown away.**
+Block B is REQUIRED for every group we parse (it carries the group type and address), so its
+other bits cost nothing at all — we read four of sixteen and discard the rest:
+- **PTY** (bits 9-5) — programme type, on EVERY group.
+- **TP** (bit 10) — traffic programme flag, on EVERY group.
+- **TA** (bit 4), **MS** music/speech (bit 3), **DI** (bit 2) — on type 0 groups.
+★ Same shape as the PI bug: recovered, validated, then binned at the door. Do these first —
+they are a parser change with no DSP work and no extra bandwidth.
+
+**TIER 2 — cheap, new group types**
+- **AF list** (0A, block C) — alternative frequencies. The FM-DX display scores these.
+- **CT** (4A) — clock time and date; also a free sanity check on decoder health.
+- **PIN** (1A, alongside the ECC we already read).
+
+**TIER 3 — worth it for the FM-DX audience**
+- **RT+** (3A/11A ODA) — artist/title tagging inside RadioText. This is what turns a scrolling
+  message into now-playing metadata, and it feeds the media card we already publish.
+- **EON** (14A) — other networks, a DXer favourite.
+- **Group-type histogram** — which groups a station actually transmits, and how often. Cheap
+  (a 32-entry counter), and genuinely diagnostic: it identifies a transmitter's configuration
+  and shows at a glance whether a weak signal is delivering a representative mix.
+
+**TIER 4 — the receiver's own health (all SHIPPED except the plot)**
+- **PI code** — SHIPPED. **BER** — SHIPPED. **Subcarrier level vs pilot** — SHIPPED.
+- **★ CONSTELLATION PLOT** — DSP side DONE (`RdsDemod::constellation()`); needs a client.
+  ★ Add **EVM** alongside it: cluster tightness vs scatter. The level figure alone cannot
+  separate signal from noise — BBC R2 measured a perfectly healthy -10 dB while running 66%
+  block errors, because that RMS includes in-band noise. EVM is the number that closes that
+  gap, and the points are already captured.
+- **Correction strength** (`setMaxBurstBits`, default 2) — with the on-air warning above.
+
+★ PROVEN ON AIR 2026-07-26: on BBC R2 88.6 we decoded PI + name where **SDR++ Brown failed
+entirely**, and on a station where it managed only a PI we managed PI *and* name. We are ahead
+of the reference software implementation on identical hardware; the remaining gap is against
+dedicated tuner silicon, not other SDR software.
