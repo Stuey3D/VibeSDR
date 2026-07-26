@@ -332,10 +332,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 int af[RdsDecoder::kMaxAf]; int nAf = 0;
                 if (d) { nAf = d->afCount();
                          for (int i = 0; i < nAf; ++i) af[i] = d->afKhz(i); }
+                int gc[32] = {0};
+                if (d) for (int i = 0; i < 32; ++i) gc[i] = d->groupCount(i);
                 cb_.rdsExt(cb_.ctx,
                            d ? d->pty() : -1, d ? d->tp() : -1,
                            d ? d->ta()  : -1, d ? d->ms() : -1,
-                           af, nAf, xy, np);
+                           d ? d->di()  : -1,
+                           d ? d->ctMinutes() : -1, d ? d->ctOffsetHalfHours() : 0,
+                           af, nAf, gc, d ? d->groupTotal() : 0,
+                           xy, np);
             }
             if (wantRds && pll_.trackable())
                 rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), ref57qBuf_.data(),

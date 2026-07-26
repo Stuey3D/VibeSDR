@@ -1211,7 +1211,9 @@ struct LocalSdrShim::Impl {
     float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
     // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
-    int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1;
+    int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
+    int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0;
+    std::vector<int> rdsGrp;
     std::vector<int> rdsAf;
     std::vector<float> rdsConst;
     std::atomic<bool> stereoDetected{false};
@@ -1575,13 +1577,16 @@ struct LocalSdrShim::Impl {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPi = (int)pi;
     }
-    static void rdsExtCb(void* ctx, int pty, int tp, int ta, int ms,
-                         const int* af, int nAf, const float* xy, int nPts) {
+    static void rdsExtCb(void* ctx, int pty, int tp, int ta, int ms, int di,
+                         int ctMin, int ctOff, const int* af, int nAf,
+                         const int* gc, int gTotal, const float* xy, int nPts) {
         Impl* t = (Impl*)ctx;
         if (!t->rdsxOn.load()) return;
         std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsPty = pty; t->rdsTp = tp; t->rdsTa = ta; t->rdsMs = ms;
+        t->rdsPty = pty; t->rdsTp = tp; t->rdsTa = ta; t->rdsMs = ms; t->rdsDi = di;
+        t->rdsCtMin = ctMin; t->rdsCtOff = ctOff; t->rdsGrpTotal = gTotal;
         t->rdsAf.assign(af, af + nAf);
+        t->rdsGrp.assign(gc, gc + 32);
         t->rdsConst.assign(xy, xy + nPts * 2);
     }
     static void rdsSigCb(void* ctx, float relDb) {
@@ -3139,14 +3144,23 @@ struct LocalSdrShim::Impl {
      *  would be fifty times the bytes for precision no eye can resolve. */
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
-        int pty, tp, ta, ms; std::vector<int> af; std::vector<float> pts;
+        int pty, tp, ta, ms, di, ctMin, ctOff, gTot;
+        std::vector<int> af, grp; std::vector<float> pts;
         { std::lock_guard<std::mutex> lk(rdsMtx);
-          pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; af = rdsAf; pts = rdsConst; }
+          pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
+          ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
+          af = rdsAf; grp = rdsGrp; pts = rdsConst; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
                       + ",\"ms\":"  + std::to_string(ms)
-                      + ",\"af\":[";
+                      + ",\"di\":"  + std::to_string(di)
+                      + ",\"ct\":"  + std::to_string(ctMin)
+                      + ",\"ctoff\":" + std::to_string(ctOff)
+                      + ",\"gtot\":"  + std::to_string(gTot)
+                      + ",\"grp\":[";
+        for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
+        j += "],\"af\":[";
         for (size_t i = 0; i < af.size(); ++i) {
             if (i) j += ',';
             j += std::to_string(af[i]);

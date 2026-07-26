@@ -541,7 +541,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #rdsPanel.show { display: flex; }
 #rdsGrid {
   display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr));
-  gap: 7px 16px; flex: 1 1 300px; min-width: 0;
+  gap: 2px 16px; flex: 1 1 300px; min-width: 0;
 }
 .rdsF { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .rdsF.rdsWide { grid-column: 1 / -1; }
@@ -554,6 +554,27 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   min-width: 0; overflow-wrap: anywhere; white-space: normal;
 }
 /* One column once the box is genuinely narrow — a phone, or a small decoder box. */
+/* ★★ NARROW SCREENS SCROLL, they do not truncate or drop fields. The browser has room;
+   a phone does not, and the answer there is a scrollable panel — an FM-DXer wants every
+   field, and hiding some to fit is the one thing this panel must never do (Stuart). */
+/* ★★ A STABLE FOOTPRINT. RadioText, the DI list and the group histogram all change length
+   as they decode, and each change reflowed the grid — so the whole box grew and shrank
+   continuously, which is horrible to read and worse to click (Stuart, 2026-07-26).
+   Fixed height plus internal scroll: the panel never moves, only its contents do. */
+#rdsPanel {
+  /* ★ The browser has room, so use it — the box is only cramped on a phone, and there the
+     answer is scrolling, not a shorter box with fields hidden inside it (Stuart). */
+  /* Tall enough that NOTHING sits below the fold on a desktop — the last rows were
+     cut off by a line or two, which is exactly what you notice in a screenshot. */
+  height: 390px; max-height: 64vh;
+  overflow-y: auto; overscroll-behavior: contain;
+}
+@media (max-height: 800px) { #rdsPanel { height: 320px; } }
+@media (max-height: 640px) { #rdsPanel { height: 250px; } }
+/* Each field reserves two lines, so a value wrapping onto a second line does not shove
+   everything below it down the panel. */
+.rdsF { min-height: 2.1em; align-items: flex-start; line-height: 1.25; }
+.rdsF label { padding-top: 1px; }
 @media (max-width: 560px) {
   #rdsGrid { grid-template-columns: 1fr; }
   #rdsConstWrap { margin: 0 auto; }
@@ -563,6 +584,31 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   width: 180px; height: 180px; background: #000;
   border: 1px solid var(--btn-border); border-radius: 3px;
 }
+#rdsEye {
+  width: 180px; height: 54px; background: #000; display: block;
+  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
+}
+#decLogo {
+  display: none; height: 16px; width: auto; max-width: 60px;
+  object-fit: contain; border-radius: 2px;
+}
+#decLogo.show { display: inline-block; }
+#decFlag { font-size: 14px; }
+/* AF entries are buttons — the point of an alternative frequency is going to it. */
+.afBtn {
+  font-family: var(--mono, monospace); font-size: 12px;
+  background: transparent; color: inherit;
+  border: 1px solid var(--btn-border); border-radius: 3px;
+  padding: 1px 5px; margin: 0 4px 4px 0; cursor: pointer;
+}
+.afBtn:hover { border-color: var(--accent, #ffa500); }
+#rdsVerdict {
+  font-size: 11px; letter-spacing: 0.5px; margin-top: 4px;
+  font-family: var(--mono, monospace);
+}
+#rdsVerdict.good { color: #7dff9a; }
+#rdsVerdict.ok   { color: #ffd479; }
+#rdsVerdict.bad  { color: #ff8a7d; }
 #rdsConstCap {
   color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
   text-transform: uppercase; margin-top: 3px;
@@ -841,6 +887,9 @@ select.btn { padding: 6px 8px; }
   <div id="decBoxHead">
     <span class="dot" id="decDot"></span>
     <span id="decTitle">RTTY</span>
+    <!-- Station identity, mirroring the VTS bar that hides while ADV RDS is open. -->
+    <img id="decLogo" alt="">
+    <span id="decFlag"></span>
     <span id="decStatus"></span>
     <!-- Spot filters — cyclers, as in the app's decoder-panel header. -->
     <span id="spotFilters">
@@ -872,14 +921,31 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label title="Block error rate, before correction, last 12 groups">Errors</label><span id="rxBer">—</span></div>
         <div class="rdsF"><label title="Recovered 57 kHz level relative to the 19 kHz pilot">Sub vs pilot</label><span id="rxSig">—</span></div>
         <div class="rdsF rdsWide"><label>RadioText</label><span id="rxRt">—</span></div>
+        <div class="rdsF"><label title="Decoder identification bits">DI</label><span id="rxDi">—</span></div>
+        <div class="rdsF"><label title="Clock time from group 4A — proves whole groups are arriving intact">Clock</label><span id="rxCt">—</span></div>
+        <div class="rdsF"><label title="Transmitter country, from the PI country code checked against the Extended Country Code">Country</label><span id="rxCountry">—</span></div>
+        <div class="rdsF"><label title="Coverage area and reference number, decoded from the PI">PI detail</label><span id="rxPiDetail">—</span></div>
+        <div class="rdsF"><label title="Groups decoded per second, and the total since tuning">Rate</label><span id="rxRate">—</span></div>
         <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz">AF MHz</label><span id="rxAf">—</span></div>
+        <div class="rdsF rdsWide"><label title="Which RDS group types this transmitter sends, and how often">Groups</label><span id="rxGroups">—</span></div>
       </div>
       <!-- The constellation. Two tight clusters = healthy; a diffuse cloud = the subcarrier
            is buried in noise. It says at a glance what a block-error percentage takes
            experience to interpret. -->
       <div id="rdsConstWrap">
+        <!-- ★ BEST OF BOTH. The constellation is the precise read — one point per decision
+             instant, so cluster tightness IS the bit margin. The trace beneath is the
+             instantly recognisable one, the shape SDR++ Brown shows: symbol value against
+             time, which draws two clean bands with a gap when locked and fills the gap in
+             when it is not. Same data, two questions: "how much margin" and "is it locked".
+             (Stuart, 2026-07-26) -->
         <canvas id="rdsConst" width="180" height="180"></canvas>
+        <canvas id="rdsEye" width="180" height="54"></canvas>
         <div id="rdsConstCap">constellation</div>
+        <!-- ★ A plain-English verdict, because the plot expects you to already know how to
+             read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the
+             panel should answer the question rather than pose it (Stuart, 2026-07-26). -->
+        <div id="rdsVerdict">—</div>
       </div>
     </div>
   </div>

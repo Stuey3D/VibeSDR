@@ -398,6 +398,20 @@ public:
     /** Alternative frequencies, kHz, de-duplicated. Rides in 0A block C, which we already
      *  receive. More than a display field: a list of where else the same PI can be found
      *  feeds the FM-DX dial and learned stations directly (Stuart). */
+    /** DI — decoder identification: bit0 stereo, bit1 artificial head, bit2 compressed,
+     *  bit3 dynamic PTY. Assembled across the four type-0 addresses. -1 = none yet. */
+    int  di() const { return diSeen_ == 0xF ? di_ : -1; }
+    /** Clock time from group 4A: minutes since UTC midnight, and the local offset in
+     *  half-hours. -1 = not received. ★ A DXer's favourite: CT is transmitted once a
+     *  minute, so receiving one at all proves the link is carrying whole groups intact,
+     *  and its VALUE identifies the network's timezone. */
+    int  ctMinutes() const { return ctMin_; }
+    int  ctOffsetHalfHours() const { return ctOff_; }
+    /** How many groups of each type/version (0A=0, 0B=1, 1A=2 ... ) have been decoded.
+     *  ★ Identifies a transmitter's configuration at a glance, and shows whether a weak
+     *  signal is delivering a representative mix or only the easy groups. */
+    int  groupCount(int idx) const { return (idx >= 0 && idx < 32) ? grpCount_[idx] : 0; }
+    int  groupTotal() const { return grpTotal_; }
     int  afCount() const { return afN_; }
     int  afKhz(int i) const { return (i >= 0 && i < afN_) ? afKhz_[i] : 0; }
     static constexpr int kMaxAf = 25;
@@ -475,6 +489,10 @@ private:
     int pty_ = -1, tp_ = -1, ta_ = -1, ms_ = -1;
     int afKhz_[kMaxAf] = {0};
     int afN_ = 0;
+    int di_ = 0, diSeen_ = 0;
+    int ctMin_ = -1, ctOff_ = 0;
+    int grpCount_[32] = {0};
+    int grpTotal_ = 0;
     // ── Confirmation by repetition ────────────────────────────────────────────
     // Burst correction buys extra blocks, but a MIS-correction produces a block that
     // looks valid and isn't — and a wrong station name on screen is worse than no name
@@ -544,7 +562,11 @@ public:
      *  on 2026-07-26, and which this shows at a glance.
      *  Copies up to `maxPts` normalised x,y pairs; returns how many were written. */
     int constellation(float* xy, int maxPts) const;
-    static constexpr int kConstPts = 64;
+    // ★ 256 symbols (~220 ms), not 64. At 64 the plot was SPARSE — sparse reads as noisy
+    // whatever the signal is doing, because you are seeing a small sample rather than a
+    // distribution. More points do not change what the plot MEANS; they make what it means
+    // visible (Stuart's comparison against SDR++ Brown, 2026-07-26).
+    static constexpr int kConstPts = 256;
     /** Extended fields from whichever hypothesis is winning; -1 / 0 when none is. */
     const RdsDecoder* best() const;
 private:
@@ -659,8 +681,10 @@ public:
         // ★ The Advanced RDS decoder's payload: the fields we used to discard, plus the
         // constellation. Only emitted when a client has the decoder OPEN — selecting it IS
         // the toggle, so nothing here is paid for while nobody is looking.
-        void (*rdsExt)(void* ctx, int pty, int tp, int ta, int ms,
+        void (*rdsExt)(void* ctx, int pty, int tp, int ta, int ms, int di,
+                       int ctMinutes, int ctOffsetHalfHours,
                        const int* afKhz, int nAf,
+                       const int* groupCounts, int groupTotal,
                        const float* constXY, int nPts) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;

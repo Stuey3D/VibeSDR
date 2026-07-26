@@ -287,8 +287,17 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       populateHw();
     },
     onRdsX: (x) => {
+      const now = Date.now();
+      if (grpPrev.at && x.gtot >= grpPrev.tot) {
+        const dt = (now - grpPrev.at) / 1000;
+        if (dt > 0.2) {
+          const inst = (x.gtot - grpPrev.tot) / dt;
+          grpRate = grpRate ? grpRate + 0.3 * (inst - grpRate) : inst;
+          grpPrev = { tot: x.gtot, at: now };
+        }
+      } else grpPrev = { tot: x.gtot, at: now };
       rdsExt = x;
-      if (rdsPanelOpen()) { renderRds(); drawConstellation(); }
+      if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); }
     },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
@@ -733,7 +742,8 @@ let rdsSig = -99;   // 57 kHz level vs pilot, dB
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
-  rdsPi = -1; rdsBer = -1; rdsSig = -99;
+  rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
+  grpRate = 0; grpPrev = { tot: 0, at: 0 };
   rdsFreq = -1;
 }
 
@@ -2186,6 +2196,8 @@ const PTY_EU = [
   'Documentary', 'Alarm Test', 'Alarm',
 ];
 let rdsExt: import('./spectrum').RdsExt | null = null;
+let grpRate = 0;        // groups/sec, smoothed from successive totals
+let grpPrev = { tot: 0, at: 0 };
 
 /** Params for the current mode — the shim's startDecoder reads these. */
 function decParams(mode: string): Record<string, unknown> {
@@ -2354,7 +2366,7 @@ function showDecBox(what: string) {
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
   $('rdsPanel').classList.toggle('show', isRds);
   $('decText').classList.toggle('off', image || isSpots || isRds);
-  if (isRds) { renderRds(); drawConstellation(); }
+  if (isRds) { renderRds(); drawConstellation(); drawEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
   // PREV/SAVE buttons entirely for text/spot decoders.
@@ -2380,6 +2392,13 @@ function rdsPanelOpen(): boolean {
 /** Fill the Advanced RDS fields. Everything here is data we already received. */
 function renderRds() {
   const dash = '—';
+  // ★ The flag and logo move into the header while the bar is hidden, so the station keeps
+  // the same visual identity it had on the VTS rather than becoming a table of numbers
+  // (Stuart, 2026-07-26).
+  $('decFlag').textContent = rdsName || rdsPi > 0 ? isoToFlag(rdsIso) : '';
+  const dlogo = $<HTMLImageElement>('decLogo');
+  if (rdsLogoUrl) { if (dlogo.src !== rdsLogoUrl) dlogo.src = rdsLogoUrl; dlogo.classList.add('show'); }
+  else dlogo.classList.remove('show');
   $('rxPi').textContent  = rdsPi > 0 ? piHex(rdsPi) : dash;
   $('rxPs').textContent  = rdsName || dash;
   $('rxRt').textContent  = rdsText || dash;
@@ -2395,10 +2414,163 @@ function renderRds() {
   // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
   // signal is weak, when it is the normal injection ratio for a healthy station.
   $('rxSig').textContent = rdsSig > -90 ? `${rdsSig.toFixed(0)} dB` : dash;
+  // ★ AF ENTRIES ARE TAPPABLE. A list of alternative frequencies you cannot act on is
+  // trivia; the whole point of AF is "the same station is also over there", so the natural
+  // gesture is to go there (Stuart, 2026-07-26).
   const af = rdsExt?.af ?? [];
-  $('rxAf').textContent = af.length
-    ? af.map((k) => (k / 1000).toFixed(1)).join('  ')
+  const afEl = $('rxAf');
+  afEl.textContent = '';
+  if (!af.length) afEl.textContent = dash;
+  else for (const k of af) {
+    const b = document.createElement('button');
+    b.className = 'afBtn';
+    b.textContent = (k / 1000).toFixed(1);
+    b.title = `Tune to ${(k / 1000).toFixed(1)} MHz`;
+    // Same PI, so the same station and the same mode — that is what makes AF an AF.
+    b.onclick = () => tuneTo({ frequency: k * 1000, mode: 'wfm' } as SearchResult);
+    afEl.appendChild(b);
+  }
+
+  // ── PI decomposition — free, it is arithmetic on a number we already have ──────
+  // Country code (top nibble), coverage area, and the programme reference number, as the
+  // FM-DX Webserver breaks it out. Coverage is the interesting one to a DXer: it says
+  // whether a catch is a local filler or a national network.
+  const COV = ['Local', 'International', 'National', 'Supra-regional',
+               'Regional 1', 'Regional 2', 'Regional 3', 'Regional 4',
+               'Regional 5', 'Regional 6', 'Regional 7', 'Regional 8',
+               'Regional 9', 'Regional 10', 'Regional 11', 'Regional 12'];
+  $('rxPiDetail').textContent = rdsPi > 0
+    ? `${COV[(rdsPi >> 8) & 0xF]} · ref ${rdsPi & 0xFF} · cc ${(rdsPi >> 12) & 0xF}`
     : dash;
+  $('rxCountry').textContent = rdsIso ? rdsIso.toUpperCase() : dash;
+
+  // DI — four flags, assembled across the four name segments.
+  const di = rdsExt?.di ?? -1;
+  if (di < 0) $('rxDi').textContent = dash;
+  else {
+    const d: string[] = [];
+    if (di & 1) d.push('Stereo'); else d.push('Mono');
+    if (di & 2) d.push('Artificial head');
+    if (di & 4) d.push('Compressed');
+    if (di & 8) d.push('Dynamic PTY');
+    $('rxDi').textContent = d.join(' · ');
+  }
+
+  // ★ CT — transmitted once a minute, so RECEIVING one at all proves whole groups are
+  // arriving intact, and its offset identifies the network's timezone.
+  const ct = rdsExt?.ct ?? -1;
+  if (ct < 0) $('rxCt').textContent = dash;
+  else {
+    const hh = String(Math.floor(ct / 60)).padStart(2, '0');
+    const mm = String(ct % 60).padStart(2, '0');
+    const off = rdsExt!.ctoff;
+    const os = off === 0 ? 'UTC' : `UTC${off > 0 ? '+' : '−'}${Math.abs(off) / 2}`;
+    $('rxCt').textContent = `${hh}:${mm} ${os}`;
+  }
+
+  // ★ Group-type histogram — identifies a transmitter's configuration, and shows whether a
+  // weak signal is delivering a representative mix or only the easy groups.
+  const grp = rdsExt?.grp ?? [];
+  const tot = rdsExt?.gtot ?? 0;
+  if (!tot) { $('rxGroups').textContent = dash; $('rxRate').textContent = dash; }
+  else {
+    const parts: string[] = [];
+    for (let i = 0; i < grp.length; i++) {
+      if (!grp[i]) continue;
+      const name = `${i >> 1}${(i & 1) ? 'B' : 'A'}`;
+      parts.push(`${name} ${Math.round((grp[i] / tot) * 100)}%`);
+    }
+    parts.sort((a, b) => parseInt(b.split(' ')[1]) - parseInt(a.split(' ')[1]));
+    $('rxGroups').textContent = parts.join('  ') || dash;
+    // ★ Rate from SUCCESSIVE DELTAS, not total-over-elapsed. gtot accumulates from when the
+    // DECODER started; the panel opens later, so dividing one by the other reported 113/s
+    // against a theoretical maximum of 11.4 (Stuart, 2026-07-26). ★ Two clocks with
+    // different origins is not a rate.
+    $('rxRate').textContent = grpRate > 0
+      ? `${grpRate.toFixed(1)}/s of 11.4 · ${tot} total`
+      : `${tot} total`;
+  }
+}
+
+/** Rotation that lays the two BPSK lobes on the horizontal. BPSK has 180-degree ambiguity,
+ *  so angles are DOUBLED (folding both lobes onto one), magnitude-weighted so the strong
+ *  symbols that define the lobes dominate, averaged, then halved. */
+function constellationAngle(xy: number[]): number {
+  let sx = 0, sy = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const x = xy[i], y = xy[i + 1];
+    const r2 = x * x + y * y;
+    if (r2 < 1) continue;
+    const a2 = 2 * Math.atan2(y, x);
+    sx += r2 * Math.cos(a2);
+    sy += r2 * Math.sin(a2);
+  }
+  return (sx || sy) ? -0.5 * Math.atan2(sy, sx) : 0;
+}
+
+/** ★ A PLAIN-ENGLISH VERDICT from the constellation, because the plot assumes you already
+ *  know how to read it. Measures how tightly the points cluster around the two lobes
+ *  against how far they scatter — error vector magnitude, in effect. The lobes lie on the
+ *  horizontal after de-rotation, so |x| is the wanted signal and y is pure error. */
+function constellationVerdict(xy: number[]): { text: string; cls: string } {
+  // ★★ DE-ROTATE FIRST. The verdict was computed on the RAW points while only the DRAWING
+  // was de-rotated, so the maths saw the diagonal lobes and counted the entire carrier
+  // phase offset as error — a visibly clean constellation reported "299% EVM" (Stuart,
+  // 2026-07-26). ★ Two consumers of one transform is exactly where this kind of bug lives:
+  // share the transform, do not repeat it.
+  const rot = constellationAngle(xy);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  let n = 0, sumAbsX = 0, sumY2 = 0, sumXErr2 = 0;
+  const rx: number[] = [], ry: number[] = [];
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const r2 = xy[i] * xy[i] + xy[i + 1] * xy[i + 1];
+    if (r2 < 1) continue;
+    const x = xy[i] * cr - xy[i + 1] * sr;
+    const y = xy[i] * sr + xy[i + 1] * cr;
+    rx.push(x); ry.push(y);
+    n++; sumAbsX += Math.abs(x); sumY2 += y * y;
+  }
+  if (n < 8) return { text: 'no lock', cls: 'bad' };
+  const meanAbsX = sumAbsX / n;
+  for (let i = 0; i < rx.length; i++) {
+    const dx = Math.abs(rx[i]) - meanAbsX;
+    sumXErr2 += dx * dx;
+  }
+  // Error energy is the scatter off the two ideal points; signal energy is the lobe offset.
+  const err = Math.sqrt((sumY2 + sumXErr2) / n);
+  if (meanAbsX < 1) return { text: 'no lock', cls: 'bad' };
+  const evm = (err / meanAbsX) * 100;
+  if (evm < 45)  return { text: `clean · ${evm.toFixed(0)}% EVM`, cls: 'good' };
+  if (evm < 80)  return { text: `usable · ${evm.toFixed(0)}% EVM`, cls: 'ok' };
+  return { text: `noisy · ${evm.toFixed(0)}% EVM`, cls: 'bad' };
+}
+
+/** ★ The symbol trace — the "two lines" read. Symbol value against time: two clean bands
+ *  with a clear gap means every bit is being decided with margin; a filled gap means bits
+ *  are landing near the threshold and the block errors follow. */
+function drawEye() {
+  const c = $<HTMLCanvasElement>('rdsEye');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height, mid = H / 2;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  // The decision threshold — the line a symbol must not stray across.
+  g.strokeStyle = 'rgba(255,160,60,0.35)';
+  g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+  const xy = rdsExt?.xy ?? [];
+  if (!xy.length) return;
+  const rot = constellationAngle(xy);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const n = xy.length / 2;
+  const k = (H / 2) / 110;
+  g.fillStyle = 'rgba(120,255,140,0.85)';
+  for (let i = 0; i < n; i++) {
+    const x = xy[i * 2] * cr - xy[i * 2 + 1] * sr;   // the wanted component
+    const px = (i / (n - 1)) * (W - 2) + 1;
+    const py = mid - x * k;
+    g.fillRect(px, py, 1.5, 1.5);
+  }
 }
 
 /** The constellation. Two tight clusters = healthy; a diffuse cloud = buried in noise. */
@@ -2417,6 +2589,10 @@ function drawConstellation() {
   g.moveTo(cx, 0); g.lineTo(cx, H); g.moveTo(0, cy); g.lineTo(W, cy);
   g.stroke();
   const xy = rdsExt?.xy ?? [];
+  const vEl = $('rdsVerdict');
+  const v = constellationVerdict(xy);
+  vEl.textContent = v.text;
+  vEl.className = v.cls;
   if (!xy.length) return;
   // Points arrive as signed bytes scaled x100; the DSP already normalised by the running
   // RMS, so the SCALE is stable and only the SHAPE changes — which is the part that means
@@ -2431,16 +2607,7 @@ function drawConstellation() {
   // BPSK has 180-degree ambiguity, so the angle is estimated by DOUBLING each point's angle
   // — which maps both lobes onto one — averaging, and halving. Magnitude-weighted, so the
   // strong symbols that define the lobes count for more than the noise near the origin.
-  let sx = 0, sy = 0;
-  for (let i = 0; i + 1 < xy.length; i += 2) {
-    const x = xy[i], y = xy[i + 1];
-    const r2 = x * x + y * y;
-    if (r2 < 1) continue;
-    const a2 = 2 * Math.atan2(y, x);
-    sx += r2 * Math.cos(a2);
-    sy += r2 * Math.sin(a2);
-  }
-  const rot = (sx || sy) ? -0.5 * Math.atan2(sy, sx) : 0;
+  const rot = constellationAngle(xy);
   const cr = Math.cos(rot), sr = Math.sin(rot);
   const k = (W / 2) / 110;
   for (let i = 0; i + 1 < xy.length; i += 2) {
@@ -2448,7 +2615,8 @@ function drawConstellation() {
     g.fillStyle = `rgba(120,255,140,${0.25 + 0.6 * age})`;
     const px = cx + (xy[i] * cr - xy[i + 1] * sr) * k;
     const py = cy - (xy[i] * sr + xy[i + 1] * cr) * k;
-    g.fillRect(px - 1, py - 1, 2, 2);
+    // 1px dots at this density: 2px squares merge into blobs and hide the shape.
+    g.fillRect(px, py, 1.5, 1.5);
   }
 }
 

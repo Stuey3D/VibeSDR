@@ -64,8 +64,12 @@ export interface RdsMeta {
 
 /** The fields the normal RDS path discards, plus the constellation. */
 export interface RdsExt {
-  pty: number; tp: number; ta: number; ms: number;
+  pty: number; tp: number; ta: number; ms: number; di: number;
+  ct: number;            // minutes since UTC midnight, -1 = none
+  ctoff: number;         // local offset, half-hours
   af: number[];          // kHz
+  grp: number[];         // 32 counters, gtype*2+version
+  gtot: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
 }
 
@@ -261,7 +265,11 @@ export class SpectrumClient {
         this.cb.onRdsX?.({
           pty: Number(msg.pty ?? -1), tp: Number(msg.tp ?? -1),
           ta: Number(msg.ta ?? -1), ms: Number(msg.ms ?? -1),
+          di: Number(msg.di ?? -1),
+          ct: Number(msg.ct ?? -1), ctoff: Number(msg.ctoff ?? 0),
           af: Array.isArray(msg.af) ? msg.af : [],
+          grp: Array.isArray(msg.grp) ? msg.grp : [],
+          gtot: Number(msg.gtot ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
         });
         break;

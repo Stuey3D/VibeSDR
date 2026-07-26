@@ -143,7 +143,23 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     const float kPi   = (float)M_PI;
     const float phaseStep = twoPi / NPH;
 
-    constBest_ = bestIdx();            // once per block, not once per sample
+    // ★★ A HYPOTHESIS SWITCH INVALIDATES THE PLOT. Each hypothesis has its own carrier
+    // phase and timing alignment, so points captured either side of a switch are two
+    // DIFFERENT receivers' outputs sharing one ring — which draws as FOUR lobes, and makes
+    // the de-rotation average across both and land between them. Observed on air by Stuart
+    // (2026-07-26): "2 blobs, now 4 blobs".
+    // ★ It is also worth noticing rather than smoothing over: frequent switching means the
+    // arbitration is FLAPPING, which is the same instability that once produced two-character
+    // station names. Clearing keeps the plot honest — a sparse plot on a flapping signal is
+    // the truth, where four lobes is an artefact that looks like a signal property.
+    {
+        const int nb2 = bestIdx();
+        if (nb2 != constBest_) {
+            for (int i = 0; i < kConstPts * 2; ++i) constXY_[i] = 0.0f;
+            constHead_ = 0;
+        }
+        constBest_ = nb2;
+    }
     // Smoothed RMS of the complex RDS baseband — the level the detector actually sees.
     for (int i = 0; i < nb; ++i) {
         const float mag2 = sI_[i] * sI_[i] + sQ_[i] * sQ_[i];
@@ -351,6 +367,9 @@ void RdsDecoder::reset() {
     ecc_ = 0;
     piLast_ = 0; piSeen_ = false; grpRepairBits_ = 0; piConfirmedVal_ = 0;
     pty_ = tp_ = ta_ = ms_ = -1; afN_ = 0;
+    di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
+    for (int i = 0; i < 32; ++i) grpCount_[i] = 0;
+    grpTotal_ = 0;
     for (int i = 0; i < 4; ++i) blkRepair_[i] = 0;
     errHist_ = 0; errSeen_ = 0;
     eccCand_ = 0; eccSeen_ = false;
@@ -454,6 +473,8 @@ void RdsDecoder::parseGroup() {
     // ★ FREE, from a block B we have already validated: PTY and TP are in EVERY group.
     pty_ = (blk_[1] >> 5) & 0x1F;
     tp_  = (blk_[1] >> 10) & 1;
+    const int gidx = gtype * 2 + ver;
+    if (gidx >= 0 && gidx < 32) { ++grpCount_[gidx]; ++grpTotal_; }
 
     // PI is carried by EVERY group, so a PI that disagrees with the previous one is
     // either a genuine station change or a mis-correction. Either way it is not yet
@@ -479,6 +500,16 @@ void RdsDecoder::parseGroup() {
         const int addr = blk_[1] & 0x3;
         ta_ = (blk_[1] >> 4) & 1;                      // traffic announcement (free)
         ms_ = (blk_[1] >> 3) & 1;                      // music / speech (free)
+        // DI arrives ONE BIT PER GROUP, indexed by the same address as the name — so it
+        // takes all four to assemble, and diSeen_ tracks which have arrived rather than
+        // reporting a half-built value as if it were complete.
+        // ★★ REVERSED. The four DI bits are numbered d3..d0 and are transmitted in SEGMENT
+        // ADDRESS order 0,1,2,3 — so address 0 carries d3, not d0. Indexing them straight by
+        // address mirrors every flag: Heart, plainly in stereo, reported Mono because we
+        // were reading its dynamic-PTY bit and calling it stereo (Stuart, on air 2026-07-26).
+        const int b = 3 - addr;
+        if ((blk_[1] >> 2) & 1) di_ |= (1 << b); else di_ &= ~(1 << b);
+        diSeen_ |= (1 << b);
         // ★ AF — 0A only, block C, two codes per group. 1..204 map to 87.5 + n/10 MHz;
         // 224+ are counts and filler, not frequencies. De-duplicated, because the list
         // repeats endlessly and a DXer wants the SET, not the stream.
@@ -500,6 +531,17 @@ void RdsDecoder::parseGroup() {
                 if (cb_.ps) cb_.ps(cb_.ctx, pi, ps_);
             } else {
                 psCand_[addr] = blk_[3]; psSeen_[addr] = true;
+            }
+        }
+    } else if (gtype == 4 && ver == 0) {               // 4A — clock time and date
+        if (blkOk_[2] && blkOk_[3]) {
+            const int hour = ((blk_[2] & 0x1) << 4) | ((blk_[3] >> 12) & 0xF);
+            const int min  = (blk_[3] >> 6) & 0x3F;
+            const int sign = (blk_[3] >> 5) & 0x1;
+            const int off  = blk_[3] & 0x1F;
+            if (hour < 24 && min < 60) {
+                ctMin_ = hour * 60 + min;
+                ctOff_ = sign ? -off : off;
             }
         }
     } else if (gtype == 2) {                            // 2A/2B — RadioText
