@@ -33,7 +33,7 @@ const KEYS: { k: string; what: string }[] = [
   { k: '−  +', what: 'zoom out and in' },
   { k: 'shift + arrow', what: 'move through menus and lists' },
   { k: 'alt/option/⌥ + tab', what: 'in and out of the decoder box' },
-  { k: 'enter', what: 'selects, wherever space would' },
+  { k: 'enter', what: 'selects and presses buttons' },
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {

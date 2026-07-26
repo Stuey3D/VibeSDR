@@ -335,6 +335,12 @@ export default function DecoderPanel({
   // through the list, and whichever you last used is what SPACE activates. That avoids a
   // nested "now you are in the header" state, which would be one more invisible mode.
   //
+  // ★★ ENTER IS THE KEY WE NAME; Space still works but is no longer advertised anywhere
+  // (Stuart, 2026-07-26: "now we don't have the spacebar so any references to it need
+  // removing"). Documenting both meant naming a key that silently fails for anyone using Full
+  // Keyboard Access, which is worse than naming one that always works. Space is kept in the
+  // handlers because it costs nothing and is what a hand reaches for out of habit.
+  //
   // ★★ ENTER WORKS TOO, added 2026-07-26. iOS Full Keyboard Access uses SPACE to activate the
   // focused element, so under FKA the space bar never reaches us and the box became unusable —
   // a list you can move through and cannot select from. Stuart: "space is not working in FKA
@@ -647,12 +653,12 @@ export default function DecoderPanel({
               // ★ Always says where Tab goes NEXT, so the cycle is discoverable by using it
               // rather than by being remembered. The wording differs by zone AND by whether
               // the box owns the arrows or merely borrowed them.
-              ? (kbZone === 'speed'  ? 'space/enter to set · backspace to cancel'
-                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'space/enter to press · tab for stations · t to tune'
-                                                               : 'space/enter to press · tab for the list · t to tune')
-                                                  : 'space/enter to press · tab to leave')
-                 : listLen > 0        ? (autoOwn ? 'space/enter to select · tab for controls · t to tune'
-                                                  : 'space/enter to select · tab for controls')
+              ? (kbZone === 'speed'  ? 'enter to set · backspace to cancel'
+                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'enter to press · tab for stations · t to tune'
+                                                               : 'enter to press · tab for the list · t to tune')
+                                                  : 'enter to press · tab to leave')
+                 : listLen > 0        ? (autoOwn ? 'enter to select · tab for controls · t to tune'
+                                                  : 'enter to select · tab for controls')
                  : 'scroll with ↑↓ · tab for controls')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               : decoderStatus}

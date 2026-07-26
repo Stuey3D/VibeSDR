@@ -67,14 +67,14 @@ const SECTIONS: Section[] = [
     title: 'DECODER BOXES',
     body: [
       'On the HF decoders the waterfall is still the point, so the box leaves the arrows alone until you ask for them. Press Tab and it takes the keyboard, announcing itself with a flash. Press it again for the controls in its header, and once more to hand the keyboard back.',
-      'While it has the keyboard, up and down move through the list or scroll the output, left and right move along the header controls, and Space or Enter presses whichever you last moved to. Escape or backspace hand the keyboard straight back, and so does ten seconds of not touching it — tune and zoom are what you want back.',
+      'While it has the keyboard, up and down move through the list or scroll the output, left and right move along the header controls, and Enter presses whichever you last moved to. Escape or backspace hand the keyboard straight back, and so does ten seconds of not touching it — tune and zoom are what you want back.',
     ],
   },
   {
     title: 'DAB AND ADS-B',
     body: [
       'Here the box is the screen rather than something on top of it: the VFO is locked to the multiplex, so there is nothing to tune. The arrows belong to the box from the moment it appears, and it keeps them — up and down move through the stations, or scroll the aircraft table.',
-      'Space or Enter selects a station. On ADS-B there is nothing to select, so the arrows simply scroll. Tab moves between the list and the header controls rather than leaving, and inside SPEED FIX the arrows choose a preset, Space or Enter sets it, and backspace closes it having changed nothing.',
+      'Enter selects a station. On ADS-B there is nothing to select, so the arrows simply scroll. Tab moves between the list and the header controls rather than leaving, and inside SPEED FIX the arrows choose a preset, Enter sets it, and backspace closes it having changed nothing.',
       'T opens the frequency box here. This is the one box that keeps the keyboard rather than handing it back, so Enter is permanently spoken for and would otherwise leave no way to change frequency at all.',
     ],
   },
@@ -83,13 +83,13 @@ const SECTIONS: Section[] = [
     body: [
       'Left and right tune a step at a time and hold to keep going; up and down zoom the dial. Because FM-DX is one radio shared by everyone connected, holding an arrow retunes it once when you stop, not once per step.',
       'Enter opens the frequency box, D the demodulator options, S the tuning step, C chat and R your recordings. Escape closes whatever is open, or takes you back to the server list.',
-      'The shared-tuner notice you meet on connecting will go with Enter, Space or Escape — whichever you reach for.',
+      'The shared-tuner notice you meet on connecting will go with Enter or Escape — whichever you reach for.',
     ],
   },
   {
     title: 'RECORDINGS',
     body: [
-      'Up and down select, Space or Enter plays and pauses, and backspace deletes — or forward-delete, since a Mac keyboard has no such key. Escape closes the list.',
+      'Up and down select, Enter plays and pauses, and backspace deletes — or forward-delete, since a Mac keyboard has no such key. Escape closes the list.',
       'Sharing is not on the keyboard: it hands over to the system share sheet, which is not ours to drive.',
     ],
   },
@@ -111,7 +111,6 @@ const SECTIONS: Section[] = [
       'Leave it switched on. For tuning and zoom there are four keys that need no modifier at all: < and > tune down and up, and - and + zoom out and in. They are the arrow keys by another name and work anywhere in the app, menus included, whether or not Full Keyboard Access is on.',
       'For everything else, hold Shift with an arrow, and Alt/Option (⌥) with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. It is one key with several faces: a Windows or handheld keyboard prints Alt, an Apple one prints Option or nothing but the ⌥ symbol, and all of them arrive here as the same modifier. Avoid Command, which the system keeps for switching apps.',
       'The one place the four substitute keys do not apply is inside a text box, where they are simply the characters they look like — a decimal point in a frequency, a dash in a server address. In the bookmarks search, where the arrows walk the results while you are still typing, use Shift with an arrow.',
-      'Anywhere the space bar would press or select something — the decoder box, a DAB station, a recording — Enter does the same job, so that is covered too.',
       'Either way you never have to turn an accessibility feature off to use the radio.',
     ],
   },
