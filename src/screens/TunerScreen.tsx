@@ -7,7 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
-import { shortcutsSuppressed, useKeyboardMode, NAV_FOCUS } from '../components/PanelNav';
+import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from '../components/PanelNav';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -512,11 +512,43 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
   //    committed once on settle (shared tuner — don't spam retunes). ───────────
+  // ★ Declared here, well above the keyboard block, because the handlers it publishes are
+  // defined between the two — a ref has to exist before anything assigns to it.
+  const kbRefs = useRef({
+    openChat: (() => {}) as () => void,
+    stepTune: (() => {}) as (d: 1 | -1) => void,
+    dialZoom: (() => {}) as (px: number) => void,
+  });
+
   const commitTune = useCallback(() => {
     const f = dragFreqRef.current;
     dragFreqRef.current = null;
     if (f != null) { armTarget(f); backendRef.current?.tune(f); }
   }, [armTarget]);
+
+  /**
+   * One tuning step from the keyboard.
+   *
+   * ★ Not routed through onVfoDelta: that converts DRAG PIXELS with a velocity curve, which a
+   * key press has none of. This snaps to the step grid and moves exactly one step, which is
+   * what a discrete press should do.
+   *
+   * ★★ It reuses the same 220ms settle-commit as the drum, and that matters here more than
+   * anywhere else in the app: FM-DX is ONE RADIO SHARED BY EVERYONE, so holding an arrow must
+   * retune the shared tuner once when you stop, not once per repeat. The debounce is the
+   * etiquette. (See the note above commitTune.)
+   */
+  const stepTune = useCallback((dir: 1 | -1) => {
+    const sHz = step;
+    const cur = dragFreqRef.current ?? displayFreq;
+    const snapped = Math.round(cur / sHz) * sHz;
+    const newHz = clampFm(snapped + dir * sHz);
+    if (newHz === cur) return;
+    dragFreqRef.current = newHz;
+    setDisplayFreq(newHz);
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(commitTune, 220);
+  }, [displayFreq, step, commitTune]);
 
   const onVfoDelta = useCallback((pxDelta: number) => {
     const s = step;
@@ -573,6 +605,8 @@ export default function TunerScreen({ route, navigation }: Props) {
       return { lo, hi };
     });
   }, [displayFreq]);
+  kbRefs.current.stepTune = stepTune;   // arrows — see the keyboard block above
+  kbRefs.current.dialZoom = onDialZoom;
 
   // ── Chat handlers ───────────────────────────────────────────────────────────
   const onJoin = useCallback((cs: string) => {
@@ -597,7 +631,6 @@ export default function TunerScreen({ route, navigation }: Props) {
   // ★ The drums/keys toggle is deliberately NOT here: if you are on a keyboard you are using
   // neither control, so a shortcut for switching between them would be answering a question
   // nobody has asked.
-  const kbRefs = useRef({ openChat, toggleRecording: (() => {}) as () => void });
   kbRefs.current.openChat = openChat;
   const screenFocused = useIsFocused();
   const screenFocusedRef = useRef(screenFocused);
@@ -617,10 +650,11 @@ export default function TunerScreen({ route, navigation }: Props) {
                          || chatOpen || recordingsOpen;
   }, [freqModalOpen, demodOpen, stepOpen, audioSheetOpen, chatOpen, recordingsOpen]);
 
-  useEffect(() => {
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      const k = e?.key;
+  // ★ Repeating, so holding an arrow tunes continuously — the same helper the panels use. On a
+  // SHARED tuner that is safe because the settle-commit debounce in stepTune sends one retune
+  // when you stop rather than one per repeat.
+  useRepeatingKeys(true, (k: string) => {
+    {
       if (!k) return;
       // Not the screen on top, or a page we did not write is showing — same rules as SDRScreen.
       if (!screenFocusedRef.current || shortcutsSuppressed()) return;
@@ -646,16 +680,24 @@ export default function TunerScreen({ route, navigation }: Props) {
       // A panel that is open owns the rest — its own navigation is already listening.
       if (panelsOpenRef.current) return;
       switch (k) {
+        // ★ Tuning IS the point of this screen, and leaving the arrows out was wrong — the
+        // dial is the primary control here exactly as the drums are on the SDR screen.
+        case 'ArrowLeft':  kbRefs.current.stepTune(-1); break;
+        case 'ArrowRight': kbRefs.current.stepTune(1);  break;
+        case 'ArrowUp':    kbRefs.current.dialZoom(-40); break;
+        case 'ArrowDown':  kbRefs.current.dialZoom(40);  break;
         case 'Enter': setFreqModalOpen(true); break;
         case 'C': kbRefs.current.openChat(); break;
         case 'D': setDemodOpen(true); break;
         case 'S': setStepOpen(true); break;
-        case 'R': kbRefs.current.toggleRecording(); break;
+        // ★ R opens the RECORDINGS list rather than starting a recording. Stuart: it should
+        // reach the playback side too — and a key that silently begins recording, with the
+        // only feedback a small dot, is a poor thing to press by accident.
+        case 'R': setRecordingsOpen(true); break;
         default: break;
       }
-    });
-    return () => sub.remove();
-  }, [navigation]);
+    }
+  }, NAV_REPEAT_KEYS);
 
   // ── Recording (REC + Recordings live in the AUDIO sheet — control island) ────
   const toggleRecording = useCallback(() => {
@@ -691,7 +733,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         .catch(() => setAudioSheetOpen(false));
     }
   }, [isRecording, displayFreq]);
-  kbRefs.current.toggleRecording = toggleRecording;   // R — see the keyboard block above
+
   useEffect(() => () => { if (recTimerRef.current) clearInterval(recTimerRef.current); }, []);
 
   // Playing a saved recording (expo-audio) fights the live native engine for the
