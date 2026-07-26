@@ -391,11 +391,21 @@ function ServerGlyph({ color }: { color: string }) {
 export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const m = useMeters(bus);
   const q = m ? m.link : 0;
+  // ★ LATCH, don't gate on the live value. Requiring fps > 0 to show the readout
+  // meant a single second with no counted frames BLANKED it — so on a backend
+  // whose frames arrive unevenly (Kiwi) it flashed on and off once a second.
+  // ★★ And hiding is the wrong response anyway: a stall is precisely when
+  // "0k/s · 0fps" is worth seeing. Blanking turns the most informative moment
+  // into no information at all. Show it once a rate has ever arrived, then keep
+  // showing it — zeros included.
+  const everHadRate = useRef(false);
+  if ((m?.fps ?? 0) > 0 || (m?.kbps ?? 0) > 0) everHadRate.current = true;
+  if (q === 0) everHadRate.current = false;      // disconnected — start clean again
   const dim = 'rgba(255,255,255,0.40)';
   // Incoming rate readout — spectrum KB/s (the phone's audio is decoded natively, so JS can't see
   // its bytes) + frame rate, the same "what's actually arriving" cue the web client shows. Only once
   // a link exists, so a disconnected meter stays clean.
-  const showRate = !!m && q > 0 && (m.fps ?? 0) > 0;
+  const showRate = !!m && q > 0 && everHadRate.current;
   const rateTxt  = showRate ? `${Math.round(m!.kbps ?? 0)}k/s · ${Math.round(m!.fps ?? 0)}fps` : '';
   return (
     <View style={pm.linkRow}>

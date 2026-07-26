@@ -10,7 +10,13 @@ import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
 import { watchProvider } from './src/services/watchProvider';
-import { getFavourites, getTcpFavs, setFavouriteServerType } from './src/services/favourites';
+import { favouritesCollection, getFavourites, getTcpFavs, setFavouriteServerType } from './src/services/favourites';
+import { bookmarksCollection } from './src/services/bookmarksSync';
+import { registerCollection, registerSyncHook, startCloudSync } from './src/services/cloudSync';
+import {
+  syncGlobalDisplayPrefs, syncLastTune, syncServerDisplayPrefs,
+} from './src/services/perServerSync';
+import { syncFmdxDials } from './src/services/dialSync';
 import { detectServerType } from './src/services/sdrTypes';
 import { newLocalSession } from './src/services/localSession';
 import { getViewMode } from './src/services/viewMode';
@@ -177,6 +183,20 @@ export default function App() {
   // Install the global JS crash guard once — flaky SDR servers must never abort
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
+
+  // ── iCloud sync ────────────────────────────────────────────────────────────
+  // Registered here, at the app level, rather than inside the screens that own
+  // each store: a per-server dial or a favourites list must still merge when
+  // the app cold-launches headless for the watch and no screen ever mounts.
+  useEffect(() => {
+    registerCollection(favouritesCollection);
+    registerCollection(bookmarksCollection);
+    registerSyncHook('displayPrefs',       syncGlobalDisplayPrefs);
+    registerSyncHook('serverDisplayPrefs', syncServerDisplayPrefs);
+    registerSyncHook('lastTune',           syncLastTune);
+    registerSyncHook('fmdxDials',          syncFmdxDials);
+    return startCloudSync();
+  }, []);
 
   // ── Apple Watch: run HEADLESS ──────────────────────────────────────────────
   //

@@ -22,6 +22,11 @@
  *  bad" are different states that must look different in the UI. */
 export type LinkMode = 'full' | 'adaptive' | 'lowData';
 
+/** TEMPORARY on-screen diagnostic — read it in the menu, under LINK.
+ *  MEASURE, DON'T REASON: four wrong single-cause explanations in a row tonight
+ *  is the signal to stop inferring and print what the controller is doing. */
+export const linkDebug = { line: '—' };
+
 export const LADDERS: Record<string, number[]> = {
   ubersdr:    [10, 5, 3.3],
   vibeserver: [20, 10, 5],
@@ -61,6 +66,8 @@ const HEALTHY_RATIO = 0.85;
  * instantaneous value, so stepping DOWN stays fast.
  */
 const RECOVERY_WINDOW = 5;
+/** Seconds ignored after a rung is applied, while the server reaches the new rate. */
+const WARMUP_TICKS = 3;
 
 export class LinkManager {
   /** Expected fps at each rung, rung 1 (full rate) first. The LAST rung is the adaptive floor. */
@@ -88,6 +95,12 @@ export class LinkManager {
   private recent: number[] = [];
   /** Has this session ever genuinely starved? Distinguishes "cautious start" from "recovering". */
   private everStarved = false;
+  /** Has this link EVER met the healthy bar? Until it has, a shortfall is more
+   *  likely the server still reaching the rate we just asked for than a verdict
+   *  on the link. */
+  private everHealthy = false;
+  /** Ticks since the current rung was applied — the warm-up window. */
+  private sinceApply = 0;
 
   /**
    * ★★ START IN THE MIDDLE, EARN THE TOP. Connection setup is the most fragile moment there is —
@@ -169,22 +182,43 @@ export class LinkManager {
 
     const expected = this.ladder[this.rung - 1];
     const ratio = expected > 0 ? fps / expected : 1;
+    linkDebug.line = `${this.mode} r${this.rung}/${this.ladder.length}`
+      + ` [${this.ladder.join('/')}] want${expected} got${fps.toFixed(0)}`
+      + ` ${(ratio * 100).toFixed(0)}%`;
 
     this.recent.push(fps);
     if (this.recent.length > RECOVERY_WINDOW) this.recent.splice(0, this.recent.length - RECOVERY_WINDOW);
     const avg = this.recent.length ? this.recent.reduce((a, b) => a + b, 0) / this.recent.length : fps;
     const avgRatio = expected > 0 ? avg / expected : 1;
 
+    // ★ WARM-UP. A rate change does not take effect instantly — the server has to
+    // ramp to it — so the first couple of seconds after applying a rung measure
+    // the RAMP, not the link. Counting them made a cold start look like a failing
+    // connection every single time.
+    this.sinceApply++;
+    if (this.sinceApply <= WARMUP_TICKS) { this.starvedSecs = 0; return; }
+
     if (ratio < STARVE_RATIO) {
       this.starvedSecs++; this.healthySecs = 0;
       if (this.starvedSecs >= DEGRADE_AFTER && this.rung < this.ladder.length) {
-        this.everStarved = true;   // from here on, climbing back is a RECOVERY: be slow about it
+        // ★★ ONLY A LINK THAT WAS ONCE HEALTHY CAN BE JUDGED POOR.
+        //
+        // everStarved latches forever and switches recovery from 8s per rung to
+        // 20s of SUSTAINED health. One transient at connect — dongle spinning up,
+        // the audio socket landing, the first rate applied — therefore condemned
+        // the whole session: the controller walked to the floor and could not
+        // climb back, because any small dip reset the 20s counter. Stuart found it
+        // by accident: BACKGROUNDING the app fixed it, because that builds a fresh
+        // controller. A reconnect "fixing" a link problem means the state is
+        // stuck, not the link.
+        if (this.everHealthy) this.everStarved = true;
         this.settling = false;     // decided: this link is poor
         this.set(this.rung + 1, true);
         this.starvedSecs = 0;
       }
     } else if (avgRatio >= HEALTHY_RATIO) {
       this.healthySecs++; this.starvedSecs = 0;
+      this.everHealthy = true;
       const needed = this.everStarved ? RECOVER_AFTER : FIRST_CLIMB_AFTER;
       if (this.healthySecs >= needed) {
         this.settling = false;     // decided: we know what this link will carry
@@ -197,6 +231,17 @@ export class LinkManager {
 
   /** Re-assert the current rung — call after a reconnect, where the server starts at its default. */
   reassert(): void { if (this.rung !== 1) this.apply(this.rung, this.ladder[this.rung - 1]); }
+
+  /** Apply the current rung UNCONDITIONALLY, including rung 1.
+   *
+   *  ★★ A controller must never measure against a rate it has not ASKED FOR.
+   *  reassert() skips rung 1 on the assumption that the server is already at its
+   *  default — fine after a reconnect, false after the ladder is REBUILT
+   *  underneath a live connection (see UberSDRClient's hwinfo handler). There the
+   *  server sits at whatever the previous controller requested while the new one
+   *  expects its own rung, reads the difference as starvation, and steps DOWN —
+   *  so it starts mid-ladder and can only ever go the wrong way. */
+  forceApply(): void { this.apply(this.rung, this.ladder[this.rung - 1]); }
 
   /**
    * ★ THE OWNER'S CEILING IS NOT A FAILURE. A server may cap its frame rate (VibeServer's
@@ -223,7 +268,7 @@ export class LinkManager {
     this.adaptiveRung = adaptive ? clamped : 1;
     if (clamped === this.rung && !force) return;
     this.rung = clamped;
-    this.starvedSecs = 0; this.healthySecs = 0;
+    this.starvedSecs = 0; this.healthySecs = 0; this.sinceApply = 0;
     this.recent = [];       // the old rung's counts say nothing about the new one
     this.apply(clamped, this.ladder[clamped - 1]);
   }

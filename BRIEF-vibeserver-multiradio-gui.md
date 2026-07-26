@@ -863,3 +863,58 @@ DIFFERENT radios, which is the model the multi-client brief already chose.
 8. **Safety:** a dongle that matches no configured radio starts with direct sampling OFF and bias-T
    OFF, and never inherits another radio's settings.
 9. Measure and record RAM per radio process on a Pi before advertising a maximum radio count.
+
+---
+
+## ★★ Fixed-span multi-user: ONE GLOBAL USER LIMIT, not a per-radio split (Stuart, 2026-07-26)
+
+**Decision.** In fixed-span multi-user mode the owner sets ONE overall listener cap for the server,
+not a cap per radio/band. 40 users may be 35 on 160/80m and 5 on 40m, or any other split.
+
+**Why it is not merely acceptable but better.** The cost decomposes as:
+
+    total CPU = (radios x capture+FFT)  +  (users x demod+encode)
+
+The first term is fixed by how many radios are RUNNING, not by who is listening — one FFT per radio
+is shared by every listener on it (see `onSpectrum`: one 4096-point FFT, then a cheap ~1024-bin
+per-view resample). The second term depends only on the TOTAL number of users, wherever they are.
+So 35+5 and 20+20 cost the same, and a per-radio cap only strands capacity on the quiet band while
+refusing people on the busy one.
+
+★ It is actually CHEAPER at the extreme: a radio with zero listeners idles its capture entirely
+("no listeners — dongle capture paused"), so 40+0 costs less than 20+20. A global cap permits that;
+a per-band split forbids it.
+
+★ The only thing a global cap cannot express is FAIRNESS — 40 people on 160m leaves nobody able to
+reach an idle 40m radio. If that ever matters it is a soft reservation (keep N slots per radio), a
+policy nicety, not a resource constraint.
+
+★★ SINGLE-USER-PER-SDR MODE IS UNCHANGED. This is an additional mode, not a replacement.
+
+**Prerequisite, and it is the real work:** per-client state must actually become per-client.
+`zoomFactor`, `g_vsOutBins`, `rateDivisor` and the occupancy identity are all single globals today,
+and each one caused a bug on 2026-07-26 with only ONE client connected — see
+[[vibeserver_per_client_state_globals]]. Multi-user makes that condition permanent.
+
+**Capacity is already demonstrated:** a Pi 5 carried 10 browsers on one OWRX profile while its other
+six radios kept decoding WSJT-X. VibeServer should carry the same 10 for about a quarter of the
+bandwidth, because OWRX replicates the whole profile FFT per client and VibeServer shares it.
+
+## ★ Idle radios: power down the capture, and OPTIONALLY the Bias-T (Stuart, 2026-07-26)
+
+A radio with no listeners already idles its capture, and that is where the power goes — the battery
+work measured **the dongle, not the DSP, as most of the load**. So an idle radio in multi-radio mode
+should cost almost nothing, and the only price is a slightly longer start for the first listener,
+which can hide inside the network connection stage.
+
+**Bias-T is a separate, opt-in decision per radio.** If the Bias-T is only feeding the dongle it can
+drop with the capture. But:
+
+- ★★ **A Bias-T may power an antenna that must stay alive.** Mast-head preamps are frequently shared
+  through a splitter, so cutting power on an IDLE radio can deafen radios that ARE in use — and the
+  symptom appears on a different band entirely, which is horrible to diagnose. Hence: per-radio,
+  opt-in, default LEAVE POWERED.
+- ★ **An LNA does not come back instantly.** Gain and thermal noise settle over seconds after power
+  is restored, so a settle delay is needed before the radio is declared ready. Otherwise the first
+  listener gets a quiet band and concludes the receiver is deaf. The USB re-init can hide in the
+  connect stage; preamp settling cannot always.

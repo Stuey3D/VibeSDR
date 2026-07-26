@@ -36,6 +36,10 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
+import {
+  getSyncStatus, loadSyncEnabled, onSyncStatus, setSyncEnabled, type SyncStatus,
+} from '../services/cloudSync';
+import { linkDebug } from '../services/linkManager';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
@@ -506,6 +510,40 @@ function VfoLockBtn({ locked, disabled, onPress, full }: {
 
 function SubLabel({ label, small }: { label: string; small?: boolean }) {
   return <Text style={[styles.subLabel, small && styles.subLabelSmall]}>{label}</Text>;
+}
+
+/**
+ * iCloud sync: the on/off switch and, more importantly, whether it is WORKING.
+ *
+ * ★ A sync that has silently stopped is worse than one that never started —
+ * the user believes their favourites and bookmarks are covered. So this reports
+ * the last error rather than only the happy state, and says nothing at all on a
+ * platform where iCloud does not exist rather than showing a dead control.
+ */
+function ICloudRow() {
+  const [s, setS] = useState<SyncStatus>(getSyncStatus());
+  useEffect(() => {
+    void loadSyncEnabled();
+    return onSyncStatus(setS);
+  }, []);
+  if (!s.supported) return null;
+  const when = s.lastSyncAt
+    ? new Date(s.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
+  return (<>
+    <SectionLabel label="iCLOUD SYNC" icon="instance" />
+    <BtnRow>
+      <Btn label="ON"  active={s.enabled}  onPress={() => { void setSyncEnabled(true); }} />
+      <Btn label="OFF" active={!s.enabled} onPress={() => { void setSyncEnabled(false); }} />
+    </BtnRow>
+    <SubLabel small label={
+      !s.enabled          ? 'Off — favourites and bookmarks stay on this device.'
+      : s.lastError       ? `⚠ ${s.lastError}`
+      : !s.available      ? 'Waiting for iCloud — sign in to iCloud in Settings.'
+      : when              ? `Synced ${when}.`
+      :                     'Syncing…'
+    } />
+  </>);
 }
 
 function OptRow({ children }: { children: React.ReactNode }) {
@@ -1242,6 +1280,11 @@ export default function MenuSheet({
                 <Btn label="LISTENERS"  skipNav={kbInUse} onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
               </BtnRow>
             </>)}
+
+            {/* TEMPORARY link-controller diagnostic. */}
+            <SubLabel small label={`LINK: ${linkDebug.line}`} />
+
+            <ICloudRow />
 
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="SERVER" icon="instance" />

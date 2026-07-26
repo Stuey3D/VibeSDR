@@ -179,6 +179,17 @@ export class OwrxAdapter implements SDRBackend {
   private wsUrl: string;
   private httpBase: string;   // http(s)://host:port — for /status.json polling
   private statusTimer: ReturnType<typeof setInterval> | null = null;
+  // ── Incoming-rate readout ───────────────────────────────────────────────────
+  // ★ OWRX showed no KB/s or fps at all. It has always measured frame TIMING for
+  // the link bars, but never counted frames or bytes — so the connection readout
+  // that every other backend fills in was simply blank here. It matters MORE on
+  // OWRX than anywhere else: the rate cannot be turned down (fps/fft_fps/fft_size
+  // are all ignored by the server), so knowing what it is costing you is the only
+  // information available before deciding to move to the watch's own wifi.
+  private rateTimer: ReturnType<typeof setInterval> | null = null;
+  private fftFrames = 0;
+  /** ALL inbound bytes on this socket — FFT *and* audio. See the case 2/4 note. */
+  private fftBytes  = 0;
 
   // server/profile state
   private cfg: OwrxConfig | null = null;
@@ -304,6 +315,23 @@ export class OwrxAdapter implements SDRBackend {
     } catch { /* server may not expose it / be offline — leave usage unknown */ }
   }
 
+  /** 1 Hz frames/bytes readout. Rung 1 and never settling: OWRX has no rate
+   *  ladder to climb (see LADDERS — it is omitted deliberately), so it must not
+   *  clamp the link bars, which take the WORST of gap quality and rung. */
+  private startRateMeter(): void {
+    if (this.rateTimer) return;
+    this.rateTimer = setInterval(() => {
+      const fps  = this.fftFrames;
+      const kbps = this.fftBytes / 1024;
+      this.fftFrames = 0; this.fftBytes = 0;
+      this.cb.onLinkRate?.(1, false, fps, kbps);
+    }, 1000);
+  }
+  private stopRateMeter(): void {
+    if (this.rateTimer) { clearInterval(this.rateTimer); this.rateTimer = null; }
+    this.fftFrames = 0; this.fftBytes = 0;
+  }
+
   private startStatusPoll(): void {
     if (this.statusTimer) return;
     this.pollStatus();
@@ -311,6 +339,7 @@ export class OwrxAdapter implements SDRBackend {
   }
   private stopStatusPoll(): void {
     if (this.statusTimer) { clearInterval(this.statusTimer); this.statusTimer = null; }
+    this.stopRateMeter();
   }
 
   /** http(s)://host:port[/path] → ws(s)://host:port/ws/ (trailing slash required;
@@ -878,9 +907,24 @@ export class OwrxAdapter implements SDRBackend {
     const type = buf[0];
     const payload = buf.subarray(1);
     switch (type) {
-      case 1: this.onFft(payload); break;
-      case 2: this.onAudio(payload, OWRX_AUDIO_RATE, this.audioDec); break;   // primary (12k)
-      case 4: this.onAudio(payload, OWRX_HD_RATE, this.hdAudioDec); break;     // HD / WFM (48k)
+      case 1:
+        this.fftFrames++; this.fftBytes += buf.length;
+        this.startRateMeter();
+        this.onFft(payload);
+        break;
+      // ★ AUDIO COUNTS TOO, and only OWRX can do this honestly. Everywhere else
+      // the phone decodes audio NATIVELY, so JS never sees those bytes and the
+      // readout is spectrum-only. OWRX's audio arrives on this same socket and is
+      // decoded here — and it is not a rounding error: WFM/DAB is ~23.8 KB/s, it
+      // CANNOT be lowered, and on a heavy profile it is roughly half the total.
+      // Reporting spectrum alone would halve the very number that decides whether
+      // this server is viable on a given link.
+      case 2:
+        this.fftBytes += buf.length;
+        this.onAudio(payload, OWRX_AUDIO_RATE, this.audioDec); break;   // primary (12k)
+      case 4:
+        this.fftBytes += buf.length;
+        this.onAudio(payload, OWRX_HD_RATE, this.hdAudioDec); break;     // HD / WFM (48k)
       case 3: break;                                    // secondary FFT — ignored in v3
       default: this.dbg('unknown binary type ' + type);
     }

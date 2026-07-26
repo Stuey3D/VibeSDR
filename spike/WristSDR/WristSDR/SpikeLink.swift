@@ -108,6 +108,11 @@ final class SpikeLink: ObservableObject {
   /// Waterfall rate rung Link Management has settled on: 1 = full, 2 = half, 3 = the emergency
   /// floor. Feeds the link glyph so a compensated-but-poor link never reads as green.
   @Published var throttleRung = 1
+  /// How hard the iPhone-relay link is being pushed: 0 = comfortable (≤20 KB/s),
+  /// 1 = at the limit (30 KB/s), >1 = past it. Always 0 on wifi/cellular, so only
+  /// the iPhone glyph ever changes colour. See the derivation where it is set.
+  @Published var relayLoad: Double = 0
+  private var relayKbSmoothed: Double = 0
   /// ★ Link Management is still working out what this connection will carry (the first few seconds
   /// of a session). ContentView draws the link glyph as INDETERMINATE — cycling and breathing —
   /// rather than showing a bar count it has not earned yet.
@@ -480,6 +485,54 @@ final class SpikeLink: ObservableObject {
     //   drown the relay, and which has no comparable kick behaviour.
     let isKiwi = client is KiwiClient
     let relayDropping = transport == .iphone && client.status.hasPrefix("reconnect") && !isKiwi
+
+    // ── Graded relay load, for the connection glyph ────────────────────────
+    // The advisory pill above is BINARY and arrives after a 4s dwell. The glyph
+    // shows the same truth continuously, so "getting close" is visible before
+    // "at the limit" — the pill tells you, the glyph lets you watch it coming.
+    //
+    // ★ 20 → 30 KB/s (Stuart's call). 20 is exactly where the two backends that
+    // must never false-trigger sit: Kiwi on the relay is capped to land ~20 KB/s
+    // (KiwiClient.topWfSpeed) and UberSDR at full rate is ~12.4 KB/s of
+    // waterfall plus ~7 of audio, also ~20. So the ramp begins where "heavier
+    // than anything Kiwi or UberSDR asks for" begins — a session at either
+    // baseline stays green, and only a genuinely heavier server tints it.
+    //
+    // ★ 30 is FIELD-OBSERVED, not derived: Stuart watched the
+    // relay sit at 30 KB/s repeatedly with no hiccup (2026-07-26). Breathing at
+    // the pill's 25 would therefore fire during perfectly healthy use, and an
+    // indicator that cries wolf gets ignored exactly when it matters.
+    //
+    // The pill (>25, 4s dwell) still fires FIRST and that is deliberate: amber
+    // glyph → advisory pill → red → breathing is a graded escalation, not two
+    // opinions. Do not "align" them by dragging the glyph down to 25.
+    //
+    // ★★ AND THEY MUST STAY LOW. `inboundKbPerSec` is DELIVERY,
+    // and the relay caps delivery at ~40 KB/s (measured 2026-07-26: asked 56 and
+    // 64 KB/s over the relay, got a stable ~40). So any ceiling ABOVE ~40 is
+    // unreachable and the indicator would be dead code — the identical mistake
+    // the old 55 KB/s pill threshold made. Do not "improve" these upward.
+    //
+    // EWMA, because a zoom raises the byte rate at the same fps and a raw meter
+    // would flicker the glyph on every crown turn.
+    if transport == .iphone {
+        relayKbSmoothed += (Double(kb) - relayKbSmoothed) * 0.3
+        let load = (relayKbSmoothed - 20.0) / (30.0 - 20.0)
+        // ★★ A DROP OUTRANKS THE METER. Throughput measures DEMAND against a
+        // ceiling we assume is ~30 KB/s — but the ceiling COLLAPSES at the edge
+        // of Bluetooth range, so a link failing at 15 KB/s would sit green while
+        // the user watches it fall apart. A reconnect on the relay needs no
+        // threshold to be believed, and it is the one case a throughput test
+        // structurally cannot see, because a dropped socket delivers nothing.
+        // Same evidence the advisory pill uses, so glyph and pill agree.
+        let clamped = relayDropping ? 1.6 : max(0, min(1.6, load))
+        if abs(clamped - relayLoad) > 0.01 { relayLoad = clamped }
+    } else if relayLoad != 0 {
+        // WiFi and cellular have headroom — their glyphs never discolour.
+        relayLoad = 0
+        relayKbSmoothed = 0
+    }
+
 
     // A backend that has told us WHY in plain English (Kiwi's full/password refusals) owns the
     // explanation. Never talk over it with a guess about the link.

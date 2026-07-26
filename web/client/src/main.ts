@@ -191,7 +191,16 @@ async function connect(host: string, pin: string) {
   // a different client and the occupancy check would reject a client's own audio. Two browsers or
   // two devices get two ids, which is exactly what we want to keep apart.
   const sid = uuid();
-  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8', auth)}`;
+  // ★ Bins = the waterfall's DISPLAY width, not its resolution. The server maps
+  // its fine 4096-point FFT onto whatever we ask for, scaled to the ZOOMED span
+  // (onSpectrum's `step`, peak-held) — so sharpness still improves as you zoom
+  // in, at constant bandwidth. 1024 matches UberSDR's native frame width, which
+  // every other VibeSDR surface already renders.
+  //
+  // ★ Safe for the fixed-ring waterfall: ensureRing() only reallocates when the
+  // COLUMN count changes, and that is fixed at connect — a window resize still
+  // just shows more/fewer rows, so history survives a drag exactly as before.
+  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024', auth)}`;
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.

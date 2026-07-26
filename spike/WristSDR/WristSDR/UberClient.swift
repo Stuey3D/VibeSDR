@@ -180,6 +180,12 @@ final class UberClient: ObservableObject {
   @Published var audioPerSec: Double = 0
   /// DEBUG: total incoming KB/s (spectrum + audio), for the on-wrist counter.
   @Published var kbps: Double = 0
+  /// SDRClient — feeds the relay-load glyph. ★ The protocol DEFAULT is 0, which
+  /// reads as "comfortable" rather than "unknown", so every client that does not
+  /// override this is silently invisible to the bandwidth warning. OWRX was the
+  /// only one that did. Covers UberSDR and VibeServer, both of which run through
+  /// this client.
+  var inboundKbPerSec: Int { Int(kbps.rounded()) }
 
   /// NONISOLATED, deliberately.
   ///
@@ -387,14 +393,23 @@ final class UberClient: ObservableObject {
   /// only needs "on the watch's own cellular".
   nonisolated private static func transportFor(_ p: NWPath) -> Transport {
     guard p.status == .satisfied else { return .none }
-    // ORDER MATTERS, and this order is FIELD-VERIFIED (2026-07-19): the glyph correctly showed
-    // the iPhone on a relayed OWRX session, so a relayed path here reports .other WITHOUT .wifi.
-    // (My notes from the companion say "check .other before .wifi" — that was a different code
-    // path; do not reorder this one without re-testing on a real relayed connection, or a watch on
-    // its OWN wifi could start reporting as relayed.)
+    // ★★ `.other` FIRST — CORRECTED 2026-07-26 against direct evidence, and this
+    // file previously claimed the opposite order was field-verified.
+    //
+    // Proof: with Jr streaming from a VibeServer on the Mac, the SERVER's own
+    // peer address was the iPhone's (192.168.86.245 = stuey3ds-iphone.lan), not
+    // the watch's — so every byte was relayed, while this function was returning
+    // .wifi. The companion bridge advertises BOTH .other AND .wifi, so a
+    // .wifi-first test reports WiFi whenever the phone is merely NEARBY.
+    //
+    // SpikeLink.startPathMonitor() has always had it this way round, so the two
+    // monitors in this app disagreed and the glyph (SpikeLink) was right while
+    // this one was wrong. ★ When two code paths answer the same question
+    // differently, the tie-breaker is an observation from OUTSIDE both of them —
+    // here, who the server says is talking to it.
+    if p.usesInterfaceType(.other)    { return .iphone }
     if p.usesInterfaceType(.wifi)     { return .wifi }
     if p.usesInterfaceType(.cellular) { return .cellular }
-    if p.usesInterfaceType(.other)    { return .iphone }
     return .none
   }
 

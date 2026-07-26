@@ -13,6 +13,11 @@ ROOT = "/Users/stuey3d/VibeSDR/spike/WristSDR"
 NAME = "WristSDR"
 BUNDLE = "com.stuey3d.wristsdr"
 TEAM = "6PV2X6THHM"
+# ★ The build number lives HERE, not in the generated project: genproj rewrites
+# project.pbxproj wholesale, so a number bumped by hand in the .pbxproj is lost
+# the next time anyone regenerates. Bump this before every device install —
+# watchOS ignores an install whose build number has not changed.
+BUILDNO = 42
 
 # ★ DISCOVERED FROM DISK, NOT LISTED.
 #
@@ -262,7 +267,7 @@ pbx = f'''// !$*UTF8*$!
 			buildSettings = {{
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = {BUILDNO};
 				DEVELOPMENT_TEAM = {TEAM};
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -270,6 +275,7 @@ pbx = f'''// !$*UTF8*$!
 				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
 				MARKETING_VERSION = 1.0;
+				CODE_SIGN_ENTITLEMENTS = "{NAME}.entitlements";
 				PRODUCT_BUNDLE_IDENTIFIER = "{BUNDLE}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = NO;
@@ -286,7 +292,7 @@ pbx = f'''// !$*UTF8*$!
 			buildSettings = {{
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = {BUILDNO};
 				DEVELOPMENT_TEAM = {TEAM};
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -294,6 +300,7 @@ pbx = f'''// !$*UTF8*$!
 				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
 				MARKETING_VERSION = 1.0;
+				CODE_SIGN_ENTITLEMENTS = "{NAME}.entitlements";
 				PRODUCT_BUNDLE_IDENTIFIER = "{BUNDLE}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = NO;

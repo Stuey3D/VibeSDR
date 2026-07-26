@@ -106,6 +106,15 @@ export class KiwiAdapter implements SDRBackend {
   private sndWs: WebSocket | null = null;
   private wfWs: WebSocket | null = null;
   private keepalive: ReturnType<typeof setInterval> | null = null;
+  // ── Incoming-rate readout ───────────────────────────────────────────────────
+  // ★ Kiwi reported neither KB/s nor fps — the readout was simply blank, exactly
+  // as it was on OWRX. Counts BOTH sockets: Kiwi decodes its audio in JS (IMA
+  // ADPCM on SND), so unlike the natively-decoded backends we can report the true
+  // total the link is carrying, which is the number that decides whether a server
+  // is viable over the phone relay.
+  private rateTimer: ReturnType<typeof setInterval> | null = null;
+  private wfFrames = 0;
+  private rxBytes  = 0;
 
   // RX / tuning state
   private rxBw = KIWI_FULL_BW;           // MSG bandwidth (usually 30 MHz)
@@ -160,6 +169,22 @@ export class KiwiAdapter implements SDRBackend {
     else if (u.startsWith('http://'))  u = 'ws://'  + u.slice(7);
     else if (!/^wss?:\/\//.test(u))    u = 'ws://'  + u;
     return u.replace(/\/ws(\/.*)?$/, '');
+  }
+
+  /** 1 Hz readout. Rung 1 / never settling: the adaptive ladder for Kiwi lives in
+   *  Jr, not here — the phone runs Kiwi unthrottled — so it must not clamp the
+   *  link bars, which take the WORST of gap quality and rung. */
+  private startRateMeter(): void {
+    if (this.rateTimer) return;
+    this.rateTimer = setInterval(() => {
+      const fps = this.wfFrames, kbps = this.rxBytes / 1024;
+      this.wfFrames = 0; this.rxBytes = 0;
+      this.cb.onLinkRate?.(1, false, fps, kbps);
+    }, 1000);
+  }
+  private stopRateMeter(): void {
+    if (this.rateTimer) { clearInterval(this.rateTimer); this.rateTimer = null; }
+    this.wfFrames = 0; this.rxBytes = 0;
   }
 
   private url(stream: 'SND' | 'W/F'): string {
@@ -228,7 +253,12 @@ export class KiwiAdapter implements SDRBackend {
       this.sndWs.onmessage = (e) => {
         try {
           if (typeof e.data === 'string') this.onText(e.data, 'SND');
-          else this.onBinaryFrame(new Uint8Array(e.data as ArrayBuffer), 'SND');
+          else {
+            const u8 = new Uint8Array(e.data as ArrayBuffer);
+            this.rxBytes += u8.length;
+            this.startRateMeter();
+            this.onBinaryFrame(u8, 'SND');
+          }
           this.openWf();
         } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
       };
@@ -281,7 +311,12 @@ export class KiwiAdapter implements SDRBackend {
     this.wfWs.onmessage = (e) => {
       try {
         if (typeof e.data === 'string') this.onText(e.data, 'W/F');
-        else this.onBinaryFrame(new Uint8Array(e.data as ArrayBuffer), 'W/F');
+        else {
+          const u8 = new Uint8Array(e.data as ArrayBuffer);
+          this.rxBytes += u8.length; this.wfFrames++;   // fps = WATERFALL rows
+          this.startRateMeter();
+          this.onBinaryFrame(u8, 'W/F');
+        }
       } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
@@ -420,10 +455,24 @@ export class KiwiAdapter implements SDRBackend {
         // Guard on errorShown: badp arrives on BOTH the SND and W/F sockets, so without this it
         // fired onError (a native Alert) twice — two stacked alerts, the second lost when the
         // first navigates back. One refusal, one message.
-        // badp=1 is a SPECIFIC signal: the sign-in was rejected because this receiver has a
-        // listen PASSWORD set and we connected without one. (Guard on errorShown: badp arrives on
-        // BOTH sockets, and a socket close may also fire — one refusal, one message.)
-        if (val !== '0' && !this.errorShown) { this.errorShown = true; this.cb.onError('This KiwiSDR is password-protected — the owner requires a listen password, which VibeSDR doesn’t have. It’s a private receiver; try another KiwiSDR, or use UberSDR or OpenWebRX.'); }
+        // ★★ DO NOT NAME ONE CAUSE. The comment above lists THREE things badp can
+        // mean and admits the wire cannot tell them apart — yet the old copy
+        // asserted "password-protected" as fact. Disproved directly: the same
+        // receiver was serving Stuart's Mac in Safari, with no password, at the
+        // moment the app was told this (2026-07-26). The likeliest cause there was
+        // a SECOND CONNECTION FROM THE SAME ADDRESS — his Mac already had the
+        // session — which the old wording could never have led anyone to.
+        //
+        // ★ Naming the wrong cause is worse than naming none: it sends the user
+        // hunting for a password that does not exist. List what it can be, put
+        // the checkable one first, and let them rule them out.
+        // (Guard on errorShown: badp arrives on BOTH sockets, and a socket close
+        // may also fire — one refusal, one message.)
+        if (val !== '0' && !this.errorShown) {
+          this.errorShown = true;
+          this.dbg('badp=' + val);
+          this.cb.onError('This KiwiSDR refused the sign-in, without saying why. Usually one of: another device on your network is already using it (KiwiSDRs often allow one listener per address); the owner has set a listen password; or they only allow their own web page. Check you are not connected elsewhere, then try another KiwiSDR.');
+        }
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;
@@ -851,7 +900,14 @@ export class KiwiAdapter implements SDRBackend {
       // Reported as a genuine mid-session loss it reads as "VibeSDR is broken"; it isn't, and no
       // amount of reconnecting will help. Say what it is and send them elsewhere.
       this.errorShown = true;
-      this.cb.onError('This KiwiSDR let us in and then ended the session after a few seconds. That’s the receiver applying a limit — many cap how long each listener gets per day — not a problem with your connection. It should let you back in later. Try another KiwiSDR for now.');
+      // ★ DO NOT ASSERT A CAUSE WE CANNOT SEE. This branch fires when the server
+      // closes with NO reason given, so "you have used your daily allowance" is a
+      // GUESS — and a wrong one when the user has not touched a KiwiSDR in days
+      // and several receivers do it at once (Stuart, 2026-07-26). Naming the
+      // wrong cause sends people off to fix something that was never the problem.
+      // Say what we observed, offer the possibilities, and be clear it is the
+      // receiver's decision rather than their connection.
+      this.cb.onError('This KiwiSDR accepted us and then closed the session after a few seconds, without saying why. That is the receiver’s decision, not a problem with your connection — owners variously cap daily listening time per address, allow only their own web page, or reserve slots. Try another KiwiSDR; this one may let you back in later.');
     } else {
       // Was streaming for a while, then dropped — a genuine mid-session loss.
       this.cb.onServerLost?.();

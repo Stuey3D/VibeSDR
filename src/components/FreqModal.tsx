@@ -70,6 +70,9 @@ interface FreqModalProps {
   userBookmarks?:    UserBookmark[];
   onAddBookmark?:    (name: string, allInstances: boolean) => void;
   onDeleteBookmark?: (bm: UserBookmark) => void;
+  /** Flip a bookmark's iCloud opt-in. Absent (Android, or no iCloud) hides the
+   *  cloud button entirely — a control that cannot work must not be offered. */
+  onToggleBookmarkSync?: (bm: UserBookmark) => void;
   onExportBookmarks?: () => void;
   onImportBookmarks?: (text: string, allInstances: boolean) => string;
   onPickImportFile?:  (allInstances: boolean) => Promise<string>;
@@ -144,7 +147,7 @@ export default function FreqModal({
   vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
   currentMode = 'usb', onSearchTune, searchBookmarks = [], searchBands = [],
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
-  onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
+  onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
 }: FreqModalProps) {
   const hasBookmarks = !!onSearchTune;   // bookmarks mode available
   const { theme: t } = useTheme();
@@ -620,6 +623,19 @@ export default function FreqModal({
                     <Text style={[st.bmName2, { color: t.freqColor }]} numberOfLines={1}>{b.name}</Text>
                     <Text style={[st.bmFreq2, { color: dimText }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
                   </BmBtn>
+                  {!!onToggleBookmarkSync && (
+                    <TouchableOpacity hitSlop={8} onPress={() => onToggleBookmarkSync(b)}
+                      accessibilityLabel={b.synced ? `Stop syncing ${b.name} to iCloud` : `Sync ${b.name} to iCloud`}>
+                      <Text style={[st.bmCloud, { color: b.synced ? t.freqColor : dimText,
+                                                  opacity: b.synced ? 1 : 0.45 }]}>
+                        {/* Distinct GLYPHS, not just a colour: a dim cloud and a
+                            bright one are the same shape, and "is this one
+                            syncing?" is exactly the question the row has to
+                            answer at a glance. */}
+                        {b.synced ? '\u2601\u2713' : '\u2601'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: dimText }]}>✕</Text></TouchableOpacity>
                 </View>
               ))}
@@ -706,4 +722,5 @@ const st = StyleSheet.create({
   bmName2:      { fontSize: 13, fontWeight: '600' },
   bmFreq2:      { fontSize: 10, marginTop: 1 },
   bmDel:        { fontSize: 16, paddingHorizontal: 6 },
+  bmCloud:      { fontSize: 14, paddingHorizontal: 6 },
 });

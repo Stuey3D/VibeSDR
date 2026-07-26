@@ -125,6 +125,47 @@ RECOMMENDED      3 listeners
 
 ---
 
+## 2b. ★★ ADDED 2026-07-26 — two requirements the multi-user work needs
+
+**1. Measure the PER-LISTENER cost, not just per-radio.** Stuart's Pi 5 already runs 2 SDRplays and
+4 RTL-SDRs with WSJT-X decoding, so per-RADIO headroom is proven in the field. What is NOT proven is
+what one extra *listener* costs: a listener is a continuous DDC + filter chain + demodulator + Opus
+encode, and on WFM that is a 200 kHz channel at 48 kHz stereo — far heavier than a 3 kHz FT8 channel
+that decodes once a cycle. ★ The expensive spectrum work is SHARED (one FFT per radio, then a cheap
+~1024-bin resample per view), so the answer is dominated by AUDIO. The single number that sizes
+multi-user is: **how many simultaneous WFM listeners can one Pi 5 radio carry?**
+
+Bandwidth is no longer the binding constraint: ~27 KB/s per listener (19 spectrum + 8 Opus audio)
+means a 20 Mbps uplink is ~90 listeners before the network cares. CPU will bite long first — which
+is the better problem, and was NOT true before 2026-07-26 when a listener cost ~200 KB/s.
+
+**1b. ★ THE FIELD DATAPOINT WE ALREADY HAVE (Stuart, 2026-07-26).** A **Pi 5** carried **10 browsers
+on one OWRX profile** — one shared FFT plus ten independent audio demod chains — **while the other
+radios kept decoding in the background** (2 SDRplays + 4 RTL-SDRs on WSJT-X). That is the VibeServer
+multi-user shape under a realistic background load, so the architecture is already demonstrated at
+~10 listeners on the target hardware. ★ The benchmark's job is therefore to find where it ACTUALLY
+breaks and on which mode, not to establish whether 10 is possible.
+
+★ And VibeServer should carry those same 10 for roughly a QUARTER of the bandwidth: OWRX force-feeds
+every client the whole profile FFT (~80 KB/s each, ~1 MB/s for ten), where VibeServer shares one FFT
+and sends a ~1024-bin per-view resample (~19 KB/s each, ~270 KB/s for ten). OWRX's spectrum cost
+multiplies per listener; VibeServer's does not.
+
+**2. ★★ MEASURE BOTH ENDS, AND COMPARE REQUESTED WITH ACHIEVED.** A benchmark that reports only what
+the server was CONFIGURED for is worse than none. On 2026-07-26 the Mac reported "5 fps" while
+actually emitting 2.9, because `fftRate` is the requested value and only `specBytesPerSec` is
+measured — and a client-sent `set_rate` divisor was halving the output at SEND time, where nothing
+upstream could see it. Hours were lost to it. The benchmark must therefore report, per run:
+
+- requested rate vs **achieved** rate (frames AND bytes), at the server;
+- the same at the client, so a divergence localises the loss;
+- time the emit thread spends BLOCKED in `send()` — the signature of a slow client throttling the
+  server invisibly;
+- the actual frame size, which exposes the bins in play.
+
+★ A single A/B — a loopback probe against the real client, on ONE running instance — localised in
+one step what a whole afternoon of reasoning could not. Build that comparison INTO the benchmark.
+
 ## 3. Where it fits
 
 - **Standalone VibeServer** — Stuart: *"a useful metric going forward for the standalone VibeServer."*

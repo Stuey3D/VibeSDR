@@ -1213,13 +1213,53 @@ struct ContentView: View {
   }
 
   /// What the watch is connected THROUGH. `.other` (the iPhone relay) → iphone; see transportFor.
+  ///
+  /// ★ ONLY THE iPHONE GLYPH CHANGES COLOUR. The watch's own Wi-Fi and cellular
+  /// have ample headroom for anything a server can send, and we have no way of
+  /// knowing what they are capable of anyway — the server glyph already reports
+  /// quality there. The Bluetooth relay is the one link that runs out.
+  /// `link.relayLoad` is 0 on every other transport, which enforces that here.
+  ///
+  /// ★★ WHAT GREEN ACTUALLY PROMISES: "this much data is comfortable for a
+  /// Bluetooth link IN GOOD CONDITIONS — phone near the watch." It is a
+  /// throughput reading against a fixed ceiling, and the real ceiling collapses
+  /// as you walk away from the phone. So a struggling link at the edge of range
+  /// can sit under 20 KB/s and stay green on demand alone; that case is caught
+  /// by folding reconnects into relayLoad instead (see SpikeLink), because a
+  /// dropped socket is evidence no byte counter can produce.
   @ViewBuilder private var methodGlyph: some View {
     switch link.transport {
-    case .iphone:   Image(systemName: "iphone")
+    case .iphone:
+      Image(systemName: "iphone")
+        .foregroundStyle(relayTint)
+        // Past the limit it BREATHES — a colour alone is easy to miss on a
+        // wrist, and this is the moment the user needs to act (switch to the
+        // watch's own Wi-Fi). Reuses the shared `pulse`, so there is still only
+        // one breathing rhythm on screen.
+        .opacity(link.relayLoad >= 1 ? pulse : 1)
+        // The EWMA behind relayLoad already smooths the meter; this just keeps
+        // the colour itself from stepping between published values.
+        .animation(.easeInOut(duration: 0.4), value: link.relayLoad)
     case .wifi:     Image(systemName: "wifi")
     case .cellular: Image(systemName: "antenna.radiowaves.left.and.right")
     case .none:     Image(systemName: "xmark").foregroundStyle(.red)
     }
+  }
+
+  /// A CONTINUOUS green→red fade as the relay approaches its ceiling.
+  ///
+  /// ★ Green at rest, not the usual white. An untinted glyph that snapped to
+  /// green the instant it crossed 20 KB/s would read as a state CHANGE at the
+  /// very moment we want to say "still fine, but climbing" — the scale has to
+  /// start somewhere and be continuous, or the first step of the fade is the
+  /// loudest thing on it.
+  ///
+  /// Linear hue 0.33→0.0 over 20→30 KB/s gives the intended progression:
+  /// 21 yellow-green · 25-26 amber · 28-29 nearly red · 30 red and breathing.
+  /// Only ever seen on the iPhone relay — relayLoad is 0 on wifi/cellular.
+  private var relayTint: some ShapeStyle {
+    let l = max(0, min(1, link.relayLoad))
+    return AnyShapeStyle(Color(hue: 0.33 * (1 - l), saturation: 0.95, brightness: 1.0))
   }
 
   /// How WELL the server link is holding — the phone app's instance triangle, tinted, X when down.

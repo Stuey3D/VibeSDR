@@ -124,13 +124,17 @@ import {
 } from '../services/stations';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
-  exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, type UserBookmark,
+  exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, setBookmarkSynced,
+  type UserBookmark,
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
 import { countryForCallsign } from '../services/callsignCountry';
+import { onCollectionChanged, requestSync } from '../services/cloudSync';
+import { kvsAvailable } from '../services/cloudKvs';
+import { markServerPrefsReset, setActiveSyncServer } from '../services/perServerSync';
 import * as DocumentPicker from 'expo-document-picker';
 // SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
 import * as FileSystem from 'expo-file-system/legacy';
@@ -1139,6 +1143,41 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Meter values bypass React state entirely (full-tree re-render per update
   // was ~a third of all JS time in the CPU profile) — leaf widgets subscribe.
   const meterBus    = useRef(createMeterBus());
+  // ── Link bars ───────────────────────────────────────────────────────────────
+  // Three independent signals, and the bars show the WORST: how punctually frames
+  // arrive (gap quality), the raw network health, and how far the rate controller
+  // has had to back off. Any one of them being bad IS a bad link.
+  // ★★ AUDIO BYTES BELONG IN THE READOUT. The client's own kbps counts SPECTRUM
+  // only, because on most backends audio is decoded natively and JS never sees
+  // it — so the meter read 12 KB/s on a link carrying 198. VibeServer's audio
+  // socket IS in JS here, so count it and report the true total.
+  const audioBytes  = useRef(0);
+  const gapLinkRef  = useRef<0|1|2|3>(0);
+  const rungBars    = useRef<1|2|3>(3);
+  const settlingRef = useRef(false);
+  const settleAnim  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const effLink = useCallback((): 0|1|2|3 => {
+    if (gapLinkRef.current === 0) return 0;      // nothing arriving = disconnected
+    return Math.min(gapLinkRef.current, netLinkRef.current, rungBars.current) as 0|1|2|3;
+  }, []);
+
+  // ★ SETTLING = "still working out what this link will carry", and it must LOOK
+  // like a question, not an answer. Until the controller has decided, a settled
+  // bar count would be a guess dressed as a measurement — so the bars sweep
+  // 1-2-3-3-2-1 while it decides, then land on the truth. Same idea as a Wi-Fi
+  // glyph cycling while it associates: the animation says "asking", not "bad".
+  useEffect(() => {
+    const SWEEP: (1|2|3)[] = [1, 2, 3, 3, 2, 1];
+    let i = 0;
+    const t = setInterval(() => {
+      if (!settlingRef.current) return;
+      const b = meterBus.current;
+      if (b.value.link === 0) return;            // disconnected wins outright
+      b.emit({ ...b.value, link: SWEEP[i++ % SWEEP.length] });
+    }, 300);
+    settleAnim.current = t;
+    return () => clearInterval(t);
+  }, []);
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
   // SNR from radiod's channel status (basebandPower − noiseDensity), pushed by
   // native per audio packet. This is the demodulator's own measurement (zoom-
@@ -1169,8 +1208,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Save scope: 'server' when a per-instance override exists (saved via the
   // display panel's THIS SERVER button) — auto-save then targets that key so
   // later tweaks stick to this instance instead of silently reverting.
+  // Tell the sync engine which server is on screen, so it does not push a
+  // downloaded prefs blob underneath a screen that is about to write its own.
+  useEffect(() => {
+    setActiveSyncServer(isLocal ? null : baseUrl);
+    return () => setActiveSyncServer(null);
+  }, [baseUrl, isLocal]);
+
   const prefsTarget = useRef<'global' | 'server'>('global');
   const latestPrefsJson = useRef('');
+  // iCloud sync stamps every prefs blob with the moment it was written: colours
+  // are a preference, not a collection, so the newest copy wins outright.
+  // Injected at WRITE time rather than baked into latestPrefsJson, which the
+  // explicit save buttons reuse and would otherwise carry a stale timestamp.
+  const stampPrefs = (json: string) => {
+    try { return JSON.stringify({ ...JSON.parse(json), at: Date.now() }); }
+    catch { return json; }
+  };
   useEffect(() => {
     (async () => {
       let j: string | null = null;
@@ -1223,7 +1277,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     const key = prefsTarget.current === 'server'
       ? 'lsv_display_prefs:' + baseUrl : 'lsv_display_prefs';
     const t = setTimeout(() => {
-      AsyncStorage.setItem(key, json).catch(() => {});
+      AsyncStorage.setItem(key, stampPrefs(json)).catch(() => {});
+      requestSync();
     }, 500);
     return () => clearTimeout(t);
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
@@ -1235,6 +1290,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // override; THIS SERVER = per-instance override; GLOBAL = the shared blob.
   const onDispReset = useCallback(() => {
     AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
+    void markServerPrefsReset(baseUrl);
     prefsTarget.current = 'global';
     setDbMin(-120); setDbMax(-20); setColormap('Jet');
     setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
@@ -1248,16 +1304,19 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onDispSaveServer = useCallback(() => {
     prefsTarget.current = 'server';
-    AsyncStorage.setItem('lsv_display_prefs:' + baseUrl, latestPrefsJson.current)
+    AsyncStorage.setItem('lsv_display_prefs:' + baseUrl, stampPrefs(latestPrefsJson.current))
       .catch(() => {});
+    requestSync();
     Alert.alert('Saved', 'Display settings saved for this server.');
   }, [baseUrl]);
 
   const onDispSaveGlobal = useCallback(() => {
     prefsTarget.current = 'global';
     AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
-    AsyncStorage.setItem('lsv_display_prefs', latestPrefsJson.current)
+    void markServerPrefsReset(baseUrl);
+    AsyncStorage.setItem('lsv_display_prefs', stampPrefs(latestPrefsJson.current))
       .catch(() => {});
+    requestSync();
     Alert.alert('Saved', 'Display settings saved as the global default.');
   }, [baseUrl]);
 
@@ -2130,10 +2189,26 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
       // Incoming spectrum data-rate + frame-rate → the connection meter's "NNk/s · NNfps" readout.
-      onLinkRate: (_rung: number, _settling: boolean, fps: number, kbps: number) => {
+      onLinkRate: (rung: number, settling: boolean, fps: number, kbps: number) => {
         if (destroyed.current) return;
         const b = meterBus.current;
-        b.emit({ ...b.value, fps, kbps });
+        // ★★ THE RUNG IS PART OF LINK HEALTH, and the phone was throwing it away.
+        //
+        // Once the controller throttles, frames arrive punctually again — so every
+        // gap-based measure reads GREEN while the user watches a slower waterfall.
+        // The bars must show what the link can actually SUSTAIN: rung 1 = 3 bars
+        // green, rung 2 = 2 yellow, rung 3 = 1 red. (The watch has always done
+        // this; it was never carried across.)
+        //
+        // ★ adaptiveRung, NOT the requested rung: a rate the USER pinned (Full /
+        // Low Data) is a preference, not a symptom, and must never show red.
+        rungBars.current = Math.max(1, 4 - Math.max(1, rung)) as 1|2|3;
+        settlingRef.current = settling;
+        // Spectrum (from the client) + audio (counted here) = what the LINK is
+        // actually carrying, which is the only figure worth showing.
+        const audioKb = audioBytes.current / 1024;
+        audioBytes.current = 0;
+        b.emit({ ...b.value, fps, kbps: kbps + audioKb, link: effLink() });
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onServerLost: () => {
@@ -2165,7 +2240,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // On the rtl_tcp path the backend's FFT-timing quality is measured AFTER the
         // jitter buffer, so it reads green while the network is starving the buffer.
         // Clamp it with the real network health — a bad link can only make it worse.
-        const eff = Math.min(q, netLinkRef.current) as 0|1|2|3;
+        gapLinkRef.current = q;
+        const eff = effLink();
         b.emit({ ...b.value, link: eff });
         // The PHONE↔SERVER hop's health, sent to the wrist so its warning pill can
         // name which of the two hops is rough rather than shrugging "LINK ROUGH".
@@ -2472,6 +2548,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.
     if (route.params.authSuffix) (c as { setAuthSuffix?: (s: string) => void }).setAuthSuffix?.(route.params.authSuffix);
+    // ★ Declare the backend BEFORE connecting. Both the local shim and the LAN
+    // shim (VibeServer) speak fftRate and use the 20/10/5 ladder; waiting for
+    // hwinfo to reveal that is a race the controller always lost. See
+    // UberSDRClient.markVibeServer().
+    if (isLocal) (c as { markVibeServer?: () => void }).markVibeServer?.();
     // QoL: restore the last frequency/mode used on THIS instance before
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.
@@ -2652,7 +2733,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     const p = pendingTune.current;
     if (!p) return;
     pendingTune.current = null;
-    AsyncStorage.setItem(p.key, JSON.stringify({ frequency: p.frequency, mode: p.mode })).catch(() => {});
+    // `at` is for iCloud sync (newest wins per server). Readers ignore unknown
+    // fields, so a blob written before sync existed simply has no timestamp.
+    AsyncStorage.setItem(p.key, JSON.stringify({ frequency: p.frequency, mode: p.mode, at: Date.now() }))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -2878,7 +2962,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Pause the controller so it stops re-asserting its rung, THEN drop to the idle rate — else
         // adaptive/Low Data would win the tick and hold the full rate under the powersave pill.
         (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(true);
-        client.current?.setRate(IDLE_DIVISOR);
+        // Absolute 5 fps, not a divisor — see setPowersaveRate(). A divisor
+        // compounded with the controller's rung and bottomed out at ~1 fps.
+        (client.current as unknown as { setPowersaveRate?: () => void })?.setPowersaveRate?.();
         watchProvider.setPowersave(true);   // → Buddy 'powersave' pill
         setPowersaveUi(true);               // → phone pill
       }
@@ -3941,6 +4027,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { cancelled = true; };
   }, [baseUrl]);
 
+  // ★ A bookmark arriving from Jr lands in storage while this screen is already
+  // mounted, and the list above only ever loads at mount — so without this the
+  // sync works perfectly and the bookmark is invisible until a remount, which
+  // is indistinguishable from a sync that never happened.
+  useEffect(() => onCollectionChanged((name: string) => {
+    if (name === 'bookmarks') {
+      loadUserBookmarks().then(setUserBookmarks).catch(() => {});
+    }
+  }), []);
+
   // EiBi fallback set — loaded when enabled, refreshed as the schedule rolls.
   // Used only when the backend gave us no server bookmarks (see the merge).
   useEffect(() => {
@@ -4031,6 +4127,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     persistUserBookmarks(userBookmarks.filter(
       (b: UserBookmark) => !(b.name === bm.name && b.frequency === bm.frequency && b.scope === bm.scope),
     ));
+  }, [userBookmarks, persistUserBookmarks]);
+
+  // Hide the cloud button entirely where iCloud cannot work (Android, or a
+  // device signed out of iCloud). A control that silently does nothing reads as
+  // "sync is broken", which is worse than not offering it.
+  const [icloudOn, setIcloudOn] = useState(false);
+  useEffect(() => { kvsAvailable().then(setIcloudOn).catch(() => {}); }, []);
+
+  // ★ The per-bookmark iCloud opt-in. Deliberately explicit: everything the
+  // phone saves stays local until the user marks it, which is what keeps Jr's
+  // list short enough to be usable on a 1-inch screen.
+  const onToggleBookmarkSync = useCallback((bm: UserBookmark) => {
+    persistUserBookmarks(setBookmarkSynced(userBookmarks, bm, !bm.synced));
+    requestSync();
   }, [userBookmarks, persistUserBookmarks]);
 
   const onExportBookmarks = useCallback(() => {
@@ -4723,7 +4833,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Idle power-save: the 30s saver has slowed the spectrum for battery. Tap/tune wakes
           it (markInteract). Non-interactive so it never eats a touch on the waterfall. */}
       {powersaveUi ? (
-        <View style={[styles.powersavePill, { bottom: pillBottom + 8 }]} pointerEvents="none">
+        // ★ CLEAR THE VTS BAR. Both sat at exactly `pillBottom + 8`, so whenever
+        // the VTS bar was on screen it covered the powersave pill completely —
+        // the throttle was active and its ONLY explanation was invisible. That
+        // cost a long debugging session tonight: the rate kept dropping for
+        // "no reason" because the thing saying why was underneath something else.
+        // VTSBar already reports its height, so stack on top of it.
+        <View style={[styles.powersavePill,
+                      { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) }]}
+              pointerEvents="none">
           <Text style={styles.powersavePillText}>
             ◐  POWER SAVE · spectrum slowed — touch to wake
           </Text>
@@ -5530,6 +5648,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         userBookmarks={visibleBookmarks}
         onAddBookmark={onAddBookmark}
         onDeleteBookmark={onDeleteBookmark}
+        onToggleBookmarkSync={icloudOn ? onToggleBookmarkSync : undefined}
         onExportBookmarks={onExportBookmarks}
         onImportBookmarks={onImportBookmarks}
         onPickImportFile={onPickImportFile}
@@ -5593,6 +5712,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           host={route.params.localHost}
           authSuffix={route.params.authSuffix}
           sessionId={sessionUuid}
+          onBytes={(n: number) => { audioBytes.current += n; }}
         />
       ) : null}
     </View>
