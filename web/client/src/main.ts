@@ -4187,7 +4187,8 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   const n = caps?.lnaStates ?? 10;
   const lna = $<HTMLInputElement>('rspLna');
   lna.max = String(n - 1);
-  lna.value = String(Math.floor((n - 1) / 2));    // mid gain, never wide open
+  if (typeof prefs()['rsp_lna'] !== 'number')
+    lna.value = String(Math.floor((n - 1) / 2));    // mid gain by default, never wide open
   const gr = $<HTMLInputElement>('rspIfGr');
   gr.min = String(caps?.ifGrMin ?? 20);
   gr.max = String(caps?.ifGrMax ?? 59);
@@ -4195,6 +4196,9 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   $<HTMLButtonElement>('rspDabNotch').hidden = !caps?.dabNotch;
   $<HTMLButtonElement>('rspBiasT').hidden    = !caps?.biasT;
   renderRspVals();
+  // ★ The radio has just told us what it is — which is also the moment to tell it what the
+  // user last chose. Covers a server restart, a reconnect, and a fresh page load alike.
+  pushAllRspSettings();
 }
 
 function rspSend(msg: Record<string, unknown>) {
@@ -4236,27 +4240,82 @@ function tweenIfGr(target: number) {
   ifGrTween = requestAnimationFrame(step);
 }
 
+/** ★★ RSP settings are REMEMBERED and RE-SENT on connect.
+ *
+ *  They were UI-only, so a server restart brought the radio back on its defaults while the
+ *  panel still showed the positions you had chosen — the controls and the hardware quietly
+ *  disagreeing, which is worse than losing them outright because nothing looks wrong
+ *  (Stuart, 2026-07-26: "all the gains revert", "resets back to -60 whilst showing -30").
+ *  ★ And the UI defaults now MATCH what the server opens with. A control whose resting
+ *  position differs from the radio's is lying before anyone has touched it.
+ */
+const RSP_PREFS = {
+  lna: 'rspLna', ifgr: 'rspIfGr', agcset: 'rspAgcSet',
+} as const;
+const RSP_TOGGLES = {
+  ifagc: 'rspIfAgc', rfnotch: 'rspRfNotch', dabnotch: 'rspDabNotch', biast: 'rspBiasT',
+} as const;
+
+/** Push every current RSP setting to the server. Called whenever a radio announces itself,
+ *  so a reconnect or a server restart restores what the user chose. */
+function pushAllRspSettings() {
+  if (radioCaps?.driver !== 'sdrplay') return;
+  const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  rspSend({
+    lna:      lnaMax - Number($<HTMLInputElement>('rspLna').value),
+    agcset:   Number($<HTMLInputElement>('rspAgcSet').value),
+    rfnotch:  $('rspRfNotch').classList.contains('on') ? 1 : 0,
+    dabnotch: $('rspDabNotch').classList.contains('on') ? 1 : 0,
+    biast:    $('rspBiasT').classList.contains('on') ? 1 : 0,
+  });
+  // ★ AGC last, and the IF reduction only when it is OFF — the server refuses a manual
+  // IFGR while the AGC owns the register, so sending them the other way round would drop
+  // the value silently.
+  const agcOn = $('rspIfAgc').classList.contains('on');
+  rspSend({ ifagc: agcOn ? 1 : 0 });
+  if (!agcOn) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+}
+
 function initRspControls() {
+  const p = prefs();
+  // Restore before wiring, so nothing fires a send with a stale value.
+  for (const [key, id] of Object.entries(RSP_PREFS)) {
+    const v = p[`rsp_${key}`];
+    if (typeof v === 'number') $<HTMLInputElement>(id).value = String(v);
+  }
+  for (const [key, id] of Object.entries(RSP_TOGGLES)) {
+    const v = p[`rsp_${key}`];
+    const on = typeof v === 'boolean' ? v : key === 'ifagc';   // AGC defaults on
+    $(id).classList.toggle('on', on);
+  }
+
   const lna = $<HTMLInputElement>('rspLna');
   const gr  = $<HTMLInputElement>('rspIfGr');
   lna.oninput = () => {
     renderRspVals();
     const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
     rspSend({ lna: lnaMax - Number(lna.value) });   // slider is gain, hardware wants state
+    savePref('rsp_lna', Number(lna.value));
   };
-  gr.oninput  = () => { renderRspVals(); rspSend({ ifgr: Number(gr.value) }); };
+  gr.oninput  = () => {
+    renderRspVals(); rspSend({ ifgr: Number(gr.value) }); savePref('rsp_ifgr', Number(gr.value));
+  };
   const sp = $<HTMLInputElement>('rspAgcSet');
-  sp.oninput = () => { renderRspVals(); rspSend({ agcset: Number(sp.value) }); };
-  const toggle = (id: string, key: string, initial = false) => {
-    const b = $<HTMLButtonElement>(id);
-    let on = initial;
-    b.classList.toggle('on', on);
-    b.onclick = () => { on = !on; b.classList.toggle('on', on); rspSend({ [key]: on ? 1 : 0 }); };
+  sp.oninput = () => {
+    renderRspVals(); rspSend({ agcset: Number(sp.value) }); savePref('rsp_agcset', Number(sp.value));
   };
-  toggle('rspIfAgc', 'ifagc', true);      // AGC on by default — see setGainTenthDb
-  toggle('rspRfNotch', 'rfnotch');
-  toggle('rspDabNotch', 'dabnotch');
-  toggle('rspBiasT', 'biast');
+  const toggle = (id: string, key: string) => {
+    const b = $<HTMLButtonElement>(id);
+    b.onclick = () => {
+      const on = !b.classList.contains('on');
+      b.classList.toggle('on', on);
+      rspSend({ [key]: on ? 1 : 0 });
+      savePref(`rsp_${key}`, on);
+      // Turning AGC OFF hands the IF reduction back, so send the slider's value with it.
+      if (key === 'ifagc' && !on) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+    };
+  };
+  for (const [key, id] of Object.entries(RSP_TOGGLES)) toggle(id, key);
 }
 
 function initWaterfallInput() {

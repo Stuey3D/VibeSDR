@@ -411,7 +411,20 @@ void SdrplaySource::setIfGainReduction(int gRdB) {
 
 void SdrplaySource::setIfAgc(bool on) {
     if (!impl_->params || !impl_->params->rxChannelA) return;
-    auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+    auto* ch = impl_->params->rxChannelA;
+    auto& agc = ch->ctrlParams.agc;
+    // ★★ SEED gRdB BEFORE ENABLING. The loop starts from whatever the IF reduction register
+    // holds, and if it has never been written the AGC does not engage — it sat inert with a
+    // huge apparent gain until the user disabled AGC, moved the IF slider (which writes
+    // gRdB) and re-enabled it. That workaround IS the diagnosis: write the register first,
+    // then hand it over (Stuart, 2026-07-26).
+    // ★ Order matters and must not be reversed: writing gRdB AFTER enabling is refused,
+    // because the AGC owns it by then.
+    if (on && agc.enable == sdrplay_api_AGC_DISABLE) {
+        ch->tunerParams.gain.gRdB = 40;      // mid reduction — a sane place for the loop to start
+        if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    }
     agc.enable = on ? sdrplay_api_AGC_50HZ : sdrplay_api_AGC_DISABLE;
     // ★ The setpoint is set separately (setIfAgcSetPoint) and NOT forced here — it is a
     // user-facing target, so toggling the AGC must not quietly discard their choice.
