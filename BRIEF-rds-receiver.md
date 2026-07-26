@@ -274,3 +274,26 @@ Consequences:
 - The decoder box is a natural home for the constellation + EVM, the BER and the subcarrier
   level: diagnostics belong where someone is deliberately looking at signal quality, not on
   the station bar where they would be noise to an ordinary listener.
+
+### ★★ VTS BAR vs DECODER BOX — no duplication (Stuart, 2026-07-26)
+
+**The station bar identifies; the decoder box diagnoses.**
+
+- **VTS bar keeps: the PI code beside the name**, and nothing else new. PI is
+  IDENTIFICATION — it is what the station is — so it belongs where the name is, and it is the
+  one field that survives when the name cannot be assembled. SHIPPED.
+- **VTS bar loses: BER and subcarrier level.** They were shown there while they were being
+  used to diagnose the decoder, and they do not belong: a DXer wants them, an ordinary
+  listener reads them as clutter beside a station name. ★ Kept in the chip's TOOLTIP, so the
+  measurement is a hover away — it cost an entire evening to be able to see these at all, and
+  they should never be more than a hover from anyone debugging a station.
+- **★★ WHEN THE ADVANCED RDS DECODER IS OPEN, HIDE THE VTS BAR ENTIRELY** and show everything
+  in the decoder box — name, PI, RadioText, PTY/TP/TA/MS, AF, plus the diagnostics. No point
+  having the same data twice, and the bar is the smaller, more compromised presentation of it.
+  ★ It also gives the decoder box the screen space back: it is the surface the user has
+  deliberately chosen, so it should be the complete one, not a supplement to a strip that is
+  already saying half the same thing.
+- The bar's other duties (bookmark/EiBi fallback names, band label, the media card) are
+  unaffected and continue while the decoder is closed. ★ Note the media card reads the VTS
+  name — hiding the bar must not stop PUBLISHING it, only stop DRAWING it. Same trap as the
+  cleared-textContent bug: hiding an element is not the same as having no data.

@@ -796,11 +796,10 @@ function updateVts() {
     flag = isoToFlag(rdsIso);
   }
 
-  // Nothing known here — hide it rather than show an empty bar. ★ EXCEPT when the RDS
-  // decoder has a block-error figure: that means it is synced and working on this carrier,
-  // which is worth saying out loud even with no name and no PI yet. Hiding it there is
-  // what made "no RDS" and "RDS struggling" look identical from the outside.
-  if (!name && rdsBer < 0 && rdsSig <= -90) {
+  // Nothing known here — hide it rather than show an empty bar. ★ A confirmed PI counts as
+  // known (see the fallback above); a block-error figure does NOT. Diagnostics belong in the
+  // Advanced RDS decoder, not on the bar an ordinary listener reads (Stuart, 2026-07-26).
+  if (!name) {
     vts.classList.remove('show', 'on');
     // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
     // element when there is no RDS name, so a stale value left in the DOM came back as
@@ -855,22 +854,20 @@ function updateVts() {
   // Without that, a blank box means both and neither.
   const piEl = $('vtsPi');
   const piTxt = piHex(rdsPi);
-  // ★ THE SUBCARRIER LEVEL, always, even when nothing decodes. It is the one number that
-  // separates "the 57 kHz subcarrier is not reaching us" from "it is reaching us and we
-  // are wasting it" — opposite faults, opposite fixes, and every other reading we have
-  // looks identical for both.
-  const sigTxt = rdsSig > -90 ? ` · ${rdsSig.toFixed(0)}dB` : '';
-  const chip = piTxt && rdsBer >= 0 ? `${piTxt} · ${rdsBer}%${sigTxt}`
-             : piTxt                ? `${piTxt}${sigTxt}`
-             : rdsBer >= 0          ? `RDS ${rdsBer}%${sigTxt}`
-             : sigTxt               ? `RDS${sigTxt}`
-             : '';
-  piEl.textContent = chip;
-  piEl.title = rdsBer >= 0
-    ? `${piTxt ? 'PI ' + piTxt + ' — ' : ''}RDS block error rate ${rdsBer}% `
-      + '(before correction, last 12 groups)'
-    : `PI ${piTxt}`;
-  piEl.classList.toggle('show', !!chip);
+  // ★★ THE CHIP IS THE PI CODE, AND ONLY THE PI CODE. Block error rate and subcarrier level
+  // were shown here while they were being used to diagnose the decoder, and they do not
+  // belong: an FM-DXer wants them, an ordinary listener reads them as clutter beside a
+  // station name. They live in the Advanced RDS decoder, where someone is deliberately
+  // examining signal quality (Stuart, 2026-07-26).
+  // ★ Kept in the TOOLTIP, so the measurement is never further away than a hover — it cost a
+  // whole evening to be able to see these at all.
+  piEl.textContent = piTxt;
+  const diag = [
+    rdsBer >= 0  ? `block error rate ${rdsBer}% (before correction, last 12 groups)` : '',
+    rdsSig > -90 ? `subcarrier ${rdsSig.toFixed(0)} dB vs pilot` : '',
+  ].filter(Boolean).join(' · ');
+  piEl.title = `PI ${piTxt}${diag ? ' — ' + diag : ''}`;
+  piEl.classList.toggle('show', !!piTxt);
   const srcEl = $('vtsSrc');
   // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
   // textContent would print the markup as literal text.
