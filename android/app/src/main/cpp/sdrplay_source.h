@@ -63,6 +63,22 @@ public:
     void setIfGainReduction(int gRdB);
     /** API-side AGC on the IF stage. While enabled the IF reduction cannot be set by hand. */
     void setIfAgc(bool on);
+    /** ★★ THE AGC's TARGET LEVEL in dBfs, which SDRconnect exposes and which decides how
+     *  hard the AGC drives. It is a TARGET, not a limit: -60 aims for a quiet output and so
+     *  applies LESS gain, -20 aims loud and applies MORE.
+     *  ★ Getting that backwards is easy and I did: raising it from the API's -60 default to
+     *  -30 made the AGC drive harder, which is precisely the "IF auto gain is huge" that
+     *  followed (Stuart, 2026-07-26). The right value depends on band and antenna, so it
+     *  belongs to the user rather than to a constant of mine. */
+    void setIfAgcSetPoint(int dBfs);
+    /** ★★ THE AGC'S LOOP DYNAMICS, which the API defaults to ZERO and almost nobody sets.
+     *  SDRconnect uses attack 500 ms, decay 500 ms, decay delay 200 ms, decay threshold 5 dB
+     *  — and an AGC with no time constants has no loop behaviour at all: it slams straight to
+     *  whatever the instantaneous level suggests, which is what "IF auto gain is huge" and
+     *  "auto overloads but manual is fine" actually look like from outside.
+     *  ★ This is very likely the real bodge that SoapySDRPlay3 and OWRX inherit — not the
+     *  setpoint, which SDRconnect also puts at -30 dBFS (Stuart, 2026-07-26). */
+    void setIfAgcDynamics(int attackMs, int decayMs, int decayDelayMs, int decayThresholdDb);
     /** RSP1A/1B/2/duo/dx: broadcast FM notch. ★ Wanted ON for HF or airband, where a strong
      *  local FM transmitter is what overloads the front end — and OFF when the FM band is
      *  what you came to listen to. */
@@ -76,6 +92,16 @@ public:
     bool hasDabNotch() const;
     bool hasBiasT() const;
     std::string model() const;
+    /** ★★ TOTAL SYSTEM GAIN in dB — the single number SDRconnect shows above its two
+     *  sliders, and the thing that makes them comprehensible. LNA state and IF reduction are
+     *  each meaningless alone; what a user actually wants to know is what they have ended up
+     *  with. The API computes it for us (gainVals.curr), so not showing it was simply an
+     *  omission (Stuart, 2026-07-26). 0 = unknown. */
+    float systemGainDb() const;
+    /** What the IF reduction currently IS — the AGC moves it, so a slider position is not
+     *  the truth while AGC is on. */
+    int currentIfGr() const;
+    int currentLnaState() const;
     /** The API's own bandwidth choice for a sample rate, following SoapySDRPlay3's mapping. */
     static int bandwidthKHzForRate(double sampleRateHz);
 
@@ -90,6 +116,13 @@ public:
     /** Set when the device disappears — the shim's watchdog polls this exactly as it does
      *  for a dongle that has been unplugged. */
     bool deviceLost() const { return lost_; }
+    /** ★★ THE RADIO'S OWN OVERLOAD FLAG. The API raises a PowerOverloadChange event when the
+     *  ADC is being driven into clipping — so we do not have to INFER overload from the
+     *  spectrum, as the auto-gain brief proposes for a dongle: on an RSP the hardware simply
+     *  says so. SDRconnect shows it as a badge, and tonight established that RF overload is
+     *  precisely what destroys RDS, so it is worth shouting about (Stuart, 2026-07-26).
+     *  ★ The event MUST be acknowledged or the API stops sending them. */
+    bool overloaded() const { return overload_; }
 
 private:
     struct Impl;
@@ -98,6 +131,7 @@ private:
     bool open_ = false;
     bool lost_ = false;
     bool paused_ = false;
+    bool overload_ = false;
 };
 
 }  // namespace vibe

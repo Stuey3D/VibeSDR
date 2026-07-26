@@ -111,6 +111,8 @@ export interface SpectrumCallbacks {
   onRds?:    (meta: RdsMeta) => void;
   /** Advanced RDS payload — only sent while the RDS decoder is attached. */
   onRdsX?:   (x: RdsExt) => void;
+  /** Live RSP gain state — the AGC moves the IF reduction, so slider positions are not it. */
+  onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   /** The server is already serving someone else — do not retry. */
   onBusy?: () => void;
@@ -318,6 +320,10 @@ export class SpectrumClient {
           rdsDev: Number(msg.rdsDev ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
         });
+        break;
+      case 'rspstat':
+        this.cb.onRspStat?.(Number(msg.sysGain) || 0, Number(msg.lna) || 0, Number(msg.ifgr) || 0,
+                            Number(msg.overload) === 1);
         break;
       case 'pong':
         if (this.lastPingAt) this.cb.onRtt?.(performance.now() - this.lastPingAt);

@@ -287,6 +287,20 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       applyRateOptions();
       populateHw();
     },
+    onRspStat: (sys, lna, ifgr, overload) => {
+      // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
+      // dongle where it has to be guessed from the spectrum.
+      $<HTMLElement>('rspOverload').hidden = !overload;
+      // ★ Show what the radio IS doing, not what the sliders were last set to — with AGC on,
+      // the IF reduction is the AGC's to move, and a stale slider reading would be a lie.
+      $('rspSysGain').textContent = sys > 0 ? `${sys.toFixed(1)} dB` : '—';
+      const gr = $<HTMLInputElement>('rspIfGr');
+      if ($<HTMLButtonElement>('rspIfAgc').classList.contains('on')) {
+        gr.value = String(ifgr);
+        $('rspIfGrVal').textContent = `${ifgr} dB · AGC`;
+      }
+      void lna;
+    },
     onRdsX: (x) => {
       const now = Date.now();
       if (grpPrev.at && x.gtot >= grpPrev.tot) {
@@ -4180,6 +4194,9 @@ function renderRspVals() {
   // ★ Say which END is more gain, every time. "LNA 3" means nothing on its own.
   $('rspLnaVal').textContent = `${lna}/${n - 1}${lna === 0 ? ' · max RF' : lna === n - 1 ? ' · min RF' : ''}`;
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
+  const sp = Number($<HTMLInputElement>('rspAgcSet').value);
+  // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
+  $('rspAgcSetVal').textContent = `${sp} dBfs${sp >= -25 ? ' · drives hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
 
 function initRspControls() {
@@ -4187,6 +4204,8 @@ function initRspControls() {
   const gr  = $<HTMLInputElement>('rspIfGr');
   lna.oninput = () => { renderRspVals(); rspSend({ lna: Number(lna.value) }); };
   gr.oninput  = () => { renderRspVals(); rspSend({ ifgr: Number(gr.value) }); };
+  const sp = $<HTMLInputElement>('rspAgcSet');
+  sp.oninput = () => { renderRspVals(); rspSend({ agcset: Number(sp.value) }); };
   const toggle = (id: string, key: string, initial = false) => {
     const b = $<HTMLButtonElement>(id);
     let on = initial;

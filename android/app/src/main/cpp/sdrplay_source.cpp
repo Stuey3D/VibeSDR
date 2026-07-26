@@ -171,7 +171,10 @@ static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT,
 
 namespace {
 // Only the pieces the callbacks touch, so this needs no access to the private Impl.
-struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* lost; bool* paused; };
+// Deliberately holds only what the callbacks touch — a raw device handle rather than the
+// private Impl, so this needs no access to the class's internals.
+struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* lost; bool* paused;
+               bool* overload; HANDLE dev; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -220,10 +223,14 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         ch->ctrlParams.dcOffset.DCenable = 1;
         ch->ctrlParams.dcOffset.IQenable = 1;
     }
+    // ★ Give the AGC real loop dynamics BEFORE it starts. The API defaults them all to zero,
+    // which is not "fast" but "undefined behaviour dressed as a default".
+    setIfAgcSetPoint(-30);
+    setIfAgcDynamics(500, 500, 200, 5);
     setGainTenthDb(gainTenthDb);
 
     static CbCtx ctx;
-    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_ };
+    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -295,16 +302,22 @@ void SdrplaySource::setGainTenthDb(int tenthDb) {
 }
 
 int SdrplaySource::bandwidthKHzForRate(double fs) {
-    // SoapySDRPlay3's mapping. ★ 1.536 MHz is the one that matters for FM: the MPX runs to
-    // 57 kHz plus sidebands, so anything narrower silently removes RDS — the very thing this
-    // hardware was fetched to receive.
-    if (fs < 300000)   return 200;
-    if (fs < 600000)   return 300;
-    if (fs < 1536000)  return 600;
-    if (fs < 5000000)  return 1536;
-    if (fs < 6000000)  return 5000;
-    if (fs < 7000000)  return 6000;
-    if (fs < 8000000)  return 7000;
+    // ★★ THE SMALLEST BANDWIDTH THAT COVERS THE WHOLE SPAN — deliberately NOT Soapy's
+    // mapping, which picks the largest bandwidth BELOW the rate. That is right for a
+    // receiver decoding one channel, and wrong for a SPECTRUM DISPLAY: at 2.4 MSPS it fits a
+    // 1.536 MHz filter, so the outer third of the visible span is filtered away and the
+    // waterfall shows a great rolled-off dome that looks like broken calibration (Stuart,
+    // on air 2026-07-26 — "waterfall calibration is well off").
+    // ★ A filter narrower than the span does not merely dim the edges, it makes the display
+    // lie about what is on the air out there.
+    const double k = fs / 1000.0;
+    if (k <= 200)  return 200;
+    if (k <= 300)  return 300;
+    if (k <= 600)  return 600;
+    if (k <= 1536) return 1536;
+    if (k <= 5000) return 5000;
+    if (k <= 6000) return 6000;
+    if (k <= 7000) return 7000;
     return 8000;
 }
 
@@ -350,6 +363,19 @@ std::string SdrplaySource::model() const {
     }
 }
 
+float SdrplaySource::systemGainDb() const {
+    if (!open_ || !impl_->params || !impl_->params->rxChannelA) return 0.0f;
+    return impl_->params->rxChannelA->tunerParams.gain.gainVals.curr;
+}
+int SdrplaySource::currentIfGr() const {
+    if (!impl_->params || !impl_->params->rxChannelA) return 0;
+    return impl_->params->rxChannelA->tunerParams.gain.gRdB;
+}
+int SdrplaySource::currentLnaState() const {
+    if (!impl_->params || !impl_->params->rxChannelA) return 0;
+    return (int)impl_->params->rxChannelA->tunerParams.gain.LNAstate;
+}
+
 void SdrplaySource::setLnaState(int state) {
     if (!impl_->params || !impl_->params->rxChannelA) return;
     const int n = lnaStateCount();
@@ -379,12 +405,29 @@ void SdrplaySource::setIfAgc(bool on) {
     if (!impl_->params || !impl_->params->rxChannelA) return;
     auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
     agc.enable = on ? sdrplay_api_AGC_50HZ : sdrplay_api_AGC_DISABLE;
-    // ★★ AND GIVE IT A SENSIBLE SETPOINT. The API default is -60 dBfs, which drives the front
-    // end far harder than SDRuno does — which is why "auto gain overloads but manual is fine"
-    // is a recurring complaint about SDRplay under third-party software (Stuart, on OWRX).
-    // -30 dBfs is the conventional working point and leaves real headroom. The API is not the
-    // problem; it is being asked for the wrong thing.
-    agc.setPoint_dBfs = -30;
+    // ★ The setpoint is set separately (setIfAgcSetPoint) and NOT forced here — it is a
+    // user-facing target, so toggling the AGC must not quietly discard their choice.
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+}
+
+void SdrplaySource::setIfAgcSetPoint(int dBfs) {
+    if (!impl_->params || !impl_->params->rxChannelA) return;
+    if (dBfs > -10) dBfs = -10;
+    if (dBfs < -72) dBfs = -72;
+    impl_->params->rxChannelA->ctrlParams.agc.setPoint_dBfs = dBfs;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+}
+
+void SdrplaySource::setIfAgcDynamics(int attackMs, int decayMs, int delayMs, int threshDb) {
+    if (!impl_->params || !impl_->params->rxChannelA) return;
+    auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+    auto clampi = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
+    agc.attack_ms          = (unsigned short)clampi(attackMs, 0, 5000);
+    agc.decay_ms           = (unsigned short)clampi(decayMs, 0, 5000);
+    agc.decay_delay_ms     = (unsigned short)clampi(delayMs, 0, 5000);
+    agc.decay_threshold_dB = (unsigned short)clampi(threshDb, 0, 40);
     if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
 }
@@ -448,10 +491,23 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
     (*c->sink)(ilv.data(), (int)numSamples);
 }
 
-static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT,
-                    sdrplay_api_EventParamsT*, void* ctx) {
+static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT tuner,
+                    sdrplay_api_EventParamsT* prm, void* ctx) {
     auto* c = (CbCtx*)ctx;
     if (!c) return;
+    if (id == sdrplay_api_PowerOverloadChange && prm) {
+        if (c->overload)
+            *c->overload = (prm->powerOverloadParams.powerOverloadChangeType
+                            == sdrplay_api_Overload_Detected);
+        // ★ ACKNOWLEDGE, or the API stops reporting overloads entirely — and a warning that
+        // fires once and then goes quiet is worse than none, because its silence reads as
+        // "all clear".
+        if (c->dev)
+            api().Update(c->dev, tuner,
+                         sdrplay_api_Update_Ctrl_OverloadMsgAck,
+                         sdrplay_api_Update_Ext1_None);
+        return;
+    }
     // ★ A device removal is the one event the shim genuinely has to know about: its watchdog
     // already distinguishes "stream fault" from "radio gone", and telling it the truth is what
     // keeps a false "no radio" off a working waterfall.
@@ -481,6 +537,8 @@ void SdrplaySource::setBiasT(bool) {}
 void SdrplaySource::setLnaState(int) {}
 void SdrplaySource::setIfGainReduction(int) {}
 void SdrplaySource::setIfAgc(bool) {}
+void SdrplaySource::setIfAgcSetPoint(int) {}
+void SdrplaySource::setIfAgcDynamics(int, int, int, int) {}
 void SdrplaySource::setRfNotch(bool) {}
 void SdrplaySource::setDabNotch(bool) {}
 int  SdrplaySource::lnaStateCount() const { return 0; }
@@ -488,6 +546,9 @@ bool SdrplaySource::hasRfNotch() const { return false; }
 bool SdrplaySource::hasDabNotch() const { return false; }
 bool SdrplaySource::hasBiasT() const { return false; }
 std::string SdrplaySource::model() const { return ""; }
+float SdrplaySource::systemGainDb() const { return 0.0f; }
+int SdrplaySource::currentIfGr() const { return 0; }
+int SdrplaySource::currentLnaState() const { return 0; }
 int SdrplaySource::bandwidthKHzForRate(double) { return 0; }
 }  // namespace vibe
 

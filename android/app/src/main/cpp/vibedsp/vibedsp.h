@@ -852,6 +852,13 @@ public:
             float pilotPhaseCoherence;
             float pilotDevKHz;      // pilot injection, kHz deviation
             float rdsDevKHz;        // RDS injection, kHz deviation
+            /** ★★ THE MPX SPECTRUM, 0-100 kHz — the view SDRconnect calls "MPX SP" and the
+             *  most analyser-like display there is: L+R at the bottom, the 19 kHz pilot, the
+             *  L-R sidebands around 38 kHz, RDS at 57 kHz, and anything else a station is
+             *  carrying up there. We already compute the MPX for the stereo and RDS
+             *  decoders, so this is one FFT away (Stuart, 2026-07-26).
+             *  dB, one entry per bin, 0 Hz to kMpxSpanHz. */
+            const float* mpx; int nMpx;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.

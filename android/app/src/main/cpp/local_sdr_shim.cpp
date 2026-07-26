@@ -1399,6 +1399,17 @@ struct LocalSdrShim::Impl {
             sendWs(sock, 0x2, frame.data(), frame.size());
             vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
+            // ★ The RSP's live gain state, once a second. The AGC moves the IF reduction on
+            // its own, so a slider position is NOT the truth — and the total system gain is
+            // the one figure that makes two independent controls readable.
+            if (n % 10 == 0 && useSdrplay()) {
+                char gb[160];
+                snprintf(gb, sizeof gb,
+                    "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d}",
+                    sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
+                    sdrp->overloaded() ? 1 : 0);
+                sendText(sock, gb);
+            }
             // ★ The Advanced RDS payload runs FASTER than the metadata — a constellation
             // updated once a second reads as a still image, and its whole value is watching
             // the cloud tighten or spread as you tune. ~5 Hz, and only while the decoder is
@@ -2132,6 +2143,29 @@ struct LocalSdrShim::Impl {
         double v;
         if (type == "ping") { sendText(sock, "{\"type\":\"pong\"}"); return; }
         if (type == "set_rate") { if (jsonNum(msg,"divisor",v)) rateDivisor.store(std::max(1,(int)llround(v))); return; }
+        // ★ RSP-specific controls. They belong HERE, on the spectrum socket, because that is
+        // the connection the client's control messages travel on — the first attempt put them
+        // in the audio/decoder loop, where nothing ever sent them, so every RSP control
+        // silently did nothing (Stuart, 2026-07-26).
+        // ★ One message for the lot: these exist on one kind of radio, so they have no place
+        // in the shared tune/gain vocabulary that every source must understand.
+        if (type == "rsp_control") {
+            if (jsonNum(msg, "lna", v))      LocalSdrShim::instance().setLnaState((int)v);
+            if (jsonNum(msg, "ifgr", v))     LocalSdrShim::instance().setIfGainReduction((int)v);
+            if (jsonNum(msg, "ifagc", v))    LocalSdrShim::instance().setIfAgc(v != 0);
+            if (jsonNum(msg, "agcset", v))   LocalSdrShim::instance().setIfAgcSetPoint((int)v);
+            // Loop dynamics arrive together — they only make sense as a set.
+            {
+                double a, d, dd, th;
+                if (jsonNum(msg, "agcAttack", a) && jsonNum(msg, "agcDecay", d)
+                 && jsonNum(msg, "agcDelay", dd) && jsonNum(msg, "agcThresh", th))
+                    LocalSdrShim::instance().setIfAgcDynamics((int)a, (int)d, (int)dd, (int)th);
+            }
+            if (jsonNum(msg, "rfnotch", v))  LocalSdrShim::instance().setRfNotch(v != 0);
+            if (jsonNum(msg, "dabnotch", v)) LocalSdrShim::instance().setDabNotch(v != 0);
+            if (jsonNum(msg, "biast", v))    LocalSdrShim::instance().setBiasT(v != 0);
+            return;
+        }
         if (type == "reset") { zoomFactor.store(1.0); sendConfig(sock); return; }
         if (type == "zoom") { // spectrum view-centre move (+ span via binBandwidth)
             if (jsonNum(msg,"frequency",v) && v > 0) {
@@ -2983,16 +3017,6 @@ struct LocalSdrShim::Impl {
             } else if (type == "audio_extension_detach") {
                 stopDecoder();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
-            } else if (type == "rsp_control") {
-                // ★ One message for every RSP-specific control. They only exist on one kind
-                // of radio, so they do not belong in the shared tune/gain vocabulary.
-                double v = 0;
-                if (jsonNum(payload, "lna", v))    LocalSdrShim::instance().setLnaState((int)v);
-                if (jsonNum(payload, "ifgr", v))   LocalSdrShim::instance().setIfGainReduction((int)v);
-                if (jsonNum(payload, "ifagc", v))  LocalSdrShim::instance().setIfAgc(v != 0);
-                if (jsonNum(payload, "rfnotch", v))LocalSdrShim::instance().setRfNotch(v != 0);
-                if (jsonNum(payload, "dabnotch", v))LocalSdrShim::instance().setDabNotch(v != 0);
-                if (jsonNum(payload, "biast", v))  LocalSdrShim::instance().setBiasT(v != 0);
             } else if (type == "subscribe_digital_spots") {
                 startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
             } else if (type == "unsubscribe_digital_spots") {
@@ -4175,13 +4199,18 @@ void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
     Impl* impl = p;
     const bool tcp = impl->useTcp();
-    if (!tcp && !impl->dev) return;
+    const bool rsp = impl->useSdrplay();
+    if (!tcp && !rsp && !impl->dev) return;
     // Stop the IQ source + drain the DSP consumer BEFORE taking modeMtx (the
     // dspThread locks modeMtx per buffer, so holding it across the join would
     // deadlock). With both quiesced, the rtlsdr control transfer below runs on an
     // idle libusb and the engine rebuild has no concurrent rx.feed.
-    if (tcp) { impl->tcpRunning.store(false); }
-    else     { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
+    if (tcp)      { impl->tcpRunning.store(false); }
+    // ★ An RSP keeps streaming across a rate change — the API reconfigures in place, and
+    // tearing the device down is what crashed it earlier. Just stop consuming while the
+    // engine is rebuilt.
+    else if (rsp) { impl->sdrp->setPaused(true); }
+    else          { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->stopDspThread();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
@@ -4193,6 +4222,9 @@ void LocalSdrShim::setSampleRate(double rate) {
         // exactly what we asked for made the DSP resample against the wrong rate,
         // and the audio came out pitch-shifted.
         actual = (uint32_t)llround(rtlActualRate(rate));
+    } else if (rsp) {
+        impl->sdrp->setSampleRate(rate);   // also moves the IF bandwidth to match the span
+        actual = (uint32_t)llround(rate);  // the RSP takes the rate it is given
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
@@ -4210,6 +4242,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
     impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
+    else if (rsp) { impl->sdrp->setPaused(false); }
     else {
         impl->launchCapture();
         impl->restarting.store(false);   // back to normal: a stop now really is an unplug
@@ -4305,7 +4338,7 @@ std::string LocalSdrShim::radioCapsJson() const {
     auto& d = *p->sdrp;
     std::string j = ",\"radio\":{\"driver\":\"sdrplay\",\"model\":\"" + d.model() + "\"";
     j += ",\"lnaStates\":" + std::to_string(d.lnaStateCount());
-    j += ",\"ifGrMin\":20,\"ifGrMax\":59";
+    j += ",\"ifGrMin\":20,\"ifGrMax\":59,\"agcSetPoint\":true";
     j += std::string(",\"rfNotch\":") + (d.hasRfNotch() ? "true" : "false");
     j += std::string(",\"dabNotch\":") + (d.hasDabNotch() ? "true" : "false");
     j += std::string(",\"biasT\":") + (d.hasBiasT() ? "true" : "false");
@@ -4316,6 +4349,10 @@ std::string LocalSdrShim::radioCapsJson() const {
 void LocalSdrShim::setLnaState(int v)       { if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
 void LocalSdrShim::setIfGainReduction(int v){ if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
 void LocalSdrShim::setIfAgc(bool v)         { if (p && p->useSdrplay()) p->sdrp->setIfAgc(v); }
+void LocalSdrShim::setIfAgcSetPoint(int v)  { if (p && p->useSdrplay()) p->sdrp->setIfAgcSetPoint(v); }
+void LocalSdrShim::setIfAgcDynamics(int a, int d, int dd, int th) {
+    if (p && p->useSdrplay()) p->sdrp->setIfAgcDynamics(a, d, dd, th);
+}
 void LocalSdrShim::setRfNotch(bool v)       { if (p && p->useSdrplay()) p->sdrp->setRfNotch(v); }
 void LocalSdrShim::setDabNotch(bool v)      { if (p && p->useSdrplay()) p->sdrp->setDabNotch(v); }
 void LocalSdrShim::setBiasT(bool v)         { if (p && p->useSdrplay()) p->sdrp->setBiasT(v); }

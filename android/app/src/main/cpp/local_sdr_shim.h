@@ -96,6 +96,8 @@ public:
     void setLnaState(int state);
     void setIfGainReduction(int gRdB);
     void setIfAgc(bool on);
+    void setIfAgcSetPoint(int dBfs);
+    void setIfAgcDynamics(int attackMs, int decayMs, int delayMs, int threshDb);
     void setRfNotch(bool on);
     void setDabNotch(bool on);
     void setBiasT(bool on);

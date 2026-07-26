@@ -653,6 +653,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   padding: 1px 5px; margin: 0 4px 4px 0; cursor: pointer;
 }
 .afBtn:hover { border-color: var(--accent, #ffa500); }
+/* ★ The radio's OWN overload flag, not an inference from the spectrum. Loud on purpose:
+   tonight established that RF overload is what destroys RDS. */
+#rspOverload {
+  color: #1a0f00; background: #ff8a3d; font-size: 10px; letter-spacing: 1px;
+  padding: 1px 6px; border-radius: 3px; font-weight: 600;
+}
 #rdsVerdict {
   font-size: 11px; letter-spacing: 0.5px; margin-top: 4px;
   font-family: var(--mono, monospace);
@@ -1344,6 +1350,13 @@ select.btn { padding: 6px 8px; }
        ★ AND THE DIRECTION IS INVERTED, which is what catches people out: you set a gain
        REDUCTION, so 20 dB is MAXIMUM gain and 59 dB is minimum. The labels say so. -->
   <div id="rspCtls" hidden>
+    <!-- ★ The one number that makes two independent sliders readable: what you have
+         ACTUALLY got. SDRconnect shows it above its gain controls for the same reason. -->
+    <div class="mrow">
+      <label>SYSTEM GAIN</label>
+      <span class="val" id="rspSysGain" style="flex:1">—</span>
+      <span id="rspOverload" hidden>OVERLOAD</span>
+    </div>
     <div class="mrow">
       <label for="rspLna">RF GAIN (LNA)</label>
       <input type="range" id="rspLna" min="0" max="9" value="4">
@@ -1357,6 +1370,14 @@ select.btn { padding: 6px 8px; }
     <div class="mrow">
       <label>IF AGC</label>
       <div class="seg"><button class="btn on" id="rspIfAgc">AUTO</button></div>
+    </div>
+    <!-- ★ The AGC's TARGET, as SDRconnect exposes it. It is a target, not a limit: a higher
+         (less negative) figure asks for a louder output and so applies MORE gain. The right
+         value depends on band and antenna, so it belongs to the user. -->
+    <div class="mrow" id="rowAgcSet">
+      <label for="rspAgcSet">AGC TARGET</label>
+      <input type="range" id="rspAgcSet" min="-72" max="-10" value="-60">
+      <span class="val" id="rspAgcSetVal">—</span>
     </div>
     <div class="mrow" id="rowRspNotch">
       <label>FILTERS</label>
