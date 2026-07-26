@@ -357,8 +357,14 @@ confirm the app is still fully operable.
    the picker's subtitle, the decoder box's header line, the [H]z/[T]une/[P]/[D] caps. There is
    nowhere that shows the whole scheme, which is what someone wants after the first day rather
    than during the first minute.
+   ★ **THE SHAPE (Stuart):** a BUTTON in the main menu, which opens a POPUP containing a
+   SCROLLABLE LIST of the shortcuts. Not a settings page and not a panel to navigate — a
+   reference you open, read, and dismiss.
    ★ It should be the reference the per-surface hints are NOT: scrollable, complete, and
-   organised by where a key works rather than alphabetically.
+   organised by WHERE a key works rather than alphabetically — the question being answered is
+   "what can I do from here", not "what does K do".
+   ★ It is itself keyboard-reachable, so it needs the same treatment as everything else: arrows
+   scroll it, Esc closes it, and it should say so.
 2. `GainSlider` (RTL-SDR gain) is a custom component, not an RN `Slider`, so none of the slider
    work reaches it. Reachable by the RTL-TCP path on iOS as well as local USB on Android.
 3. FM-DX **Android Auto** controls — see `BRIEF-fmdx-backend-adapter.md`.
