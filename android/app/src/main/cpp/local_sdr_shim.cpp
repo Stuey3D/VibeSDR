@@ -1242,6 +1242,7 @@ struct LocalSdrShim::Impl {
     std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
     std::vector<int> rdsAf;
     std::vector<float> rdsConst;
+    std::vector<float> rdsMpx;             // MPX spectrum, dB per bin
     std::atomic<bool> stereoDetected{false};
     // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
@@ -1639,6 +1640,7 @@ struct LocalSdrShim::Impl {
         t->rdsAf.assign(x.afKhz, x.afKhz + x.nAf);
         t->rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
         t->rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
+        if (x.mpx && x.nMpx > 0) t->rdsMpx.assign(x.mpx, x.mpx + x.nMpx);
         t->rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
         t->rdsRtpArtist = x.rtpArtist ? x.rtpArtist : "";
         t->rdsLongPs = x.longPs ? x.longPs : "";
@@ -3263,11 +3265,11 @@ struct LocalSdrShim::Impl {
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
-        std::vector<int> af, grp; std::vector<float> pts;
+        std::vector<int> af, grp; std::vector<float> pts, mpx;
         { std::lock_guard<std::mutex> lk(rdsMtx);
           pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
           ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
-          af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen;
+          af = rdsAf; grp = rdsGrp; pts = rdsConst; mpx = rdsMpx; afSeen = rdsAfSeen;
           rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
           lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
           eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh;
@@ -3321,6 +3323,15 @@ struct LocalSdrShim::Impl {
             float v = pts[i] * 100.0f;
             if (v > 127.0f) v = 127.0f; else if (v < -127.0f) v = -127.0f;
             j += std::to_string((int)v);
+        }
+        // ★ MPX as signed bytes: the plot is a small strip, so a dB value to the nearest
+        // decibel is finer than any pixel can show and a tenth of the bytes of a float.
+        j += "],\"mpx\":[";
+        for (size_t i = 0; i < mpx.size(); ++i) {
+            if (i) j += ',';
+            int v = (int)lround(mpx[i]);
+            if (v < -128) v = -128; else if (v > 0) v = 0;
+            j += std::to_string(v);
         }
         j += "]}";
         sendText(sock, j);

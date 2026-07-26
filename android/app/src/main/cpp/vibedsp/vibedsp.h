@@ -806,6 +806,11 @@ private:
 class RxPipeline {
 public:
     enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM /* mono; stereo+RDS later */ };
+    /** MPX spectrum geometry — DC to 100 kHz, which covers L+R, pilot, L-R and RDS with a
+     *  little room above for anything unusual a station is carrying. */
+    static constexpr int    kMpxFft  = 1024;
+    static constexpr int    kMpxBins = 128;
+    static constexpr double kMpxSpanHz = 100000.0;
 
     struct Callbacks {
         void* ctx = nullptr;
@@ -950,6 +955,12 @@ private:
     std::vector<float> ref57Buf_, ref57qBuf_, bitClkBuf_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
+    // MPX spectrum for the Advanced RDS panel. Only computed while somebody is looking at
+    // it — an extra FFT per block otherwise buys nothing.
+    std::unique_ptr<RealFFT> mpxFft_;
+    std::vector<float> mpxWin_, mpxIn_, mpxDb_, mpxOut_;
+    std::vector<float> mpxAcc_;      // fills across blocks — see the note in pipeline.cpp
+    int mpxAccN_ = 0;
     // WFM only: the rate the stereo audio post-chain runs at, = chFs_/audioDecim_.
     // The 15 kHz filters decimate as they filter, so everything after them (blend,
     // de-emphasis, resampling) costs a fraction of what it did at the channel rate.

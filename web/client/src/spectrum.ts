@@ -84,6 +84,7 @@ export interface RdsExt {
   pilotDev: number;      // pilot injection, kHz deviation (spec 6.0–7.5)
   rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6)
   xy: number[];          // interleaved x,y as signed bytes (x100)
+  mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
 
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
@@ -320,6 +321,7 @@ export class SpectrumClient {
           pilotDev: Number(msg.pilotDev ?? 0),
           rdsDev: Number(msg.rdsDev ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
+          mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });
         break;
       case 'rspstat':

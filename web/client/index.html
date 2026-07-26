@@ -684,6 +684,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   color: #1a0f00; background: #ff8a3d; font-size: 10px; letter-spacing: 1px;
   padding: 1px 6px; border-radius: 3px; font-weight: 600;
 }
+#rdsMpx {
+  width: 180px; height: 76px; background: #000; display: block;
+  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
+}
+#rdsMpxCap {
+  color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
+  text-transform: uppercase; margin-top: 2px;
+}
 #rdsVerdict {
   font-size: 11px; letter-spacing: 0.5px; margin-top: 4px;
   font-family: var(--mono, monospace);
@@ -1051,6 +1059,12 @@ select.btn { padding: 6px 8px; }
              (Stuart, 2026-07-26) -->
         <canvas id="rdsConst" width="180" height="180"></canvas>
         <canvas id="rdsEye" width="180" height="54"></canvas>
+        <!-- ★ THE MPX SPECTRUM — what SDRconnect calls "MPX SP". L+R at the bottom, the
+             19 kHz pilot, the L-R sidebands at 38 kHz and RDS at 57 kHz, all in one picture.
+             Labelled, because an unlabelled spectrum of a signal most people have never seen
+             plotted is a puzzle rather than a diagnostic (Stuart, 2026-07-26). -->
+        <canvas id="rdsMpx" width="180" height="76"></canvas>
+        <div id="rdsMpxCap">MPX · 0–100 kHz</div>
         <div id="rdsConstCap">constellation</div>
         <!-- ★ A plain-English verdict, because the plot expects you to already know how to
              read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the

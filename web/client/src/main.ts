@@ -329,7 +329,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         }
       } else grpPrev = { tot: x.gtot, at: now };
       rdsExt = x;
-      if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); }
+      if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
     },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
@@ -2405,7 +2405,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', isRds);
   if (isRds) applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
-  if (isRds) { renderRds(); drawConstellation(); drawEye(); }
+  if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
   // PREV/SAVE buttons entirely for text/spot decoders.
@@ -2783,6 +2783,54 @@ function drawEye() {
     const py = mid - x * k;
     g.fillRect(px, py, 1.5, 1.5);
   }
+}
+
+/** ★ The MPX spectrum — the whole of what the FM demodulator produces, DC to 100 kHz.
+ *  Labelled at the three landmarks, because a spectrum of a signal most listeners have never
+ *  seen plotted is a puzzle otherwise: L+R audio at the bottom, the 19 kHz PILOT, the L-R
+ *  stereo sidebands around 38 kHz, and RDS at 57 kHz. Everything the stereo and RDS decoders
+ *  work from, in one picture. */
+function drawMpx() {
+  const c = $<HTMLCanvasElement>('rdsMpx');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  const mpx = rdsExt?.mpx ?? [];
+
+  // Landmarks first, so the trace draws over them rather than under.
+  const SPAN = 100000;
+  const marks: Array<[number, string]> = [[19000, 'PILOT'], [38000, 'L−R'], [57000, 'RDS']];
+  g.font = '7px ui-monospace, monospace';
+  for (const [hz, label] of marks) {
+    const x = (hz / SPAN) * W;
+    g.strokeStyle = 'rgba(255,170,60,0.30)';
+    g.beginPath(); g.moveTo(x, 10); g.lineTo(x, H); g.stroke();
+    g.fillStyle = 'rgba(255,190,110,0.85)';
+    g.fillText(label, Math.min(W - 26, x + 2), 8);
+  }
+  // L+R occupies DC..15 kHz — a band rather than a line, so shade it.
+  g.fillStyle = 'rgba(255,170,60,0.07)';
+  g.fillRect(0, 10, (15000 / SPAN) * W, H - 10);
+  g.fillStyle = 'rgba(255,190,110,0.85)';
+  g.fillText('L+R', 2, 8);
+
+  if (!mpx.length) return;
+  // Auto-range on what is present: injection levels vary and a fixed scale would either
+  // clip a loud station or flatten a quiet one.
+  let lo = 999, hi = -999;
+  for (const v of mpx) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (hi - lo < 12) { hi = lo + 12; }
+  g.strokeStyle = '#7dff9a';
+  g.lineWidth = 1;
+  g.beginPath();
+  for (let i = 0; i < mpx.length; i++) {
+    const x = (i / (mpx.length - 1)) * W;
+    const y = H - ((mpx[i] - lo) / (hi - lo)) * (H - 12);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
 }
 
 /** The constellation. Two tight clusters = healthy; a diffuse cloud = buried in noise. */

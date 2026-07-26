@@ -325,6 +325,45 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 cb_.rdsBer(cb_.ctx, pll_.trackable() ? rdsDemod_.blockErrorPercent() : -1);
             if (wantRds && cb_.rdsSig)
                 cb_.rdsSig(cb_.ctx, rdsDemod_.subcarrierRelDb());
+            // ★ The MPX spectrum, computed only when the Advanced RDS panel is watching.
+            // demodBuf_ IS the MPX — the same buffer the stereo and RDS decoders read — so
+            // this costs one FFT and no new signal path.
+            if (wantRds && cb_.rdsExt) {
+                if (!mpxFft_) {
+                    mpxFft_ = std::make_unique<RealFFT>(kMpxFft);
+                    mpxWin_.resize(kMpxFft);
+                    nuttallWindow(mpxWin_.data(), kMpxFft);
+                    mpxIn_.resize(kMpxFft);
+                    mpxDb_.resize(kMpxFft / 2 + 1);
+                    mpxOut_.assign(kMpxBins, -120.0f);
+                    mpxAcc_.assign(kMpxFft, 0.0f);
+                    mpxAccN_ = 0;
+                }
+                // ★ ACCUMULATE ACROSS BLOCKS. The first version required a single block of at
+                // least kMpxFft samples — and the DSP block is smaller than that, so the FFT
+                // never ran and the panel drew an empty box with labels on it (Stuart,
+                // 2026-07-26). ★ Never gate work on a block size you do not control.
+                for (int i = 0; i < nc && mpxAccN_ < kMpxFft; ++i)
+                    mpxAcc_[mpxAccN_++] = demodBuf_[i];
+                if (mpxAccN_ >= kMpxFft) {
+                mpxAccN_ = 0;
+                for (int i = 0; i < kMpxFft; ++i) mpxIn_[i] = mpxAcc_[i] * mpxWin_[i];
+                mpxFft_->powerDb(mpxIn_.data(), mpxDb_.data(), 2.0f / kMpxFft);
+                // Map DC..kMpxSpanHz onto kMpxBins, taking the PEAK of each group: the pilot
+                // and RDS are narrow, and averaging would flatten the very features this
+                // display exists to show.
+                const double binHz = chFs_ / kMpxFft;
+                const int hi = (int)std::min<double>(kMpxFft / 2.0, kMpxSpanHz / binHz);
+                for (int i = 0; i < kMpxBins; ++i) {
+                    const int a = (int)((double)i / kMpxBins * hi);
+                    const int b = std::max(a + 1, (int)((double)(i + 1) / kMpxBins * hi));
+                    float m = -200.0f;
+                    for (int k = a; k < b && k < (int)mpxDb_.size(); ++k)
+                        if (mpxDb_[k] > m) m = mpxDb_[k];
+                    mpxOut_[i] = m;
+                }
+                }
+            }
             if (wantRds && cb_.rdsExt) {
                 const RdsDecoder* d = rdsDemod_.best();
                 float xy[RdsDemod::kConstPts * 2];
@@ -356,6 +395,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
                 x.pilotPhaseCoherence = rdsDemod_.pilotPhaseCoherence();
                 x.pilotDevKHz = pll_.pilotDeviationKHz();
+                x.mpx = mpxOut_.empty() ? nullptr : mpxOut_.data();
+                x.nMpx = (int)mpxOut_.size();
                 x.rdsDevKHz   = rdsDemod_.rdsDeviationKHz();
                 cb_.rdsExt(cb_.ctx, x);
             }
