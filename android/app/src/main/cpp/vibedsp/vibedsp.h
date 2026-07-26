@@ -412,6 +412,16 @@ public:
      *  signal is delivering a representative mix or only the easy groups. */
     int  groupCount(int idx) const { return (idx >= 0 && idx < 32) ? grpCount_[idx] : 0; }
     int  groupTotal() const { return grpTotal_; }
+    // ── ★★ RT+ and LONG PS — asked for directly by the FM-DX community ────────
+    // Both ride on the 57 kHz subcarrier; neither needs any network access.
+    /** RT+ tagging (ODA 4BD7, announced in group 3A): the artist and title carved out of
+     *  RadioText by start/length pointers. This is what turns a scrolling message into
+     *  now-playing metadata — and it feeds the OS media card we already publish. */
+    const char* rtPlusTitle()  const { return rtpTitle_; }
+    const char* rtPlusArtist() const { return rtpArtist_; }
+    /** Long PS — 32 UTF-8 characters in group 15A, where ordinary PS is 8. Stations use it
+     *  to send a full name instead of an abbreviation squeezed into eight slots. */
+    const char* longPs() const { return lpsSeen_ ? longPs_ : ""; }
     int  afCount() const { return afN_; }
     int  afKhz(int i) const { return (i >= 0 && i < afN_) ? afKhz_[i] : 0; }
     int  afHits(int i) const { return (i >= 0 && i < afN_) ? afHits_[i] : 0; }
@@ -448,6 +458,7 @@ public:
 
 private:
     void parseGroup();
+    void applyRtPlus(int type, int start, int len);
     // ── Weak-signal block recovery ───────────────────────────────────────────
     // Sync used to LATCH on a single block-A syndrome, and any one bad bit threw a
     // block away. Both are costly on a marginal signal, and both have standard
@@ -498,6 +509,13 @@ private:
     int afHits_[kMaxAf] = {0};
     int afN_ = 0;
     int di_ = 0, diSeen_ = 0;
+    // RT+ : group 3A names which group type carries the tags (commonly 11A), so we cannot
+    // parse them until that announcement arrives. -1 = not yet announced.
+    int  rtpGroup_ = -1;
+    char rtpTitle_[65] = {0};
+    char rtpArtist_[65] = {0};
+    char longPs_[33] = {0};
+    int  lpsSeen_ = 0;          // bitmask of the 8 segments received
     int ctMin_ = -1, ctOff_ = 0;
     int grpCount_[32] = {0};
     int grpTotal_ = 0;
@@ -703,6 +721,7 @@ public:
                        int ctMinutes, int ctOffsetHalfHours,
                        const int* afKhz, int nAf, int afSeen,
                        const int* groupCounts, int groupTotal,
+                       const char* rtpTitle, const char* rtpArtist, const char* longPs,
                        const float* constXY, int nPts) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;

@@ -2404,6 +2404,14 @@ function renderRds() {
   $('rxPi').textContent  = rdsPi > 0 ? piHex(rdsPi) : dash;
   $('rxPs').textContent  = rdsName || dash;
   $('rxRt').textContent  = rdsText || dash;
+  // ★ RT+ — the tags point INTO RadioText, so they can only appear once group 3A has
+  // announced which group carries them. That announcement is infrequent, which is why this
+  // often fills in well after the RadioText itself.
+  const rtpA = rdsExt?.rtpArtist ?? '', rtpT = rdsExt?.rtpTitle ?? '';
+  $('rxRtp').textContent = (rtpA || rtpT)
+    ? (rtpA && rtpT ? `${rtpA} — ${rtpT}` : (rtpT || rtpA))
+    : dash;
+  $('rxLps').textContent = rdsExt?.longPs?.trim() || dash;
   const pty = rdsExt?.pty ?? -1;
   $('rxPty').textContent = pty >= 0 ? `${PTY_EU[pty] ?? '?'} (${pty})` : dash;
   // TP/TA/MS are one-bit flags; show the ones that are SET rather than a row of noes.

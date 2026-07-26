@@ -340,6 +340,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                            d ? d->di()  : -1,
                            d ? d->ctMinutes() : -1, d ? d->ctOffsetHalfHours() : 0,
                            af, nAf, afSeen, gc, d ? d->groupTotal() : 0,
+                           d ? d->rtPlusTitle()  : "", d ? d->rtPlusArtist() : "",
+                           d ? d->longPs() : "",
                            xy, np);
             }
             if (wantRds && pll_.trackable())

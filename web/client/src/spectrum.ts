@@ -71,6 +71,9 @@ export interface RdsExt {
   afseen: number;        // distinct frequencies glimpsed, confirmed or not
   grp: number[];         // 32 counters, gtype*2+version
   gtot: number;
+  rtpTitle: string;      // RT+ tagged title (ODA 4BD7)
+  rtpArtist: string;     // RT+ tagged artist
+  longPs: string;        // 32-character Long PS (group 15A)
   xy: number[];          // interleaved x,y as signed bytes (x100)
 }
 
@@ -272,6 +275,9 @@ export class SpectrumClient {
           afseen: Number(msg.afseen ?? 0),
           grp: Array.isArray(msg.grp) ? msg.grp : [],
           gtot: Number(msg.gtot ?? 0),
+          rtpTitle: String(msg.rtpTitle ?? ''),
+          rtpArtist: String(msg.rtpArtist ?? ''),
+          longPs: String(msg.longPs ?? ''),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
         });
         break;

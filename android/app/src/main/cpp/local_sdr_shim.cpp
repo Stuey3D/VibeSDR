@@ -1214,6 +1214,7 @@ struct LocalSdrShim::Impl {
     int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
     int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0, rdsAfSeen = 0;
     std::vector<int> rdsGrp;
+    std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs;
     std::vector<int> rdsAf;
     std::vector<float> rdsConst;
     std::atomic<bool> stereoDetected{false};
@@ -1579,13 +1580,17 @@ struct LocalSdrShim::Impl {
     }
     static void rdsExtCb(void* ctx, int pty, int tp, int ta, int ms, int di,
                          int ctMin, int ctOff, const int* af, int nAf, int afSeen,
-                         const int* gc, int gTotal, const float* xy, int nPts) {
+                         const int* gc, int gTotal,
+                         const char* rtpT, const char* rtpA, const char* lps,
+                         const float* xy, int nPts) {
         Impl* t = (Impl*)ctx;
         if (!t->rdsxOn.load()) return;
         std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPty = pty; t->rdsTp = tp; t->rdsTa = ta; t->rdsMs = ms; t->rdsDi = di;
         t->rdsCtMin = ctMin; t->rdsCtOff = ctOff; t->rdsGrpTotal = gTotal;
         t->rdsAf.assign(af, af + nAf); t->rdsAfSeen = afSeen;
+        t->rdsRtpTitle = rtpT ? rtpT : ""; t->rdsRtpArtist = rtpA ? rtpA : "";
+        t->rdsLongPs = lps ? lps : "";
         t->rdsGrp.assign(gc, gc + 32);
         t->rdsConst.assign(xy, xy + nPts * 2);
     }
@@ -3145,11 +3150,13 @@ struct LocalSdrShim::Impl {
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
+        std::string rtpT, rtpA, lps;
         std::vector<int> af, grp; std::vector<float> pts;
         { std::lock_guard<std::mutex> lk(rdsMtx);
           pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
           ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
-          af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen; }
+          af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen;
+          rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -3159,6 +3166,9 @@ struct LocalSdrShim::Impl {
                       + ",\"ctoff\":" + std::to_string(ctOff)
                       + ",\"gtot\":"  + std::to_string(gTot)
                       + ",\"afseen\":" + std::to_string(afSeen)
+                      + ",\"rtpTitle\":\"" + jsonEscape(rtpT) + "\""
+                      + ",\"rtpArtist\":\"" + jsonEscape(rtpA) + "\""
+                      + ",\"longPs\":\"" + jsonEscape(lps) + "\""
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"af\":[";

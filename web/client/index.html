@@ -562,15 +562,35 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    continuously, which is horrible to read and worse to click (Stuart, 2026-07-26).
    Fixed height plus internal scroll: the panel never moves, only its contents do. */
 #rdsPanel {
-  /* ★ The browser has room, so use it — the box is only cramped on a phone, and there the
-     answer is scrolling, not a shorter box with fields hidden inside it (Stuart). */
-  /* Tall enough that NOTHING sits below the fold on a desktop — the last rows were
-     cut off by a line or two, which is exactly what you notice in a screenshot. */
-  height: 390px; max-height: 64vh;
+  /* ★★ SCALES WITH THE WINDOW, with a floor and a ceiling. Fixed pixel heights plus a
+     stack of media queries meant every new field needed the numbers revisiting, and a
+     resized window or a low-resolution screen could still end up with a box taller than
+     the page. clamp() states the actual intent in one line: never smaller than usable,
+     never taller than most of the viewport, and as tall as it likes in between.
+     ★ The upper bound matters as much as the lower one — a box that grows past the window
+     pushes its own scrollbar off screen, which is how "scrollable" becomes "unreachable"
+     (Stuart, 2026-07-26). */
+  height: clamp(240px, 58vh, 620px);
   overflow-y: auto; overscroll-behavior: contain;
 }
-@media (max-height: 800px) { #rdsPanel { height: 320px; } }
-@media (max-height: 640px) { #rdsPanel { height: 250px; } }
+/* ★★ ON A PHONE THE WATERFALL MUST STILL BE VISIBLE. This box sits over the display it is
+   describing, and tuning is the reason the user is here — a panel tall enough to hide the
+   spectrum makes them close it to tune and reopen it to read, which is the panel failing at
+   its own job. So a much harder cap on small screens, and the DATA scrolls instead: every
+   field stays reachable, nothing is dropped to fit, and roughly two thirds of the screen
+   stays radio (Stuart, 2026-07-26). */
+@media (max-width: 760px) {
+  #rdsPanel { height: clamp(170px, 34vh, 300px); }
+  /* The constellation and trace go under the fields rather than beside them, so neither
+     ends up too narrow to read. */
+  #rdsConstWrap { margin: 0 auto; }
+  #rdsConst { width: 150px; height: 150px; }
+  #rdsEye   { width: 150px; height: 44px; }
+}
+/* A landscape phone has almost no height at all — there, the cap is the binding constraint. */
+@media (max-height: 480px) {
+  #rdsPanel { height: clamp(140px, 42vh, 220px); }
+}
 /* Each field reserves two lines, so a value wrapping onto a second line does not shove
    everything below it down the panel. */
 .rdsF { min-height: 2.1em; align-items: flex-start; line-height: 1.25; }
@@ -921,6 +941,12 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label title="Block error rate, before correction, last 12 groups">Errors</label><span id="rxBer">—</span></div>
         <div class="rdsF"><label title="Recovered 57 kHz level relative to the 19 kHz pilot">Sub vs pilot</label><span id="rxSig">—</span></div>
         <div class="rdsF rdsWide"><label>RadioText</label><span id="rxRt">—</span></div>
+        <!-- ★ Asked for directly by the FM-DX community: RT+ carves artist and title out of
+             RadioText using start/length pointers (ODA 4BD7, announced in group 3A), and Long
+             PS is a 32-character station name where ordinary PS has only eight. Both come
+             off the 57 kHz subcarrier; neither needs any network access. -->
+        <div class="rdsF rdsWide"><label title="RT+ tagged now-playing, carved out of RadioText (ODA 4BD7)">Now playing</label><span id="rxRtp">—</span></div>
+        <div class="rdsF rdsWide"><label title="Long PS — 32 characters, group 15A, where ordinary PS has 8">Long PS</label><span id="rxLps">—</span></div>
         <div class="rdsF"><label title="Decoder identification bits">DI</label><span id="rxDi">—</span></div>
         <div class="rdsF"><label title="Clock time from group 4A — proves whole groups are arriving intact">Clock</label><span id="rxCt">—</span></div>
         <div class="rdsF"><label title="Transmitter country, from the PI country code checked against the Extended Country Code">Country</label><span id="rxCountry">—</span></div>

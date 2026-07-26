@@ -398,6 +398,10 @@ void RdsDecoder::reset() {
     pty_ = tp_ = ta_ = ms_ = -1; afN_ = 0;
     for (int i = 0; i < kMaxAf; ++i) afHits_[i] = 0;
     di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
+    rtpGroup_ = -1; lpsSeen_ = 0;
+    std::memset(rtpTitle_, 0, sizeof rtpTitle_);
+    std::memset(rtpArtist_, 0, sizeof rtpArtist_);
+    std::memset(longPs_, 0, sizeof longPs_);
     for (int i = 0; i < 32; ++i) grpCount_[i] = 0;
     grpTotal_ = 0;
     for (int i = 0; i < 4; ++i) blkRepair_[i] = 0;
@@ -486,6 +490,22 @@ void RdsDecoder::pushBit(int bit) {
     if (++nextBlk_ == 4) { parseGroup(); nextBlk_ = 0; }
 }
 
+// RT+ content types. 1 = title, 4 = artist; the rest are album, track, station info and
+// so on, which nothing here needs yet.
+void RdsDecoder::applyRtPlus(int type, int start, int len) {
+    if (type != 1 && type != 4) return;                 // only title and artist
+    if (start < 0 || len <= 0 || start + len > 64) return;
+    // The pointers index the RadioText, so a tag arriving before its text would copy
+    // whatever happened to be there — refuse rather than publish a fragment.
+    for (int i = 0; i < len; ++i) if (rt_[start + i] == '\0') return;
+    char* dst = (type == 1) ? rtpTitle_ : rtpArtist_;
+    int n = len; if (n > 64) n = 64;
+    std::memcpy(dst, rt_ + start, (size_t)n);
+    dst[n] = '\0';
+    // Trim the padding RadioText is full of.
+    for (int i = n - 1; i >= 0 && (dst[i] == ' ' || dst[i] == '\r'); --i) dst[i] = '\0';
+}
+
 void RdsDecoder::parseGroup() {
     // ★★ BLOCK B IS THE ONLY HARD REQUIREMENT. It carries the group type and the segment
     // ADDRESS, so without it there is nowhere to put anything — but block A carries only
@@ -563,6 +583,36 @@ void RdsDecoder::parseGroup() {
             } else {
                 psCand_[addr] = blk_[3]; psSeen_[addr] = true;
             }
+        }
+    } else if (gtype == 3 && ver == 0) {               // 3A — ODA announcement
+        // ★ RT+ does not have a fixed group of its own: 3A declares WHICH group carries it
+        // (block D is the Application ID, 0x4BD7 for RT+; block B's low 5 bits are the group
+        // type and version that will carry the tags). So RT+ is unparseable until this
+        // arrives, which is why it can appear a while after RadioText does.
+        if (blkOk_[3] && blk_[3] == 0x4BD7) rtpGroup_ = blk_[1] & 0x1F;
+    } else if (rtpGroup_ >= 0 && (gtype * 2 + ver) == rtpGroup_) {
+        // RT+ tags: two (content type, start, length) triplets pointing INTO the RadioText
+        // we have already assembled. ★ Length is stored as length-1, and a tag is only
+        // meaningful once the text it points at has actually been received — so both are
+        // range-checked against rt_ rather than trusted.
+        if (blkOk_[2] && blkOk_[3]) {
+            const int t1  = ((blk_[1] & 0x7) << 3) | ((blk_[2] >> 13) & 0x7);
+            const int s1  = (blk_[2] >> 7) & 0x3F;
+            const int l1  = ((blk_[2] >> 1) & 0x3F) + 1;
+            const int t2  = ((blk_[2] & 0x1) << 5) | ((blk_[3] >> 11) & 0x1F);
+            const int s2  = (blk_[3] >> 5) & 0x3F;
+            const int l2  = (blk_[3] & 0x1F) + 1;
+            applyRtPlus(t1, s1, l1);
+            applyRtPlus(t2, s2, l2);
+        }
+    } else if (gtype == 15 && ver == 0) {              // 15A — Long PS (32 UTF-8 bytes)
+        const int seg = blk_[1] & 0x7;
+        if (blkOk_[2] && blkOk_[3]) {
+            longPs_[seg * 4 + 0] = (char)((blk_[2] >> 8) & 0xFF);
+            longPs_[seg * 4 + 1] = (char)(blk_[2] & 0xFF);
+            longPs_[seg * 4 + 2] = (char)((blk_[3] >> 8) & 0xFF);
+            longPs_[seg * 4 + 3] = (char)(blk_[3] & 0xFF);
+            lpsSeen_ |= (1 << seg);
         }
     } else if (gtype == 4 && ver == 0) {               // 4A — clock time and date
         if (blkOk_[2] && blkOk_[3]) {
