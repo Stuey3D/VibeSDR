@@ -4415,10 +4415,14 @@ void LocalSdrShim::setLnaState(int v)       { if (p && p->useSdrplay()) p->sdrp-
 void LocalSdrShim::setIfGainReduction(int v){ if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
 void LocalSdrShim::setIfAgc(bool v) {
     if (!p || !p->useSdrplay()) return;
-    // Remember the choice, and cancel any pending kick — the user has just told us
-    // directly, which outranks our start-up workaround.
+    // ★★ RECORD THE PREFERENCE; DO NOT CANCEL THE KICK. Cancelling was wrong: the CLIENT
+    // re-sends its saved settings the instant it connects, so an "ifagc on" arrived before
+    // any samples were flowing — too early for the transition to take, exactly as it was
+    // inside open() — and it then suppressed the later kick that would have worked. The AGC
+    // was left inert again (Stuart, 2026-07-27: "agc stuck on that load").
+    // ★ Turning AGC OFF still cancels it, because the kick only fires when it is WANTED —
+    // which is the honest way to respect a manual choice, rather than by racing it.
     p->sdrpAgcWanted = v;
-    p->sdrpAgcKick = 2;
     p->sdrp->setIfAgc(v);
 }
 void LocalSdrShim::setIfAgcSetPoint(int v)  { if (p && p->useSdrplay()) p->sdrp->setIfAgcSetPoint(v); }
