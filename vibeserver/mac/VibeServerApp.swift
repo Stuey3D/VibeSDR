@@ -33,6 +33,19 @@ final class Server: ObservableObject {
     /// Owner policy — see the Settings toggle for the reasoning. Off by default:
     /// uncompressed audio is ~187 KB/s per listener out of THIS machine's uplink.
     @AppStorage("allowUncompressedAudio") var allowUncompressed = false
+    // ★★ RECEIVER LOCATION. It is the SERVER's position, never the listener's: distances,
+    // map centring and the ITU REGION all follow the ANTENNA (80m is 3.5-3.8 in R1 but
+    // 3.5-4.0 in R2), and a VibeServer may well be left at a relative's house.
+    // ★ It also decides the RDS COUNTRY and flag. The flag logic refuses to invent one —
+    // it needs either an Extended Country Code off the air or the PI's country nibble
+    // VALIDATED against the receiver's country — so with no location set, every station's
+    // country stayed blank and it looked like a decoder fault (found on air 2026-07-26).
+    @AppStorage("rxPlace") var rxPlace = ""
+    @AppStorage("rxLat")   var rxLat   = ""
+    @AppStorage("rxLon")   var rxLon   = ""
+    // Defaults to the Mac's own region, so the country works with no effort at all — and
+    // an operator who has moved the machine can still override it.
+    @AppStorage("rxIso")   var rxIso   = Locale.current.region?.identifier ?? ""
     /// Advertise on the LAN via Bonjour so clients auto-discover us. Off = reachable only by typing
     /// the address (a privacy choice — don't announce the radio to everyone on the network).
     @AppStorage("advertise") var advertise = true
@@ -137,6 +150,45 @@ final class Server: ObservableObject {
         }
     }
 
+    /// The JSON served at GET /location. Empty when nothing useful is known — every consumer
+    /// degrades honestly rather than guessing, so an empty string is a valid answer.
+    /// ★ The COUNTRY alone is worth publishing even with no coordinates: it is all the RDS
+    /// flag needs, and it costs the operator nothing because it defaults from the Mac itself.
+    func locationJson() -> String {
+        let lat = Double(rxLat.trimmingCharacters(in: .whitespaces))
+        let lon = Double(rxLon.trimmingCharacters(in: .whitespaces))
+        let place = rxPlace.trimmingCharacters(in: .whitespaces)
+        let iso = rxIso.trimmingCharacters(in: .whitespaces).uppercased()
+        if lat == nil && lon == nil && place.isEmpty && iso.isEmpty { return "" }
+        var parts: [String] = []
+        if !iso.isEmpty   { parts.append("\"iso\":\"\(jsonEscaped(iso))\"") }
+        if !place.isEmpty { parts.append("\"label\":\"\(jsonEscaped(place))\"") }
+        if let la = lat, let lo = lon, la >= -90, la <= 90, lo >= -180, lo <= 180 {
+            parts.append("\"lat\":\(la)")
+            parts.append("\"lon\":\(lo)")
+            parts.append("\"grid\":\"\(maidenhead(la, lo))\"")
+        }
+        return "{" + parts.joined(separator: ",") + "}"
+    }
+
+    private func jsonEscaped(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// Maidenhead locator — what every other operator will ask for, and it is pure arithmetic
+    /// on the coordinates, so asking the user for it as well would be asking twice.
+    private func maidenhead(_ lat: Double, _ lon: Double) -> String {
+        let a = Int(UnicodeScalar("A").value)
+        let lo = lon + 180.0, la = lat + 90.0
+        let f1 = Int(lo / 20.0), f2 = Int(la / 10.0)
+        let s1 = Int((lo - Double(f1) * 20.0) / 2.0), s2 = Int(la - Double(f2) * 10.0)
+        let t1 = Int((lo - Double(f1) * 20.0 - Double(s1) * 2.0) * 12.0)
+        let t2 = Int((la - Double(f2) * 10.0 - Double(s2)) * 24.0)
+        func ch(_ i: Int) -> String { String(UnicodeScalar(UInt8(a + i))) }
+        return ch(f1) + ch(f2) + "\(s1)\(s2)" + ch(t1).lowercased() + ch(t2).lowercased()
+    }
+
     func start() {
         lastError = nil
         var cfg = VsConfig()
@@ -149,17 +201,21 @@ final class Server: ObservableObject {
         cfg.maxBandwidthHz = maxBwHz
         cfg.lockedRate     = lockedRate
         cfg.forceIdleSaver = forceIdleSaver
+        let locJson = locationJson()
 
         // The C strings must outlive the call, so hold them across it.
         mode.withCString { modePtr in
-            pin.withCString { pinPtr in
+          pin.withCString { pinPtr in
+            locJson.withCString { locPtr in
                 cfg.mode = modePtr
                 cfg.pin  = pinPtr
+                cfg.locationJson = locJson.isEmpty ? nil : locPtr
                 var err = [CChar](repeating: 0, count: 256)
                 let p = vs_start(&cfg, &err, 256)
                 if p > 0 { port = Int(p); running = true; refreshEibi() }
                 else     { lastError = String(cString: err); running = false }
             }
+          }
         }
         if running { startPolling(); startAdvertising() }
         refreshDevices()
@@ -644,6 +700,28 @@ struct SettingsView: View {
                 }
                 Text("Where a listener's radio is tuned when they first open the page. Their browser remembers where they were after that, so this mostly affects first-time visitors.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            // ★★ WHERE THE ANTENNA IS. Not where the listener is — distances, map centring and
+            // the ITU region all follow the receiver, and a VibeServer may be left anywhere.
+            // ★ Country alone is enough for the RDS flag, and it defaults from the Mac, so the
+            // common case needs no typing at all.
+            Section("Location") {
+                TextField("Country", text: $server.rxIso, prompt: Text("GB"))
+                Text("Two-letter code. Sets the RDS country and flag, and the band plan's ITU region. "
+                     + "Filled in from this Mac's own region.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Place", text: $server.rxPlace, prompt: Text("Northampton"))
+                HStack {
+                    TextField("Latitude",  text: $server.rxLat, prompt: Text("52.24"))
+                    TextField("Longitude", text: $server.rxLon, prompt: Text("-0.90"))
+                }
+                Text("Optional. Coordinates give listeners distances and bearings, and centre the "
+                     + "map — the locator is worked out from them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !server.locationJson().isEmpty && server.running {
+                    Text("Restart the server to apply a change.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Access") {
                 TextField("PIN", text: $server.pin, prompt: Text("Open — no PIN"))

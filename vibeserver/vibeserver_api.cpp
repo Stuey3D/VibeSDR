@@ -56,6 +56,8 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     LocalSdrShim::setVibeServerWebEnabled(cfg->serveWebClient);
     LocalSdrShim::setVibeServerForceIdleSaver(cfg->forceIdleSaver);
     LocalSdrShim::setVibeServerAllowUncompressedAudio(cfg->allowUncompressedAudio);
+    if (cfg->locationJson && *cfg->locationJson)
+        LocalSdrShim::setLocationJson(cfg->locationJson);
 
     std::string err;
     // Negative fd = "open by device index" on desktop — see local_sdr_shim.cpp.
