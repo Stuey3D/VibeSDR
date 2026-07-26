@@ -75,11 +75,84 @@ int RdsDemod::bestIdx() const {
     return best;
 }
 
+// Pull anything the winner now knows into the sticky aggregate. ★ KNOWN values only: a
+// field that reads -1 or "" means "not received yet", never "no longer true", so letting it
+// overwrite would be forgetting on the strength of an absence.
+void RdsDemod::updateAggregate() {
+    const RdsDecoder* d = best();
+    if (!d) return;
+    auto keepInt = [](int& dst, int src, int unknown) { if (src != unknown) dst = src; };
+    keepInt(agg_.pty, d->pty(), -1);
+    keepInt(agg_.tp,  d->tp(),  -1);
+    keepInt(agg_.ta,  d->ta(),  -1);
+    keepInt(agg_.ms,  d->ms(),  -1);
+    keepInt(agg_.di,  d->di(),  -1);
+    keepInt(agg_.ctMinutes, d->ctMinutes(), -1);
+    if (d->ctMinutes() >= 0) agg_.ctOffsetHalfHours = d->ctOffsetHalfHours();
+    keepInt(agg_.language, d->languageCode(), 0);
+    if (d->pinHour() >= 0) {
+        agg_.pinDay = d->pinDay(); agg_.pinHour = d->pinHour(); agg_.pinMinute = d->pinMinute();
+    }
+    auto keepStr = [](char* dst, size_t cap, const char* src) {
+        if (src && *src) { std::strncpy(dst, src, cap - 1); dst[cap - 1] = '\0'; }
+    };
+    keepStr(agg_.ptyn, sizeof agg_.ptyn, d->ptyn());
+    keepStr(agg_.rtpTitle, sizeof agg_.rtpTitle, d->rtPlusTitle());
+    keepStr(agg_.rtpArtist, sizeof agg_.rtpArtist, d->rtPlusArtist());
+    keepStr(agg_.longPs, sizeof agg_.longPs, d->longPs());
+    // Highest count wins per bucket: a hypothesis that has been in sync longer knows more,
+    // and taking the maximum can only ever move forwards.
+    int tot = 0;
+    for (int i = 0; i < 32; ++i) {
+        if (d->groupCount(i) > agg_.groupCounts[i]) agg_.groupCounts[i] = d->groupCount(i);
+        tot += agg_.groupCounts[i];
+    }
+    agg_.groupTotal = tot;
+    // EON and ODA merge by key, so a partially-heard sister station fills in over time
+    // rather than being replaced wholesale by a less complete copy.
+    for (int i = 0; i < d->eonCount(); ++i) {
+        const RdsDecoder::Eon& e = d->eon(i);
+        RdsDecoder::Eon* slot = nullptr;
+        for (int k = 0; k < aggEonN_; ++k) if (aggEon_[k].pi == e.pi) { slot = &aggEon_[k]; break; }
+        if (!slot && aggEonN_ < RdsDecoder::kMaxEon) slot = &aggEon_[aggEonN_++];
+        if (!slot) continue;
+        slot->pi = e.pi;
+        for (int c = 0; c < 8; ++c) if (e.ps[c]) slot->ps[c] = e.ps[c];
+        if (e.afKhz) slot->afKhz = e.afKhz;
+        if (e.ta >= 0) slot->ta = e.ta;
+    }
+    for (int i = 0; i < d->odaCount(); ++i) {
+        const RdsDecoder::Oda& o = d->oda(i);
+        bool seen = false;
+        for (int k = 0; k < aggOdaN_; ++k) if (aggOda_[k].aid == o.aid) { seen = true; break; }
+        if (!seen && aggOdaN_ < RdsDecoder::kMaxOda) aggOda_[aggOdaN_++] = o;
+    }
+}
+
+int RdsDemod::mergedEon(RdsDecoder::Eon* out, int maxOut) {
+    const int n = std::min(maxOut, aggEonN_);
+    for (int i = 0; i < n; ++i) out[i] = aggEon_[i];
+    return n;
+}
+
+int RdsDemod::mergedOda(RdsDecoder::Oda* out, int maxOut) {
+    const int n = std::min(maxOut, aggOdaN_);
+    for (int i = 0; i < n; ++i) out[i] = aggOda_[i];
+    return n;
+}
+
 int RdsDemod::mergedAf(int* khzOut, int maxOut, int* seenOut) {
     // A station change invalidates the whole list — AF belongs to a PI, not to a dial spot.
     const RdsDecoder* b = best();
     const uint16_t pi = b ? b->confirmedPi() : 0;
-    if (pi && pi != mergedAfPi_) { mergedAfN_ = 0; mergedAfPi_ = pi; }
+    if (pi && pi != mergedAfPi_) {
+        // ★ A new PI is a DIFFERENT STATION, and that is the only thing that invalidates any
+        // of this. Sync loss does not — the station is still there and still saying the same
+        // things, so forgetting on a fade would be exactly the flicker this exists to stop.
+        mergedAfN_ = 0; mergedAfPi_ = pi;
+        agg_ = Agg{}; aggEonN_ = 0; aggOdaN_ = 0;
+    }
+    updateAggregate();
     for (int p = 0; p < NPH; ++p) {
         const int n = dec_[p].afCount();
         for (int i = 0; i < n; ++i) {
@@ -117,6 +190,13 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
         xy[i * 2 + 1] = constXY_[k * 2 + 1];
     }
     return n;
+}
+
+float RdsDemod::pilotPhaseCoherence() const {
+    // The accumulator holds an average of UNIT vectors, so its length is the agreement
+    // between them: 1 = every symbol reports the same angle, 0 = uniformly distributed.
+    const float m = std::sqrt(phCos2_ * phCos2_ + phSin2_ * phSin2_);
+    return m > 1.0f ? 1.0f : m;
 }
 
 float RdsDemod::pilotPhaseDeg() const {
@@ -200,6 +280,7 @@ void RdsDemod::reset() {
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
     mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
+    agg_ = Agg{}; aggEonN_ = 0; aggOdaN_ = 0;
     for (int k = 0; k < NPH; ++k) {
         accI_[k] = accQ_[k] = 0.0f; prevPh_[k] = 0.0f;
         prevAI_[k] = prevAQ_[k] = 0.0f; havePrev_[k] = false;

@@ -2515,44 +2515,29 @@ function renderRds() {
   // be interpreted — the whole reason this field exists is that reading it takes equipment
   // most people do not have (HansVanEijsden, FMDX.org, 2026-07-26).
   const rdsPhase = rdsExt?.phase ?? -1;
+  const coh = rdsExt?.phaseCoh ?? 0;
   const phEl = $('rxPhase');
-  if (rdsPhase < 0) { phEl.textContent = dash; phEl.removeAttribute('style'); }
-  else {
+  // ★★ NEVER STATE A PHASE WE CANNOT STAND BEHIND. The estimate averages unit vectors at
+  // twice the symbol angle; if our 57 kHz reference drifts at all, those vectors cancel and
+  // the average collapses while STILL producing a plausible angle. Observed on air as
+  // Classic FM cycling red/amber/green rapidly, and Heart reading 45 then 27 degrees.
+  // ★ A confident wrong number here is worse than none: this field would be telling
+  // broadcasters their transmitters are faulty (Stuart, 2026-07-26).
+  if (rdsPhase < 0 || coh < 0.35) {
+    phEl.textContent = rdsPhase < 0 ? dash : 'unstable — not measurable';
+    phEl.style.color = 'var(--text-dim)';
+  } else {
     const d0 = Math.min(rdsPhase, 180 - rdsPhase);   // distance from 0/180
     const d90 = Math.abs(rdsPhase - 90);             // distance from quadrature
     const near = Math.min(d0, d90);
+    // ★ Only claim a FAULT when the estimate is genuinely solid — asserting a transmitter
+    // defect is serious, so the bar for saying it is higher than for the other states.
     const verdict = near <= 10 ? (d0 <= d90 ? 'in phase' : 'quadrature')
                   : near <= 25 ? 'off nominal'
-                  : 'FAULT';
-    phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict}`;
+                  : coh > 0.7  ? 'FAULT'
+                  : 'off nominal';
+    phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
     phEl.style.color = near <= 10 ? '#7dff9a' : near <= 25 ? '#ffd479' : '#ff8a7d';
-  }
-  // ★ AF ENTRIES ARE TAPPABLE. A list of alternative frequencies you cannot act on is
-  // trivia; the whole point of AF is "the same station is also over there", so the natural
-  // gesture is to go there (Stuart, 2026-07-26).
-  // ★ SORTED, not arrival order. AF codes cycle continuously and the list refills from
-  // scratch whenever the decoder resyncs, so an arrival-ordered list visibly RESHUFFLES —
-  // tappable buttons moving under the cursor, and a list you cannot read twice the same
-  // way (Stuart: "why does the AF keep changing? that is what was throwing me").
-  const af = [...(rdsExt?.af ?? [])].sort((a, b) => a - b);
-  const afEl = $('rxAf');
-  afEl.textContent = '';
-  // ★ AF SCORE, as the FM-DX Webserver shows it: confirmed / glimpsed. Below 100% means
-  // entries are arriving damaged, which is a statement about the LINK, not the station.
-  const seen = rdsExt?.afseen ?? 0;
-  const scoreEl = $('rxAfScore');
-  scoreEl.textContent = seen
-    ? `${af.length}/${seen} · ${Math.round((af.length / seen) * 100)}%`
-    : dash;
-  if (!af.length) afEl.textContent = dash;
-  else for (const k of af) {
-    const b = document.createElement('button');
-    b.className = 'afBtn';
-    b.textContent = (k / 1000).toFixed(1);
-    b.title = `Tune to ${(k / 1000).toFixed(1)} MHz — confirmed by repetition`;
-    // Same PI, so the same station and the same mode — that is what makes AF an AF.
-    b.onclick = () => tuneTo({ frequency: k * 1000, mode: 'wfm' } as SearchResult);
-    afEl.appendChild(b);
   }
 
   // ── PI decomposition — free, it is arithmetic on a number we already have ──────

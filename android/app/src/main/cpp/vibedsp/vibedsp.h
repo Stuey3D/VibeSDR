@@ -630,6 +630,17 @@ public:
      *  enough to tell 0 from 90, the distinction that matters. Heavily smoothed: it is a
      *  transmitter characteristic, not something that should flicker. -1 = no lock. */
     float pilotPhaseDeg() const;
+    /** ★★ HOW COHERENT that phase estimate is, 0..1 — and the reason the number above must
+     *  never be shown without it. The estimate averages a unit vector at twice the symbol
+     *  angle: if the phase is STEADY the vectors agree and the average keeps its length, but
+     *  if our 57 kHz reference has even a slight frequency error the angle ROTATES, the
+     *  vectors cancel, and the average collapses towards zero while still yielding a
+     *  perfectly plausible-looking angle.
+     *  ★ That is exactly what was observed on air: Classic FM cycling red/amber/green, Heart
+     *  reading 45 then 27 degrees. A phase cannot be measured against a reference that is
+     *  itself turning, and a confident wrong number is worse than no number — this one would
+     *  have told broadcasters their transmitters were faulty (Stuart, 2026-07-26). */
+    float pilotPhaseCoherence() const;
     /** Pilot amplitude at the same instant, so the ratio means something. */
     void setPilotRef(float amp) { pilotRef_ = amp; }
     /** ★★ RECENT SYMBOL POINTS — the RDS constellation, as every serious FM receiver
@@ -647,6 +658,35 @@ public:
     static constexpr int kConstPts = 256;
     /** Extended fields from whichever hypothesis is winning; -1 / 0 when none is. */
     const RdsDecoder* best() const;
+
+    // ★★ EVERY FIELD IS STICKY AND STATION-SCOPED, exactly as AF is.
+    // Reading these straight off best() had the same fault the AF list had: each of the
+    // sixteen hypotheses keeps its OWN copy, so an arbitration switch swapped the whole set
+    // for a different receiver's partial knowledge, and fields that had been decoded
+    // perfectly well flicked back to dashes. Anything a user watches must not blink out
+    // because the decoder changed its mind about which timing phase it prefers.
+    // So: accumulate above the bank, accept only values that are KNOWN, never overwrite
+    // something known with something unknown, and clear the lot only when the PI changes —
+    // because that, and only that, means a different station (Stuart, 2026-07-26).
+    struct Agg {
+        int pty = -1, tp = -1, ta = -1, ms = -1, di = -1;
+        int ctMinutes = -1, ctOffsetHalfHours = 0;
+        int language = 0, pinDay = 0, pinHour = -1, pinMinute = 0;
+        char ptyn[9] = {0};
+        char rtpTitle[65] = {0};
+        char rtpArtist[65] = {0};
+        char longPs[33] = {0};
+        // ★ Group counts belong here too. Taken from the winner they JUMP whenever
+        // arbitration switches — and a rate computed from successive totals read that jump
+        // as throughput, reporting 16.7 groups/sec against a physical maximum of 11.4
+        // (Stuart, 2026-07-26). Monotonic per station, like everything else here.
+        int groupCounts[32] = {0};
+        int groupTotal = 0;
+    };
+    const Agg& aggregate() const { return agg_; }
+    /** Merged EON and ODA, same stickiness. */
+    int mergedEon(RdsDecoder::Eon* out, int maxOut);
+    int mergedOda(RdsDecoder::Oda* out, int maxOut);
     /** ★★ AF merged ACROSS hypotheses. Each of the sixteen has its own decoder and its own
      *  partial list, so when arbitration switched winner the reported AFs visibly vanished
      *  and reappeared — nothing was forgotten, we were simply reading a different receiver's
@@ -727,6 +767,12 @@ private:
     float phCos2_ = 0.0f, phSin2_ = 0.0f;
     // Constellation ring — written by whichever hypothesis is currently winning, so the
     // plot shows what the DECODER is actually working with rather than an also-ran.
+    Agg agg_{};
+    RdsDecoder::Eon aggEon_[RdsDecoder::kMaxEon] = {};
+    int aggEonN_ = 0;
+    RdsDecoder::Oda aggOda_[RdsDecoder::kMaxOda] = {};
+    int aggOdaN_ = 0;
+    void updateAggregate();
     int mergedAf_[RdsDecoder::kMaxAf] = {0};
     int mergedAfN_ = 0;
     uint16_t mergedAfPi_ = 0;          // whose list this is; a new PI starts a new list
@@ -788,6 +834,7 @@ public:
             const RdsDecoder::Oda* oda; int nOda;
             const float* constXY; int nPts;
             float pilotPhaseDeg;
+            float pilotPhaseCoherence;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.

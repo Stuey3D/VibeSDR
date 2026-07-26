@@ -1217,6 +1217,7 @@ struct LocalSdrShim::Impl {
     std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs, rdsPtyn;
     int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
     float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
+    float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
     std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
     std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
     std::vector<int> rdsAf;
@@ -1601,6 +1602,7 @@ struct LocalSdrShim::Impl {
         t->rdsEon.assign(x.eon, x.eon + x.nEon);
         t->rdsOda.assign(x.oda, x.oda + x.nOda);
         t->rdsPhase = x.pilotPhaseDeg;
+        t->rdsPhaseCoh = x.pilotPhaseCoherence;
     }
     static void rdsSigCb(void* ctx, float relDb) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
@@ -3158,7 +3160,7 @@ struct LocalSdrShim::Impl {
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
-        int lang, pinD, pinH, pinM; float phase;
+        int lang, pinD, pinH, pinM; float phase, phaseCoh;
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
@@ -3169,7 +3171,7 @@ struct LocalSdrShim::Impl {
           af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen;
           rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
           lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
-          eon = rdsEon; oda = rdsOda; phase = rdsPhase; }
+          eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -3188,6 +3190,7 @@ struct LocalSdrShim::Impl {
                       + ",\"pinHour\":" + std::to_string(pinH)
                       + ",\"pinMin\":" + std::to_string(pinM)
                       + ",\"phase\":" + std::to_string(phase)
+                      + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";

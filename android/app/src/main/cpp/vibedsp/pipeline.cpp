@@ -330,37 +330,31 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 float xy[RdsDemod::kConstPts * 2];
                 const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);
                 int af[RdsDecoder::kMaxAf]; int afSeen = 0;
+                // ★ mergedAf() also refreshes the sticky aggregate, so it must run first.
                 const int nAf = rdsDemod_.mergedAf(af, RdsDecoder::kMaxAf, &afSeen);
-                int gc[32] = {0};
-                if (d) for (int i = 0; i < 32; ++i) gc[i] = d->groupCount(i);
                 static RdsDecoder::Eon eons[RdsDecoder::kMaxEon];
-                int nEon = 0;
-                if (d) { nEon = d->eonCount();
-                         for (int i = 0; i < nEon; ++i) eons[i] = d->eon(i); }
-                Callbacks::RdsExt x{};
-                x.pty = d ? d->pty() : -1;  x.tp = d ? d->tp() : -1;
-                x.ta  = d ? d->ta()  : -1;  x.ms = d ? d->ms() : -1;
-                x.di  = d ? d->di()  : -1;
-                x.ctMinutes = d ? d->ctMinutes() : -1;
-                x.ctOffsetHalfHours = d ? d->ctOffsetHalfHours() : 0;
-                x.afKhz = af; x.nAf = nAf; x.afSeen = afSeen;
-                x.groupCounts = gc; x.groupTotal = d ? d->groupTotal() : 0;
-                x.rtpTitle  = d ? d->rtPlusTitle()  : "";
-                x.rtpArtist = d ? d->rtPlusArtist() : "";
-                x.longPs    = d ? d->longPs() : "";
-                x.ptyn      = d ? d->ptyn() : "";
-                x.language  = d ? d->languageCode() : 0;
-                x.pinDay    = d ? d->pinDay() : 0;
-                x.pinHour   = d ? d->pinHour() : -1;
-                x.pinMinute = d ? d->pinMinute() : 0;
-                x.eon = eons; x.nEon = nEon;
                 static RdsDecoder::Oda odas[RdsDecoder::kMaxOda];
-                int nOda = 0;
-                if (d) { nOda = d->odaCount();
-                         for (int i = 0; i < nOda; ++i) odas[i] = d->oda(i); }
+                const int nEon = rdsDemod_.mergedEon(eons, RdsDecoder::kMaxEon);
+                const int nOda = rdsDemod_.mergedOda(odas, RdsDecoder::kMaxOda);
+                // ★★ EVERYTHING BELOW COMES FROM THE STICKY AGGREGATE, never straight from
+                // the winning hypothesis — otherwise every field blinks out whenever
+                // arbitration changes its mind, which is precisely the fault that made the
+                // AF list appear and disappear (Stuart, 2026-07-26).
+                const RdsDemod::Agg& a = rdsDemod_.aggregate();
+                Callbacks::RdsExt x{};
+                x.pty = a.pty; x.tp = a.tp; x.ta = a.ta; x.ms = a.ms; x.di = a.di;
+                x.ctMinutes = a.ctMinutes;
+                x.ctOffsetHalfHours = a.ctOffsetHalfHours;
+                x.afKhz = af; x.nAf = nAf; x.afSeen = afSeen;
+                x.groupCounts = a.groupCounts; x.groupTotal = a.groupTotal;
+                x.rtpTitle = a.rtpTitle; x.rtpArtist = a.rtpArtist; x.longPs = a.longPs;
+                x.ptyn = a.ptyn; x.language = a.language;
+                x.pinDay = a.pinDay; x.pinHour = a.pinHour; x.pinMinute = a.pinMinute;
+                x.eon = eons; x.nEon = nEon;
                 x.oda = odas; x.nOda = nOda;
                 x.constXY = xy; x.nPts = np;
                 x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
+                x.pilotPhaseCoherence = rdsDemod_.pilotPhaseCoherence();
                 cb_.rdsExt(cb_.ctx, x);
             }
             if (wantRds && pll_.trackable())

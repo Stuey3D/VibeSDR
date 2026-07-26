@@ -80,6 +80,7 @@ export interface RdsExt {
   eon: { pi: string; ps: string; af: number; ta: number }[];
   oda: { aid: string; grp: number }[];
   phase: number;         // RDS-to-pilot phase, degrees (-1 = no lock)
+  phaseCoh: number;      // 0..1 — how steady that phase is; below ~0.35 it is meaningless
   xy: number[];          // interleaved x,y as signed bytes (x100)
 }
 
@@ -292,6 +293,7 @@ export class SpectrumClient {
           eon: Array.isArray(msg.eon) ? msg.eon : [],
           oda: Array.isArray(msg.oda) ? msg.oda : [],
           phase: Number(msg.phase ?? -1),
+          phaseCoh: Number(msg.phaseCoh ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
         });
         break;
