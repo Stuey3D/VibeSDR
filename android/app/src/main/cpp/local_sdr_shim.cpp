@@ -14,6 +14,7 @@
 // the only remaining native dependency.
 
 #include "local_sdr_shim.h"
+#include "sdrplay_source.h"
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -896,6 +897,12 @@ struct LocalSdrShim::Impl {
     // byte-identical to what the USB and rtl_tcp paths feed enqueueIq().
     std::unique_ptr<spyserver::SpyServerClient> spy;
     bool useSpy() const { return (bool)spy; }
+    // ★ A THIRD SOURCE, following the shape the other two already set. The RSP is 14-bit
+    // where the dongle is 8 — and 2026-07-26 established that RDS is limited by the FRONT
+    // END, not by our decoder, so this is how that gets tested rather than argued about.
+    std::unique_ptr<vibe::SdrplaySource> sdrp;
+    int  sdrpIndex = 0;
+    bool useSdrplay() const { return (bool)sdrp; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
 
@@ -1190,6 +1197,7 @@ struct LocalSdrShim::Impl {
             }
         }
         else if (useTcp()) sendTcpCmd(0x01, hz);
+        else if (useSdrplay()) sdrp->setFrequency((double)hz);
         else if (dev) rtlsdr_set_center_freq(dev, hz);
     }
 
@@ -1218,6 +1226,7 @@ struct LocalSdrShim::Impl {
     int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
     float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
     float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
+    float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
     std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
     std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
     std::vector<int> rdsAf;
@@ -1603,6 +1612,8 @@ struct LocalSdrShim::Impl {
         t->rdsOda.assign(x.oda, x.oda + x.nOda);
         t->rdsPhase = x.pilotPhaseDeg;
         t->rdsPhaseCoh = x.pilotPhaseCoherence;
+        t->rdsPilotDev = x.pilotDevKHz;
+        t->rdsDev      = x.rdsDevKHz;
     }
     static void rdsSigCb(void* ctx, float relDb) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
@@ -3129,6 +3140,7 @@ struct LocalSdrShim::Impl {
     void pauseCaptureIdle() {
         if (captureIdle.exchange(true)) return;               // already paused
         if (useTcp()) { tcpRunning.store(false); }
+        else if (useSdrplay()) { sdrp->close(); }
         else          { restarting.store(true); if (dev) rtlsdr_cancel_async(dev); }
         if (rtlThread.joinable()) rtlThread.join();
         // ★★ LET LIBUSB FINISH REAPING THE CANCELLED TRANSFERS. rtlsdr_read_async can
@@ -3143,13 +3155,15 @@ struct LocalSdrShim::Impl {
         // unattended machine, and invisible to whoever is testing with a client already
         // connected. Same shape as the AVAudioPlayerNode crash: an uncatchable abort on a
         // resume path, so it has to be prevented rather than handled.
-        if (!useTcp()) std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        if (!useTcp() && !useSdrplay()) std::this_thread::sleep_for(std::chrono::milliseconds(120));
         { std::lock_guard<std::mutex> lk(iqMtx); iqQueue.clear(); iqQueuedSamples = 0; iqPrefilled = false; }
         LOGI("no listeners — dongle capture paused (idle)");
     }
     void resumeCaptureIdle() {
         if (!captureIdle.exchange(false)) return;             // wasn't paused
         if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
+        else if (useSdrplay()) { std::string e; sdrp->open(sdrpIndex, sampleRate,
+                                                           rtlCenter.load(), lastGainTenthDb, e); }
         else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
         LOGI("listener connected — dongle capture resumed");
     }
@@ -3160,7 +3174,7 @@ struct LocalSdrShim::Impl {
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
-        int lang, pinD, pinH, pinM; float phase, phaseCoh;
+        int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_;
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
@@ -3171,7 +3185,8 @@ struct LocalSdrShim::Impl {
           af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen;
           rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
           lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
-          eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh; }
+          eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh;
+          pilotDev = rdsPilotDev; rdsDev_ = rdsDev; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -3191,6 +3206,8 @@ struct LocalSdrShim::Impl {
                       + ",\"pinMin\":" + std::to_string(pinM)
                       + ",\"phase\":" + std::to_string(phase)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
+                      + ",\"pilotDev\":" + std::to_string(pilotDev)
+                      + ",\"rdsDev\":" + std::to_string(rdsDev_)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";
@@ -3620,6 +3637,81 @@ static const int kR820tGains[] = {
     297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496
 };
 
+static double nowSecsStatic() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+/**
+ * Start on an SDRplay RSP.
+ *
+ * ★ Mirrors startTcp deliberately rather than generalising the three sources into one
+ * abstraction: the shim has 56 direct librtlsdr calls and refactoring all of them tonight
+ * would risk the path that actually works for the sake of tidiness. A third sibling is the
+ * honest small change; the abstraction can come when something needs it.
+ *
+ * ★ The samples land in enqueueIqInt16 — the SAME queue the SpyServer path already fills,
+ * which is why 14-bit hardware needed no new DSP: the shim has handled int16 IQ all along.
+ */
+int LocalSdrShim::startSdrplay(int index,
+                               double centerFreq, double sampleRate, int gainTenthDb,
+                               int fftSize, double fftRate, const std::string& mode,
+                               std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on SDRplay start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->sampleRate = sampleRate;
+    impl->fftSize = fftSize;
+    impl->fftRate = fftRate;
+    impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "wfm" : mode;
+    impl->lastGainTenthDb = gainTenthDb;
+    impl->sdrpIndex = index;
+
+    impl->sdrp = std::make_unique<vibe::SdrplaySource>();
+    Impl* self = impl;
+    impl->sdrp->setSink([self](const int16_t* iq, int n) {
+        self->lastIqAt.store(nowSecsStatic(), std::memory_order_relaxed);
+        self->enqueueIqInt16(iq, n, /*blockIfFull=*/false);
+    });
+    if (!impl->sdrp->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
+        delete impl; return -1;
+    }
+
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->startEngine();
+    impl->buildAudio();
+
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
+        impl->teardownAudio(); impl->rx.stop();
+        impl->sdrp->close(); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startDspThread();
+
+    p = impl;
+    LOGI("SDRplay started: index=%d center=%.0f rate=%.0f port=%d",
+         index, centerFreq, sampleRate, chosen);
+    return chosen;
+}
+
 int LocalSdrShim::startTcp(const std::string& host, int port,
                            double centerFreq, double sampleRate, int gainTenthDb,
                            int fftSize, double fftRate, const std::string& mode, std::string& err) {
@@ -3974,6 +4066,12 @@ void LocalSdrShim::setGain(int gainTenthDb) {
         else { p->sendTcpCmd(0x03, 1); p->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
         return;
     }
+    if (p->useSdrplay()) {
+        p->lastGainTenthDb = gainTenthDb;
+        p->sdrp->setGainTenthDb(gainTenthDb);
+        LOGI("gain (RSP): %s", gainTenthDb < 0 ? "auto" : std::to_string(gainTenthDb / 10.0).c_str());
+        return;
+    }
     if (!p->dev) return;
     if (gainTenthDb < 0) { rtlsdr_set_tuner_gain_mode(p->dev, 0); LOGI("gain: auto"); }
     else { rtlsdr_set_tuner_gain_mode(p->dev, 1); rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
@@ -4159,6 +4257,16 @@ std::vector<int> LocalSdrShim::getTunerGains() {
     // offer and gain looks uncontrollable. (Stock clients just show a 0..29 dial.)
     if (p->useSpy()) return p->spyGains;
     if (p->useTcp()) return p->tcpGains;     // rtl_tcp header has no values → R820T table
+    // ★ An RSP has NO discrete tuner-gain table to read: gain is an LNA state plus a
+    // continuous IF gain reduction. The client's slider needs SOMETHING to offer, so present
+    // a linear 0-49 dB scale — which is exactly the range setGainTenthDb maps onto IF
+    // reduction. ★ Deliberately NOT the dongle's table: showing R820T steps for an RSP would
+    // be inventing values the hardware has never heard of.
+    if (p->useSdrplay()) {
+        std::vector<int> g;
+        for (int db = 0; db <= 49; ++db) g.push_back(db * 10);
+        return g;
+    }
     if (!p->dev) return out;
     int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
     if (n <= 0) return out;

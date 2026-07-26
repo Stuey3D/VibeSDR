@@ -355,6 +355,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.constXY = xy; x.nPts = np;
                 x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
                 x.pilotPhaseCoherence = rdsDemod_.pilotPhaseCoherence();
+                x.pilotDevKHz = pll_.pilotDeviationKHz();
+                x.rdsDevKHz   = rdsDemod_.rdsDeviationKHz();
                 cb_.rdsExt(cb_.ctx, x);
             }
             if (wantRds && pll_.trackable())

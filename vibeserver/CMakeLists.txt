@@ -59,6 +59,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     "${CPP_DIR}/mdns_responder.cpp"
+    "${CPP_DIR}/sdrplay_source.cpp"
     "${CPP_DIR}/spyserver/spyserver_client.cpp"
     "${CPP_DIR}/spyserver/spyserver_messages.cpp"
     "${CPP_DIR}/decoders/fsk_decoder.cpp"
@@ -99,6 +100,24 @@ target_include_directories(vibeserver_core PUBLIC "${RTLSDR_INC}")
 # Use the REAL rtl-sdr.h, not the iOS no-op stub the shim falls back to.
 target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
 target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
+
+# ── SDRplay (RSP): HEADERS ONLY, deliberately never linked ────────────────────
+# ★★ The API is a separate install living in /usr/local/lib, and it ships as a DYLIB with no
+# static archive. Linking it would repeat exactly the failure the librtlsdr block above warns
+# about: a notarised hardened-runtime app that hard-links a dylib from /usr/local CRASHES ON
+# LAUNCH for everyone who does not have that dylib — which is almost every user, since almost
+# nobody owns an RSP. Breaking the app for the majority to serve the minority is the wrong
+# trade, and it is avoidable: sdrplay_source.cpp dlopen()s the library on first use.
+# So we take the HEADERS (for the structs and typedefs) and link NOTHING. A machine without
+# the API simply reports zero SDRplay devices.
+find_path(SDRPLAY_INC sdrplay_api.h HINTS /usr/local/include /Library/SDRplayAPI/3.15.1/include)
+if(SDRPLAY_INC)
+  message(STATUS "SDRplay headers: ${SDRPLAY_INC} (runtime dlopen, not linked)")
+  target_include_directories(vibeserver_core PUBLIC "${SDRPLAY_INC}")
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_SDRPLAY)
+else()
+  message(STATUS "SDRplay headers not found — building without RSP support")
+endif()
 
 # ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
 # STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code

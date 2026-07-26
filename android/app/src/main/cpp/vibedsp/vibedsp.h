@@ -262,6 +262,14 @@ public:
     // station was instant and everything else struggled (Stuart, on air, 2026-07-26).
     bool trackable() const { return trackState_; }
     float lockAmp() const { return lockAmp_; }
+    /** ★★ PILOT DEVIATION IN kHz — the number a broadcast analyser shows, and the one an
+     *  FM-DXer already reads fluently. The MPX is scaled so ±1 is ±75 kHz (see the FmDemod
+     *  gain in pipeline.cpp), so this is simply the pilot's amplitude in those units.
+     *  Spec is 8-10% of 75 kHz, i.e. 6.0-7.5 kHz — and the lock threshold's own comment,
+     *  written long before this, notes a real pilot measures ~0.08, which is 6 kHz. The
+     *  calibration was already right; we had just never expressed it in the units the
+     *  industry uses (2026-07-26, prompted by a Pira reading 6.8 kHz). */
+    float pilotDeviationKHz() const { return std::fabs(lockAmp_) * 75.0f; }
     void reset() { phase_ = 0.0; df_ = 0.0; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false; trackState_ = false;
                    oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0; }
 private:
@@ -617,6 +625,13 @@ public:
      *  subcarrier sits ~30 dB down, and an 8-bit ADC only gives ~48 dB of range, so the
      *  audio can sound perfect while RDS drowns in quantisation noise (2026-07-26). */
     float subcarrierRelDb() const;
+    /** ★ RDS DEVIATION IN kHz, on the same ±1 = ±75 kHz scale as the pilot. Typical is
+     *  2-4 kHz with 7.5% (5.6 kHz) the ceiling — a station pushing 4.9 is being generous,
+     *  which is good for reception and worth being able to see.
+     *  ★ Derived from the RMS of the recovered baseband and scaled to a peak equivalent, so
+     *  treat it as indicative rather than as a calibrated measurement: an analyser measures
+     *  the deviation directly, we infer it after filtering. */
+    float rdsDeviationKHz() const;
     /** ★★★ RDS-TO-PILOT PHASE, in degrees — the measurement HansVanEijsden (FMDX.org,
      *  2026-07-26) called "one verrrrry much requested thing… as far as I know, no software
      *  solution yet", and carries a Pira broadcast analyser to get. A correctly encoded
@@ -835,6 +850,8 @@ public:
             const float* constXY; int nPts;
             float pilotPhaseDeg;
             float pilotPhaseCoherence;
+            float pilotDevKHz;      // pilot injection, kHz deviation
+            float rdsDevKHz;        // RDS injection, kHz deviation
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.

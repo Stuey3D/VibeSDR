@@ -88,6 +88,9 @@ public:
      *  It's the SERVER's position — distances, map centring and the ITU region are
      *  properties of the antenna, not of whoever happens to be listening. */
     static void setLocationJson(const std::string& json);
+    /** Start on an SDRplay RSP (14-bit). Returns the port, or -1 with err set. */
+    int startSdrplay(int index, double centerFreq, double sampleRate, int gainTenthDb,
+                     int fftSize, double fftRate, const std::string& mode, std::string& err);
 
     // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
     // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like

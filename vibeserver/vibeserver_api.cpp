@@ -2,6 +2,7 @@
 // own. Anything that looks like a decision belongs in the shim, where every host shares it.
 #include "vibeserver_api.h"
 #include "local_sdr_shim.h"
+#include "sdrplay_source.h"
 
 #ifdef VIBE_HAVE_LIBRTLSDR
 #include <rtl-sdr.h>
@@ -23,6 +24,17 @@ void copyStr(char* dst, int cap, const std::string& src) {
     dst[n] = '\0';
 }
 }  // namespace
+
+// ★ DEVICES ARE ONE FLAT LIST: dongles first, then any SDRplay RSPs. The operator picks a
+// receiver, not a driver — which of the two APIs it happens to speak is our problem, not
+// theirs. Indices above the dongle count route to the RSP path (2026-07-26).
+static int rtlCount() {
+#ifdef VIBE_HAVE_LIBRTLSDR
+    return (int)rtlsdr_get_device_count();
+#else
+    return 0;
+#endif
+}
 
 void vs_default_config(VsConfig* cfg) {
     if (!cfg) return;
@@ -60,6 +72,16 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
         LocalSdrShim::setLocationJson(cfg->locationJson);
 
     std::string err;
+    // ★ Route to whichever driver owns this index. See vs_device_count for the flat list.
+    const int nRtl = rtlCount();
+    if (cfg->deviceIndex >= nRtl) {
+        const int port2 = LocalSdrShim::instance().startSdrplay(
+            cfg->deviceIndex - nRtl, cfg->centreHz, cfg->sampleRate, cfg->gainTenthDb,
+            cfg->fftSize, cfg->fftRate, cfg->mode ? cfg->mode : "wfm", err);
+        if (port2 <= 0) { copyStr(errOut, errCap, err.empty() ? "could not start" : err); g_port = 0; return -1; }
+        g_port = port2;
+        return port2;
+    }
     // Negative fd = "open by device index" on desktop — see local_sdr_shim.cpp.
     const int port = LocalSdrShim::instance().start(
         -(cfg->deviceIndex + 1), 0, 0,
@@ -102,14 +124,15 @@ void vs_set_stations(const char* json) {
 }
 
 int vs_device_count(void) {
-#ifdef VIBE_HAVE_LIBRTLSDR
-    return (int)rtlsdr_get_device_count();
-#else
-    return 0;
-#endif
+    return rtlCount() + vibe::SdrplaySource::deviceCount();
 }
 
 const char* vs_device_name(int index) {
+    const int nRtl = rtlCount();
+    if (index >= nRtl) {
+        g_deviceName = vibe::SdrplaySource::deviceName(index - nRtl);
+        return g_deviceName.c_str();
+    }
 #ifdef VIBE_HAVE_LIBRTLSDR
     if (index < 0 || (uint32_t)index >= rtlsdr_get_device_count()) { g_deviceName.clear(); return ""; }
     // ★ THE USB DESCRIPTOR, NOT librtlsdr's GUESS. rtlsdr_get_device_name() reports the TUNER

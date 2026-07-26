@@ -2509,7 +2509,21 @@ function renderRds() {
   $('rxBer').textContent = rdsBer >= 0 ? `${rdsBer}%` : dash;
   // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
   // signal is weak, when it is the normal injection ratio for a healthy station.
-  $('rxSig').textContent = rdsSig > -90 ? `${rdsSig.toFixed(0)} dB` : dash;
+  // ★ Deviations in kHz, each said against its own spec band so the number explains itself
+  // — "6.8 kHz" means nothing without knowing 6.0–7.5 is nominal (Stuart: "make it clear").
+  const pdev = rdsExt?.pilotDev ?? 0;
+  const rdev = rdsExt?.rdsDev ?? 0;
+  const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');
+  if (pdev > 0.2) {
+    const ok = pdev >= 6.0 && pdev <= 7.5;
+    pEl.textContent = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}`;
+    pEl.style.color = ok ? '#7dff9a' : '#ffd479';
+  } else { pEl.textContent = dash; pEl.style.color = ''; }
+  if (rdev > 0.2) {
+    const strong = rdev >= 4.0, low = rdev < 1.5;
+    rEl.textContent = `${rdev.toFixed(1)} kHz · ${low ? 'weak' : strong ? 'generous' : 'typical'}`;
+    rEl.style.color = low ? '#ffd479' : '#7dff9a';
+  } else { rEl.textContent = dash; rEl.style.color = ''; }
   // ★★★ RDS-to-pilot phase. Correct is near 0 or near 90 (quadrature encoding); the middle
   // ground is a transmitter fault, so say which it is rather than leaving a bare number to
   // be interpreted — the whole reason this field exists is that reading it takes equipment
@@ -2524,8 +2538,18 @@ function renderRds() {
   // ★ A confident wrong number here is worse than none: this field would be telling
   // broadcasters their transmitters are faulty (Stuart, 2026-07-26).
   if (rdsPhase < 0 || coh < 0.35) {
-    phEl.textContent = rdsPhase < 0 ? dash : 'unstable — not measurable';
-    phEl.style.color = 'var(--text-dim)';
+    // ★★ A ROTATING CONSTELLATION IS A DIAGNOSIS, NOT A FAILURE. Low coherence with a LOW
+    // block error rate is a distinctive combination: the symbols are being decoded perfectly
+    // (differential detection does not care about a steady rotation), but the phase is
+    // sweeping — which means the station's encoder is not locked to its pilot at all. It
+    // draws as a clean RING rather than two lobes, and calling that "noisy" is exactly wrong.
+    // ★ Confirmed on Classic FM by two INDEPENDENT receivers, an RTL-SDR and an SDRplay
+    // RSP1B, which agreed (2026-07-26). That is a finding a DXer would buy an analyser for.
+    const rotating = rdsPhase >= 0 && coh < 0.35 && rdsBer >= 0 && rdsBer < 20;
+    phEl.textContent = rdsPhase < 0 ? dash
+                     : rotating     ? 'rotating — encoder not locked to pilot'
+                                    : 'unstable — not measurable';
+    phEl.style.color = rotating ? '#ffd479' : 'var(--text-dim)';
   } else {
     const d0 = Math.min(rdsPhase, 180 - rdsPhase);   // distance from 0/180
     const d90 = Math.abs(rdsPhase - 90);             // distance from quadrature
@@ -2682,6 +2706,11 @@ function constellationVerdict(xy: number[]): { text: string; cls: string } {
   const err = Math.sqrt((sumY2 + sumXErr2) / n);
   if (meanAbsX < 1) return { text: 'no lock', cls: 'bad' };
   const evm = (err / meanAbsX) * 100;
+  // ★ EVM assumes two lobes after de-rotation. A ROTATING constellation defeats that — the
+  // points are ordered, not scattered — so it reports a huge figure for a signal that is
+  // decoding flawlessly. Say what it actually is instead of libelling it as noise.
+  if (rdsExt && (rdsExt.phaseCoh ?? 0) < 0.35 && rdsBer >= 0 && rdsBer < 20)
+    return { text: 'rotating — unlocked encoder', cls: 'ok' };
   if (evm < 45)  return { text: `clean · ${evm.toFixed(0)}% EVM`, cls: 'good' };
   if (evm < 80)  return { text: `usable · ${evm.toFixed(0)}% EVM`, cls: 'ok' };
   return { text: `noisy · ${evm.toFixed(0)}% EVM`, cls: 'bad' };

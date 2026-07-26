@@ -192,6 +192,11 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
     return n;
 }
 
+float RdsDemod::rdsDeviationKHz() const {
+    // Complex baseband RMS → peak equivalent (×√2), on the MPX's ±1 = ±75 kHz scale.
+    return rdsRms_ * 1.41421356f * 75.0f;
+}
+
 float RdsDemod::pilotPhaseCoherence() const {
     // The accumulator holds an average of UNIT vectors, so its length is the agreement
     // between them: 1 = every symbol reports the same angle, 0 = uniformly distributed.

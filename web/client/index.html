@@ -979,7 +979,11 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label>Type</label><span id="rxPty">—</span></div>
         <div class="rdsF"><label>Flags</label><span id="rxFlags">—</span></div>
         <div class="rdsF"><label title="Block error rate, before correction, last 12 groups">Errors</label><span id="rxBer">—</span></div>
-        <div class="rdsF"><label title="Recovered 57 kHz level relative to the 19 kHz pilot">Sub vs pilot</label><span id="rxSig">—</span></div>
+        <!-- ★ INJECTION LEVELS IN kHz DEVIATION — the units a broadcast analyser uses and an
+             FM-DXer reads fluently, and directly comparable against a Pira. Spec bands are in
+             the tooltips so the number interprets itself. -->
+        <div class="rdsF"><label title="Pilot injection. Spec is 8–10% of 75 kHz, so 6.0–7.5 kHz.">Pilot dev</label><span id="rxPilotDev">—</span></div>
+        <div class="rdsF"><label title="RDS injection. Typically 2–4 kHz; 7.5% (5.6 kHz) is the ceiling. Higher means the station is pushing its RDS hard, which helps reception. Inferred after filtering, so indicative rather than calibrated.">RDS dev</label><span id="rxRdsDev">—</span></div>
         <!-- ★★★ The measurement FM-DXers carry a Pira analyser to get. Near 0 or near 90 is
              correct; anything in between is a transmitter fault. -->
         <div class="rdsF"><label title="Phase between the station's RDS subcarrier and its own 19 kHz pilot. Correct is near 0°, or near 90° for quadrature encoding — anything between indicates a transmitter fault. Modulo 180° (inherent to BPSK).">RDS↔pilot</label><span id="rxPhase">—</span></div>

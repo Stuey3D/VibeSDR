@@ -23,6 +23,15 @@ final class Server: ObservableObject {
     @Published var status = VsStatus()
     @Published var deviceName = ""
     @Published var deviceCount = 0
+    /// ★ ALL attached receivers, not just the first. The app read vs_device_name(0) and
+    /// started device 0 unconditionally — which was invisible while a dongle was the only
+    /// thing anyone owned, and became "I can't see the SDRplay" the moment a second radio
+    /// was plugged in beside it (Stuart, 2026-07-26).
+    @Published var devices: [String] = []
+    /// Which one to serve. Persisted, and matched BY NAME on the next launch — indices
+    /// renumber when something is unplugged, and silently serving a different radio than
+    /// last time is worse than asking again.
+    @AppStorage("deviceName") var wantedDevice = ""
 
     // Persisted so a restart keeps the operator's choices; the core still owns what they MEAN.
     @AppStorage("centreHz") var centreHz   = 96_600_000.0
@@ -129,8 +138,16 @@ final class Server: ObservableObject {
 
     func refreshDevices() {
         deviceCount = Int(vs_device_count())
-        deviceName  = deviceCount > 0 ? String(cString: vs_device_name(0)) : ""
+        devices = (0..<max(0, deviceCount)).map { String(cString: vs_device_name(Int32($0))) }
+        deviceName = devices.indices.contains(deviceIndex) ? devices[deviceIndex] : (devices.first ?? "")
         onChange?()
+    }
+
+    /// The chosen receiver's index, resolved by NAME so an unplug elsewhere cannot silently
+    /// hand a listener a different radio. Falls back to the first attached device.
+    var deviceIndex: Int {
+        if let i = devices.firstIndex(of: wantedDevice) { return i }
+        return devices.isEmpty ? 0 : 0
     }
 
     /// Rescan for radios, and start serving if a radio has appeared and we were idle.
@@ -235,6 +252,7 @@ final class Server: ObservableObject {
         var cfg = VsConfig()
         vs_default_config(&cfg)
         cfg.centreHz = centreHz
+        cfg.deviceIndex = Int32(deviceIndex)
         cfg.port     = Int32(wantedPort)
         cfg.serveWebClient = serveWeb
         cfg.allowUncompressedAudio = allowUncompressed
@@ -746,6 +764,21 @@ struct SettingsView: View {
             // the ITU region all follow the receiver, and a VibeServer may be left anywhere.
             // ★ Country alone is enough for the RDS flag, and it defaults from the Mac, so the
             // common case needs no typing at all.
+            // ★ A receiver PICKER. With more than one radio attached the app used to serve
+            // whichever enumerated first, with no way to say otherwise.
+            Section("Receiver") {
+                if server.devices.isEmpty {
+                    Text("No radio found. Plug one in and press Refresh.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Picker("Radio", selection: $server.wantedDevice) {
+                        ForEach(server.devices, id: \.self) { d in Text(d).tag(d) }
+                    }
+                    Text("Restart the server to change radio.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Refresh") { server.refreshDevices() }
+            }
             Section("Location") {
                 TextField("Country", text: $server.rxIso, prompt: Text("GB"))
                 Text("Two-letter code. Sets the RDS country and flag, and the band plan's ITU region. "
