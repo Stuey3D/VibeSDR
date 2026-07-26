@@ -4176,6 +4176,10 @@ function applyShareParams() {
  *  the readout say so, because a slider that silently means the opposite of every other
  *  slider in the app is a trap.
  */
+/** SDRplay's own AGC working point. The API defaults to -60, which is a different thing —
+ *  see the setpoint note in sdrplay_source.h. */
+const AGC_DEFAULT = -30;
+
 let radioCaps: import('./spectrum').RadioCaps | null = null;
 
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
@@ -4226,7 +4230,12 @@ function renderRspVals() {
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
-  $('rspAgcSetVal').textContent = `${sp} dBfs${sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
+  // ★ Name the default where it sits. -30 dBFS is SDRplay's OWN working point (the API's
+  // default is -60, which is a different and much gentler thing), so it is the value a user
+  // will want to come back to after experimenting — and a number means nothing without
+  // knowing where home is (Stuart, 2026-07-26).
+  $('rspAgcSetVal').textContent =
+    `${sp} dBfs${sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
 
 /** Glide the IF thumb to a new AGC value. Status arrives at 5 Hz; a slider that teleports
@@ -4308,7 +4317,12 @@ function initRspControls() {
   };
   const sp = $<HTMLInputElement>('rspAgcSet');
   sp.oninput = () => {
-    renderRspVals(); rspSend({ agcset: Number(sp.value) }); savePref('rsp_agcset', Number(sp.value));
+    // ★ A SOFT DETENT AT THE DEFAULT. Dragging near -30 snaps to it, so getting back to
+    // SDRplay's working point is a gesture rather than a pixel-hunt. Narrow enough (±2 dB)
+    // that it never fights someone deliberately choosing -28 or -32.
+    let v = Number(sp.value);
+    if (Math.abs(v - AGC_DEFAULT) <= 2) { v = AGC_DEFAULT; sp.value = String(v); }
+    renderRspVals(); rspSend({ agcset: v }); savePref('rsp_agcset', v);
   };
   const toggle = (id: string, key: string) => {
     const b = $<HTMLButtonElement>(id);
