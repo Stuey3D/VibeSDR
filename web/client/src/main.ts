@@ -3733,11 +3733,16 @@ function populateHw() {
       const o = document.createElement('option');
       o.value = String(rate);
       const mhz = `${(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s`;
-      // An RTL-SDR cannot sustain more than 2.4 MS/s over USB — above it the dongle
-      // drops samples, which shows up as glitches in the audio and gaps in the
-      // waterfall. It is offered because some dongles cope and some users want the
-      // span, but it must never be chosen FOR them, and never without saying so.
-      o.textContent = rate > RTL_SAFE_RATE ? `${mhz} (may drop samples)` : mhz;
+      // ★★ THE WARNING IS THE DONGLE'S, NOT THE RADIO'S. An RTL-SDR cannot sustain more
+      // than 2.4 MS/s over USB — above it the dongle drops samples silently, which is what
+      // makes it a trap rather than a trade-off, so those rates are labelled. An RSP is a
+      // different radio: it runs 8 MS/s happily, and carrying the dongle's caveat across
+      // would warn about the very capability the hardware was bought for (Stuart,
+      // 2026-07-26). The server already omits what a given radio cannot sustain — 10 MS/s
+      // is absent for an RSP for the same measured reason 3.2 is absent for a dongle — so
+      // anything still on offer here is safe on THIS receiver.
+      const risky = radioCaps?.driver !== 'sdrplay' && rate > RTL_SAFE_RATE;
+      o.textContent = risky ? `${mhz} (may drop samples)` : mhz;
       r.appendChild(o);
     }
     r.onchange = () => {
