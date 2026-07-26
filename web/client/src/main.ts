@@ -2484,7 +2484,11 @@ function renderRds() {
   const dlogo = $<HTMLImageElement>('decLogo');
   if (rdsLogoUrl) { if (dlogo.src !== rdsLogoUrl) dlogo.src = rdsLogoUrl; dlogo.classList.add('show'); }
   else dlogo.classList.remove('show');
-  $('rxPi').textContent  = rdsPi > 0 ? piHex(rdsPi) : dash;
+  // ★ HEX AND DECIMAL. Hex is how the standard defines PI, and how it decomposes into
+  // country / coverage / reference — but plenty of databases, loggers and older receivers
+  // quote it in DECIMAL, so DXers comparing catches see both forms. Showing both saves
+  // anyone doing hex arithmetic to match a log entry (Stuart, 2026-07-27).
+  $('rxPi').textContent  = rdsPi > 0 ? `${piHex(rdsPi)} · ${rdsPi}` : dash;
   $('rxPs').textContent  = rdsName || dash;
   $('rxRt').textContent  = rdsText || dash;
   // ★ RT+ — the tags point INTO RadioText, so they can only appear once group 3A has
