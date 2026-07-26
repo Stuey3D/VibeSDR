@@ -28,7 +28,7 @@ const KEYS: { k: string; what: string }[] = [
   { k: '<  >', what: 'tune down and up' },
   { k: '−  +', what: 'zoom out and in' },
   { k: 'shift + arrow', what: 'move through menus and lists' },
-  { k: 'alt + tab', what: 'in and out of the decoder box' },
+  { k: 'alt/opt + tab', what: 'in and out of the decoder box' },
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
@@ -111,7 +111,7 @@ const s = StyleSheet.create({
   row:   { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   // Key caps are VIEWS, not nested Text — a nested <Text> cannot carry a border on iOS.
   cap: {
-    minWidth: 108, paddingHorizontal: 8, paddingVertical: 5, marginRight: 12,
+    minWidth: 120, paddingHorizontal: 8, paddingVertical: 5, marginRight: 12,
     borderWidth: 1, borderColor: NAV_FOCUS, borderRadius: 5, alignItems: 'center',
   },
   capTxt: { color: NAV_FOCUS, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
