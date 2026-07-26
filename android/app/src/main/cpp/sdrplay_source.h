@@ -51,7 +51,42 @@ public:
     /** Bias-T for an active antenna or LNA at the mast. */
     void setBiasT(bool on);
 
+    // ── ★★ THE CONTROLS AN RSP ACTUALLY HAS ──────────────────────────────────
+    // Reference: SoapySDRPlay3, which is open source and authoritative about the per-model
+    // ranges the API itself does not expose.
+    /** RF gain is an LNA STATE, not decibels: 0..lnaStateCount()-1, 0 being most RF gain.
+     *  ★ This is the control that decides whether the front end overloads — and RF overload
+     *  is what destroys the RDS subcarrier, which is the whole reason this device is here.
+     *  A dongle's single gain slider cannot express it, so it must not pretend to. */
+    void setLnaState(int state);
+    /** IF gain REDUCTION in dB, 20..59. Higher means LESS gain — it is a reduction. */
+    void setIfGainReduction(int gRdB);
+    /** API-side AGC on the IF stage. While enabled the IF reduction cannot be set by hand. */
+    void setIfAgc(bool on);
+    /** RSP1A/1B/2/duo/dx: broadcast FM notch. ★ Wanted ON for HF or airband, where a strong
+     *  local FM transmitter is what overloads the front end — and OFF when the FM band is
+     *  what you came to listen to. */
+    void setRfNotch(bool on);
+    /** RSP1A/1B/duo/dx: DAB band notch, same reasoning as the FM notch. */
+    void setDabNotch(bool on);
+
+    /** How many LNA states this model offers — 4 on an RSP1, 10 on an RSP1A/1B, 28 on a dx. */
+    int  lnaStateCount() const;
+    bool hasRfNotch() const;
+    bool hasDabNotch() const;
+    bool hasBiasT() const;
+    std::string model() const;
+    /** The API's own bandwidth choice for a sample rate, following SoapySDRPlay3's mapping. */
+    static int bandwidthKHzForRate(double sampleRateHz);
+
     void setSink(IqSink sink) { sink_ = std::move(sink); }
+    /** ★★ IDLE PARK WITHOUT TOUCHING THE API. Closing the device on idle CRASHED inside the
+     *  SDRplay API's own shared mutex (ReleaseDevice, from the connection thread, 2026-07-26):
+     *  its lifecycle is process-wide shared state and will not tolerate being unwound from
+     *  under an arriving client. The park exists to stop a DONGLE drawing power; on an RSP
+     *  simply dropping the samples achieves the same for the host, costs nothing, and cannot
+     *  crash. ★ A power optimisation must never be able to take the server down. */
+    void setPaused(bool p) { paused_ = p; }
     /** Set when the device disappears — the shim's watchdog polls this exactly as it does
      *  for a dongle that has been unplugged. */
     bool deviceLost() const { return lost_; }
@@ -62,6 +97,7 @@ private:
     IqSink sink_;
     bool open_ = false;
     bool lost_ = false;
+    bool paused_ = false;
 };
 
 }  // namespace vibe

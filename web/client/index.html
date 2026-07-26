@@ -1337,6 +1337,36 @@ select.btn { padding: 6px 8px; }
     <label>AUTO GAIN</label>
     <div class="seg"><button class="btn" id="gainAuto">AUTO</button></div>
   </div>
+  <!-- ★★ SDRplay RSP controls. An RSP is not a dongle: RF gain is an LNA STATE and IF gain is
+       a REDUCTION in dB, with separate AGC over the IF stage. Presenting one slider labelled
+       "gain" for all of that is not a simplification, it is a misrepresentation — and it hid
+       the fact that the LNA was wide open and flooding the front end.
+       ★ AND THE DIRECTION IS INVERTED, which is what catches people out: you set a gain
+       REDUCTION, so 20 dB is MAXIMUM gain and 59 dB is minimum. The labels say so. -->
+  <div id="rspCtls" hidden>
+    <div class="mrow">
+      <label for="rspLna">RF GAIN (LNA)</label>
+      <input type="range" id="rspLna" min="0" max="9" value="4">
+      <span class="val" id="rspLnaVal">—</span>
+    </div>
+    <div class="mrow">
+      <label for="rspIfGr">IF GAIN RED.</label>
+      <input type="range" id="rspIfGr" min="20" max="59" value="40">
+      <span class="val" id="rspIfGrVal">—</span>
+    </div>
+    <div class="mrow">
+      <label>IF AGC</label>
+      <div class="seg"><button class="btn on" id="rspIfAgc">AUTO</button></div>
+    </div>
+    <div class="mrow" id="rowRspNotch">
+      <label>FILTERS</label>
+      <div class="seg">
+        <button class="btn" id="rspRfNotch" title="Broadcast FM notch — wanted ON elsewhere in the spectrum, where a strong local FM transmitter is what overloads the front end, and OFF when FM is what you came to hear">FM NOTCH</button>
+        <button class="btn" id="rspDabNotch" title="DAB band notch, same reasoning as the FM notch">DAB NOTCH</button>
+        <button class="btn" id="rspBiasT" title="Bias-T — powers an active antenna or a mast-head amplifier">BIAS-T</button>
+      </div>
+    </div>
+  </div>
   <div class="mrow" id="rowRate">
     <label for="rate">SAMPLE RATE</label>
     <select id="rate" class="btn"></select>

@@ -171,7 +171,7 @@ static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT,
 
 namespace {
 // Only the pieces the callbacks touch, so this needs no access to the private Impl.
-struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* lost; };
+struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* lost; bool* paused; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -214,7 +214,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         // ★ Zero-IF with a bandwidth wide enough for the whole FM MPX. RDS rides at 57 kHz,
         // so anything narrower than ~200 kHz would remove the very thing this device was
         // fetched to receive — and it would do so silently, looking like a decode failure.
-        ch->tunerParams.bwType = sdrplay_api_BW_1_536;
+        ch->tunerParams.bwType = (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(sampleRateHz);
         ch->tunerParams.ifType = sdrplay_api_IF_Zero;
         ch->ctrlParams.decimation.enable = 0;
         ch->ctrlParams.dcOffset.DCenable = 1;
@@ -223,7 +223,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     setGainTenthDb(gainTenthDb);
 
     static CbCtx ctx;
-    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_ };
+    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -256,36 +256,167 @@ void SdrplaySource::setFrequency(double hz) {
 void SdrplaySource::setSampleRate(double hz) {
     if (!open_ || !impl_->params || !impl_->params->devParams) return;
     impl_->params->devParams->fsFreq.fsHz = hz;
+    // ★ The IF bandwidth must follow the rate, or a wider span arrives already filtered.
+    if (impl_->params->rxChannelA)
+        impl_->params->rxChannelA->tunerParams.bwType =
+            (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(hz);
     api().Update(impl_->dev.dev, impl_->dev.tuner,
-                       sdrplay_api_Update_Dev_Fs, sdrplay_api_Update_Ext1_None);
+                 (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Dev_Fs
+                                              | sdrplay_api_Update_Tuner_BwType),
+                 sdrplay_api_Update_Ext1_None);
 }
 
 void SdrplaySource::setGainTenthDb(int tenthDb) {
     if (!impl_->params || !impl_->params->rxChannelA) return;
     auto* ch = impl_->params->rxChannelA;
-    // ★★ THE GAIN MODEL IS TWO-DIMENSIONAL, and that is a real difference from a dongle
-    // rather than a detail. An RSP has an LNA state (RF gain, in coarse steps whose meaning
-    // depends on band and model) and an IF gain REDUCTION in dB. A single slider therefore
-    // needs a POLICY, and the one that matters for our purpose is: prefer LNA gain low and
-    // IF reduction low, because RF overload is what destroys the RDS subcarrier — the exact
-    // failure we spent 2026-07-26 chasing on an 8-bit dongle.
+    // ★★ ON AN RSP THE SLIDER DRIVES THE LNA, NOT THE IF — the opposite of a dongle, and the
+    // correction to a genuinely bad first attempt. The first version pinned LNAstate to 0,
+    // which is MAXIMUM RF gain, and moved only the IF reduction: the front end sat wide open
+    // whatever the user did, and an RSP with its LNA wide open on the FM band floods itself
+    // (Stuart, on air 2026-07-26 — "the uncontrollable gain that is flooding it").
+    // ★ RF overload is what destroys the RDS subcarrier, the entire reason this hardware is
+    // here, so the one control a single slider gets must be the one that governs it.
+    const int n = lnaStateCount();
+    int st;
     if (tenthDb < 0) {
-        ch->ctrlParams.agc.enable = sdrplay_api_AGC_50HZ;   // API's own AGC
+        // "Auto" gets a MIDDLE LNA state, never 0 — automatic must not mean wide open.
+        st = n / 2;
     } else {
-        ch->ctrlParams.agc.enable = sdrplay_api_AGC_DISABLE;
-        // Map 0..49 dB of "gain" onto IF gain reduction, which runs the other way: 20 dB of
-        // reduction is minimum, 59 maximum. More gain = less reduction.
-        int gr = 59 - (tenthDb / 10);
-        if (gr < 20) gr = 20;
-        if (gr > 59) gr = 59;
-        ch->tunerParams.gain.gRdB = gr;
-        ch->tunerParams.gain.LNAstate = 0;                  // most RF gain; see the note above
+        // 0..49 dB onto the LNA ladder, INVERTED: state 0 is the most RF gain.
+        st = (int)((1.0 - (double)tenthDb / 490.0) * (n - 1) + 0.5);
     }
+    if (st < 0) st = 0;
+    if (st > n - 1) st = n - 1;
+    ch->tunerParams.gain.LNAstate = (unsigned char)st;
+    setIfAgc(true);
     if (open_)
         api().Update(impl_->dev.dev, impl_->dev.tuner,
-                           (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Tuner_Gr
-                                                        | sdrplay_api_Update_Ctrl_Agc),
-                           sdrplay_api_Update_Ext1_None);
+                     sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+}
+
+int SdrplaySource::bandwidthKHzForRate(double fs) {
+    // SoapySDRPlay3's mapping. ★ 1.536 MHz is the one that matters for FM: the MPX runs to
+    // 57 kHz plus sidebands, so anything narrower silently removes RDS — the very thing this
+    // hardware was fetched to receive.
+    if (fs < 300000)   return 200;
+    if (fs < 600000)   return 300;
+    if (fs < 1536000)  return 600;
+    if (fs < 5000000)  return 1536;
+    if (fs < 6000000)  return 5000;
+    if (fs < 7000000)  return 6000;
+    if (fs < 8000000)  return 7000;
+    return 8000;
+}
+
+int SdrplaySource::lnaStateCount() const {
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP1_ID:    return 4;
+        case SDRPLAY_RSP1A_ID:
+        case SDRPLAY_RSP1B_ID:   return 10;
+        case SDRPLAY_RSP2_ID:    return 9;
+        case SDRPLAY_RSPduo_ID:  return 10;
+        case SDRPLAY_RSPdx_ID:
+        case SDRPLAY_RSPdxR2_ID: return 28;
+        default:                 return 4;
+    }
+}
+
+bool SdrplaySource::hasRfNotch() const {
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID: case SDRPLAY_RSP2_ID:
+        case SDRPLAY_RSPduo_ID: case SDRPLAY_RSPdx_ID: case SDRPLAY_RSPdxR2_ID: return true;
+        default: return false;
+    }
+}
+bool SdrplaySource::hasDabNotch() const {
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
+        case SDRPLAY_RSPduo_ID: case SDRPLAY_RSPdx_ID: case SDRPLAY_RSPdxR2_ID: return true;
+        default: return false;
+    }
+}
+bool SdrplaySource::hasBiasT() const { return hasDabNotch() || impl_->dev.hwVer == SDRPLAY_RSP2_ID; }
+
+std::string SdrplaySource::model() const {
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP1_ID:    return "RSP1";
+        case SDRPLAY_RSP1A_ID:   return "RSP1A";
+        case SDRPLAY_RSP1B_ID:   return "RSP1B";
+        case SDRPLAY_RSP2_ID:    return "RSP2";
+        case SDRPLAY_RSPduo_ID:  return "RSPduo";
+        case SDRPLAY_RSPdx_ID:   return "RSPdx";
+        case SDRPLAY_RSPdxR2_ID: return "RSPdx-R2";
+        default:                 return "RSP";
+    }
+}
+
+void SdrplaySource::setLnaState(int state) {
+    if (!impl_->params || !impl_->params->rxChannelA) return;
+    const int n = lnaStateCount();
+    if (state < 0) state = 0;
+    if (state >= n) state = n - 1;
+    impl_->params->rxChannelA->tunerParams.gain.LNAstate = (unsigned char)state;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+}
+
+void SdrplaySource::setIfGainReduction(int gRdB) {
+    if (!impl_->params || !impl_->params->rxChannelA) return;
+    // ★★ REFUSED WHILE THE AGC IS ON. The API's own documentation is explicit that IFGR
+    // cannot be adjusted with AGC enabled — and writing it anyway is exactly the "bodge" that
+    // makes SDRplay AGC behave worse under third-party software than under SDRuno, despite
+    // being the same API underneath (Stuart, 2026-07-26). Two controllers fighting over one
+    // register is not a compromise; it is a bug that presents as poor hardware.
+    if (impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE) return;
+    if (gRdB < 20) gRdB = 20;
+    if (gRdB > 59) gRdB = 59;
+    impl_->params->rxChannelA->tunerParams.gain.gRdB = gRdB;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+}
+
+void SdrplaySource::setIfAgc(bool on) {
+    if (!impl_->params || !impl_->params->rxChannelA) return;
+    auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+    agc.enable = on ? sdrplay_api_AGC_50HZ : sdrplay_api_AGC_DISABLE;
+    // ★★ AND GIVE IT A SENSIBLE SETPOINT. The API default is -60 dBfs, which drives the front
+    // end far harder than SDRuno does — which is why "auto gain overloads but manual is fine"
+    // is a recurring complaint about SDRplay under third-party software (Stuart, on OWRX).
+    // -30 dBfs is the conventional working point and leaves real headroom. The API is not the
+    // problem; it is being asked for the wrong thing.
+    agc.setPoint_dBfs = -30;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+}
+
+void SdrplaySource::setRfNotch(bool on) {
+    if (!impl_->params || !impl_->params->rxChannelA || !hasRfNotch()) return;
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
+            // ★ On devParams, not the channel: the notches are in the RF path BEFORE the
+            // tuner, so they are a property of the RADIO rather than of a receive channel.
+            if (impl_->params->devParams)
+                impl_->params->devParams->rsp1aParams.rfNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_Rsp1a_RfNotchControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        default: break;
+    }
+}
+
+void SdrplaySource::setDabNotch(bool on) {
+    if (!impl_->params || !impl_->params->rxChannelA || !hasDabNotch()) return;
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
+            if (impl_->params->devParams)
+                impl_->params->devParams->rsp1aParams.rfDabNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_Rsp1a_RfDabNotchControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        default: break;
+    }
 }
 
 void SdrplaySource::setBiasT(bool on) {
@@ -307,6 +438,7 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
                      unsigned int numSamples, unsigned int, void* ctx) {
     auto* c = (CbCtx*)ctx;
     if (!c || !c->sink || !*c->sink || numSamples == 0) return;
+    if (c->paused && *c->paused) return;      // idle: drop, never tear the device down
     auto& ilv = *c->ilv;
     if (ilv.size() < (size_t)numSamples * 2) ilv.resize((size_t)numSamples * 2);
     for (unsigned i = 0; i < numSamples; ++i) {
@@ -346,6 +478,17 @@ void SdrplaySource::setFrequency(double) {}
 void SdrplaySource::setSampleRate(double) {}
 void SdrplaySource::setGainTenthDb(int) {}
 void SdrplaySource::setBiasT(bool) {}
+void SdrplaySource::setLnaState(int) {}
+void SdrplaySource::setIfGainReduction(int) {}
+void SdrplaySource::setIfAgc(bool) {}
+void SdrplaySource::setRfNotch(bool) {}
+void SdrplaySource::setDabNotch(bool) {}
+int  SdrplaySource::lnaStateCount() const { return 0; }
+bool SdrplaySource::hasRfNotch() const { return false; }
+bool SdrplaySource::hasDabNotch() const { return false; }
+bool SdrplaySource::hasBiasT() const { return false; }
+std::string SdrplaySource::model() const { return ""; }
+int SdrplaySource::bandwidthKHzForRate(double) { return 0; }
 }  // namespace vibe
 
 #endif

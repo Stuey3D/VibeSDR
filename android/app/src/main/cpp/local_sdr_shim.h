@@ -88,6 +88,17 @@ public:
      *  It's the SERVER's position — distances, map centring and the ITU region are
      *  properties of the antenna, not of whoever happens to be listening. */
     static void setLocationJson(const std::string& json);
+    /** Is the running source an SDRplay? The client's controls differ materially. */
+    bool isSdrplay() const;
+    /** `,"radio":{…}` describing the running receiver's real controls, for hwinfo. */
+    std::string radioCapsJson() const;
+    /** RSP-only controls. No-ops on any other source. */
+    void setLnaState(int state);
+    void setIfGainReduction(int gRdB);
+    void setIfAgc(bool on);
+    void setRfNotch(bool on);
+    void setDabNotch(bool on);
+    void setBiasT(bool on);
     /** Start on an SDRplay RSP (14-bit). Returns the port, or -1 with err set. */
     int startSdrplay(int index, double centerFreq, double sampleRate, int gainTenthDb,
                      int fftSize, double fftRate, const std::string& mode, std::string& err);

@@ -2277,7 +2277,20 @@ struct LocalSdrShim::Impl {
         // list — it was the first entry — so it was the one a curious user reached
         // for, and the dropped samples then read as a bad receiver rather than a bad
         // setting. 2.56 is the real ceiling; offer that instead.
-        j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
+        // ★★ THE RATES THIS RADIO CAN ACTUALLY DO. An RSP is not a dongle: it runs to
+        // 10 MSPS where the RTL2832U tops out near 2.56, and offering the dongle's list on
+        // an RSP wastes most of the hardware while implying it is the limit. The client
+        // renders whatever we send, so the honest answer is per-device (2026-07-26).
+        if (LocalSdrShim::instance().isSdrplay())
+            j += "],\"rates\":[10000000,8000000,6000000,5000000,4000000,3000000,2048000,2000000,1000000]";
+        else
+            j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
+        // ★ And WHICH radio, plus the controls it really has. A single gain slider is a lie
+        // on an RSP: RF gain is an LNA STATE and IF gain is a separate REDUCTION, and it is
+        // the LNA that decides whether the front end overloads — the very thing that has been
+        // destroying RDS all evening. A client cannot present that honestly unless it is
+        // told, so it is told.
+        j += LocalSdrShim::instance().radioCapsJson();
         // A pinned rate is advertised so the client can HIDE its rate picker and say
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).
@@ -2970,6 +2983,16 @@ struct LocalSdrShim::Impl {
             } else if (type == "audio_extension_detach") {
                 stopDecoder();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
+            } else if (type == "rsp_control") {
+                // ★ One message for every RSP-specific control. They only exist on one kind
+                // of radio, so they do not belong in the shared tune/gain vocabulary.
+                double v = 0;
+                if (jsonNum(payload, "lna", v))    LocalSdrShim::instance().setLnaState((int)v);
+                if (jsonNum(payload, "ifgr", v))   LocalSdrShim::instance().setIfGainReduction((int)v);
+                if (jsonNum(payload, "ifagc", v))  LocalSdrShim::instance().setIfAgc(v != 0);
+                if (jsonNum(payload, "rfnotch", v))LocalSdrShim::instance().setRfNotch(v != 0);
+                if (jsonNum(payload, "dabnotch", v))LocalSdrShim::instance().setDabNotch(v != 0);
+                if (jsonNum(payload, "biast", v))  LocalSdrShim::instance().setBiasT(v != 0);
             } else if (type == "subscribe_digital_spots") {
                 startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
             } else if (type == "unsubscribe_digital_spots") {
@@ -3140,7 +3163,7 @@ struct LocalSdrShim::Impl {
     void pauseCaptureIdle() {
         if (captureIdle.exchange(true)) return;               // already paused
         if (useTcp()) { tcpRunning.store(false); }
-        else if (useSdrplay()) { sdrp->close(); }
+        else if (useSdrplay()) { sdrp->setPaused(true); }
         else          { restarting.store(true); if (dev) rtlsdr_cancel_async(dev); }
         if (rtlThread.joinable()) rtlThread.join();
         // ★★ LET LIBUSB FINISH REAPING THE CANCELLED TRANSFERS. rtlsdr_read_async can
@@ -3162,8 +3185,7 @@ struct LocalSdrShim::Impl {
     void resumeCaptureIdle() {
         if (!captureIdle.exchange(false)) return;             // wasn't paused
         if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
-        else if (useSdrplay()) { std::string e; sdrp->open(sdrpIndex, sampleRate,
-                                                           rtlCenter.load(), lastGainTenthDb, e); }
+        else if (useSdrplay()) { sdrp->setPaused(false); }
         else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
         LOGI("listener connected — dongle capture resumed");
     }
@@ -4274,6 +4296,29 @@ std::vector<int> LocalSdrShim::getTunerGains() {
     rtlsdr_get_tuner_gains(p->dev, out.data());
     return out;
 }
+
+bool LocalSdrShim::isSdrplay() const { return p && p->useSdrplay(); }
+
+std::string LocalSdrShim::radioCapsJson() const {
+    if (!p) return "";
+    if (!p->useSdrplay()) return ",\"radio\":{\"driver\":\"rtl\"}";
+    auto& d = *p->sdrp;
+    std::string j = ",\"radio\":{\"driver\":\"sdrplay\",\"model\":\"" + d.model() + "\"";
+    j += ",\"lnaStates\":" + std::to_string(d.lnaStateCount());
+    j += ",\"ifGrMin\":20,\"ifGrMax\":59";
+    j += std::string(",\"rfNotch\":") + (d.hasRfNotch() ? "true" : "false");
+    j += std::string(",\"dabNotch\":") + (d.hasDabNotch() ? "true" : "false");
+    j += std::string(",\"biasT\":") + (d.hasBiasT() ? "true" : "false");
+    j += "}";
+    return j;
+}
+
+void LocalSdrShim::setLnaState(int v)       { if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
+void LocalSdrShim::setIfGainReduction(int v){ if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
+void LocalSdrShim::setIfAgc(bool v)         { if (p && p->useSdrplay()) p->sdrp->setIfAgc(v); }
+void LocalSdrShim::setRfNotch(bool v)       { if (p && p->useSdrplay()) p->sdrp->setRfNotch(v); }
+void LocalSdrShim::setDabNotch(bool v)      { if (p && p->useSdrplay()) p->sdrp->setDabNotch(v); }
+void LocalSdrShim::setBiasT(bool v)         { if (p && p->useSdrplay()) p->sdrp->setBiasT(v); }
 
 bool LocalSdrShim::isRunning() const { return p != nullptr; }
 

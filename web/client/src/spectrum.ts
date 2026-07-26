@@ -86,6 +86,19 @@ export interface RdsExt {
   xy: number[];          // interleaved x,y as signed bytes (x100)
 }
 
+/** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
+ *  different controls, and a client that assumes one will misrepresent the other. */
+export interface RadioCaps {
+  driver: 'rtl' | 'sdrplay' | string;
+  model?: string;
+  lnaStates?: number;
+  ifGrMin?: number;
+  ifGrMax?: number;
+  rfNotch?: boolean;
+  dabNotch?: boolean;
+  biasT?: boolean;
+}
+
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
@@ -94,7 +107,7 @@ export interface SpectrumCallbacks {
   /** The person at the server is looking for this window. */
   onSummon?: () => void;
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
-              forceIdleSaver?: boolean) => void;
+              forceIdleSaver?: boolean, radio?: RadioCaps | null) => void;
   onRds?:    (meta: RdsMeta) => void;
   /** Advanced RDS payload — only sent while the RDS decoder is attached. */
   onRdsX?:   (x: RdsExt) => void;
@@ -203,6 +216,10 @@ export class SpectrumClient {
     if (this.sendTimer) { clearTimeout(this.sendTimer); this.sendTimer = null; }
   }
 
+  /** Send an arbitrary control message. Used for radio-specific controls (RSP gain, notches)
+   *  that have no place in the shared tune/gain vocabulary. */
+  send(obj: Record<string, unknown>) { this._send(obj); }
+
   private _send(obj: Record<string, unknown>) {
     const ws = this.ws;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -264,7 +281,8 @@ export class SpectrumClient {
         break;
       case 'hwinfo':
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
-                           Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1);
+                           Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
+                           (msg.radio ?? null) as RadioCaps | null);
         break;
       case 'rds':
         this.cb.onRds?.({

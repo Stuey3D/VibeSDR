@@ -28,6 +28,18 @@ final class Server: ObservableObject {
     /// thing anyone owned, and became "I can't see the SDRplay" the moment a second radio
     /// was plugged in beside it (Stuart, 2026-07-26).
     @Published var devices: [String] = []
+    /// ★ The radio we are ACTUALLY serving from. Re-enumerating while running reports
+    /// NOTHING on an SDRplay — the API hands a device to one process at a time, so once we
+    /// have selected it, it stops appearing in the available list. The settings window then
+    /// said "no radio found" over a perfectly working waterfall, which is precisely the kind
+    /// of false alarm that destroys trust in every later warning (Stuart, 2026-07-26).
+    @Published var activeDevice = ""
+    /// Whether the radio in use is an RSP. Its capabilities differ enough from a dongle's
+    /// that several menus would otherwise misrepresent it.
+    var isSdrplayActive: Bool {
+        let n = running && !activeDevice.isEmpty ? activeDevice : deviceName
+        return n.localizedCaseInsensitiveContains("SDRplay")
+    }
     /// Which one to serve. Persisted, and matched BY NAME on the next launch — indices
     /// renumber when something is unplugged, and silently serving a different radio than
     /// last time is worse than asking again.
@@ -138,8 +150,16 @@ final class Server: ObservableObject {
 
     func refreshDevices() {
         deviceCount = Int(vs_device_count())
-        devices = (0..<max(0, deviceCount)).map { String(cString: vs_device_name(Int32($0))) }
-        deviceName = devices.indices.contains(deviceIndex) ? devices[deviceIndex] : (devices.first ?? "")
+        var found = (0..<max(0, deviceCount)).map { String(cString: vs_device_name(Int32($0))) }
+        // A radio we are already serving will not enumerate — keep it in the list, because it
+        // is the most present radio there is.
+        if running, !activeDevice.isEmpty, !found.contains(activeDevice) {
+            found.insert(activeDevice, at: 0)
+        }
+        devices = found
+        deviceName = running && !activeDevice.isEmpty
+            ? activeDevice
+            : (devices.indices.contains(deviceIndex) ? devices[deviceIndex] : (devices.first ?? ""))
         onChange?()
     }
 
@@ -253,6 +273,7 @@ final class Server: ObservableObject {
         vs_default_config(&cfg)
         cfg.centreHz = centreHz
         cfg.deviceIndex = Int32(deviceIndex)
+        activeDevice = devices.indices.contains(deviceIndex) ? devices[deviceIndex] : ""
         cfg.port     = Int32(wantedPort)
         cfg.serveWebClient = serveWeb
         cfg.allowUncompressedAudio = allowUncompressed
@@ -745,9 +766,21 @@ struct SettingsView: View {
                 // until something rescans, and the only workaround was quitting the app — which is
                 // an absurd thing to ask of someone who just plugged a USB stick in.
                 HStack {
-                    LabeledContent("Receiver", value: server.deviceCount > 0 ? server.deviceName : "none connected")
+                    LabeledContent("Receiver",
+                                   value: server.devices.isEmpty ? "none connected" : server.deviceName)
                     Spacer()
                     Button("Refresh") { server.rescan() }
+                }
+                // ★ A PICKER once there is a choice. The app used to serve whichever radio
+                // enumerated first, with no way to say otherwise — which was invisible while a
+                // dongle was the only thing anyone owned, and became "I can't see the SDRplay"
+                // the moment a second radio was plugged in beside it.
+                if server.devices.count > 1 {
+                    Picker("Use", selection: $server.wantedDevice) {
+                        ForEach(server.devices, id: \.self) { d in Text(d).tag(d) }
+                    }
+                    Text("Restart the server to change radio.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 // ★ These are the LISTENER'S STARTING POINT, not a property of the radio — the
                 // web client remembers where it was last, so in practice this only decides what a
@@ -764,21 +797,6 @@ struct SettingsView: View {
             // the ITU region all follow the receiver, and a VibeServer may be left anywhere.
             // ★ Country alone is enough for the RDS flag, and it defaults from the Mac, so the
             // common case needs no typing at all.
-            // ★ A receiver PICKER. With more than one radio attached the app used to serve
-            // whichever enumerated first, with no way to say otherwise.
-            Section("Receiver") {
-                if server.devices.isEmpty {
-                    Text("No radio found. Plug one in and press Refresh.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Picker("Radio", selection: $server.wantedDevice) {
-                        ForEach(server.devices, id: \.self) { d in Text(d).tag(d) }
-                    }
-                    Text("Restart the server to change radio.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Button("Refresh") { server.refreshDevices() }
-            }
             Section("Location") {
                 TextField("Country", text: $server.rxIso, prompt: Text("GB"))
                 Text("Two-letter code. Sets the RDS country and flag, and the band plan's ITU region. "
@@ -843,12 +861,27 @@ struct SettingsView: View {
                     Text("Half · 10 fps").tag(10.0)
                     Text("Quarter · 5 fps").tag(5.0)
                 }
+                // ★★ THE RATES THIS RADIO CAN ACTUALLY DO. The list was the RTL2832U's,
+                // hardcoded — so an RSP, which runs to 10 MSPS where a dongle tops out near
+                // 2.56, was capped at less than a quarter of its capability by a menu that
+                // had never heard of it (Stuart, 2026-07-26).
                 Picker("Capture rate", selection: $server.lockedRate) {
                     Text("Listener chooses").tag(0.0)
-                    Text("Up to · 2.4 MHz").tag(2_400_000.0)
-                    Text("Up to · 1.8 MHz").tag(1_800_000.0)
-                    Text("Up to · 1.2 MHz").tag(1_200_000.0)
-                    Text("Up to · 960 kHz").tag(960_000.0)
+                    if server.isSdrplayActive {
+                        Text("Up to · 10 MHz").tag(10_000_000.0)
+                        Text("Up to · 8 MHz").tag(8_000_000.0)
+                        Text("Up to · 6 MHz").tag(6_000_000.0)
+                        Text("Up to · 5 MHz").tag(5_000_000.0)
+                        Text("Up to · 4 MHz").tag(4_000_000.0)
+                        Text("Up to · 3 MHz").tag(3_000_000.0)
+                        Text("Up to · 2 MHz").tag(2_000_000.0)
+                        Text("Up to · 1 MHz").tag(1_000_000.0)
+                    } else {
+                        Text("Up to · 2.4 MHz").tag(2_400_000.0)
+                        Text("Up to · 1.8 MHz").tag(1_800_000.0)
+                        Text("Up to · 1.2 MHz").tag(1_200_000.0)
+                        Text("Up to · 960 kHz").tag(960_000.0)
+                    }
                 }
                 Text("A CEILING, not a lock: a listener can still pick a LOWER rate (a narrower span, less server CPU) — they just cannot go above this. Single radio per user, so their choice affects only them.")
                     .font(.caption).foregroundStyle(.secondary)

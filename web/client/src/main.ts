@@ -272,8 +272,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onSummon: () => onSummoned(),
     onBusy: () => showBusy(),
     onDevice: (present) => showDeviceBanner(present),
-    onHwInfo: (gains, rates, locked, maxFps, forceIdle) => {
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      applyRadioCaps(radio ?? null);
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
       // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
       // a capped server from a failing link, and the difference matters.
@@ -2242,6 +2243,7 @@ function initDecoders(host: string, auth: AuthState) {
   decoders.connect();
 
   initRdsResize();
+  initRspControls();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
 
@@ -4128,6 +4130,74 @@ function applyShareParams() {
 }
 
 // ── Waterfall input: click-to-tune, drag-to-pan, wheel-to-zoom ───────────────
+
+/** ★★ Render the controls the RUNNING radio actually has.
+ *
+ *  A dongle has one gain slider. An RSP has an LNA state, a separate IF gain REDUCTION, AGC
+ *  over the IF stage, and switchable notches — and showing a dongle's single slider for all
+ *  of that is not a simplification but a misrepresentation. It also hid a real fault: the LNA
+ *  sat wide open whatever the slider did, flooding the front end (Stuart, 2026-07-26).
+ *
+ *  ★ THE DIRECTION IS INVERTED, and it is what catches developers out: SDRplay gains are
+ *  REDUCTIONS. 20 dB of IF reduction is MAXIMUM gain; 59 dB is minimum. Both the label and
+ *  the readout say so, because a slider that silently means the opposite of every other
+ *  slider in the app is a trap.
+ */
+let radioCaps: import('./spectrum').RadioCaps | null = null;
+
+function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
+  radioCaps = caps;
+  const isRsp = caps?.driver === 'sdrplay';
+  $<HTMLElement>('rspCtls').hidden = !isRsp;
+  // The dongle's single gain slider is meaningless on an RSP — hide it rather than leave a
+  // control that does something unrelated to its label.
+  const gainRow = $('gain').closest('.mrow') as HTMLElement | null;
+  if (gainRow) gainRow.hidden = isRsp;
+  const autoRow = $('gainAuto').closest('.mrow') as HTMLElement | null;
+  if (autoRow) autoRow.hidden = isRsp;
+  if (!isRsp) return;
+
+  const n = caps?.lnaStates ?? 10;
+  const lna = $<HTMLInputElement>('rspLna');
+  lna.max = String(n - 1);
+  const gr = $<HTMLInputElement>('rspIfGr');
+  gr.min = String(caps?.ifGrMin ?? 20);
+  gr.max = String(caps?.ifGrMax ?? 59);
+  $<HTMLButtonElement>('rspRfNotch').hidden  = !caps?.rfNotch;
+  $<HTMLButtonElement>('rspDabNotch').hidden = !caps?.dabNotch;
+  $<HTMLButtonElement>('rspBiasT').hidden    = !caps?.biasT;
+  renderRspVals();
+}
+
+function rspSend(msg: Record<string, unknown>) {
+  spec?.send({ type: 'rsp_control', ...msg });
+}
+
+function renderRspVals() {
+  const n = radioCaps?.lnaStates ?? 10;
+  const lna = Number($<HTMLInputElement>('rspLna').value);
+  const gr  = Number($<HTMLInputElement>('rspIfGr').value);
+  // ★ Say which END is more gain, every time. "LNA 3" means nothing on its own.
+  $('rspLnaVal').textContent = `${lna}/${n - 1}${lna === 0 ? ' · max RF' : lna === n - 1 ? ' · min RF' : ''}`;
+  $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
+}
+
+function initRspControls() {
+  const lna = $<HTMLInputElement>('rspLna');
+  const gr  = $<HTMLInputElement>('rspIfGr');
+  lna.oninput = () => { renderRspVals(); rspSend({ lna: Number(lna.value) }); };
+  gr.oninput  = () => { renderRspVals(); rspSend({ ifgr: Number(gr.value) }); };
+  const toggle = (id: string, key: string, initial = false) => {
+    const b = $<HTMLButtonElement>(id);
+    let on = initial;
+    b.classList.toggle('on', on);
+    b.onclick = () => { on = !on; b.classList.toggle('on', on); rspSend({ [key]: on ? 1 : 0 }); };
+  };
+  toggle('rspIfAgc', 'ifagc', true);      // AGC on by default — see setGainTenthDb
+  toggle('rspRfNotch', 'rfnotch');
+  toggle('rspDabNotch', 'dabnotch');
+  toggle('rspBiasT', 'biast');
+}
 
 function initWaterfallInput() {
   const c = $<HTMLCanvasElement>('wf');
