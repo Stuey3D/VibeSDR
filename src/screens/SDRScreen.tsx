@@ -4754,6 +4754,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           spotsKind={spotsKind}
           spots={spots}
           onTuneHz={onTuneHz}
+          onOpenFreq={() => kbActions.current.onFreqOpen()}
           imageRef={decoderImageRef}
           onImageStatus={setDecoderStatus}
           dabProgrammes={dabProgrammes.map((p) => ({ id: p.id, name: p.name }))}

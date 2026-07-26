@@ -37,6 +37,9 @@ export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
+  /** ★ Opens the tune box. Needed because on DAB this panel owns the keyboard outright, so
+   *  Enter never reaches the main screen — see the T shortcut below. */
+  onOpenFreq?: () => void;
   activeDecoder: DecoderType;
   decoderText:   string;
   /** ADS-B: the structured aircraft table. When present it REPLACES the text body —
@@ -204,6 +207,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
+  onOpenFreq,
 }: DecoderPanelProps) {
   const isDabMode = dabProgrammes.length > 0;
   const isSpotsMode = !isDabMode && spotsKind !== null;
@@ -500,6 +504,12 @@ export default function DecoderPanel({
         setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
         return;
       }
+      // ★★ T OPENS THE TUNE BOX (Stuart). Only needed where the panel owns the keyboard
+      // OUTRIGHT — DAB and ADS-B — because there Enter is ours for selecting and can never
+      // reach the main screen, leaving no way to change frequency at all. On the borrowed
+      // decoders Enter still opens the tune box whenever the box does not hold the keyboard,
+      // so they need nothing.
+      if (k === 'T' && autoOwnRef.current) { onOpenFreqRef.current?.(); return; }
       if (k === 'Space' || k === 'Enter') {
         if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
         else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
@@ -514,6 +524,7 @@ export default function DecoderPanel({
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
   const autoOwnRef = useRef(autoOwn); autoOwnRef.current = autoOwn;
+  const onOpenFreqRef = useRef(onOpenFreq); onOpenFreqRef.current = onOpenFreq;
   const speedIdxRef = useRef(speedIdx); speedIdxRef.current = speedIdx;
   const setDabSpeedOpenRef = useRef(setDabSpeedOpen); setDabSpeedOpenRef.current = setDabSpeedOpen;
   const onDabSpeedRef = useRef((i: number) => {});
@@ -637,10 +648,11 @@ export default function DecoderPanel({
               // rather than by being remembered. The wording differs by zone AND by whether
               // the box owns the arrows or merely borrowed them.
               ? (kbZone === 'speed'  ? 'space/enter to set · backspace to cancel'
-                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'space/enter to press · tab for stations'
-                                                               : 'space/enter to press · tab for the list')
+                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'space/enter to press · tab for stations · t to tune'
+                                                               : 'space/enter to press · tab for the list · t to tune')
                                                   : 'space/enter to press · tab to leave')
-                 : listLen > 0        ? 'space/enter to select · tab for controls'
+                 : listLen > 0        ? (autoOwn ? 'space/enter to select · tab for controls · t to tune'
+                                                  : 'space/enter to select · tab for controls')
                  : 'scroll with ↑↓ · tab for controls')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               : decoderStatus}

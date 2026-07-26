@@ -75,6 +75,7 @@ const SECTIONS: Section[] = [
     body: [
       'Here the box is the screen rather than something on top of it: the VFO is locked to the multiplex, so there is nothing to tune. The arrows belong to the box from the moment it appears, and it keeps them — up and down move through the stations, or scroll the aircraft table.',
       'Space or Enter selects a station. On ADS-B there is nothing to select, so the arrows simply scroll. Tab moves between the list and the header controls rather than leaving, and inside SPEED FIX the arrows choose a preset, Space or Enter sets it, and backspace closes it having changed nothing.',
+      'T opens the frequency box here. This is the one box that keeps the keyboard rather than handing it back, so Enter is permanently spoken for and would otherwise leave no way to change frequency at all.',
     ],
   },
   {
