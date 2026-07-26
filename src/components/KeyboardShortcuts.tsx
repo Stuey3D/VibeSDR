@@ -139,6 +139,15 @@ export default function KeyboardShortcuts({ visible, onClose }: {
             </View>
           ))}
         </ScrollView>
+        {/* ★★ OUTSIDE the ScrollView, deliberately. At the end of the scrollable content it
+            would mean reading the whole reference to find the way out — the same trap this
+            button exists to fix, just further along.
+            ★ A keyboard reference is exactly what a TOUCH user opens out of curiosity, having
+            no keyboard to press Escape with; the backdrop is a thin margin on a small screen,
+            so tapping outside is not a way out you can rely on. (Stuart, 2026-07-26.) */}
+        <Pressable style={s.closeBtn} onPress={onClose} onTouchStart={noteTouchInteraction}>
+          <Text style={[s.closeTxt, { fontFamily: t.font }]}>CLOSE</Text>
+        </Pressable>
       </View>
     </Modal>
   );
@@ -163,4 +172,9 @@ const s = StyleSheet.create({
   // divider every few lines makes a reference feel like a form.
   secTitle: { color: NAV_FOCUS, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
   para:  { color: 'rgba(255,255,255,0.88)', fontSize: 13, lineHeight: 20, marginBottom: 8 },
+  closeBtn: {
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 14, alignItems: 'center',
+  },
+  closeTxt: { color: NAV_FOCUS, fontSize: 12, letterSpacing: 2, fontWeight: '700' },
 });
