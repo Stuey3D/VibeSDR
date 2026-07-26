@@ -56,6 +56,8 @@ export interface RdsMeta {
   radiotext: string;
   pi: number;
   ecc: number;
+  /** Block error rate %, -1 = the decoder has not seen a full window yet. */
+  ber: number;
 }
 
 export interface SpectrumCallbacks {
@@ -240,6 +242,7 @@ export class SpectrumClient {
         this.cb.onRds?.({
           stereo: !!msg.stereo, ps: msg.ps ?? '', radiotext: msg.radiotext ?? '',
           pi: msg.pi ?? -1, ecc: msg.ecc ?? 0,
+          ber: typeof msg.ber === 'number' ? msg.ber : -1,
         });
         break;
       case 'pong':

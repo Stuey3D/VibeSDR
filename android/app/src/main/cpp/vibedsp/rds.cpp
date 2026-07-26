@@ -21,10 +21,20 @@ int RdsDemod::bestIdx() const {
     return best;
 }
 
+int RdsDemod::blockErrorPercent() const {
+    const int b = bestIdx();
+    return (b >= 0 && b < NPH) ? dec_[b].blockErrorPercent() : -1;
+}
+
 void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
     // Gentle low-pass to isolate the RDS baseband (±~2.4 kHz) after the coherent
     // 57 kHz downconvert. After downconversion the nearest MPX content (stereo,
     // pilot, L+R) lands well above 2.4 kHz, so a wide transition is fine.
+    // ★ Tried and REVERTED 2026-07-26: widening this to cutoff 3200 / transition 1600, on
+    // the theory that a 2400 Hz transition was clipping the biphase spectrum (which peaks
+    // near 1187 Hz) and causing ISI. The probe said otherwise — no improvement anywhere and
+    // a clear loss at moderate noise — and it then measured 0% block errors at zero noise,
+    // which rules out ISI in this filter as the source of any error floor at all.
     const double cut = 2400.0 / mpxRate;
     std::vector<float> taps = designLowpass(cut, cut);
     // ★ DECIMATE. The RDS baseband is +/-2.4 kHz, but everything here ran at the channel
@@ -143,6 +153,7 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
             }
             prevPh_[p] = ph;
         }
+
         started_ = true;
     }
 }
@@ -173,26 +184,54 @@ uint16_t RdsDecoder::checkword(uint16_t data) {
 // IS the syndrome of the error alone — and if we have tabulated that syndrome we know
 // exactly which bits flipped and can put them back.
 //
-// Only 1-bit and 2-bit adjacent bursts are tabulated. The code can technically correct
-// bursts up to 5 bits, but every pattern added makes a FALSE correction on noise more
-// likely — a wrong "corrected" block is worse than a discarded one, because it enters
-// the group parser looking valid. Two bits is the same conservative choice redsea
-// makes, for the same reason.
+// ★★ NOW TABULATED TO 5 BITS, which is what the code can actually correct (EN 50067 /
+// IEC 62106). It was capped at 2 — the conservative choice, and the file said so — on the
+// reasoning that every added pattern makes a FALSE correction on noise more likely, and a
+// wrongly "repaired" block is worse than a discarded one because it reaches the parser
+// looking valid.
+//
+// ★ That reasoning was sound and the conclusion no longer follows, because the thing it
+// protected has changed: the parser now receives the REPAIR WIDTH, not a bare "ok", and
+// weighs a block by how much rebuilding it took. A wide repair no longer arrives
+// indistinguishable from a clean read, so admitting wide repairs costs confidence rather
+// than correctness — and confidence is recoverable by repetition, which RDS supplies for
+// free ~11 times a second. The cap is also a runtime lever now (setMaxBurstBits), so a DX
+// user can trade the other way. Measure with the probe, not by eye: the whole point of
+// widening is a threshold shift, and only the probe can see one.
+//
+// A burst of length L is any pattern whose first and last bits are set, so patterns are
+// enumerated by length and narrower ones always win a syndrome collision.
+static int g_maxBurstBits = RdsDecoder::kDefaultBurst;
+
+void RdsDecoder::setMaxBurstBits(int bits) {
+    if (bits < 1) bits = 1;
+    if (bits > 5) bits = 5;
+    g_maxBurstBits = bits;
+}
+
 const uint32_t* RdsDecoder::errorTable() {
     static uint32_t table[1024] = {0};
-    static bool built = false;
-    if (!built) {
-        // Later (wider) patterns must not overwrite earlier (narrower) ones: prefer the
-        // smallest error that explains a syndrome.
-        for (uint32_t pattern : { 0x1u, 0x3u }) {
-            for (int shift = 0; shift < 26; ++shift) {
-                const uint32_t err = (pattern << shift) & 0x3FFFFFF;
-                if (!err) continue;
-                const uint16_t syn = syndrome(err);
-                if (syn && !table[syn]) table[syn] = err;
+    static int builtFor = -1;
+    if (builtFor != g_maxBurstBits) {
+        for (int i = 0; i < 1024; ++i) table[i] = 0;
+        // Narrow before wide: prefer the SMALLEST error that explains a syndrome, so a
+        // 1-bit slip is never "explained" by an invented 5-bit burst.
+        for (int len = 1; len <= g_maxBurstBits; ++len) {
+            // Interior bits are free; the ends are forced, which is what makes it a
+            // burst of exactly this length.
+            const uint32_t ends = (len == 1) ? 1u : (1u | (1u << (len - 1)));
+            const int interior = (len <= 2) ? 0 : (len - 2);
+            for (uint32_t mid = 0; mid < (1u << interior); ++mid) {
+                const uint32_t pattern = ends | (mid << 1);
+                for (int shift = 0; shift + len <= 26; ++shift) {
+                    const uint32_t err = (pattern << shift) & 0x3FFFFFF;
+                    if (!err) continue;
+                    const uint16_t syn = syndrome(err);
+                    if (syn && !table[syn]) table[syn] = err;
+                }
             }
         }
-        built = true;
+        builtFor = g_maxBurstBits;
     }
     return table;
 }
@@ -210,14 +249,14 @@ int RdsDecoder::seqOfOffset(uint16_t offsetIdx) {
 
 // Verify `block26` against the offset word it should carry, repairing a correctable
 // burst in place. Returns whether the block is trustworthy afterwards.
-bool RdsDecoder::tryCorrect(uint16_t offsetIdx, uint32_t& block26, bool& repaired) const {
-    repaired = false;
+bool RdsDecoder::tryCorrect(uint16_t offsetIdx, uint32_t& block26, int& repairBits) const {
+    repairBits = 0;
     const uint16_t errSyn = syndrome(block26) ^ OFFSET[offsetIdx];
     if (errSyn == 0) return true;                       // clean already
     const uint32_t err = errorTable()[errSyn];
     if (!err) return false;                             // not a pattern we can undo
     block26 ^= err;
-    repaired = true;
+    for (uint32_t e = err; e; e >>= 1) repairBits += (int)(e & 1);
     return true;
 }
 
@@ -259,6 +298,14 @@ int RdsDecoder::recentGood() const {
     return n - bad;
 }
 
+int RdsDecoder::blockErrorPercent() const {
+    if (errSeen_ < kBerBlocks) return -1;      // not yet a full window — say so, don't guess
+    int bad = 0;
+    for (uint64_t h = errHist_ & ((1ull << kBerBlocks) - 1); h; h >>= 1)
+        bad += (int)(h & 1);
+    return (bad * 100) / kBerBlocks;
+}
+
 void RdsDecoder::reset() {
     reg_ = 0; synced_ = false; bitsLeft_ = 0; nextBlk_ = 0;
     pulseCount_ = 0; bitPos_ = 0; badHist_ = 0; blocksSeen_ = 0;
@@ -266,7 +313,9 @@ void RdsDecoder::reset() {
     std::memset(ps_, 0, sizeof ps_);
     std::memset(rt_, 0, sizeof rt_);
     ecc_ = 0;
-    piLast_ = 0; piSeen_ = false; grpRepaired_ = false;
+    piLast_ = 0; piSeen_ = false; grpRepairBits_ = 0; piConfirmedVal_ = 0;
+    for (int i = 0; i < 4; ++i) blkRepair_[i] = 0;
+    errHist_ = 0; errSeen_ = 0;
     eccCand_ = 0; eccSeen_ = false;
     for (int i = 0; i < 4; ++i)  { psCand_[i] = 0; psSeen_[i] = false; }
     for (int i = 0; i < 16; ++i) { rtCand_[i] = 0; rtSeen_[i] = false; }
@@ -293,27 +342,42 @@ void RdsDecoder::pushBit(int bit) {
     // carry. Slot C is allowed to be either C or C', so try both and keep the one
     // that verifies.
     static const uint16_t kSlotOffset[4] = { 0, 1, 2, 4 };
-    if (nextBlk_ == 0) grpRepaired_ = false;      // a fresh group starts trusted
+    if (nextBlk_ == 0) grpRepairBits_ = 0;        // a fresh group starts trusted
     uint32_t block = reg_;
-    bool ok = false, repaired = false;
+    bool ok = false;
+    int repaired = 0;
+    // ★ BER is measured BEFORE any repair, so it describes the LINK and not our effort.
+    // A decoder that quietly fixes everything would otherwise report a perfect link right
+    // up to the moment it falls over.
+    const bool preErr = (syndrome(reg_) != OFFSET[kSlotOffset[nextBlk_]])
+                     && (nextBlk_ != 2 || syndrome(reg_) != OFFSET[3]);
     if (nextBlk_ == 2) {
         // Slot C may legitimately carry either C or C'. Prefer whichever verifies, and
         // prefer a CLEAN match over a repaired one.
         uint32_t c = reg_, cp = reg_;
-        bool rc = false, rcp = false;
+        int rc = 0, rcp = 0;
         const bool okC  = tryCorrect(2, c,  rc);
         const bool okCp = tryCorrect(3, cp, rcp);
-        if (okC && !rc)        { block = c;  ok = true; repaired = false; }
-        else if (okCp && !rcp) { block = cp; ok = true; repaired = false; }
-        else if (okC)          { block = c;  ok = true; repaired = true;  }
-        else if (okCp)         { block = cp; ok = true; repaired = true;  }
+        if (okC && !rc)        { block = c;  ok = true; repaired = 0; }
+        else if (okCp && !rcp) { block = cp; ok = true; repaired = 0; }
+        // Both repairable: believe the NARROWER repair. Preferring C by position would
+        // pick an invented 5-bit burst over a 1-bit slip in C'.
+        else if (okC && okCp)  { if (rc <= rcp) { block = c;  ok = true; repaired = rc;  }
+                                 else           { block = cp; ok = true; repaired = rcp; } }
+        else if (okC)          { block = c;  ok = true; repaired = rc;  }
+        else if (okCp)         { block = cp; ok = true; repaired = rcp; }
     } else {
         uint32_t b = reg_;
         if (tryCorrect(kSlotOffset[nextBlk_], b, repaired)) { block = b; ok = true; }
     }
-    if (repaired || !ok) grpRepaired_ = true;
+    // An unrecoverable block counts as maximally damaged, so a group containing one is
+    // weighed down rather than merely flagged.
+    grpRepairBits_ += ok ? repaired : 8;
     blk_[nextBlk_] = (uint16_t)((block >> 10) & 0xFFFF);
     blkOk_[nextBlk_] = ok;
+    blkRepair_[nextBlk_] = ok ? repaired : 8;
+    errHist_ = (errHist_ << 1) | (preErr ? 1u : 0u);
+    if (errSeen_ < kBerBlocks) ++errSeen_;
 
     // Drop sync on a sustained error RATE, not a short run of bad blocks. Four
     // consecutive failures used to cost the lock, which a single deep fade can cause —
@@ -337,8 +401,17 @@ void RdsDecoder::pushBit(int bit) {
 }
 
 void RdsDecoder::parseGroup() {
-    if (!(blkOk_[0] && blkOk_[1])) return;
-    const uint16_t pi = blk_[0];
+    // ★★ BLOCK B IS THE ONLY HARD REQUIREMENT. It carries the group type and the segment
+    // ADDRESS, so without it there is nowhere to put anything — but block A carries only
+    // PI, and once a PI has been CONFIRMED it is already known. Requiring a clean A threw
+    // away entire groups whose payload was perfectly good, for want of a field we could
+    // already supply from memory. On a weak signal that is a large fraction of everything
+    // received, because errors are spread across blocks at random: demanding two specific
+    // blocks be clean is roughly squaring the per-block failure rate (2026-07-26).
+    if (!blkOk_[1]) return;
+    const bool haveA = blkOk_[0];
+    if (!haveA && !piConfirmedVal_) return;    // no identity, from the air or from memory
+    const uint16_t pi = haveA ? blk_[0] : piConfirmedVal_;
     const int gtype = (blk_[1] >> 12) & 0xF;
     const int ver   = (blk_[1] >> 11) & 1;
 
@@ -347,10 +420,20 @@ void RdsDecoder::parseGroup() {
     // trustworthy — wait for it to repeat before acting on anything in this group.
     // A group with no repaired blocks is trusted outright; one that needed correction
     // must agree with the previous reception before it is allowed to change anything.
-    const bool trusted = !grpRepaired_;
-    const bool piConfirmed = (piSeen_ && pi == piLast_);
-    piLast_ = pi; piSeen_ = true;
+    const bool trusted = (grpRepairBits_ == 0);
+    const bool piConfirmed = (piSeen_ && pi == piLast_) || (!haveA && pi == piConfirmedVal_);
+    if (haveA) { piLast_ = pi; piSeen_ = true; }
     if (!trusted && !piConfirmed) return;
+
+    // ★ PI FIRST — reported the moment it is confirmed, without waiting for a name.
+    // Two agreeing receptions is a strong test for a 16-bit field that repeats ~11 times
+    // a second, and it is the identity everything else (database lookup, learned
+    // stations, the FM-DX dial) is keyed on. A DXer who can see C06F has identified the
+    // station even if the name never assembles.
+    if (piConfirmed && pi != piConfirmedVal_) {
+        piConfirmedVal_ = pi;
+        if (cb_.pi) cb_.pi(cb_.ctx, pi);
+    }
 
     if (gtype == 0) {                                  // 0A/0B — programme service name
         const int addr = blk_[1] & 0x3;

@@ -305,6 +305,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // country nibble CHECKED against the receiver's own country — a validation, not
       // an assumption. A Spanish station on sporadic-E has a nibble inconsistent with a
       // British receiver, so it resolves to nothing rather than to a wrong flag.
+      rdsPi = m.pi;
+      rdsBer = m.ber;
       rdsIso = m.pi > 0
         ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
         : '';
@@ -710,12 +712,27 @@ let rdsLogoUrl = '';    // resolved station logo (radio-browser)
 // invisible while the OS media card was only refreshed at the instant of tuning; now
 // that the card tracks the station live, a stale name sits there in plain sight.
 let rdsFreq = -1;
+// ★★ PI, kept SEPARATELY from the name — because it survives conditions the name does
+// not. PS is 8 characters assembled across 4 groups, so losing any one of them leaves
+// the name blank; PI is 16 error-protected bits repeated ~11 times a second and
+// confirmed by repetition. On a weak station the PI is very often the ONLY thing that
+// gets through, and it is a complete identification: it is what a database lookup, a
+// learned station and the FM-DX dial are all keyed on. Storing it inside the name meant
+// throwing away a confirmed identity for want of a label (Stuart, 2026-07-26).
+let rdsPi = -1;
+let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
 
 /** Drop RDS state if the dial has moved off the station it came from. */
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+  rdsPi = -1; rdsBer = -1;
   rdsFreq = -1;
+}
+
+/** PI as the four hex digits every FM-DXer reads it as, e.g. C06F. */
+function piHex(pi: number): string {
+  return pi > 0 ? pi.toString(16).toUpperCase().padStart(4, '0') : '';
 }
 
 /**
@@ -766,8 +783,22 @@ function updateVts() {
     }
   }
 
-  // Nothing known here — hide it rather than show an empty bar.
-  if (!name) {
+  // ★★ PI ALONE IS AN IDENTIFICATION. Falling back to it before giving up is the whole
+  // point of decoding it separately: on a weak station the name frequently never
+  // assembles while the PI arrives cleanly, and "C06F" tells an FM-DXer exactly which
+  // transmitter they have caught. Showing nothing in that case discards a confirmed
+  // result — which is what made our RDS look far worse than it was, on a signal that
+  // was telling us who it was all along (2026-07-26).
+  if (!name && rdsPi > 0) {
+    name = 'PI ' + piHex(rdsPi);
+    flag = isoToFlag(rdsIso);
+  }
+
+  // Nothing known here — hide it rather than show an empty bar. ★ EXCEPT when the RDS
+  // decoder has a block-error figure: that means it is synced and working on this carrier,
+  // which is worth saying out loud even with no name and no PI yet. Hiding it there is
+  // what made "no RDS" and "RDS struggling" look identical from the outside.
+  if (!name && rdsBer < 0) {
     vts.classList.remove('show', 'on');
     // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
     // element when there is no RDS name, so a stale value left in the DOM came back as
@@ -801,13 +832,42 @@ function updateVts() {
   vts.classList.toggle('rt', showRt);
   if (showRt) requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
 
-  // RDS mark only when the data really IS RDS — not for a bookmark guess.
-  $('vtsRds').classList.toggle('show', !!rdsName);
+  // RDS mark only when the data really IS RDS — not for a bookmark guess. A confirmed
+  // PI counts: it came off the subcarrier exactly as a name does.
+  const haveRds = !!rdsName || rdsPi > 0;
+  const rdsEl = $('vtsRds');
+  rdsEl.classList.toggle('show', haveRds);
+  // ★ Block error rate on the badge, so RDS quality is a NUMBER rather than an opinion.
+  // Errors are counted BEFORE correction, over the last 12 groups (as redsea defines
+  // it), so it describes the link and not how hard the decoder worked — which is the
+  // figure that tells a DXer whether a missing name means a marginal signal or a
+  // decoder that has given up. -1 = not enough data yet, so say nothing.
+  // vtsRds is an IMAGE (the RDS logo), so the error rate goes in its tooltip, not its
+  // text — and on the PI chip, which is where a DXer is already looking.
+  rdsEl.title = rdsBer >= 0
+    ? `Live RDS — block error rate ${rdsBer}% (before correction, last 12 groups)`
+    : 'Live RDS data';
+  // ★ PI ALONGSIDE the name, always, once confirmed — and the BER chip shows even when
+  // NOTHING has decoded, which is the case that most needs explaining. "RDS 42%" says the
+  // decoder is synced and the blocks are damaged; nothing at all says it never synced.
+  // Without that, a blank box means both and neither.
+  const piEl = $('vtsPi');
+  const piTxt = piHex(rdsPi);
+  const chip = piTxt && rdsBer >= 0 ? `${piTxt} · ${rdsBer}%`
+             : piTxt                ? piTxt
+             : rdsBer >= 0          ? `RDS ${rdsBer}%`
+             : '';
+  piEl.textContent = chip;
+  piEl.title = rdsBer >= 0
+    ? `${piTxt ? 'PI ' + piTxt + ' — ' : ''}RDS block error rate ${rdsBer}% `
+      + '(before correction, last 12 groups)'
+    : `PI ${piTxt}`;
+  piEl.classList.toggle('show', !!chip);
   const srcEl = $('vtsSrc');
   // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
   // textContent would print the markup as literal text.
   srcEl.innerHTML = src;
-  srcEl.classList.toggle('show', !!src && !rdsName);
+  srcEl.classList.toggle('show', !!src && !haveRds);
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
   if (logo) {

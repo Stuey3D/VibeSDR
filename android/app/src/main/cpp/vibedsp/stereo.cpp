@@ -19,7 +19,7 @@ void StereoPLL::configure(double pilotHz, double rate) {
     rotS_ = (float)std::sin(w0_);
     oscC_ = 1.0f; oscS_ = 0.0f; outC_ = 1.0f; outS_ = 0.0f; sinceNorm_ = 0;
     lockAmp_ = 0.0f;
-    lockState_ = false;
+    lockState_ = false; trackState_ = false;
     // Lock-metric averaging: ~50 ms time constant (rate-independent). Slow enough
     // that brief noise-correlation spikes on static don't reach the engage level.
     lockSmooth_ = (float)(1.0 / (0.05 * rate));
@@ -65,6 +65,8 @@ void StereoPLL::advance(float mpx) {
     lockAmp_ += lockSmooth_ * (mpx * c * 2.0f - lockAmp_);
     if (!lockState_ && lockAmp_ > kLockEngage)       lockState_ = true;
     else if (lockState_ && lockAmp_ < kLockRelease)  lockState_ = false;
+    if (!trackState_ && lockAmp_ > kTrackEngage)      trackState_ = true;
+    else if (trackState_ && lockAmp_ < kTrackRelease) trackState_ = false;
 }
 
 // Phase-coherent references from the oscillator's sin/cos via exact angle

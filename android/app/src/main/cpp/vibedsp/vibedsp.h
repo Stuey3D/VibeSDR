@@ -249,8 +249,19 @@ public:
     // static noise (whose smoothed correlation occasionally spikes) can't toggle
     // stereo on/off. lockAmp() is the raw smoothed metric (for blend/diagnostics).
     bool locked() const { return lockState_; }
+    // ★★ A SEPARATE, MUCH LOWER BAR FOR RDS — because it is a different question.
+    // locked() answers "is the pilot strong enough for stereo AUDIO", where the noisy
+    // L-R sideband is added straight into what you hear, so the threshold is deliberately
+    // cautious. RDS asks only "is the PLL TRACKING well enough to give a coherent
+    // reference", and its differential detector cancels carrier phase algebraically, so
+    // it tolerates far more phase noise than a stereo decoder ever could.
+    // Gating RDS on the stereo threshold switched it OFF ENTIRELY on any station too weak
+    // for clean stereo — not degraded, off — and on a marginal pilot the state flickers,
+    // so RDS arrived in bursts with block sync discarded in between. That is why a strong
+    // station was instant and everything else struggled (Stuart, on air, 2026-07-26).
+    bool trackable() const { return trackState_; }
     float lockAmp() const { return lockAmp_; }
-    void reset() { phase_ = 0.0; df_ = 0.0; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false;
+    void reset() { phase_ = 0.0; df_ = 0.0; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false; trackState_ = false;
                    oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0; }
 private:
     // The oscillator is a RECURSIVE ROTATOR (same trick as Nco/SsbDemod), not a
@@ -271,9 +282,14 @@ private:
     int cycle_ = 0;            // pilot-cycle counter within a bit (0..15)
     float lockAmp_ = 0.0f;
     float lockSmooth_ = 0.0005f;     // lock-metric 1-pole coeff (set by rate ~50ms)
-    bool  lockState_ = false;        // hysteretic lock state
+    bool  lockState_ = false;        // hysteretic lock state (stereo audio)
+    bool  trackState_ = false;       // hysteretic PLL-is-tracking state (RDS)
     static constexpr float kLockEngage = 0.060f;   // pilot present (real ~0.08)
     static constexpr float kLockRelease = 0.035f;  // pilot lost
+    // Tracking-only thresholds: well below the stereo bar, with wide hysteresis so a
+    // fade cannot chatter the gate and cost RDS its block sync.
+    static constexpr float kTrackEngage = 0.015f;
+    static constexpr float kTrackRelease = 0.007f;
 };
 
 // ── SSB / CW demodulator (Weaver / third method — true single-sideband) ────--
@@ -338,6 +354,14 @@ public:
         void (*ps)(void* ctx, uint16_t pi, const char* ps8) = nullptr;        // 8-char station name
         void (*radiotext)(void* ctx, const char* rt64) = nullptr;             // up to 64 chars
         void (*ecc)(void* ctx, uint16_t pi, uint8_t ecc) = nullptr;           // Extended Country Code (group 1A)
+        // ★ PI FIRST. PI rides in block A of EVERY group (~11 times a second) and is a
+        // fixed 16-bit value, so it is confirmable by simple repetition — no assembly
+        // across groups, no addressing, nothing to corrupt. It is therefore the FIRST
+        // thing that becomes trustworthy on a weak signal, often long before a name can
+        // be assembled, and on its own it identifies the station to a database lookup.
+        // Reporting it separately means a DXer sees an identification where the old
+        // all-or-nothing path showed an empty box (Stuart, 2026-07-26).
+        void (*pi)(void* ctx, uint16_t pi) = nullptr;
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
@@ -348,6 +372,40 @@ public:
     bool synced() const { return synced_; }
     int  recentGood() const;          // good blocks within the last kRateWindow
     void pushBit(int bit);            // one recovered data bit (post differential)
+
+    // ── Reporting (the DX numbers) ───────────────────────────────────────────
+    // ★ BLOCK ERROR RATE, defined as redsea defines it: the percentage of blocks that
+    // arrived with a non-zero syndrome BEFORE correction, over the last kBerGroups
+    // groups. Errors before correction — not after — is the honest measure, because it
+    // describes the LINK rather than how hard we worked on it, and it stays meaningful
+    // as the correction table widens. -1 until a full window has been seen.
+    // This is the instrument this decoder has always lacked: it separates "the blocks
+    // are damaged" from "we are throwing good blocks away", which are opposite faults
+    // with opposite fixes.
+    int blockErrorPercent() const;
+    /** Last CONFIRMED PI (two agreeing receptions), or 0 if none yet. */
+    uint16_t confirmedPi() const { return piConfirmedVal_; }
+
+    // ── Correction strength (the "advanced RDS" lever) ───────────────────────
+    // Longest burst, in bits, the correction table will attempt to repair. The standard
+    // permits 5. Wider means more blocks recovered on a weak signal AND more chances to
+    // "repair" noise into something that looks valid, so it is a genuine trade rather
+    // than a free win — which is exactly why it belongs to the user on a DX receiver and
+    // not to us. Downstream trust is weighted by how many bits a block needed, so a wide
+    // setting degrades confidence rather than silently corrupting the display.
+    static void setMaxBurstBits(int bits);   // clamped to 1..5; default kDefaultBurst
+    // ★★ DEFAULT 2, NOT 5 — measured on air 2026-07-26. Widening to the standard's full
+    // 5-bit burst was tried and REGRESSED badly: BBC Radio 4, in solid stereo, produced no
+    // RDS whatsoever. A false correction on block A yields a WRONG PI; the parser compares
+    // it with the previous PI, they disagree, and because piLast_ is overwritten with each
+    // invention, two readings never agree — so PI never confirms and, with PI gating
+    // repaired groups, NOTHING gets through. A strong station needing no corrections was
+    // unaffected, which is exactly the pattern observed.
+    // ★ The old 2-bit cap was not timidity; the file said why, and it was right. The
+    // synthetic probe could not see this at all — Gaussian noise does not produce the
+    // burst patterns that make a wide table dangerous. Keep the lever for the FM-DX
+    // toggle, where a user can accept the trade knowingly and watch the BER.
+    static constexpr int kDefaultBurst = 2;
 
     // Exposed for the DSP layer / tests (encoder round-trip).
     static uint16_t checkword(uint16_t data);           // 10-bit, no offset
@@ -371,9 +429,15 @@ private:
     struct SyncPulse { uint8_t seq; uint64_t bitPos; };
     static const uint32_t* errorTable();     // 1024 syndromes -> error vector (0 = none)
     static int seqOfOffset(uint16_t offsetIdx);
-    // Returns whether the block is trustworthy; `repaired` reports whether that took
-    // an actual correction (a clean CRC match does not).
-    bool tryCorrect(uint16_t offsetIdx, uint32_t& block26, bool& repaired) const;
+    // Returns whether the block is trustworthy. `repairBits` reports HOW MANY bits had
+    // to be flipped — 0 for a clean checkword match.
+    // ★★ It used to report a bare bool, and that single bit of lost information is why
+    // the group parser had to be so blunt: unable to tell a pristine block from one
+    // rebuilt out of a 2-bit patch, its only safe policy was to distrust the WHOLE group
+    // if anything anywhere had been touched. A count lets the parser WEIGH evidence
+    // instead of VETOING it — the same thing a hardware RDS decoder gives its host,
+    // which is how those parsers afford to be decisive (2026-07-26).
+    bool tryCorrect(uint16_t offsetIdx, uint32_t& block26, int& repairBits) const;
     void notePulse(int seq);                 // candidate block boundary while unsynced
     static constexpr int kSyncPulses = 6;    // ring of recent candidates
     static constexpr int kSyncNeeded = 3;    // agreeing pulses required to declare sync
@@ -404,8 +468,15 @@ private:
     // that needed burst correction has to wait for a repeat. Taxing every update made
     // strong stations visibly sluggish to refresh RadioText for no safety gain, because
     // on a strong station nothing is being corrected in the first place.
-    bool grpRepaired_ = false;
+    int  grpRepairBits_ = 0;          // bits repaired across the current group
+    int  blkRepair_[4] = {0, 0, 0, 0};// ...and per block, so the parser can weigh
     uint16_t piLast_ = 0;   bool piSeen_ = false;
+    uint16_t piConfirmedVal_ = 0;     // last PI seen twice running (0 = none)
+    // BER window: one bit per block, 1 = arrived with a non-zero syndrome (pre-correction).
+    static constexpr int kBerGroups = 12;                 // redsea's averaging window
+    static constexpr int kBerBlocks = kBerGroups * 4;
+    uint64_t errHist_ = 0;
+    int errSeen_ = 0;
     uint16_t psCand_[4] = {0, 0, 0, 0};       bool psSeen_[4] = {false, false, false, false};
     uint32_t rtCand_[16] = {0};               bool rtSeen_[16] = {false};
     uint8_t  eccCand_ = 0;  bool eccSeen_ = false;
@@ -428,6 +499,11 @@ public:
     // quadrature) and the bit clock.
     void process(const float* mpx, const float* ref57, const float* ref57q,
                  const float* bitClk, int n);
+    /** Block error rate of whichever hypothesis is currently winning; -1 = none synced.
+     *  ★ -1 is itself the answer that matters: it means NOTHING is in block sync, which is
+     *  a completely different fault from a high error rate, and the two were indistinguishable
+     *  from outside until this existed. */
+    int blockErrorPercent() const;
 private:
     std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
@@ -459,6 +535,26 @@ private:
     // the station's actual subcarrier phase and died completely near 90 degrees. Measured
     // in rds_snr_probe: total failure at 80-90 degrees where this is flat. That, not noise,
     // is why some perfectly strong stations produced nothing.
+    // ── Why there are sixteen, and why a timing loop cannot help ─────────────
+    // ★★ The bit clock is the PILOT DIVIDED BY 16 (19000/16 = 1187.5 exactly, see
+    // stereo.cpp). Its FREQUENCY is therefore perfect — locked, through the pilot, to the
+    // transmitter's own clock — and the only unknown is the divider's starting state,
+    // which has exactly SIXTEEN possible values. So this bank is not a brute-force stand-in
+    // for symbol timing recovery: it is an exhaustive enumeration of a discrete ambiguity,
+    // and precisely one hypothesis is EXACTLY right rather than approximately right.
+    //
+    // ★★ That is why a timing loop has now failed TWICE. 2026-07-25 replaced the bank with
+    // early/late gates: it measured well synthetically and took ~30 s to name a strong
+    // station on air, because a loop must pull in while an exact clock never has to.
+    // 2026-07-26 kept the bank for acquisition and seeded a tracked loop from it, removing
+    // the pull-in objection entirely — and the probe still said 23 groups against the
+    // bank's 35. Both attempts substituted an ESTIMATE for a value that was already EXACT.
+    // There is no sampling instant better than the right one, so there is nothing here for
+    // a loop to win, at any bandwidth, with any seeding. Do not try a third time.
+    //
+    // ★ What the pilot does NOT give us is the SUBCARRIER's phase — 19 kHz and 57 kHz take
+    // different group delays through a multipath channel. That is the open problem, and it
+    // is a CARRIER problem, not a clock one.
     static constexpr int NPH = 16;
     // Per-hypothesis callback trampoline: carries which hypothesis spoke, so the demod
     // can drop everything except the winner.
@@ -500,6 +596,14 @@ public:
         void (*rdsText)(void* ctx, const char* rt64) = nullptr;
         // Optional: WFM RDS Extended Country Code (group 1A) → station country.
         void (*rdsEcc)(void* ctx, uint8_t ecc) = nullptr;
+        // ★ Optional: the station's PI code ALONE, the moment it is confirmed.
+        // PI used to reach the host only as a parameter of rdsPs, so a station whose
+        // name had not yet assembled reported NO IDENTITY AT ALL — even though its PI
+        // had been arriving, error-protected, eleven times a second. On a weak signal
+        // that is the difference between "C06F, Pride Radio, 11 km" and a blank box.
+        void (*rdsPi)(void* ctx, uint16_t pi) = nullptr;
+        // Optional: RDS block error rate, 0-100 (-1 = not enough data yet).
+        void (*rdsBer)(void* ctx, int percent) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
     };

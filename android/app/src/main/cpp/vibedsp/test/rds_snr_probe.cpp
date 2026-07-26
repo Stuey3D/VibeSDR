@@ -39,7 +39,8 @@ static uint32_t encodeBlock(uint16_t data, int offsetIdx) {
     return ((uint32_t)data << 10) | cw;
 }
 
-struct Cap { uint16_t pi = 0; char ps[9] = {0}; int psCalls = 0; };
+struct Cap { uint16_t pi = 0; char ps[9] = {0}; int psCalls = 0;
+             long berSum = 0; int berN = 0; int berMax = 0; };
 
 static std::vector<int> buildDiffBits(uint16_t PI, const char* PS, int reps) {
     std::vector<int> bits;
@@ -109,6 +110,14 @@ static Cap runAt(double noise, double rdsLevel, bool stereoOn, double subcarrier
         auto* p = (Cap*)c; p->pi = pi; std::strncpy(p->ps, ps, 8); p->psCalls++;
     };
     cb.audio = [](void*, const float*, int, int, int) {};
+    // ★ BLOCK ERROR RATE, the same figure the server reports on air — so the bench and the
+    // field finally measure the SAME quantity. Worth its own column: on air, Heart at 57 dB
+    // SNR reported 4-16%, and an error rate that will not fall with signal strength is an
+    // ERROR FLOOR — systematic corruption, not noise. If the probe shows ~0% at zero noise
+    // while the real receiver shows 4%, the fault is in the real signal path (deviation,
+    // MPX shaping, RF) and not in this decoder at all. Group counts could never tell those
+    // apart (2026-07-26).
+    cb.rdsBer = [](void* c, int pct) { auto* p = (Cap*)c; if (pct >= 0) { p->berSum += pct; p->berN++; if (pct > p->berMax) p->berMax = pct; } };
     pipe.start(fs, 1024, 20.0, 48000, cb);
     pipe.setTune(fc, RxPipeline::Mode::WFM, 200000.0);
     for (int o = 0; o < Ni; o += 65536)
@@ -120,12 +129,15 @@ int main() {
     std::printf("\nRDS weak-signal probe — 2.18 s of WFM per point, PS=\"RDSTEST!\"\n");
     std::printf("stereo L-R present, RDS at 5%% MPX (a typical real injection level)\n\n");
     std::printf("  (max possible 0A groups in this run: ~24)\n");
-    std::printf("  %-10s %-8s %-10s %s\n", "IQ noise", "PS ok?", "groups", "recovered");
+    std::printf("  %-10s %-8s %-10s %-12s %s\n", "IQ noise", "PS ok?", "groups", "BER avg/max", "recovered");
     const double levels[] = { 0.0, 0.20, 0.40, 0.60, 0.90, 1.20, 1.60, 2.00 };
     for (double nz : levels) {
         const Cap c = runAt(nz, 0.05, true);
         const bool ok = (c.psCalls > 0 && std::strcmp(c.ps, "RDSTEST!") == 0);
-        std::printf("  %-10.2f %-8s %-10d \"%s\"\n", nz, ok ? "yes" : "NO", c.psCalls, c.ps);
+        char ber[24];
+        if (c.berN) std::snprintf(ber, sizeof ber, "%ld%%/%d%%", c.berSum / c.berN, c.berMax);
+        else        std::snprintf(ber, sizeof ber, "no sync");
+        std::printf("  %-10.2f %-8s %-10d %-12s \"%s\"\n", nz, ok ? "yes" : "NO", c.psCalls, ber, c.ps);
     }
 
     // ── Subcarrier phase error ───────────────────────────────────────────────

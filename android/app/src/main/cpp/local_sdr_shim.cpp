@@ -1207,6 +1207,7 @@ struct LocalSdrShim::Impl {
     std::string rdsPsName, rdsText;
     int rdsPi = -1;
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
+    int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
     std::atomic<bool> stereoDetected{false};
     // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
@@ -1553,6 +1554,20 @@ struct LocalSdrShim::Impl {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsText = rt64 ? rt64 : "";
     }
+    // ★ PI on its own, the moment the decoder confirms it. It used to be set ONLY
+    // inside rdsPsCb, so the station's identity was hostage to its NAME assembling —
+    // and the name is the fragile part (8 characters across 4 groups, any one of which
+    // can be lost), while PI is 16 error-protected bits repeated ~11 times a second.
+    // Weak stations therefore reported nothing at all when they were in fact telling
+    // us exactly who they were (2026-07-26).
+    static void rdsPiCb(void* ctx, uint16_t pi) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsPi = (int)pi;
+    }
+    static void rdsBerCb(void* ctx, int percent) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsBer = percent;
+    }
     static void rdsEccCb(void* ctx, uint8_t ecc) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsEcc = ecc;
@@ -1810,7 +1825,7 @@ struct LocalSdrShim::Impl {
     // just resets the derived UI state; the engine retains no audio across modes.
     void teardownAudio() {
         std::lock_guard<std::mutex> lk(rdsMtx);
-        rdsPsName.clear(); rdsText.clear(); rdsPi = -1; rdsEcc = 0;
+        rdsPsName.clear(); rdsText.clear(); rdsPi = -1; rdsEcc = 0; rdsBer = -1;
         stereoDetected.store(false);
     }
 
@@ -1856,6 +1871,8 @@ struct LocalSdrShim::Impl {
         cb.spectrum = &Impl::specCb;
         cb.audio    = &Impl::audioCb;
         cb.rdsPs    = &Impl::rdsPsCb;
+        cb.rdsPi    = &Impl::rdsPiCb;
+        cb.rdsBer   = &Impl::rdsBerCb;
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
@@ -1873,11 +1890,11 @@ struct LocalSdrShim::Impl {
         return o;
     }
     void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
-        std::string ps, rt; int pi = -1, ecc = 0;
+        std::string ps, rt; int pi = -1, ecc = 0, ber = -1;
         bool wfm = (mode == "wfm");
         if (wfm) {
             std::lock_guard<std::mutex> lk(rdsMtx);
-            ps = rdsPsName; rt = rdsText; pi = rdsPi; ecc = rdsEcc;
+            ps = rdsPsName; rt = rdsText; pi = rdsPi; ecc = rdsEcc; ber = rdsBer;
         }
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
@@ -1886,15 +1903,25 @@ struct LocalSdrShim::Impl {
         // Only send when something actually CHANGED — re-sending identical RDS each
         // second re-triggers the client's notification marquee (text "repopulates"
         // and flickers). Change-detect ps/rt/pi/ecc/stereo and skip otherwise.
-        if (ps == lastSentPs_ && rt == lastSentRt_ && pi == lastSentPi_ && ecc == lastSentEcc_ && st == lastSentStereo_) return;
+        // ★ BER counts as a change TOO — otherwise the one case that most needs reporting
+        // is the one that never reports. A station decoding nothing has no name, no PI and
+        // no stereo transition, so the whole message was suppressed and the client could
+        // not tell "the decoder is receiving damaged blocks" from "the decoder is not
+        // running at all". Those are opposite faults and they looked identical.
+        // The client must not re-trigger its marquee on a BER-only change (it keys that off
+        // ps/rt), so this is safe to send at the 1 Hz metadata cadence.
+        if (ps == lastSentPs_ && rt == lastSentRt_ && pi == lastSentPi_ && ecc == lastSentEcc_
+            && st == lastSentStereo_ && ber == lastSentBer_) return;
         lastSentPs_ = ps; lastSentRt_ = rt; lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st;
+        lastSentBer_ = ber;
         char buf[512];
         snprintf(buf, sizeof buf,
-            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d}",
+            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d}",
             st ? "true" : "false",
-            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc);
+            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber);
         sendText(sock, buf);
     }
+    int lastSentBer_ = -2;   // -2 = never sent (distinct from -1 = decoder has no window)
     // Last RDS values pushed to the client (change-detect to avoid marquee re-trigger).
     std::string lastSentPs_, lastSentRt_; int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;
 
@@ -3050,6 +3077,19 @@ struct LocalSdrShim::Impl {
         if (useTcp()) { tcpRunning.store(false); }
         else          { restarting.store(true); if (dev) rtlsdr_cancel_async(dev); }
         if (rtlThread.joinable()) rtlThread.join();
+        // ★★ LET LIBUSB FINISH REAPING THE CANCELLED TRANSFERS. rtlsdr_read_async can
+        // return — and so the thread can join — while libusb still has cancelled transfers
+        // outstanding. The next SYNCHRONOUS control transfer (rtlsdr_reset_buffer, on
+        // resume) runs libusb's event loop, which then completes a transfer that has
+        // already been freed, and libusb ASSERTS rather than returning an error. That is
+        // an abort: uncatchable, and it takes the whole server down.
+        // CRASHED ON EVERY CONNECT once the server had been idle (2026-07-26): the park
+        // happens when the last listener leaves, so the fault is armed by an EMPTY server
+        // and fired by the next person to arrive — the worst possible pairing for an
+        // unattended machine, and invisible to whoever is testing with a client already
+        // connected. Same shape as the AVAudioPlayerNode crash: an uncatchable abort on a
+        // resume path, so it has to be prevented rather than handled.
+        if (!useTcp()) std::this_thread::sleep_for(std::chrono::milliseconds(120));
         { std::lock_guard<std::mutex> lk(iqMtx); iqQueue.clear(); iqQueuedSamples = 0; iqPrefilled = false; }
         LOGI("no listeners — dongle capture paused (idle)");
     }

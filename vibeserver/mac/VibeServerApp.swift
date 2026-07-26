@@ -607,7 +607,14 @@ struct SettingsView: View {
                                 } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless)
                             }
                         }
-                        Text("Point VibeSDR or Jr at one of these — INCLUDE THE PORT.")
+                        // ★ The old copy ordered everyone to type the port, which is wrong for
+                        // almost everyone: VibeSDR and Jr already SCAN 48000–48100, so the
+                        // default server is found without it. Telling people to do work the app
+                        // does for them makes the product look fussier than it is — and it buried
+                        // the one case that genuinely needs typing, a port outside that range.
+                        Text("Point VibeSDR or Jr at one of these. They scan ports 48000–48100, "
+                             + "so you only need to add the port by hand if you have moved this "
+                             + "server outside that range.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     LabeledContent("Now sending", value: server.status.clientConnected

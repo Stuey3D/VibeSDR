@@ -39,6 +39,16 @@ const BAND_FLUSH_FRAC      = 0.4;   // recentre > 40% of visible BW → flush hi
 
 const RANGE_MARGIN         = 5;     // dB margin added beyond floor/ceiling
 const NOISE_PERCENTILE     = 0.10;  // 10th percentile = noise floor estimate
+// ★★ The ceiling ignores the very top of the distribution rather than taking the single
+// strongest bin. A retune puts a brief DC/LO spike at the centre bin — one or two bins
+// tens of dB above anything real — and a single-bin maximum hands the whole palette to it,
+// so the entire waterfall dims for as long as it takes to age out. That is the residual
+// "brightness flicker on tune" that clearing the history and slew-limiting could not fix:
+// both control how FAST the ceiling moves, neither stops it being WRONG.
+// 0.4% of 1024 bins ≈ 4 bins — narrower than any real signal at any zoom (an FM carrier is
+// dozens of bins, SSB several), so nothing legitimate is excluded, and a genuinely clipping
+// band simply saturates the top few bins to white, which is what it should look like.
+const PEAK_EXCLUDE_FRAC    = 0.004;
 const MIN_HISTORY_MS       = 2000;  // noise-floor smoothing window
 const MAX_HISTORY_MS       = 5000;  // ceiling smoothing window (faster recovery)
 // Below this visible span the 10th-percentile noise floor is untrustworthy: zoomed into a
@@ -137,6 +147,8 @@ export class SignalProcessor {
   private minHistory: Array<{ value: number; ts: number }> = [];
   private lastMaxAt = 0;
   private lastMinAt = 0;
+  /** Set by a view change; the next frame adopts its range outright. See below. */
+  private adoptRange = false;
   private lastCenterHz = 0;
   private lastBwHz = 0;
   private maxHistory: Array<{ value: number; ts: number }> = [];
@@ -179,7 +191,7 @@ export class SignalProcessor {
   /** Rate-limit the floor exactly as the ceiling is limited — see the slew note
    *  there. First frame adopts outright so nothing fades in on connect. */
   private slewFloor(want: number, now: number): number {
-    if (!this.lastMinAt || !Number.isFinite(this.actualMinDb)) {
+    if (!this.lastMinAt || !Number.isFinite(this.actualMinDb) || this.adoptRange) {
       this.lastMinAt = now; return want;
     }
     const dt = Math.min(0.25, (now - this.lastMinAt) / 1000);
@@ -217,7 +229,22 @@ export class SignalProcessor {
       // (MIN_HISTORY_MS) and steps the same way as it turns over, which moves the
       // bottom of the range and flickers just as visibly. Clearing only the max
       // left a residual flicker (Stuart, 2026-07-26).
-      if (moved && this.lastBwHz > 0) { this.maxHistory.length = 0; this.minHistory.length = 0; }
+      if (moved && this.lastBwHz > 0) {
+        this.maxHistory.length = 0; this.minHistory.length = 0;
+        // ★★ THE TWO EARLIER FIXES WERE FIGHTING EACH OTHER. Clearing the window
+        // makes the new target correct IMMEDIATELY; the slew limit then refuses to
+        // go there at more than 40 dB/s. So on every tune AND every zoom the scale
+        // spent a few hundred ms travelling to a value it already knew, holding the
+        // stale pre-tune ceiling on the way — and a ceiling that is too high maps
+        // everything darker. That is the residual flicker: dim, then brighten and
+        // settle, exactly as described, and on zoom as well as tune because both
+        // clear the window (Stuart, 2026-07-26).
+        //
+        // ★ The slew limit keeps its real job — smoothing the STEPS as samples age
+        // out of the rolling window during normal listening. It was never meant to
+        // pace a deliberate, known-good change of view.
+        this.adoptRange = true;
+      }
       this.lastCenterHz = centerHz;
       this.lastBwHz = bwHz;
     }
@@ -315,7 +342,19 @@ export class SignalProcessor {
           if (acc > target) { floorDb = b - 280; break; }
         }
         const targetMin = Math.floor(floorDb - RANGE_MARGIN);
-        const targetMax = Math.ceil(absoluteMax + RANGE_MARGIN);
+        // Ceiling = the top PEAK_EXCLUDE_FRAC of bins discarded, so a one-bin retune
+        // spike cannot set the scale. Falls back to the true maximum when the view is
+        // too narrow for the fraction to mean anything (fewer bins than it excludes).
+        const drop = Math.floor(count * PEAK_EXCLUDE_FRAC);
+        let peakDb = absoluteMax;
+        if (drop >= 1) {
+          let accTop = 0;
+          for (let b = 299; b >= 0; b--) {
+            accTop += hist[b];
+            if (accTop > drop) { peakDb = b - 280; break; }
+          }
+        }
+        const targetMax = Math.ceil(peakDb + RANGE_MARGIN);
 
         // Ceiling ALWAYS tracks the strongest bin in view — a signal that appears
         // as you zoom/tune in must still set the top of the scale.
@@ -337,7 +376,7 @@ export class SignalProcessor {
         // value may travel, so it ramps over a few hundred ms instead of
         // stepping. The alternative — clearing the history on a view change —
         // trades several small jumps for one large one, which is not better.
-        if (!this.lastMaxAt || !Number.isFinite(this.actualMaxDb)) {
+        if (!this.lastMaxAt || !Number.isFinite(this.actualMaxDb) || this.adoptRange) {
           // ★ First frame of a session adopts OUTRIGHT — slewing from the initial
           // value would make the waterfall fade in on every connect.
           this.actualMaxDb = wantMaxDb;
@@ -375,6 +414,8 @@ export class SignalProcessor {
           const cappedFloor = Math.min(targetMin, this.frozenFloorDb + FLOOR_CLIMB_MAX);
           this.actualMinDb = this.slewFloor(cappedFloor + s.autoContrast, now);
         }
+        // Both ends have taken the post-view-change measurement; slew normally again.
+        this.adoptRange = false;
       }
     }
     // MINIMUM WINDOW, ANCHORED AT THE FLOOR. On a quiet/no-signal band the ceiling (strongest bin)

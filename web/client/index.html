@@ -597,6 +597,16 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #vtsSrc.show { display: inline; }
 #vtsFlag { font-size: 15px; }
+/* ★ PI stays on screen ALONGSIDE the name, not merely as a fallback for it. It is the
+   station's unambiguous identity — the key a database lookup, a learned station and the
+   FM-DX dial are all keyed on — and an FM-DXer reads it as readily as the name. Monospace
+   so the four hex digits line up between stations. */
+#vtsPi {
+  display: none; font-family: var(--mono, monospace); font-size: 11px;
+  letter-spacing: 0.5px; opacity: 0.75; border: 1px solid var(--btn-border);
+  border-radius: 3px; padding: 0 3px;
+}
+#vtsPi.show { display: inline; }
 /* RDS RadioText — the scrolling message the station sends. Ellipsised rather than
    marquee'd: a looping animation over a live waterfall is exactly the kind of
    thing that pegs a render thread for no benefit. */
@@ -782,6 +792,7 @@ select.btn { padding: 6px 8px; }
   <span id="vtsSrc"></span>
   <img id="vtsLogo" alt="">
   <span id="vtsFlag"></span>
+  <span id="vtsPi"></span>
   <span id="vtsName">—</span>
   <span id="vtsRt"><span id="vtsRtInner"></span></span>
   <span id="vtsBand"></span>

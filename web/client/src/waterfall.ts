@@ -17,6 +17,33 @@
  */
 
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
+
+/** Fixed ring width — see the note at the GPU push. Must never depend on bin count. */
+const RING_W = 1024;
+
+/**
+ * Resample one row to RING_W.
+ * ★ PEAK-HOLD when downsampling, never a mean: a narrow carrier occupies one bin, and
+ * averaging it with its quiet neighbours is exactly how a weak signal disappears from the
+ * display it exists to reveal. Nearest-neighbour when upsampling — there is no detail to
+ * invent, and interpolating would only blur what the sharpening then tries to undo.
+ */
+function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
+  if (n === RING_W) return src;
+  const step = n / RING_W;
+  if (n > RING_W) {
+    for (let i = 0; i < RING_W; i++) {
+      const a = (i * step) | 0;
+      const b = Math.min(n, ((i + 1) * step) | 0) || a + 1;
+      let m = 0;
+      for (let k = a; k < b; k++) if (src[k] > m) m = src[k];
+      dst[i] = m;
+    }
+  } else {
+    for (let i = 0; i < RING_W; i++) dst[i] = src[(i * step) | 0];
+  }
+  return dst;
+}
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 
@@ -170,6 +197,8 @@ export class Waterfall {
    *  read as texture, but a live trace visibly jumps. */
   private spec: Float32Array | null = null;
   private peak: Float32Array | null = null;
+  /** Scratch for the ring resample — allocated once, never per frame. */
+  private ringBuf = new Uint8Array(RING_W);
   private prevSpec: Float32Array | null = null;
   private prevPeak: Float32Array | null = null;
   private drawSpec: Float32Array | null = null;
@@ -436,13 +465,23 @@ export class Waterfall {
     // The ring is TALLER than the display (fixed/generous), so `head` walks its rows, not the display's
     // — that's what lets a resize keep history (the ring is never touched).
     if (this.gl) {
-      if (this.glCols !== n || this.gl.rows < wfH) {
-        this.gl.ensureRing(n, Math.max(GL_RING_ROWS, wfH));
-        this.glCols = n;
+      // ★★ THE RING IS A FIXED WIDTH, and rows are resampled into it — ported from the
+      // app (2026-07-26). It used to be allocated at the LIVE bin count, so any change in
+      // bin count reallocated the texture and threw the whole scroll-back away. Worse, it
+      // did so silently and only sometimes, which is what made the waterfall appear to
+      // "squish" on a zoom: the history was not being rescaled, it was being destroyed and
+      // refilled at a different width.
+      // 1024 ≈ one bin per pixel on a phone and comfortably more than a browser column
+      // count, so resampling into it costs nothing visible and history now survives
+      // ANY bin count the server sends.
+      const rowIn = resampleRow(blend, n, this.ringBuf);
+      if (this.glCols !== RING_W || this.gl.rows < wfH) {
+        this.gl.ensureRing(RING_W, Math.max(GL_RING_ROWS, wfH));
+        this.glCols = RING_W;
       }
       const rows = this.gl.rows;
       this.head = (this.head - 1 + rows) % rows;
-      this.gl.pushRow(blend, this.head);
+      this.gl.pushRow(rowIn, this.head);
       return;
     }
 
