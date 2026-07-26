@@ -74,6 +74,12 @@ export interface RdsExt {
   rtpTitle: string;      // RT+ tagged title (ODA 4BD7)
   rtpArtist: string;     // RT+ tagged artist
   longPs: string;        // 32-character Long PS (group 15A)
+  ptyn: string;          // programme type NAME (10A) — the station's own words
+  lang: number;          // RDS language code (1A variant 3)
+  pinDay: number; pinHour: number; pinMin: number;
+  eon: { pi: string; ps: string; af: number; ta: number }[];
+  oda: { aid: string; grp: number }[];
+  phase: number;         // RDS-to-pilot phase, degrees (-1 = no lock)
   xy: number[];          // interleaved x,y as signed bytes (x100)
 }
 
@@ -278,6 +284,14 @@ export class SpectrumClient {
           rtpTitle: String(msg.rtpTitle ?? ''),
           rtpArtist: String(msg.rtpArtist ?? ''),
           longPs: String(msg.longPs ?? ''),
+          ptyn: String(msg.ptyn ?? ''),
+          lang: Number(msg.lang ?? 0),
+          pinDay: Number(msg.pinDay ?? 0),
+          pinHour: Number(msg.pinHour ?? -1),
+          pinMin: Number(msg.pinMin ?? 0),
+          eon: Array.isArray(msg.eon) ? msg.eon : [],
+          oda: Array.isArray(msg.oda) ? msg.oda : [],
+          phase: Number(msg.phase ?? -1),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
         });
         break;

@@ -331,18 +331,37 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);
                 int af[RdsDecoder::kMaxAf]; int afSeen = 0;
                 const int nAf = rdsDemod_.mergedAf(af, RdsDecoder::kMaxAf, &afSeen);
-
                 int gc[32] = {0};
                 if (d) for (int i = 0; i < 32; ++i) gc[i] = d->groupCount(i);
-                cb_.rdsExt(cb_.ctx,
-                           d ? d->pty() : -1, d ? d->tp() : -1,
-                           d ? d->ta()  : -1, d ? d->ms() : -1,
-                           d ? d->di()  : -1,
-                           d ? d->ctMinutes() : -1, d ? d->ctOffsetHalfHours() : 0,
-                           af, nAf, afSeen, gc, d ? d->groupTotal() : 0,
-                           d ? d->rtPlusTitle()  : "", d ? d->rtPlusArtist() : "",
-                           d ? d->longPs() : "",
-                           xy, np);
+                static RdsDecoder::Eon eons[RdsDecoder::kMaxEon];
+                int nEon = 0;
+                if (d) { nEon = d->eonCount();
+                         for (int i = 0; i < nEon; ++i) eons[i] = d->eon(i); }
+                Callbacks::RdsExt x{};
+                x.pty = d ? d->pty() : -1;  x.tp = d ? d->tp() : -1;
+                x.ta  = d ? d->ta()  : -1;  x.ms = d ? d->ms() : -1;
+                x.di  = d ? d->di()  : -1;
+                x.ctMinutes = d ? d->ctMinutes() : -1;
+                x.ctOffsetHalfHours = d ? d->ctOffsetHalfHours() : 0;
+                x.afKhz = af; x.nAf = nAf; x.afSeen = afSeen;
+                x.groupCounts = gc; x.groupTotal = d ? d->groupTotal() : 0;
+                x.rtpTitle  = d ? d->rtPlusTitle()  : "";
+                x.rtpArtist = d ? d->rtPlusArtist() : "";
+                x.longPs    = d ? d->longPs() : "";
+                x.ptyn      = d ? d->ptyn() : "";
+                x.language  = d ? d->languageCode() : 0;
+                x.pinDay    = d ? d->pinDay() : 0;
+                x.pinHour   = d ? d->pinHour() : -1;
+                x.pinMinute = d ? d->pinMinute() : 0;
+                x.eon = eons; x.nEon = nEon;
+                static RdsDecoder::Oda odas[RdsDecoder::kMaxOda];
+                int nOda = 0;
+                if (d) { nOda = d->odaCount();
+                         for (int i = 0; i < nOda; ++i) odas[i] = d->oda(i); }
+                x.oda = odas; x.nOda = nOda;
+                x.constXY = xy; x.nPts = np;
+                x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
+                cb_.rdsExt(cb_.ctx, x);
             }
             if (wantRds && pll_.trackable())
                 rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), ref57qBuf_.data(),

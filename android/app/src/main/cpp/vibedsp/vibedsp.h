@@ -19,6 +19,7 @@
 #include <complex>
 #include <memory>
 #include <vector>
+#include <string>
 
 namespace vibedsp {
 
@@ -422,6 +423,31 @@ public:
     /** Long PS — 32 UTF-8 characters in group 15A, where ordinary PS is 8. Stations use it
      *  to send a full name instead of an abbreviation squeezed into eight slots. */
     const char* longPs() const { return lpsSeen_ ? longPs_ : ""; }
+    // ── ★ The rest of the standard, so nothing a station transmits is thrown away ──
+    /** PTYN (10A) — the station's OWN words for its programme type ("Rock Show" rather
+     *  than the generic "Pop Music"), 8 characters. */
+    const char* ptyn() const { return ptynSeen_ == 0x3 ? ptyn_ : ""; }
+    /** Language code (1A, slow labelling variant 3). 0 = not received. */
+    int  languageCode() const { return lang_; }
+    /** PIN (1A block D) — programme item number: day of month, hour, minute. */
+    int  pinDay() const { return pinDay_; }
+    int  pinHour() const { return pinHour_; }
+    int  pinMinute() const { return pinMin_; }
+    /** ★★ EON (14A) — OTHER NETWORKS: what the sister stations are called, where they are,
+     *  and whether one of them has a traffic announcement running. BBC Northampton spends
+     *  30% of its groups on this and we were binning every one. */
+    struct Eon { uint16_t pi; char ps[9]; int afKhz; int ta; };
+    /** ★ Which ODAs (Open Data Applications) this station announces in 3A, and in which
+     *  group each rides. RT+ is only ONE of these — a station can announce eRT, TMC or an
+     *  in-house application instead, so "3A present" does NOT mean "RT+ present". Listing
+     *  them turns "why is Now Playing empty?" from a guess into a reading (2026-07-26). */
+    struct Oda { uint16_t aid; uint8_t group; };
+    int  odaCount() const { return odaN_; }
+    const Oda& oda(int i) const { return oda_[i]; }
+    static constexpr int kMaxOda = 8;
+    int  eonCount() const { return eonN_; }
+    const Eon& eon(int i) const { return eon_[i]; }
+    static constexpr int kMaxEon = 8;
     int  afCount() const { return afN_; }
     int  afKhz(int i) const { return (i >= 0 && i < afN_) ? afKhz_[i] : 0; }
     int  afHits(int i) const { return (i >= 0 && i < afN_) ? afHits_[i] : 0; }
@@ -459,6 +485,7 @@ public:
 private:
     void parseGroup();
     void applyRtPlus(int type, int start, int len);
+    void endRadioTextAtCr();
     // ── Weak-signal block recovery ───────────────────────────────────────────
     // Sync used to LATCH on a single block-A syndrome, and any one bad bit threw a
     // block away. Both are costly on a marginal signal, and both have standard
@@ -512,6 +539,18 @@ private:
     // RT+ : group 3A names which group type carries the tags (commonly 11A), so we cannot
     // parse them until that announcement arrives. -1 = not yet announced.
     int  rtpGroup_ = -1;
+    int  rtAb_ = 0; bool rtAbSeen_ = false;   // RadioText A/B flag — see parseGroup
+    // UTF-8 renderings handed to callers — RDS G0 never escapes this class.
+    std::string psU8_, rtU8_;
+    char ptyn_[9] = {0};
+    int  ptynSeen_ = 0;
+    int  lang_ = 0;
+    int  pinDay_ = 0, pinHour_ = -1, pinMin_ = 0;
+    Oda  oda_[kMaxOda] = {};
+    int  odaN_ = 0;
+    Eon  eon_[kMaxEon] = {};
+    int  eonN_ = 0;
+    Eon* eonFor(uint16_t pi);
     char rtpTitle_[65] = {0};
     char rtpArtist_[65] = {0};
     char longPs_[33] = {0};
@@ -578,6 +617,19 @@ public:
      *  subcarrier sits ~30 dB down, and an 8-bit ADC only gives ~48 dB of range, so the
      *  audio can sound perfect while RDS drowns in quantisation noise (2026-07-26). */
     float subcarrierRelDb() const;
+    /** ★★★ RDS-TO-PILOT PHASE, in degrees — the measurement HansVanEijsden (FMDX.org,
+     *  2026-07-26) called "one verrrrry much requested thing… as far as I know, no software
+     *  solution yet", and carries a Pira broadcast analyser to get. A correctly encoded
+     *  station sits near 0 degrees, or near 90 for quadrature encoding; anything between is
+     *  a transmitter fault worth knowing about.
+     *  ★ We were already measuring it and throwing it away. Our 57 kHz reference is the
+     *  PILOT tripled, so the angle the constellation sits at IS the phase between the
+     *  station's subcarrier and its own pilot. It was removed an hour earlier purely to make
+     *  the plot look conventional.
+     *  ★ BPSK is 180-degree ambiguous, so this is reported modulo 180 — which is exactly
+     *  enough to tell 0 from 90, the distinction that matters. Heavily smoothed: it is a
+     *  transmitter characteristic, not something that should flicker. -1 = no lock. */
+    float pilotPhaseDeg() const;
     /** Pilot amplitude at the same instant, so the ratio means something. */
     void setPilotRef(float amp) { pilotRef_ = amp; }
     /** ★★ RECENT SYMBOL POINTS — the RDS constellation, as every serious FM receiver
@@ -670,6 +722,9 @@ private:
     RdsDecoder dec_[NPH];
     std::vector<float> xI_, xQ_, sI_, sQ_;
     float rdsRms_ = 0.0f;              // smoothed |baseband|, for subcarrierRelDb()
+    // Doubled-angle accumulator: doubling folds the two BPSK lobes onto one, so they can be
+    // averaged without cancelling. Slow, because this describes the transmitter.
+    float phCos2_ = 0.0f, phSin2_ = 0.0f;
     // Constellation ring — written by whichever hypothesis is currently winning, so the
     // plot shows what the DECODER is actually working with rather than an also-ran.
     int mergedAf_[RdsDecoder::kMaxAf] = {0};
@@ -717,12 +772,24 @@ public:
         // ★ The Advanced RDS decoder's payload: the fields we used to discard, plus the
         // constellation. Only emitted when a client has the decoder OPEN — selecting it IS
         // the toggle, so nothing here is paid for while nobody is looking.
-        void (*rdsExt)(void* ctx, int pty, int tp, int ta, int ms, int di,
-                       int ctMinutes, int ctOffsetHalfHours,
-                       const int* afKhz, int nAf, int afSeen,
-                       const int* groupCounts, int groupTotal,
-                       const char* rtpTitle, const char* rtpArtist, const char* longPs,
-                       const float* constXY, int nPts) = nullptr;
+        // ★ A STRUCT, not a parameter list. It reached fifteen arguments and every new RDS
+        // field meant editing four signatures in three files — the kind of friction that
+        // quietly argues against adding the next field, which is the opposite of what this
+        // work needs (2026-07-26).
+        struct RdsExt {
+            int pty, tp, ta, ms, di;
+            int ctMinutes, ctOffsetHalfHours;
+            const int* afKhz; int nAf; int afSeen;
+            const int* groupCounts; int groupTotal;
+            const char* rtpTitle; const char* rtpArtist; const char* longPs;
+            const char* ptyn; int language;
+            int pinDay, pinHour, pinMinute;
+            const RdsDecoder::Eon* eon; int nEon;
+            const RdsDecoder::Oda* oda; int nOda;
+            const float* constXY; int nPts;
+            float pilotPhaseDeg;
+        };
+        void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
     };

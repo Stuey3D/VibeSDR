@@ -1214,7 +1214,11 @@ struct LocalSdrShim::Impl {
     int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
     int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0, rdsAfSeen = 0;
     std::vector<int> rdsGrp;
-    std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs;
+    std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs, rdsPtyn;
+    int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
+    float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
+    std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
+    std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
     std::vector<int> rdsAf;
     std::vector<float> rdsConst;
     std::atomic<bool> stereoDetected{false};
@@ -1578,21 +1582,25 @@ struct LocalSdrShim::Impl {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPi = (int)pi;
     }
-    static void rdsExtCb(void* ctx, int pty, int tp, int ta, int ms, int di,
-                         int ctMin, int ctOff, const int* af, int nAf, int afSeen,
-                         const int* gc, int gTotal,
-                         const char* rtpT, const char* rtpA, const char* lps,
-                         const float* xy, int nPts) {
+    static void rdsExtCb(void* ctx, const vibedsp::RxPipeline::Callbacks::RdsExt& x) {
         Impl* t = (Impl*)ctx;
         if (!t->rdsxOn.load()) return;
         std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsPty = pty; t->rdsTp = tp; t->rdsTa = ta; t->rdsMs = ms; t->rdsDi = di;
-        t->rdsCtMin = ctMin; t->rdsCtOff = ctOff; t->rdsGrpTotal = gTotal;
-        t->rdsAf.assign(af, af + nAf); t->rdsAfSeen = afSeen;
-        t->rdsRtpTitle = rtpT ? rtpT : ""; t->rdsRtpArtist = rtpA ? rtpA : "";
-        t->rdsLongPs = lps ? lps : "";
-        t->rdsGrp.assign(gc, gc + 32);
-        t->rdsConst.assign(xy, xy + nPts * 2);
+        t->rdsPty = x.pty; t->rdsTp = x.tp; t->rdsTa = x.ta; t->rdsMs = x.ms; t->rdsDi = x.di;
+        t->rdsCtMin = x.ctMinutes; t->rdsCtOff = x.ctOffsetHalfHours;
+        t->rdsGrpTotal = x.groupTotal; t->rdsAfSeen = x.afSeen;
+        t->rdsAf.assign(x.afKhz, x.afKhz + x.nAf);
+        t->rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
+        t->rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
+        t->rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
+        t->rdsRtpArtist = x.rtpArtist ? x.rtpArtist : "";
+        t->rdsLongPs = x.longPs ? x.longPs : "";
+        t->rdsPtyn = x.ptyn ? x.ptyn : "";
+        t->rdsLang = x.language;
+        t->rdsPinDay = x.pinDay; t->rdsPinHour = x.pinHour; t->rdsPinMin = x.pinMinute;
+        t->rdsEon.assign(x.eon, x.eon + x.nEon);
+        t->rdsOda.assign(x.oda, x.oda + x.nOda);
+        t->rdsPhase = x.pilotPhaseDeg;
     }
     static void rdsSigCb(void* ctx, float relDb) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
@@ -3150,13 +3158,18 @@ struct LocalSdrShim::Impl {
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
-        std::string rtpT, rtpA, lps;
+        int lang, pinD, pinH, pinM; float phase;
+        std::string rtpT, rtpA, lps, ptyn;
+        std::vector<vibedsp::RdsDecoder::Eon> eon;
+        std::vector<vibedsp::RdsDecoder::Oda> oda;
         std::vector<int> af, grp; std::vector<float> pts;
         { std::lock_guard<std::mutex> lk(rdsMtx);
           pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
           ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
           af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen;
-          rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; }
+          rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
+          lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
+          eon = rdsEon; oda = rdsOda; phase = rdsPhase; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -3169,8 +3182,29 @@ struct LocalSdrShim::Impl {
                       + ",\"rtpTitle\":\"" + jsonEscape(rtpT) + "\""
                       + ",\"rtpArtist\":\"" + jsonEscape(rtpA) + "\""
                       + ",\"longPs\":\"" + jsonEscape(lps) + "\""
+                      + ",\"ptyn\":\"" + jsonEscape(ptyn) + "\""
+                      + ",\"lang\":" + std::to_string(lang)
+                      + ",\"pinDay\":" + std::to_string(pinD)
+                      + ",\"pinHour\":" + std::to_string(pinH)
+                      + ",\"pinMin\":" + std::to_string(pinM)
+                      + ",\"phase\":" + std::to_string(phase)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
+        j += "],\"eon\":[";
+        for (size_t i = 0; i < eon.size(); ++i) {
+            if (i) j += ',';
+            char pib[8]; snprintf(pib, sizeof pib, "%04X", eon[i].pi);
+            j += "{\"pi\":\"" + std::string(pib) + "\",\"ps\":\""
+               + jsonEscape(std::string(eon[i].ps, strnlen(eon[i].ps, 8))) + "\",\"af\":"
+               + std::to_string(eon[i].afKhz) + ",\"ta\":" + std::to_string(eon[i].ta) + "}";
+        }
+        j += "],\"oda\":[";
+        for (size_t i = 0; i < oda.size(); ++i) {
+            if (i) j += ',';
+            char ab[8]; snprintf(ab, sizeof ab, "%04X", oda[i].aid);
+            j += "{\"aid\":\"" + std::string(ab) + "\",\"grp\":"
+               + std::to_string(oda[i].group) + "}";
+        }
         j += "],\"af\":[";
         for (size_t i = 0; i < af.size(); ++i) {
             if (i) j += ',';

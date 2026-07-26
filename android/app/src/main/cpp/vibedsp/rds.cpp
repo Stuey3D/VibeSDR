@@ -2,9 +2,63 @@
 // Clean-room implementation of EN 50067 / IEC 62106. Original VibeSDR code.
 #include "vibedsp.h"
 #include <cstring>
+#include <string>
 #include <cmath>
 
 namespace vibedsp {
+
+// ── ★★ THE RDS CHARACTER SET (G0, IEC 62106 Annex E) ────────────────────────
+// RDS does NOT use ASCII above 0x7F — it has its own repertoire, and the bytes were being
+// copied straight through as if they were ASCII. Fine for the UK, visibly broken for every
+// continental station, which is exactly who FM-DXers spend their time listening to: a
+// Norwegian "NRK P3" is fine but "Sørlandet" arrives as mojibake, and an accented artist
+// name in RadioText is worse because there is no obvious clue it is wrong.
+// Converted to UTF-8 on the way out, so every consumer downstream stays plain UTF-8.
+static const char* const kRdsG0[256] = {
+    " ", " ", " ", " ", " ", " ", " ", " ",
+    " ", " ", " ", " ", " ", " ", " ", " ",
+    " ", " ", " ", " ", " ", " ", " ", " ",
+    " ", " ", " ", " ", " ", " ", " ", " ",
+    " ", "!", "\"", "#", "$", "%", "&", "'",
+    "(", ")", "*", "+", ",", "-", ".", "/",
+    "0", "1", "2", "3", "4", "5", "6", "7",
+    "8", "9", ":", ";", "<", "=", ">", "?",
+    "@", "A", "B", "C", "D", "E", "F", "G",
+    "H", "I", "J", "K", "L", "M", "N", "O",
+    "P", "Q", "R", "S", "T", "U", "V", "W",
+    "X", "Y", "Z", "[", "\\", "]", "^", "_",
+    "`", "a", "b", "c", "d", "e", "f", "g",
+    "h", "i", "j", "k", "l", "m", "n", "o",
+    "p", "q", "r", "s", "t", "u", "v", "w",
+    "x", "y", "z", "{", "|", "}", "~", "",
+    "á", "à", "é", "è", "í", "ì", "ó", "ò",
+    "ú", "ù", "Ñ", "Ç", "Ş", "ß", "¡", "Ĳ",
+    "â", "ä", "ê", "ë", "î", "ï", "ô", "ö",
+    "û", "ü", "ñ", "ç", "ş", "ğ", "ı", "ĳ",
+    "ª", "α", "©", "‰", "Ğ", "ě", "ň", "ő",
+    "π", "€", "£", "$", "←", "↑", "→", "↓",
+    "º", "¹", "²", "³", "±", "İ", "ń", "ű",
+    "µ", "¿", "÷", "°", "¼", "½", "¾", "§",
+    "Á", "À", "É", "È", "Í", "Ì", "Ó", "Ò",
+    "Ú", "Ù", "Ř", "Č", "Š", "Ž", "Ð", "Ŀ",
+    "Â", "Ä", "Ê", "Ë", "Î", "Ï", "Ô", "Ö",
+    "Û", "Ü", "ř", "č", "š", "ž", "đ", "ŀ",
+    "Ã", "Å", "Æ", "Œ", "ŷ", "Ý", "Õ", "Ø",
+    "Þ", "Ŋ", "Ŕ", "Ć", "Ś", "Ź", "Ŧ", "ð",
+    "ã", "å", "æ", "œ", "ŵ", "ý", "õ", "ø",
+    "þ", "ŋ", "ŕ", "ć", "ś", "ź", "ŧ", " "
+};
+
+/** Convert an RDS G0 string to UTF-8, stopping at the first NUL. */
+static std::string rdsToUtf8(const char* s, int maxLen) {
+    std::string out;
+    for (int i = 0; i < maxLen && s[i]; ++i)
+        out += kRdsG0[(unsigned char)s[i]];
+    // Trim the trailing spaces RDS pads everything with.
+    while (!out.empty() && (out.back() == ' ' || out.back() == '\r')) out.pop_back();
+    return out;
+}
+
 
 // ── RDS DSP front-end ─────────────────────────────────────────────────────
 static constexpr double kRdsBit = 1187.5;     // bits/sec
@@ -63,6 +117,16 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
         xy[i * 2 + 1] = constXY_[k * 2 + 1];
     }
     return n;
+}
+
+float RdsDemod::pilotPhaseDeg() const {
+    const float m = std::sqrt(phCos2_ * phCos2_ + phSin2_ * phSin2_);
+    if (m < 1e-9f) return -1.0f;
+    float deg = 0.5f * std::atan2(phSin2_, phCos2_) * 180.0f / (float)M_PI;
+    // Modulo 180 into [0,180): the ambiguity is inherent to BPSK, and 0-vs-90 survives it.
+    while (deg < 0.0f)    deg += 180.0f;
+    while (deg >= 180.0f) deg -= 180.0f;
+    return deg;
 }
 
 float RdsDemod::subcarrierRelDb() const {
@@ -135,7 +199,7 @@ void RdsDemod::reset() {
     if (lpfQ_) lpfQ_->reset();
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
-    mergedAfN_ = 0; mergedAfPi_ = 0;
+    mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
     for (int k = 0; k < NPH; ++k) {
         accI_[k] = accQ_[k] = 0.0f; prevPh_[k] = 0.0f;
         prevAI_[k] = prevAQ_[k] = 0.0f; havePrev_[k] = false;
@@ -222,6 +286,15 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
                     dec_[p].pushBit(dot < 0.0f ? 1 : 0);
                 }
                 if (p == constBest_) {
+                    // Accumulate the doubled angle, magnitude-weighted so strong symbols
+                    // define the estimate and noise near the origin barely counts.
+                    const float mag2 = aI * aI + aQ * aQ;
+                    if (mag2 > 1e-12f) {
+                        const float c = (aI * aI - aQ * aQ) / mag2;   // cos(2*theta)
+                        const float s = (2.0f * aI * aQ) / mag2;      // sin(2*theta)
+                        phCos2_ += 0.002f * (c - phCos2_);
+                        phSin2_ += 0.002f * (s - phSin2_);
+                    }
                     // Normalised by the running baseband RMS so the plot's SCALE is stable
                     // and only its SHAPE varies — which is the part that carries meaning.
                     // ★ Divide generously. The symbol accumulator sums ~34 samples, so its
@@ -404,7 +477,11 @@ void RdsDecoder::reset() {
     pty_ = tp_ = ta_ = ms_ = -1; afN_ = 0;
     for (int i = 0; i < kMaxAf; ++i) afHits_[i] = 0;
     di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
-    rtpGroup_ = -1; lpsSeen_ = 0;
+    rtpGroup_ = -1; lpsSeen_ = 0; rtAb_ = 0; rtAbSeen_ = false;
+    ptynSeen_ = 0; lang_ = 0; pinHour_ = -1; eonN_ = 0; odaN_ = 0;
+    for (int i = 0; i < kMaxOda; ++i) oda_[i] = Oda{};
+    std::memset(ptyn_, 0, sizeof ptyn_);
+    for (int i = 0; i < kMaxEon; ++i) eon_[i] = Eon{};
     std::memset(rtpTitle_, 0, sizeof rtpTitle_);
     std::memset(rtpArtist_, 0, sizeof rtpArtist_);
     std::memset(longPs_, 0, sizeof longPs_);
@@ -498,6 +575,27 @@ void RdsDecoder::pushBit(int bit) {
 
 // RT+ content types. 1 = title, 4 = artist; the rest are album, track, station info and
 // so on, which nothing here needs yet.
+// ★ 0x0D ends a RadioText message. A station with something short to say sends it followed
+// by a carriage return rather than padding to 64 characters, so honouring it is the other
+// half of not showing stale text — the A/B flag handles a REPLACEMENT, this handles a
+// message that was simply shorter than the buffer.
+void RdsDecoder::endRadioTextAtCr() {
+    for (int i = 0; i < 64; ++i) {
+        if (rt_[i] == '\r') { std::memset(rt_ + i, 0, (size_t)(65 - i)); return; }
+    }
+}
+
+// EON keeps one record per other-network PI. A station cross-references a handful of
+// sisters, so a small fixed table is right — and a fixed table cannot be made to grow
+// without bound by a mis-corrected PI, which an unbounded map could.
+RdsDecoder::Eon* RdsDecoder::eonFor(uint16_t pi) {
+    for (int i = 0; i < eonN_; ++i) if (eon_[i].pi == pi) return &eon_[i];
+    if (eonN_ >= kMaxEon) return nullptr;
+    Eon& e = eon_[eonN_++];
+    e = Eon{}; e.pi = pi; e.afKhz = 0; e.ta = -1;
+    return &e;
+}
+
 void RdsDecoder::applyRtPlus(int type, int start, int len) {
     if (type != 1 && type != 4) return;                 // only title and artist
     if (start < 0 || len <= 0 || start + len > 64) return;
@@ -585,7 +683,7 @@ void RdsDecoder::parseGroup() {
             if (trusted || (psSeen_[addr] && psCand_[addr] == blk_[3])) {
                 ps_[addr * 2]     = (char)((blk_[3] >> 8) & 0xFF);
                 ps_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);
-                if (cb_.ps) cb_.ps(cb_.ctx, pi, ps_);
+                if (cb_.ps) { psU8_ = rdsToUtf8(ps_, 8); cb_.ps(cb_.ctx, pi, psU8_.c_str()); }
             } else {
                 psCand_[addr] = blk_[3]; psSeen_[addr] = true;
             }
@@ -595,7 +693,15 @@ void RdsDecoder::parseGroup() {
         // (block D is the Application ID, 0x4BD7 for RT+; block B's low 5 bits are the group
         // type and version that will carry the tags). So RT+ is unparseable until this
         // arrives, which is why it can appear a while after RadioText does.
-        if (blkOk_[3] && blk_[3] == 0x4BD7) rtpGroup_ = blk_[1] & 0x1F;
+        if (blkOk_[3]) {
+            const uint16_t aid = blk_[3];
+            const uint8_t grp = (uint8_t)(blk_[1] & 0x1F);
+            if (aid == 0x4BD7) rtpGroup_ = grp;       // RT+
+            bool seen = false;
+            for (int i = 0; i < odaN_; ++i)
+                if (oda_[i].aid == aid) { oda_[i].group = grp; seen = true; break; }
+            if (!seen && odaN_ < kMaxOda) { oda_[odaN_].aid = aid; oda_[odaN_].group = grp; ++odaN_; }
+        }
     } else if (rtpGroup_ >= 0 && (gtype * 2 + ver) == rtpGroup_) {
         // RT+ tags: two (content type, start, length) triplets pointing INTO the RadioText
         // we have already assembled. ★ Length is stored as length-1, and a tag is only
@@ -610,6 +716,49 @@ void RdsDecoder::parseGroup() {
             const int l2  = (blk_[3] & 0x1F) + 1;
             applyRtPlus(t1, s1, l1);
             applyRtPlus(t2, s2, l2);
+        }
+    } else if (gtype == 10 && ver == 0) {              // 10A — PTYN
+        // The station's own name for its programme type, 8 chars in two 4-char halves.
+        const int seg = blk_[1] & 0x1;
+        if (blkOk_[2] && blkOk_[3]) {
+            ptyn_[seg * 4 + 0] = (char)((blk_[2] >> 8) & 0xFF);
+            ptyn_[seg * 4 + 1] = (char)(blk_[2] & 0xFF);
+            ptyn_[seg * 4 + 2] = (char)((blk_[3] >> 8) & 0xFF);
+            ptyn_[seg * 4 + 3] = (char)(blk_[3] & 0xFF);
+            ptynSeen_ |= (1 << seg);
+        }
+    } else if (gtype == 14) {                          // 14A/14B — EON, other networks
+        // ★ Block D is ALWAYS the other network's PI — that is what makes the record
+        // identifiable — and block C's meaning depends on the variant in block B.
+        if (blkOk_[3]) {
+            Eon* e = eonFor(blk_[3]);
+            if (e) {
+                e->ta = (blk_[1] >> 4) & 1;            // TA flag for THAT network
+                const int variant = blk_[1] & 0xF;
+                if (ver == 0 && blkOk_[2]) {
+                    if (variant <= 3) {                 // PS name, 2 chars per variant
+                        e->ps[variant * 2 + 0] = (char)((blk_[2] >> 8) & 0xFF);
+                        e->ps[variant * 2 + 1] = (char)(blk_[2] & 0xFF);
+                    } else if (variant == 4) {          // AF for the other network
+                        const int c = (blk_[2] >> 8) & 0xFF;
+                        if (c >= 1 && c <= 204) e->afKhz = 87500 + c * 100;
+                    }
+                }
+            }
+        }
+    } else if (gtype == 15 && ver == 1) {              // 15B — fast basic tuning
+        // Carries the same TA/MS/DI and PS segment as 0B, for quicker acquisition. Feeding
+        // it through the same path means a station that leans on 15B is not slower for us.
+        ta_ = (blk_[1] >> 4) & 1;
+        ms_ = (blk_[1] >> 3) & 1;
+        const int addr = blk_[1] & 0x3;
+        const int b = 3 - addr;
+        if ((blk_[1] >> 2) & 1) di_ |= (1 << b); else di_ &= ~(1 << b);
+        diSeen_ |= (1 << b);
+        if (blkOk_[3]) {
+            ps_[addr * 2]     = (char)((blk_[3] >> 8) & 0xFF);
+            ps_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);
+            if (cb_.ps) { psU8_ = rdsToUtf8(ps_, 8); cb_.ps(cb_.ctx, pi, psU8_.c_str()); }
         }
     } else if (gtype == 15 && ver == 0) {              // 15A — Long PS (32 UTF-8 bytes)
         const int seg = blk_[1] & 0x7;
@@ -633,6 +782,22 @@ void RdsDecoder::parseGroup() {
         }
     } else if (gtype == 2) {                            // 2A/2B — RadioText
         const int addr = blk_[1] & 0xF;
+        // ★★ THE TEXT A/B FLAG. RadioText is assembled into a 64-character buffer, so a new
+        // message SHORTER than the last leaves the old tail in place — "Now on Heart: Spin
+        // Doctors with Two Princes" followed by "La La La Long)" from the song before
+        // (Stuart, on air 2026-07-26). The standard's answer is this flag: when it toggles,
+        // the receiver MUST clear the buffer before assembling what follows.
+        // ★ The pending candidates go too. A segment held from the previous message would
+        // otherwise be "confirmed" against the new one and write a fragment of the old text
+        // into the new — stale data laundered into looking verified.
+        const int ab = (blk_[1] >> 4) & 1;
+        if (rtAbSeen_ && ab != rtAb_) {
+            std::memset(rt_, 0, sizeof rt_);
+            for (int i = 0; i < 16; ++i) { rtCand_[i] = 0; rtSeen_[i] = false; }
+            std::memset(rtpTitle_, 0, sizeof rtpTitle_);     // RT+ points INTO the old text
+            std::memset(rtpArtist_, 0, sizeof rtpArtist_);
+        }
+        rtAb_ = ab; rtAbSeen_ = true;
         if (ver == 0 && blkOk_[2] && blkOk_[3]) {       // 2A: 4 chars (C,D)
             const uint32_t seg = ((uint32_t)blk_[2] << 16) | blk_[3];
             if (trusted || (rtSeen_[addr] && rtCand_[addr] == seg)) {
@@ -640,7 +805,8 @@ void RdsDecoder::parseGroup() {
                 rt_[addr * 4 + 1] = (char)(blk_[2] & 0xFF);
                 rt_[addr * 4 + 2] = (char)((blk_[3] >> 8) & 0xFF);
                 rt_[addr * 4 + 3] = (char)(blk_[3] & 0xFF);
-                if (cb_.radiotext) cb_.radiotext(cb_.ctx, rt_);
+                endRadioTextAtCr();
+                if (cb_.radiotext) { rtU8_ = rdsToUtf8(rt_, 64); cb_.radiotext(cb_.ctx, rtU8_.c_str()); }
             } else {
                 rtCand_[addr] = seg; rtSeen_[addr] = true;
             }
@@ -649,7 +815,8 @@ void RdsDecoder::parseGroup() {
             if (trusted || (rtSeen_[addr] && rtCand_[addr] == seg)) {
                 rt_[addr * 2 + 0] = (char)((blk_[3] >> 8) & 0xFF);
                 rt_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);
-                if (cb_.radiotext) cb_.radiotext(cb_.ctx, rt_);
+                endRadioTextAtCr();
+                if (cb_.radiotext) { rtU8_ = rdsToUtf8(rt_, 64); cb_.radiotext(cb_.ctx, rtU8_.c_str()); }
             } else {
                 rtCand_[addr] = seg; rtSeen_[addr] = true;
             }
@@ -658,6 +825,16 @@ void RdsDecoder::parseGroup() {
         // Block C variant 0 (bits 14-12 == 0) carries the Extended Country Code
         // in its low byte. Combined with the PI country nibble it identifies the
         // station's country (RDS/IEC 62106).
+        // ★ PIN — programme item number, in block D of every 1A: the scheduled start time
+        // of the current programme, which is how a receiver recognises a programme rather
+        // than a station.
+        if (blkOk_[3]) {
+            const int d = (blk_[3] >> 11) & 0x1F, h = (blk_[3] >> 6) & 0x1F, m = blk_[3] & 0x3F;
+            if (d >= 1 && d <= 31 && h < 24 && m < 60) { pinDay_ = d; pinHour_ = h; pinMin_ = m; }
+        }
+        // Slow labelling variant 3 carries the LANGUAGE code — which station is in which
+        // language is a first-order question for a DXer chasing foreign catches.
+        if (blkOk_[2] && ((blk_[2] >> 12) & 0x7) == 3) lang_ = blk_[2] & 0xFF;
         if (blkOk_[2] && ((blk_[2] >> 12) & 0x7) == 0) {
             const uint8_t e = (uint8_t)(blk_[2] & 0xFF);
             if (trusted || (eccSeen_ && eccCand_ == e)) {

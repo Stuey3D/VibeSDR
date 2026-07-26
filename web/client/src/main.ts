@@ -2462,6 +2462,42 @@ function renderRds() {
     ? (rtpA && rtpT ? `${rtpA} — ${rtpT}` : (rtpT || rtpA))
     : dash;
   $('rxLps').textContent = rdsExt?.longPs?.trim() || dash;
+  $('rxPtyn').textContent = rdsExt?.ptyn?.trim() || dash;
+  // RDS language codes (IEC 62106). Only the ones a European DXer will actually meet.
+  const LANGS: Record<number, string> = {
+    1:'Albanian',2:'Breton',3:'Catalan',4:'Croatian',5:'Welsh',6:'Czech',7:'Danish',
+    8:'German',9:'English',10:'Spanish',11:'Esperanto',12:'Estonian',13:'Basque',
+    14:'Faroese',15:'French',16:'Frisian',17:'Irish',18:'Gaelic',19:'Galician',
+    20:'Icelandic',21:'Italian',22:'Lappish',23:'Latin',24:'Latvian',25:'Luxembourgish',
+    26:'Lithuanian',27:'Hungarian',28:'Maltese',29:'Dutch',30:'Norwegian',31:'Occitan',
+    32:'Polish',33:'Portuguese',34:'Romanian',35:'Romansh',36:'Serbian',37:'Slovak',
+    38:'Slovene',39:'Finnish',40:'Swedish',41:'Turkish',42:'Flemish',43:'Walloon',
+  };
+  const lang = rdsExt?.lang ?? 0;
+  $('rxLang').textContent = lang ? (LANGS[lang] ?? `code ${lang}`) : dash;
+  const ph = rdsExt?.pinHour ?? -1;
+  $('rxPin').textContent = ph >= 0
+    ? `day ${rdsExt!.pinDay} ${String(ph).padStart(2,'0')}:${String(rdsExt!.pinMin).padStart(2,'0')}`
+    : dash;
+  // ★ ODA — which Open Data Applications the station runs. This is what tells you whether an
+  // empty "Now playing" means the station sends no RT+, or that we failed to decode it.
+  const ODA_NAMES: Record<string, string> = {
+    '4BD7': 'RT+', '6552': 'eRT', 'CD46': 'TMC', 'CD47': 'TMC', '0093': 'DAB x-ref',
+    '4BD8': 'RT+ (group B)', 'C563': 'ID Logic', '6365': 'RDS2 station logo',
+  };
+  const odas = rdsExt?.oda ?? [];
+  $('rxOda').textContent = odas.length
+    ? odas.map(o => `${ODA_NAMES[o.aid] ?? o.aid} in ${o.grp >> 1}${(o.grp & 1) ? 'B' : 'A'}`).join(', ')
+    : dash;
+  // ★ EON — the sister stations. TA on one of them is why a car radio switches over.
+  const eons = rdsExt?.eon ?? [];
+  $('rxEon').textContent = eons.length
+    ? eons.map(e => {
+        const ps = e.ps.trim();
+        const f = e.af ? ` ${(e.af / 1000).toFixed(1)}` : '';
+        return `${ps || e.pi}${f}${e.ta === 1 ? ' [TA]' : ''}`;
+      }).join('  ')
+    : dash;
   const pty = rdsExt?.pty ?? -1;
   $('rxPty').textContent = pty >= 0 ? `${PTY_EU[pty] ?? '?'} (${pty})` : dash;
   // TP/TA/MS are one-bit flags; show the ones that are SET rather than a row of noes.
@@ -2474,6 +2510,23 @@ function renderRds() {
   // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
   // signal is weak, when it is the normal injection ratio for a healthy station.
   $('rxSig').textContent = rdsSig > -90 ? `${rdsSig.toFixed(0)} dB` : dash;
+  // ★★★ RDS-to-pilot phase. Correct is near 0 or near 90 (quadrature encoding); the middle
+  // ground is a transmitter fault, so say which it is rather than leaving a bare number to
+  // be interpreted — the whole reason this field exists is that reading it takes equipment
+  // most people do not have (HansVanEijsden, FMDX.org, 2026-07-26).
+  const rdsPhase = rdsExt?.phase ?? -1;
+  const phEl = $('rxPhase');
+  if (rdsPhase < 0) { phEl.textContent = dash; phEl.removeAttribute('style'); }
+  else {
+    const d0 = Math.min(rdsPhase, 180 - rdsPhase);   // distance from 0/180
+    const d90 = Math.abs(rdsPhase - 90);             // distance from quadrature
+    const near = Math.min(d0, d90);
+    const verdict = near <= 10 ? (d0 <= d90 ? 'in phase' : 'quadrature')
+                  : near <= 25 ? 'off nominal'
+                  : 'FAULT';
+    phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict}`;
+    phEl.style.color = near <= 10 ? '#7dff9a' : near <= 25 ? '#ffd479' : '#ff8a7d';
+  }
   // ★ AF ENTRIES ARE TAPPABLE. A list of alternative frequencies you cannot act on is
   // trivia; the whole point of AF is "the same station is also over there", so the natural
   // gesture is to go there (Stuart, 2026-07-26).
