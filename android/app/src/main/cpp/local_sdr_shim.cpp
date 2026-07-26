@@ -1402,7 +1402,10 @@ struct LocalSdrShim::Impl {
             // ★ The RSP's live gain state, once a second. The AGC moves the IF reduction on
             // its own, so a slider position is NOT the truth — and the total system gain is
             // the one figure that makes two independent controls readable.
-            if (n % 10 == 0 && useSdrplay()) {
+            // ★ 5 Hz, not 1. The IF slider follows the AGC live, and a thumb that jumps once
+            // a second reads as broken rather than as tracking. A ~90 byte message at 5 Hz is
+            // nothing next to the spectrum.
+            if (n % 2 == 0 && useSdrplay()) {
                 char gb[160];
                 snprintf(gb, sizeof gb,
                     "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d}",
@@ -2316,7 +2319,20 @@ struct LocalSdrShim::Impl {
         // an RSP wastes most of the hardware while implying it is the limit. The client
         // renders whatever we send, so the honest answer is per-device (2026-07-26).
         if (LocalSdrShim::instance().isSdrplay())
-            j += "],\"rates\":[10000000,8000000,6000000,5000000,4000000,3000000,2048000,2000000,1000000]";
+            // ★★ NOTHING BELOW 2 MHz. The RSP runs ZERO-IF only at 2 MHz and above; narrower
+            // spans need a LOW-IF mode (450 kHz / 1.62 / 2.048 MHz) with its own bandwidth
+            // rules, or the ADC left at a legal rate and the API's DECIMATION used to reach
+            // the output rate. We do neither yet, so offering 1 MHz would advertise a span
+            // the radio cannot legally produce in the mode we configure (Stuart, 2026-07-26).
+            // ★ Advertising a capability we have not implemented is worse than omitting it:
+            // it fails at the radio, where it looks like broken hardware.
+            // ★ NO 10 MSPS EITHER, and for exactly the reason 3.2 is missing from the RTL
+            // list above: measured on air, 10 MHz is "a broken mess" while 8 works well
+            // (Stuart, 2026-07-26). The API accepts it and then fails to sustain it — and
+            // being the biggest number in the list, it is the first one a curious user
+            // reaches for, so the dropped samples read as a bad receiver rather than a bad
+            // setting. Offer the real ceiling instead.
+            j += "],\"rates\":[8000000,6000000,5000000,4000000,3000000,2048000,2000000]";
         else
             j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
         // ★ And WHICH radio, plus the controls it really has. A single gain slider is a lie

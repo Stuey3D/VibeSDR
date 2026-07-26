@@ -655,6 +655,13 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 .afBtn:hover { border-color: var(--accent, #ffa500); }
 /* ★ The radio's OWN overload flag, not an inference from the spectrum. Loud on purpose:
    tonight established that RF overload is what destroys RDS. */
+/* ★ While the AGC owns the IF reduction the slider is READ-ONLY but still LIVE — greyed so
+   it is plainly not yours to drag, and still moving so you can watch the AGC work. A frozen
+   control looks broken; a disabled one that animates explains itself (Stuart, 2026-07-26). */
+#rspIfGr.agc {
+  opacity: 0.55; pointer-events: none;
+}
+#rspIfGr.agc::-webkit-slider-thumb { background: var(--text-dim); }
 #rspOverload {
   color: #1a0f00; background: #ff8a3d; font-size: 10px; letter-spacing: 1px;
   padding: 1px 6px; border-radius: 3px; font-weight: 600;
@@ -1359,7 +1366,11 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="mrow">
       <label for="rspLna">RF GAIN (LNA)</label>
-      <input type="range" id="rspLna" min="0" max="9" value="4">
+      <!-- ★ RIGHT IS MORE GAIN, like every other slider anywhere. The underlying LNA STATE
+           runs the other way — state 0 is maximum gain — so the slider is inverted in the
+           handler rather than exposing the hardware's numbering to the user. A control that
+           runs backwards is a trap even when the label is honest (Stuart, 2026-07-26). -->
+      <input type="range" id="rspLna" min="0" max="9" value="5">
       <span class="val" id="rspLnaVal">—</span>
     </div>
     <div class="mrow">

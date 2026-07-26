@@ -868,7 +868,7 @@ struct SettingsView: View {
                 Picker("Capture rate", selection: $server.lockedRate) {
                     Text("Listener chooses").tag(0.0)
                     if server.isSdrplayActive {
-                        Text("Up to · 10 MHz").tag(10_000_000.0)
+                        // ★ 8 MHz is the real ceiling — 10 is accepted and then not sustained.
                         Text("Up to · 8 MHz").tag(8_000_000.0)
                         Text("Up to · 6 MHz").tag(6_000_000.0)
                         Text("Up to · 5 MHz").tag(5_000_000.0)

@@ -294,12 +294,20 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ Show what the radio IS doing, not what the sliders were last set to — with AGC on,
       // the IF reduction is the AGC's to move, and a stale slider reading would be a lie.
       $('rspSysGain').textContent = sys > 0 ? `${sys.toFixed(1)} dB` : '—';
+      // ★ Under AGC the slider is the AGC's, so it is greyed and unclickable — but it keeps
+      // MOVING, because watching the loop work is how you tell it is doing its job. Tweened
+      // between updates so it glides rather than hopping.
       const gr = $<HTMLInputElement>('rspIfGr');
-      if ($<HTMLButtonElement>('rspIfAgc').classList.contains('on')) {
-        gr.value = String(ifgr);
+      const agcOn = $<HTMLButtonElement>('rspIfAgc').classList.contains('on');
+      gr.classList.toggle('agc', agcOn);
+      if (agcOn) {
+        tweenIfGr(ifgr);
         $('rspIfGrVal').textContent = `${ifgr} dB · AGC`;
       }
-      void lna;
+      // Keep the RF slider honest too if something else moved the state.
+      const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+      const el = $<HTMLInputElement>('rspLna');
+      if (document.activeElement !== el) el.value = String(lnaMax - lna);
     },
     onRdsX: (x) => {
       const now = Date.now();
@@ -4174,6 +4182,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   const n = caps?.lnaStates ?? 10;
   const lna = $<HTMLInputElement>('rspLna');
   lna.max = String(n - 1);
+  lna.value = String(Math.floor((n - 1) / 2));    // mid gain, never wide open
   const gr = $<HTMLInputElement>('rspIfGr');
   gr.min = String(caps?.ifGrMin ?? 20);
   gr.max = String(caps?.ifGrMax ?? 59);
@@ -4189,20 +4198,47 @@ function rspSend(msg: Record<string, unknown>) {
 
 function renderRspVals() {
   const n = radioCaps?.lnaStates ?? 10;
-  const lna = Number($<HTMLInputElement>('rspLna').value);
+  // Slider position is GAIN; the hardware wants a STATE, which counts the other way.
+  const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  const pos = Number($<HTMLInputElement>('rspLna').value);
+  const lna = lnaMax - pos;
   const gr  = Number($<HTMLInputElement>('rspIfGr').value);
   // ★ Say which END is more gain, every time. "LNA 3" means nothing on its own.
-  $('rspLnaVal').textContent = `${lna}/${n - 1}${lna === 0 ? ' · max RF' : lna === n - 1 ? ' · min RF' : ''}`;
+  // Show the state too — an FM-DXer comparing against SDRuno or SDRconnect wants the actual
+  // LNA state, not a slider position we invented.
+  $('rspLnaVal').textContent =
+    `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`;
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
   $('rspAgcSetVal').textContent = `${sp} dBfs${sp >= -25 ? ' · drives hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
 
+/** Glide the IF thumb to a new AGC value. Status arrives at 5 Hz; a slider that teleports
+ *  between readings looks like a glitch rather than a loop settling. */
+let ifGrTween = 0;
+function tweenIfGr(target: number) {
+  const gr = $<HTMLInputElement>('rspIfGr');
+  const from = Number(gr.value);
+  if (Math.abs(target - from) < 0.5) { gr.value = String(target); return; }
+  cancelAnimationFrame(ifGrTween);
+  const t0 = performance.now();
+  const step = (t: number) => {
+    const k = Math.min(1, (t - t0) / 180);
+    gr.value = String(from + (target - from) * k);
+    if (k < 1) ifGrTween = requestAnimationFrame(step);
+  };
+  ifGrTween = requestAnimationFrame(step);
+}
+
 function initRspControls() {
   const lna = $<HTMLInputElement>('rspLna');
   const gr  = $<HTMLInputElement>('rspIfGr');
-  lna.oninput = () => { renderRspVals(); rspSend({ lna: Number(lna.value) }); };
+  lna.oninput = () => {
+    renderRspVals();
+    const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+    rspSend({ lna: lnaMax - Number(lna.value) });   // slider is gain, hardware wants state
+  };
   gr.oninput  = () => { renderRspVals(); rspSend({ ifgr: Number(gr.value) }); };
   const sp = $<HTMLInputElement>('rspAgcSet');
   sp.oninput = () => { renderRspVals(); rspSend({ agcset: Number(sp.value) }); };

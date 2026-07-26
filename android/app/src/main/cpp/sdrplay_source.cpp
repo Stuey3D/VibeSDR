@@ -211,6 +211,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
 
     auto* dp = impl_->params->devParams;
     auto* ch = impl_->params->rxChannelA;
+    if (sampleRateHz < 2000000.0) sampleRateHz = 2000000.0;   // zero-IF minimum
     if (dp) dp->fsFreq.fsHz = sampleRateHz;
     if (ch) {
         ch->tunerParams.rfFreq.rfHz = centreHz;
@@ -218,6 +219,12 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         // so anything narrower than ~200 kHz would remove the very thing this device was
         // fetched to receive — and it would do so silently, looking like a decode failure.
         ch->tunerParams.bwType = (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(sampleRateHz);
+        // ★★ ZERO-IF IS ONLY LEGAL AT 2 MHz AND ABOVE. Below that the RSP needs a LOW-IF
+        // mode with its own bandwidth pairings, so the rate is raised to the minimum rather
+        // than asking for a configuration the hardware will refuse or silently mangle.
+        // ★ Narrow spans should eventually use the API's DECIMATION — ADC at a legal rate,
+        // decimated to the output rate — which is how Soapy reaches 62.5 kHz. Not built yet,
+        // so the rate list stops at 2 MHz and this clamp is the belt to that braces.
         ch->tunerParams.ifType = sdrplay_api_IF_Zero;
         ch->ctrlParams.decimation.enable = 0;
         ch->ctrlParams.dcOffset.DCenable = 1;
@@ -262,6 +269,7 @@ void SdrplaySource::setFrequency(double hz) {
 
 void SdrplaySource::setSampleRate(double hz) {
     if (!open_ || !impl_->params || !impl_->params->devParams) return;
+    if (hz < 2000000.0) hz = 2000000.0;      // zero-IF minimum — see open()
     impl_->params->devParams->fsFreq.fsHz = hz;
     // ★ The IF bandwidth must follow the rate, or a wider span arrives already filtered.
     if (impl_->params->rxChannelA)
