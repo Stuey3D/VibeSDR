@@ -5,6 +5,9 @@ import RecordingsOverlay from '../components/RecordingsOverlay';
 import AudioSheet from '../components/AudioSheet';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import StepPicker from '../components/StepPicker';
+import { useIsFocused } from '@react-navigation/native';
+import { shortcutsSuppressed } from '../components/PanelNav';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -150,6 +153,19 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
+  const [stepOpen, setStepOpen] = useState(false);
+
+  // ★★ THE SAME CONTROLS AS THE REST OF THE APP. FM-DX hardcoded the drums, so a user who had
+  // chosen the tuner keys got drums back on this one backend — Stuart: "controls being the
+  // same as the rest". Read from the same two keys SDRScreen persists, so the choice follows
+  // the user rather than the screen they happen to be on.
+  const [vfoKeys, setVfoKeys]   = useState(false);
+  const [zoomKeys, setZoomKeys] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_vfo_keys').then((v: string | null) => { if (v === '1') setVfoKeys(true); }).catch(() => {});
+    AsyncStorage.getItem('lsv_zoom_keys').then((v: string | null) => { if (v === '1') setZoomKeys(true); }).catch(() => {});
+  }, []);   // S — reuses StepPicker, so it is
+                                                     // navigable by keyboard for free
   const [isRecording, setIsRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -570,6 +586,60 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, []);
   const openChat = useCallback(() => { setChatOpen(true); setChatUnread(false); }, []);
 
+  // ── Hardware keyboard ───────────────────────────────────────────────────────
+  //
+  // ★ FM-DX runs on THIS screen rather than SDRScreen, which is why it had no keyboard
+  // support at all: every capability added to the main screen has to be added here again,
+  // deliberately (see BRIEF-fmdx-backend-adapter.md). Stuart scoped what it actually needs —
+  // Enter, C, Esc, D, S, R — rather than the whole SDRScreen scheme, because there is no
+  // waterfall to pan and no zoom to drive here.
+  //
+  // ★ The drums/keys toggle is deliberately NOT here: if you are on a keyboard you are using
+  // neither control, so a shortcut for switching between them would be answering a question
+  // nobody has asked.
+  const kbRefs = useRef({ openChat, toggleRecording: (() => {}) as () => void });
+  kbRefs.current.openChat = openChat;
+  const screenFocused = useIsFocused();
+  const screenFocusedRef = useRef(screenFocused);
+  useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
+
+  const panelsOpenRef = useRef(false);
+  useEffect(() => {
+    panelsOpenRef.current = freqModalOpen || demodOpen || stepOpen || audioSheetOpen
+                         || chatOpen || recordingsOpen;
+  }, [freqModalOpen, demodOpen, stepOpen, audioSheetOpen, chatOpen, recordingsOpen]);
+
+  useEffect(() => {
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key;
+      if (!k) return;
+      // Not the screen on top, or a page we did not write is showing — same rules as SDRScreen.
+      if (!screenFocusedRef.current || shortcutsSuppressed()) return;
+      if (k === 'Escape') {
+        // One rule: something open closes, nothing open goes back to the server list.
+        if (panelsOpenRef.current) {
+          setFreqModalOpen(false); setDemodOpen(false); setStepOpen(false);
+          setAudioSheetOpen(false); setChatOpen(false); setRecordingsOpen(false);
+        } else {
+          navigation.goBack();
+        }
+        return;
+      }
+      // A panel that is open owns the rest — its own navigation is already listening.
+      if (panelsOpenRef.current) return;
+      switch (k) {
+        case 'Enter': setFreqModalOpen(true); break;
+        case 'C': kbRefs.current.openChat(); break;
+        case 'D': setDemodOpen(true); break;
+        case 'S': setStepOpen(true); break;
+        case 'R': kbRefs.current.toggleRecording(); break;
+        default: break;
+      }
+    });
+    return () => sub.remove();
+  }, [navigation]);
+
   // ── Recording (REC + Recordings live in the AUDIO sheet — control island) ────
   const toggleRecording = useCallback(() => {
     if (!isRecording) {
@@ -604,6 +674,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         .catch(() => setAudioSheetOpen(false));
     }
   }, [isRecording, displayFreq]);
+  kbRefs.current.toggleRecording = toggleRecording;   // R — see the keyboard block above
   useEffect(() => () => { if (recTimerRef.current) clearInterval(recTimerRef.current); }, []);
 
   // Playing a saved recording (expo-audio) fights the live native engine for the
@@ -768,6 +839,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         vfoNoInertia
         menuAsBack
         stepList={FM_STEPS}
+        vfoKeys={vfoKeys}
+        zoomKeys={zoomKeys}
         meterLabel={st ? `${Math.round(st.sig)} dBf` : ''}
         freqFormat={(hz) => (hz / 1e6).toFixed(3)}
       />
@@ -824,6 +897,15 @@ export default function TunerScreen({ route, navigation }: Props) {
         </Pressable>
       </Modal>
 
+      {/* ★ The same StepPicker the rest of the app uses, so S gets arrow navigation, Enter
+          and Backspace for free rather than a bespoke path that would drift from the others. */}
+      <StepPicker
+        visible={stepOpen}
+        currentStep={step}
+        steps={FM_STEPS}
+        onSelect={setStep}
+        onClose={() => setStepOpen(false)}
+      />
       <RecordingsOverlay visible={recordingsOpen} onClose={() => setRecordingsOpen(false)} onActiveChange={onRecordingsActive} />
 
       {/* Audio sheet — FM-DX has only REC + Recordings (no client DSP / squelch) */}
