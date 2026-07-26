@@ -2374,6 +2374,8 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - VibeICloudKVS (1.0.0):
+    - React-Core
   - VibeLocalSDR (1.0.0):
     - React-Core
   - Yoga (0.0.0)
@@ -2481,6 +2483,7 @@ DEPENDENCIES:
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNSVG (from `../node_modules/react-native-svg`)
   - RNWorklets (from `../node_modules/react-native-worklets`)
+  - VibeICloudKVS (from `../modules/vibe-icloud-kvs`)
   - VibeLocalSDR (from `../modules/vibe-local-sdr`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
@@ -2688,6 +2691,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-svg"
   RNWorklets:
     :path: "../node_modules/react-native-worklets"
+  VibeICloudKVS:
+    :path: "../modules/vibe-icloud-kvs"
   VibeLocalSDR:
     :path: "../modules/vibe-local-sdr"
   Yoga:
@@ -2795,9 +2800,10 @@ SPEC CHECKSUMS:
   RNScreens: 991cc417cd396602a6cf59a42139e5a9d91462a9
   RNSVG: 3fe8590403ac9f107b4d14591bc6e54da4894e5c
   RNWorklets: 43af89f696342f91118a2f1f3a879056e2f47331
+  VibeICloudKVS: 479562e95e00badc42d741ee9e7bc8c331eabde8
   VibeLocalSDR: a077c4caa70d3dd4d9f8e5e114d66d3ab6aeed8c
   Yoga: fe50ab299e578f397fef753cf309c6703a4db29b
 
-PODFILE CHECKSUM: a3873e21333ea4c81703960a4b9713544c927ca0
+PODFILE CHECKSUM: 6cc3b5d1e09c33a209fd9ff408be24b82d31097b
 
 COCOAPODS: 1.16.2

@@ -179,6 +179,11 @@ struct WristSDRApp: App {
       // shows its own one-time tutorial on first connect (see ContentView/DabView/AircraftView).
       .onAppear {
         if !seenReturnTip { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showReturnTip = true } }
+        // ★ Attached at APP level, not inside a screen: Jr must merge its
+        // favourites and bookmarks with iCloud even when the user never gets
+        // past the instance picker — which is exactly the launch where a synced
+        // favourite is the thing they came for.
+        CloudSyncEngine.shared.attach(fav: favs, bookmarks: bookmarks)
       }
       .sheet(isPresented: $showReturnTip) {
         ReturnToAppTip { seenReturnTip = true; showReturnTip = false }

@@ -1,5 +1,6 @@
 import type { BackendType } from './sdrTypes';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CK, favouriteKey, requestSync, type Collection } from './cloudSync';
 
 const KEY = 'vsdr_favourites';
 
@@ -20,6 +21,37 @@ export type Favourite = {
   // favourite saved before this flag has it undefined — favIsCustom() falls back to a coords heuristic
   // (directory entries carry lat/lon; typed ones don't), so no migration write is needed.
   custom?: boolean;
+  // iCloud sync: when this entry was last changed on some device. Stamped by
+  // the sync engine on first sight, so legacy favourites need no migration.
+  updatedAt?: number;
+};
+
+/** ★ The favourites list is a COLLECTION, so it merges rather than replaces —
+ *  every device has its own additions and a whole-blob write would discard the
+ *  others'. Union by url; the higher `visits` wins because it is a tally of
+ *  real connections, so the larger number is the truer one; the newer edit wins
+ *  for the descriptive fields. */
+export const favouritesCollection: Collection<Favourite> = {
+  name: 'favourites',
+  cloudKey: CK.favourites,
+  load: getFavourites,
+  save: (items) => saveFavourites(items),
+  // NOT the raw url — see favouriteKey(): ws:// and http:// spellings of the
+  // same VibeServer were arriving as two separate favourites.
+  keyOf: (f) => favouriteKey(f.url),
+  merge: (a, b) => {
+    const newer = (b.updatedAt ?? 0) >= (a.updatedAt ?? 0) ? b : a;
+    const older = newer === b ? a : b;
+    return {
+      ...older, ...newer,
+      visits: Math.max(a.visits ?? 0, b.visits ?? 0),
+      // A snapshot is only useful if it exists — keep whichever side has one.
+      latitude:  newer.latitude  ?? older.latitude,
+      longitude: newer.longitude ?? older.longitude,
+      bestSnr:   newer.bestSnr   ?? older.bestSnr,
+      serverType: newer.serverType ?? older.serverType,
+    };
+  },
 };
 
 /** Is this a manually-added (typed) server, vs one saved from a directory? Handles legacy entries. */
@@ -45,10 +77,13 @@ export async function registerFavouriteVisit(url: string): Promise<Favourite[]> 
   const favs = await getFavourites();
   let changed = false;
   const next = favs.map(f => {
-    if (f.url === url) { changed = true; return { ...f, visits: (f.visits ?? 0) + 1 }; }
+    if (f.url === url) {
+      changed = true;
+      return { ...f, visits: (f.visits ?? 0) + 1, updatedAt: Date.now() };
+    }
     return f;
   });
-  if (changed) await saveFavourites(next);
+  if (changed) { await saveFavourites(next); requestSync(); }
   return next;
 }
 
@@ -71,8 +106,11 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
     ? current.filter(f => f.url !== fav.url)
     : [...current, { name: fav.name, url: fav.url, serverType: fav.serverType,
                      latitude: fav.latitude, longitude: fav.longitude, bestSnr: fav.bestSnr,
-                     visits: fav.visits ?? 0, custom: fav.custom }];
+                     visits: fav.visits ?? 0, custom: fav.custom, updatedAt: Date.now() }];
   await saveFavourites(next);
+  // The removal case needs no special handling here: the sync engine spots a
+  // key that was present at the last sync and is gone now, and tombstones it.
+  requestSync();
   return next;
 }
 
@@ -80,8 +118,9 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
  *  editing the address changes the key. Used by the custom-server edit sheet. */
 export async function updateFavourite(oldUrl: string, patch: Partial<Favourite>): Promise<Favourite[]> {
   const favs = await getFavourites();
-  const next = favs.map(f => (f.url === oldUrl ? { ...f, ...patch } : f));
+  const next = favs.map(f => (f.url === oldUrl ? { ...f, ...patch, updatedAt: Date.now() } : f));
   await saveFavourites(next);
+  requestSync();
   return next;
 }
 
@@ -140,8 +179,11 @@ export async function setFavouriteServerType(url: string, serverType: BackendTyp
   const favs = await getFavourites();
   let changed = false;
   const next = favs.map(f => {
-    if (f.url === url && f.serverType !== serverType) { changed = true; return { ...f, serverType }; }
+    if (f.url === url && f.serverType !== serverType) {
+      changed = true;
+      return { ...f, serverType, updatedAt: Date.now() };
+    }
     return f;
   });
-  if (changed) await saveFavourites(next);
+  if (changed) { await saveFavourites(next); requestSync(); }
 }

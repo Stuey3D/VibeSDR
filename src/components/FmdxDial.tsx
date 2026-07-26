@@ -12,7 +12,25 @@ import type { ThemeTokens } from '../contexts/ThemeContext';
 export interface DialStation {
   freqHz: number;
   name:   string;
+  /** When this name was last confirmed by an RDS decode (ms).
+   *  ★ Drives 30-day expiry: a Sporadic-E catch heard once and never again
+   *  should give its slot back, because a dial cluttered with one-off openings
+   *  claims the band is busier than it really is.
+   *  Optional only for entries written before the field existed — the loader
+   *  stamps those, so nothing in storage stays undated. */
+  lastHeard?: number;
+  /** RDS Programme Identification. A DIFFERENT broadcaster on a frequency is a
+   *  replacement, not a rename, and only the PI can tell the two apart. */
+  pi?:    string;
 }
+
+/** A station unheard for this long gives up its slot. Matches the rule
+ *  VibeServer's RDS bookmarks already use — one behaviour for "what this aerial
+ *  can hear", however it was learned. */
+export const DIAL_EXPIRY_MS = 30 * 24 * 3600_000;
+/** Keep the dial bounded: 300 entries ≈ 12 KB, which is what makes per-server
+ *  iCloud sync fit inside the key-value store's 1 MB. */
+export const DIAL_MAX = 300;
 
 // Match the VFO drum's LED palette: green digits (hue 120), warm red needle
 // (hue 4), on a near-black face.

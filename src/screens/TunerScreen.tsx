@@ -23,6 +23,8 @@ import { watchProvider } from '../services/watchProvider';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
+import { dialKeyFor, pruneDial, stampUndatedDial } from '../services/dialSync';
+import { requestSync } from '../services/cloudSync';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -116,20 +118,32 @@ export default function TunerScreen({ route, navigation }: Props) {
   // on the vintage dial, persisted per server. Accumulate in a ref, flush to state
   // + storage debounced.
   const [dialStations, setDialStations] = useState<DialStation[]>([]);
-  const dialMapRef = useRef<Map<number, string>>(new Map());
+  const dialMapRef = useRef<Map<number, DialStation>>(new Map());
   const dialFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const DIAL_KEY = `lsv_fmdx_dial:${baseUrl}`;
-  const learnStation = useCallback((freqHz: number, name: string) => {
+  const DIAL_KEY = dialKeyFor(baseUrl);
+  // How stale a lastHeard has to get before a re-hear is worth a write. Without
+  // this every RDS frame while parked on a station would rewrite the whole dial.
+  const TOUCH_MS = 3600_000;
+  const learnStation = useCallback((freqHz: number, name: string, pi?: string) => {
     const n = name.trim();
     if (n.length < 2) return;                          // wait for a real PS lock
-    if (dialMapRef.current.get(freqHz) === n) return;  // unchanged — no-op (no spam while parked)
-    dialMapRef.current.set(freqHz, n);
+    const now = Date.now();
+    const prev = dialMapRef.current.get(freqHz);
+    // ★ A NEW STATION TAKES THE SLOT. Same frequency, different PI is a
+    // different broadcaster — replace it, don't merge, or the dial keeps
+    // showing whoever used to be there.
+    const displaced = !!(prev && prev.pi && pi && prev.pi !== pi);
+    const unchanged = !!prev && !displaced && prev.name === n && (!pi || prev.pi === pi);
+    if (unchanged && now - (prev!.lastHeard ?? 0) < TOUCH_MS) return;  // no spam while parked
+    dialMapRef.current.set(freqHz, { freqHz, name: n, lastHeard: now, pi: pi || prev?.pi });
     // Update the dial LIVE as you tune; persist to storage debounced.
-    const arr = Array.from(dialMapRef.current, ([f, nm]) => ({ freqHz: f, name: nm })).slice(-300);
+    const arr = pruneDial([...dialMapRef.current.values()]);
+    dialMapRef.current = new Map(arr.map((s) => [s.freqHz, s]));
     setDialStations(arr);
     if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
     dialFlushTimer.current = setTimeout(() => {
       AsyncStorage.setItem(DIAL_KEY, JSON.stringify(arr)).catch(() => {});
+      requestSync();
     }, 800);
   }, [DIAL_KEY]);
 
@@ -243,8 +257,11 @@ export default function TunerScreen({ route, navigation }: Props) {
     AsyncStorage.getItem(DIAL_KEY).then((raw) => {
       if (destroyed.current || !raw) return;
       try {
-        const arr: DialStation[] = JSON.parse(raw);
-        dialMapRef.current = new Map(arr.map((s) => [s.freqHz, s.name]));
+        // ★ MIGRATION FIRST, THEN EXPIRY. Entries written before `lastHeard`
+        // existed have none, and a naive expiry pass would read that as
+        // "unheard since 1970" and wipe a dial someone spent hours filling.
+        const arr = pruneDial(stampUndatedDial(JSON.parse(raw)));
+        dialMapRef.current = new Map(arr.map((s) => [s.freqHz, s]));
         setDialStations(arr);
       } catch {}
     });
@@ -284,7 +301,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         // `dBf` is FM-DX's own unit; the watch prints whatever string we send, so
         // it can never disagree with us about the signal.
         watchProvider.sendFmdx(watchFmdxPayload(s, sn, rxNameRef.current, serverInfoRef.current?.antennas ?? []));
-        if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
+        if (s.rds && s.ps) learnStation(s.freqHz, s.ps, s.pi);  // pin RDS name (+PI) to the dial
         // Lock-screen card: "STATION · 89.2" (freq beside the RDS name), or just
         // the frequency until RDS locks. Deduped so we don't spam the card.
         const mhz = (s.freqHz / 1e6).toFixed(1);

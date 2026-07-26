@@ -352,6 +352,10 @@ struct Favourite: Codable, Identifiable, Hashable {
   /// don't. New entries set it explicitly, so the heuristic only ever applies to old stored data.
   var isCustom: Bool? = nil
   var custom: Bool { isCustom ?? (latitude == nil && longitude == nil) }
+  /// Last edit (ms since epoch), for iCloud conflict resolution. nil on entries
+  /// saved before sync existed — the engine stamps those on first sight, so no
+  /// migration write is needed.
+  var updatedAt: Double? = nil
 }
 
 @MainActor
@@ -370,6 +374,28 @@ final class FavStore: ObservableObject {
 
   private func persist() {
     if let d = try? JSONEncoder().encode(favourites) { UserDefaults.standard.set(d, forKey: Self.key) }
+    CloudSyncEngine.shared.request()
+  }
+
+  /// ★★ STAMP EVERY EDIT. The sync engine resolves an item against a tombstone by
+  /// comparing timestamps, so an entry with no `updatedAt` has to be given one —
+  /// and giving it the CURRENT time made it "just edited", which beat every
+  /// tombstone and made the favourite IMMORTAL: deleted on the phone, resurrected
+  /// by the watch, forever (hit for real 2026-07-26). The engine now stamps
+  /// untimed entries with 1 instead, which only works if genuine edits carry a
+  /// genuine time — that is this function's job. Call it from every mutation.
+  private func stamp(_ i: Int) {
+    guard favourites.indices.contains(i) else { return }
+    favourites[i].updatedAt = Date().timeIntervalSince1970 * 1000
+  }
+
+  /// Replace the whole list with the merged result of an iCloud sync. Writes
+  /// storage WITHOUT calling back into the engine — persist() would schedule
+  /// another sync and the pair would ping-pong.
+  func replaceAll(_ list: [Favourite]) {
+    guard list != favourites else { return }
+    favourites = list
+    if let d = try? JSONEncoder().encode(list) { UserDefaults.standard.set(d, forKey: Self.key) }
   }
 
   func isFav(_ url: String) -> Bool { favourites.contains { $0.url == url } }
@@ -380,7 +406,8 @@ final class FavStore: ObservableObject {
     } else {
       favourites.append(Favourite(name: s.name, url: s.url, serverType: s.serverType,
                                   latitude: s.latitude, longitude: s.longitude, bestSnr: s.bestSnr,
-                                  isCustom: false))    // saved from a directory listing
+                                  isCustom: false,     // saved from a directory listing
+                                  updatedAt: Date().timeIntervalSince1970 * 1000))
     }
     persist()
   }
@@ -390,8 +417,11 @@ final class FavStore: ObservableObject {
     let url = "ws://\(host)"
     if let i = favourites.firstIndex(where: { $0.url == url }) {
       favourites[i].host = host; favourites[i].pin = pin; favourites[i].name = name
+      stamp(i)
     } else {
-      favourites.append(Favourite(name: name.isEmpty ? host : name, url: url, serverType: .vibeserver, host: host, pin: pin, isCustom: true))
+      favourites.append(Favourite(name: name.isEmpty ? host : name, url: url, serverType: .vibeserver,
+                                  host: host, pin: pin, isCustom: true,
+                                  updatedAt: Date().timeIntervalSince1970 * 1000))
     }
     persist()
   }
@@ -401,7 +431,9 @@ final class FavStore: ObservableObject {
 
   func addCustom(name: String, url: String, type: ServerType) {
     guard !favourites.contains(where: { $0.url == url }) else { return }
-    favourites.append(Favourite(name: name.isEmpty ? url : name, url: url, serverType: type, host: hostPort(url), isCustom: true))
+    favourites.append(Favourite(name: name.isEmpty ? url : name, url: url, serverType: type,
+                                host: hostPort(url), isCustom: true,
+                                updatedAt: Date().timeIntervalSince1970 * 1000))
     persist()
   }
 
@@ -415,6 +447,7 @@ final class FavStore: ObservableObject {
     favourites[i].serverType = type
     favourites[i].host = hostPort(url)
     favourites[i].isCustom = true
+    stamp(i)
     persist()
   }
 
@@ -425,6 +458,7 @@ final class FavStore: ObservableObject {
   func registerVisit(_ url: String) {
     guard let i = favourites.firstIndex(where: { $0.url == url }) else { return }
     favourites[i].visits += 1
+    stamp(i)
     persist()
   }
 
@@ -692,8 +726,10 @@ struct Bookmark: Codable, Identifiable, Hashable {
   var name: String
   var frequency: Double   // Hz
   var mode: String        // lowercase demod: am/sam/usb/lsb/cw/nfm/wfm…
+  /// Last edit (ms since epoch), for iCloud conflict resolution.
+  var updatedAt: Double? = nil
 
-  private enum CodingKeys: String, CodingKey { case id, name, frequency, mode }
+  private enum CodingKeys: String, CodingKey { case id, name, frequency, mode, updatedAt }
 }
 
 @MainActor
@@ -709,6 +745,15 @@ final class BookmarkStore: ObservableObject {
 
   private func persist() {
     if let d = try? JSONEncoder().encode(bookmarks) { UserDefaults.standard.set(d, forKey: Self.key) }
+    CloudSyncEngine.shared.request()
+  }
+
+  /// Merged result of an iCloud sync — see FavStore.replaceAll for why this
+  /// does not go through persist().
+  func replaceAll(_ list: [Bookmark]) {
+    guard list != bookmarks else { return }
+    bookmarks = list
+    if let d = try? JSONEncoder().encode(list) { UserDefaults.standard.set(d, forKey: Self.key) }
   }
 
   func add(name: String, frequency: Double, mode: String) {

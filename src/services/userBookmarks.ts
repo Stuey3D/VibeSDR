@@ -26,6 +26,33 @@ export interface UserBookmark {
   bandwidth_high?: number | null;
   /** '' = all instances; otherwise the owning instance baseUrl. App-only. */
   scope:           string;
+  /** ★★ iCloud opt-in, per bookmark. Local unless the user says otherwise.
+   *
+   *  The asymmetry is the point: on the phone you accumulate dozens of
+   *  bookmarks without thinking, and that is exactly the list you do not want
+   *  arriving on a 1-inch screen — so the phone opts IN per bookmark, while Jr
+   *  syncs everything it saves (on a watch you only ever save a handful,
+   *  deliberately). The constraint belongs to the CONSUMER, so the filtering
+   *  happens where the list is CREATED, not where it is read.
+   *
+   *  ★ undefined = local, which is also the migration: every bookmark that
+   *  existed before this field stays on the device it was made on, with no
+   *  migration write. An update that silently pushed them all to iCloud would
+   *  produce precisely the unmanageable Jr list this design exists to prevent.
+   */
+  synced?:         boolean;
+  /** Last edit time, for sync conflict resolution. Stamped on first sight. */
+  updatedAt?:      number;
+}
+
+/** Flip a bookmark's iCloud opt-in. Matched the same way deletion is. */
+export function setBookmarkSynced(
+  list: UserBookmark[], bm: UserBookmark, synced: boolean,
+): UserBookmark[] {
+  return list.map((b) =>
+    b.name === bm.name && b.frequency === bm.frequency && b.scope === bm.scope
+      ? { ...b, synced, updatedAt: Date.now() }
+      : b);
 }
 
 export async function loadUserBookmarks(): Promise<UserBookmark[]> {
