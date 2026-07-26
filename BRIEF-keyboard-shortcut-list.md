@@ -21,31 +21,6 @@ a shortcut that had been committed but never actually shipped.
 
 ---
 
-## ★★ INSTEAD OF THE ARROWS — `<` `>` `-` `+`
-
-Four punctuation keys **are** the arrow keys, resolved in `AppDelegate.swift`'s `name(for:)` so
-nothing downstream knows the difference. `<`/`>` are the left-right axis, `-`/`+` the up-down one.
-
-★★ **Stuart's framing is what makes this cheap.** Treated as a *tuning shortcut* it would have
-needed work on every surface — waterfall, menus, lists, dropdowns, decoder boxes, the dial.
-Treated as an *alias for the arrows*, it is one dictionary in the key mapper and every surface
-gets it for nothing, with no second code path to drift out of step.
-
-★ **Unconditional, not a Full Keyboard Access fallback.** FKA is what sent us looking, but a key
-that only exists in a mode nobody can see is a key nobody finds. And `<` `>` is what every radio
-ever built is marked with.
-
-★★ **The one gap that cannot be closed: a focused TEXT BOX.** Every key there is a character
-somebody needs — `.` is a decimal point, `-` lives in every URL and IP address, and letters are
-letters, which is why a WASD-style substitute fails too (Stuart). This is not a mapping we have
-yet to find; it is the nature of a text field. So the aliases are suppressed while typing, and the
-bookmarks search — where the arrows walk the results *while you type* — keeps Shift+arrow under
-FKA. One documented island beats blocking the whole thing on the only case with no solution.
-
-★ Sharp edge for anyone touching this: the aliases resolve to names in `typingPassthrough`, so
-WITHOUT the typing guard a `-` typed into a server address would both type itself AND scroll the
-list underneath it.
-
 ## SERVER LIST
 
 The up and down arrows move through everything on the page — the custom URL box at the top, your
@@ -155,3 +130,36 @@ a key.
 - ★ Keep it honest as things change. A stale shortcut list is worse than none, because a user who
   tries something listed and gets nothing concludes the keyboard is broken rather than the
   documentation.
+
+---
+
+## ★★ LAST SECTION: `<` `>` `-` `+` AND FULL KEYBOARD ACCESS
+
+★ **At the BOTTOM, and in ONE place (Stuart).** It was briefly the first section, which led with
+an edge case almost nobody is in and repeated what the closing section already said. Anyone who
+needs it is told by the splash and by the notice at the top of the menu.
+
+Four punctuation keys **are** the arrow keys, resolved in `AppDelegate.swift`'s `name(for:)` so
+nothing downstream knows the difference. `<`/`>` are the left-right axis, `-`/`+` the up-down one.
+
+★★ **Stuart's framing is what makes this cheap.** Treated as a *tuning shortcut* it would have
+needed work on every surface — waterfall, menus, lists, dropdowns, decoder boxes, the dial.
+Treated as an *alias for the arrows*, it is one dictionary in the key mapper and every surface
+gets it for nothing, with no second code path to drift out of step.
+
+★ **Unconditional, not a Full Keyboard Access fallback.** FKA is what sent us looking, but a key
+that only exists in a mode nobody can see is a key nobody finds. And `<` `>` is what every radio
+ever built is marked with.
+
+★★ **The one gap that cannot be closed: a focused TEXT BOX.** Every key there is a character
+somebody needs — `.` is a decimal point, `-` lives in every URL and IP address, and letters are
+letters, which is why a WASD-style substitute fails too (Stuart). This is not a mapping we have
+yet to find; it is the nature of a text field. So the aliases are suppressed while typing, and the
+bookmarks search — where the arrows walk the results *while you type* — keeps Shift+arrow under
+FKA. One documented island beats blocking the whole thing on the only case with no solution.
+
+★ Sharp edge for anyone touching this: the aliases resolve to names in `typingPassthrough`, so
+WITHOUT the typing guard a `-` typed into a server address would both type itself AND scroll the
+list underneath it.
+
+

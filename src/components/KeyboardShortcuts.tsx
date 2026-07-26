@@ -12,6 +12,13 @@
  * receiver for everyone else on it, and that FM-DX commits once when you stop because the tuner
  * is shared. That is the part a user would otherwise have to discover by upsetting someone.
  *
+ * ★★ ORDERED FOR THE 99% (Stuart, 2026-07-26). The Full Keyboard Access substitutes were briefly
+ * the FIRST section, which was wrong twice over: it led with an edge case almost nobody is in,
+ * and it repeated what the last section already said. Everything accessibility-related now lives
+ * in ONE place at the bottom, and the list opens with the screens a user actually meets. Anyone
+ * who needs the substitutes is told by the splash and by the notice at the top of the menu, so
+ * the reference does not have to shout about them as well.
+ *
  * ★ Ordered by WHERE it applies rather than alphabetically — the question is "how does this
  * work here", not "what does K do". Content audited from the source in
  * BRIEF-keyboard-shortcut-list.md; re-audit rather than recall when it changes, because a stale
@@ -26,15 +33,6 @@ import { useRepeatingKeys, noteTouchInteraction, NAV_FOCUS } from './PanelNav';
 type Section = { title: string; body: string[] };
 
 const SECTIONS: Section[] = [
-  {
-    title: 'INSTEAD OF THE ARROWS',
-    body: [
-      'Four keys stand in for the arrow keys anywhere in the app: < and > are left and right, and - and + are up and down. They are the same keys, not a separate shortcut — on the waterfall they tune and zoom, and in a menu they move the highlight and adjust the sliders, exactly as the arrows do.',
-      'They are marked on your keyboard the way a radio is, which is the point: < and > have meant tune down and tune up on every receiver ever built.',
-      'The one place they do not apply is inside a text box. There they are simply the characters they look like — a decimal point in a frequency, a dash in a server address — because a key we took there would be a key you could no longer type.',
-      'The arrows themselves also answer to Shift at all times: Shift with an arrow does whatever the arrow does, and Alt with Tab does whatever Tab does. On a full-size keyboard that is the easier hand position for working through menus, and it is the way in when an arrow will not reach us on its own. Alt is the same key as Option — a Windows keyboard\u2019s Alt arrives as Option, and its Windows key as Command.',
-    ],
-  },
   {
     title: 'SERVER LIST',
     body: [
@@ -108,9 +106,10 @@ const SECTIONS: Section[] = [
   {
     title: 'IF YOUR ARROW KEYS DO NOTHING',
     body: [
-      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys and Tab for its own focus navigation before any app sees them — so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu opens but nothing can be stepped through.',
-      'For tuning and zoom, use < > and - + instead, described at the top of this list. They are the arrow keys by another name, they are not keys iOS wants, and they need no modifier at all — which is why they suit a small handheld keyboard, where holding two keys at once is awkward.',
-      'For menus and lists, hold Shift with an arrow, and Alt with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. Avoid Command, which the system takes for itself. On a full-size or Mac keyboard this is a comfortable hand position; < > and - + work in menus too if you would rather not hold anything.',
+      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys and Tab for its own focus navigation before any app sees them, so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu still opens but nothing can be tuned or stepped through.',
+      'Leave it switched on. For tuning and zoom there are four keys that need no modifier at all: < and > tune down and up, and - and + zoom out and in. They are the arrow keys by another name and work anywhere in the app, menus included, whether or not Full Keyboard Access is on.',
+      'For everything else, hold Shift with an arrow, and Alt with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. Alt is the same key as Option — a Windows keyboard sends its Alt as Option and its Windows key as Command. Avoid Command itself, which the system keeps for switching apps.',
+      'The one place the four substitute keys do not apply is inside a text box, where they are simply the characters they look like — a decimal point in a frequency, a dash in a server address. In the bookmarks search, where the arrows walk the results while you are still typing, use Shift with an arrow.',
       'Either way you never have to turn an accessibility feature off to use the radio.',
     ],
   },
