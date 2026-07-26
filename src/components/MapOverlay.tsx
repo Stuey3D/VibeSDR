@@ -875,6 +875,11 @@ export default function MapOverlay(
 ) {
   const webRef = useRef<WebView>(null);
   const [ignored, setIgnored] = useState(false);
+
+  // ★ Esc closes the map. It is OUR page, so shortcuts are not suppressed here — but nothing
+  // was listening for a way out, and once inside a map a keyboard user was stuck.
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  useRepeatingKeys(visible, (k: string) => { if (k === 'Escape') closeRef.current(); }, []);
   useEffect(() => { if (!disconnected) setIgnored(false); }, [disconnected]);
   const injected = useRef<Set<string>>(new Set());
   const html = useMemo(
