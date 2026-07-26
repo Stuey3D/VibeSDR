@@ -644,6 +644,39 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   const kbInUse = useKeyboardMode();
 
+  // ── The demodulator sheet's own keyboard ────────────────────────────────────
+  // ★ Stereo, cEQ, iMS, each antenna, then CLOSE — built from the same conditions that render
+  // them, so the order matches what is on screen and an absent antenna row cannot leave the
+  // focus one item out. Up/down move, Enter toggles, Esc or Backspace closes: the same map as
+  // every other menu in the app.
+  const demodActions = useMemo(() => {
+    const a: Array<{ label: string; run: () => void }> = [
+      { label: 'Stereo', run: () => { const m = !forcedMono; setForcedMono(m); (backendRef.current as any)?.forceMono?.(m); } },
+      { label: 'cEQ',    run: () => (backendRef.current as any)?.setEq?.(!st?.eq) },
+      { label: 'iMS',    run: () => (backendRef.current as any)?.setIms?.(!st?.ims) },
+    ];
+    if ((serverInfo?.antennas.length ?? 0) > 1) {
+      serverInfo!.antennas.forEach((ant) => a.push({
+        label: ant.name, run: () => (backendRef.current as any)?.setAntenna?.(ant.id),
+      }));
+    }
+    a.push({ label: 'CLOSE', run: () => setDemodOpen(false) });
+    return a;
+  }, [forcedMono, st?.eq, st?.ims, serverInfo]);
+
+  const [demodIdx, setDemodIdx] = useState(0);
+  useEffect(() => { if (demodOpen) setDemodIdx(0); }, [demodOpen]);
+  const demodRef = useRef({ demodActions, demodIdx });
+  demodRef.current = { demodActions, demodIdx };
+
+  useRepeatingKeys(demodOpen, (k: string) => {
+    const { demodActions: acts, demodIdx: i } = demodRef.current;
+    if (k === 'Escape' || k === 'Backspace') { setDemodOpen(false); return; }
+    if (k === 'ArrowUp')   { setDemodIdx(Math.max(0, i - 1)); return; }
+    if (k === 'ArrowDown') { setDemodIdx(Math.min(acts.length - 1, i + 1)); return; }
+    if (k === 'Enter' || k === 'Space') acts[i]?.run();
+  }, NAV_REPEAT_KEYS);
+
   const panelsOpenRef = useRef(false);
   useEffect(() => {
     panelsOpenRef.current = freqModalOpen || demodOpen || stepOpen || audioSheetOpen
@@ -935,11 +968,11 @@ export default function TunerScreen({ route, navigation }: Props) {
         <Pressable style={styles.sheetBackdrop} onPress={() => setDemodOpen(false)}>
           <Pressable style={styles.sheet} onPress={() => {}}>
             <Text style={styles.sheetTitle}>DEMODULATOR</Text>
-            <OptToggle label="Stereo" on={!forcedMono} styles={styles}
+            <OptToggle label="Stereo" on={!forcedMono} styles={styles} navOn={kbInUse && demodIdx === 0}
               onPress={() => { const m = !forcedMono; setForcedMono(m); (backendRef.current as any)?.forceMono?.(m); }} />
-            <OptToggle label="cEQ" on={!!st?.eq} styles={styles}
+            <OptToggle label="cEQ" on={!!st?.eq} styles={styles} navOn={kbInUse && demodIdx === 1}
               onPress={() => (backendRef.current as any)?.setEq?.(!st?.eq)} />
-            <OptToggle label="iMS" on={!!st?.ims} styles={styles}
+            <OptToggle label="iMS" on={!!st?.ims} styles={styles} navOn={kbInUse && demodIdx === 2}
               onPress={() => (backendRef.current as any)?.setIms?.(!st?.ims)} />
             {(serverInfo?.antennas.length ?? 0) > 1 && (
               <View style={{ marginTop: 6 }}>
@@ -947,7 +980,8 @@ export default function TunerScreen({ route, navigation }: Props) {
                 <View style={styles.antRow}>
                   {serverInfo!.antennas.map((a, i) => (
                     <TouchableOpacity key={`ant${i}`}
-                      style={[styles.antBtn, st?.ant === a.id && styles.antBtnOn]}
+                      style={[styles.antBtn, st?.ant === a.id && styles.antBtnOn,
+                              kbInUse && demodIdx === 3 + i && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                       onPress={() => (backendRef.current as any)?.setAntenna?.(a.id)}>
                       <Text style={[styles.antBtnTxt, st?.ant === a.id && styles.antBtnTxtOn]} numberOfLines={1}>{a.name}</Text>
                     </TouchableOpacity>
@@ -955,7 +989,10 @@ export default function TunerScreen({ route, navigation }: Props) {
                 </View>
               </View>
             )}
-            <TouchableOpacity style={styles.sheetClose} onPress={() => setDemodOpen(false)}>
+            <TouchableOpacity
+              style={[styles.sheetClose,
+                      kbInUse && demodIdx === demodActions.length - 1 && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+              onPress={() => setDemodOpen(false)}>
               <Text style={styles.sheetCloseTxt}>CLOSE</Text>
             </TouchableOpacity>
           </Pressable>
@@ -1013,9 +1050,10 @@ export default function TunerScreen({ route, navigation }: Props) {
   );
 }
 
-function OptToggle({ label, on, onPress, styles }: { label: string; on: boolean; onPress: () => void; styles: any }) {
+function OptToggle({ label, on, onPress, styles, navOn }: { label: string; on: boolean; onPress: () => void; styles: any; navOn?: boolean }) {
   return (
-    <TouchableOpacity style={styles.optRow} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity style={[styles.optRow, navOn && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                      onPress={onPress} activeOpacity={0.7}>
       <Text style={styles.optLabel}>{label}</Text>
       <View style={[styles.optSwitch, on && styles.optSwitchOn]}>
         <Text style={[styles.optSwitchTxt, on && styles.optSwitchTxtOn]}>{on ? 'ON' : 'OFF'}</Text>
