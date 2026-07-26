@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -667,6 +667,7 @@ export default function MenuSheet({
   // closure never sees a stale one.
   const paneBack = useRef<() => void>(() => {});
   const kbInUse = useKeyboardMode();
+  const fkaSuspected = useFullKeyboardAccessSuspected();
   const { navCtx, scrollProps, scrollRef, scrollY: scrollYRef } = usePanelNav(visible, {
     onBack: () => paneBack.current(),
     onTimeout: onClose,
@@ -823,6 +824,22 @@ export default function MenuSheet({
           <View style={styles.handle} />
 
           <NavCtx.Provider value={navCtx}>
+            {/* ★★ Shown when iOS Full Keyboard Access appears to be on — it takes the arrows and
+                Tab before they reach us, so nothing here can be navigated. It has to sit at the
+                TOP and outside the focus order, because the one thing the user cannot do in this
+                state is move a highlight to find an explanation. (Tested on device 2026-07-26.) */}
+            {fkaSuspected && (
+              <View style={styles.fkaNote}>
+                <Text style={styles.fkaNoteTitle}>HOLD SHIFT WITH THE ARROW KEYS</Text>
+                <Text style={styles.fkaNoteBody}>
+                  iOS Full Keyboard Access looks to be switched on. It claims the plain arrow keys
+                  and Tab for its own navigation, so VibeSDR never sees them.{'\n'}
+                  Hold <Text style={styles.fkaNoteKey}>Shift</Text> and everything works as normal
+                  — Shift with an arrow tunes, zooms and moves through these menus, and Shift with
+                  Tab still works. You do not need to turn anything off.
+                </Text>
+              </View>
+            )}
           <ScrollView {...scrollProps} style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
@@ -1376,6 +1393,12 @@ const styles = StyleSheet.create({
   // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
   // setting is on"). Focus is where the keyboard is, not what is selected.
   btnFocused:    { borderColor: C.focus, borderWidth: 2 },
+  // Amber rather than the focus green: this is an explanation of why the green is not moving.
+  fkaNote:      { borderWidth: 1, borderColor: C.goldDim, borderRadius: 6,
+                  backgroundColor: 'rgba(60,40,0,0.5)', padding: 10, marginBottom: 10 },
+  fkaNoteTitle: { color: C.gold, fontSize: 11, letterSpacing: 1, marginBottom: 5 },
+  fkaNoteBody:  { color: C.muted, fontSize: 11, lineHeight: 16 },
+  fkaNoteKey:   { color: C.gold, fontWeight: '700' },
   // Dim and small: an explanation, not a warning — nothing has gone wrong.
   kbSkipNote:    { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 },
   dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },

@@ -209,6 +209,7 @@ export function useRepeatingKeys(
     const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key;
       if (!k) return;
+      noteKeyForFka(k);
       if (k === held) return;      // a re-fired down for the key already held: ignore
       stop();
       hRef.current(k);
@@ -226,6 +227,44 @@ export function useRepeatingKeys(
 }
 
 export const NAV_REPEAT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const;
+
+// ── iOS Full Keyboard Access detection ───────────────────────────────────────
+//
+// ★★ TESTED ON DEVICE 2026-07-26. With Settings → Accessibility → Keyboards → **Full Keyboard
+// Access** switched on, iOS takes the ARROW KEYS for its own focus navigation before they reach
+// the app at all. Letters and Enter still arrive — M opens the menu, Enter opens the frequency
+// box — but nothing can be tuned or navigated, and there is no error to explain it.
+//
+// ★ Note this is the OPPOSITE of the worry that prompted the test: we are not stealing keys from
+// an accessibility feature, the system is outranking us. Apple's feature works exactly as
+// intended; ours quietly does not, which is the failure a user cannot diagnose.
+//
+// ★★ There is NO public iOS API for this (`isFullKeyboardAccessEnabled` is macOS/AppKit), so it
+// is inferred from the SHAPE OF WHAT ARRIVES: several keys received and not one of them ever an
+// arrow. That cannot be certain — someone might genuinely never press an arrow — so it is only
+// ever used to offer an EXPLANATION, never to change behaviour.
+let keysSeen = 0;
+let arrowsSeen = 0;
+const fkaListeners = new Set<(on: boolean) => void>();
+export const fullKeyboardAccessSuspected = () => keysSeen >= 4 && arrowsSeen === 0;
+
+function noteKeyForFka(k: string) {
+  const was = fullKeyboardAccessSuspected();
+  if (k.startsWith('Arrow')) arrowsSeen++; else keysSeen++;
+  const now = fullKeyboardAccessSuspected();
+  if (was !== now) fkaListeners.forEach(f => f(now));
+}
+
+/** True when several keys have arrived and never an arrow — see the note above. */
+export function useFullKeyboardAccessSuspected(): boolean {
+  const [on, setOn] = useState(fullKeyboardAccessSuspected());
+  useEffect(() => {
+    setOn(fullKeyboardAccessSuspected());
+    fkaListeners.add(setOn);
+    return () => { fkaListeners.delete(setOn); };
+  }, []);
+  return on;
+}
 
 // ── Region capture ───────────────────────────────────────────────────────────
 //

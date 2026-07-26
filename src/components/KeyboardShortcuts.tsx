@@ -86,6 +86,13 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    title: 'IF THE ARROWS DO NOTHING',
+    body: [
+      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys and Tab for its own focus navigation before any app sees them — so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu opens but nothing can be stepped through.',
+      'Hold Shift and everything works again — Shift with an arrow tunes, zooms and moves through the menus and lists, and Shift with Tab still steps in and out of the decoder box. Full Keyboard Access only claims the PLAIN navigation keys and leaves modified ones alone, so the two can be used together and you never have to turn an accessibility feature off to use the radio.',
+    ],
+  },
+  {
     title: 'MAPS',
     body: ['Escape brings you back to the receiver.'],
   },
