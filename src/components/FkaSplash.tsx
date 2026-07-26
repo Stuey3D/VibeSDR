@@ -24,11 +24,15 @@ import { useFullKeyboardAccessSuspected, useRepeatingKeys, useSuppressShortcuts,
 
 const SEEN_KEY = 'lsv_fka_splash_seen_v2';
 
+// ★ The Alt key is labelled differently on every keyboard likely to be in front of a reader:
+// Alt on a Windows or handheld one (Stuart's Rii says ALT), Option on an older Apple keyboard,
+// and on a modern Mac nothing but the symbol. Showing "alt/⌥" covers all three, because the
+// only failure that matters here is a user unable to FIND the key an instruction names.
 const KEYS: { k: string; what: string }[] = [
   { k: '<  >', what: 'tune down and up' },
   { k: '−  +', what: 'zoom out and in' },
   { k: 'shift + arrow', what: 'move through menus and lists' },
-  { k: 'alt/opt + tab', what: 'in and out of the decoder box' },
+  { k: 'alt/⌥ + tab', what: 'in and out of the decoder box' },
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
