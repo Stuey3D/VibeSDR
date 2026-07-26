@@ -115,6 +115,11 @@ export interface ProcessedFrame {
 
 // ── Processor ────────────────────────────────────────────────────────────────
 
+/** How fast the auto-contrast ceiling may travel, dB/second. Fast enough that a
+ *  real level change is followed promptly, slow enough that the step as the
+ *  rolling window turns over is a ramp rather than a flash. */
+const MAX_SLEW_DB_PER_SEC = 40;
+
 export class SignalProcessor {
   private settings: SignalProcessorSettings = { ...DEFAULT_PROCESSOR_SETTINGS };
 
@@ -130,6 +135,10 @@ export class SignalProcessor {
 
   // Auto-range state (UberSDR algorithm)
   private minHistory: Array<{ value: number; ts: number }> = [];
+  private lastMaxAt = 0;
+  private lastMinAt = 0;
+  private lastCenterHz = 0;
+  private lastBwHz = 0;
   private maxHistory: Array<{ value: number; ts: number }> = [];
   // The last trustworthy (wide-view) noise-floor dB, held while zoomed in past
   // FLOOR_FREEZE_SPAN_HZ. Cleared on every range flush so a band change re-learns.
@@ -167,6 +176,19 @@ export class SignalProcessor {
     return { dbMin: this.actualMinDb, dbMax: this.actualMaxDb };
   }
 
+  /** Rate-limit the floor exactly as the ceiling is limited — see the slew note
+   *  there. First frame adopts outright so nothing fades in on connect. */
+  private slewFloor(want: number, now: number): number {
+    if (!this.lastMinAt || !Number.isFinite(this.actualMinDb)) {
+      this.lastMinAt = now; return want;
+    }
+    const dt = Math.min(0.25, (now - this.lastMinAt) / 1000);
+    this.lastMinAt = now;
+    const step = MAX_SLEW_DB_PER_SEC * dt;
+    const d = want - this.actualMinDb;
+    return this.actualMinDb + (Math.abs(d) <= step ? d : Math.sign(d) * step);
+  }
+
   /** Process one raw dBFS frame. bins length may change between frames. */
   process(bins: Float32Array, centerHz: number, bwHz: number, interacting = false): ProcessedFrame {
     const n = bins.length;
@@ -176,6 +198,29 @@ export class SignalProcessor {
       ? Math.min(0.5, Math.max(0.01, (now - this.lastFrameMs) / 1000))
       : 0.1;
     this.lastFrameMs = now;
+
+    // ── 0. View change: drop stale ceiling samples ──────────────────────────
+    // ★★ The ceiling averages a 5 SECOND window, so after a tune or zoom it
+    // blends pre- and post-tune levels — every intermediate value is WRONG, not
+    // merely late, and the waterfall dims and recovers for as long as the window
+    // takes to turn over. Discard samples that describe somewhere the user is no
+    // longer looking; the new target is then correct immediately and the slew
+    // limit below turns the one remaining step into a fade.
+    //
+    // ★ actualMaxDb is deliberately NOT reset — holding the pre-tune ceiling is
+    // what makes this a smooth adjustment rather than a jump to a cold start
+    // (Stuart: "preserve the pretune setting and then adjust to the new limit").
+    if (centerHz > 0 && bwHz > 0) {
+      const moved = Math.abs(centerHz - this.lastCenterHz) > bwHz * 0.25
+                 || Math.abs(bwHz - this.lastBwHz) > this.lastBwHz * 0.05;
+      // ★ BOTH windows, not just the ceiling. The floor averages its own history
+      // (MIN_HISTORY_MS) and steps the same way as it turns over, which moves the
+      // bottom of the range and flickers just as visibly. Clearing only the max
+      // left a residual flicker (Stuart, 2026-07-26).
+      if (moved && this.lastBwHz > 0) { this.maxHistory.length = 0; this.minHistory.length = 0; }
+      this.lastCenterHz = centerHz;
+      this.lastBwHz = bwHz;
+    }
 
     // ── 0a. Resize buffers if bin count changed ─────────────────────────────
     if (!this.dbAvg || this.dbAvg.length !== n) {
@@ -280,7 +325,29 @@ export class SignalProcessor {
         maxs.push({ value: targetMax, ts: now });
         while (maxs.length && now - maxs[0].ts > MAX_HISTORY_MS) maxs.shift();
         let sumMax = 0; for (let i = 0; i < maxs.length; i++) sumMax += maxs[i].value;
-        this.actualMaxDb = sumMax / maxs.length - s.autoContrast;
+        const wantMaxDb = sumMax / maxs.length - s.autoContrast;
+
+        // ★★ SLEW-LIMIT THE TOP OF THE RANGE. The rolling average STEPS as
+        // pre-tune samples age out of the window, and because the top of the
+        // range sets the palette mapping, the whole waterfall visibly DIMS and
+        // then recovers on every tune — worse when landing on a strong carrier,
+        // which raises the max sharply (Stuart, 2026-07-26).
+        //
+        // ★ The settled appearance is UNCHANGED: this only bounds how fast the
+        // value may travel, so it ramps over a few hundred ms instead of
+        // stepping. The alternative — clearing the history on a view change —
+        // trades several small jumps for one large one, which is not better.
+        if (!this.lastMaxAt || !Number.isFinite(this.actualMaxDb)) {
+          // ★ First frame of a session adopts OUTRIGHT — slewing from the initial
+          // value would make the waterfall fade in on every connect.
+          this.actualMaxDb = wantMaxDb;
+        } else {
+          const dt = this.lastMaxAt ? Math.min(0.25, (now - this.lastMaxAt) / 1000) : 0.05;
+          const maxStep = MAX_SLEW_DB_PER_SEC * dt;        // dB this frame may move
+          const delta = wantMaxDb - this.actualMaxDb;
+          this.actualMaxDb += Math.abs(delta) <= maxStep ? delta : Math.sign(delta) * maxStep;
+        }
+        this.lastMaxAt = now;
 
         // FLOOR FREEZE. The 10th-percentile floor is only a real NOISE floor when the
         // view is wide enough to contain noise. Zoomed into a busy band, every visible
@@ -297,7 +364,7 @@ export class SignalProcessor {
           while (mins.length && now - mins[0].ts > MIN_HISTORY_MS) mins.shift();
           let sumMin = 0; for (let i = 0; i < mins.length; i++) sumMin += mins[i].value;
           const avgMin = sumMin / mins.length;
-          this.actualMinDb = avgMin + s.autoContrast;
+          this.actualMinDb = this.slewFloor(avgMin + s.autoContrast, now);
           if (floorTrust) this.frozenFloorDb = avgMin;   // remember the trustworthy floor
         } else {
           // Zoomed in: hold the LOCAL floor (this frame's targetMin) so a quieter sub-band doesn't
@@ -306,7 +373,7 @@ export class SignalProcessor {
           // the scale up to white. Previously this hard-held frozenFloorDb, which is what produced the
           // large flat area when zoomed into an active-but-not-full band (Stuart, 2026-07-24).
           const cappedFloor = Math.min(targetMin, this.frozenFloorDb + FLOOR_CLIMB_MAX);
-          this.actualMinDb = cappedFloor + s.autoContrast;
+          this.actualMinDb = this.slewFloor(cappedFloor + s.autoContrast, now);
         }
       }
     }

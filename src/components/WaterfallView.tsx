@@ -92,6 +92,11 @@ const TICK_H   = 22;   // frequency ticker height
 // so orientation changes the mapping — never the ring. Depth ≥ any view's point-height so 1 row = 1
 // point holds without the mapping exceeding the ring.
 const RING_ROWS = 1024;
+/** Fixed waterfall texture WIDTH. Incoming rows are resampled into it, so a
+ *  server changing its bin count (UberSDR does this on every zoom) can never
+ *  reallocate the ring, reset the frame counter or destroy history. 1024 matches
+ *  what UberSDR sends natively and what VibeServer is now asked for. */
+const RING_W = 1024;
 
 const BAND_COLS: Record<string, string> = {
   ham:       hexRgba(BAND_HEX.ham, 0.92),
@@ -337,6 +342,8 @@ function WaterfallView({
   const SPEC_TWEEN_MS       = 33;
 
   // ── Signal processor (owns all dB→index maths) ──────────────────────────────
+  /** Scratch for the resample — reused, never per-frame allocated. */
+  const rowBuf = useRef(new Uint8Array(RING_W));
   const proc = useRef(new SignalProcessor());
   useEffect(() => {
     // v1 webgl parity: interpolation blur grows with the display rate, so the
@@ -344,12 +351,22 @@ function WaterfallView({
     // of it (5 = 1×; 60fps base 5 keeps existing setups looking identical).
     const sharpBase =
       frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
-    // Quadratic slider curve: 5 = 1× base, 10 = 4× — the linear curve made
-    // the upper half of the slider nearly imperceptible.
-    const sharpMul = Math.pow(wfSharpness / 5, 2);
+    // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
+    // maximum. The curve used to be quadratic, which made the BOTTOM half do
+    // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point
+    // control effectively had about five useful points (Stuart, 2026-07-26).
+    // Linear means every step moves something.
+    //
+    // ★ It reads as more effective now for a second reason: unsharp corrects
+    // INTERPOLATION BLUR, so it only bites where bins are stretched across
+    // pixels. At 4096 bins on a phone the row was being downsampled and there
+    // was nothing to sharpen; at 1024 there finally is.
+    const sharpMul = wfSharpness / 5;
     // GPU-side row effects (unsharp + S-curve) — uniforms, applied LIVE to
     // the whole waterfall history on the next draw.
-    uSharpSv.value    = Math.min(10, sharpBase * sharpMul) * 0.12;
+    // Ceiling 2.0: unsharp amplifies NOISE along with signal and rings either
+    // side of a carrier, so this is where "sharp" stops and "artefacts" start.
+    uSharpSv.value    = Math.min(2.0, (wfSharpness / 10) * 1.5 * (sharpBase / 1.5));
     uContrastSv.value = Math.max(-1, Math.min(1, wfContrast / 10));
     const patch: Partial<SignalProcessorSettings> = {
       autoContrast,
@@ -359,7 +376,7 @@ function WaterfallView({
       avgFrames,
       spatialSmooth, peakHold,
       wfBrightness, wfContrast,
-      wfSharpness: Math.min(10, sharpBase * sharpMul),
+      wfSharpness: Math.min(12, sharpBase * sharpMul * 2),
     };
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
@@ -385,7 +402,6 @@ function WaterfallView({
   // display-order mapping via uHead). Each push = one row write + a 256KB
   // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
   const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
-  const lastBinCount = useRef(0);
   const [texReady, setTexReady] = useState(false);
   const texReadyRef  = useRef(false);
 
@@ -396,7 +412,15 @@ function WaterfallView({
   const viewRef = useRef({ centerHz: 0, bwHz: 0 });
   const uSharpSv    = useSharedValue(0);
   const uContrastSv = useSharedValue(0);
-  const uNSv        = useSharedValue(2); // lines per data frame
+  // ★ Seeded from the CONFIGURED display rate, not a magic 2. A hardcoded
+  // initial value guaranteed one remap shortly after connect — at the native
+  // rate with ~18 fps data the first settled tick computes 1, so uN went 2→1 and
+  // the (still filling) waterfall rescaled once. Barely visible because the ring
+  // is nearly empty then, but it was real (Stuart, 2026-07-26).
+  const uNSv        = useSharedValue(1); // lines per data frame
+  /** The last SETTLED lines-per-frame, held across a gesture so uN never changes
+   *  mid-interaction — a change rescales the whole waterfall vertically. */
+  const lastDynRows = useRef(1);
   const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
   const frameCount  = useRef(0);
 
@@ -560,16 +584,49 @@ function WaterfallView({
   // incremental display shift, colourise, new SkImage. The line ticker emits
   // duplicate pushes of the latest data row between frames so the fps modes
   // reach 30/60 lines per second.
-  const pushRow = useCallback((row: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0) => {
-    const n = row.length;
-    // Ring depth is FIXED (RING_ROWS) — realloc ONLY on a bin-count change, never on resize/rotation,
-    // so the buffered waterfall survives an orientation change with no redraw (the hero feature).
-    if (n !== lastBinCount.current || !idxBuf.current) {
-      idxBuf.current  = new Uint8Array(n * RING_ROWS);
-      frameCount.current = 0;
-      lastBinCount.current = n;
-      uTexW.value = n;
+  const pushRow = useCallback((srcRow: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0) => {
+    // ★★ THE RING IS A FIXED SIZE IN BOTH DIMENSIONS. It used to be reallocated
+    // whenever the incoming bin count changed, which also reset frameCount to 0 —
+    // and the shader indexes from that ABSOLUTE counter, so the reset made it
+    // read rows that had just been zeroed. The waterfall visibly squashed and
+    // then popped open again as frames refilled (Stuart, 2026-07-26: "vertical
+    // hitches... the whole waterfall gets squished then pops open").
+    //
+    // ★ A bin-count change is NOT an error to be survived — it is NORMAL: UberSDR
+    // sends more bins as you zoom in (finer bins = more data/frame), and Kiwi
+    // varies too. So the renderer must absorb it, not restart on it.
+    //
+    // ★ This is what the WEB client already does — its ring is never reallocated
+    // and the GPU scales bins→width for free, which is why dragging a browser
+    // window preserves history. Same idea here: resample into a FIXED width.
+    const srcN = srcRow.length;
+    let row = srcRow, n = srcN;
+    if (srcN !== RING_W) {
+      const dst = rowBuf.current;
+      if (srcN > RING_W) {
+        // PEAK-HOLD when downsampling — a mean would swallow narrow carriers,
+        // which are exactly what a waterfall exists to show.
+        const step = srcN / RING_W;
+        for (let i = 0; i < RING_W; i++) {
+          const a = (i * step) | 0, b = Math.min(srcN, ((i + 1) * step) | 0) || a + 1;
+          let m = 0;
+          for (let k = a; k < b; k++) if (srcRow[k] > m) m = srcRow[k];
+          dst[i] = m;
+        }
+      } else {
+        const step = srcN / RING_W;                      // < 1: nearest-neighbour
+        for (let i = 0; i < RING_W; i++) dst[i] = srcRow[(i * step) | 0];
+      }
+      row = dst; n = RING_W;
     }
+    // Allocated ONCE. No bin count can reallocate it, so history always survives.
+    if (!idxBuf.current) {
+      idxBuf.current = new Uint8Array(RING_W * RING_ROWS);
+      uTexW.value = RING_W;
+    }
+    // The resample changes how much spectrum each stored bin covers, so the
+    // alignment maths below must use the RESAMPLED scale, not the wire's.
+    if (srcN !== RING_W && rowHzPerBin > 0) rowHzPerBin = rowHzPerBin * srcN / RING_W;
     // ── In-flight frame alignment (BRIEF-waterfall-frame-alignment) ──────────
     // The renderer places rows against the CURRENT view, so a frame still in
     // flight when the view moves gets drawn as though the predicted centre had
@@ -796,7 +853,20 @@ function WaterfallView({
       // fluctuates during a gesture) made uN jump every frame — jerking the scroll AND pulsing the
       // shader's temporal blend into a brighter noise band that settled back on release (Stuart
       // 2026-07-24). The dynamic target-rate interpolation is for the SETTLED low-fps path only.
-      uNSv.value = cfg.rowsPerFrame;
+      // ★★ HOLD THE LAST SETTLED uN, do not swap to a different one. uN is the
+      // shader's lines-per-frame and ALL history is mapped through it, so any
+      // change rescales the whole waterfall vertically at once. Using
+      // cfg.rowsPerFrame here while the settled path uses dynRows meant the two
+      // disagreed — at the 20fps display mode with ~18fps data, settled gives
+      // round(20/18)=1 and a gesture gave 2 — so the waterfall SQUASHED at the
+      // start of every zoom/tune and POPPED OPEN again when it settled
+      // (Stuart, 2026-07-26).
+      //
+      // ★ The original reason for a static value still holds: deriving uN from
+      // the LIVE data rate during a gesture made it jump every frame. Holding
+      // the last settled value satisfies both — stable during the gesture, and
+      // identical to what settles afterwards, so nothing rescales.
+      uNSv.value = lastDynRows.current;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
@@ -805,6 +875,7 @@ function WaterfallView({
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
       const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
       const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
+      lastDynRows.current = dynRows;   // what a gesture will hold — see the boost branch
       uNSv.value = dynRows;
       startRevealStepper(dynRows, dur);
     }
