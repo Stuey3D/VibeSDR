@@ -46,6 +46,12 @@ final class Server: ObservableObject {
     // Defaults to the Mac's own region, so the country works with no effort at all — and
     // an operator who has moved the machine can still override it.
     @AppStorage("rxIso")   var rxIso   = Locale.current.region?.identifier ?? ""
+    // ★★ A MAIDENHEAD LOCATOR INSTEAD OF COORDINATES — the privacy fallback the Android app
+    // already offers. A 6-character square is about 4 x 2.5 km, which is ample for distances
+    // and bearings and does not publish where you live. Coordinates win when both are given;
+    // otherwise the square's CENTRE is used, and everything downstream behaves identically
+    // because it only ever sees a lat/lon (Stuart, 2026-07-26).
+    @AppStorage("rxGrid")  var rxGrid  = ""
     /// Advertise on the LAN via Bonjour so clients auto-discover us. Off = reachable only by typing
     /// the address (a privacy choice — don't announce the radio to everyone on the network).
     @AppStorage("advertise") var advertise = true
@@ -155,18 +161,24 @@ final class Server: ObservableObject {
     /// ★ The COUNTRY alone is worth publishing even with no coordinates: it is all the RDS
     /// flag needs, and it costs the operator nothing because it defaults from the Mac itself.
     func locationJson() -> String {
-        let lat = Double(rxLat.trimmingCharacters(in: .whitespaces))
-        let lon = Double(rxLon.trimmingCharacters(in: .whitespaces))
+        var lat = Double(rxLat.trimmingCharacters(in: .whitespaces))
+        var lon = Double(rxLon.trimmingCharacters(in: .whitespaces))
+        let grid = rxGrid.trimmingCharacters(in: .whitespaces)
+        // Exact coordinates win; a locator is the deliberately coarse alternative.
+        if lat == nil || lon == nil, let c = gridCentre(grid) { lat = c.lat; lon = c.lon }
         let place = rxPlace.trimmingCharacters(in: .whitespaces)
         let iso = rxIso.trimmingCharacters(in: .whitespaces).uppercased()
-        if lat == nil && lon == nil && place.isEmpty && iso.isEmpty { return "" }
+        if lat == nil && lon == nil && place.isEmpty && iso.isEmpty && grid.isEmpty { return "" }
         var parts: [String] = []
         if !iso.isEmpty   { parts.append("\"iso\":\"\(jsonEscaped(iso))\"") }
         if !place.isEmpty { parts.append("\"label\":\"\(jsonEscaped(place))\"") }
         if let la = lat, let lo = lon, la >= -90, la <= 90, lo >= -180, lo <= 180 {
             parts.append("\"lat\":\(la)")
             parts.append("\"lon\":\(lo)")
-            parts.append("\"grid\":\"\(maidenhead(la, lo))\"")
+            // Echo the operator's OWN locator when they gave one — recomputing it from the
+            // square's centre would return the same square, but showing back exactly what
+            // was typed is less confusing than showing a value they did not enter.
+            parts.append("\"grid\":\"\(jsonEscaped(grid.isEmpty ? maidenhead(la, lo) : grid))\"")
         }
         return "{" + parts.joined(separator: ",") + "}"
     }
@@ -174,6 +186,35 @@ final class Server: ObservableObject {
     private func jsonEscaped(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\")
          .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// Centre of a Maidenhead square, or nil if it does not parse. 4 or 6 characters.
+    /// ★ The CENTRE, not the corner: a corner biases every distance by half a square in a
+    /// fixed direction, which is a systematic error rather than the honest rounding the
+    /// operator asked for by giving a locator in the first place.
+    private func gridCentre(_ g: String) -> (lat: Double, lon: Double)? {
+        let u = g.uppercased()
+        let c = Array(u)
+        guard c.count == 4 || c.count == 6 else { return nil }
+        let A = Int(UnicodeScalar("A").value)
+        guard c[0].isLetter, c[1].isLetter, c[2].isNumber, c[3].isNumber else { return nil }
+        let f1 = Int(c[0].asciiValue.map { Int($0) - A } ?? -1)
+        let f2 = Int(c[1].asciiValue.map { Int($0) - A } ?? -1)
+        guard f1 >= 0, f1 < 18, f2 >= 0, f2 < 18 else { return nil }
+        let s1 = Int(String(c[2])) ?? 0, s2 = Int(String(c[3])) ?? 0
+        var lon = Double(f1) * 20.0 + Double(s1) * 2.0 - 180.0
+        var lat = Double(f2) * 10.0 + Double(s2) * 1.0 - 90.0
+        if c.count == 6 {
+            guard c[4].isLetter, c[5].isLetter else { return nil }
+            let t1 = Int(c[4].asciiValue.map { Int($0) - A } ?? -1)
+            let t2 = Int(c[5].asciiValue.map { Int($0) - A } ?? -1)
+            guard t1 >= 0, t1 < 24, t2 >= 0, t2 < 24 else { return nil }
+            lon += Double(t1) * (2.0 / 24.0) + (1.0 / 24.0)      // + half a sub-square
+            lat += Double(t2) * (1.0 / 24.0) + (0.5 / 24.0)
+        } else {
+            lon += 1.0; lat += 0.5                                // + half a square
+        }
+        return (lat, lon)
     }
 
     /// Maidenhead locator — what every other operator will ask for, and it is pure arithmetic
@@ -715,8 +756,10 @@ struct SettingsView: View {
                     TextField("Latitude",  text: $server.rxLat, prompt: Text("52.24"))
                     TextField("Longitude", text: $server.rxLon, prompt: Text("-0.90"))
                 }
-                Text("Optional. Coordinates give listeners distances and bearings, and centre the "
-                     + "map — the locator is worked out from them.")
+                TextField("Or locator", text: $server.rxGrid, prompt: Text("IO92ng"))
+                Text("Optional, and either will do. Coordinates give exact distances and bearings; "
+                     + "a locator gives the same to within a few km without publishing where you "
+                     + "live. Coordinates win if you give both.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !server.locationJson().isEmpty && server.running {
                     Text("Restart the server to apply a change.")
