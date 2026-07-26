@@ -26,13 +26,13 @@ const SEEN_KEY = 'lsv_fka_splash_seen_v2';
 
 // ★ The Alt key is labelled differently on every keyboard likely to be in front of a reader:
 // Alt on a Windows or handheld one (Stuart's Rii says ALT), Option on an older Apple keyboard,
-// and on a modern Mac nothing but the symbol. Showing "alt/⌥" covers all three, because the
+// and on a modern Mac nothing but the symbol. ALL THREE are shown (Stuart), because the
 // only failure that matters here is a user unable to FIND the key an instruction names.
 const KEYS: { k: string; what: string }[] = [
   { k: '<  >', what: 'tune down and up' },
   { k: '−  +', what: 'zoom out and in' },
   { k: 'shift + arrow', what: 'move through menus and lists' },
-  { k: 'alt/⌥ + tab', what: 'in and out of the decoder box' },
+  { k: 'alt/option/⌥ + tab', what: 'in and out of the decoder box' },
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
@@ -115,10 +115,10 @@ const s = StyleSheet.create({
   row:   { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   // Key caps are VIEWS, not nested Text — a nested <Text> cannot carry a border on iOS.
   cap: {
-    minWidth: 120, paddingHorizontal: 8, paddingVertical: 5, marginRight: 12,
+    minWidth: 138, paddingHorizontal: 8, paddingVertical: 5, marginRight: 12,
     borderWidth: 1, borderColor: NAV_FOCUS, borderRadius: 5, alignItems: 'center',
   },
-  capTxt: { color: NAV_FOCUS, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  capTxt: { color: NAV_FOCUS, textAlign: 'center', fontSize: 11, fontWeight: '700', letterSpacing: 1 },
   what:   { color: 'rgba(255,255,255,0.85)', fontSize: 13, flexShrink: 1 },
   btns: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
   btn:  { paddingHorizontal: 18, paddingVertical: 10, marginLeft: 10, borderWidth: 1, borderColor: NAV_FOCUS, borderRadius: 6 },
