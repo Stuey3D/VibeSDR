@@ -85,6 +85,7 @@ import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
+import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
@@ -1004,6 +1005,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
   const [aboutOpen,     setAboutOpen]     = useState(false);
+  const [keyHelpOpen,   setKeyHelpOpen]   = useState(false);
   const [recordingsOpen, setRecordingsOpen] = useState(false);
   // Mute the live SDR while a recording plays so they don't fight over the audio
   // session; restore the prior mute state when the browser closes.
@@ -4404,7 +4406,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const anyPanelOpen = menuOpen || stepOpen || chatOpen ||
                        freqModalOpen || modeSelOpen || audioSheetOpen || serversOpen ||
                        hwOpen || aboutOpen || ratioOverlayOpen || recordingsOpen ||
-                       cityPickerOpen;
+                       cityPickerOpen || keyHelpOpen;
   const panelOpenRef = useRef(anyPanelOpen);
   useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
 
@@ -4443,7 +4445,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setMenuOpen(false); setStepOpen(false); setChatOpen(false);
       setFreqModalOpen(false); setModeSelOpen(false); setAudioSheetOpen(false);
       setHwOpen(false); setAboutOpen(false); setRatioOverlayOpen(false);
-      setRecordingsOpen(false); setCityPickerOpen(false);
+      setRecordingsOpen(false); setCityPickerOpen(false); setKeyHelpOpen(false);
       setServersCloseToken(t => t + 1);
     };
 
@@ -5260,6 +5262,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           wheelAction={wheelAction}
           onWheelAction={onWheelAction} hapticsHardware={hapticsHardware}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
+        onKeyHelp={() => { setMenuOpen(false); setKeyHelpOpen(true); }}
         vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
         onDispSaveGlobal={onDispSaveGlobal}
@@ -5290,6 +5293,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <KeyboardShortcuts visible={keyHelpOpen} onClose={() => setKeyHelpOpen(false)} />
       <RecordingsOverlay
         visible={recordingsOpen}
         onClose={() => setRecordingsOpen(false)}

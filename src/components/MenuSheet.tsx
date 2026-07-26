@@ -157,6 +157,8 @@ export interface MenuSheetProps {
   onToggleVfoLock?: () => void;
   /** Hide the controls bar for a full-screen waterfall (chevron restores). */
   onHideControls?: () => void;
+  /** Opens the full keyboard reference — see KeyboardShortcuts.tsx. */
+  onKeyHelp?: () => void;
   onDispReset?:      () => void;
   onDispSaveServer?: () => void;
   onDispSaveGlobal?: () => void;
@@ -573,7 +575,7 @@ export default function MenuSheet({
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
-  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls,
+  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls, onKeyHelp,
   mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics, hapticsHardware = true,
@@ -864,6 +866,9 @@ export default function MenuSheet({
             <BtnRow>
               <Btn label="DISPLAY SETTINGS" icon="monitor" full active={dispSettingsOpen}
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
+            </BtnRow>
+            <BtnRow>
+              <Btn label="⌨ KEYBOARD SHORTCUTS" full onPress={onKeyHelp} />
             </BtnRow>
             <BtnRow>
               <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />
