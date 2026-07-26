@@ -570,9 +570,38 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      ★ The upper bound matters as much as the lower one — a box that grows past the window
      pushes its own scrollbar off screen, which is how "scrollable" becomes "unreachable"
      (Stuart, 2026-07-26). */
-  height: clamp(240px, 58vh, 620px);
+  /* ★★ CONTENT-DRIVEN, not a fixed height. A fixed box left a dead black gap whenever the
+     content was shorter than it, and clipped whenever it was longer. The height was pinned
+     in the first place because the AF list churned every second — and that is FIXED now, so
+     the reason for pinning it has gone. ★ A workaround should be removed when the thing it
+     worked around is repaired, or it becomes a permanent cost paid for a solved problem.
+     ★ AND DRAGGABLE. `resize: vertical` is the browser's own handle, so the operator sets
+     the height they want, on the screen they actually have — better than any guess of mine,
+     and it survives every future field we add (Stuart, 2026-07-26). */
+  height: auto;
+  min-height: 180px;
+  max-height: clamp(260px, 72vh, 760px);
   overflow-y: auto; overscroll-behavior: contain;
 }
+/* ★★ AN EXPLICIT GRIP, not CSS `resize`. The native handle is drawn in the element's own
+   bottom-right corner — and this panel is nested inside a box that is absolutely positioned
+   and anchored by its BOTTOM edge, so that corner sits under the constellation column where
+   it cannot be grabbed. Worse, a miss lands on the waterfall behind and TUNES the radio.
+   A grip bar of our own, with pointer capture, cannot be missed and cannot leak (Stuart:
+   "not resizing but the waterfall does stuff underneath", 2026-07-26). */
+/* ★★ TWO FIXED SIZES ON A BUTTON, not a drag. Dragging was the wrong mechanism here: the
+   handle sat inside a bottom-anchored box where it could not be grabbed, a miss tuned the
+   radio behind it, and touch has no pointer to drag with at all. A button cannot be missed,
+   works identically on a phone, and two sensible sizes are all anyone actually wanted —
+   read the numbers, or watch the constellation (Stuart, 2026-07-26). */
+#rdsSize { display: none; padding: 2px 5px; line-height: 0; }
+#rdsSize.show { display: inline-block; }
+#rdsSize svg { width: 11px; height: 13px; }
+#rdsSize svg rect { fill: none; stroke: currentColor; stroke-width: 1.2; }
+#rdsSize svg path { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; }
+/* Tall state: the box in the icon grows and the arrow flips to point down. */
+#rdsSize.tall svg rect { y: 3; height: 10; }
+#rdsSize.tall svg path { transform: rotate(180deg); transform-origin: 6px 3px; }
 /* ★★ ON A PHONE THE WATERFALL MUST STILL BE VISIBLE. This box sits over the display it is
    describing, and tuning is the reason the user is here — a panel tall enough to hide the
    spectrum makes them close it to tune and reopen it to read, which is the panel failing at
@@ -580,7 +609,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    field stays reachable, nothing is dropped to fit, and roughly two thirds of the screen
    stays radio (Stuart, 2026-07-26). */
 @media (max-width: 760px) {
-  #rdsPanel { height: clamp(170px, 34vh, 300px); }
+  /* The waterfall must stay visible for tuning, so on a phone the CAP binds and the data
+     scrolls — and the drag handle is pointless on touch, so it goes. */
+  #rdsPanel { max-height: clamp(170px, 34vh, 300px); resize: none; }
   /* The constellation and trace go under the fields rather than beside them, so neither
      ends up too narrow to read. */
   #rdsConstWrap { margin: 0 auto; }
@@ -589,7 +620,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 /* A landscape phone has almost no height at all — there, the cap is the binding constraint. */
 @media (max-height: 480px) {
-  #rdsPanel { height: clamp(140px, 42vh, 220px); }
+  #rdsPanel { max-height: clamp(140px, 42vh, 220px); }
 }
 /* Each field reserves two lines, so a value wrapping onto a second line does not shove
    everything below it down the panel. */
@@ -922,6 +953,9 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>
     <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
+    <!-- ★ Sits with minimise and close, where a window's size controls belong — the user
+         already knows to look there, and it needs no explaining (Stuart, 2026-07-26). -->
+    <button class="btn" id="rdsSize" title="Taller / shorter panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect id="rdsSizeBox" x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3" /></svg></button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
   </div>

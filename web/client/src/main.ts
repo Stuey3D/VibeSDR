@@ -2241,6 +2241,7 @@ function initDecoders(host: string, auth: AuthState) {
   });
   decoders.connect();
 
+  initRdsResize();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
 
@@ -2367,6 +2368,8 @@ function showDecBox(what: string) {
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
   $('rdsPanel').classList.toggle('show', isRds);
+  $('rdsSize').classList.toggle('show', isRds);
+  if (isRds) applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); }
   updateVts();
@@ -2383,7 +2386,41 @@ function showDecBox(what: string) {
 function hideDecBox() {
   $('decBox').classList.remove('open');
   $('rdsPanel').classList.remove('show');
+  $('rdsSize').classList.remove('show');
   updateVts();      // the bar comes back when Advanced RDS closes
+}
+
+/** ★ TWO FIXED SIZES, on a button. Short enough to leave the waterfall usable while tuning,
+ *  or tall enough to read every field at once — which are the only two things anyone wanted.
+ *  ★ Not a drag: the handle had to live inside a bottom-anchored box where it could not be
+ *  grabbed, a miss went through to the waterfall and TUNED THE RADIO, and touch has no
+ *  pointer to drag with. A button has none of those failure modes and works everywhere.
+ */
+let rdsTall = localStorage.getItem('rdsPanelTall') === '1';
+
+function applyRdsSize() {
+  const panel = $('rdsPanel');
+  const btn = $('rdsSize');
+  // Phones get a smaller pair: the waterfall behind still has to be usable for tuning.
+  const phone = window.innerWidth <= 760;
+  panel.style.height = rdsTall
+    ? (phone ? 'min(56vh, 420px)' : 'min(72vh, 720px)')
+    : (phone ? 'min(30vh, 240px)' : 'min(40vh, 330px)');
+  panel.style.maxHeight = 'none';       // the explicit height IS the cap now
+  btn.classList.toggle('tall', rdsTall);
+  btn.title = rdsTall ? 'Shorter panel' : 'Taller panel';
+}
+
+function initRdsResize() {
+  applyRdsSize();
+  $('rdsSize').onclick = (e) => {
+    e.stopPropagation();
+    rdsTall = !rdsTall;
+    localStorage.setItem('rdsPanelTall', rdsTall ? '1' : '0');
+    applyRdsSize();
+  };
+  // A rotated phone changes which pair of sizes is right.
+  window.addEventListener('resize', () => { if (rdsPanelOpen()) applyRdsSize(); });
 }
 
 /** True while the Advanced RDS decoder owns the RDS display. */
@@ -4076,6 +4113,12 @@ function initKeyboard() {
       case 'ArrowUp':    spec.zoomBy(1.25); updateViewOverlays(); e.preventDefault(); break;
       case 'ArrowDown':  spec.zoomBy(0.8);  updateViewOverlays(); e.preventDefault(); break;
       case 'm': audio!.muted = !audio!.muted; $('muteBtn').classList.toggle('on', audio!.muted); break;
+      // ★ T = taller/shorter, but ONLY while the panel that it resizes is open. A shortcut
+      // that does nothing visible is worse than no shortcut: the user cannot tell whether
+      // they pressed the wrong key or the app is broken (Stuart, 2026-07-26).
+      case 't': case 'T':
+        if (rdsPanelOpen()) { $('rdsSize').click(); e.preventDefault(); }
+        break;
       default: {
         // Mode letter keys: first mode whose name starts with the key.
         const m = MODES.find(x => x[0] === e.key.toLowerCase());
