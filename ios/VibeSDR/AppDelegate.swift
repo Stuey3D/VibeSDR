@@ -54,7 +54,7 @@ class AppDelegate: ExpoAppDelegate {
 /// Down and up are separate events on purpose: the arrow keys reuse the tuner keys'
 /// tap-steps / hold-sweeps semantics, and a sweep has to know when the key was let go.
 class VibeKeyWindow: UIWindow {
-  private static func name(for key: UIKey) -> String? {
+  private static func name(for key: UIKey, typing: Bool = false) -> String? {
     switch key.keyCode {
     case .keyboardLeftArrow:  return "ArrowLeft"
     case .keyboardRightArrow: return "ArrowRight"
@@ -76,10 +76,50 @@ class VibeKeyWindow: UIWindow {
       // Letters come through as their characters; ignore anything with modifiers so
       // system shortcuts (Cmd-Q and friends) are left entirely alone.
       guard key.modifierFlags.isEmpty else { return nil }
-      let c = key.charactersIgnoringModifiers.uppercased()
+      let raw = key.charactersIgnoringModifiers
+      // ★★ THE ARROW ALIASES. `,` `.` `-` `=` ARE the arrow keys — see the note above the
+      // arrowAlias table. Suppressed while typing, because every one of them is a character
+      // somebody needs in a text box.
+      if !typing, let a = VibeKeyWindow.arrowAlias[raw] { return a }
+      let c = raw.uppercased()
       return (c.count == 1 && c >= "A" && c <= "Z") ? c : nil
     }
   }
+
+  /// ★★ FOUR PUNCTUATION KEYS THAT ARE LITERALLY THE ARROW KEYS.
+  ///
+  /// Stuart's find, and the good part is the framing: `<` and `>` are the LEFT-RIGHT axis,
+  /// `-` and `+` are the UP-DOWN axis. Not a tuning shortcut — an alias for the arrows
+  /// themselves, resolved here at the very bottom so that NOTHING downstream knows the
+  /// difference. Every menu, list, dropdown, decoder box and dial gets them for nothing, and
+  /// there is no second code path to keep in step with the first. On the waterfall they read
+  /// as tune and zoom; in a menu the same keys move the highlight and drag the sliders.
+  ///
+  /// ★ They are unconditional rather than a Full Keyboard Access fallback. FKA is what sent us
+  /// looking, but a key that only exists in a mode nobody can see is a key nobody finds — and
+  /// `<` `>` for tuning is what every radio ever built is marked with anyway.
+  ///
+  /// ★ Chosen because they are NOT letters, so they cannot collide with any shortcut on any
+  /// surface, and because iOS leaves them alone: FKA claims the actual navigation keys, which
+  /// is precisely why these get through when the arrows themselves do not.
+  ///
+  /// ★★ SUPPRESSED WHILE TYPING, and this is the sharp edge. `.` is a decimal point, `-` and
+  /// `.` both live in URLs and IP addresses. Worse, they alias to names in `typingPassthrough`,
+  /// so without the guard a `-` typed into a server address would BOTH type itself and scroll
+  /// the list underneath. Hence `typing` is threaded down here rather than checked by the
+  /// caller alone.
+  ///
+  /// ★ The consequence is a gap we cannot design away: inside a focused text box there is no
+  /// single-key substitute available AT ALL, because every key is a character somebody needs.
+  /// The bookmarks search — where the arrows walk the results while you are still typing — is
+  /// the one place that still wants Shift with an arrow under FKA. One documented island is a
+  /// better trade than blocking the whole thing on the only case that has no solution.
+  private static let arrowAlias: [String: String] = [
+    ",": "ArrowLeft", "<": "ArrowLeft",
+    ".": "ArrowRight", ">": "ArrowRight",
+    "=": "ArrowUp", "+": "ArrowUp",       // zoom IN / move up
+    "-": "ArrowDown", "_": "ArrowDown",   // zoom OUT / move down
+  ]
 
   /// ★★ A FOCUSED TEXT FIELD OWNS THE KEYBOARD.
   ///
@@ -139,7 +179,7 @@ class VibeKeyWindow: UIWindow {
     // A NUMBER PAD cannot use letters, so they stay ours even while it has focus.
     let numeric = typing && focusedFieldIsNumeric
     for p in presses {
-      guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      guard let k = p.key, let n = VibeKeyWindow.name(for: k, typing: typing) else { continue }
       let mine = VibeKeyWindow.typingPassthrough.contains(n)
               || (numeric && n.count == 1 && n >= "A" && n <= "Z")
       if typing && !mine { continue }
@@ -148,7 +188,7 @@ class VibeKeyWindow: UIWindow {
     // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must
     // still receive them. We are observing here, not intercepting.
     if typing { super.pressesBegan(presses, with: event); return }
-    let handled = presses.contains { $0.key.flatMap(VibeKeyWindow.name(for:)) != nil }
+    let handled = presses.contains { $0.key.flatMap { VibeKeyWindow.name(for: $0, typing: typing) } != nil }
     if !handled { super.pressesBegan(presses, with: event) }
   }
 
@@ -157,14 +197,14 @@ class VibeKeyWindow: UIWindow {
     // A NUMBER PAD cannot use letters, so they stay ours even while it has focus.
     let numeric = typing && focusedFieldIsNumeric
     for p in presses {
-      guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      guard let k = p.key, let n = VibeKeyWindow.name(for: k, typing: typing) else { continue }
       let mine = VibeKeyWindow.typingPassthrough.contains(n)
               || (numeric && n.count == 1 && n >= "A" && n <= "Z")
       if typing && !mine { continue }
       VibePowerModule.emitKey("VibeKeyUp", n)
     }
     if typing { super.pressesEnded(presses, with: event); return }
-    let handled = presses.contains { $0.key.flatMap(VibeKeyWindow.name(for:)) != nil }
+    let handled = presses.contains { $0.key.flatMap { VibeKeyWindow.name(for: $0, typing: typing) } != nil }
     if !handled { super.pressesEnded(presses, with: event) }
   }
 

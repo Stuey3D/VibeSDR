@@ -834,9 +834,11 @@ export default function MenuSheet({
                 <Text style={styles.fkaNoteBody}>
                   iOS Full Keyboard Access looks to be switched on. It claims the plain arrow keys
                   and Tab for its own navigation, so VibeSDR never sees them.{'\n'}
-                  Hold <Text style={styles.fkaNoteKey}>Shift</Text> and everything works as normal
-                  — Shift with an arrow tunes, zooms and moves through these menus, and Shift with
-                  Tab still works. You do not need to turn anything off.
+                  Use <Text style={styles.fkaNoteKey}>{'<'}</Text> <Text style={styles.fkaNoteKey}>{'>'}</Text> to
+                  tune and <Text style={styles.fkaNoteKey}>-</Text> <Text style={styles.fkaNoteKey}>+</Text> to
+                  zoom — they are the arrow keys by another name and work in these menus too. In a
+                  text box, hold <Text style={styles.fkaNoteKey}>Shift</Text> with an arrow. You do
+                  not need to turn anything off.
                 </Text>
               </View>
             )}
