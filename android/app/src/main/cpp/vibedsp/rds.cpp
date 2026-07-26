@@ -21,6 +21,22 @@ int RdsDemod::bestIdx() const {
     return best;
 }
 
+int RdsDemod::constellation(float* xy, int maxPts) const {
+    const int n = std::min(maxPts, kConstPts);
+    // Oldest first, so the plot ages consistently rather than jumping at the wrap.
+    for (int i = 0; i < n; ++i) {
+        const int k = (constHead_ + kConstPts - n + i) % kConstPts;
+        xy[i * 2]     = constXY_[k * 2];
+        xy[i * 2 + 1] = constXY_[k * 2 + 1];
+    }
+    return n;
+}
+
+float RdsDemod::subcarrierRelDb() const {
+    if (rdsRms_ <= 1e-9f || pilotRef_ <= 1e-9f) return -99.0f;
+    return 20.0f * std::log10(rdsRms_ / pilotRef_);
+}
+
 int RdsDemod::blockErrorPercent() const {
     const int b = bestIdx();
     return (b >= 0 && b < NPH) ? dec_[b].blockErrorPercent() : -1;
@@ -122,6 +138,13 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     const float kPi   = (float)M_PI;
     const float phaseStep = twoPi / NPH;
 
+    constBest_ = bestIdx();            // once per block, not once per sample
+    // Smoothed RMS of the complex RDS baseband — the level the detector actually sees.
+    for (int i = 0; i < nb; ++i) {
+        const float mag2 = sI_[i] * sI_[i] + sQ_[i] * sQ_[i];
+        rdsRms_ += 0.0005f * (std::sqrt(mag2) - rdsRms_);
+    }
+
     for (int i = 0; i < nb; ++i) {
         const float sI = sI_[i], sQ = sQ_[i];
         float base = bclk_[i] - (float)groupDelayPhase_;
@@ -147,6 +170,14 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
                 if (havePrev_[p]) {
                     const float dot = aI * prevAI_[p] + aQ * prevAQ_[p];
                     dec_[p].pushBit(dot < 0.0f ? 1 : 0);
+                }
+                if (p == constBest_) {
+                    // Normalised by the running baseband RMS so the plot's SCALE is stable
+                    // and only its SHAPE varies — which is the part that carries meaning.
+                    const float k = (rdsRms_ > 1e-9f) ? 1.0f / (rdsRms_ * 24.0f) : 0.0f;
+                    constXY_[constHead_ * 2]     = aI * k;
+                    constXY_[constHead_ * 2 + 1] = aQ * k;
+                    constHead_ = (constHead_ + 1) % kConstPts;
                 }
                 prevAI_[p] = aI; prevAQ_[p] = aQ; havePrev_[p] = true;
                 accI_[p] = 0.0f; accQ_[p] = 0.0f;

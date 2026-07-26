@@ -307,6 +307,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // British receiver, so it resolves to nothing rather than to a wrong flag.
       rdsPi = m.pi;
       rdsBer = m.ber;
+      rdsSig = m.sig;
       rdsIso = m.pi > 0
         ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
         : '';
@@ -721,12 +722,13 @@ let rdsFreq = -1;
 // throwing away a confirmed identity for want of a label (Stuart, 2026-07-26).
 let rdsPi = -1;
 let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
+let rdsSig = -99;   // 57 kHz level vs pilot, dB
 
 /** Drop RDS state if the dial has moved off the station it came from. */
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
-  rdsPi = -1; rdsBer = -1;
+  rdsPi = -1; rdsBer = -1; rdsSig = -99;
   rdsFreq = -1;
 }
 
@@ -798,7 +800,7 @@ function updateVts() {
   // decoder has a block-error figure: that means it is synced and working on this carrier,
   // which is worth saying out loud even with no name and no PI yet. Hiding it there is
   // what made "no RDS" and "RDS struggling" look identical from the outside.
-  if (!name && rdsBer < 0) {
+  if (!name && rdsBer < 0 && rdsSig <= -90) {
     vts.classList.remove('show', 'on');
     // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
     // element when there is no RDS name, so a stale value left in the DOM came back as
@@ -853,9 +855,15 @@ function updateVts() {
   // Without that, a blank box means both and neither.
   const piEl = $('vtsPi');
   const piTxt = piHex(rdsPi);
-  const chip = piTxt && rdsBer >= 0 ? `${piTxt} · ${rdsBer}%`
-             : piTxt                ? piTxt
-             : rdsBer >= 0          ? `RDS ${rdsBer}%`
+  // ★ THE SUBCARRIER LEVEL, always, even when nothing decodes. It is the one number that
+  // separates "the 57 kHz subcarrier is not reaching us" from "it is reaching us and we
+  // are wasting it" — opposite faults, opposite fixes, and every other reading we have
+  // looks identical for both.
+  const sigTxt = rdsSig > -90 ? ` · ${rdsSig.toFixed(0)}dB` : '';
+  const chip = piTxt && rdsBer >= 0 ? `${piTxt} · ${rdsBer}%${sigTxt}`
+             : piTxt                ? `${piTxt}${sigTxt}`
+             : rdsBer >= 0          ? `RDS ${rdsBer}%${sigTxt}`
+             : sigTxt               ? `RDS${sigTxt}`
              : '';
   piEl.textContent = chip;
   piEl.title = rdsBer >= 0

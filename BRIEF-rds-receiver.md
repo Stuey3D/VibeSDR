@@ -137,3 +137,71 @@ Three RDS-adjacent projects were examined; two are dead ends:
 (`APPSTORE-EXCEPTION.md`) is a §7 additional permission Stuart grants **as sole copyright holder** —
 incorporate someone else's GPL code and he can no longer grant it over their portion, and the store
 build breaks. Permissive licences (MIT/BSD/Apache) are fine with attribution, as KissFFT already is.
+
+---
+
+## ★★ ADVANCED RDS PANEL (FM-DX) — scoped 2026-07-26
+
+Stuart's plan: a **Standard / Enhanced RDS** toggle, Enhanced aimed squarely at the FM-DX
+community. The benchmark is an FM-DX Webserver (io95.fmtuner.org), whose display we studied.
+
+### What that display actually contains — and the split that matters
+- **From the air:** PS, PI, PTY, TP/TA, stereo, MS, AF list, RadioText.
+- **From a DATABASE, keyed on PI:** the logo, "Pride Radio", "Newcastle upon Tyne", 0.05 kW,
+  11 km, 122°. Distance and bearing are computed from the receiver's own position.
+
+★ So most of the visible richness is a PI LOOKUP, not harder decoding. And PI is the most
+robust field in RDS (block A of every group, ~11/sec, confirmable by repetition), so the
+database half is reachable BEFORE the decoder improves — the opposite of the intuitive order.
+
+★ Their advantage is not a cleverer algorithm: a TEF6686 decodes RDS in SILICON and hands the
+host finished blocks, which librdsparser merely assembles. We do the whole chain in DSP.
+
+### Contents of the panel
+1. **PI code** — its own field. SHIPPED 2026-07-26 (decoder → pipeline → shim → clients).
+2. **Block error rate** — errors before correction, last 12 groups. SHIPPED.
+3. **Subcarrier level vs pilot, dB** — SHIPPED. Separates "not arriving" from "arriving and
+   wasted".
+4. **★ CONSTELLATION PLOT** — Stuart's request after seeing SDR++ Brown's. The DSP side is
+   DONE (`RdsDemod::constellation()`, 64 recent symbol points, from the winning hypothesis,
+   normalised by the running RMS so scale is stable and only SHAPE varies). NOT yet wired to
+   any client — it belongs here, not bolted onto the station bar.
+   ★ Two tight clusters = healthy; a diffuse cloud = subcarrier buried in noise. That single
+   picture says at a glance what took three instruments and a whole evening to establish.
+5. **Correction strength** — `RdsDecoder::setMaxBurstBits()`, 1..5, DEFAULT 2. The standard
+   permits 5; see the warning below before offering it casually.
+6. Later: PTY, TP/TA, MS, AF list, and the PI-keyed database lookup (logo/name/site/ERP/
+   distance/bearing), which also feeds the FM-DX dial and learned stations.
+
+### ★★ MEASURED, AND DO NOT REPEAT
+- **5-bit burst correction REGRESSED it on air.** BBC Radio 4 in solid stereo produced NO RDS
+  at all. A false correction on block A yields a wrong PI; the parser compares consecutive
+  PIs, they disagree, `piLast_` is overwritten with each invention, so PI never confirms —
+  and with PI gating repaired groups, nothing gets through. Strong stations were unaffected,
+  which is exactly the pattern seen. The old 2-bit cap was a correct engineering judgement.
+- **A symbol timing loop cannot help. Twice failed, and now understood.** The bit clock is
+  the PILOT DIVIDED BY 16, so its frequency is exact and the only unknown is the divider's
+  starting state — sixteen discrete possibilities, which is precisely what the hypothesis
+  bank enumerates. One hypothesis is EXACTLY right, not approximately. There is no better
+  sampling instant to find.
+- **Widening the RDS baseband filter did nothing** (2400/2400 → 3200/1600), and cost groups
+  at moderate noise. Reverted.
+- **Relaxing the parser's gates bought ~1 group.** They were never the bottleneck.
+
+### ★★★ THE ACTUAL LIMIT IS THE SIGNAL, NOT THE DECODER (proven three ways)
+1. Our decoder makes **0% block errors** on a clean synthetic signal — no error floor.
+2. **SDR++ Brown, same dongle, same antenna, same stations, struggles identically** — and on
+   BBC R2 88.6 it showed PI `0xC202` and NOTHING ELSE, where we showed PI *and* resolved
+   "BBC R2". Two unrelated implementations failing the same way means the input is at fault.
+3. Its **constellation was a diffuse cloud**, not two clusters.
+
+★ Leading explanation: the **8-bit dongle**. RDS is injected ~30 dB below peak deviation and
+an 8-bit ADC gives ~48 dB of range, so a strong FM carrier leaves the subcarrier near the
+quantisation floor — audio uses the top 30 dB and sounds perfect while RDS drowns. Fits the
+evidence that RDS flips between decoding and nothing over ~2 dB of gain, and that MORE gain
+helped until intermod took over. ★ NEXT TEST: build SDRplay (14-bit) support into VibeServer
+and repeat. That is now a well-posed hardware question, not a software mystery.
+
+★ Consequence: **auto-gain (`BRIEF-auto-gain.md`) is an RDS fix**, not a nice-to-have — one
+control, two opposite failures. And BER gives it a real objective to hill-climb on instead of
+a spectral heuristic.

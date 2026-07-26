@@ -1208,6 +1208,7 @@ struct LocalSdrShim::Impl {
     int rdsPi = -1;
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
     int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
+    float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
     std::atomic<bool> stereoDetected{false};
     // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
@@ -1564,6 +1565,10 @@ struct LocalSdrShim::Impl {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPi = (int)pi;
     }
+    static void rdsSigCb(void* ctx, float relDb) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsSig = relDb;
+    }
     static void rdsBerCb(void* ctx, int percent) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsBer = percent;
@@ -1825,7 +1830,7 @@ struct LocalSdrShim::Impl {
     // just resets the derived UI state; the engine retains no audio across modes.
     void teardownAudio() {
         std::lock_guard<std::mutex> lk(rdsMtx);
-        rdsPsName.clear(); rdsText.clear(); rdsPi = -1; rdsEcc = 0; rdsBer = -1;
+        rdsPsName.clear(); rdsText.clear(); rdsPi = -1; rdsEcc = 0; rdsBer = -1; rdsSig = -99.0f;
         stereoDetected.store(false);
     }
 
@@ -1873,6 +1878,7 @@ struct LocalSdrShim::Impl {
         cb.rdsPs    = &Impl::rdsPsCb;
         cb.rdsPi    = &Impl::rdsPiCb;
         cb.rdsBer   = &Impl::rdsBerCb;
+        cb.rdsSig   = &Impl::rdsSigCb;
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
@@ -1890,11 +1896,11 @@ struct LocalSdrShim::Impl {
         return o;
     }
     void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
-        std::string ps, rt; int pi = -1, ecc = 0, ber = -1;
+        std::string ps, rt; int pi = -1, ecc = 0, ber = -1; float sig = -99.0f;
         bool wfm = (mode == "wfm");
         if (wfm) {
             std::lock_guard<std::mutex> lk(rdsMtx);
-            ps = rdsPsName; rt = rdsText; pi = rdsPi; ecc = rdsEcc; ber = rdsBer;
+            ps = rdsPsName; rt = rdsText; pi = rdsPi; ecc = rdsEcc; ber = rdsBer; sig = rdsSig;
         }
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
@@ -1911,16 +1917,18 @@ struct LocalSdrShim::Impl {
         // The client must not re-trigger its marquee on a BER-only change (it keys that off
         // ps/rt), so this is safe to send at the 1 Hz metadata cadence.
         if (ps == lastSentPs_ && rt == lastSentRt_ && pi == lastSentPi_ && ecc == lastSentEcc_
-            && st == lastSentStereo_ && ber == lastSentBer_) return;
+            && st == lastSentStereo_ && ber == lastSentBer_
+            && std::fabs(sig - lastSentSig_) < 0.5f) return;
         lastSentPs_ = ps; lastSentRt_ = rt; lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st;
-        lastSentBer_ = ber;
+        lastSentBer_ = ber; lastSentSig_ = sig;
         char buf[512];
         snprintf(buf, sizeof buf,
-            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d}",
+            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d,\"sig\":%.1f}",
             st ? "true" : "false",
-            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber);
+            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig);
         sendText(sock, buf);
     }
+    float lastSentSig_ = -999.0f;
     int lastSentBer_ = -2;   // -2 = never sent (distinct from -1 = decoder has no window)
     // Last RDS values pushed to the client (change-detect to avoid marquee re-trigger).
     std::string lastSentPs_, lastSentRt_; int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;

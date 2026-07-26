@@ -504,6 +504,28 @@ public:
      *  a completely different fault from a high error rate, and the two were indistinguishable
      *  from outside until this existed. */
     int blockErrorPercent() const;
+    /** ★★ RMS of the recovered 57 kHz baseband, relative to the pilot's own lock
+     *  amplitude, in dB. THE decisive measurement: it separates "the subcarrier is not
+     *  reaching us" from "it is reaching us and we are wasting it" — opposite faults with
+     *  opposite fixes, and every other reading we have looks identical for both.
+     *  RDS is injected at ~2-4% of MPX deviation against the pilot's ~8-10%, so a healthy
+     *  station should land very roughly -6 to -12 dB below the pilot. Far below that means
+     *  the subcarrier is being lost UPSTREAM — channel filter, deviation, or the 8-bit
+     *  dongle's quantisation floor, which is a real candidate: at 2-4% injection the RDS
+     *  subcarrier sits ~30 dB down, and an 8-bit ADC only gives ~48 dB of range, so the
+     *  audio can sound perfect while RDS drowns in quantisation noise (2026-07-26). */
+    float subcarrierRelDb() const;
+    /** Pilot amplitude at the same instant, so the ratio means something. */
+    void setPilotRef(float amp) { pilotRef_ = amp; }
+    /** ★★ RECENT SYMBOL POINTS — the RDS constellation, as every serious FM receiver
+     *  displays it. Each decoded symbol already produces a complex value in the
+     *  differential detector; we simply kept throwing them away. Two tight clusters means
+     *  a healthy subcarrier, a diffuse cloud means it is buried in noise — which is the
+     *  distinction that took an entire evening and three separate instruments to establish
+     *  on 2026-07-26, and which this shows at a glance.
+     *  Copies up to `maxPts` normalised x,y pairs; returns how many were written. */
+    int constellation(float* xy, int maxPts) const;
+    static constexpr int kConstPts = 64;
 private:
     std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
@@ -571,6 +593,13 @@ private:
     bool  started_ = false;
     RdsDecoder dec_[NPH];
     std::vector<float> xI_, xQ_, sI_, sQ_;
+    float rdsRms_ = 0.0f;              // smoothed |baseband|, for subcarrierRelDb()
+    // Constellation ring — written by whichever hypothesis is currently winning, so the
+    // plot shows what the DECODER is actually working with rather than an also-ran.
+    float constXY_[kConstPts * 2] = {0};
+    int   constHead_ = 0;
+    int   constBest_ = -1;             // refreshed once per process(), not per sample
+    float pilotRef_ = 0.0f;            // pilot lock amplitude at the same instant
 };
 
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
@@ -604,6 +633,8 @@ public:
         void (*rdsPi)(void* ctx, uint16_t pi) = nullptr;
         // Optional: RDS block error rate, 0-100 (-1 = not enough data yet).
         void (*rdsBer)(void* ctx, int percent) = nullptr;
+        /** Recovered 57 kHz level relative to the pilot, dB. See subcarrierRelDb(). */
+        void (*rdsSig)(void* ctx, float relDb) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
     };

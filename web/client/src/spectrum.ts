@@ -58,6 +58,8 @@ export interface RdsMeta {
   ecc: number;
   /** Block error rate %, -1 = the decoder has not seen a full window yet. */
   ber: number;
+  /** Recovered 57 kHz level relative to the pilot, dB (-99 = nothing). */
+  sig: number;
 }
 
 export interface SpectrumCallbacks {
@@ -243,6 +245,7 @@ export class SpectrumClient {
           stereo: !!msg.stereo, ps: msg.ps ?? '', radiotext: msg.radiotext ?? '',
           pi: msg.pi ?? -1, ecc: msg.ecc ?? 0,
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
+          sig: typeof msg.sig === 'number' ? msg.sig : -99,
         });
         break;
       case 'pong':

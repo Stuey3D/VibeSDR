@@ -311,7 +311,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // Only generate the 57 kHz reference and bit clock when something is
             // actually listening for RDS — that is a third of the PLL's per-sample
             // work, and with no subscriber it was being computed and thrown away.
-            const bool wantRds = (cb_.rdsPs || cb_.rdsText || cb_.rdsPi);
+            const bool wantRds = (cb_.rdsPs || cb_.rdsText || cb_.rdsPi || cb_.rdsSig);
             lprBuf_.assign(demodBuf_.begin(), demodBuf_.begin() + nc);   // L+R = MPX
             lmrBuf_.resize(nc);
             if (wantRds) { ref57Buf_.resize(nc); ref57qBuf_.resize(nc); bitClkBuf_.resize(nc); }
@@ -320,8 +320,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
                               wantRds ? ref57qBuf_.data() : nullptr,
                               wantRds ? bitClkBuf_.data() : nullptr);
             // RDS (only meaningful once the pilot is locked).
+            rdsDemod_.setPilotRef(pll_.lockAmp());
             if (wantRds && cb_.rdsBer)
                 cb_.rdsBer(cb_.ctx, pll_.trackable() ? rdsDemod_.blockErrorPercent() : -1);
+            if (wantRds && cb_.rdsSig)
+                cb_.rdsSig(cb_.ctx, rdsDemod_.subcarrierRelDb());
             if (wantRds && pll_.trackable())
                 rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), ref57qBuf_.data(),
                                   bitClkBuf_.data(), nc);
