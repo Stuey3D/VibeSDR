@@ -902,6 +902,16 @@ struct LocalSdrShim::Impl {
     // END, not by our decoder, so this is how that gets tested rather than argued about.
     std::unique_ptr<vibe::SdrplaySource> sdrp;
     int  sdrpIndex = 0;
+    // ★★ One-shot AGC kick, once the stream is genuinely running. Cycling it inside open()
+    // — immediately after Init, before any samples have flowed — still left it inert, so
+    // the transition evidently has to happen against a LIVE stream rather than a device
+    // that has merely been initialised. Stuart's suggestion, and it is the same sequence a
+    // user performs by hand, just done for them a second in (2026-07-26).
+    int  sdrpAgcKick = 0;
+    // ★ What the USER wants, which the kick must respect. Somebody deliberately running
+    // manual gain would otherwise have the AGC switched back on for them a second after
+    // connecting — a fix for one person's problem becoming another's bug (Stuart).
+    bool sdrpAgcWanted = true;
     bool useSdrplay() const { return (bool)sdrp; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
@@ -1405,6 +1415,12 @@ struct LocalSdrShim::Impl {
             // ★ 5 Hz, not 1. The IF slider follows the AGC live, and a thumb that jumps once
             // a second reads as broken rather than as tracking. A ~90 byte message at 5 Hz is
             // nothing next to the spectrum.
+            // ★ ~1 s after the stream starts, cycle the AGC once. Off, then on: the API only
+            // starts the loop on a TRANSITION, and assignment before Init is not one.
+            if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 2 && n > 10) {
+                if (++sdrpAgcKick == 1) sdrp->setIfAgc(false);
+                else                    sdrp->setIfAgc(true);
+            }
             if (n % 2 == 0 && useSdrplay()) {
                 char gb[160];
                 snprintf(gb, sizeof gb,
@@ -4364,7 +4380,14 @@ std::string LocalSdrShim::radioCapsJson() const {
 
 void LocalSdrShim::setLnaState(int v)       { if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
 void LocalSdrShim::setIfGainReduction(int v){ if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
-void LocalSdrShim::setIfAgc(bool v)         { if (p && p->useSdrplay()) p->sdrp->setIfAgc(v); }
+void LocalSdrShim::setIfAgc(bool v) {
+    if (!p || !p->useSdrplay()) return;
+    // Remember the choice, and cancel any pending kick — the user has just told us
+    // directly, which outranks our start-up workaround.
+    p->sdrpAgcWanted = v;
+    p->sdrpAgcKick = 2;
+    p->sdrp->setIfAgc(v);
+}
 void LocalSdrShim::setIfAgcSetPoint(int v)  { if (p && p->useSdrplay()) p->sdrp->setIfAgcSetPoint(v); }
 void LocalSdrShim::setIfAgcDynamics(int a, int d, int dd, int th) {
     if (p && p->useSdrplay()) p->sdrp->setIfAgcDynamics(a, d, dd, th);
