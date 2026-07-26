@@ -28,6 +28,7 @@ import {
   Text,
   TouchableOpacity,
   View, ViewStyle,} from 'react-native';
+import { useRegionHandback, NAV_FOCUS } from './PanelNav';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
 import {
@@ -62,6 +63,7 @@ function ControlSlot({ report, style, children }: {
       if (w > 0 && h > 0) report?.({ x, y, w, h });
     });
   }, [report]);
+
   return (
     <View ref={ref} style={style} onLayout={measure} collapsable={false}>
       {children}
@@ -644,11 +646,31 @@ function useDrumSwipeGuard() {
   return { ref, onLayout };
 }
 
+/**
+ * The handback flash, shared by the portrait and landscape bars.
+ *
+ * ★ Stuart: when focus moves from the decoder box back to tune/zoom, the drums or keys should
+ * flash too. The decoder box's departure flash says "leaving"; without this nothing says
+ * "arriving here", and on a TV across the room the controls that just became live are exactly
+ * what you need to find.
+ */
+function useHandbackFlash() {
+  const handback = useRegionHandback();
+  const value = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!handback) return;                    // not on mount, only on a real handback
+    value.setValue(1);
+    Animated.timing(value, { toValue: 0, duration: 450, useNativeDriver: true }).start();
+  }, [handback, value]);
+  return value;
+}
+
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   onControlRects }: any) {
+  const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -802,6 +824,18 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
             pointerEvents={readOnly ? 'none' : 'auto'}
             style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
+        {/* ★ HANDBACK FLASH. When the decoder box gives the keyboard back, the controls that
+            just became live announce themselves — the same arrival/departure idea, applied to
+            the other end of the move. Drawn as a glow OVER the row rather than inside the two
+            controls, so it works for the drums and the keys without either knowing about it.
+            pointerEvents none: a signal, never a target. */}
+        <Animated.View pointerEvents="none"
+          style={{
+            position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
+            borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
+            backgroundColor: 'rgba(124,255,155,0.10)',
+            opacity: handbackFlash, zIndex: 3,
+          }} />
         <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ vfo: r })}>
           {vfoKeys
             ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} />
@@ -1019,6 +1053,15 @@ function ControlsBar({
   vfoSweepRate,
   onControlRects,
 }: ControlsBarProps) {
+  // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
+  const handback = useRegionHandback();
+  const handbackFlash = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!handback) return;                       // not on first mount, only on a real handback
+    handbackFlash.setValue(1);
+    Animated.timing(handbackFlash, { toValue: 0, duration: 450, useNativeDriver: true }).start();
+  }, [handback, handbackFlash]);
+
   const { theme: t } = useTheme();
   const s = useUiScale();
 

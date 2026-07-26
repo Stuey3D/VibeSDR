@@ -234,8 +234,31 @@ export const NAV_REPEAT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight
 // tune. When the keyboard is handed to the box (Tab), the main screen has to stop acting on
 // keys entirely, or up and down would retune the radio underneath the list being read.
 let region: string | null = null;
+const regionListeners = new Set<(r: string | null) => void>();
 export const regionCaptured = () => region !== null;
-export function captureRegion(name: string | null) { region = name; }
+export function captureRegion(name: string | null) {
+  if (region === name) return;
+  region = name;
+  regionListeners.forEach(f => f(region));
+}
+
+/**
+ * A token that increments whenever a captured region HANDS THE KEYBOARD BACK.
+ *
+ * ★ Stuart: when focus moves from the decoder box back to tune/zoom, the drums or keys should
+ * flash too. The departure flash says "leaving"; without this nothing says "arriving here",
+ * and on a TV across the room the controls that just became live are the thing you need to
+ * find. An announcement of arrival is only half an answer if only one end announces.
+ */
+export function useRegionHandback(): number {
+  const [tok, setTok] = useState(0);
+  useEffect(() => {
+    const f = (r: string | null) => { if (r === null) setTok(t => t + 1); };
+    regionListeners.add(f);
+    return () => { regionListeners.delete(f); };
+  }, []);
+  return tok;
+}
 
 // ── Owner stack ──────────────────────────────────────────────────────────────
 const owners: object[] = [];
