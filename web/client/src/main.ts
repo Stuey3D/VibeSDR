@@ -2678,7 +2678,13 @@ function renderRds() {
       parts.push(`${name} ${Math.round((grp[i] / tot) * 100)}%`);
     }
     parts.sort((a, b) => parseInt(b.split(' ')[1]) - parseInt(a.split(' ')[1]));
-    $('rxGroups').textContent = parts.join('  ') || dash;
+    // ★ SAY WHAT THE PERCENTAGES ARE OF. There are two percentage figures on this panel —
+    // this one and the block ERROR RATE — and a bare "0A 40%" gives no clue which kind it is.
+    // Stating the denominator makes the row explain itself: 40% OF 504 GROUPS were type 0A
+    // (Stuart, 2026-07-27).
+    $('rxGroups').textContent = parts.length
+      ? `of ${tot} groups: ${parts.join('  ')}`
+      : dash;
     // ★ Rate from SUCCESSIVE DELTAS, not total-over-elapsed. gtot accumulates from when the
     // DECODER started; the panel opens later, so dividing one by the other reported 113/s
     // against a theoretical maximum of 11.4 (Stuart, 2026-07-26). ★ Two clocks with
@@ -2756,9 +2762,13 @@ function constellationVerdict(xy: number[]): { text: string; cls: string } {
   // decoding flawlessly. Say what it actually is instead of libelling it as noise.
   if (rdsExt && (rdsExt.phaseCoh ?? 0) < 0.35 && rdsBer >= 0 && rdsBer < 20)
     return { text: 'rotating — unlocked encoder', cls: 'ok' };
-  if (evm < 45)  return { text: `clean · ${evm.toFixed(0)}% EVM`, cls: 'good' };
-  if (evm < 80)  return { text: `usable · ${evm.toFixed(0)}% EVM`, cls: 'ok' };
-  return { text: `noisy · ${evm.toFixed(0)}% EVM`, cls: 'bad' };
+  // ★ "SCATTER", not "EVM". Error Vector Magnitude is the correct term and what an engineer
+  // expects — but it means nothing to someone new to this, and the whole panel is written to
+  // explain itself rather than assume. The proper name lives in the tooltip, so a DXer
+  // comparing against other equipment can still find it (Stuart, 2026-07-27).
+  if (evm < 45)  return { text: `clean · ${evm.toFixed(0)}% scatter`, cls: 'good' };
+  if (evm < 80)  return { text: `usable · ${evm.toFixed(0)}% scatter`, cls: 'ok' };
+  return { text: `noisy · ${evm.toFixed(0)}% scatter`, cls: 'bad' };
 }
 
 /** ★ The symbol trace — the "two lines" read. Symbol value against time: two clean bands
@@ -2857,6 +2867,8 @@ function drawConstellation() {
   const v = constellationVerdict(xy);
   vEl.textContent = v.text;
   vEl.className = v.cls;
+  vEl.title = 'How far the received symbols land from where they should — lower is tighter. '
+            + 'Known technically as EVM (error vector magnitude).';
   if (!xy.length) return;
   // Points arrive as signed bytes scaled x100; the DSP already normalised by the running
   // RMS, so the SCALE is stable and only the SHAPE changes — which is the part that means
