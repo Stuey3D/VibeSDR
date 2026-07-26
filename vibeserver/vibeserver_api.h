@@ -31,6 +31,9 @@ typedef struct {
     double lockedRate;     // 0 = client may change the capture rate
     bool   serveWebClient; // serve the browser client at GET /
     bool   forceIdleSaver; // listeners may NOT switch off idle power-saving (solar/cellular hosts)
+    // Serve RAW audio to a client that cannot decode Opus? ~187 KB/s each, ~20x
+    // the compressed stream, out of the OWNER's uplink. Default (zero-init) = false.
+    bool   allowUncompressedAudio;
 } VsConfig;
 
 /** Live status for a status view. Deliberately the same numbers the CLI prints. */

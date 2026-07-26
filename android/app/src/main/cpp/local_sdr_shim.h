@@ -59,6 +59,9 @@ public:
     // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
     // that hits a decode issue can ask the server to fall back to raw int16 PCM.
     static void setVibeServerCompressAudio(bool on);
+    /// Owner policy: may a client that cannot decode Opus be served RAW audio
+    /// (~187 KB/s of the owner's uplink each)? Default OFF.
+    static void setVibeServerAllowUncompressedAudio(bool on);
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */

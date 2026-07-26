@@ -727,6 +727,26 @@ static void bmSaveLocked() {
 static std::mutex  g_locMtx;
 static std::string g_locJson;
 static std::atomic<bool>   g_vsCompressAudio{true};
+// ★★ May a client have RAW audio if it does not ask for Opus?
+//
+// Uncompressed is 48 kHz x 2 ch x 2 B = ~187 KB/s PER LISTENER, ~20x the Opus
+// stream, and it is the OWNER'S uplink it spends — the shack at the allotment on
+// a flaky link is exactly who cannot afford a visitor demanding it. So the
+// operator gets to refuse it, in the same spirit as the max rate/fps ceiling.
+//
+// ★ PERMANENT, and OFF BY DEFAULT — the same shape OWRX offers (Stuart's call).
+// An operator control that other SDR servers already provide is a familiar
+// affordance in a familiar place; keeping it costs nothing, and removing it
+// later would surprise anyone who had come to rely on it.
+//
+// ★ DEFAULTS TO FALSE. The compatibility worry turned out to be almost empty:
+// VibeServer debuted in v8, so App Store 6.1 cannot see a VibeServer at all, and
+// the ONLY client that opens /ws/audio without a `codec` parameter is TestFlight
+// 9.0.1 — the build this release replaces. So the cost of defaulting off is one
+// superseded TestFlight build, against every visitor otherwise silently spending
+// ~187 KB/s of the owner's uplink.
+static std::atomic<bool>   g_vsAllowUncompressedAudio{false};
+
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
 static std::atomic<int>    g_vsOpusBitrate{64000};
@@ -1967,11 +1987,31 @@ struct LocalSdrShim::Impl {
     // headless core), no effect on audio. Capped so the crop keeps >= 16 bins.
     void setSpan(double binBw) {
         if (binBw <= 0) return;
-        // The client sees OUT_BINS bins, so its requested span = binBw*OUT_BINS;
-        // zoom = full span / requested span. (Using fftSize here made the reported
-        // span 8x too wide → zoom snapped straight back out / wouldn't go deep.)
-        double want = sampleRate / (binBw * (double)OUT_BINS);
-        double maxZoom = (double)fftSize / 16.0;
+        // ★★ THE CLIENT'S OWN BIN COUNT, not the constant. The client derives its
+        // requested span as binBw x (the bins IT receives), which sendConfig()
+        // computes from g_vsOutBins — so interpreting it here with the fixed
+        // OUT_BINS is only correct while the client happens to take all 4096.
+        // The moment a client asks for fewer (the phone at 1024, Jr at 128) the
+        // two disagree by exactly that ratio and every zoom lands 4x — or 32x —
+        // off, which reads as erratic zoom and a waterfall that keeps rescaling.
+        //
+        // ★ It agreed by accident for years because only Jr used the bins lever
+        // and its zoom is driven differently. Both sides must use the SAME bin
+        // count: the one actually being sent.
+        double want = sampleRate / (binBw * (double)g_vsOutBins.load());
+        // ★★ ZOOM IS CAPPED BY REAL RESOLUTION, not by an arbitrary fraction.
+        // The old /16 left just 16 SOURCE bins spread across ~1024 output bins —
+        // a ~9 kHz span on a 2.4 MHz capture, which is 64x interpolation and
+        // renders as mush (Stuart, 2026-07-26: "pretty useless"). Zooming past
+        // the point where the FFT has bins to show is magnifying nothing.
+        //
+        // /64 keeps at least 64 source bins on screen (~37 kHz span at 2.4 MHz,
+        // ~586 Hz/bin) — still far inside an FM channel, and everything shown is
+        // measured rather than interpolated.
+        //
+        // ★ To zoom DEEPER honestly, raise fftSize; do not raise this. Resolution
+        // is a property of the FFT, and no cap can invent it.
+        double maxZoom = (double)fftSize / 64.0;
         if (want < 1.0) want = 1.0;
         if (want > maxZoom) want = maxZoom;
         zoomFactor.store(want);
@@ -2022,7 +2062,7 @@ struct LocalSdrShim::Impl {
                 viewCenter.store(v);
                 double bb = 0.0;
                 double viewSpan = jsonNum(msg, "binBandwidth", bb) && bb > 0
-                    ? bb * (double)OUT_BINS
+                    ? bb * (double)g_vsOutBins.load()   // same reason as setSpan()
                     : displaySpan() / zoomFactor.load();
                 double dongle = dongleForView(v, viewSpan);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
@@ -2295,31 +2335,81 @@ struct LocalSdrShim::Impl {
             // FFT/bin lever: a spectrum client may ask for fewer output bins (?bins=N) to shrink each
             // SPEC frame — the watch, ~200 px wide over Bluetooth, needs far fewer than the web's full
             // res. No param → full res (OUT_BINS), so the web client is unaffected. Clamp [128, OUT_BINS].
+            // ★★ DO NOT APPLY IT HERE. This runs on the HTTP upgrade, BEFORE the
+            // occupancy check — so a client that is about to be refused
+            // {"type":"busy"} was still rewriting the bin count out from under
+            // the CLIENT ALREADY STREAMING. Jr asks for 128; the incumbent phone,
+            // which sends no param and expects the full 4096, went blocky
+            // mid-session because somebody else merely TRIED to connect.
+            //
+            // A refused client must change nothing about the server. Resolve the
+            // value here, apply it inside acceptWs once the slot is actually won.
+            //
+            // ★ Still a GLOBAL, and that is the deeper flaw: bins are per-client
+            // state living in one variable, which only holds while exactly one
+            // client streams. Real multi-client has to make this per-connection.
+            int wantBins = 0;
             if (wsSpec) {
                 const std::string bq = queryParam(reqLine, "bins");
-                int b = bq.empty() ? OUT_BINS : atoi(bq.c_str());
-                if (b < 128) b = 128; else if (b > OUT_BINS) b = OUT_BINS;
-                g_vsOutBins.store(b);
+                wantBins = bq.empty() ? OUT_BINS : atoi(bq.c_str());
+                if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
             }
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
                      queryParam(reqLine, "codec") == "opus",
-                     queryParam(reqLine, "channels") == "1");
+                     queryParam(reqLine, "channels") == "1", wantBins);
         } else if (reqLine.find("/connection") != std::string::npos) {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
             // instead of the client opening a socket only to be refused with type:"busy". A
             // loopback caller (the host's own browser) is never told it is busy — it IS the
             // occupant or is about to become one.
+            // ★★ ASK WHO IS CALLING. acceptWs() lets the occupant back in
+            // (`occupantSession != me`), but this preflight compared against
+            // NOBODY — so a client whose own audio socket already held the slot
+            // was told its own server was in use, and its spectrum never opened.
+            // Audio playing while the app reports "in use" is the signature.
+            //
+            // ★ The id must come from the QUERY STRING: only the request line is
+            // available here, so an id sent in the POST body cannot be seen. Old
+            // clients send nothing, and fall back to the previous behaviour.
+            const std::string me = queryParam(reqLine, "user_session_id");
             bool busy;
             { std::lock_guard<std::mutex> lk(clientMtx);
               busy = !occupantSession.empty()
+                     && (me.empty() || occupantSession != me)
                      && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen())); }
+            // Loopback exemption retained for the host's own browser, which is
+            // the occupant or about to become one. It was also masking the bug
+            // above, which is why only NETWORK clients ever saw it.
             if (busy && isLoopback(sock->peerAddress())) busy = false;
             std::string body = busy
                 ? "{\"allowed\":false,\"reason\":\"in-use\"}"
                 : "{\"allowed\":true}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /vibeserver.json", 0) == 0) {
+            // ★★ POSITIVE IDENTITY. detectServerType() used to sniff the landing
+            // page for the substring "vibeserver" — but serving that page is
+            // OPTIONAL (--no-web / webServer:false), and with it off `GET /`
+            // returns a page saying only "VibeSDR", the CLIENT's name. The
+            // detector must never match "vibesdr" (that is what mis-typed real
+            // UberSDR servers as VibeServer in v8.0.0), so a web-disabled
+            // VibeServer fell through to the `return 'ubersdr'` default EVERY
+            // TIME. This is the one protocol we own both ends of, so it should
+            // never be guessed at from prose.
+            //
+            // Deliberately OUTSIDE the g_vsWebEnabled gate: identity is not part
+            // of the web client, and gating it would reintroduce the same bug.
+            bool pinOn;
+            { std::lock_guard<std::mutex> lk(g_vsMtx); pinOn = !g_vsSecret.empty(); }
+            std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
+                             + (pinOn ? "true" : "false") + ",\"web\":"
+                             + (g_vsWebEnabled.load() ? "true" : "false") + "}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /location", 0) == 0) {
@@ -2485,7 +2575,8 @@ struct LocalSdrShim::Impl {
     }
 
     void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
-                  const std::string& session, bool wantsOpus, bool forceMono = false) {
+                  const std::string& session, bool wantsOpus, bool forceMono = false,
+                  int wantBins = 0) {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -2523,6 +2614,39 @@ struct LocalSdrShim::Impl {
             }
             occupantSession = me;   // claim (or re-affirm) the slot for this client
         }
+
+        // ★ A client that cannot take Opus, on a server that does not allow raw,
+        // is turned away HERE with a reason rather than being handed a stream it
+        // cannot decode (silence) or one the owner cannot afford (187 KB/s).
+        // Loopback is exempt: the host's own browser costs no uplink.
+        if (isAudio && !wantsOpus && !g_vsAllowUncompressedAudio.load()
+            && !isLoopback(sock->peerAddress())) {
+            LOGI("audio WS refused — uncompressed audio not allowed by the owner");
+            static const char* kMsg = "{\"type\":\"needs_codec\",\"codec\":\"opus\"}";
+            sendWs(sock, 0x1, (const uint8_t*)kMsg, strlen(kMsg));
+            sock->close();
+            return;
+        }
+
+        // Slot won — NOW it is safe to adopt this client's bin count. Before the
+        // occupancy check, a refused client corrupted the incumbent's stream.
+        if (wantBins > 0) g_vsOutBins.store(wantBins);
+
+        // ★★ RESET PER-CLIENT RATE STATE ON ARRIVAL. `rateDivisor` is a global
+        // that OUTLIVES the client that set it — nothing cleared it on connect or
+        // disconnect. So a divisor left behind by a previous session silently
+        // multiplied the next client's rate:
+        //
+        //     new client asks fftRate 2  ×  leftover divisor 3  =  0.67 fps
+        //
+        // It stayed hidden while every client also SENT a divisor (each one
+        // overwrote the last). The moment a client expressed its rate purely as
+        // fftRate instead, the stale value had nothing to overwrite it and the
+        // stream ran at a third of the requested rate for no visible reason.
+        //
+        // ★ A fresh session must start from a known state, not inherit the last
+        // one's. Same flaw as the bins global directly above.
+        if (!isAudio) rateDivisor.store(1);
 
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
         // (guarded by captureIdle), so whichever of the two sockets lands first does it. Only starts a
@@ -3172,6 +3296,7 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
+void LocalSdrShim::setVibeServerAllowUncompressedAudio(bool on) { g_vsAllowUncompressedAudio.store(on); }
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }

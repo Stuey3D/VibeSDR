@@ -30,6 +30,9 @@ final class Server: ObservableObject {
     @AppStorage("pin")      var pin        = ""
     @AppStorage("port")     var wantedPort = 0        // 0 = first free 48000-48049
     @AppStorage("serveWeb") var serveWeb   = true
+    /// Owner policy — see the Settings toggle for the reasoning. Off by default:
+    /// uncompressed audio is ~187 KB/s per listener out of THIS machine's uplink.
+    @AppStorage("allowUncompressedAudio") var allowUncompressed = false
     /// Advertise on the LAN via Bonjour so clients auto-discover us. Off = reachable only by typing
     /// the address (a privacy choice — don't announce the radio to everyone on the network).
     @AppStorage("advertise") var advertise = true
@@ -141,6 +144,7 @@ final class Server: ObservableObject {
         cfg.centreHz = centreHz
         cfg.port     = Int32(wantedPort)
         cfg.serveWebClient = serveWeb
+        cfg.allowUncompressedAudio = allowUncompressed
         cfg.maxFftRate     = maxFps
         cfg.maxBandwidthHz = maxBwHz
         cfg.lockedRate     = lockedRate
@@ -639,6 +643,19 @@ struct SettingsView: View {
                 Text("Network listeners must enter this. This Mac never has to.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
+                Toggle("Allow uncompressed audio (compatibility)", isOn: $server.allowUncompressed)
+                Text("Off, listeners use the compressed audio stream — around 10 KB/s each. On, a "
+                   + "client that cannot decode it gets raw audio instead: roughly 187 KB/s per "
+                   + "listener out of YOUR connection, some twenty times more for no gain in "
+                   + "quality.\n\n"
+                   + "Everything that connects to VibeServer today decodes the compressed stream — "
+                   + "VibeSDR 10 and later, VibeSDR Jr, and the browser client. So there is really "
+                   + "only one reason to switch this on: ANY VibeSDR BEFORE VERSION 10 NEEDS IT. "
+                   + "(A pre-2017 browser would too — Safari 11 was the last major browser to add "
+                   + "Opus — but nothing that old can run the client anyway.)\n\n"
+                   + "Leave it off unless someone tells you they have no audio, especially if your "
+                   + "uplink is modest.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Advertise on the network", isOn: Binding(
                     get: { server.advertise },
                     set: { server.advertise = $0; server.applyAdvertise() }))

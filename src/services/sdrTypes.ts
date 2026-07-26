@@ -66,6 +66,23 @@ export async function detectServerType(url: string): Promise<BackendType | null>
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
+    // ★★ ASK, DON'T SNIFF — VibeServer is the one protocol we own both ends of,
+    // so it identifies itself instead of being guessed at from page prose.
+    //
+    // The sniff below cannot see a VibeServer whose host turned the web client
+    // off (--no-web / webServer:false): `GET /` then returns a page saying only
+    // "VibeSDR", the CLIENT's name, and matching "vibesdr" is exactly what
+    // mis-typed genuine UberSDR servers in v8.0.0 — so it fell through to the
+    // ubersdr default every single time. /vibeserver.json is served regardless
+    // of that toggle.
+    try {
+      const idr = await fetch(base + '/vibeserver.json', { signal: ctrl.signal });
+      if (idr.ok) {
+        const id = await idr.json();
+        if (id && id.server === 'vibeserver') return 'vibeserver';
+      }
+    } catch { /* not a VibeServer, or older than this endpoint — fall through */ }
+
     const r = await fetch(base + '/', { signal: ctrl.signal });
     const body = (await r.text()).toLowerCase();
     // ORDER MATTERS, and every rule here exists because a later backend's page

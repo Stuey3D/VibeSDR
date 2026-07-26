@@ -45,36 +45,81 @@ const srv = net.createServer((sock) => {
   hdr.writeUInt32BE(29, 8);
   sock.write(hdr);
 
-  let phase = 0;                    // carrier phases advance continuously across chunks…
-  const aphase = STATIONS.map(() => 0);   // …and so do the audio ones, or you hear a click per chunk
   let stopped = false;
 
-  // ~50 ms of IQ per tick keeps latency low without waking the CPU constantly.
+  // ── Pacing ────────────────────────────────────────────────────────────────
+  // ★ DEADLINE-BASED, not sleep-based. The original did `generate 50ms of IQ`
+  // then `setTimeout(tick, 50)`, so every cycle took generation + 50ms and the
+  // stream delivered only ~46% of the advertised rate (measured: 1.11 of 2.4
+  // MS/s). That silently halves the DSP's frame rate via
+  // (effective_source / sampleRate) * fps — which makes this source USELESS as a
+  // bench for anything rate-related, and looks exactly like a server or link
+  // fault. Sleep until the NEXT DUE TIME instead, so generation cost is absorbed.
+  const CHUNK_MS = 50;
+  let nextDue = Date.now();
+
+  // ── Signal generation ─────────────────────────────────────────────────────
+  // ★ TRIG-FREE INNER LOOP. Sustaining 2.4 MS/s means ~2.4M iterations/second;
+  // two Math.cos/Math.sin per station per sample could not keep up, which is the
+  // other half of the shortfall. Each carrier is a unit complex number advanced
+  // by a fixed rotation (one complex multiply), which is the standard cheap
+  // oscillator and is exact enough for a synthetic bench.
+  let rate = 0, osc = [], aosc = [];
+  const retune = () => {
+    rate = RATE;
+    osc  = STATIONS.map((st) => {
+      const w = (2 * Math.PI * st.offset) / rate;
+      return { re: 1, im: 0, cw: Math.cos(w), sw: Math.sin(w) };
+    });
+    aosc = STATIONS.map((st) => {
+      const w = (2 * Math.PI * st.audioHz) / rate;
+      return { re: 1, im: 0, cw: Math.cos(w), sw: Math.sin(w) };
+    });
+  };
+  const advance = (o) => {
+    const re = o.re * o.cw - o.im * o.sw;
+    o.im = o.re * o.sw + o.im * o.cw;
+    o.re = re;
+  };
+  // Repeated complex multiplies drift off the unit circle; a cheap first-order
+  // renormalise each chunk keeps amplitude constant without a sqrt per sample.
+  const renorm = (o) => {
+    const m = 1.5 - 0.5 * (o.re * o.re + o.im * o.im);
+    o.re *= m; o.im *= m;
+  };
+
   const tick = () => {
     if (stopped || sock.destroyed) return;
-    const n = Math.max(1024, Math.round(RATE * 0.05));
+    if (rate !== RATE) retune();
+    const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
     for (let i = 0; i < n; i++) {
-      // Noise floor. Two uniforms summed is a cheap, adequate stand-in for Gaussian here.
       let re = (Math.random() + Math.random() - 1) * 0.06;
       let im = (Math.random() + Math.random() - 1) * 0.06;
       for (let s = 0; s < STATIONS.length; s++) {
-        const st = STATIONS[s];
-        aphase[s] += (2 * Math.PI * st.audioHz) / RATE;
-        const env = st.amplitude * (0.6 + 0.4 * Math.sin(aphase[s]));   // AM, ~40% depth
-        const ph = phase * st.offset;
-        re += env * Math.cos(ph);
-        im += env * Math.sin(ph);
+        const a = aosc[s], c = osc[s];
+        const env = STATIONS[s].amplitude * (0.6 + 0.4 * a.im);   // AM, ~40% depth
+        re += env * c.re;
+        im += env * c.im;
+        advance(a); advance(c);
       }
-      phase += (2 * Math.PI) / RATE;
-      // u8 IQ, 127.5 centred — clamp so a loud moment wraps like a real ADC clips, not like a bug.
       buf[i * 2]     = Math.max(0, Math.min(255, Math.round(127.5 + re * 127)));
       buf[i * 2 + 1] = Math.max(0, Math.min(255, Math.round(127.5 + im * 127)));
     }
+    for (const o of osc)  renorm(o);
+    for (const o of aosc) renorm(o);
+
+    nextDue += CHUNK_MS;
+    // If we fell badly behind (debugger, laptop sleep), give up on catching up
+    // rather than firing a burst of chunks — a flood is a different lie.
+    if (Date.now() - nextDue > 500) nextDue = Date.now();
+    const delay = Math.max(0, nextDue - Date.now());
+
     // Respect backpressure: if the consumer is slow, wait rather than buffering the world.
-    if (sock.write(buf)) setTimeout(tick, 50);
-    else sock.once('drain', () => setTimeout(tick, 5));
+    if (sock.write(buf)) setTimeout(tick, delay);
+    else sock.once('drain', () => { nextDue = Date.now(); setTimeout(tick, 0); });
   };
+  retune();
   setTimeout(tick, 10);
 
   // Commands: 5 bytes each. 0x01 = centre freq, 0x02 = sample rate.
