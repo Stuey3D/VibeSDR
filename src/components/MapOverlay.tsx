@@ -29,6 +29,7 @@
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { useRepeatingKeys } from './PanelNav';
 import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';

@@ -68,6 +68,10 @@ class VibeKeyWindow: UIWindow {
     // otherwise had no keyboard way back. Safe to claim because a focused text
     // field takes precedence — see `isTypingInTextField`.
     case .keyboardDeleteOrBackspace: return "Backspace"
+    // ★ Forward delete as well as backspace. A Mac keyboard has no forward-delete key at all,
+    // so anything that offers only one of the two is unusable on half the hardware — Stuart's
+    // point, and the reason both are mapped rather than one being picked as canonical.
+    case .keyboardDeleteForward: return "Delete"
     default:
       // Letters come through as their characters; ignore anything with modifiers so
       // system shortcuts (Cmd-Q and friends) are left entirely alone.
