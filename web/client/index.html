@@ -926,7 +926,8 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label title="Transmitter country, from the PI country code checked against the Extended Country Code">Country</label><span id="rxCountry">—</span></div>
         <div class="rdsF"><label title="Coverage area and reference number, decoded from the PI">PI detail</label><span id="rxPiDetail">—</span></div>
         <div class="rdsF"><label title="Groups decoded per second, and the total since tuning">Rate</label><span id="rxRate">—</span></div>
-        <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz">AF MHz</label><span id="rxAf">—</span></div>
+        <div class="rdsF"><label title="Confirmed alternative frequencies against how many have been glimpsed — below 100% means entries are arriving damaged">AF score</label><span id="rxAfScore">—</span></div>
+        <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz — tap to tune">AF MHz</label><span id="rxAf">—</span></div>
         <div class="rdsF rdsWide"><label title="Which RDS group types this transmitter sends, and how often">Groups</label><span id="rxGroups">—</span></div>
       </div>
       <!-- The constellation. Two tight clusters = healthy; a diffuse cloud = the subcarrier

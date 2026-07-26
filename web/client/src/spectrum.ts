@@ -67,7 +67,8 @@ export interface RdsExt {
   pty: number; tp: number; ta: number; ms: number; di: number;
   ct: number;            // minutes since UTC midnight, -1 = none
   ctoff: number;         // local offset, half-hours
-  af: number[];          // kHz
+  af: number[];          // kHz, CONFIRMED only
+  afseen: number;        // distinct frequencies glimpsed, confirmed or not
   grp: number[];         // 32 counters, gtype*2+version
   gtot: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
@@ -268,6 +269,7 @@ export class SpectrumClient {
           di: Number(msg.di ?? -1),
           ct: Number(msg.ct ?? -1), ctoff: Number(msg.ctoff ?? 0),
           af: Array.isArray(msg.af) ? msg.af : [],
+          afseen: Number(msg.afseen ?? 0),
           grp: Array.isArray(msg.grp) ? msg.grp : [],
           gtot: Number(msg.gtot ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],

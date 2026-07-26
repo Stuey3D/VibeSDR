@@ -34,6 +34,16 @@ typedef struct {
     // Serve RAW audio to a client that cannot decode Opus? ~187 KB/s each, ~20x
     // the compressed stream, out of the OWNER's uplink. Default (zero-init) = false.
     bool   allowUncompressedAudio;
+    /** ★ RECEIVER LOCATION as the JSON served at GET /location:
+     *    {"name":"…","iso":"GB","lat":52.24,"lon":-0.90,"label":"Northampton","grid":"IO92ng"}
+     *  NULL/"" = unknown, and everything that depends on it degrades honestly rather than
+     *  guessing. It is the SERVER's position, never the listener's: distances, map centring
+     *  and the ITU REGION (80m is 3.5-3.8 in R1 but 3.5-4.0 in R2) all follow the ANTENNA.
+     *  ★ It also decides the RDS country. The flag logic refuses to invent one — it either
+     *  has an Extended Country Code from the air, or it validates the PI's country nibble
+     *  against the RECEIVER's country — so with no location set, every station's country
+     *  and flag stayed blank (found on air 2026-07-26). */
+    const char* locationJson;
 } VsConfig;
 
 /** Live status for a status view. Deliberately the same numbers the CLI prints. */

@@ -321,6 +321,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       rdsPi = m.pi;
       rdsBer = m.ber;
       rdsSig = m.sig;
+      rdsEcc = m.ecc || 0;
       rdsIso = m.pi > 0
         ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
         : '';
@@ -737,13 +738,14 @@ let rdsFreq = -1;
 let rdsPi = -1;
 let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
 let rdsSig = -99;   // 57 kHz level vs pilot, dB
+let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
 
 /** Drop RDS state if the dial has moved off the station it came from. */
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
   rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
-  grpRate = 0; grpPrev = { tot: 0, at: 0 };
+  grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
   rdsFreq = -1;
 }
 
@@ -2417,15 +2419,26 @@ function renderRds() {
   // ★ AF ENTRIES ARE TAPPABLE. A list of alternative frequencies you cannot act on is
   // trivia; the whole point of AF is "the same station is also over there", so the natural
   // gesture is to go there (Stuart, 2026-07-26).
-  const af = rdsExt?.af ?? [];
+  // ★ SORTED, not arrival order. AF codes cycle continuously and the list refills from
+  // scratch whenever the decoder resyncs, so an arrival-ordered list visibly RESHUFFLES —
+  // tappable buttons moving under the cursor, and a list you cannot read twice the same
+  // way (Stuart: "why does the AF keep changing? that is what was throwing me").
+  const af = [...(rdsExt?.af ?? [])].sort((a, b) => a - b);
   const afEl = $('rxAf');
   afEl.textContent = '';
+  // ★ AF SCORE, as the FM-DX Webserver shows it: confirmed / glimpsed. Below 100% means
+  // entries are arriving damaged, which is a statement about the LINK, not the station.
+  const seen = rdsExt?.afseen ?? 0;
+  const scoreEl = $('rxAfScore');
+  scoreEl.textContent = seen
+    ? `${af.length}/${seen} · ${Math.round((af.length / seen) * 100)}%`
+    : dash;
   if (!af.length) afEl.textContent = dash;
   else for (const k of af) {
     const b = document.createElement('button');
     b.className = 'afBtn';
     b.textContent = (k / 1000).toFixed(1);
-    b.title = `Tune to ${(k / 1000).toFixed(1)} MHz`;
+    b.title = `Tune to ${(k / 1000).toFixed(1)} MHz — confirmed by repetition`;
     // Same PI, so the same station and the same mode — that is what makes AF an AF.
     b.onclick = () => tuneTo({ frequency: k * 1000, mode: 'wfm' } as SearchResult);
     afEl.appendChild(b);
@@ -2442,7 +2455,17 @@ function renderRds() {
   $('rxPiDetail').textContent = rdsPi > 0
     ? `${COV[(rdsPi >> 8) & 0xF]} · ref ${rdsPi & 0xFF} · cc ${(rdsPi >> 12) & 0xF}`
     : dash;
-  $('rxCountry').textContent = rdsIso ? rdsIso.toUpperCase() : dash;
+  // ★ SAY WHY IT IS BLANK. The flag logic refuses to guess a country: it uses the ECC
+  // (group 1A) when present, otherwise it validates the PI's country nibble against the
+  // RECEIVER's own country — so a server that does not know where it is resolves to
+  // nothing. Correct for the station bar, but in an expert panel an empty field reads as
+  // broken rather than as "not established yet" (Stuart, 2026-07-26).
+  // ECC is also infrequent — group 1A — so this often fills in later, like the clock.
+  $('rxCountry').textContent = rdsIso
+    ? `${rdsIso.toUpperCase()}${rdsEcc ? ` · ECC ${rdsEcc.toString(16).toUpperCase()}` : ' · from PI'}`
+    : rdsEcc
+      ? `ECC ${rdsEcc.toString(16).toUpperCase()} · unmatched`
+      : (rdsExt?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : dash;
 
   // DI — four flags, assembled across the four name segments.
   const di = rdsExt?.di ?? -1;
@@ -2458,9 +2481,18 @@ function renderRds() {
 
   // ★ CT — transmitted once a minute, so RECEIVING one at all proves whole groups are
   // arriving intact, and its offset identifies the network's timezone.
+  // ★ CT is transmitted ONCE A MINUTE (group 4A), against ~11 groups a second — about one
+  // group in 660. So a dash means "not caught yet" far more often than "not transmitted",
+  // and it needs BOTH blocks C and D intact with no repetition to fall back on. Saying
+  // "waiting" instead of "—" is the honest reading, and it stops the user concluding the
+  // station does not send it (Stuart: car stereos set their clocks from this, 2026-07-26).
   const ct = rdsExt?.ct ?? -1;
-  if (ct < 0) $('rxCt').textContent = dash;
-  else {
+  const g4a = rdsExt?.grp?.[8] ?? 0;      // group 4A = index 4*2+0
+  if (ct < 0) {
+    $('rxCt').textContent = (rdsExt?.gtot ?? 0) > 0
+      ? (g4a > 0 ? 'seen, damaged' : 'waiting… (1/min)')
+      : dash;
+  } else {
     const hh = String(Math.floor(ct / 60)).padStart(2, '0');
     const mm = String(ct % 60).padStart(2, '0');
     const off = rdsExt!.ctoff;

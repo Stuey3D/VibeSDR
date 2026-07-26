@@ -1212,7 +1212,7 @@ struct LocalSdrShim::Impl {
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
     // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
     int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
-    int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0;
+    int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0, rdsAfSeen = 0;
     std::vector<int> rdsGrp;
     std::vector<int> rdsAf;
     std::vector<float> rdsConst;
@@ -1578,14 +1578,14 @@ struct LocalSdrShim::Impl {
         t->rdsPi = (int)pi;
     }
     static void rdsExtCb(void* ctx, int pty, int tp, int ta, int ms, int di,
-                         int ctMin, int ctOff, const int* af, int nAf,
+                         int ctMin, int ctOff, const int* af, int nAf, int afSeen,
                          const int* gc, int gTotal, const float* xy, int nPts) {
         Impl* t = (Impl*)ctx;
         if (!t->rdsxOn.load()) return;
         std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPty = pty; t->rdsTp = tp; t->rdsTa = ta; t->rdsMs = ms; t->rdsDi = di;
         t->rdsCtMin = ctMin; t->rdsCtOff = ctOff; t->rdsGrpTotal = gTotal;
-        t->rdsAf.assign(af, af + nAf);
+        t->rdsAf.assign(af, af + nAf); t->rdsAfSeen = afSeen;
         t->rdsGrp.assign(gc, gc + 32);
         t->rdsConst.assign(xy, xy + nPts * 2);
     }
@@ -3144,12 +3144,12 @@ struct LocalSdrShim::Impl {
      *  would be fifty times the bytes for precision no eye can resolve. */
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
-        int pty, tp, ta, ms, di, ctMin, ctOff, gTot;
+        int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         std::vector<int> af, grp; std::vector<float> pts;
         { std::lock_guard<std::mutex> lk(rdsMtx);
           pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
           ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
-          af = rdsAf; grp = rdsGrp; pts = rdsConst; }
+          af = rdsAf; grp = rdsGrp; pts = rdsConst; afSeen = rdsAfSeen; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -3158,6 +3158,7 @@ struct LocalSdrShim::Impl {
                       + ",\"ct\":"  + std::to_string(ctMin)
                       + ",\"ctoff\":" + std::to_string(ctOff)
                       + ",\"gtot\":"  + std::to_string(gTot)
+                      + ",\"afseen\":" + std::to_string(afSeen)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"af\":[";

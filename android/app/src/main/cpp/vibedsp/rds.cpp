@@ -21,6 +21,34 @@ int RdsDemod::bestIdx() const {
     return best;
 }
 
+int RdsDemod::mergedAf(int* khzOut, int maxOut, int* seenOut) {
+    // A station change invalidates the whole list — AF belongs to a PI, not to a dial spot.
+    const RdsDecoder* b = best();
+    const uint16_t pi = b ? b->confirmedPi() : 0;
+    if (pi && pi != mergedAfPi_) { mergedAfN_ = 0; mergedAfPi_ = pi; }
+    for (int p = 0; p < NPH; ++p) {
+        const int n = dec_[p].afCount();
+        for (int i = 0; i < n; ++i) {
+            if (dec_[p].afHits(i) < RdsDecoder::kAfConfirm) continue;   // unconfirmed
+            const int khz = dec_[p].afKhz(i);
+            bool seen = false;
+            for (int k = 0; k < mergedAfN_; ++k) if (mergedAf_[k] == khz) { seen = true; break; }
+            if (!seen && mergedAfN_ < RdsDecoder::kMaxAf) mergedAf_[mergedAfN_++] = khz;
+        }
+    }
+    // ★ How many DISTINCT frequencies have been glimpsed at all, confirmed or not — the
+    // denominator of an "AF score", as the FM-DX Webserver shows it (confirmed / seen).
+    // A score below 100% says entries are arriving damaged, which is a link statement.
+    if (seenOut) {
+        int seen = 0;
+        for (int p = 0; p < NPH; ++p) seen = std::max(seen, dec_[p].afCount());
+        *seenOut = std::max(seen, mergedAfN_);
+    }
+    const int out = std::min(maxOut, mergedAfN_);
+    for (int i = 0; i < out; ++i) khzOut[i] = mergedAf_[i];
+    return out;
+}
+
 const RdsDecoder* RdsDemod::best() const {
     const int b = bestIdx();
     return (b >= 0 && b < NPH) ? &dec_[b] : nullptr;
@@ -107,6 +135,7 @@ void RdsDemod::reset() {
     if (lpfQ_) lpfQ_->reset();
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
+    mergedAfN_ = 0; mergedAfPi_ = 0;
     for (int k = 0; k < NPH; ++k) {
         accI_[k] = accQ_[k] = 0.0f; prevPh_[k] = 0.0f;
         prevAI_[k] = prevAQ_[k] = 0.0f; havePrev_[k] = false;
@@ -367,6 +396,7 @@ void RdsDecoder::reset() {
     ecc_ = 0;
     piLast_ = 0; piSeen_ = false; grpRepairBits_ = 0; piConfirmedVal_ = 0;
     pty_ = tp_ = ta_ = ms_ = -1; afN_ = 0;
+    for (int i = 0; i < kMaxAf; ++i) afHits_[i] = 0;
     di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
     for (int i = 0; i < 32; ++i) grpCount_[i] = 0;
     grpTotal_ = 0;
@@ -520,8 +550,9 @@ void RdsDecoder::parseGroup() {
                 if (c < 1 || c > 204) continue;
                 const int khz = 87500 + c * 100;
                 bool seen = false;
-                for (int k = 0; k < afN_; ++k) if (afKhz_[k] == khz) { seen = true; break; }
-                if (!seen && afN_ < kMaxAf) afKhz_[afN_++] = khz;
+                for (int k = 0; k < afN_; ++k)
+                    if (afKhz_[k] == khz) { ++afHits_[k]; seen = true; break; }
+                if (!seen && afN_ < kMaxAf) { afKhz_[afN_] = khz; afHits_[afN_] = 1; ++afN_; }
             }
         }
         if (blkOk_[3]) {

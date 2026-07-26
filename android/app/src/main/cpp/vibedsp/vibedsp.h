@@ -414,6 +414,10 @@ public:
     int  groupTotal() const { return grpTotal_; }
     int  afCount() const { return afN_; }
     int  afKhz(int i) const { return (i >= 0 && i < afN_) ? afKhz_[i] : 0; }
+    int  afHits(int i) const { return (i >= 0 && i < afN_) ? afHits_[i] : 0; }
+    /** Sightings before an AF is believed. The list repeats endlessly, so a genuine entry
+     *  returns within seconds while a mis-corrected block's invention does not. */
+    static constexpr int kAfConfirm = 2;
     static constexpr int kMaxAf = 25;
 
     // ── Correction strength (the "advanced RDS" lever) ───────────────────────
@@ -487,7 +491,11 @@ private:
     char rt_[65] = {0};
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
     int pty_ = -1, tp_ = -1, ta_ = -1, ms_ = -1;
+    // ★ CONFIRMATION BY REPETITION, as everything else here uses. An AF that arrived once
+    // could be a mis-corrected block; the list repeats endlessly, so a real one comes back
+    // within seconds. Nothing is published until it has been seen kAfConfirm times.
     int afKhz_[kMaxAf] = {0};
+    int afHits_[kMaxAf] = {0};
     int afN_ = 0;
     int di_ = 0, diSeen_ = 0;
     int ctMin_ = -1, ctOff_ = 0;
@@ -569,6 +577,13 @@ public:
     static constexpr int kConstPts = 256;
     /** Extended fields from whichever hypothesis is winning; -1 / 0 when none is. */
     const RdsDecoder* best() const;
+    /** ★★ AF merged ACROSS hypotheses. Each of the sixteen has its own decoder and its own
+     *  partial list, so when arbitration switched winner the reported AFs visibly vanished
+     *  and reappeared — nothing was forgotten, we were simply reading a different receiver's
+     *  notes (Stuart, on air 2026-07-26: "some kept arriving then disappearing"). Merging
+     *  above the bank makes the list monotonic within a station, and only a retune or a PI
+     *  change clears it. Entries appear only once CONFIRMED by repetition.  */
+    int mergedAf(int* khzOut, int maxOut, int* seenOut = nullptr);
 private:
     std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
@@ -639,6 +654,9 @@ private:
     float rdsRms_ = 0.0f;              // smoothed |baseband|, for subcarrierRelDb()
     // Constellation ring — written by whichever hypothesis is currently winning, so the
     // plot shows what the DECODER is actually working with rather than an also-ran.
+    int mergedAf_[RdsDecoder::kMaxAf] = {0};
+    int mergedAfN_ = 0;
+    uint16_t mergedAfPi_ = 0;          // whose list this is; a new PI starts a new list
     float constXY_[kConstPts * 2] = {0};
     int   constHead_ = 0;
     int   constBest_ = -1;             // refreshed once per process(), not per sample
@@ -683,7 +701,7 @@ public:
         // the toggle, so nothing here is paid for while nobody is looking.
         void (*rdsExt)(void* ctx, int pty, int tp, int ta, int ms, int di,
                        int ctMinutes, int ctOffsetHalfHours,
-                       const int* afKhz, int nAf,
+                       const int* afKhz, int nAf, int afSeen,
                        const int* groupCounts, int groupTotal,
                        const float* constXY, int nPts) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.

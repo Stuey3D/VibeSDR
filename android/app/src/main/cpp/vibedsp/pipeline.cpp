@@ -329,9 +329,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 const RdsDecoder* d = rdsDemod_.best();
                 float xy[RdsDemod::kConstPts * 2];
                 const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);
-                int af[RdsDecoder::kMaxAf]; int nAf = 0;
-                if (d) { nAf = d->afCount();
-                         for (int i = 0; i < nAf; ++i) af[i] = d->afKhz(i); }
+                int af[RdsDecoder::kMaxAf]; int afSeen = 0;
+                const int nAf = rdsDemod_.mergedAf(af, RdsDecoder::kMaxAf, &afSeen);
+
                 int gc[32] = {0};
                 if (d) for (int i = 0; i < 32; ++i) gc[i] = d->groupCount(i);
                 cb_.rdsExt(cb_.ctx,
@@ -339,7 +339,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                            d ? d->ta()  : -1, d ? d->ms() : -1,
                            d ? d->di()  : -1,
                            d ? d->ctMinutes() : -1, d ? d->ctOffsetHalfHours() : 0,
-                           af, nAf, gc, d ? d->groupTotal() : 0,
+                           af, nAf, afSeen, gc, d ? d->groupTotal() : 0,
                            xy, np);
             }
             if (wantRds && pll_.trackable())
