@@ -86,6 +86,7 @@ import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBa
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
+import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
@@ -5312,6 +5313,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
       <KeyboardShortcuts visible={keyHelpOpen} onClose={() => setKeyHelpOpen(false)} />
+      <FkaSplash onOpenHelp={() => setKeyHelpOpen(true)} />
       <RecordingsOverlay
         visible={recordingsOpen}
         onClose={() => setRecordingsOpen(false)}

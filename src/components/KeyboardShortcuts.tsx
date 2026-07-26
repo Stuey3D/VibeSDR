@@ -95,15 +95,6 @@ const SECTIONS: Section[] = [
     ],
   },
   {
-    title: 'IF THE ARROWS DO NOTHING',
-    body: [
-      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys and Tab for its own focus navigation before any app sees them — so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu opens but nothing can be stepped through.',
-      'For tuning and zoom, use < > and - + instead, described at the top of this list. They are the arrow keys by another name, they are not keys iOS wants, and they need no modifier at all — which is why they suit a small handheld keyboard, where holding two keys at once is awkward.',
-      'For menus and lists, hold Shift with an arrow, and Alt with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. Avoid Command, which the system takes for itself. On a full-size or Mac keyboard this is a comfortable hand position; < > and - + work in menus too if you would rather not hold anything.',
-      'Either way you never have to turn an accessibility feature off to use the radio.',
-    ],
-  },
-  {
     title: 'MAPS',
     body: ['Escape brings you back to the receiver.'],
   },
@@ -112,6 +103,15 @@ const SECTIONS: Section[] = [
     body: [
       "A receiver's own pages — compatibility mode, and the server admin pages in the menu — cannot be reached from the keyboard at all. They are not our pages, so we cannot know whether or how a keyboard will work on them, and taking you somewhere the keys stop working would be worse than not going.",
       'The admin buttons are simply skipped as the highlight moves past them, and the compatibility-mode button is greyed while you are using a keyboard. Touching it wakes it up — the tap is proof you are back on the touchscreen — and the next tap goes through.',
+    ],
+  },
+  {
+    title: 'IF YOUR ARROW KEYS DO NOTHING',
+    body: [
+      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys and Tab for its own focus navigation before any app sees them — so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu opens but nothing can be stepped through.',
+      'For tuning and zoom, use < > and - + instead, described at the top of this list. They are the arrow keys by another name, they are not keys iOS wants, and they need no modifier at all — which is why they suit a small handheld keyboard, where holding two keys at once is awkward.',
+      'For menus and lists, hold Shift with an arrow, and Alt with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. Avoid Command, which the system takes for itself. On a full-size or Mac keyboard this is a comfortable hand position; < > and - + work in menus too if you would rather not hold anything.',
+      'Either way you never have to turn an accessibility feature off to use the radio.',
     ],
   },
 ];
