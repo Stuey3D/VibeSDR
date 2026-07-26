@@ -665,7 +665,13 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   text-transform: uppercase; margin-top: 3px;
 }
 #decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
+/* ★★ The 40vh cap here is what the ADV RDS "taller" button was fighting: the panel grew and
+   its PARENT clipped it, landing exactly on the spectrum/waterfall divide and looking like
+   the box was stuck (Stuart, 2026-07-26). The cap is right for the text and image decoders,
+   which scroll their own content — but ADV RDS sizes itself deliberately, so it opts out.
+   ★ A container limit and a child that manages its own height cannot both be in charge. */
 #decBody { max-height: 40vh; overflow-y: auto; padding: 8px 10px; }
+#decBox.rds #decBody { max-height: none; overflow-y: visible; }
 #decBox.min #decBody { display: none; }
 #decText {
   margin: 0; color: var(--btn-text); font-size: 12px;

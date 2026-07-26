@@ -2368,6 +2368,7 @@ function showDecBox(what: string) {
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
   $('rdsPanel').classList.toggle('show', isRds);
+  $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   $('rdsSize').classList.toggle('show', isRds);
   if (isRds) applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
@@ -2386,6 +2387,7 @@ function showDecBox(what: string) {
 function hideDecBox() {
   $('decBox').classList.remove('open');
   $('rdsPanel').classList.remove('show');
+  $('decBox').classList.remove('rds');
   $('rdsSize').classList.remove('show');
   updateVts();      // the bar comes back when Advanced RDS closes
 }
@@ -2403,10 +2405,21 @@ function applyRdsSize() {
   const btn = $('rdsSize');
   // Phones get a smaller pair: the waterfall behind still has to be usable for tuning.
   const phone = window.innerWidth <= 760;
-  panel.style.height = rdsTall
-    ? (phone ? 'min(56vh, 420px)' : 'min(72vh, 720px)')
-    : (phone ? 'min(30vh, 240px)' : 'min(40vh, 330px)');
-  panel.style.maxHeight = 'none';       // the explicit height IS the cap now
+  if (rdsTall) {
+    // ★★ TALL FITS THE CONTENT, it does not reach for a number. A fixed tall height left a
+    // large black void whenever the station sent less than the maximum — and RDS fields
+    // arrive over MINUTES (RT+ waits on a 3A announcement, CT comes once a minute), so the
+    // content genuinely grows while you watch. Fitting means "show me everything there is
+    // now", which is what pressing it means; the cap only binds when there is more than the
+    // window can hold (Stuart, 2026-07-26).
+    panel.style.height = 'auto';
+    panel.style.maxHeight = phone ? 'min(56vh, 420px)' : 'min(78vh, 780px)';
+  } else {
+    // Compact is a deliberate FIXED height: it is the "leave me room to tune" state, and it
+    // must not drift as fields arrive.
+    panel.style.height = phone ? 'min(30vh, 240px)' : 'min(40vh, 330px)';
+    panel.style.maxHeight = 'none';
+  }
   btn.classList.toggle('tall', rdsTall);
   btn.title = rdsTall ? 'Shorter panel' : 'Taller panel';
 }
@@ -2569,6 +2582,20 @@ function renderRds() {
   }
 }
 
+/** Pixels per unit, chosen so the mean lobe distance lands at a comfortable fraction of the
+ *  box. Falls back to a sane constant when there is nothing to measure. */
+function constellationScale(xy: number[], box: number): number {
+  let n = 0, sum = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const r = Math.hypot(xy[i], xy[i + 1]);
+    if (r < 1) continue;
+    n++; sum += r;
+  }
+  if (!n) return (box / 2) / 110;
+  const mean = sum / n;
+  return (box * 0.30) / Math.max(1, mean);
+}
+
 /** Rotation that lays the two BPSK lobes on the horizontal. BPSK has 180-degree ambiguity,
  *  so angles are DOUBLED (folding both lobes onto one), magnitude-weighted so the strong
  *  symbols that define the lobes dominate, averaged, then halved. */
@@ -2640,7 +2667,7 @@ function drawEye() {
   const rot = constellationAngle(xy);
   const cr = Math.cos(rot), sr = Math.sin(rot);
   const n = xy.length / 2;
-  const k = (H / 2) / 110;
+  const k = constellationScale(xy, H) * 0.9;   // same scale, a touch of headroom
   g.fillStyle = 'rgba(120,255,140,0.85)';
   for (let i = 0; i < n; i++) {
     const x = xy[i * 2] * cr - xy[i * 2 + 1] * sr;   // the wanted component
@@ -2686,7 +2713,13 @@ function drawConstellation() {
   // strong symbols that define the lobes count for more than the noise near the origin.
   const rot = constellationAngle(xy);
   const cr = Math.cos(rot), sr = Math.sin(rot);
-  const k = (W / 2) / 110;
+  // ★★ SCALE TO THE DATA, never to a constant. A constellation carries its meaning in SHAPE
+  // — how tight the lobes are and how far they sit from the centre line — so absolute
+  // magnitude is not information, and pinning the scale meant a strong station's points flew
+  // clean out of the box and a weak one's huddled invisibly at the origin. Fitting the mean
+  // lobe distance to a fixed fraction of the box makes the plot readable at every signal
+  // level, which is the whole point of it (Stuart, 2026-07-26).
+  const k = constellationScale(xy, W);
   for (let i = 0; i + 1 < xy.length; i += 2) {
     const age = i / xy.length;                    // oldest dimmest
     g.fillStyle = `rgba(120,255,140,${0.25 + 0.6 * age})`;

@@ -224,7 +224,13 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
                 if (p == constBest_) {
                     // Normalised by the running baseband RMS so the plot's SCALE is stable
                     // and only its SHAPE varies — which is the part that carries meaning.
-                    const float k = (rdsRms_ > 1e-9f) ? 1.0f / (rdsRms_ * 24.0f) : 0.0f;
+                    // ★ Divide generously. The symbol accumulator sums ~34 samples, so its
+                    // magnitude is many times the per-sample RMS — and the wire format is a
+                    // SIGNED BYTE, so anything over 127 clips and the shape is destroyed
+                    // rather than merely rescaled. A strong station overflowed and the plot
+                    // emptied (Stuart, 2026-07-26). The client rescales to fit, so headroom
+                    // here costs nothing and clipping cannot be undone.
+                    const float k = (rdsRms_ > 1e-9f) ? 1.0f / (rdsRms_ * 96.0f) : 0.0f;
                     constXY_[constHead_ * 2]     = aI * k;
                     constXY_[constHead_ * 2 + 1] = aQ * k;
                     constHead_ = (constHead_ + 1) % kConstPts;
