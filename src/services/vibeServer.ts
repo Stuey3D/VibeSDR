@@ -459,3 +459,59 @@ export function fmtRate(bytesPerSec: number): string {
   return kb >= 1000 ? `${(kb / 1024).toFixed(1)} MB/s` : `${kb.toFixed(0)} KB/s`;
 }
 
+
+// ── Finding a VibeServer on a typed host ─────────────────────────────────────
+
+/** The range the server itself picks from: `--port` defaults to "the first free
+ *  port in 48000-48049", and the multi-radio design puts the hub on 48000 with
+ *  one radio per port above it. So the port a user needs is frequently NOT the
+ *  48000 that DEFAULT_PORT fills in for a bare hostname. */
+const VS_PORT_LO = 48000;
+const VS_PORT_HI = 48100;
+
+/**
+ * Probe a SINGLE, USER-SUPPLIED host for a VibeServer, so typing just the IP is
+ * enough.
+ *
+ * ★ This is NOT a subnet scan, and the distinction is deliberate: discovery
+ * remains advertise-only (`_vibesdr._tcp`, see services/mdns.ts — "the
+ * App-Store-clean path... no subnet scanning"). This only ever touches the one
+ * address the user typed in, which they could equally have typed a port onto.
+ *
+ * ★ Identifies via `/vibeserver.json`, which answers definitively and is served
+ * even when the host has turned the web client off. A VibeServer older than
+ * that endpoint will not be found — it must be reached by typing its port.
+ *
+ * Returns the LOWEST matching port (the hub, in a multi-radio setup), or null.
+ */
+export async function findVibeServerPort(host: string): Promise<number | null> {
+  const scheme = 'http://';
+  const probe = async (port: number): Promise<number | null> => {
+    const ctrl = new AbortController();
+    // Short: these are LAN hosts, and 101 of them. A port with nothing on it
+    // refuses immediately; only a firewalled one burns the whole timeout.
+    const timer = setTimeout(() => ctrl.abort(), 1200);
+    try {
+      const r = await fetch(`${scheme}${host}:${port}/vibeserver.json`, { signal: ctrl.signal });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d && d.server === 'vibeserver' ? port : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Batched rather than all-at-once: 101 simultaneous sockets is enough to upset
+  // a phone's networking stack and some home routers. Ordered batches also mean
+  // we can stop at the first hit instead of always paying for the full range.
+  const BATCH = 20;
+  for (let lo = VS_PORT_LO; lo <= VS_PORT_HI; lo += BATCH) {
+    const ports: number[] = [];
+    for (let p = lo; p < Math.min(lo + BATCH, VS_PORT_HI + 1); p++) ports.push(p);
+    const hits = (await Promise.all(ports.map(probe))).filter((p): p is number => p != null);
+    if (hits.length) return Math.min(...hits);
+  }
+  return null;
+}

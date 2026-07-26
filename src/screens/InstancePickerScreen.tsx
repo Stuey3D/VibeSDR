@@ -86,6 +86,7 @@ import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkSta
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { watchTargetPending } from '../services/watchBoot';
 import { watchProvider } from '../services/watchProvider';
+import { findVibeServerPort } from '../services/vibeServer';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          repairVibeserverFavourites, saveFavourites, registerFavouriteVisit,
          updateFavourite, favIsCustom,
@@ -917,7 +918,31 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // self-heals a wrong stored type (e.g. an UberSDR-with-kiwi-emulation that a
     // previous build mis-saved as kiwi). Detection returns null only when the
     // host can't be reached — then keep the stored type rather than guessing.
-    const detected = await detectServerType(fav.url);
+    let detected = await detectServerType(fav.url);
+
+    // ★★ A SAVED VibeServer PORT GOES STALE ON ITS OWN. The server takes "the
+    // first free port" from 48000 up, so if something else holds 48000 at launch
+    // it lands on 48001 — and when that clash clears it moves back. The saved
+    // favourite still points at the old port and simply stops working, with
+    // nothing on screen to explain why. (Hit for real, 2026-07-26: the Mac moved
+    // 48000→48001→48000 and the watch's favourite was stranded.)
+    //
+    // So: if a favourite we believe is a VibeServer no longer answers, look for
+    // it on the rest of the range and REWRITE the favourite. One typed host,
+    // not a subnet scan — see findVibeServerPort.
+    if (!detected && fav.serverType === 'vibeserver') {
+      const u = parseHostPort(fav.url, 'vibeserver');
+      if (u) {
+        const port = await findVibeServerPort(u.host).catch(() => null);
+        if (port && port !== u.port) {
+          const url = `http://${u.host}:${port}`;
+          await updateFavourite(fav.url, { url }).catch(() => {});
+          setFavourites(await getFavourites());
+          connectDetected('vibeserver', u.host, port, fav.name);
+          return;
+        }
+      }
+    }
     const type = detected ?? fav.serverType ?? 'ubersdr';
     if (type !== fav.serverType) setFavouriteServerType(fav.url, type).catch(() => {});
     // A favourite can now detect as a VibeServer (it serves a web page, so it IS
@@ -928,7 +953,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (u) { connectDetected('vibeserver', u.host, u.port, fav.name); return; }
     }
     connect(fav.url, fav.name, undefined, null, type as ServerType | 'fmdx');
-  }, [connect, connectDetected]);
+  }, [connect, connectDetected, setFavourites]);
 
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
@@ -949,6 +974,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const type = await probeServer(u.host, u.port, null);
     setConnecting(false);
     if (!type) {
+      // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
+      // never where a VibeServer lives. Sweep its range before giving up, so
+      // "just type the IP" works however the server numbered itself today.
+      if (!/:\d+\s*$/.test(raw.replace(/^\w+:\/\//, ''))) {
+        setConnecting(true);
+        const port = await findVibeServerPort(u.host).catch(() => null);
+        setConnecting(false);
+        if (port) { connectDetected('vibeserver', u.host, port, raw); return; }
+      }
       Alert.alert('Custom server',
         `Nothing answered at ${u.host}:${u.port}.\n\nIf this is an rtl_tcp or SpyServer on a non-standard port, add it with the + button and pick the type — raw TCP servers can't be auto-detected.`);
       return;

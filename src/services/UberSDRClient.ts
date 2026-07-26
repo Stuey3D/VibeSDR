@@ -21,6 +21,9 @@ import { VibePowerModule } from '../components/AudioPlayer';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 
+/** Powersave target, in frames/sec — an absolute floor, not a divisor. */
+const POWERSAVE_FPS = 5;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 // 'wfm' = broadcast FM (stereo); local-hardware (RTL-SDR) only — UberSDR is HF.
@@ -191,7 +194,32 @@ export class UberSDRClient {
   private followVfo = true;
   // Local hardware only — set by the adapter from the device config. Drives the
   // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
-  isLocal = false;
+  /**
+   * The on-device shim OR a LAN VibeServer — both are the same shim binary, and
+   * both speak `fftRate` rather than UberSDR's `set_rate` divisor.
+   *
+   * ★★ SETTING THIS ALSO SETS isVibeServer, and that is the whole fix. The
+   * backend-specific policy (which ladder, which rate lever, whether to ask for
+   * fewer bins) was being decided from `isVibeServer`, which only became true
+   * when `hwinfo` ARRIVED — a message, so necessarily after the socket opened and
+   * after the controller had already acted. Measured on the wire 2026-07-26:
+   *
+   *   WS UPGRADE /ws/user-spectrum?...&mode=binary8     ← no bins=, flag still false
+   *   DIAG set_rate divisor=2 RECEIVED                  ← UberSDR lever, on a VibeServer
+   *   fft rate: 5.0 (engine 20.0)  →  emit 2.5 fps      ← server halving, obediently
+   *
+   * The controller started on UberSDR's ladder at rung 2, sent divisor 2, and the
+   * server dropped every other frame FOREVER — nothing resets that divisor. Then
+   * hwinfo arrived, the ladder was rebuilt and fftRate started being used
+   * correctly, so everything downstream looked right while the output stayed
+   * halved. Days of "the link controller is broken" traced to one flag set late.
+   *
+   * ★ `isLocal` has been known since construction all along. Decide from what you
+   * already know, never from what is still in flight.
+   */
+  set isLocal(v: boolean) { this._isLocal = v; if (v) this.isVibeServer = true; }
+  get isLocal(): boolean { return this._isLocal; }
+  private _isLocal = false;
   localSampleRate = 2_400_000;
   // VibeServer PIN: a pre-computed "&vs_nonce=&vs_auth=" suffix appended to the
   // spectrum WS URL so a PIN-protected server accepts the upgrade. Empty otherwise.
@@ -213,6 +241,9 @@ export class UberSDRClient {
   /** Bypass password (rate-limit/ban bypass) — appended to every WS URL,
    *  exactly like the skin's window.bypassPassword. */
   private password: string | null = null;
+  /** `&bins=` for VibeServer only. UberSDR ignores it and sends its own count. */
+  private _binsSuffix(): string { return this.isVibeServer ? `&bins=${UberSDRClient.VIBE_BINS}` : ''; }
+
   private _pwSuffix(): string {
     return this.password ? `&password=${encodeURIComponent(this.password)}` : '';
   }
@@ -489,10 +520,68 @@ export class UberSDRClient {
   setRate(divisor: number) {
     this.rateDivisor = Math.max(1, Math.min(8, Math.round(divisor)));
     this.gapHist.length = 0; // legit frame-rate change — don't read as stalls
-    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-      this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
-    }
+    if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+
+    // ★★ ONE LEVER PER SERVER, NEVER TWO. The shim honours BOTH `set_rate`
+    // (a frame-dropping divisor) and `fftRate` (the real rate) — so sending a
+    // divisor to a VibeServer MULTIPLIES with whatever rate LinkManager has
+    // already asked for, and nothing reconciles them:
+    //
+    //     rung 5 fps ÷ idle divisor 3 = 1.7 fps      (seen as "2 fps")
+    //     Full 20 fps ÷ 3             = 6.7 fps      ("Full did nothing")
+    //
+    // On UberSDR the divisor IS the only lever, so the two agreed and this
+    // stayed invisible for as long as VibeServer has existed. Express the
+    // divisor as an fftRate instead, so a VibeServer only ever hears one.
+    // ★★ ON VIBESERVER, setRate() DOES NOTHING. The rate has exactly ONE owner
+    // here — LinkManager (and setPowersaveRate for idle) — and every attempt to
+    // give it a second one has produced the same bug in a new place:
+    //
+    //   • the shim honours BOTH set_rate and fftRate, so the raw divisor
+    //     multiplied the controller's rate           (fixed 276)
+    //   • apply() divided the rung by rateDivisor, so the controller measured
+    //     its own reduction as starvation             (fixed 277)
+    //   • ws.onopen re-asserted a stale divisor       (fixed 284)
+    //   • and HERE: dividing the ladder rate by a leftover rateDivisor sent
+    //     HALF the rung — rung 2 → 5, rung 3 → 2.5 — so Auto crawled while Full
+    //     (which goes through apply(), undivided) reached 20 on the SAME server
+    //     seconds later. Stuart: "starting rung 2 but divided."
+    //
+    // ★ Keep the divisor recorded for UberSDR, but never let it reach a
+    // VibeServer. One owner, no exceptions.
+    if (this.isVibeServer) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
   }
+  /**
+   * Powersave: drop to an ABSOLUTE frame rate, never a divisor.
+   *
+   * ★★ The idle saver used setRate(3) — a DIVISOR, which compounds with whatever
+   * rung the controller had already chosen. ÷3 of 20 fps is a sensible 6.7; ÷3 of
+   * the 5 fps floor is 1.7, and ÷3 of UberSDR's 3.3 emergency rung is 1. So the
+   * worse the link already was, the harder powersave hit it — precisely backwards,
+   * and how the waterfall ended up at 1 fps.
+   *
+   * ★ 5 fps is the established floor for a rate anyone CHOOSES (Stuart, on Low
+   * Data: "the interpolation can hide 5; 3.3 is reserved for connection issues
+   * only"). Powersave is chosen behaviour, so it gets the same floor — and it can
+   * never make things worse than the rung it replaces.
+   */
+  setPowersaveRate() {
+    const target = Math.min(POWERSAVE_FPS, this.ladderFps > 0 ? this.ladderFps : POWERSAVE_FPS);
+    if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+    if (this.isVibeServer) {
+      this.rateDivisor = 1;   // one lever only — see setRate()
+      this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: target }));
+      return;
+    }
+    // UberSDR speaks divisors off its own full rate; 10 ⇒ divisor 2 for 5 fps.
+    const full = LADDERS.ubersdr[0];
+    this.setRate(Math.max(1, Math.min(8, Math.round(full / target))));
+  }
+
+  /** The fps of the rung LinkManager currently holds — the base an idle-saver
+   *  divisor is applied to. Without it a divisor would have nothing to divide. */
+  private ladderFps = 0;
   private rateDivisor   = 1;
   private lastRateBinBw = 0;
 
@@ -572,7 +661,15 @@ export class UberSDRClient {
 
   private async _checkConnection() {
     this.dbg('POST /connection uuid=' + this.uuid.slice(0, 8));
-    const resp = await fetch(`${this.baseUrl}/connection`, {
+    // ★★ THE ID GOES IN THE QUERY STRING TOO, not just the body. VibeServer's
+    // /connection preflight only ever sees the REQUEST LINE, so an id sent only
+    // in the body is invisible to it — and its occupancy check then could not
+    // tell the caller apart from anyone else. Result: once this client's own
+    // AUDIO socket had claimed the occupant slot, its own preflight answered
+    // "in-use" and the spectrum never opened. Audio playing while the app says
+    // the server is busy is the signature. The body is kept for older servers.
+    const resp = await fetch(
+      `${this.baseUrl}/connection?user_session_id=${encodeURIComponent(this.uuid)}`, {
       method: 'POST',
       headers: {
         'Content-Type':   'application/json',
@@ -604,13 +701,13 @@ export class UberSDRClient {
    *  socket when the phone locks — same URL this client uses in _openSpectrumWs. Handed to
    *  VibeWatchModule.startWatchSpectrum so the native forwarder never re-implements auth. */
   watchSpectrumUrl(): string {
-    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}${this.authSuffix}`);
+    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}`);
   }
 
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}${this.authSuffix}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}`);
     const ws  = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;
@@ -635,10 +732,19 @@ export class UberSDRClient {
         frequency:    Math.round(this.view.centerHz || this.status.centerHz || this.status.frequency),
         binBandwidth: this.view.binBandwidth || this.status.binBandwidth || 100,
       }));
-      // Fresh server session — re-assert the poll divisor if one is active.
-      if (this.rateDivisor > 1) {
-        ws.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
-      }
+      // ★★ NO RAW DIVISOR RE-ASSERT HERE. This used to send `set_rate` directly on
+      // every socket open, which was wrong twice over:
+      //
+      //   1. It BYPASSED setRate(), the one place that knows a VibeServer speaks
+      //      `fftRate`, so an UberSDR divisor was stacked on the VibeServer rate:
+      //      rung 2 (10 fps) ÷ a stale divisor 2 = 5, the controller then read 5
+      //      against an expected 10, degraded, and rung 3 ÷ 2 gave ~3 fps.
+      //   2. It could not be fixed by testing `isVibeServer` HERE, because hwinfo
+      //      is a message and has not arrived yet at onopen — the same race that
+      //      put the controller on the wrong ladder.
+      //
+      // It is also redundant: LinkManager.reassert() below re-applies the rung
+      // through the backend-correct lever. ★ One owner for the rate, always.
       // Adaptive rate control. On a RECONNECT the server is back at its default, so re-assert
       // whatever rung we had settled on rather than silently jumping back to full rate.
       this.startLinkManager();
@@ -803,14 +909,54 @@ export class UberSDRClient {
    *  lever this server speaks: VibeServer takes `fftRate` in fps, UberSDR takes a `set_rate`
    *  divisor. Everything else about the controller is identical. */
   private isVibeServer = false;
+
+  /**
+   * Bins to ask a VibeServer for — the FFT/BIN lever, as Jr has always used.
+   *
+   * ★★ MEASURED 2026-07-26. The phone asked for NOTHING and so got the server's
+   * full 4096 bins (4118 B/frame). `sendWs()` on the server is a BLOCKING send,
+   * so the server can only emit as fast as the client drains — and at the same
+   * configured 5 fps it sent 20.1 KB/s to a loopback probe but only 12 KB/s to
+   * the phone. The server was not under-delivering; THE PHONE WAS THE BOTTLENECK,
+   * and every "the rate controller is broken" symptom followed from it.
+   *
+   * ★ 4096 bins is detail no phone screen can show: it costs a 4096-iteration JS
+   * loop per frame plus a Skia image, for a display about 1200 px wide. 1024 is
+   * still roughly one bin per pixel, cuts the bytes 4x and the per-frame work
+   * with it. Jr has done exactly this since it shipped (`bins=` its waterfall
+   * width); the phone simply never did.
+   */
+  private static readonly VIBE_BINS = 1024;
+
+  /**
+   * Tell the client it is talking to a VibeServer BEFORE the socket opens.
+   *
+   * ★★ THE LADDER RACE, KILLED AT SOURCE. `isVibeServer` used to be set only when
+   * `hwinfo` ARRIVED — but hwinfo is a MESSAGE, so it cannot land before
+   * ws.onopen, where startLinkManager() picks the ladder. The controller was
+   * therefore ALWAYS built on LADDERS.ubersdr [10, 5, 3.3] and asked a 20 fps
+   * VibeServer for 5 then 3.3 — "connects at 5, drops to 3", with no 3 anywhere
+   * on VibeServer's own [20/10/5]. Rebuilding the controller when hwinfo landed
+   * was a patch over the race and did not always fire.
+   *
+   * ★ The app KNOWS which backend it dialled before it dials it. Deciding a
+   * backend-specific policy from state that arrives later is the bug; taking it
+   * from the caller, who has known all along, is the fix.
+   */
+  markVibeServer() { this.isVibeServer = true; }
   private link: LinkManager | null = null;
   private specFrames = 0;              // frames counted in the current 1s window
   private specBytes  = 0;              // spectrum bytes in the current 1s window (audio is native)
   private linkTimer: ReturnType<typeof setInterval> | null = null;
   private serverMaxFps = 0;            // the owner's ceiling, once hwinfo tells us
 
+  /** Which ladder the live controller was built for, so a late `hwinfo` can
+   *  rebuild it against the right one. */
+  private linkBuiltForVibe = false;
+
   private startLinkManager() {
     if (this.linkTimer) return;
+    this.linkBuiltForVibe = this.isVibeServer;
     const mode = (this.linkMode ?? 'adaptive') as LinkMode;
     this.link = new LinkManager({
       ladder: this.isVibeServer ? LADDERS.vibeserver : LADDERS.ubersdr,
@@ -820,7 +966,18 @@ export class UberSDRClient {
       mode,
       apply: (rung, fps) => {
         if (this.isVibeServer) {
+          this.ladderFps = fps;
           if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+            // ★★ SEND THE RUNG'S RATE, UNDIVIDED. Dividing by the idle-saver's
+            // rateDivisor here made the controller FIGHT ITSELF: it asks for 20,
+            // deliberately sends 6.7, then measures 6.7 against an expectation of
+            // 20, reads 33% as starvation and degrades — over and over, so the
+            // link glyph flapped red/green and the rate collapsed to the floor.
+            //
+            // The controller must only ever ask for what it expects to receive.
+            // The idle saver PAUSES it before applying a divisor (setLinkPaused),
+            // so the two can never be active at once and apply() needs no
+            // knowledge of powersave at all.
             this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: fps }));
           }
         } else {
@@ -1191,6 +1348,33 @@ export class UberSDRClient {
       // permitted one, and read the difference as a failing link — stepping down forever chasing a
       // limit that can never be reached. (The server's own comment makes the same point.)
       this.isVibeServer = true;
+      // ★★ REBUILD THE CONTROLLER ON THE RIGHT LADDER.
+      //
+      // startLinkManager() runs in ws.onopen, but `hwinfo` is a MESSAGE — it can
+      // only arrive afterwards. So the controller was ALWAYS constructed with
+      // isVibeServer false and took LADDERS.ubersdr [10, 5, 3.3], and it early-
+      // returns if the timer already exists, so it never got a second chance.
+      //
+      // Once hwinfo landed, apply() switched to the VibeServer lever (fftRate)
+      // but kept UberSDR's RUNGS — so the phone asked a 20 fps VibeServer for
+      // 10 / 5 / 3.3 and could never request full rate. The browser, which just
+      // asks for min(displayRate, serverCap), sat at 83 KB/s on the same server
+      // while the phone crawled. (Stuart spotted this: "is auto link management
+      // set to UberSDR standards?")
+      //
+      // ★ Deciding a backend-specific policy from state that arrives LATER than
+      // the decision is the bug; rebuilding when the truth lands is the fix.
+      if (!this.linkBuiltForVibe && this.linkTimer) {
+        clearInterval(this.linkTimer);
+        this.linkTimer = null;
+        this.link = null;
+        this.startLinkManager();
+        // ★ ASK for the new ladder's rung. Without this the server stays on the
+        // OLD controller's rate and the new one measures a deficit it created.
+        // Cast: TS narrows `this.link` to never after the null assignment above —
+        // it cannot see that startLinkManager() reassigns it.
+        (this.link as LinkManager | null)?.forceApply();
+      }
       this.serverMaxFps = Number(msg.maxFftRate) || 0;
       if (this.serverMaxFps > 0) this.link?.applyServerCeiling(this.serverMaxFps);
       return;

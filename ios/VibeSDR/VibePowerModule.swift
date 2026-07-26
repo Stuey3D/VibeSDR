@@ -328,24 +328,89 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       inBuf.frameLength = AVAudioFrameCount(n)
       data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         let s16 = raw.bindMemory(to: Int16.self)
-        if ch2 {
-          let left  = inBuf.floatChannelData![0]
-          let right = inBuf.floatChannelData![1]
-          for i in 0..<n {
-            left[i]  = Float(Int16(littleEndian: s16[i*2]))   / 32768.0
-            right[i] = Float(Int16(littleEndian: s16[i*2+1])) / 32768.0
-          }
-        } else {
-          let ch = inBuf.floatChannelData![0]
-          for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
-        }
+        self.fillExternalBuffer(inBuf, from: s16.baseAddress!, frames: n, ch2: ch2)
       }
-      self.packetCount += 1
-      self.lastPacketAt = Date()
-      if let out = self.convertTo48k(inBuf) {
-        if self.recArmed { self.writeRecording(out) }   // OWRX/external audio recording
-        self.scheduleOut(out)
+      self.playExternalBuffer(inBuf)
+    }
+  }
+
+  /// Interleaved little-endian Int16 → the buffer's float channels. Shared by the
+  /// RAW and OPUS external paths so both handle stereo identically.
+  private func fillExternalBuffer(_ inBuf: AVAudioPCMBuffer,
+                                  from s16: UnsafePointer<Int16>, frames n: Int, ch2: Bool) {
+    if ch2 {
+      let left  = inBuf.floatChannelData![0]
+      let right = inBuf.floatChannelData![1]
+      for i in 0..<n {
+        left[i]  = Float(Int16(littleEndian: s16[i*2]))   / 32768.0
+        right[i] = Float(Int16(littleEndian: s16[i*2+1])) / 32768.0
       }
+    } else {
+      let ch = inBuf.floatChannelData![0]
+      for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
+    }
+  }
+
+  private func playExternalBuffer(_ inBuf: AVAudioPCMBuffer) {
+    packetCount += 1
+    lastPacketAt = Date()
+    if let out = convertTo48k(inBuf) {
+      if recArmed { writeRecording(out) }   // OWRX/external audio recording
+      scheduleOut(out)
+    }
+  }
+
+  // ── VibeServer COMPRESSED audio (Opus) on the external path ────────────────
+  //
+  // ★★ WHY THIS EXISTS. The phone opened /ws/audio with NO `codec` parameter, so
+  // VibeServer fell back to raw PCM — and 48 kHz × 2 ch × 2 bytes is 187 KB/s,
+  // measured on the wire as 186. The spectrum beside it was 8 KB/s. Worse, the
+  // shim sends both sockets under ONE blocking send mutex, so that torrent
+  // starved the spectrum emitter and the server delivered ~58% of its configured
+  // frame rate — which the phone's link controller then correctly read as a bad
+  // link and throttled itself over. An entire afternoon of "the rate controller
+  // is broken" was this.
+  //
+  // ★ The decoder was already here (the UberSDR path uses one), and the JS side
+  // already crosses the bridge once per audio frame with base64 PCM — so sending
+  // base64 OPUS instead is roughly 20x LESS bridge traffic, not more.
+  //
+  // Its own decoder instance, deliberately: the UberSDR path's decoder carries
+  // its own rate/channel state and that path stays exactly as-is.
+  private var extOpusDec:  OpaquePointer?
+  private var extOpusRate: Int32 = 0
+  private var extOpusCh:   Int32 = 0
+
+  @objc func pushExternalOpus(_ base64: String, sampleRate: NSNumber, channels: NSNumber) {
+    guard externalAudio, !isMuted,
+          let pkt = Data(base64Encoded: base64), pkt.count >= 3 else { return }
+    let sr = Int32(max(8000, sampleRate.intValue))
+    let ch = Int32(channels.intValue == 2 ? 2 : 1)
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      if self.extOpusDec == nil || self.extOpusRate != sr || self.extOpusCh != ch {
+        if let d = self.extOpusDec { opus_decoder_destroy(d) }
+        var err: Int32 = 0
+        self.extOpusDec = opus_decoder_create(sr, ch, &err)
+        self.extOpusRate = sr; self.extOpusCh = ch
+        NSLog("[VibePowerModule] ext opus decoder sr=%d ch=%d err=%d", sr, ch, err)
+      }
+      guard let dec = self.extOpusDec else { return }
+      var pcm16 = [Int16](repeating: 0, count: Int(self.FRAME_SIZE) * Int(ch))
+      let frames = pkt.withUnsafeBytes { raw -> Int32 in
+        opus_decode(dec, raw.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    Int32(pkt.count), &pcm16, self.FRAME_SIZE, 0)
+      }
+      guard frames > 0,
+            let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr),
+                                      channels: ch == 2 ? self.ENGINE_CH : 1, interleaved: false),
+            let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt,
+                                         frameCapacity: AVAudioFrameCount(frames)) else { return }
+      inBuf.frameLength = AVAudioFrameCount(frames)
+      pcm16.withUnsafeBufferPointer { bp in
+        self.fillExternalBuffer(inBuf, from: bp.baseAddress!, frames: Int(frames), ch2: ch == 2)
+      }
+      self.playExternalBuffer(inBuf)
     }
   }
 
