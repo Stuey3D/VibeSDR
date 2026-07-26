@@ -349,6 +349,20 @@ confirm the app is still fully operable.
 
 ---
 
+## 4.2 ★ STILL TO BUILD (keyboard phase)
+
+1. ★★ **THE FULL SHORTCUT LIST IN THE MAIN MENU** — Stuart, raised repeatedly and still not
+   built: *"in the main menu there will be a full keyboard shortcut popup that can be scrolled
+   with all the hints on it."* Everything else teaches ONE surface's keys at the point of use —
+   the picker's subtitle, the decoder box's header line, the [H]z/[T]une/[P]/[D] caps. There is
+   nowhere that shows the whole scheme, which is what someone wants after the first day rather
+   than during the first minute.
+   ★ It should be the reference the per-surface hints are NOT: scrollable, complete, and
+   organised by where a key works rather than alphabetically.
+2. `GainSlider` (RTL-SDR gain) is a custom component, not an RN `Slider`, so none of the slider
+   work reaches it. Reachable by the RTL-TCP path on iOS as well as local USB on Android.
+3. FM-DX **Android Auto** controls — see `BRIEF-fmdx-backend-adapter.md`.
+
 ## 5. Open decisions — Stuart's calls, deliberately not made
 
 1. **One stick pill or two?** If the right stick zooms, a rising *number* is the wrong illustration for it.
