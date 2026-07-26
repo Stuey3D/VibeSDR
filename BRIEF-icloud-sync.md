@@ -23,9 +23,16 @@ Stuart's list, with the store each already uses:
 keyed by server — a last-tune or a dial pooled across receivers would be meaningless, because
 they describe *that aerial*.
 
-★ `lsv_last_tune` uses a **per-device** key for local hardware (`usb` / `tcp:host:port`) rather
-than a baseUrl, because local baseUrls carry a per-session port. Those should NOT sync: "the last
-thing this dongle was tuned to" does not travel to another person's phone.
+★★ **LAST TUNE IS FOR SERVERS ONLY — Stuart, confirmed.** `lsv_last_tune` also uses a
+**per-device** key for local hardware (`usb` / `tcp:host:port`), because local baseUrls carry a
+per-session port. Those are deliberately excluded: what a dongle plugged into one phone was last
+tuned to has no meaning on another device, and syncing it would restore a frequency the user
+never chose there.
+
+★ Practical consequence for whoever builds this: filter by KEY SHAPE. Sync only
+`lsv_last_tune:<baseUrl>` where the suffix is a real server address, never `usb` or
+`tcp:host:port` — the two live in the same key namespace, so a naive prefix match would carry
+both.
 
 ## 2. ★★ Bookmarks sync SELECTIVELY, and the asymmetry is the point
 
