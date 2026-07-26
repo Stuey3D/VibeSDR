@@ -247,3 +247,30 @@ they are a parser change with no DSP work and no extra bandwidth.
 entirely**, and on a station where it managed only a PI we managed PI *and* name. We are ahead
 of the reference software implementation on identical hardware; the remaining gap is against
 dedicated tuner silicon, not other SDR software.
+
+### ★★ WHERE IT LIVES: with the other decoders (Stuart, 2026-07-26)
+
+Advanced RDS is a DECODER, so it belongs in the decoder box beside FT8, WEFAX, SSTV, RTTY
+and NAVTEX — same selection, same panel, same real estate.
+
+★★ That settles the CPU question by itself. The earlier plan was a Standard/Enhanced setting,
+possibly a server-owner option, because the extra decoding could burden a weak host. As a
+decoder there is nothing to configure: **selecting it IS the toggle**, the cost is paid only
+while someone is looking, and it stops when they close the box — exactly like the others.
+No setting to explain, no server option to document, and no way to leave it running by
+accident. ★ Prefer a structure that makes a setting unnecessary over a setting.
+
+Consequences:
+- The base RDS path (PS, RadioText, PI, stereo) stays ALWAYS ON and unchanged — it feeds the
+  station bar, the media card, learned stations and the FM-DX dial, none of which can depend
+  on a panel being open.
+- Everything in Tiers 1-4 above is computed only while the decoder is selected, EXCEPT the
+  Tier 1 fields, which are free (they fall out of a block B we already parse) and can simply
+  always be available.
+- ★ **AF is explicitly wanted** (Stuart) — the alternative-frequency list, as the FM-DX
+  display shows with its score. It rides in 0A block C, which we already receive and discard
+  today; it also has real utility beyond display, since AF is a ready-made list of where else
+  the same PI can be found — directly useful to the FM-DX dial and to learned stations.
+- The decoder box is a natural home for the constellation + EVM, the BER and the subcarrier
+  level: diagnostics belong where someone is deliberately looking at signal quality, not on
+  the station bar where they would be noise to an ordinary listener.
