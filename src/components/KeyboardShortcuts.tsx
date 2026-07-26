@@ -32,6 +32,7 @@ const SECTIONS: Section[] = [
       'Four keys stand in for the arrow keys anywhere in the app: < and > are left and right, and - and + are up and down. They are the same keys, not a separate shortcut — on the waterfall they tune and zoom, and in a menu they move the highlight and adjust the sliders, exactly as the arrows do.',
       'They are marked on your keyboard the way a radio is, which is the point: < and > have meant tune down and tune up on every receiver ever built.',
       'The one place they do not apply is inside a text box. There they are simply the characters they look like — a decimal point in a frequency, a dash in a server address — because a key we took there would be a key you could no longer type.',
+      'The arrows themselves also answer to Shift at all times: Shift with an arrow does whatever the arrow does, and Alt with Tab does whatever Tab does. On a full-size keyboard that is the easier hand position for working through menus, and it is the way in when an arrow will not reach us on its own. Alt is the same key as Option — a Windows keyboard\u2019s Alt arrives as Option, and its Windows key as Command.',
     ],
   },
   {
@@ -97,8 +98,8 @@ const SECTIONS: Section[] = [
     title: 'IF THE ARROWS DO NOTHING',
     body: [
       'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys and Tab for its own focus navigation before any app sees them — so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu opens but nothing can be stepped through.',
-      'Use < > and - + instead, described at the top of this list. They are the arrow keys by another name, they are not keys iOS wants, and they need no modifier — so tuning, zoom and every menu keep working with Full Keyboard Access left on.',
-      'The exception is a text box, where those keys are characters you may need to type. In the bookmarks search, where the arrows walk the results while you are still typing, hold Shift with an arrow: Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone. Shift with Tab works the same way.',
+      'For tuning and zoom, use < > and - + instead, described at the top of this list. They are the arrow keys by another name, they are not keys iOS wants, and they need no modifier at all — which is why they suit a small handheld keyboard, where holding two keys at once is awkward.',
+      'For menus and lists, hold Shift with an arrow, and Alt with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. Avoid Command, which the system takes for itself. On a full-size or Mac keyboard this is a comfortable hand position; < > and - + work in menus too if you would rather not hold anything.',
       'Either way you never have to turn an accessibility feature off to use the radio.',
     ],
   },

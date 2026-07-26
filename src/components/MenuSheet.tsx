@@ -837,8 +837,9 @@ export default function MenuSheet({
                   Use <Text style={styles.fkaNoteKey}>{'<'}</Text> <Text style={styles.fkaNoteKey}>{'>'}</Text> to
                   tune and <Text style={styles.fkaNoteKey}>-</Text> <Text style={styles.fkaNoteKey}>+</Text> to
                   zoom — they are the arrow keys by another name and work in these menus too. In a
-                  text box, hold <Text style={styles.fkaNoteKey}>Shift</Text> with an arrow. You do
-                  not need to turn anything off.
+                  text box, or for menus, hold <Text style={styles.fkaNoteKey}>Shift</Text> with an
+                  arrow — and <Text style={styles.fkaNoteKey}>Alt</Text> with Tab. You do not need
+                  to turn anything off.
                 </Text>
               </View>
             )}
