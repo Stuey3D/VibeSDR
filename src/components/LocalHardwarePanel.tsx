@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
   Switch, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from './PanelNav';
 import GainSlider from './GainSlider';
 
 // VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
@@ -72,15 +73,21 @@ const DEEMPH_OPTS: { label: string; value: number }[] = [
   { label: 'Off', value: 0 }, { label: '50µs', value: 50e-6 }, { label: '75µs', value: 75e-6 },
 ];
 
-function Seg<T>({ options, value, onChange, fmt }: {
+function Seg<T>({ options, value, onChange, fmt, slot }: {
   options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
+  /** Claims a place in the panel's focus order — see the note in LocalHardwarePanel. */
+  slot?: (run: () => void) => boolean;
 }) {
   return (
     <View style={styles.segRow}>
       {options.map((o, i) => {
         const active = o === value;
+        const on = slot?.(() => onChange(o));
         return (
-          <TouchableOpacity key={i} style={[styles.seg, active && styles.segActive]} onPress={() => onChange(o)}>
+          <TouchableOpacity key={i}
+            style={[styles.seg, active && styles.segActive,
+                    on && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+            onPress={() => onChange(o)}>
             <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
           </TouchableOpacity>
         );
@@ -91,6 +98,37 @@ function Seg<T>({ options, value, onChange, fmt }: {
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
+
+  // ★ One flat focus order over everything on the panel, claimed during render in JSX order —
+  // the same pattern as the server picker, so the order is whatever is actually on screen.
+  // Arrows move, Enter or Space activates, and Esc is handled by SDRScreen along with every
+  // other overlay.
+  //
+  // ★ ANDROID ONLY, so this cannot be exercised on an iPhone: local USB hardware is an Android
+  // feature. Wired for completeness rather than because it could be tested here.
+  const slots = useRef<Array<() => void>>([]);
+  slots.current = [];
+  const [count, setCount] = useState(0);
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { if (slots.current.length !== count) setCount(slots.current.length); });
+  useEffect(() => { if (p.visible) setIdx(0); }, [p.visible]);
+
+  const kb = useRef({ idx });
+  kb.current = { idx };
+  useRepeatingKeys(p.visible, (k: string) => {
+    const n = slots.current.length;
+    if (!n) return;
+    const i = kb.current.idx;
+    if (k === 'ArrowUp' || k === 'ArrowLeft')    { setIdx(Math.max(0, i - 1)); return; }
+    if (k === 'ArrowDown' || k === 'ArrowRight') { setIdx(Math.min(n - 1, i + 1)); return; }
+    if (k === 'Enter' || k === 'Space') slots.current[i]?.();
+  }, NAV_REPEAT_KEYS);
+
+  const slot = (run: () => void) => {
+    const i = slots.current.length;
+    slots.current.push(run);
+    return idx === i;
+  };
   return (
     <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
@@ -130,7 +168,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               networked rtl_tcp source like UberSDR only sends ~192 kHz). */}
           {/* VibeServer sends its own supported rates → use them verbatim; else
               RTL-TCP keeps the low rates and local USB filters to >=1 MHz. */}
-          <Seg options={p.serverRates && p.serverRates.length
+          <Seg slot={slot} options={p.serverRates && p.serverRates.length
                           ? [...p.serverRates].sort((a, b) => a - b)
                           : p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
                value={p.sampleRate} onChange={p.onSampleRate}
@@ -144,7 +182,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </Text>}
 
           <Text style={styles.section}>FM DE-EMPHASIS</Text>
-          <Seg options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
+          <Seg slot={slot} options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
                fmt={(v) => DEEMPH_OPTS.find(d => d.value === v)?.label ?? String(v)} />
           <Text style={styles.note}>50µs Europe/UK, 75µs Americas/Korea.</Text>
 
@@ -157,9 +195,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           {!p.isSpy && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
             <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm + 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
           </View>
 
           <View style={styles.toggleRow}>
@@ -172,7 +210,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </View>
 
           <Text style={styles.section}>DIRECT SAMPLING</Text>
-          <Seg options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
+          <Seg slot={slot} options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
                fmt={(v) => DS_MODES.find(d => d.value === v)?.label ?? String(v)} />
           <Text style={styles.note}>Not needed on RTL-SDR Blog V4 (HF is covered directly).</Text>
           </>}

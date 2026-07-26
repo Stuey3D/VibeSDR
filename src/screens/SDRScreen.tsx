@@ -4396,8 +4396,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // never shut it. It now reports up, and closeAll sends it a close token.
   const [serversOpen, setServersOpen] = useState(false);
   const [serversCloseToken, setServersCloseToken] = useState(0);
+  // ★★ EVERY overlay, not just the ones with keyboard navigation. An audit found that Esc knew
+  // about six of them and not the rest — so on the others it did not close what was open, it
+  // OPENED THE SERVERS MENU ON TOP. A surface the keyboard can reach must be one the keyboard
+  // can leave; that has now been the failure mode three times over (hidden controls, the FM-DX
+  // notice, the maps), so this lists them all rather than the ones we happened to think of.
   const anyPanelOpen = menuOpen || stepOpen || chatOpen ||
-                       freqModalOpen || modeSelOpen || audioSheetOpen || serversOpen;
+                       freqModalOpen || modeSelOpen || audioSheetOpen || serversOpen ||
+                       hwOpen || aboutOpen || ratioOverlayOpen || recordingsOpen ||
+                       cityPickerOpen;
   const panelOpenRef = useRef(anyPanelOpen);
   useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
 
@@ -4435,6 +4442,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     const closeAll = () => {
       setMenuOpen(false); setStepOpen(false); setChatOpen(false);
       setFreqModalOpen(false); setModeSelOpen(false); setAudioSheetOpen(false);
+      setHwOpen(false); setAboutOpen(false); setRatioOverlayOpen(false);
+      setRecordingsOpen(false); setCityPickerOpen(false);
       setServersCloseToken(t => t + 1);
     };
 
