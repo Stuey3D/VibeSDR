@@ -206,10 +206,10 @@ export function useRepeatingKeys(
       const elapsed = Date.now() - startedAt;
       timer = setTimeout(tick, elapsed > REPEAT_RAMP_MS ? REPEAT_FAST_MS : REPEAT_MS);
     };
-    const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+    const down = emitter.addListener('VibeKeyDown', (e: { key: string; plain?: boolean }) => {
       const k = e?.key;
       if (!k) return;
-      noteKeyForFka(k);
+      noteKeyForFka(k, e?.plain !== false);
       if (k === held) return;      // a re-fired down for the key already held: ignore
       stop();
       hRef.current(k);
@@ -248,9 +248,16 @@ let arrowsSeen = 0;
 const fkaListeners = new Set<(on: boolean) => void>();
 export const fullKeyboardAccessSuspected = () => keysSeen >= 4 && arrowsSeen === 0;
 
-function noteKeyForFka(k: string) {
+/**
+ * ★★ `plain` matters more than it looks. The `< > - +` aliases emit REAL arrow names — that is
+ * the whole point of them — and Shift+arrow does too. Both are the WORKAROUNDS for Full Keyboard
+ * Access, so counting either as "an arrow arrived" made the feature suppress its own diagnosis:
+ * the moment a user pressed the one key that still worked, the app concluded FKA was off.
+ * (Found 2026-07-26, after the splash failed to appear on a device that plainly needed it.)
+ */
+export function noteKeyForFka(k: string, plain = true) {
   const was = fullKeyboardAccessSuspected();
-  if (k.startsWith('Arrow')) arrowsSeen++; else keysSeen++;
+  if (k.startsWith('Arrow') && plain) arrowsSeen++; else keysSeen++;
   const now = fullKeyboardAccessSuspected();
   if (was !== now) fkaListeners.forEach(f => f(now));
 }

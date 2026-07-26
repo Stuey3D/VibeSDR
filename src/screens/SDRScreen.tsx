@@ -87,7 +87,7 @@ import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
-import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka } from '../components/PanelNav';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -4451,8 +4451,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       setServersCloseToken(t => t + 1);
     };
 
-    const down = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+    const down = emitter.addListener('VibeKeyDown', (e: { key: string; plain?: boolean }) => {
       const k = e?.key; if (!k) return;
+      // ★★ Feed the Full Keyboard Access detector FIRST — above every guard below.
+      // This screen runs its own raw listener rather than useRepeatingKeys, so it was the one
+      // surface never reporting keys, and it is precisely the surface FkaSplash is mounted on.
+      // Loading straight into a server therefore meant the splash could never fire, which is
+      // exactly what Stuart saw. Counted before the focus and suppression guards because the
+      // question "do arrows reach this app at all" is app-wide, not per screen.
+      noteKeyForFka(k, e?.plain !== false);
       // ★ Not the screen on top — a stack navigator keeps this MOUNTED behind whatever is
       // above it, and a listener that keeps firing there acts on a screen the user cannot
       // see. The mirror of the bug that had the picker connecting to servers from behind

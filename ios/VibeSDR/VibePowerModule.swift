@@ -65,8 +65,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   static weak var shared: VibePowerModule?
 
   /// Called from VibeKeyWindow. No-ops harmlessly before JS has subscribed.
-  static func emitKey(_ name: String, _ key: String) {
-    shared?.sendEvent(withName: name, body: ["key": key])
+  /// ★ `plain` is false when the name was SYNTHESISED — an arrow that came from the `< > - +`
+  /// aliases, or one that only arrived because a modifier was held. The Full Keyboard Access
+  /// detector needs that distinction: those are precisely the WORKAROUNDS for FKA, so counting
+  /// them as evidence that the arrows work would make the feature hide its own diagnosis.
+  static func emitKey(_ name: String, _ key: String, _ plain: Bool = true) {
+    shared?.sendEvent(withName: name, body: ["key": key, "plain": plain])
   }
 
   /// Pointer scroll deltas (mouse wheel / trackpad), in points.

@@ -22,7 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../contexts/ThemeContext';
 import { useFullKeyboardAccessSuspected, useRepeatingKeys, useSuppressShortcuts, noteTouchInteraction, NAV_FOCUS } from './PanelNav';
 
-const SEEN_KEY = 'lsv_fka_splash_seen_v1';
+const SEEN_KEY = 'lsv_fka_splash_seen_v2';
 
 const KEYS: { k: string; what: string }[] = [
   { k: '<  >', what: 'tune down and up' },

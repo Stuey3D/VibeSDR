@@ -114,6 +114,12 @@ class VibeKeyWindow: UIWindow {
   /// The bookmarks search — where the arrows walk the results while you are still typing — is
   /// the one place that still wants Shift with an arrow under FKA. One documented island is a
   /// better trade than blocking the whole thing on the only case that has no solution.
+  /// Did this name come from the physical key it claims to be? False for the punctuation
+  /// aliases and for anything reached with a modifier held — see emitKey's note.
+  private static func isPlain(_ key: UIKey) -> Bool {
+    key.modifierFlags.isEmpty && arrowAlias[key.charactersIgnoringModifiers] == nil
+  }
+
   private static let arrowAlias: [String: String] = [
     ",": "ArrowLeft", "<": "ArrowLeft",
     ".": "ArrowRight", ">": "ArrowRight",
@@ -183,7 +189,7 @@ class VibeKeyWindow: UIWindow {
       let mine = VibeKeyWindow.typingPassthrough.contains(n)
               || (numeric && n.count == 1 && n >= "A" && n <= "Z")
       if typing && !mine { continue }
-      VibePowerModule.emitKey("VibeKeyDown", n)
+      VibePowerModule.emitKey("VibeKeyDown", n, VibeKeyWindow.isPlain(k))
     }
     // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must
     // still receive them. We are observing here, not intercepting.
@@ -201,7 +207,7 @@ class VibeKeyWindow: UIWindow {
       let mine = VibeKeyWindow.typingPassthrough.contains(n)
               || (numeric && n.count == 1 && n >= "A" && n <= "Z")
       if typing && !mine { continue }
-      VibePowerModule.emitKey("VibeKeyUp", n)
+      VibePowerModule.emitKey("VibeKeyUp", n, VibeKeyWindow.isPlain(k))
     }
     if typing { super.pressesEnded(presses, with: event); return }
     let handled = presses.contains { $0.key.flatMap { VibeKeyWindow.name(for: $0, typing: typing) } != nil }
