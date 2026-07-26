@@ -7,7 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
-import { shortcutsSuppressed } from '../components/PanelNav';
+import { shortcutsSuppressed, useKeyboardMode, NAV_FOCUS } from '../components/PanelNav';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -603,6 +603,14 @@ export default function TunerScreen({ route, navigation }: Props) {
   const screenFocusedRef = useRef(screenFocused);
   useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
 
+  // Read through refs: the key listener is installed once.
+  const showNoticeRef = useRef(false);
+  showNoticeRef.current = showNotice;
+  const dismissNoticeRef = useRef<() => void>(() => {});
+  dismissNoticeRef.current = dismissNotice;
+
+  const kbInUse = useKeyboardMode();
+
   const panelsOpenRef = useRef(false);
   useEffect(() => {
     panelsOpenRef.current = freqModalOpen || demodOpen || stepOpen || audioSheetOpen
@@ -616,6 +624,15 @@ export default function TunerScreen({ route, navigation }: Props) {
       if (!k) return;
       // Not the screen on top, or a page we did not write is showing — same rules as SDRScreen.
       if (!screenFocusedRef.current || shortcutsSuppressed()) return;
+      // ★★ THE SHARED-TUNER NOTICE COMES FIRST. It is modal and it is the ONLY thing on screen,
+      // so it takes every key and passes none through — and it had no keyboard route out at
+      // all, which on a keyboard-only setup meant the app opened into a wall. Enter, Space and
+      // Escape all dismiss it, because with one button and one action there is nothing to
+      // choose between and no reason to be fussy about which key you reach for.
+      if (showNoticeRef.current) {
+        if (k === 'Enter' || k === 'Space' || k === 'Escape') dismissNoticeRef.current();
+        return;
+      }
       if (k === 'Escape') {
         // One rule: something open closes, nothing open goes back to the server list.
         if (panelsOpenRef.current) {
@@ -858,8 +875,14 @@ export default function TunerScreen({ route, navigation }: Props) {
             <Text style={styles.noticeItem}>💬  Please ask in chat before you retune.</Text>
             <Text style={styles.noticeItem}>🔒  Lock-screen / headphone skip is disabled here, so you can't retune everyone by accident.</Text>
             <Text style={styles.noticeItem}>👤  The counter at the top shows how many people are listening.</Text>
-            <TouchableOpacity style={styles.noticeBtn} onPress={dismissNotice}>
-              <Text style={styles.noticeBtnTxt}>GOT IT</Text>
+            {/* ★ Ringed while a keyboard is in use, so it is visibly the thing a key will
+                press — the notice is modal, so this is the only target on screen. */}
+            <TouchableOpacity
+              style={[styles.noticeBtn, kbInUse && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+              onPress={dismissNotice}>
+              <Text style={styles.noticeBtnTxt}>
+                {kbInUse ? 'GOT IT  ·  press enter' : 'GOT IT'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
