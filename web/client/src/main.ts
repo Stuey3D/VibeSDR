@@ -289,6 +289,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onRspStat: (sys, lna, ifgr, overload, settling) => {
       $('initChip').classList.toggle('set', settling);
+      // Same fact, two places: beside the gain controls where it can be ACTED on, and on the
+      // main screen where it will actually be seen.
+      $('ovlChip').classList.toggle('set', overload);
       // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
       // dongle where it has to be guessed from the spectrum.
       $<HTMLElement>('rspOverload').hidden = !overload;
@@ -2586,12 +2589,20 @@ function renderRds() {
     const near = Math.min(d0, d90);
     // ★ Only claim a FAULT when the estimate is genuinely solid — asserting a transmitter
     // defect is serious, so the bar for saying it is higher than for the other states.
-    const verdict = near <= 10 ? (d0 <= d90 ? 'in phase' : 'quadrature')
-                  : near <= 25 ? 'off nominal'
+    // ★ WIDER BANDS, because the measurement is steadier than the labels were. Heart read
+    // 27/25/24 degrees across two receivers and two antennas — three degrees of spread — yet
+    // flipped between "off nominal" and "FAULT" because the boundary sat at 25. A verdict
+    // that changes on a one-degree drift makes a stable measurement look unstable, which is
+    // the opposite of what a diagnostic should do (Stuart, 2026-07-26).
+    // ★ FAULT is now reserved for genuinely far out (>40 degrees from BOTH nominals) and
+    // still requires a solid estimate — calling a broadcaster's transmitter defective
+    // deserves the higher bar.
+    const verdict = near <= 12 ? (d0 <= d90 ? 'in phase' : 'quadrature')
+                  : near <= 40 ? 'off nominal'
                   : coh > 0.7  ? 'FAULT'
                   : 'off nominal';
     phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
-    phEl.style.color = near <= 10 ? '#7dff9a' : near <= 25 ? '#ffd479' : '#ff8a7d';
+    phEl.style.color = near <= 12 ? '#7dff9a' : near <= 40 ? '#ffd479' : '#ff8a7d';
   }
 
   // ── PI decomposition — free, it is arithmetic on a number we already have ──────
@@ -4186,6 +4197,12 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
   const isRsp = caps?.driver === 'sdrplay';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
+  // Dongle-only controls: hidden on anything that is not a dongle, so no inert switches.
+  for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
+    el.hidden = isRsp;
+  $('radioName').textContent = caps?.model
+    ? (isRsp ? `SDRplay ${caps.model}` : caps.model)
+    : (caps?.driver === 'rtl' ? 'RTL-SDR' : '—');
   // The dongle's single gain slider is meaningless on an RSP — hide it rather than leave a
   // control that does something unrelated to its label.
   const gainRow = $('gain').closest('.mrow') as HTMLElement | null;

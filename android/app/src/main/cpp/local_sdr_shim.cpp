@@ -4373,7 +4373,22 @@ bool LocalSdrShim::isSdrplay() const { return p && p->useSdrplay(); }
 
 std::string LocalSdrShim::radioCapsJson() const {
     if (!p) return "";
-    if (!p->useSdrplay()) return ",\"radio\":{\"driver\":\"rtl\"}";
+    if (!p->useSdrplay()) {
+        // ★ Name the dongle too. The client had nothing to show for a receiver, which is an
+        // odd thing for a radio application to be coy about — and the USB descriptor carries
+        // what is written on the box ("Blog V4"), which is far more use than "RTL-SDR".
+        // The USB descriptor carries what is written on the box ("Blog V4"), which is far
+        // more use than librtlsdr's generic tuner name — the same reasoning as vs_device_name.
+        std::string n = "RTL-SDR";
+        if (p->usbIndex >= 0) {
+            char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
+            if (rtlsdr_get_device_usb_strings((uint32_t)p->usbIndex, mfr, prd, ser) == 0 && prd[0]) {
+                n = std::string(mfr[0] ? mfr : "") + (mfr[0] ? " " : "") + prd;
+            }
+        }
+        for (auto& c : n) if (c == '"' || c == '\\') c = ' ';   // device strings, kept simple
+        return ",\"radio\":{\"driver\":\"rtl\",\"model\":\"" + n + "\"}";
+    }
     auto& d = *p->sdrp;
     std::string j = ",\"radio\":{\"driver\":\"sdrplay\",\"model\":\"" + d.model() + "\"";
     j += ",\"lnaStates\":" + std::to_string(d.lnaStateCount());

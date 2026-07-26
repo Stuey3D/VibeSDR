@@ -100,7 +100,17 @@ bool apiOpen(std::string& err) {
 
 void apiClose() {
     std::lock_guard<std::mutex> lk(g_apiMtx);
-    if (g_apiRefs > 0 && --g_apiRefs == 0) api().Close();
+    if (g_apiRefs > 0) --g_apiRefs;
+    // ★★★ WE NEVER CALL sdrplay_api_Close(). Closing the API around a device release is what
+    // leaves the SYSTEM-WIDE lock held: the service is left mid-operation and every later
+    // caller — in any process — blocks forever on LockDeviceApi. Observed as "the USB icon
+    // comes up next to it and drops away straight away", and as the API being dead
+    // afterwards until the service is restarted (Stuart, 2026-07-26).
+    // ★ So the handle is deliberately kept for the life of the process. That is what
+    // SDRplay's own software does, and an "unreleased" handle at exit costs nothing —
+    // whereas a poisoned lock costs every other program on the machine.
+    // ★★ Reference counting is kept because it still governs Select/Release pairing; only
+    // the final Close is skipped.
 }
 }  // namespace
 
