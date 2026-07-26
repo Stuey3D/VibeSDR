@@ -662,6 +662,15 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   opacity: 0.55; pointer-events: none;
 }
 #rspIfGr.agc::-webkit-slider-thumb { background: var(--text-dim); }
+/* ★★ FIXED-WIDTH READOUTS. These values change length as they are dragged ("-30 dBfs" ->
+   "-10 dBfs · drives hard"), and in a flex row that RESIZES THE SLIDER MID-DRAG — so the
+   pointer suddenly maps to a different position and the value leaps (Stuart, 2026-07-26:
+   "jumping from -30 to -10 and the slider changes size").
+   ★ A readout added to make a control clearer must not be able to move the control. */
+#rspCtls .val {
+  flex: 0 0 130px; min-width: 130px; text-align: right; white-space: nowrap; overflow: hidden;
+}
+#rspCtls input[type=range] { flex: 1 1 auto; min-width: 0; }
 #rspOverload {
   color: #1a0f00; background: #ff8a3d; font-size: 10px; letter-spacing: 1px;
   padding: 1px 6px; border-radius: 3px; font-weight: 600;

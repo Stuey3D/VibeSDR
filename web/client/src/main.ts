@@ -304,10 +304,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         tweenIfGr(ifgr);
         $('rspIfGrVal').textContent = `${ifgr} dB · AGC`;
       }
-      // Keep the RF slider honest too if something else moved the state.
+      // Keep the RF slider honest too if something else moved the state — and RE-RENDER, or
+      // the thumb moves while the label beside it keeps the old number, which reads as the
+      // two disagreeing about the same thing.
       const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
       const el = $<HTMLInputElement>('rspLna');
-      if (document.activeElement !== el) el.value = String(lnaMax - lna);
+      if (document.activeElement !== el) {
+        el.value = String(lnaMax - lna);
+        renderRspVals();
+      }
     },
     onRdsX: (x) => {
       const now = Date.now();
@@ -4220,7 +4225,7 @@ function renderRspVals() {
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
-  $('rspAgcSetVal').textContent = `${sp} dBfs${sp >= -25 ? ' · drives hard' : sp <= -60 ? ' · gentle' : ''}`;
+  $('rspAgcSetVal').textContent = `${sp} dBfs${sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
 
 /** Glide the IF thumb to a new AGC value. Status arrives at 5 Hz; a slider that teleports

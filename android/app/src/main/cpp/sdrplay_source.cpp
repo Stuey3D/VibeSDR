@@ -232,6 +232,9 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     }
     // ★ Give the AGC real loop dynamics BEFORE it starts. The API defaults them all to zero,
     // which is not "fast" but "undefined behaviour dressed as a default".
+    // ★ Before Init, so the struct handed to the API is already coherent: a starting IF
+    // reduction, a target, and real loop dynamics.
+    ch->tunerParams.gain.gRdB = 40;
     setIfAgcSetPoint(-30);
     setIfAgcDynamics(500, 500, 200, 5);
     setGainTenthDb(gainTenthDb);
@@ -250,6 +253,28 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     impl_->streaming = true;
     open_ = true;
     lost_ = false;
+
+    // ★★★ CYCLE THE AGC AFTER Init. Setting agc.enable in the params struct BEFORE Init does
+    // not start the loop — only a transition does, applied through Update once the device is
+    // running. So we perform exactly the sequence Stuart found by hand: off, then on.
+    // ★ This is the last of three separate reasons SDRplay AGC misbehaves under third-party
+    // software, and the one no amount of reading the struct would have revealed. It was found
+    // by a user noticing that toggling the switch fixed it, then by narrowing what the toggle
+    // actually did: first the gRdB seed (fixed), then this transition (2026-07-26).
+    // ★★ A SETTING THAT ONLY TAKES EFFECT ON CHANGE is not a setting, it is an event — and
+    // initialising it by assignment silently does nothing.
+    {
+        auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+        const auto want = agc.enable;
+        if (want != sdrplay_api_AGC_DISABLE) {
+            agc.enable = sdrplay_api_AGC_DISABLE;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+            agc.enable = want;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+        }
+    }
     return true;
 }
 
@@ -293,7 +318,12 @@ void SdrplaySource::setGainTenthDb(int tenthDb) {
     // here, so the one control a single slider gets must be the one that governs it.
     const int n = lnaStateCount();
     int st;
-    if (tenthDb < 0) {
+    // ★ ZERO MEANS UNSET, NOT "no gain". vs_default_config leaves gainTenthDb at 0, and
+    // reading that literally mapped it to LNA state 9 — MINIMUM RF gain — so a freshly
+    // started server sat at the bottom of its range with the slider pinned at 0 while the
+    // readout said otherwise (Stuart, 2026-07-26). A sentinel and a value must not share a
+    // representation.
+    if (tenthDb <= 0) {
         // "Auto" gets a MIDDLE LNA state, never 0 — automatic must not mean wide open.
         st = n / 2;
     } else {
@@ -420,7 +450,13 @@ void SdrplaySource::setIfAgc(bool on) {
     // then hand it over (Stuart, 2026-07-26).
     // ★ Order matters and must not be reversed: writing gRdB AFTER enabling is refused,
     // because the AGC owns it by then.
-    if (on && agc.enable == sdrplay_api_AGC_DISABLE) {
+    // ★★ SEED WHENEVER TURNING ON, not only on a transition from DISABLE. The API's DEFAULT
+    // for agc.enable is already AGC_50HZ — so a "currently off?" guard never fires at
+    // startup, gRdB is left at the API default, and the loop still has no starting point.
+    // That is why seeding it appeared not to fix anything on a restart (Stuart, 2026-07-26).
+    // ★ A guard that tests for a state the system is never in is the same as no guard at all,
+    // and it reads as though the case were handled.
+    if (on) {
         ch->tunerParams.gain.gRdB = 40;      // mid reduction — a sane place for the loop to start
         if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                                 sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
