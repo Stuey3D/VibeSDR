@@ -896,6 +896,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
+  const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -927,6 +928,16 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
   return (
     <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
+
+      {/* ★ Handback flash — see useHandbackFlash. The landscape bar has its own drum row, so
+          without this the announcement simply vanished on rotation. */}
+      <Animated.View pointerEvents="none"
+        style={{
+          position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
+          borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
+          backgroundColor: 'rgba(124,255,155,0.10)',
+          opacity: handbackFlash, zIndex: 3,
+        }} />
 
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
