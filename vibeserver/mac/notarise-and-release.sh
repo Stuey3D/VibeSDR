@@ -40,8 +40,14 @@ xattr -cr "$APP"
 echo "==> Signing (hardened runtime)…"
 find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null \
   | xargs -0 -I{} codesign --force --timestamp --options runtime --sign "$IDENT" {} || true
-codesign --force --timestamp --options runtime --sign "$IDENT" "$APP/Contents/MacOS/VibeServer"
-codesign --force --timestamp --options runtime --sign "$IDENT" "$APP"
+# ★★ THE ENTITLEMENT MATTERS. Library validation (part of the hardened runtime) allows only
+# libraries signed by our own Team ID — and SDRplay's API is signed by SDRPLAY LIMITED, so
+# without disable-library-validation the dlopen() in sdrplay_source.cpp is refused and RSPs
+# never appear. ★ Only on a SIGNED build: an unsigned dev build loads it happily, so this
+# fails exclusively in the artefact you ship (2026-07-27).
+ENT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/VibeServer.entitlements"
+codesign --force --timestamp --options runtime --entitlements "$ENT" --sign "$IDENT" "$APP/Contents/MacOS/VibeServer"
+codesign --force --timestamp --options runtime --entitlements "$ENT" --sign "$IDENT" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 # ── Notarise ────────────────────────────────────────────────────────────────
