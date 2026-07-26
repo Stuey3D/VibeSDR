@@ -286,6 +286,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       applyRateOptions();
       populateHw();
     },
+    onRdsX: (x) => {
+      rdsExt = x;
+      if (rdsPanelOpen()) { renderRds(); drawConstellation(); }
+    },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
       // RDS is the station naming itself — it outranks any bookmark guess.
@@ -313,6 +317,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         : '';
       if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
       rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
+      if (rdsPanelOpen()) renderRds();
       updateVts();
     },
     onStatus: (s, detail) => {
@@ -753,6 +758,11 @@ let logoQuery = '';     // guards against a stale async logo landing late
 function updateVts() {
   expireRdsIfRetuned();
   if (!spec) return;
+  // ★★ The Advanced RDS decoder OWNS the RDS display while it is open — the bar would be
+  // the same data, smaller and less complete. Hidden, not emptied: the media card reads
+  // the name from here, and clearing it would strip the OS Now Playing title (the same
+  // trap as the stale-textContent bug). Only the DRAWING stops.
+  if (rdsPanelOpen()) { $('vts').classList.remove('show', 'on'); return; }
   const hz = spec.frequency;
   // Region-aware, ham before broadcast before utility — the app's VTS ordering.
   const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
@@ -2164,7 +2174,18 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.ham };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | null = null;
+
+/** RDS programme types, RDS (Europe) table — index 0..31. */
+const PTY_EU = [
+  'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
+  'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening',
+  'Light Classical', 'Serious Classical', 'Other Music', 'Weather', 'Finance',
+  "Children's", 'Social Affairs', 'Religion', 'Phone In', 'Travel', 'Leisure',
+  'Jazz Music', 'Country Music', 'National Music', 'Oldies Music', 'Folk Music',
+  'Documentary', 'Alarm Test', 'Alarm',
+];
+let rdsExt: import('./spectrum').RdsExt | null = null;
 
 /** Params for the current mode — the shim's startDecoder reads these. */
 function decParams(mode: string): Record<string, unknown> {
@@ -2213,7 +2234,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decoders!.attach(mode, decParams(mode));
@@ -2314,14 +2335,27 @@ function syncDecButtons() {
 function showDecBox(what: string) {
   const image = what === 'wefax' || what === 'sstv';
   const isSpots = what === 'spots';
+  const isRds = what === 'rds';
   $('decBox').classList.add('open');
   $('decBox').classList.remove('min');
-  $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS' : what.toUpperCase();
+  // ★ "ADV RDS", never plain "RDS". Basic RDS — station name, RadioText, PI — is ALWAYS on
+  // and needs no decoder; a button labelled "RDS" would read as "switch this on to get RDS"
+  // and imply the app had none until you did (Stuart, 2026-07-26).
+  $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS'
+                            : what === 'rds'   ? 'ADV RDS'
+                            : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
   $('decText').classList.toggle('off', image || isSpots);
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
+  // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
+  // bar is a compressed version of the same data; showing both would be saying everything
+  // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
+  $('rdsPanel').classList.toggle('show', isRds);
+  $('decText').classList.toggle('off', image || isSpots || isRds);
+  if (isRds) { renderRds(); drawConstellation(); }
+  updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
   // PREV/SAVE buttons entirely for text/spot decoders.
   if (image) resetDecImages();
@@ -2332,7 +2366,91 @@ function showDecBox(what: string) {
   setDecLive(false);
 }
 
-function hideDecBox() { $('decBox').classList.remove('open'); }
+function hideDecBox() {
+  $('decBox').classList.remove('open');
+  $('rdsPanel').classList.remove('show');
+  updateVts();      // the bar comes back when Advanced RDS closes
+}
+
+/** True while the Advanced RDS decoder owns the RDS display. */
+function rdsPanelOpen(): boolean {
+  return activeDec === 'rds' && $('decBox').classList.contains('open');
+}
+
+/** Fill the Advanced RDS fields. Everything here is data we already received. */
+function renderRds() {
+  const dash = '—';
+  $('rxPi').textContent  = rdsPi > 0 ? piHex(rdsPi) : dash;
+  $('rxPs').textContent  = rdsName || dash;
+  $('rxRt').textContent  = rdsText || dash;
+  const pty = rdsExt?.pty ?? -1;
+  $('rxPty').textContent = pty >= 0 ? `${PTY_EU[pty] ?? '?'} (${pty})` : dash;
+  // TP/TA/MS are one-bit flags; show the ones that are SET rather than a row of noes.
+  const f: string[] = [];
+  if (rdsExt?.tp === 1) f.push('TP');
+  if (rdsExt?.ta === 1) f.push('TA');
+  if (rdsExt?.ms === 1) f.push('Music'); else if (rdsExt?.ms === 0) f.push('Speech');
+  $('rxFlags').textContent = f.length ? f.join(' · ') : dash;
+  $('rxBer').textContent = rdsBer >= 0 ? `${rdsBer}%` : dash;
+  // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
+  // signal is weak, when it is the normal injection ratio for a healthy station.
+  $('rxSig').textContent = rdsSig > -90 ? `${rdsSig.toFixed(0)} dB` : dash;
+  const af = rdsExt?.af ?? [];
+  $('rxAf').textContent = af.length
+    ? af.map((k) => (k / 1000).toFixed(1)).join('  ')
+    : dash;
+}
+
+/** The constellation. Two tight clusters = healthy; a diffuse cloud = buried in noise. */
+function drawConstellation() {
+  const c = $<HTMLCanvasElement>('rdsConst');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height, cx = W / 2, cy = H / 2;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  // Axes, so the two lobes are read against a centre rather than floating.
+  g.strokeStyle = 'rgba(120,200,120,0.22)';
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(cx, 0); g.lineTo(cx, H); g.moveTo(0, cy); g.lineTo(W, cy);
+  g.stroke();
+  const xy = rdsExt?.xy ?? [];
+  if (!xy.length) return;
+  // Points arrive as signed bytes scaled x100; the DSP already normalised by the running
+  // RMS, so the SCALE is stable and only the SHAPE changes — which is the part that means
+  // something.
+  // ★★ DE-ROTATE ONTO THE HORIZONTAL, as every other receiver plots it. Our detector is
+  // DIFFERENTIAL — it cancels carrier phase in the arithmetic rather than physically
+  // de-rotating the signal — so the constellation arrives tilted by however far our
+  // pilot-derived 57 kHz reference sits from the station's actual subcarrier. That tilt is
+  // real information (it is the phase error the complex I/Q detection exists to tolerate),
+  // but it makes the plot incomparable with SDR++ or a hardware receiver, where a Costas
+  // loop has already rotated it flat.
+  // BPSK has 180-degree ambiguity, so the angle is estimated by DOUBLING each point's angle
+  // — which maps both lobes onto one — averaging, and halving. Magnitude-weighted, so the
+  // strong symbols that define the lobes count for more than the noise near the origin.
+  let sx = 0, sy = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const x = xy[i], y = xy[i + 1];
+    const r2 = x * x + y * y;
+    if (r2 < 1) continue;
+    const a2 = 2 * Math.atan2(y, x);
+    sx += r2 * Math.cos(a2);
+    sy += r2 * Math.sin(a2);
+  }
+  const rot = (sx || sy) ? -0.5 * Math.atan2(sy, sx) : 0;
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const k = (W / 2) / 110;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const age = i / xy.length;                    // oldest dimmest
+    g.fillStyle = `rgba(120,255,140,${0.25 + 0.6 * age})`;
+    const px = cx + (xy[i] * cr - xy[i + 1] * sr) * k;
+    const py = cy - (xy[i] * sr + xy[i + 1] * cr) * k;
+    g.fillRect(px - 1, py - 1, 2, 2);
+  }
+}
 
 let decLiveTimer = 0;
 function setDecLive(on: boolean) {

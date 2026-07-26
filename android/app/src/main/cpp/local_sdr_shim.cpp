@@ -1209,6 +1209,11 @@ struct LocalSdrShim::Impl {
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
     int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
     float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
+    std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
+    // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
+    int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1;
+    std::vector<int> rdsAf;
+    std::vector<float> rdsConst;
     std::atomic<bool> stereoDetected{false};
     // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
@@ -1377,6 +1382,11 @@ struct LocalSdrShim::Impl {
             sendWs(sock, 0x2, frame.data(), frame.size());
             vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
+            // ★ The Advanced RDS payload runs FASTER than the metadata — a constellation
+            // updated once a second reads as a still image, and its whole value is watching
+            // the cloud tighten or spread as you tune. ~5 Hz, and only while the decoder is
+            // open, so an ordinary listener never pays for it.
+            if (rdsxOn.load() && n % 2 == 0) sendRdsExt(sock);
         }
         // Tuned-channel power for squelch (peak dB in the demod passband).
         {
@@ -1564,6 +1574,15 @@ struct LocalSdrShim::Impl {
     static void rdsPiCb(void* ctx, uint16_t pi) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPi = (int)pi;
+    }
+    static void rdsExtCb(void* ctx, int pty, int tp, int ta, int ms,
+                         const int* af, int nAf, const float* xy, int nPts) {
+        Impl* t = (Impl*)ctx;
+        if (!t->rdsxOn.load()) return;
+        std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsPty = pty; t->rdsTp = tp; t->rdsTa = ta; t->rdsMs = ms;
+        t->rdsAf.assign(af, af + nAf);
+        t->rdsConst.assign(xy, xy + nPts * 2);
     }
     static void rdsSigCb(void* ctx, float relDb) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
@@ -1879,6 +1898,7 @@ struct LocalSdrShim::Impl {
         cb.rdsPi    = &Impl::rdsPiCb;
         cb.rdsBer   = &Impl::rdsBerCb;
         cb.rdsSig   = &Impl::rdsSigCb;
+        cb.rdsExt   = &Impl::rdsExtCb;
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
@@ -2778,7 +2798,12 @@ struct LocalSdrShim::Impl {
 
     void startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
-        if (ext == "wefax") { startWefax(msg); return; }
+        // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
+        // fields we normally discard, plus the constellation). It attaches through the same
+        // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
+        // work and the extra bytes are paid for only while somebody is looking at them, and
+        // there is no setting to explain (Stuart, 2026-07-26).
+        if (ext == "rds") { rdsxOn.store(true); return; }
         if (ext == "sstv")  { startSstv(msg);  return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
@@ -2886,6 +2911,7 @@ struct LocalSdrShim::Impl {
         LOGI("decoder attached: sstv");
     }
     void stopDecoder() {
+        rdsxOn.store(false);
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
@@ -3106,6 +3132,34 @@ struct LocalSdrShim::Impl {
         if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
         else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
         LOGI("listener connected — dongle capture resumed");
+    }
+
+    /** Advanced RDS: the fields the normal path discards, plus the constellation.
+     *  Points are sent as signed bytes — the plot is 64 dots in a small box, so a float
+     *  would be fifty times the bytes for precision no eye can resolve. */
+    void sendRdsExt(std::shared_ptr<net::Socket> sock) {
+        if (!sock || !sock->isOpen()) return;
+        int pty, tp, ta, ms; std::vector<int> af; std::vector<float> pts;
+        { std::lock_guard<std::mutex> lk(rdsMtx);
+          pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; af = rdsAf; pts = rdsConst; }
+        std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
+                      + ",\"tp\":"  + std::to_string(tp)
+                      + ",\"ta\":"  + std::to_string(ta)
+                      + ",\"ms\":"  + std::to_string(ms)
+                      + ",\"af\":[";
+        for (size_t i = 0; i < af.size(); ++i) {
+            if (i) j += ',';
+            j += std::to_string(af[i]);
+        }
+        j += "],\"xy\":[";
+        for (size_t i = 0; i < pts.size(); ++i) {
+            if (i) j += ',';
+            float v = pts[i] * 100.0f;
+            if (v > 127.0f) v = 127.0f; else if (v < -127.0f) v = -127.0f;
+            j += std::to_string((int)v);
+        }
+        j += "]}";
+        sendText(sock, j);
     }
 
     /** Tell every connected client whether we currently have a radio. They draw the message. */

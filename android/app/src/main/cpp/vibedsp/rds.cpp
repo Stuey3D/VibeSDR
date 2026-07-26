@@ -21,6 +21,11 @@ int RdsDemod::bestIdx() const {
     return best;
 }
 
+const RdsDecoder* RdsDemod::best() const {
+    const int b = bestIdx();
+    return (b >= 0 && b < NPH) ? &dec_[b] : nullptr;
+}
+
 int RdsDemod::constellation(float* xy, int maxPts) const {
     const int n = std::min(maxPts, kConstPts);
     // Oldest first, so the plot ages consistently rather than jumping at the wrap.
@@ -345,6 +350,7 @@ void RdsDecoder::reset() {
     std::memset(rt_, 0, sizeof rt_);
     ecc_ = 0;
     piLast_ = 0; piSeen_ = false; grpRepairBits_ = 0; piConfirmedVal_ = 0;
+    pty_ = tp_ = ta_ = ms_ = -1; afN_ = 0;
     for (int i = 0; i < 4; ++i) blkRepair_[i] = 0;
     errHist_ = 0; errSeen_ = 0;
     eccCand_ = 0; eccSeen_ = false;
@@ -445,6 +451,9 @@ void RdsDecoder::parseGroup() {
     const uint16_t pi = haveA ? blk_[0] : piConfirmedVal_;
     const int gtype = (blk_[1] >> 12) & 0xF;
     const int ver   = (blk_[1] >> 11) & 1;
+    // ★ FREE, from a block B we have already validated: PTY and TP are in EVERY group.
+    pty_ = (blk_[1] >> 5) & 0x1F;
+    tp_  = (blk_[1] >> 10) & 1;
 
     // PI is carried by EVERY group, so a PI that disagrees with the previous one is
     // either a genuine station change or a mis-correction. Either way it is not yet
@@ -468,6 +477,22 @@ void RdsDecoder::parseGroup() {
 
     if (gtype == 0) {                                  // 0A/0B — programme service name
         const int addr = blk_[1] & 0x3;
+        ta_ = (blk_[1] >> 4) & 1;                      // traffic announcement (free)
+        ms_ = (blk_[1] >> 3) & 1;                      // music / speech (free)
+        // ★ AF — 0A only, block C, two codes per group. 1..204 map to 87.5 + n/10 MHz;
+        // 224+ are counts and filler, not frequencies. De-duplicated, because the list
+        // repeats endlessly and a DXer wants the SET, not the stream.
+        if (ver == 0 && blkOk_[2]) {
+            const int codes[2] = { (blk_[2] >> 8) & 0xFF, blk_[2] & 0xFF };
+            for (int ci = 0; ci < 2; ++ci) {
+                const int c = codes[ci];
+                if (c < 1 || c > 204) continue;
+                const int khz = 87500 + c * 100;
+                bool seen = false;
+                for (int k = 0; k < afN_; ++k) if (afKhz_[k] == khz) { seen = true; break; }
+                if (!seen && afN_ < kMaxAf) afKhz_[afN_++] = khz;
+            }
+        }
         if (blkOk_[3]) {
             if (trusted || (psSeen_[addr] && psCand_[addr] == blk_[3])) {
                 ps_[addr * 2]     = (char)((blk_[3] >> 8) & 0xFF);

@@ -62,6 +62,13 @@ export interface RdsMeta {
   sig: number;
 }
 
+/** The fields the normal RDS path discards, plus the constellation. */
+export interface RdsExt {
+  pty: number; tp: number; ta: number; ms: number;
+  af: number[];          // kHz
+  xy: number[];          // interleaved x,y as signed bytes (x100)
+}
+
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
@@ -72,6 +79,8 @@ export interface SpectrumCallbacks {
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
               forceIdleSaver?: boolean) => void;
   onRds?:    (meta: RdsMeta) => void;
+  /** Advanced RDS payload — only sent while the RDS decoder is attached. */
+  onRdsX?:   (x: RdsExt) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   /** The server is already serving someone else — do not retry. */
   onBusy?: () => void;
@@ -246,6 +255,14 @@ export class SpectrumClient {
           pi: msg.pi ?? -1, ecc: msg.ecc ?? 0,
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
+        });
+        break;
+      case 'rdsx':
+        this.cb.onRdsX?.({
+          pty: Number(msg.pty ?? -1), tp: Number(msg.tp ?? -1),
+          ta: Number(msg.ta ?? -1), ms: Number(msg.ms ?? -1),
+          af: Array.isArray(msg.af) ? msg.af : [],
+          xy: Array.isArray(msg.xy) ? msg.xy : [],
         });
         break;
       case 'pong':

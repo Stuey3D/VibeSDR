@@ -528,6 +528,45 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decBoxHead .dot.live { background: #33cc44; box-shadow: 0 0 6px #33cc44; }
 #decTitle { color: var(--amber); letter-spacing: 2px; }
 #decStatus { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; }
+/* ── Advanced RDS panel ─────────────────────────────────────────────────── */
+/* ★★ NOTHING HERE TRUNCATES. This is a DATA panel — an ellipsis in "Pop Music…" or an AF
+   list cut off at "89.5, 10…" hides the very thing the user opened it to read, and the
+   phone (a much narrower box) would truncate hardest of all. So: values WRAP, the grid
+   collapses to one column when it must, and the constellation drops below the fields
+   rather than squeezing them (Stuart, 2026-07-26). */
+#rdsPanel {
+  display: none; gap: 14px; padding: 10px 12px;
+  align-items: flex-start; flex-wrap: wrap;
+}
+#rdsPanel.show { display: flex; }
+#rdsGrid {
+  display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 7px 16px; flex: 1 1 300px; min-width: 0;
+}
+.rdsF { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.rdsF.rdsWide { grid-column: 1 / -1; }
+.rdsF label {
+  color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
+  text-transform: uppercase; flex: 0 0 66px;
+}
+.rdsF span {
+  font-family: var(--mono, monospace); font-size: 12px;
+  min-width: 0; overflow-wrap: anywhere; white-space: normal;
+}
+/* One column once the box is genuinely narrow — a phone, or a small decoder box. */
+@media (max-width: 560px) {
+  #rdsGrid { grid-template-columns: 1fr; }
+  #rdsConstWrap { margin: 0 auto; }
+}
+#rdsConstWrap { flex: 0 0 auto; text-align: center; }
+#rdsConst {
+  width: 180px; height: 180px; background: #000;
+  border: 1px solid var(--btn-border); border-radius: 3px;
+}
+#rdsConstCap {
+  color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
+  text-transform: uppercase; margin-top: 3px;
+}
 #decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
 #decBody { max-height: 40vh; overflow-y: auto; padding: 8px 10px; }
 #decBox.min #decBody { display: none; }
@@ -821,6 +860,28 @@ select.btn { padding: 6px 8px; }
     <pre id="decText"></pre>
     <canvas id="decImage"></canvas>
     <div id="spotList"></div>
+    <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
+         health. The VTS bar hides while this is open — no point showing the same data
+         twice, and this is the surface the user deliberately chose. -->
+    <div id="rdsPanel">
+      <div id="rdsGrid">
+        <div class="rdsF"><label>PI</label><span id="rxPi">—</span></div>
+        <div class="rdsF"><label>Station</label><span id="rxPs">—</span></div>
+        <div class="rdsF"><label>Type</label><span id="rxPty">—</span></div>
+        <div class="rdsF"><label>Flags</label><span id="rxFlags">—</span></div>
+        <div class="rdsF"><label title="Block error rate, before correction, last 12 groups">Errors</label><span id="rxBer">—</span></div>
+        <div class="rdsF"><label title="Recovered 57 kHz level relative to the 19 kHz pilot">Sub vs pilot</label><span id="rxSig">—</span></div>
+        <div class="rdsF rdsWide"><label>RadioText</label><span id="rxRt">—</span></div>
+        <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz">AF MHz</label><span id="rxAf">—</span></div>
+      </div>
+      <!-- The constellation. Two tight clusters = healthy; a diffuse cloud = the subcarrier
+           is buried in noise. It says at a glance what a block-error percentage takes
+           experience to interpret. -->
+      <div id="rdsConstWrap">
+        <canvas id="rdsConst" width="180" height="180"></canvas>
+        <div id="rdsConstCap">constellation</div>
+      </div>
+    </div>
   </div>
 </div>
   </div><!-- /#wfWrap -->
@@ -1006,6 +1067,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
+    <button class="btn" data-dec="rds" title="Advanced RDS — the full data set plus signal diagnostics. Basic RDS (station name, RadioText, PI) is always on.">ADV RDS</button>
   </div>
 
   <!-- Settings for the selected mode appear underneath, as in the app. -->

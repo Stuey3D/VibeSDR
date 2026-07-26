@@ -386,6 +386,22 @@ public:
     /** Last CONFIRMED PI (two agreeing receptions), or 0 if none yet. */
     uint16_t confirmedPi() const { return piConfirmedVal_; }
 
+    // ── ★★ FIELDS THAT COST NOTHING ──────────────────────────────────────────
+    // PTY and TP ride in BLOCK B, which every group we parse already requires and has
+    // already error-checked — we were reading four of its sixteen bits and discarding the
+    // rest. TA/MS/DI likewise, in type 0 groups. Same shape as the PI bug: recovered,
+    // validated, then thrown away at the door (2026-07-26).
+    int  pty() const { return pty_; }        // -1 = not yet seen
+    int  tp()  const { return tp_; }         // traffic programme, -1 unknown
+    int  ta()  const { return ta_; }         // traffic announcement now, -1 unknown
+    int  ms()  const { return ms_; }         // 1 = music, 0 = speech, -1 unknown
+    /** Alternative frequencies, kHz, de-duplicated. Rides in 0A block C, which we already
+     *  receive. More than a display field: a list of where else the same PI can be found
+     *  feeds the FM-DX dial and learned stations directly (Stuart). */
+    int  afCount() const { return afN_; }
+    int  afKhz(int i) const { return (i >= 0 && i < afN_) ? afKhz_[i] : 0; }
+    static constexpr int kMaxAf = 25;
+
     // ── Correction strength (the "advanced RDS" lever) ───────────────────────
     // Longest burst, in bits, the correction table will attempt to repair. The standard
     // permits 5. Wider means more blocks recovered on a weak signal AND more chances to
@@ -456,6 +472,9 @@ private:
     char ps_[9] = {0};
     char rt_[65] = {0};
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
+    int pty_ = -1, tp_ = -1, ta_ = -1, ms_ = -1;
+    int afKhz_[kMaxAf] = {0};
+    int afN_ = 0;
     // ── Confirmation by repetition ────────────────────────────────────────────
     // Burst correction buys extra blocks, but a MIS-correction produces a block that
     // looks valid and isn't — and a wrong station name on screen is worse than no name
@@ -526,6 +545,8 @@ public:
      *  Copies up to `maxPts` normalised x,y pairs; returns how many were written. */
     int constellation(float* xy, int maxPts) const;
     static constexpr int kConstPts = 64;
+    /** Extended fields from whichever hypothesis is winning; -1 / 0 when none is. */
+    const RdsDecoder* best() const;
 private:
     std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
@@ -635,6 +656,12 @@ public:
         void (*rdsBer)(void* ctx, int percent) = nullptr;
         /** Recovered 57 kHz level relative to the pilot, dB. See subcarrierRelDb(). */
         void (*rdsSig)(void* ctx, float relDb) = nullptr;
+        // ★ The Advanced RDS decoder's payload: the fields we used to discard, plus the
+        // constellation. Only emitted when a client has the decoder OPEN — selecting it IS
+        // the toggle, so nothing here is paid for while nobody is looking.
+        void (*rdsExt)(void* ctx, int pty, int tp, int ta, int ms,
+                       const int* afKhz, int nAf,
+                       const float* constXY, int nPts) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
     };
