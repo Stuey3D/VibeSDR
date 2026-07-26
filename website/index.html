@@ -443,7 +443,7 @@
     </ul>
 
     <div class="mac-alpha">
-      <p class="soon-k">New · macOS alpha · v0.3.4 · GPU waterfall</p>
+      <p class="soon-k">New · macOS alpha · v0.4 · SDRplay + Advanced RDS</p>
       <h3>Now on the Mac too</h3>
       <p>
         The same server, native on macOS — a menu&#8209;bar app around the same DSP core. Plug in an
@@ -458,6 +458,24 @@
         <b>scroll&#8209;speed</b> and <b>data&#8209;rate</b> controls so a slow link stays smooth,
         and save/compare for decoded images. Audio is <b>Opus</b> (around 4× lighter), which is what
         lets <b>VibeSDR Jr</b> on the Apple Watch pull decent stereo and a live waterfall down Bluetooth.
+      </p>
+      <p>
+        <b>v0.4 adds SDRplay RSP receivers</b> alongside RTL&#8209;SDR dongles, with the controls an
+        RSP actually has rather than a dongle's: RF gain as an LNA state, a separate IF gain
+        reduction, IF AGC with an adjustable target, the FM and DAB notch filters, bias&#8209;T,
+        spans up to 8&nbsp;MHz, and the receiver's own overload warning. SDRplay's API is a separate
+        install from <a href="https://www.sdrplay.com/downloads/">sdrplay.com</a> — we don't bundle
+        it, and everything else works exactly as before without it.
+      </p>
+      <p>
+        <b>And an Advanced RDS decoder</b>, for anyone who chases FM. It reads essentially the whole
+        of RDS — the station name and its 32&#8209;character long form, RadioText and now&#8209;playing
+        tags, programme type, traffic flags, the clock, alternative frequencies you can tap to tune,
+        and <b>EON</b>: the other stations in the same network. Alongside it sits what your receiver
+        is making of the signal — block error rate, the pilot and RDS injection levels in kHz
+        deviation, a constellation, a symbol trace, the MPX spectrum, and the
+        <b>RDS&#8209;to&#8209;pilot phase</b>, a measurement that normally means carrying a broadcast
+        analyser. Every reading is labelled with what it means, not just what it is.
       </p>
       <p>
         <b>v0.3.4</b> is about doing the same work for far less — and doing it right. Broadcast FM
@@ -476,7 +494,7 @@
         Your Mac's own media controls work too: play, pause and skip from the keyboard, with the
         station's name, frequency and <b>its own logo</b> in Now Playing.
       </p>
-      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v0.3.4-alpha">Download the macOS alpha →</a>
+      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v0.4.0-alpha">Download the macOS alpha →</a>
     </div>
   </div>
 </section>
