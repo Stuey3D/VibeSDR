@@ -30,6 +30,24 @@ no compositor process — and **no singleton refactor**. Each radio keeps its ow
 listeners, which is exactly the one-process-per-radio shape [[vibeserver_multiradio]] already
 concluded. This is buildable on what exists; stitching was not.
 
+## ★★ THE MEASURED LAYOUT (Stuart's RSP1A, OpenWebRX, 2026-07-28)
+Three 9 MHz windows with deliberate overlap:
+
+| profile | range | overlap with neighbour |
+|---|---|---|
+| FM Broadcast Band – Lower  | 87–96 MHz  | — |
+| FM Broadcast Band – Middle | 94–103 MHz | 2 MHz with Lower |
+| FM Broadcast Band – Upper  | 100–109 MHz | 3 MHz with Middle |
+
+★★★ **HFM 102.3 IS THE WHOLE ARGUMENT IN ONE NUMBER**: 0.7 MHz from Middle's top edge, 2.3 MHz
+inside Upper's bottom. Receivable on Middle, listenable WITH RDS on Upper.
+- ★ Implies **the outer ~1 MHz of a 9 MHz RSP window is compromised** — about 10% per edge, so
+  ~7 MHz of every 9 is genuinely good. Tiling 87.5–108 (20.5 MHz) with 7 MHz good regions needs
+  exactly THREE windows, which is why three RSPs is the real answer and not a round-up.
+- ★ He uses the same pattern beyond FM — Airband 117/124/131, 70cm 425/430/435 — and on the
+  RTL-SDR v4, 2.4 MHz windows with a 0.4 MHz overlap (~17%). **Overlap at least ~20%** so every
+  frequency lands inside somebody's good region.
+
 ## ★★ THE ONE ADDITION: SIBLING AWARENESS
 Side-by-side alone has a discovery hole. Stuart knows about HFM because it is his antenna and his
 band; a visitor would simply never learn the station is better next door.
@@ -42,6 +60,13 @@ So the server should know its profiles OVERLAP and tell the client:
   all. That is a DX tool, and it exists ONLY because we did not blend.
 - ★ Say WHY the alternative might be better — "nearer the middle of that receiver's range" — or
   it looks like an arbitrary suggestion.
+
+### ★ The rule is trivial to compute, and needs no measurement
+For a frequency `f`, prefer the profile maximising **fractional distance from its nearest edge**:
+`min(f - lo, hi - f) / (hi - lo)`. HFM: Middle scores 0.7/9 = 0.08, Upper 2.3/9 = 0.26 — Upper
+wins, which is what Stuart hears. ★ Pure arithmetic on numbers the operator already typed in;
+no signal measurement, no calibration, nothing to drift. Only suggest when the gap is worth a
+switch (say the alternative scores at least twice as well) or it will nag over trivia.
 
 ## Still to decide
 - Does one operator's set of radios appear as one server with N profiles, or N servers? Profiles
