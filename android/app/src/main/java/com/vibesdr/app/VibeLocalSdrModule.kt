@@ -368,7 +368,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // dies under it (START_STICKY brings the service back, but not the radio).
         if (autoRestore) {
             VibeServerRestore.arm(reactContext, name, pin, sampleRate, lockedRate, maxFps,
-                                  compress, webSrv, advertiseOnStart)
+                                  compress, webSrv, advertiseOnStart,
+                                  adminPw, uncomp, limitMin)
         } else {
             VibeServerRestore.disarm(reactContext)
         }
