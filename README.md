@@ -363,6 +363,7 @@ cd modules/vibe-local-sdr && ./build_ios.sh
 | **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR |
 | **Jakob Ketterl (DD5JFK) & the OpenWebRX+ project** | OpenWebRX / OpenWebRX+ servers |
 | **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
+| **Hans van Eijsden (FMDX.org)** | **Calibration and validation of the Advanced RDS analyser against a Pira FM broadcast analyser** — see below |
 | **radio-browser.info** | Community station directory used to look up FM-DX / RDS station logos |
 | **Konrad Kosmatka** | librdsparser — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
 | **Phil Karn (KA9Q)** | [ka9q-radio](https://github.com/ka9q/ka9q-radio) (GPL-3.0) — design reference for VibeSDR's front-end automatic gain: its IF-power level targeting, proportional correction and snap-to-hardware-steps. Read and credited, never copied; VibeSDR adds an intermodulation test that a direct-sampling receiver does not need |
@@ -376,6 +377,35 @@ cd modules/vibe-local-sdr && ./build_ios.sh
 | **Braille Institute** | Atkinson Hyperlegible typeface |
 | **Claude (Anthropic)** | AI coding and development assistant |
 | **Expo, React Native, Hermes, Skia, Reanimated, Gesture Handler, OkHttp** | App framework and native stack |
+
+### Hans van Eijsden — calibrating the RDS analyser
+
+VibeSDR's Advanced RDS panel reports things most software does not: the phase between a
+station's RDS subcarrier and its own 19 kHz pilot, the RDS and pilot deviations in kHz, and
+the constellation behind them. Measurements like those are only worth having if they are
+*right*, and nothing inside a receiver can tell you whether they are — a receiver comparing
+its own numbers against itself will happily agree with itself while being wrong.
+
+Hans van Eijsden of [FMDX.org](https://fmdx.org) settled that by putting a **Pira FM
+broadcast analyser** alongside VibeServer on six Dutch stations and photographing both
+panels side by side. That single act of measurement found two errors we had no other way of
+seeing:
+
+- **The RDS-to-pilot phase was reporting every station as its own reflection** — 8° shown as
+  172°, 45° as 131°. The estimate was correct; the range was not. What made it invisible is
+  that the two cases anyone would test against, a correctly-phased station and a quadrature
+  one, are precisely the two the fault cannot affect.
+- **The RDS deviation used the wrong constant**, applying a sinusoid's RMS-to-peak factor to
+  a quantity that is neither an RMS nor a sinusoid.
+
+He also confirmed on air the RDS features UK broadcasters barely transmit — **Long PS, RT+,
+PTYN and ODA** — which no amount of testing in Britain could have exercised, and reported
+the bugs behind the uncompressed-audio option, the receiver-location control, and several
+panel fixes. He identified the Opus codec **by ear** within moments of first listening,
+which is why raw audio is now an option at all.
+
+Where VibeSDR's RDS measurements agree with a professional analyser, it is because Hans
+checked them. Where they still differ, he told us by how much.
 
 ---
 
