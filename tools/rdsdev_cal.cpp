@@ -46,7 +46,7 @@ static std::vector<double> shapingTaps(double fs, int halfLenBits) {
     return h;
 }
 
-static double calibrate(double fs, unsigned seed) {
+static double calibrate(double fs, unsigned seed, double* kOut = nullptr) {
     const int nbits = 20000;
     std::mt19937 rng(seed);
     std::vector<int> bits(nbits);
@@ -97,25 +97,29 @@ static double calibrate(double fs, unsigned seed) {
     const int ns = std::min(lpfI.process(xI.data(), nsamp, oI.data()),
                             lpfQ.process(xQ.data(), nsamp, oQ.data()));
 
-    // Mean envelope, skipping filter warm-up.
+    // ★ BOTH constants. The mean envelope is what the old estimator used; the RMS is what the
+    // noise-subtracting one needs, because noise removes in POWER and only an RMS is a power.
     const int skip = ns / 10;
-    double sum = 0.0; long cnt = 0;
+    double sum = 0.0, sumSq = 0.0; long cnt = 0;
     for (int i = skip; i < ns; ++i) {
-        sum += std::sqrt((double)oI[i] * oI[i] + (double)oQ[i] * oQ[i]);
+        const double m2 = (double)oI[i] * oI[i] + (double)oQ[i] * oQ[i];
+        sum += std::sqrt(m2); sumSq += m2;
         ++cnt;
     }
     const double meanEnv = sum / cnt;
-    return devKHz / (meanEnv * 75.0);
+    const double rms     = std::sqrt(sumSq / cnt);
+    if (kOut) *kOut = devKHz / (rms * 75.0);          // peak / RMS
+    return devKHz / (meanEnv * 75.0);                 // peak / mean-envelope
 }
 
 int main() {
-    printf("  fs (Hz)   decim    K (peak/mean)   reported with K=1.41421\n");
+    printf("  fs (Hz)   decim   K peak/mean   K peak/RMS\n");
     for (double fs : {192000.0, 240000.0, 250000.0, 256000.0, 300000.0, 320000.0}) {
-        double K = 0.0;
-        for (unsigned s = 1; s <= 3; ++s) K += calibrate(fs, s);
-        K /= 3.0;
-        printf("  %8.0f  %5d    %10.4f      %6.3f kHz (true 4.000)\n",
-               fs, std::max(1, (int)std::floor(fs / 40000.0)), K, 4.0 * 1.41421356 / K);
+        double K = 0.0, Kr = 0.0;
+        for (unsigned s = 1; s <= 3; ++s) { double kr = 0; K += calibrate(fs, s, &kr); Kr += kr; }
+        K /= 3.0; Kr /= 3.0;
+        printf("  %8.0f  %5d   %10.4f   %10.4f\n",
+               fs, std::max(1, (int)std::floor(fs / 40000.0)), K, Kr);
     }
     return 0;
 }

@@ -410,6 +410,14 @@ public:
     /** DI — decoder identification: bit0 stereo, bit1 artificial head, bit2 compressed,
      *  bit3 dynamic PTY. Assembled across the four type-0 addresses. -1 = none yet. */
     int  di() const { return diSeen_ == 0xF ? di_ : -1; }
+    /** ★ THE SAME FIELDS BEFORE CONFIRMATION — what was last seen on air, accepted or not.
+     *  For the client's RAW view: the flicker is evidence about the signal path, so it is
+     *  offered rather than hidden. Never mix these into the sticky aggregate. */
+    int  ptyRaw() const { return ptyRaw_; }
+    int  tpRaw()  const { return tpRaw_; }
+    int  taRaw()  const { return taRaw_; }
+    int  msRaw()  const { return msRaw_; }
+    int  diRaw()  const { return diSeenRaw_ == 0xF ? diRaw_ : -1; }
     /** Clock time from group 4A: minutes since UTC midnight, and the local offset in
      *  half-hours. -1 = not received. ★ A DXer's favourite: CT is transmitted once a
      *  minute, so receiving one at all proves the link is carrying whole groups intact,
@@ -492,6 +500,9 @@ public:
 
 private:
     void parseGroup();
+    /** TA/MS/DI out of block B, confirmed by the same rule as PTY and TP. `addr` is the
+     *  segment address, which selects WHICH DI bit this group carries. */
+    void acceptBlockBFlags(int addr);
     void applyRtPlus(int type, int start, int len);
     void endRadioTextAtCr();
     // ── Weak-signal block recovery ───────────────────────────────────────────
@@ -538,8 +549,23 @@ private:
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
     int pty_ = -1, tp_ = -1, ta_ = -1, ms_ = -1;
     // Confirmation state for the block-B fields — see the note in parseGroup.
-    int ptyCand_ = -1, tpCand_ = -1;
+    // ★★ TA, MS and DI ride in the SAME block B and were accepted unconditionally long after
+    // PTY and TP were fixed. That is where "Artificial head · Compressed" came from on a
+    // station at 87% block errors (Hans/Stuart, 2026-07-27) — DI is four single bits, so one
+    // bad group flips a flag and the sticky aggregate keeps it forever.
+    int ptyCand_ = -1, tpCand_ = -1, taCand_ = -1, msCand_ = -1;
+    int diCandBit_[4] = { -1, -1, -1, -1 };   // per SEGMENT ADDRESS, not per DI bit number
     bool ptySeen_ = false, trustedB_ = false;
+    // ★★ THE UNCONFIRMED READING, KEPT DELIBERATELY. Confirmation happens here in the decoder,
+    // so a rejected value is normally discarded and no amount of UI could show it. A DXer
+    // working a marginal signal wants to SEE that flicker — it is evidence about the path, not
+    // noise to be hidden — so every confirmed field keeps its last raw sighting alongside.
+    // ★ These are LIVE, not sticky: raw is "what just arrived", and its coming and going is
+    // the whole point. The confirmed values remain the sticky ones.
+    // ★ Both are always published; choosing between them is entirely the CLIENT's business, so
+    // one listener switching to raw cannot affect what anyone else on a shared receiver sees.
+    int ptyRaw_ = -1, tpRaw_ = -1, taRaw_ = -1, msRaw_ = -1;
+    int diRaw_ = 0, diSeenRaw_ = 0;
     // ★ CONFIRMATION BY REPETITION, as everything else here uses. An AF that arrived once
     // could be a mis-corrected block; the list repeats endlessly, so a real one comes back
     // within seconds. Nothing is published until it has been seen kAfConfirm times.
@@ -637,6 +663,11 @@ public:
      *  low against a Pira analyser — see rdsDeviationKHz() in rds.cpp for why that residual
      *  is believed to be a real signal-path loss rather than a scaling error. */
     float rdsDeviationKHz() const;
+    /** ★ Turn on the guard-band noise measurement. Costs a second decimating filter pair on the
+     *  RDS front end, so it is the operator's call — see the note on guardPow_. Without it the
+     *  deviation figure is reported uncorrected and can read high on a weak signal. */
+    void setNoiseCorrection(bool on);
+    bool noiseCorrection() const { return guardOn_; }
     /** ★★★ RDS-TO-PILOT PHASE, in degrees — the measurement HansVanEijsden (FMDX.org,
      *  2026-07-26) called "one verrrrry much requested thing… as far as I know, no software
      *  solution yet", and carries a Pira broadcast analyser to get. A correctly encoded
@@ -786,6 +817,24 @@ private:
     RdsDecoder dec_[NPH];
     std::vector<float> xI_, xQ_, sI_, sQ_;
     float rdsRms_ = 0.0f;              // smoothed |baseband|, for subcarrierRelDb()
+    // ★★★ NOISE-SUBTRACTED DEVIATION. The ±2.4 kHz RDS baseband is never empty: with no
+    // subcarrier it still holds NOISE, and scaling that into a deviation produced confident
+    // nonsense — 12.9 kHz on a dead carrier and 10.5 kHz on a weak one, both past the 5.6 kHz
+    // spec ceiling, and the reading went UP as the signal got WORSE (Stuart, 2026-07-27).
+    // An estimate that rises as the station weakens is measuring the wrong thing.
+    // ★ So measure a GUARD BAND too — the same filter, offset clear of the subcarrier — and
+    // subtract it in POWER. What is left is the subcarrier alone, and it now degrades toward
+    // zero on a weak signal instead of inflating.
+    // ★ POWER, hence mean-square rather than mean-envelope: noise adds and removes as power,
+    // and only a mean-square is one. The peak/RMS crest factor differs accordingly (1.381 vs
+    // the 1.520 peak/mean-envelope) — both measured by tools/rdsdev_cal.
+    float rdsPow_ = 0.0f;              // smoothed mean-square of the RDS baseband
+    float guardPow_ = 0.0f;            // ...and of the guard band beside it
+    double guardPhase_ = 0.0;          // guard NCO phase, carried across blocks
+    double guardStep_ = 0.0;           // radians per sample for the guard offset
+    bool  guardOn_ = false;            // costs a second filter pair — operator opt-in
+    std::unique_ptr<RealFir> lpfGI_, lpfGQ_;
+    std::vector<float> xGI_, xGQ_, sGI_, sGQ_;
     // Doubled-angle accumulator: doubling folds the two BPSK lobes onto one, so they can be
     // averaged without cancelling. Slow, because this describes the transmitter.
     float phCos2_ = 0.0f, phSin2_ = 0.0f;
@@ -853,6 +902,13 @@ public:
         // work needs (2026-07-26).
         struct RdsExt {
             int pty, tp, ta, ms, di;
+            /** ★★ THE SAME FIELDS UNCONFIRMED — the client's RAW view. LIVE, not sticky: these
+             *  are the last thing seen on air whether or not it passed confirmation, so they
+             *  flicker on a marginal signal, which is exactly the diagnostic. Both sets are
+             *  always sent; which to show is purely the client's choice, so one listener in
+             *  RAW cannot change what anyone else on a shared receiver sees.
+             *  ★ -1 = nothing seen at all yet, same convention as the confirmed fields. */
+            int ptyRaw, tpRaw, taRaw, msRaw, diRaw;
             int ctMinutes, ctOffsetHalfHours;
             const int* afKhz; int nAf; int afSeen;
             const int* groupCounts; int groupTotal;
@@ -909,6 +965,10 @@ public:
     // FM de-emphasis time constant (seconds): 0 = off, 50e-6 (EU/UK), 75e-6 (US).
     // Applies to WFM and NFM. Takes effect on the next tune/rebuild.
     void setDeemphasis(double tauSec) { deempTau_ = tauSec; dirty_ = true; }
+    /** ★ Operator opt-in: widen the WFM channel and enable the RDS guard-band noise
+     *  measurement. Costs CPU everywhere downstream — see VsConfig::rdsMaxPerformance.
+     *  Marks the chain dirty so it takes effect on the next rebuild. */
+    void setRdsMaxPerformance(bool on) { rdsMaxPerf_ = on; dirty_ = true; }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     float stereoBlend()  const { return stereoBlend_; }
@@ -958,6 +1018,7 @@ private:
     bool lastStereo_ = false;
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
+    std::atomic<bool>   rdsMaxPerf_{false};  // wider channel + RDS noise correction
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;

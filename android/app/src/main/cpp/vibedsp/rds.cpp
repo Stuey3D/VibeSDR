@@ -193,21 +193,42 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
 }
 
 float RdsDemod::rdsDeviationKHz() const {
-    // ★★ CREST FACTOR, NOT √2. rdsRms_ is a smoothed MEAN OF THE ENVELOPE (see process()),
-    // not an RMS and not a sinusoid, so the sinusoid's √2 RMS→peak conversion that used to
-    // sit here was simply the wrong constant for the quantity — it under-read by ~7%.
-    // What we need is the peak/mean ratio of a spec-shaped biphase envelope after OUR own
-    // ±2.4 kHz baseband filter. That depends on the filter, so there is no closed form:
-    // measured by simulation (tools/rdsdev_cal) at 1.520, stable to ±0.2% across every
-    // channel rate from 192 to 320 kHz, which confirms it is a waveform property.
-    // ★ KNOWN REMAINING ERROR, ~1.3 dB: against HansVanEijsden's Pira analyser over six
-    // stations we still read ~14% low after this fix. That residual is NOT in here — it
-    // looks like genuine subcarrier loss in the WFM channel filter (pipeline.cpp chHalf
-    // = 100 kHz clips the FM sidebands, which attenuates the TOP of the MPX while leaving
-    // the 19 kHz pilot exact — matching the evidence that pilot deviation agrees on 6/6
-    // while RDS is low on 6/6). Fix that at source; do NOT absorb it into this constant,
-    // because if it is real we are also losing that much RDS decode margin.
+    // ★★★ NO SUBCARRIER, NO NUMBER. See the guardPow_ note in vibedsp.h: this band always holds
+    // something, so without a floor to subtract, noise becomes a "deviation". Observed on a
+    // dead carrier as "12.9 kHz - generous" beside no lock and 0.0 groups/s (Stuart,
+    // 2026-07-27) — a reading that is not merely wrong but IMPOSSIBLE, the spec ceiling being
+    // 7.5% = 5.6 kHz.
+    if (!best()) return -1.0f;
+
+    // ★ SUBTRACT THE FLOOR IN POWER. The guard band sees the same noise through the same
+    // filter but no subcarrier, so what survives the subtraction is signal alone. If the
+    // difference is not positive there is nothing above the noise, which is the honest answer
+    // on a station this weak — better than a confident number built out of hiss.
+    if (guardOn_) {
+        const float sigPow = rdsPow_ - guardPow_;
+        if (sigPow <= 0.0f) return -1.0f;
+        // 1.381 = peak / RMS of a spec-shaped biphase envelope through our own +/-2.4 kHz
+        // filter (tools/rdsdev_cal, stable to +/-0.2% from 192 to 320 kHz). NOT the 1.520 used
+        // below: that one is peak / mean-envelope, and only an RMS can have noise power taken
+        // off it.
+        return std::sqrt(sigPow) * 1.381f * 75.0f;
+    }
+
+    // ★ Uncorrected fallback when the operator has not enabled the guard band. Same crest
+    // factor reasoning, applied to the mean envelope: 1.520, replacing a hard-coded sqrt(2)
+    // that was a SINUSOID's RMS->peak factor applied to a quantity that is neither an RMS nor
+    // a sinusoid, and under-read by ~7%. This path still reads high on a weak signal — the
+    // client flags anything past the spec ceiling as suspect.
     return rdsRms_ * 1.520f * 75.0f;
+}
+
+// ★ Enabling costs a second decimating filter pair on the RDS front end (the rotation itself is
+// a complex multiply per input sample). Configured lazily here rather than in configure(),
+// because the operator can turn it on while a radio is already running.
+void RdsDemod::setNoiseCorrection(bool on) {
+    guardOn_ = on;
+    if (!on) { guardPow_ = 0.0f; return; }
+    guardPow_ = 0.0f;
 }
 
 float RdsDemod::pilotPhaseCoherence() const {
@@ -273,6 +294,14 @@ void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
     decim_ = std::max(1, (int)std::floor(mpxRate / 40000.0));
     lpfI_ = std::make_unique<RealFir>(taps, decim_);
     lpfQ_ = std::make_unique<RealFir>(taps, decim_);
+    // ★ THE GUARD BAND: the same filter, offset +6 kHz, so it sees the same noise through the
+    // same shape but no subcarrier. 6 kHz is chosen to sit in genuinely empty MPX — the RDS
+    // sidebands end near 59.4 kHz and the next thing anyone transmits is an SCA around 67 kHz,
+    // so 63 +/- 2.4 kHz (60.6-65.4) is clear of both. Too close and it would measure RDS and
+    // subtract the signal from itself; too far and it would measure something else's noise.
+    lpfGI_ = std::make_unique<RealFir>(taps, decim_);
+    lpfGQ_ = std::make_unique<RealFir>(taps, decim_);
+    guardStep_ = 2.0 * M_PI * 6000.0 / mpxRate;
     const double groupDelay = (taps.size() - 1) / 2.0;     // samples
     const double bitStep = 2.0 * M_PI * kRdsBit / mpxRate; // bit-phase per sample
     groupDelayPhase_ = std::fmod(groupDelay * bitStep, 2.0 * M_PI);
@@ -306,6 +335,9 @@ void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
 void RdsDemod::reset() {
     if (lpfI_) lpfI_->reset();
     if (lpfQ_) lpfQ_->reset();
+    if (lpfGI_) lpfGI_->reset();
+    if (lpfGQ_) lpfGQ_->reset();
+    rdsPow_ = guardPow_ = 0.0f; guardPhase_ = 0.0;
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
     mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
@@ -364,9 +396,38 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
         constBest_ = nb2;
     }
     // Smoothed RMS of the complex RDS baseband — the level the detector actually sees.
+    // ★ Mean-square is tracked alongside the mean envelope: the envelope feeds the legacy
+    // uncorrected deviation and subcarrierRelDb, the POWER feeds the noise subtraction, which
+    // can only be done on a power. Same smoothing on both so they stay comparable.
     for (int i = 0; i < nb; ++i) {
         const float mag2 = sI_[i] * sI_[i] + sQ_[i] * sQ_[i];
         rdsRms_ += 0.0005f * (std::sqrt(mag2) - rdsRms_);
+        rdsPow_ += 0.0005f * (mag2 - rdsPow_);
+    }
+
+    // ★★ THE GUARD BAND — only when the operator has paid for it. Rotating the ALREADY
+    // downconverted complex baseband by the offset and reusing the same taps costs one complex
+    // multiply per input sample plus a second decimating filter pair; building a whole second
+    // downconvert from the MPX would have cost the mixer twice over for the same answer.
+    if (guardOn_ && lpfGI_) {
+        xGI_.resize(n); xGQ_.resize(n);
+        double ph = guardPhase_;
+        for (int i = 0; i < n; ++i) {
+            const float c = (float)std::cos(ph), sn = (float)std::sin(ph);
+            xGI_[i] =  xI_[i] * c + xQ_[i] * sn;      // rotate by -ph: selects 57 kHz + offset
+            xGQ_[i] = -xI_[i] * sn + xQ_[i] * c;
+            ph += guardStep_;
+            if (ph > 2.0 * M_PI) ph -= 2.0 * M_PI;    // bounded, or the float cos/sin degrades
+        }
+        guardPhase_ = ph;
+        sGI_.resize(lpfGI_->maxOut(n));
+        sGQ_.resize(lpfGQ_->maxOut(n));
+        const int ng = std::min(lpfGI_->process(xGI_.data(), n, sGI_.data()),
+                                lpfGQ_->process(xGQ_.data(), n, sGQ_.data()));
+        for (int i = 0; i < ng; ++i) {
+            const float m2 = sGI_[i] * sGI_[i] + sGQ_[i] * sGQ_[i];
+            guardPow_ += 0.0005f * (m2 - guardPow_);
+        }
     }
 
     for (int i = 0; i < nb; ++i) {
@@ -588,6 +649,8 @@ void RdsDecoder::reset() {
     ptyCand_ = tpCand_ = -1; ptySeen_ = false; trustedB_ = false;
     for (int i = 0; i < kMaxAf; ++i) afHits_[i] = 0;
     di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
+    taCand_ = msCand_ = -1;
+    diCandBit_[0] = diCandBit_[1] = diCandBit_[2] = diCandBit_[3] = -1;
     rtpGroup_ = -1; lpsSeen_ = 0; rtAb_ = 0; rtAbSeen_ = false;
     ptynSeen_ = 0; lang_ = 0; pinHour_ = -1; eonN_ = 0; odaN_ = 0;
     for (int i = 0; i < kMaxOda; ++i) oda_[i] = Oda{};
@@ -721,6 +784,47 @@ void RdsDecoder::applyRtPlus(int type, int start, int len) {
     for (int i = n - 1; i >= 0 && (dst[i] == ' ' || dst[i] == '\r'); --i) dst[i] = '\0';
 }
 
+// ★★ TA / MS / DI — the rest of block B, held to the SAME standard as PTY and TP. A clean
+// block B is trusted outright; a repaired one must agree with the previous reception before it
+// is allowed to change anything.
+//
+// ★ DI is the one that really needed it. It is FOUR SINGLE BITS, one per group, each indexed by
+// the segment address — so a single mis-corrected block flips one flag, and the sticky
+// aggregate then keeps it for the whole session with nothing to contradict it.
+// ★★ THE PROMPT WAS A STATION AT 87% BLOCK ERRORS READING "Artificial head · Compressed"
+// (2026-07-27) — but do NOT record that as a confirmed false positive. Stuart points out it is
+// a local station with genuinely poor audio (ground hum has been heard on air), so
+// "Compressed" may well be true and the flags may be perfectly correct. What was wrong was the
+// STANDARD OF EVIDENCE: a single sighting, unconfirmable, indistinguishable from corruption.
+// The fix is justified by that, not by the reading having been proven wrong.
+// Candidates are tracked PER ADDRESS, because
+// consecutive groups carry DIFFERENT DI bits and comparing a bit against the previous group's
+// would compare two unrelated flags and confirm nothing.
+void RdsDecoder::acceptBlockBFlags(int addr) {
+    const int ta  = (blk_[1] >> 4) & 1;
+    const int ms  = (blk_[1] >> 3) & 1;
+    const int dib = (blk_[1] >> 2) & 1;
+    taRaw_ = ta; msRaw_ = ms;                          // what arrived, confirmed or not
+    if (trustedB_ || (taCand_ >= 0 && ta == taCand_)) ta_ = ta;
+    if (trustedB_ || (msCand_ >= 0 && ms == msCand_)) ms_ = ms;
+    taCand_ = ta; msCand_ = ms;
+
+    // ★★ REVERSED. The four DI bits are numbered d3..d0 and are transmitted in SEGMENT ADDRESS
+    // order 0,1,2,3 — so address 0 carries d3, not d0. Indexing them straight by address
+    // mirrors every flag: Heart, plainly in stereo, reported Mono because we were reading its
+    // dynamic-PTY bit and calling it stereo (Stuart, on air 2026-07-26).
+    const int b = 3 - addr;
+    if (addr >= 0 && addr < 4) {
+        if (dib) diRaw_ |= (1 << b); else diRaw_ &= ~(1 << b);
+        diSeenRaw_ |= (1 << b);
+        if (trustedB_ || (diCandBit_[addr] >= 0 && dib == diCandBit_[addr])) {
+            if (dib) di_ |= (1 << b); else di_ &= ~(1 << b);
+            diSeen_ |= (1 << b);   // ★ only once ACCEPTED, so a rejected bit stays "not seen"
+        }
+        diCandBit_[addr] = dib;
+    }
+}
+
 void RdsDecoder::parseGroup() {
     // ★★ BLOCK B IS THE ONLY HARD REQUIREMENT. It carries the group type and the segment
     // ADDRESS, so without it there is nowhere to put anything — but block A carries only
@@ -746,6 +850,7 @@ void RdsDecoder::parseGroup() {
     {
         const int pty = (blk_[1] >> 5) & 0x1F;
         const int tp  = (blk_[1] >> 10) & 1;
+        ptyRaw_ = pty; tpRaw_ = tp;
         if (trustedB_ || (ptySeen_ && pty == ptyCand_)) pty_ = pty;
         if (trustedB_ || (ptySeen_ && tp  == tpCand_))  tp_  = tp;
         ptyCand_ = pty; tpCand_ = tp; ptySeen_ = true;
@@ -778,18 +883,7 @@ void RdsDecoder::parseGroup() {
 
     if (gtype == 0) {                                  // 0A/0B — programme service name
         const int addr = blk_[1] & 0x3;
-        ta_ = (blk_[1] >> 4) & 1;                      // traffic announcement (free)
-        ms_ = (blk_[1] >> 3) & 1;                      // music / speech (free)
-        // DI arrives ONE BIT PER GROUP, indexed by the same address as the name — so it
-        // takes all four to assemble, and diSeen_ tracks which have arrived rather than
-        // reporting a half-built value as if it were complete.
-        // ★★ REVERSED. The four DI bits are numbered d3..d0 and are transmitted in SEGMENT
-        // ADDRESS order 0,1,2,3 — so address 0 carries d3, not d0. Indexing them straight by
-        // address mirrors every flag: Heart, plainly in stereo, reported Mono because we
-        // were reading its dynamic-PTY bit and calling it stereo (Stuart, on air 2026-07-26).
-        const int b = 3 - addr;
-        if ((blk_[1] >> 2) & 1) di_ |= (1 << b); else di_ &= ~(1 << b);
-        diSeen_ |= (1 << b);
+        acceptBlockBFlags(addr);                       // TA / MS / DI, confirmed like PTY
         // ★ AF — 0A only, block C, two codes per group. 1..204 map to 87.5 + n/10 MHz;
         // 224+ are counts and filler, not frequencies. De-duplicated, because the list
         // repeats endlessly and a DXer wants the SET, not the stream.
@@ -875,12 +969,8 @@ void RdsDecoder::parseGroup() {
     } else if (gtype == 15 && ver == 1) {              // 15B — fast basic tuning
         // Carries the same TA/MS/DI and PS segment as 0B, for quicker acquisition. Feeding
         // it through the same path means a station that leans on 15B is not slower for us.
-        ta_ = (blk_[1] >> 4) & 1;
-        ms_ = (blk_[1] >> 3) & 1;
         const int addr = blk_[1] & 0x3;
-        const int b = 3 - addr;
-        if ((blk_[1] >> 2) & 1) di_ |= (1 << b); else di_ &= ~(1 << b);
-        diSeen_ |= (1 << b);
+        acceptBlockBFlags(addr);
         if (blkOk_[3]) {
             ps_[addr * 2]     = (char)((blk_[3] >> 8) & 0xFF);
             ps_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);

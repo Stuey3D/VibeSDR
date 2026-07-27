@@ -17,7 +17,7 @@
  *      link. Keep _sendView.
  */
 
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'fmdx';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
@@ -27,6 +27,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   cwu: [-200, 200],    cwl: [-200, 200],
   fm:  [-6000, 6000],  nfm: [-5000, 5000],
   wfm: [-100000, 100000],
+  fmdx: [-100000, 100000],   // same RF channel; the SERVER widens its filter (see paramsFor)
 };
 
 const SPEC_MAGIC    = 0x43455053; // 'SPEC' little-endian
@@ -65,6 +66,9 @@ export interface RdsMeta {
 /** The fields the normal RDS path discards, plus the constellation. */
 export interface RdsExt {
   pty: number; tp: number; ta: number; ms: number; di: number;
+  // ★ The same five UNCONFIRMED — what is arriving right now, whether or not it passed
+  // confirmation. Always sent; the RAW/CONFIRMED choice is entirely the client's.
+  ptyRaw: number; tpRaw: number; taRaw: number; msRaw: number; diRaw: number;
   ct: number;            // minutes since UTC midnight, -1 = none
   ctoff: number;         // local offset, half-hours
   af: number[];          // kHz, CONFIRMED only
@@ -301,6 +305,9 @@ export class SpectrumClient {
           pty: Number(msg.pty ?? -1), tp: Number(msg.tp ?? -1),
           ta: Number(msg.ta ?? -1), ms: Number(msg.ms ?? -1),
           di: Number(msg.di ?? -1),
+          ptyRaw: Number(msg.ptyRaw ?? -1), tpRaw: Number(msg.tpRaw ?? -1),
+          taRaw: Number(msg.taRaw ?? -1), msRaw: Number(msg.msRaw ?? -1),
+          diRaw: Number(msg.diRaw ?? -1),
           ct: Number(msg.ct ?? -1), ctoff: Number(msg.ctoff ?? 0),
           af: Array.isArray(msg.af) ? msg.af : [],
           afseen: Number(msg.afseen ?? 0),

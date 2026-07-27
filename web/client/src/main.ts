@@ -41,7 +41,10 @@ import {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const MODES: SDRMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl'];
+// ★ FM-DX sits next to WFM because it IS WFM, with the channel filter traded the other way:
+// ~1.9 dB more RDS subcarrier for ~2 dB less audio SNR near the threshold. A DXer wants that
+// swap, a listener does not, so it is a mode rather than a setting (Stuart, 2026-07-27).
+const MODES: SDRMode[] = ['wfm', 'fmdx', 'nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl'];
 const LS_SERVERS = 'vibesdr_web_servers_v1';   // { "host:port": pin }
 const LS_PREFS   = 'vibesdr_web_prefs_v1';
 
@@ -1351,7 +1354,8 @@ function buildControls() {
   for (const m of MODES) {
     const b = document.createElement('button');
     b.className = 'btn';
-    b.textContent = m.toUpperCase();
+    b.textContent = m === 'fmdx' ? 'FM-DX' : m.toUpperCase();
+    if (m === 'fmdx') b.title = 'Wide FM for DX: more RDS reach on weak stations, at the cost of some audio quality. Opens the RDS analyser.';
     b.dataset.mode = m;
     b.onclick = () => setMode(m, true);
     modes.appendChild(b);
@@ -2264,6 +2268,25 @@ async function loadServerLocation(host: string) {
   }
 }
 
+// ── ADV RDS: RAW vs CONFIRMED ────────────────────────────────────────────────
+// ★★ A CLIENT-SIDE VIEW, NOT A SERVER MODE. The server always publishes both the confirmed and
+// the unconfirmed value for every gated field, so this switch changes nothing for anyone else
+// on a shared receiver — which it would if RAW meant "turn confirmation off at the source".
+// It also means there is no state to reset and no way to leave a receiver degraded for the
+// next listener.
+let rdsRawMode = false;
+
+/** Mark a field's LABEL with its confirmation state. Only visible in RAW (see the CSS).
+ *  `confirmed` — the gated value has arrived, i.e. this is what CONFIRMED mode would show.
+ *  `present`   — anything at all is being displayed; a field with nothing yet stays neutral
+ *                rather than shouting red about data that simply has not been transmitted. */
+function markConf(id: string, confirmed: boolean, present: boolean) {
+  const row = document.getElementById(id)?.closest('.rdsF');
+  if (!row) return;
+  row.classList.toggle('conf', present && confirmed);
+  row.classList.toggle('unconf', present && !confirmed);
+}
+
 /** Distance to a spot, km — null when either end is unknown. */
 function spotDistanceKm(grid?: string): number | null {
   const me = myPos();
@@ -2388,11 +2411,36 @@ function initDecoders(host: string, auth: AuthState) {
   // Output box chrome.
   initSpotFilters();
   $('decClr').onclick = () => { $('decText').textContent = ''; };
+  // ★ Sticky across retunes and reloads: a DXer who has switched to RAW is investigating a
+  // signal and would not thank us for silently putting the gate back. The button stays lit,
+  // so the state is never hidden.
+  rdsRawMode = prefs()['rdsRaw'] === true;
+  const paintRaw = () => {
+    $('rdsRaw').classList.toggle('on', rdsRawMode);
+    $('decBox').classList.toggle('rdsRawMode', rdsRawMode);
+    if (rdsPanelOpen()) renderRds();
+  };
+  paintRaw();
+  $('rdsRaw').onclick = () => {
+    rdsRawMode = !rdsRawMode;
+    savePref('rdsRaw', rdsRawMode);
+    paintRaw();
+  };
   $('decPrev').onclick = () => toggleDecPrev();
   $('decSave').onclick = () => saveDecImage();
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
-  $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
-    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
+  $('decHide').onclick = () => {
+    // ★★ CLOSING THE ANALYSER LEAVES FM-DX. The mode exists to feed this panel, and it costs
+    // ~2 dB of audio SNR to do it — so with the panel shut a listener would be paying for
+    // something they can no longer see. Worse, nothing on screen would say why the audio was
+    // noisier than plain WFM. Mode and panel are one state (Stuart, 2026-07-27).
+    // ★ Only on a deliberate CLOSE, not on hideDecBox() generally: switching to another
+    // decoder is not a decision to stop DXing.
+    const leavingFmdx = spec?.mode === 'fmdx';
+    stopDecoder(); decoders!.setSpots(false);
+    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox();
+    if (leavingFmdx) setMode('wfm', true);
+  };
 }
 
 /** Wire a segmented control; `on` marks the selected button. */
@@ -2468,6 +2516,8 @@ function showDecBox(what: string) {
   $('rdsPanel').classList.toggle('show', isRds);
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   $('rdsSize').classList.toggle('show', isRds);
+  // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
+  $('rdsRaw').style.display = isRds ? '' : 'none';
   if (isRds) applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
@@ -2546,9 +2596,15 @@ function renderRds() {
   // the same visual identity it had on the VTS rather than becoming a table of numbers
   // (Stuart, 2026-07-26).
   $('decFlag').textContent = rdsName || rdsPi > 0 ? isoToFlag(rdsIso) : '';
-  const dlogo = $<HTMLImageElement>('decLogo');
-  if (rdsLogoUrl) { if (dlogo.src !== rdsLogoUrl) dlogo.src = rdsLogoUrl; dlogo.classList.add('show'); }
-  else dlogo.classList.remove('show');
+  // ★ TWO COPIES, ON PURPOSE. The header badge is the identity you glance at while the panel
+  // is minimised; the big one under the MPX fills space the column already leaves empty and is
+  // the one you actually look at. Both are driven from the same URL so they cannot disagree.
+  for (const id of ['decLogo', 'rdsLogoBig']) {
+    const el = document.getElementById(id) as HTMLImageElement | null;
+    if (!el) continue;
+    if (rdsLogoUrl) { if (el.src !== rdsLogoUrl) el.src = rdsLogoUrl; el.classList.add('show'); }
+    else el.classList.remove('show');
+  }
   // ★ HEX AND DECIMAL. Hex is how the standard defines PI, and how it decomposes into
   // country / coverage / reference — but plenty of databases, loggers and older receivers
   // quote it in DECIMAL, so DXers comparing catches see both forms. Showing both saves
@@ -2600,14 +2656,25 @@ function renderRds() {
         return `${ps || e.pi}${f}${e.ta === 1 ? ' [TA]' : ''}`;
       }).join('  ')
     : dash;
-  const pty = rdsExt?.pty ?? -1;
+  // ★ In RAW, read the UNCONFIRMED value and mark the label; otherwise the confirmed one.
+  // A field is "confirmed" when the confirmed value has actually arrived (>= 0) — that is the
+  // same test the panel already uses for "known", so red simply means "seen but not yet
+  // trusted" and green means "this is what CONFIRMED mode would show".
+  const pty = (rdsRawMode ? rdsExt?.ptyRaw : rdsExt?.pty) ?? -1;
   $('rxPty').textContent = pty >= 0 ? `${PTY_EU[pty] ?? '?'} (${pty})` : dash;
+  markConf('rxPty', (rdsExt?.pty ?? -1) >= 0, pty >= 0);
   // TP/TA/MS are one-bit flags; show the ones that are SET rather than a row of noes.
+  const tpV = (rdsRawMode ? rdsExt?.tpRaw : rdsExt?.tp) ?? -1;
+  const taV = (rdsRawMode ? rdsExt?.taRaw : rdsExt?.ta) ?? -1;
+  const msV = (rdsRawMode ? rdsExt?.msRaw : rdsExt?.ms) ?? -1;
   const f: string[] = [];
-  if (rdsExt?.tp === 1) f.push('TP');
-  if (rdsExt?.ta === 1) f.push('TA');
-  if (rdsExt?.ms === 1) f.push('Music'); else if (rdsExt?.ms === 0) f.push('Speech');
+  if (tpV === 1) f.push('TP');
+  if (taV === 1) f.push('TA');
+  if (msV === 1) f.push('Music'); else if (msV === 0) f.push('Speech');
   $('rxFlags').textContent = f.length ? f.join(' · ') : dash;
+  // All three share block B, so they confirm together — one label for the row is honest.
+  markConf('rxFlags', (rdsExt?.tp ?? -1) >= 0 || (rdsExt?.ms ?? -1) >= 0,
+           tpV >= 0 || taV >= 0 || msV >= 0);
   $('rxBer').textContent = rdsBer >= 0 ? `${rdsBer}%` : dash;
   // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
   // signal is weak, when it is the normal injection ratio for a healthy station.
@@ -2622,9 +2689,16 @@ function renderRds() {
     pEl.style.color = ok ? '#7dff9a' : '#ffd479';
   } else { pEl.textContent = dash; pEl.style.color = ''; }
   if (rdev > 0.2) {
-    const strong = rdev >= 4.0, low = rdev < 1.5;
-    rEl.textContent = `${rdev.toFixed(1)} kHz · ${low ? 'weak' : strong ? 'generous' : 'typical'}`;
-    rEl.style.color = low ? '#ffd479' : '#7dff9a';
+    // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the spec
+    // maximum, and the old wording ran open-ended: anything above 4 kHz was called "generous",
+    // so a reading of 12.9 kHz — physically impossible — was presented as a station doing well
+    // (Stuart, 2026-07-27). A number past the ceiling is evidence of a MEASUREMENT problem, not
+    // of a strong subcarrier, and must never be dressed up as good news.
+    // ★ The server now returns -1 with no block sync, which was the cause in that case; this is
+    // the second line of defence, for anything else that could put the estimate out of range.
+    const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
+    rEl.textContent = `${rdev.toFixed(1)} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
+    rEl.style.color = impossible ? '#ff8a7d' : low ? '#ffd479' : '#7dff9a';
   } else { rEl.textContent = dash; rEl.style.color = ''; }
   // ★★★ RDS-to-pilot phase. Correct is near 0 or near 90 (quadrature encoding); the middle
   // ground is a transmitter fault, so say which it is rather than leaving a bare number to
@@ -2698,7 +2772,11 @@ function renderRds() {
       : (rdsExt?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : dash;
 
   // DI — four flags, assembled across the four name segments.
-  const di = rdsExt?.di ?? -1;
+  // ★★ THE FIELD THIS WHOLE RAW/CONFIRMED SPLIT CAME FROM. Each flag is ONE BIT in one group,
+  // so a single mis-corrected block used to set one permanently. In RAW you can now watch them
+  // flicker: a genuine flag sits steady across hundreds of groups, corruption does not — which
+  // is the only way to tell "this station really is compressed" from "one bad block said so".
+  const di = (rdsRawMode ? rdsExt?.diRaw : rdsExt?.di) ?? -1;
   if (di < 0) $('rxDi').textContent = dash;
   else {
     const d: string[] = [];
@@ -2708,6 +2786,7 @@ function renderRds() {
     if (di & 8) d.push('Dynamic PTY');
     $('rxDi').textContent = d.join(' · ');
   }
+  markConf('rxDi', (rdsExt?.di ?? -1) >= 0, di >= 0);
 
   // ★ CT — transmitted once a minute, so RECEIVING one at all proves whole groups are
   // arriving intact, and its offset identifies the network's timezone.
@@ -3935,10 +4014,16 @@ function setMode(m: SDRMode, send: boolean) {
   for (const b of Array.from($('modes').children) as HTMLButtonElement[]) {
     b.classList.toggle('on', b.dataset.mode === m);
   }
-  if (m !== 'wfm') {
+  // ★ FM CARRIES RDS IN BOTH FLAVOURS — clearing on a wfm->fmdx switch would throw away a
+  // station's identity for a change that does not leave the FM band.
+  if (m !== 'wfm' && m !== 'fmdx') {
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
   }
+  // ★ FM-DX is the DX workflow, and the analyser IS that workflow — someone choosing this
+  // mode is chasing an identification, so open it rather than making them find it under
+  // Decoders. It stays an ordinary optional decoder for plain WFM, exactly as before.
+  if (m === 'fmdx' && send && !rdsPanelOpen()) showDecBox('rds');
   updateVts();
   syncBw();
 }
@@ -3956,7 +4041,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   am: 20000,    sam: 20000,
   cwu: 2000,    cwl: 2000,
   fm: 30000,    nfm: 30000,
-  wfm: 250000,
+  wfm: 250000,  fmdx: 250000,
 };
 
 let bwSync = false;

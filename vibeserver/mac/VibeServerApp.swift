@@ -138,6 +138,9 @@ final class Server: ObservableObject {
     /// 0 = off, 1 = listener's choice, 2 = compatibility fallback only (VsUncompressedAudio).
     /// ★ This Mac's own browser is not governed by it and always gets uncompressed audio.
     @AppStorage("uncompressedAudio") var uncompressedAudio = 0
+    /// ★ Spend more CPU on RDS — a wider WFM channel and the noise-corrected deviation figure.
+    /// Off by default: the cost is this machine's, the benefit a listener's.
+    @AppStorage("rdsMaxPerformance") var rdsMaxPerformance = false
     // ★★ RECEIVER LOCATION. It is the SERVER's position, never the listener's: distances,
     // map centring and the ITU REGION all follow the ANTENNA (80m is 3.5-3.8 in R1 but
     // 3.5-4.0 in R2), and a VibeServer may well be left at a relative's house.
@@ -372,6 +375,7 @@ final class Server: ObservableObject {
         cfg.port     = Int32(wantedPort)
         cfg.serveWebClient = serveWeb
         cfg.uncompressedAudio = Int32(uncompressedAudio)
+        cfg.rdsMaxPerformance = rdsMaxPerformance
         cfg.maxFftRate     = maxFps
         cfg.maxBandwidthHz = maxBwHz
         cfg.lockedRate     = lockedRate
@@ -990,6 +994,28 @@ struct SettingsView: View {
                     get: { server.advertise },
                     set: { server.advertise = $0; server.applyAdvertise() }))
                 Text("On, clients auto-discover this server (Bonjour). Off, it's reachable only by typing its address — a privacy choice if you'd rather not announce the radio to everyone on the network.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("RDS") {
+                Toggle("Maximum RDS performance", isOn: $server.rdsMaxPerformance)
+                Text("Off, RDS decodes well and costs little. On, the receiver works harder for "
+                   + "the weakest stations:\n\n"
+                   + "• The FM channel filter widens, so less of the RDS subcarrier is lost "
+                   + "before it is decoded — worth roughly half a dB of extra reach on marginal "
+                   + "signals.\n"
+                   + "• The RDS deviation figure gains a noise measurement, so it stops reading "
+                   + "high on a weak station instead of quietly exaggerating.\n\n"
+                   + "★ THIS COSTS CPU — measured at about 45% more per listener than FM with "
+                   + "RDS, and 60% more than plain FM stereo (tools/pi-bench). Everything after "
+                   + "the filter runs at a third more samples per second, and RDS is already the "
+                   + "most expensive part of the engine. On a Mac or a Pi 5 that is comfortable; "
+                   + "on a Pi 3, an older machine, or a host serving several listeners it may "
+                   + "not be. If the server starts struggling — stuttering audio, a waterfall "
+                   + "falling behind — turn this back off.\n\n"
+                   + "Listeners can also choose FM-DX per station from the mode buttons, which "
+                   + "costs the same but only while someone is actually using it. This switch "
+                   + "turns the wide filter on for everyone, all the time.\n\n"
+                   + "Restart the server to apply a change.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Station search") {

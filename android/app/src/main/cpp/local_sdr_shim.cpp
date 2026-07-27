@@ -334,6 +334,15 @@ ModeParams paramsFor(const std::string& mode) {
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
     if (mode == "am" || mode == "sam") return {ModeParams::AM, 15000, 10000, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
+    // ★★ FM-DX IS WFM WITH A DIFFERENT TRADE, not a different demodulator. Same MPX chain and
+    // the same stereo/RDS decoders; what changes is the channel filter, which widens to give
+    // the RDS subcarrier back the ~1.9 dB the standard filter costs it — at the price of about
+    // 2 dB of audio SNR near the FM threshold (tools/wfm_mpx_loss.cpp).
+    // ★ THAT TRADE BELONGS TO THE LISTENER, not to the operator and not to a default. A DXer
+    // chasing a PI spends audio quality gladly; someone listening to music does not. Hence a
+    // MODE next to WFM rather than a global setting (Stuart, 2026-07-27) — the first version
+    // widened the default and would have made ordinary FM quietly noisier for everyone.
+    if (mode == "fmdx")           return {ModeParams::WFM, 250000, 200000, 2};
     if (mode == "wfm")            return {ModeParams::WFM, 250000, 200000, 2};  // NB: ifRate field is unused/dead
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
 }
@@ -759,6 +768,9 @@ static std::atomic<bool>   g_vsCompressAudio{true};
 //   CHOICE(1) listener may switch it on; a control appears in the audio menu
 //   COMPAT(2) automatic fallback only, no control shown
 static std::atomic<int>    g_vsUncompressedAudio{0};   // VsUncompressedAudio
+// ★ Operator opt-in to the expensive RDS path. Read by the pipeline when it builds the channel
+// filter, so it takes effect on the next rebuild (a retune or mode change) as well as at start.
+static std::atomic<bool>   g_vsRdsMaxPerf{false};
 
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
@@ -1076,6 +1088,9 @@ struct LocalSdrShim::Impl {
      *  completing transfers, so the capture thread sits there forever and any detection that waits
      *  for that call to return waits for ever too. Silence is the signal. */
     std::atomic<double> lastIqAt{0.0};
+    // Consecutive in-place stream restarts since the last healthy stretch — the backoff that
+    // stops a wedged API being hammered. Watchdog thread only.
+    int sdrpRestarts = 0;
     int usbIndex = -1;
     std::string usbSerial;
     std::thread hotplugThread;
@@ -1243,6 +1258,8 @@ struct LocalSdrShim::Impl {
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
     // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
     int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
+    // ★ The same five UNCONFIRMED, for the client's RAW view. Live, never sticky.
+    int rdsPtyRaw = -1, rdsTpRaw = -1, rdsTaRaw = -1, rdsMsRaw = -1, rdsDiRaw = -1;
     int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0, rdsAfSeen = 0;
     std::vector<int> rdsGrp;
     std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs, rdsPtyn;
@@ -1647,6 +1664,8 @@ struct LocalSdrShim::Impl {
         if (!t->rdsxOn.load()) return;
         std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsPty = x.pty; t->rdsTp = x.tp; t->rdsTa = x.ta; t->rdsMs = x.ms; t->rdsDi = x.di;
+        t->rdsPtyRaw = x.ptyRaw; t->rdsTpRaw = x.tpRaw; t->rdsTaRaw = x.taRaw;
+        t->rdsMsRaw = x.msRaw;   t->rdsDiRaw = x.diRaw;
         t->rdsCtMin = x.ctMinutes; t->rdsCtOff = x.ctOffsetHalfHours;
         t->rdsGrpTotal = x.groupTotal; t->rdsAfSeen = x.afSeen;
         t->rdsAf.assign(x.afKhz, x.afKhz + x.nAf);
@@ -1958,6 +1977,12 @@ struct LocalSdrShim::Impl {
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp.kind);
+        // ★ FM-DX: the wide channel and the RDS noise correction, chosen by the LISTENER via
+        // the mode. The operator's rdsMaxPerformance switch is a PERMISSION and a floor — it
+        // turns the expensive path on for everyone, and a host that has not granted it still
+        // lets a listener pick FM-DX. If the CPU cost ever needs to be refused outright, this
+        // is the one place to gate it.
+        rx.setRdsMaxPerformance(mode == "fmdx" || g_vsRdsMaxPerf.load());
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
         // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
@@ -3285,6 +3310,7 @@ struct LocalSdrShim::Impl {
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
+        int ptyR, tpR, taR, msR, diR;
         int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_;
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
@@ -3292,6 +3318,7 @@ struct LocalSdrShim::Impl {
         std::vector<int> af, grp; std::vector<float> pts, mpx;
         { std::lock_guard<std::mutex> lk(rdsMtx);
           pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
+          ptyR = rdsPtyRaw; tpR = rdsTpRaw; taR = rdsTaRaw; msR = rdsMsRaw; diR = rdsDiRaw;
           ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
           af = rdsAf; grp = rdsGrp; pts = rdsConst; mpx = rdsMpx; afSeen = rdsAfSeen;
           rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
@@ -3303,6 +3330,13 @@ struct LocalSdrShim::Impl {
                       + ",\"ta\":"  + std::to_string(ta)
                       + ",\"ms\":"  + std::to_string(ms)
                       + ",\"di\":"  + std::to_string(di)
+                      // ★ RAW alongside CONFIRMED, always both. The client picks; the server
+                      // never changes behaviour for one listener on a shared receiver.
+                      + ",\"ptyRaw\":" + std::to_string(ptyR)
+                      + ",\"tpRaw\":"  + std::to_string(tpR)
+                      + ",\"taRaw\":"  + std::to_string(taR)
+                      + ",\"msRaw\":"  + std::to_string(msR)
+                      + ",\"diRaw\":"  + std::to_string(diR)
                       + ",\"ct\":"  + std::to_string(ctMin)
                       + ",\"ctoff\":" + std::to_string(ctOff)
                       + ",\"gtot\":"  + std::to_string(gTot)
@@ -3438,6 +3472,38 @@ struct LocalSdrShim::Impl {
                 // that the message arrives while the user is still holding the plug.
                 const double last = lastIqAt.load(std::memory_order_relaxed);
                 const bool silent = last > 0 && (nowSecs() - last) > 3.0;
+
+                // ★★★ AN RSP STALL IS RECOVERABLE IN PLACE — and unlike a dongle, nothing has
+                // been unplugged. The SDRplay API can simply stop calling the stream callback
+                // while every handle stays valid and every call keeps returning Success: audio
+                // and spectrum freeze, the server still reports itself serving, and only
+                // killing the process brought it back (Stuart, 2026-07-27). Re-Initing the
+                // stream fixes it without disturbing the listener's session.
+                // ★ The dongle path deliberately does NOT reopen (see below) because `dev` is
+                // touched unlocked from the control threads. That objection does not apply
+                // here: restartStream() takes SdrplaySource's own lock, which every API-
+                // touching call on the object now also takes.
+                // ★ BACK OFF. If the API is wedged rather than merely stalled, retrying every
+                // 2 s forever would hammer a system-wide mutex and bury the real error; after
+                // a few goes, stop and report honestly rather than thrash.
+                if (silent && useSdrplay() && sdrp && !captureIdle.load()) {
+                    if (sdrpRestarts < 4) {
+                        ++sdrpRestarts;
+                        LOGE("no IQ for 3s on an RSP — re-initialising the stream (attempt %d)",
+                             sdrpRestarts);
+                        std::string rerr;
+                        if (sdrp->restartStream(rerr)) {
+                            // Give it a fresh clock, or the next tick sees the OLD timestamp
+                            // and declares another stall before any sample could have arrived.
+                            lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+                            continue;
+                        }
+                        LOGE("RSP stream restart failed: %s", rerr.c_str());
+                    }
+                } else if (!silent) {
+                    sdrpRestarts = 0;   // healthy again: the next stall gets a full set of tries
+                }
+
                 if (silent && !deviceLost.load()) {
                     deviceLost.store(true);
                     captureDown.store(true);
@@ -3577,6 +3643,20 @@ struct DesiredDsp {
     std::atomic<float>  nrStrength{-1.0f};  // <0 = never set, so leave the engine alone
     std::atomic<bool>   notchOn{false};     // Impl::notchOn
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
+    // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
+    // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
+    // saves every one of these and re-pushes them when the radio announces itself. They were
+    // lost at the OTHER end, in setters shaped `if (p && p->useSdrplay())` with nothing to
+    // replay them onto the fresh Impl a restart creates.
+    // ★ SENTINELS, not defaults: -1 / -999 mean "the listener never chose one", so a restart
+    // re-applies only what was actually set and never overwrites the API's own starting point
+    // with a value we invented.
+    std::atomic<int>  rspLna{-1};
+    std::atomic<int>  rspIfGr{-1};
+    std::atomic<int>  rspAgcSet{-999};
+    std::atomic<int>  rspIfAgc{-1};      // tri-state: -1 unset, 0 off, 1 on
+    std::atomic<int>  rspRfNotch{-1};
+    std::atomic<int>  rspDabNotch{-1};
 };
 static DesiredDsp g_dsp;
 
@@ -3592,6 +3672,20 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
     impl->rx.setStereoEnabled(g_dsp.stereoOn.load());
     impl->deempTau = g_dsp.deempTau.load();
     impl->rx.setDeemphasis(impl->deempTau);
+    // ★ RSP controls, only when this radio IS an RSP and only what was actually chosen.
+    if (impl->useSdrplay() && impl->sdrp) {
+        if (g_dsp.rspLna.load()      >= 0)    impl->sdrp->setLnaState(g_dsp.rspLna.load());
+        if (g_dsp.rspAgcSet.load()   > -999)  impl->sdrp->setIfAgcSetPoint(g_dsp.rspAgcSet.load());
+        if (g_dsp.rspRfNotch.load()  >= 0)    impl->sdrp->setRfNotch(g_dsp.rspRfNotch.load() != 0);
+        if (g_dsp.rspDabNotch.load() >= 0)    impl->sdrp->setDabNotch(g_dsp.rspDabNotch.load() != 0);
+        // ★ ORDER MATTERS, exactly as it does in the client's pushAllRspSettings: a manual IF
+        // reduction is refused while the AGC owns that register, so set the AGC state FIRST and
+        // only push a manual IFGR when the AGC is off. Reversing these drops the value silently.
+        const int agc = g_dsp.rspIfAgc.load();
+        if (agc >= 0) impl->sdrp->setIfAgc(agc != 0);
+        if (agc == 0 && g_dsp.rspIfGr.load() >= 0)
+            impl->sdrp->setIfGainReduction(g_dsp.rspIfGr.load());
+    }
     const float nrs = g_dsp.nrStrength.load();
     if (nrs >= 0.0f) {   // only if the client ever set one; else leave the engine's own
         std::lock_guard<std::mutex> lk(impl->nrMtx);
@@ -3646,6 +3740,12 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
 void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAudio.store(mode); }
+void LocalSdrShim::setVibeServerRdsMaxPerformance(bool on) {
+    g_vsRdsMaxPerf.store(on);
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    auto& self = instance();
+    if (self.p) self.p->rx.setRdsMaxPerformance(on);   // live: rebuilds on the next tune
+}
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
@@ -3877,6 +3977,13 @@ int LocalSdrShim::startSdrplay(int index,
 
     p = impl;
     LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
+    // ★★★ THE WATCHDOG WAS NEVER STARTED ON THIS PATH. The silence detector, `lastIqAt` and the
+    // whole reporting chain already existed and the SDRplay sink even stamped `lastIqAt` on
+    // every buffer — but startHotplugWatch() was only ever called from the RTL start, so
+    // nothing ever READ it. That is precisely why an RSP stall was silent: the server went on
+    // reporting itself healthy because no code was asking whether samples had stopped
+    // (Stuart, 2026-07-27). One missing call, in the one place it mattered most.
+    impl->startHotplugWatch();
     LOGI("SDRplay started: index=%d center=%.0f rate=%.0f port=%d",
          index, centerFreq, sampleRate, chosen);
     return chosen;
@@ -4497,9 +4604,12 @@ std::string LocalSdrShim::radioCapsJson() const {
     return j;
 }
 
-void LocalSdrShim::setLnaState(int v)       { if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
-void LocalSdrShim::setIfGainReduction(int v){ if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
+void LocalSdrShim::setLnaState(int v)       { g_dsp.rspLna.store(v);
+                                              if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
+void LocalSdrShim::setIfGainReduction(int v){ g_dsp.rspIfGr.store(v);
+                                              if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
 void LocalSdrShim::setIfAgc(bool v) {
+    g_dsp.rspIfAgc.store(v ? 1 : 0);   // remembered even with no radio yet
     if (!p || !p->useSdrplay()) return;
     // ★★ RECORD THE PREFERENCE; DO NOT CANCEL THE KICK. Cancelling was wrong: the CLIENT
     // re-sends its saved settings the instant it connects, so an "ifagc on" arrived before
@@ -4511,12 +4621,15 @@ void LocalSdrShim::setIfAgc(bool v) {
     p->sdrpAgcWanted = v;
     p->sdrp->setIfAgc(v);
 }
-void LocalSdrShim::setIfAgcSetPoint(int v)  { if (p && p->useSdrplay()) p->sdrp->setIfAgcSetPoint(v); }
+void LocalSdrShim::setIfAgcSetPoint(int v)  { g_dsp.rspAgcSet.store(v);
+                                              if (p && p->useSdrplay()) p->sdrp->setIfAgcSetPoint(v); }
 void LocalSdrShim::setIfAgcDynamics(int a, int d, int dd, int th) {
     if (p && p->useSdrplay()) p->sdrp->setIfAgcDynamics(a, d, dd, th);
 }
-void LocalSdrShim::setRfNotch(bool v)       { if (p && p->useSdrplay()) p->sdrp->setRfNotch(v); }
-void LocalSdrShim::setDabNotch(bool v)      { if (p && p->useSdrplay()) p->sdrp->setDabNotch(v); }
+void LocalSdrShim::setRfNotch(bool v)       { g_dsp.rspRfNotch.store(v ? 1 : 0);
+                                              if (p && p->useSdrplay()) p->sdrp->setRfNotch(v); }
+void LocalSdrShim::setDabNotch(bool v)      { g_dsp.rspDabNotch.store(v ? 1 : 0);
+                                              if (p && p->useSdrplay()) p->sdrp->setDabNotch(v); }
 void LocalSdrShim::setBiasT(bool v)         { if (p && p->useSdrplay()) p->sdrp->setBiasT(v); }
 
 bool LocalSdrShim::isRunning() const { return p != nullptr; }

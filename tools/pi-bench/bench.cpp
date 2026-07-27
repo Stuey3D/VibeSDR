@@ -104,7 +104,8 @@ struct Result {
 };
 
 static Result runOne(double fs, RxPipeline::Mode mode, double bwHz,
-                     int fftSize, double fftRate, double seconds, bool rds) {
+                     int fftSize, double fftRate, double seconds, bool rds,
+                     bool fmdx = false) {
     // Callbacks just count — we're measuring DSP cost, not I/O.
     struct Ctx { long rows = 0; long frames = 0; int rate = 48000; } ctx;
 
@@ -127,6 +128,9 @@ static Result runOne(double fs, RxPipeline::Mode mode, double bwHz,
     }
 
     RxPipeline pipe;
+    // ★ FM-DX BEFORE start(), so the first channel build already uses the wide filter — set
+    // afterwards it would measure one rebuild's worth of the narrow chain as well.
+    pipe.setRdsMaxPerformance(fmdx);
     pipe.start(fs, fftSize, fftRate, 48000, cb);
     pipe.setTune(200000.0, mode, bwHz);   // 200 kHz off centre
 
@@ -179,16 +183,25 @@ int main(int argc, char** argv) {
     printf("  100%% = one whole core. Lower is better.\n");
     printf("\n");
 
-    struct Case { const char* name; RxPipeline::Mode mode; double bw; bool rds; };
+    struct Case { const char* name; RxPipeline::Mode mode; double bw; bool rds; bool fmdx; };
     const Case cases[] = {
-        // WFM twice: RDS is only decoded for a client that has the decoder OPEN, so the
-        // two rows are genuinely different users and the gap between them is the price
-        // of RDS. Most listeners are the first row.
-        {"WFM (stereo)",       RxPipeline::Mode::WFM,     180000.0, false},
-        {"WFM (stereo + RDS)", RxPipeline::Mode::WFM,     180000.0, true },
-        {"NFM",                RxPipeline::Mode::NFM,      12500.0, false},
-        {"AM",                 RxPipeline::Mode::AM,       10000.0, false},
-        {"SSB (USB)",          RxPipeline::Mode::SSB_USB,   2800.0, false},
+        // WFM appears three times because they are three genuinely different users, and the
+        // gaps between them are the two things an operator is deciding about:
+        //   plain stereo         — what most listeners cost
+        //   + RDS                — the price of a client having the decoder open at all
+        //                          (RDS is only built when something subscribes)
+        //   FM-DX                — the price of the DX trade on top: a wider channel filter,
+        //                          so the whole chain after it runs at 400 kHz instead of 300,
+        //                          plus the guard-band noise measurement on the deviation.
+        // ★ THIS IS THE ROW TO LOOK AT before enabling FM-DX on a small host. Shipped
+        // un-benchmarked on 2026-07-27 with a warning on the switch rather than a number we
+        // had made up; this row replaces the guess.
+        {"WFM (stereo)",         RxPipeline::Mode::WFM,     180000.0, false, false},
+        {"WFM (stereo + RDS)",   RxPipeline::Mode::WFM,     180000.0, true,  false},
+        {"FM-DX (wide + RDS)",   RxPipeline::Mode::WFM,     180000.0, true,  true },
+        {"NFM",                  RxPipeline::Mode::NFM,      12500.0, false, false},
+        {"AM",                   RxPipeline::Mode::AM,       10000.0, false, false},
+        {"SSB (USB)",            RxPipeline::Mode::SSB_USB,   2800.0, false, false},
     };
     const double rates[] = {2400000.0, 2048000.0, 1024000.0};
 
@@ -198,7 +211,7 @@ int main(int argc, char** argv) {
         for (const auto& c : cases) {
             const Result r = runOne(fs, c.mode, c.bw, 1024,
                                     getenv("WFPS") ? atof(getenv("WFPS")) : 20.0,
-                                    seconds, c.rds);
+                                    seconds, c.rds, c.fmdx);
             const double pct = r.coreFrac * 100.0;
             // Leave one core's worth of headroom for USB capture, the WebSocket
             // server, ADPCM and the OS — do not promise the last core.

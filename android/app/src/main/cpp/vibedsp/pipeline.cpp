@@ -66,7 +66,11 @@ void RxPipeline::rebuildAudio() {
     double targetCh = std::max(bwHz_ * 3.0, 12000.0);
     // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
     // real channel regardless of the RF bandwidth the user picked.
-    if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
+    // ★ MAX-PERFORMANCE RDS buys a wider channel, and a wider channel needs a higher rate to
+    // carry it: 120 kHz of passband plus its transition will not fit under a 150 kHz Nyquist.
+    // 2.0x lands on 400 kHz for a 200 kHz channel, which is what tools/wfm_mpx_loss measured.
+    if (mode_ == Mode::WFM)
+        targetCh = std::max(bwHz_ * (rdsMaxPerf_.load() ? 2.0 : 1.5), 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
@@ -99,7 +103,39 @@ void RxPipeline::rebuildAudio() {
     // an UberSDR recording of the same signal, we were 37 dB down over 2.0-2.7 kHz.
     const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB ||
                           mode_ == Mode::CW);
-    const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
+    // ★★★ WFM NEEDS MORE THAN HALF ITS CHANNEL — the FM sidebands are wider than the channel
+    // they are quoted as occupying. At 75 kHz deviation modulated up to 57 kHz, Carson puts
+    // real energy out past ±130 kHz, so cutting at bw/2 = 100 kHz clipped the outer sidebands.
+    // That does NOT attenuate the MPX evenly: it takes the TOP of it, so 57 kHz RDS suffers
+    // while the 19 kHz pilot does not notice.
+    // ★ MEASURED, not reasoned (tools/wfm_mpx_loss.cpp): at bw/2 the recovered RDS subcarrier
+    // was 1.86 dB down with the pilot at 0.00 dB. That is the asymmetry HansVanEijsden's Pira
+    // analyser saw from the other end — RDS deviation low on six stations out of six while
+    // pilot deviation was exact on all six (2026-07-27). We were RECEIVING RDS weak, not
+    // merely displaying it low, and paying for it in decode margin on weak stations.
+    // ★★★ BUT WIDENING IS NOT FREE, AND THE COST IS AUDIO. A wider channel admits more noise
+    // into the discriminator, and near the FM threshold — exactly where the weak stations
+    // live — that is audible. Measured on the same harness with noise added:
+    //     bw/2       RDS -1.86 dB   audio SNR +11.72 dB
+    //     0.55       RDS -0.85 dB   audio SNR +11.09 dB   (1.0 dB of RDS for 0.6 dB of audio)
+    //     0.60       RDS -0.27 dB   audio SNR  +9.74 dB   (1.6 dB of RDS for 2.0 dB of audio)
+    // ★ So it trades roughly one for one, and worse the further it goes. That makes it a
+    // LISTENER'S choice per station, not a global default: a DXer chasing a PI will spend
+    // audio quality happily, someone listening to music will not (Stuart, 2026-07-27, who
+    // spotted this before it shipped — the first version widened the default and would have
+    // quietly made ordinary FM noisier for everyone).
+    // ★★ HENCE THE DEFAULT STAYS AT bw/2. The widening lives behind FM-DX, chosen per session
+    // by whoever is listening.
+    // ★ THE COST IS ADJACENT-CHANNEL REJECTION, which is the thing this filter exists for:
+    // measured 98 dB -> 93 dB at a 200 kHz offset. Still far beyond the ~74 dB the deepStop
+    // note below sets as the bar. Re-measure before widening further: tools/wfm_mpx_loss.cpp
+    // reports adjacent rejection alongside the MPX loss, precisely so the trade is visible.
+    // ★ NOTE the deepStop note below says to check "test_demod's alias-rejection case" — there
+    // is no such case in test_demod (checked 2026-07-27). The tool above is the real check.
+    // 0.60 needs the 400 kHz channel rate selected above; 0.5 is plain WFM, unchanged.
+    const double wfmFrac = rdsMaxPerf_.load() ? 0.60 : 0.5;
+    const double chHalf = std::max(1.0, ssbLike ? bwHz_
+                                       : (mode_ == Mode::WFM ? bwHz_ * wfmFrac : bwHz_ * 0.5));
     // The absolute transition width the old single-stage design worked out to. Keep it
     // identical so the audible filter shape does not change.
     const double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);
@@ -246,6 +282,7 @@ void RxPipeline::rebuildAudio() {
                 if (self->cb_.rdsPi) self->cb_.rdsPi(self->cb_.ctx, pi);
             };
             rdsDemod_.configure(chFs_, rcb);
+            rdsDemod_.setNoiseCorrection(rdsMaxPerf_.load());
             break;
         }
     }
@@ -382,6 +419,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 const RdsDemod::Agg& a = rdsDemod_.aggregate();
                 Callbacks::RdsExt x{};
                 x.pty = a.pty; x.tp = a.tp; x.ta = a.ta; x.ms = a.ms; x.di = a.di;
+                // ★ RAW comes straight from the WINNING hypothesis, deliberately bypassing the
+                // sticky aggregate: "what is arriving right now", not "what we have ever known".
+                // No winner yet = nothing is arriving, which -1 says honestly.
+                if (const RdsDecoder* w = rdsDemod_.best()) {
+                    x.ptyRaw = w->ptyRaw(); x.tpRaw = w->tpRaw();
+                    x.taRaw  = w->taRaw();  x.msRaw = w->msRaw(); x.diRaw = w->diRaw();
+                } else {
+                    x.ptyRaw = x.tpRaw = x.taRaw = x.msRaw = x.diRaw = -1;
+                }
                 x.ctMinutes = a.ctMinutes;
                 x.ctOffsetHalfHours = a.ctOffsetHalfHours;
                 x.afKhz = af; x.nAf = nAf; x.afSeen = afSeen;

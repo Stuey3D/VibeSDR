@@ -127,6 +127,19 @@ public:
     /** Set when the device disappears — the shim's watchdog polls this exactly as it does
      *  for a dongle that has been unplugged. */
     bool deviceLost() const { return lost_; }
+    /** ★★★ RE-INITIALISE THE STREAM IN PLACE, after the API has gone quiet without saying so.
+     *  The SDRplay API can simply STOP calling the stream callback while every handle stays
+     *  valid and every call still returns Success — audio and spectrum freeze, the server
+     *  reports itself perfectly healthy, and only killing the process brings it back (Stuart,
+     *  2026-07-27: "I have to do a full close and open of vibeserver to resurrect it").
+     *  ★ Uninit + Init, NOT ReleaseDevice/SelectDevice: unwinding device selection is what
+     *  crashed inside the API's own shared mutex before (see setPaused), and the stream is the
+     *  part that has actually died. Device selection and the params struct stay untouched, so
+     *  gain, AGC and tuning survive the restart.
+     *  ★ Serialised against every other API-touching call on this object, because the caller
+     *  is a WATCHDOG THREAD and the control sockets keep taking gain changes throughout.
+     *  @return true if the stream was re-initialised; `err` describes any failure. */
+    bool restartStream(std::string& err);
     /** ★★ THE RADIO'S OWN OVERLOAD FLAG. The API raises a PowerOverloadChange event when the
      *  ADC is being driven into clipping — so we do not have to INFER overload from the
      *  spectrum, as the auto-gain brief proposes for a dongle: on an RSP the hardware simply

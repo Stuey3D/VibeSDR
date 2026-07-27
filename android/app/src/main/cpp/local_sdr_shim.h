@@ -64,6 +64,10 @@ public:
     /** VsUncompressedAudio: 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
      *  Loopback clients are outside this setting entirely and always get raw PCM. */
     static void setVibeServerUncompressedAudio(int mode);
+    /** ★ Spend more CPU on RDS: a wider WFM channel (400 kHz instead of 300) and the
+     *  guard-band noise subtraction on the deviation readout. Off by default — the cost is
+     *  the operator's. See VsConfig::rdsMaxPerformance. */
+    static void setVibeServerRdsMaxPerformance(bool on);
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */

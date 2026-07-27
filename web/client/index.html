@@ -543,15 +543,27 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    phone (a much narrower box) would truncate hardest of all. So: values WRAP, the grid
    collapses to one column when it must, and the constellation drops below the fields
    rather than squeezing them (Stuart, 2026-07-26). */
+/* ★★ NEVER WRAP, NEVER RESIZE SIDEWAYS. The plots column used to be allowed to wrap under the
+   field grid: as fields arrived the grid's minimum width grew, the column jumped to a new row,
+   and the graphs and logo stair-stepped out of alignment while you watched (Stuart,
+   2026-07-27). The box has a fixed width, so the only honest layout is a fixed plot column and
+   a field grid that absorbs whatever is left. Growth is UPWARD only — the box is anchored by
+   its bottom edge, so a taller panel rises rather than pushing the controls about. */
 #rdsPanel {
   display: none; gap: 14px; padding: 10px 12px;
-  align-items: flex-start; flex-wrap: wrap;
+  align-items: flex-start; flex-wrap: nowrap;
+  overflow-y: auto; overflow-x: hidden;
 }
 #rdsPanel.show { display: flex; }
 #rdsGrid {
-  display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr));
-  gap: 2px 16px; flex: 1 1 300px; min-width: 0;
+  /* minmax(0,1fr), not minmax(150px,1fr): a 150px floor gave the grid a minimum width the flex
+     row could not honour, which is what forced the wrap. Columns may now shrink and long
+     values wrap inside their own cell instead of shoving the layout. */
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 16px; flex: 1 1 auto; min-width: 0;
 }
+/* (The plots column's flex basis is pinned further down, where the later rule would
+   otherwise override anything set here.) */
 .rdsF { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .rdsF.rdsWide { grid-column: 1 / -1; }
 .rdsF label {
@@ -633,13 +645,27 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 /* Each field reserves two lines, so a value wrapping onto a second line does not shove
    everything below it down the panel. */
+/* ★★ RAW MODE COLOURS THE LABEL, NOT THE VALUE. The value is what you are reading; recolouring
+   it would make the data itself look like a status light and would fight the panel's existing
+   green/amber/red verdicts (RDS↔pilot already uses those to mean something quite different).
+   The LABEL is inert otherwise, so it is free to carry the confirmation state.
+   Red = arriving but not yet confirmed, green = confirmed. Only ever applied in RAW. */
+#decBox.rdsRawMode .rdsF.unconf label { color: #ff8a7d; }
+#decBox.rdsRawMode .rdsF.conf   label { color: #7dff9a; }
 .rdsF { min-height: 2.1em; align-items: flex-start; line-height: 1.25; }
 .rdsF label { padding-top: 1px; }
 @media (max-width: 560px) {
+  /* ★ Narrow screens STACK on purpose — beside each other, neither column would be readable.
+     Wrapping is re-enabled here deliberately, and the plots take the full width rather than a
+     fixed 180px, so the stack is a layout choice rather than the accident it was on desktop. */
+  #rdsPanel { flex-wrap: wrap; }
   #rdsGrid { grid-template-columns: 1fr; }
-  #rdsConstWrap { margin: 0 auto; }
+  #rdsConstWrap { flex: 1 1 100%; min-width: 0; margin: 0 auto; }
 }
-#rdsConstWrap { flex: 0 0 auto; text-align: center; }
+/* ★ PINNED to the canvases' own width. `flex: 0 0 auto` sized it from content, so it drifted
+   as the logo appeared and the verdict text changed length — and combined with wrapping, that
+   is what stair-stepped the graphs. A fixed basis cannot be squeezed or displaced. */
+#rdsConstWrap { flex: 0 0 180px; min-width: 180px; text-align: center; }
 #rdsConst {
   width: 180px; height: 180px; background: #000;
   border: 1px solid var(--btn-border); border-radius: 3px;
@@ -696,6 +722,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   font-size: 11px; letter-spacing: 0.5px; margin-top: 4px;
   font-family: var(--mono, monospace);
 }
+/* ★ Matches the plots' 180px column width so the whole right-hand stack lines up. Contained,
+   never cropped: station logos are all shapes, and a wordmark cut in half is worse than a
+   small one. `display:none` until a logo exists — see rdsLogoBig in main.ts. */
+#rdsLogoBig {
+  display: none; width: 180px; max-height: 96px; object-fit: contain;
+  margin-top: 10px; border-radius: 4px;
+}
+#rdsLogoBig.show { display: block; }
 #rdsVerdict.good { color: #7dff9a; }
 #rdsVerdict.ok   { color: #ffd479; }
 #rdsVerdict.bad  { color: #ff8a7d; }
@@ -997,6 +1031,13 @@ select.btn { padding: 6px 8px; }
          continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
     <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>
     <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
+    <!-- ★★ RAW vs CONFIRMED, ADV RDS only. Everything the panel shows is normally confirmed by
+         repetition, so a single mis-corrected block cannot poison a field. RAW drops that gate
+         and shows what is arriving live — labels start RED and turn GREEN as each field earns
+         confirmation, so you watch the panel resolve. Purely a CLIENT choice: the server always
+         sends both, so switching cannot affect other listeners on a shared receiver. -->
+    <button class="btn" id="rdsRaw" style="display:none"
+            title="Show unconfirmed data as it arrives. Red = not yet confirmed, green = confirmed.">RAW</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★ Sits with minimise and close, where a window's size controls belong — the user
          already knows to look there, and it needs no explaining (Stuart, 2026-07-26). -->
@@ -1070,6 +1111,13 @@ select.btn { padding: 6px 8px; }
              read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the
              panel should answer the question rather than pose it (Stuart, 2026-07-26). -->
         <div id="rdsVerdict">—</div>
+        <!-- ★ The station's logo, large, in the space the column already leaves below the
+             verdict. The header keeps its small copy — that one is the identity badge you
+             glance at; this is the one you actually SEE. Hidden entirely when there is no
+             logo, so the column simply ends rather than reserving an empty box.
+             ★ Sized for what RDS2 will carry: stations transmit their own artwork over it,
+             and a thumbnail would waste the one genuinely new thing RDS2 offers. -->
+        <img id="rdsLogoBig" alt="">
       </div>
     </div>
   </div>

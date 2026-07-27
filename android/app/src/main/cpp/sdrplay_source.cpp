@@ -10,6 +10,7 @@
 #include <atomic>
 #include <future>
 #include <chrono>
+#include <cstdio>
 
 namespace vibe {
 
@@ -115,6 +116,11 @@ void apiClose() {
 }  // namespace
 
 struct SdrplaySource::Impl {
+    // ★★ SERIALISES EVERY API-TOUCHING CALL ON THIS OBJECT. Until the stall watchdog existed
+    // the only callers were control sockets, which are effectively serialised by the client;
+    // restartStream() is called from a WATCHDOG THREAD while gain changes keep arriving, so
+    // Uninit/Init could otherwise run underneath an in-flight Update on the same handle.
+    std::recursive_mutex api_mtx;
     sdrplay_api_DeviceT       dev{};
     sdrplay_api_DeviceParamsT* params = nullptr;
     bool selected = false;
@@ -382,7 +388,59 @@ void SdrplaySource::setSampleRate(double hz) {
                  sdrplay_api_Update_Ext1_None);
 }
 
+// ★★★ THE STREAM DIED BUT NOTHING SAID SO. See the header for the failure mode; this is the
+// recovery. Uninit tears down only the streaming half, leaving the selected device and the
+// params struct intact, so re-Initing restores the session with the operator's gain, AGC and
+// tuning still in place — nothing to re-push and nothing for the listener to notice beyond a
+// gap. The AGC transition is repeated because Init resets the loop and, as open() records at
+// length, agc.enable only takes effect on a CHANGE.
+bool SdrplaySource::restartStream(std::string& err) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    if (!open_ || !impl_->selected) { err = "device not open"; return false; }
+
+    if (impl_->streaming) {
+        // ★ A failure here is EXPECTED and must not abort the restart: the whole reason we are
+        // in this function is that the API is misbehaving, and refusing to re-Init because the
+        // teardown of a already-broken stream complained would leave the radio dead for good.
+        const sdrplay_api_ErrT ue = api().Uninit(impl_->dev.dev);
+        if (ue != sdrplay_api_Success)
+            std::fprintf(stderr, "sdrplay restart: Uninit said %s - continuing anyway\n", errStr(ue));
+        impl_->streaming = false;
+    }
+
+    static CbCtx ctx;
+    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev };
+    sdrplay_api_CallbackFnsT fns{};
+    fns.StreamACbFn = &streamCb;
+    fns.StreamBCbFn = nullptr;
+    fns.EventCbFn   = &eventCb;
+    const sdrplay_api_ErrT e = api().Init(impl_->dev.dev, &fns, &ctx);
+    if (e != sdrplay_api_Success) {
+        err = std::string("re-Init: ") + errStr(e);
+        std::fprintf(stderr, "sdrplay restart FAILED: %s\n", err.c_str());
+        return false;
+    }
+    impl_->streaming = true;
+    lost_ = false;
+
+    if (impl_->params && impl_->params->rxChannelA) {
+        auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+        const auto want = agc.enable;
+        if (want != sdrplay_api_AGC_DISABLE) {
+            agc.enable = sdrplay_api_AGC_DISABLE;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+            agc.enable = want;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+        }
+    }
+    std::fprintf(stderr, "sdrplay stream re-initialised after a stall\n");
+    return true;
+}
+
 void SdrplaySource::setGainTenthDb(int tenthDb) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!impl_->params || !impl_->params->rxChannelA) return;
     auto* ch = impl_->params->rxChannelA;
     // ★★ ON AN RSP THE SLIDER DRIVES THE LNA, NOT THE IF — the opposite of a dongle, and the
@@ -491,6 +549,7 @@ int SdrplaySource::currentLnaState() const {
 }
 
 void SdrplaySource::setLnaState(int state) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!impl_->params || !impl_->params->rxChannelA) return;
     const int n = lnaStateCount();
     if (state < 0) state = 0;
@@ -501,6 +560,7 @@ void SdrplaySource::setLnaState(int state) {
 }
 
 void SdrplaySource::setIfGainReduction(int gRdB) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!impl_->params || !impl_->params->rxChannelA) return;
     // ★★ REFUSED WHILE THE AGC IS ON. The API's own documentation is explicit that IFGR
     // cannot be adjusted with AGC enabled — and writing it anyway is exactly the "bodge" that
@@ -683,6 +743,7 @@ bool SdrplaySource::open(int, double, double, int, std::string& err) {
 void SdrplaySource::close() {}
 void SdrplaySource::setFrequency(double) {}
 void SdrplaySource::setSampleRate(double) {}
+bool SdrplaySource::restartStream(std::string&) { return false; }
 void SdrplaySource::setGainTenthDb(int) {}
 void SdrplaySource::setBiasT(bool) {}
 void SdrplaySource::setLnaState(int) {}
