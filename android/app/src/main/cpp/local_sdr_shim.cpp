@@ -764,6 +764,15 @@ static std::atomic<bool>   g_vsCompressAudio{true};
 //   CHOICE(1) listener may switch it on; a control appears in the audio menu
 //   COMPAT(2) automatic fallback only, no control shown
 static std::atomic<int>    g_vsUncompressedAudio{0};   // VsUncompressedAudio
+// ★★★ THE ADMIN PASSWORD — a SECOND secret, and a different job from the PIN. The PIN gates
+// ACCESS (may you listen at all); this gates CONTROL of the settings a stranger has no
+// business touching on someone else's radio.
+// ★ The two are independent on purpose: Hans's public receiver has NO pin (anyone may listen)
+// but must still refuse a visitor switching the bias-T on.
+// ★ Empty = no admin password set, and then nothing is protected — a host that has not asked
+// for this should not find controls mysteriously refusing to work.
+static std::mutex          g_vsAdminMtx;
+static std::string         g_vsAdminSecret;
 
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
@@ -1252,6 +1261,9 @@ struct LocalSdrShim::Impl {
     int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
     float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
+    // ★★ ADMIN UNLOCK, per connected client. Cleared whenever the spectrum client changes, so
+    // an unlock cannot outlive the session that earned it and be inherited by the next visitor.
+    std::atomic<bool> adminOk{false};
     // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
     int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
     // ★ The same five UNCONFIRMED, for the client's RAW view. Live, never sticky.
@@ -2211,11 +2223,67 @@ struct LocalSdrShim::Impl {
         // ★ Airspy HF+ controls, on the SPECTRUM socket like the RSP ones — that is the
         // connection a client's control messages travel on. The first RSP attempt put them in
         // the audio loop where nothing ever sent them, and every control silently did nothing.
+        // ★★★ ADMIN UNLOCK. HMAC(adminSecret, nonce) — the same challenge-response the PIN
+        // uses, so the password itself never crosses the wire, and the same nonce endpoint
+        // issues the challenge. Reusing it rather than inventing a second scheme also means it
+        // inherits the failure lockout that already exists.
+        // ★★★ THE GATE, AND IT LIVES ON THE SERVER. Hiding a control in the client is
+        // cosmetic: anything can open the WebSocket and send `biast` directly. So the refusal
+        // has to be here, and the client's hiding is only a courtesy on top of it.
+        // ★ WHAT IS PROTECTED, and why these and not others:
+        //   • bias-T — puts DC ON THE FEEDLINE. A stranger flipping it can damage whatever is
+        //     connected. Not "advanced", actively dangerous.
+        //   • direct sampling — reconfigures the whole front end; a listener who leaves it on
+        //     makes the receiver look broken to everyone after them.
+        //   • PPM / calibration — silently miscalibrates the radio, and the damage is invisible
+        //     and persistent. Everyone who follows quietly gets wrong frequencies.
+        // ★ NOT protected: gain, sample rate, tuning, mode, and the per-listener DSP. Those are
+        // the controls someone needs to actually USE a receiver, they are recoverable in a
+        // click, and locking them would make a public server pointless (Stuart, 2026-07-27:
+        // Hans "will probably only want the gain and sample rate accessible").
+        auto adminGate = [this](const char* what) -> bool {
+            bool needed;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); needed = !g_vsAdminSecret.empty(); }
+            if (!needed || adminOk.load()) return true;
+            LOGI("refused %s — admin password required", what);
+            std::shared_ptr<net::Socket> sc;
+            { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
+            if (sc) sendText(sc, "{\"type\":\"admin\",\"ok\":false,\"refused\":true}");
+            return false;
+        };
+        if (type == "admin_unlock") {
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string nonce = jsonStr(msg, "nonce");
+            const std::string token = jsonStr(msg, "token");
+            const std::string ip = sock ? sock->peerAddress() : "";
+            bool ok = false;
+            if (secret.empty()) {
+                // No password configured: nothing is protected, so "unlocked" is the honest
+                // answer rather than refusing a request that has nothing to refuse.
+                ok = true;
+            } else if (!g_vsAuthState.blocked(ip) && !nonce.empty() && !token.empty()
+                       && g_vsAuthState.verify(secret, nonce, token)) {
+                ok = true; g_vsAuthState.recordOk(ip);
+            } else {
+                g_vsAuthState.recordFail(ip);
+            }
+            adminOk.store(ok);
+            LOGI("admin unlock %s", ok ? "granted" : "REFUSED");
+            std::shared_ptr<net::Socket> sc;
+            { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
+            if (sc) sendText(sc, ok ? "{\"type\":\"admin\",\"ok\":true}"
+                                    : "{\"type\":\"admin\",\"ok\":false}");
+            return;
+        }
         if (type == "ahf_control") {
             if (jsonNum(msg, "att", v))    LocalSdrShim::instance().setAhfAttenuation((int)v);
             if (jsonNum(msg, "lna", v))    LocalSdrShim::instance().setAhfLna(v != 0);
             if (jsonNum(msg, "thresh", v)) LocalSdrShim::instance().setAhfAgcThreshold(v != 0);
-            if (jsonNum(msg, "ppb", v))    LocalSdrShim::instance().setAhfCalibrationPpb((int)v);
+            // ★ Calibration is protected even though the rest of this message is not:
+            // gain a listener can play with, a miscalibrated reference they cannot see.
+            if (jsonNum(msg, "ppb", v) && adminGate("calibration"))
+                LocalSdrShim::instance().setAhfCalibrationPpb((int)v);
             // ★ AGC LAST, matching the client's own send order: it owns the gain path, so
             // applying it before the manual attenuation would let it immediately override it.
             if (jsonNum(msg, "agc", v))    LocalSdrShim::instance().setAhfAgc(v != 0);
@@ -2235,7 +2303,9 @@ struct LocalSdrShim::Impl {
             }
             if (jsonNum(msg, "rfnotch", v))  LocalSdrShim::instance().setRfNotch(v != 0);
             if (jsonNum(msg, "dabnotch", v)) LocalSdrShim::instance().setDabNotch(v != 0);
-            if (jsonNum(msg, "biast", v))    LocalSdrShim::instance().setBiasT(v != 0);
+            // ★ The RSP has its own bias-T, and it is the same hazard as the dongle's.
+            if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
+                LocalSdrShim::instance().setBiasT(v != 0);
             return;
         }
         if (type == "reset") { zoomFactor.store(1.0); sendConfig(sock); return; }
@@ -2306,12 +2376,16 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "biasT") {
+            if (!adminGate("bias-T")) return;
             LocalSdrShim::instance().setBiasTee(msg.find("\"on\":true") != std::string::npos); return;
         }
         if (type == "agc") {
             LocalSdrShim::instance().setAgc(msg.find("\"on\":true") != std::string::npos); return;
         }
-        if (type == "ppm") { if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setPpm((int)v); return; }
+        if (type == "ppm") {
+            if (!adminGate("ppm")) return;
+            if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setPpm((int)v); return;
+        }
         // Capture sample rate = the spectrum span the server sends. A remote client
         // can widen/narrow it (e.g. drop the rate to ease a struggling link) without
         // touching the server. setSampleRate restarts the IQ stream and pushes a
@@ -2328,6 +2402,7 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "directSampling") {
+            if (!adminGate("direct sampling")) return;
             if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setDirectSampling((int)v); return;
         }
         // ── Audio DSP (squelch / NR / notch / de-emphasis / stereo) ───────────
@@ -2646,6 +2721,10 @@ struct LocalSdrShim::Impl {
             // query parameter on the connect URL.
             const int um = g_vsUncompressedAudio.load();
             const bool loop = isLoopback(sock->peerAddress());
+            // ★ Advertised so the client can OFFER the unlock box only where there is something
+            // to unlock — an unlock prompt on a server with no admin password is a puzzle.
+            bool adminSet;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); adminSet = !g_vsAdminSecret.empty(); }
             std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")
@@ -2858,6 +2937,9 @@ struct LocalSdrShim::Impl {
                 return;
             }
             occupantSession = me;   // claim (or re-affirm) the slot for this client
+            // ★ A NEW CLIENT IS NOT THE ADMIN. Clearing here means an unlock cannot outlive the
+            // session that earned it and be inherited by whoever connects next.
+            adminOk.store(false);
         }
 
         // ★ A client that cannot take Opus, on a server that does not allow raw,
@@ -3838,6 +3920,10 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
 void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAudio.store(mode); }
+void LocalSdrShim::setVibeServerAdminSecret(const std::string& secret) {
+    std::lock_guard<std::mutex> lk(g_vsAdminMtx);
+    g_vsAdminSecret = secret;
+}
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }

@@ -48,6 +48,7 @@ void vs_default_config(VsConfig* cfg) {
     cfg->fftRate        = 15;
     cfg->mode           = "wfm";
     cfg->pin            = "";
+    cfg->adminPassword  = "";
     cfg->port           = 0;
     cfg->maxBandwidthHz = 0;
     cfg->maxFftRate     = 0;
@@ -64,6 +65,7 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     LocalSdrShim::setServeOnLan(true);
     LocalSdrShim::setVibeServerPort(cfg->port);
     LocalSdrShim::setVibeServerAuth(cfg->pin ? cfg->pin : "");
+    LocalSdrShim::setVibeServerAdminSecret(cfg->adminPassword ? cfg->adminPassword : "");
     LocalSdrShim::setVibeServerLimits(cfg->maxBandwidthHz, cfg->maxFftRate);
     LocalSdrShim::setVibeServerLockedRate(cfg->lockedRate);
     LocalSdrShim::setVibeServerWebEnabled(cfg->serveWebClient);

@@ -64,6 +64,11 @@ public:
     /** VsUncompressedAudio: 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
      *  Loopback clients are outside this setting entirely and always get raw PCM. */
     static void setVibeServerUncompressedAudio(int mode);
+    /** ★ ADMIN PASSWORD — a second secret, gating CONTROL rather than ACCESS. The PIN decides
+     *  who may listen; this decides who may touch bias-T, direct sampling and calibration.
+     *  Independent of the PIN on purpose: a public receiver may be open to all listeners and
+     *  still refuse a visitor putting DC on the feedline. Empty = nothing is protected. */
+    static void setVibeServerAdminSecret(const std::string& secret);
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */

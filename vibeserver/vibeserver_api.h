@@ -40,6 +40,16 @@ typedef struct {
     double fftRate;        // spectrum frames per second
     const char* mode;      // "am" | "lsb" | "usb" | "nfm" | "wfm" | "cw…"
     const char* pin;       // NULL/"" = open access. The host machine is never asked (loopback).
+    /** ★★ ADMIN PASSWORD — a SECOND secret, and a different job from the PIN. The PIN decides
+     *  who may LISTEN; this decides who may change the settings a visitor has no business
+     *  touching on someone else's radio: bias-T, direct sampling and frequency calibration.
+     *  ★ Independent of the PIN deliberately. A public receiver is typically open to every
+     *  listener (no PIN) and must STILL refuse a stranger putting DC on the feedline.
+     *  ★ What it does NOT protect: gain, sample rate, tuning, mode and the per-listener DSP.
+     *  Those are what someone needs to actually use a receiver and are recoverable in a click.
+     *  ★ NULL/"" = no admin password, and then nothing is protected — a host who has not asked
+     *  for this must not find controls mysteriously refusing to work. */
+    const char* adminPassword;
     int    port;           // 0 = first free in 48000-48049; otherwise this port or fail
     double maxBandwidthHz; // 0 = uncapped   ─┐ operator ceilings
     double maxFftRate;     // 0 = default    ─┘

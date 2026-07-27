@@ -135,10 +135,79 @@ export async function detectServerType(url: string): Promise<BackendType | null>
  * `hint` is the user's explicit choice, if they made one — it always wins, so a
  * non-standard port is never unreachable.
  */
+/** ★★★ A SERVER ADDRESS IS A URL, NOT A HOST AND A PORT.
+ *
+ *  The picker used to reduce whatever was typed to `{host, port}`, keeping the scheme only
+ *  long enough to choose a default port and discarding the path outright. That shape cannot
+ *  express either half of a perfectly ordinary receiver URL:
+ *
+ *      https://kiwisdr.tgcfabian.nl/OpenWebRX/      <- TLS *and* a subfolder
+ *      https://teftuner.tgcfabian.nl/main/
+ *
+ *  Both were reported by Fabian (NL13999) on 2026-07-27: the OWRX one would not connect at
+ *  all, and the FM-DX one was correctly DETECTED and then failed on the WebSocket — because
+ *  the socket was rebuilt from host+port as `ws://host:port`, losing both the `wss` and the
+ *  `/main/`. The adapters were innocent; they handle scheme and path correctly. Nothing ever
+ *  handed them a URL.
+ *
+ *  ★ So parse once, keep everything, and pass the URL down. `host`/`port` remain for display,
+ *  for the raw-TCP backends that genuinely have no URL, and for the VibeServer port sweep.
+ */
+export interface ServerAddress {
+  host: string;
+  port: number;
+  /** Full normalised base, e.g. `https://host:8443/OpenWebRX` — no trailing slash. */
+  url: string;
+  /** Did the user actually name a scheme? If not we may still probe both. */
+  explicitScheme: boolean;
+  /** Did they name a path? A subfolder must be probed where it lives, not at the root. */
+  hasPath: boolean;
+}
+
+export function parseServerAddress(
+  raw: string, defaultPort?: number,
+): ServerAddress | null {
+  let s = raw.trim().replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+  const schemeM = /^(https?):\/\//i.exec(s);
+  const explicitScheme = !!schemeM;
+  const https = schemeM ? schemeM[1].toLowerCase() === 'https' : false;
+  if (schemeM) s = s.slice(schemeM[0].length);
+  if (!s) return null;
+
+  // Split authority from path BEFORE touching either — the old code deleted the path here.
+  const slash = s.indexOf('/');
+  const authority = slash >= 0 ? s.slice(0, slash) : s;
+  let path = slash >= 0 ? s.slice(slash) : '';
+  path = path.replace(/[?#].*$/, '').replace(/\/+$/, '');   // drop query/fragment + trailing /
+
+  const m = /^(.+?)(?::(\d+))?$/.exec(authority);
+  if (!m || !m[1]) return null;
+  const host = m[1];
+  const port = m[2] ? parseInt(m[2], 10)
+    : defaultPort != null ? defaultPort
+    : https ? 443 : 80;
+  if (!Number.isFinite(port) || port <= 0 || port >= 65536) return null;
+
+  // ★ Omit the port when it is the scheme's default: a URL that says `:443` on https works,
+  // but it is not what anyone pasted and it makes every log and label harder to read.
+  const scheme = https ? 'https' : 'http';
+  const defaultForScheme = https ? 443 : 80;
+  const authorityOut = port === defaultForScheme ? host : `${host}:${port}`;
+  return { host, port, url: `${scheme}://${authorityOut}${path}`,
+           explicitScheme, hasPath: path.length > 0 };
+}
+
 export async function probeServer(
-  host: string, port: number, hint?: BackendType | null,
+  host: string, port: number, hint?: BackendType | null, baseUrl?: string,
 ): Promise<BackendType | null> {
   if (hint) return hint;
+
+  // ★ A URL WINS WHEN WE HAVE ONE. A receiver in a subfolder does not answer at the root, so
+  // probing `host:port` alone reports "nothing there" for a server that is plainly running.
+  if (baseUrl) {
+    const t = await detectServerType(baseUrl);
+    if (t) return t;
+  }
 
   const authority = `${host}:${port}`;
   for (const scheme of ['https', 'http'] as const) {

@@ -36,7 +36,7 @@ import {
   isVersionOld,
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
-import { checkConnection, detectServerType, probeServer, DEFAULT_PORT,
+import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
          type BackendType, type ServerType } from '../services/sdrTypes';
 import { vibeServerNeedsPin } from '../services/vibeAuth';
 
@@ -62,6 +62,10 @@ const PROTO_CHOICES: Array<[BackendType | 'auto', string]> = [
   ['ubersdr', 'UberSDR'], ['fmdx', 'FM-DX'],
 ];
 
+/** ★ HOST+PORT ONLY — for VibeServer, which is always `host:port` with no path and no TLS.
+ *  ★★ DO NOT reach for this for anything else: it DELETES the scheme and the path, which is
+ *  exactly the bug that stopped `https://host/OpenWebRX/` connecting at all. Use
+ *  parseServerAddress() from sdrTypes for any address a user typed. */
 function parseHostPort(raw: string, hint?: BackendType): { host: string; port: number } | null {
   let s = raw.trim()
     .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
@@ -767,7 +771,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    * once, route here, and a single typed address can reach anything we support.
    */
   const connectDetected = useCallback(async (
-    type: BackendType, host: string, port: number, name: string,
+    type: BackendType, host: string, port: number, name: string, baseUrl?: string,
   ) => {
     const label = name || `${host}:${port}`;
     switch (type) {
@@ -788,7 +792,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       default: {
         // The HTTP receivers (ubersdr / kiwi / owrx / fmdx) all go through connect(),
         // which routes fmdx to the tuner screen and the rest to the waterfall.
-        const url = `http://${host}:${port}`;
+        // ★★ USE THE URL WE WERE GIVEN. Rebuilding it from host+port hardcoded `http://` and
+        // dropped any subfolder, so an https receiver — or one living at /OpenWebRX/ — was
+        // handed an address it does not answer on. That is why Fabian's FM-DX server was
+        // detected correctly and then died on the WebSocket (2026-07-27).
+        const url = baseUrl || `http://${host}:${port}`;
         connect(url, label, undefined, null, type);
       }
     }
@@ -813,7 +821,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // to the SpyServer proto — Airspy's map hands out copy-text, so paste must work
   // where tapping can't). Returns the detected proto so the connect routing below
   // doesn't depend on the async setTcpProto having landed yet.
-  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto' } | null => {
+  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto'; url: string } | null => {
     let h = tcpHost.trim();
     let proto: BackendType | 'auto' = tcpProto;
     const schemeM = /^(sdr|spyserver):\/\//i.exec(h);
@@ -825,11 +833,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // The port field is a fallback — a port typed into the HOST field wins, since
     // that's the natural way to paste "host:8073".
     let p = parseInt(tcpPort.trim(), 10);
-    const u = parseHostPort(h, proto === 'auto' ? undefined : proto);
+    // ★ Same parser as the paste box: a named server may equally live behind TLS or in a
+    // subfolder, and the two entry points must not disagree about what an address IS.
+    const u = parseServerAddress(h, proto === 'auto' ? undefined : DEFAULT_PORT[proto]);
     if (!u) return null;
     h = u.host;
     if (/:\d+$/.test(tcpHost.trim()) || !Number.isFinite(p) || p <= 0 || p > 65535) p = u.port;
-    return { host: h, port: p, proto };
+    return { host: h, port: p, proto, url: u.url };
   }, [tcpHost, tcpPort, tcpProto]);
 
   const tcpModalConnect = useCallback(async (save: boolean) => {
@@ -842,7 +852,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let type: BackendType | null = parsed.proto === 'auto' ? null : parsed.proto;
     if (!type) {
       setConnecting(true);
-      type = await probeServer(parsed.host, parsed.port, null);
+      type = await probeServer(parsed.host, parsed.port, null, parsed.url);
       setConnecting(false);
       if (!type) {
         Alert.alert('Custom server',
@@ -856,7 +866,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
     setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('');
-    connectDetected(type, parsed.host, parsed.port, name);
+    connectDetected(type, parsed.host, parsed.port, name, parsed.url);
   }, [parseTcpEntry, tcpName, tcpFavs, connectDetected]);
 
   const removeTcpFav = useCallback((fav: TcpFav) => {
@@ -964,14 +974,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const spy = parseSdrUrl(raw.replace(/^spyserver:\/\//i, 'sdr://'));
     if (spy) { setCustomUrl(''); connectSpy(spy.host, spy.port, `${spy.host}:${spy.port}`); return; }
 
-    const u = parseHostPort(raw);
+    const u = parseServerAddress(raw);
     if (!u) { Alert.alert('Custom server', `Couldn't read an address from "${raw}".`); return; }
 
     // Probe, then route. Plain HTTP to public-internet servers IS allowed
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them.
     setConnecting(true);
-    const type = await probeServer(u.host, u.port, null);
+    const type = await probeServer(u.host, u.port, null, u.url);
     setConnecting(false);
     if (!type) {
       // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
@@ -987,7 +997,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         `Nothing answered at ${u.host}:${u.port}.\n\nIf this is an rtl_tcp or SpyServer on a non-standard port, add it with the + button and pick the type — raw TCP servers can't be auto-detected.`);
       return;
     }
-    connectDetected(type, u.host, u.port, raw);
+    connectDetected(type, u.host, u.port, raw, u.url);
   }, [customUrl, connectSpy, connectDetected]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {

@@ -129,6 +129,8 @@ export interface SpectrumCallbacks {
   onRds?:    (meta: RdsMeta) => void;
   /** Advanced RDS payload — only sent while the RDS decoder is attached. */
   onRdsX?:   (x: RdsExt) => void;
+  /** Admin unlock result, or a refusal of a protected control. */
+  onAdmin?:  (ok: boolean, refused: boolean) => void;
   /** Live RSP gain state — the AGC moves the IF reduction, so slider positions are not it. */
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
                settling: boolean) => void;
@@ -312,6 +314,11 @@ export class SpectrumClient {
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
         });
+        break;
+      case 'admin':
+        // ok=true after a correct password; refused=true when a protected control was
+        // rejected, which is how a client learns it is locked without having asked.
+        this.cb.onAdmin?.(msg.ok === true, msg.refused === true);
         break;
       case 'rdsx':
         this.cb.onRdsX?.({

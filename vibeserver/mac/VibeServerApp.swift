@@ -183,6 +183,10 @@ final class Server: ObservableObject {
     @AppStorage("centreHz") var centreHz   = 96_600_000.0
     @AppStorage("mode")     var mode       = "wfm"
     @AppStorage("pin")      var pin        = ""
+    /// ★ A SECOND secret, gating CONTROL not ACCESS — see VsConfig.adminPassword. A public
+    /// receiver is usually open to every listener and must still refuse a stranger switching
+    /// the bias-T on.
+    @AppStorage("adminPassword") var adminPassword = ""
     @AppStorage("port")     var wantedPort = 0        // 0 = first free 48000-48049
     @AppStorage("serveWeb") var serveWeb   = true
     /// Owner policy — see the Settings picker for the reasoning. Off by default:
@@ -439,20 +443,23 @@ final class Server: ObservableObject {
         // ★ A hang is worse than a failure: a failure can be SHOWN.
         starting = true
         lastError = nil
-        let modeS = mode, pinS = pin
+        let modeS = mode, pinS = pin, admS = adminPassword
         DispatchQueue.global(qos: .userInitiated).async {
             var cfg2 = cfg
             var port2 = -1
             var errStr = ""
             modeS.withCString { modePtr in
               pinS.withCString { pinPtr in
+                admS.withCString { admPtr in
                 locJson.withCString { locPtr in
                     cfg2.mode = modePtr
                     cfg2.pin  = pinPtr
+                    cfg2.adminPassword = admPtr
                     cfg2.locationJson = locJson.isEmpty ? nil : locPtr
                     var err = [CChar](repeating: 0, count: 256)
                     port2 = Int(vs_start(&cfg2, &err, 256))
                     if port2 <= 0 { errStr = String(cString: err) }
+                }
                 }
               }
             }
@@ -1047,6 +1054,23 @@ struct SettingsView: View {
             Section("Access") {
                 TextField("PIN", text: $server.pin, prompt: Text("Open — no PIN"))
                 Text("Network listeners must enter this. This Mac never has to.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Admin password", text: $server.adminPassword,
+                          prompt: Text("Not set — nothing is protected"))
+                Text("A SECOND password, for a different job. The PIN decides who may listen; "
+                   + "this decides who may change the settings a visitor has no business "
+                   + "touching on someone else's radio:\n\n"
+                   + "• BIAS-T — it puts DC on the feedline, and a stranger switching it on can "
+                   + "damage whatever is connected.\n"
+                   + "• DIRECT SAMPLING — reconfigures the front end; left on, the receiver "
+                   + "looks broken to everyone after.\n"
+                   + "• CALIBRATION — miscalibrates the radio invisibly and permanently.\n\n"
+                   + "Gain, sample rate, tuning and the audio controls stay open to listeners — "
+                   + "those are what anyone needs to actually use the receiver, and they undo in "
+                   + "a click.\n\n"
+                   + "Leave it blank and nothing is protected. Set it, and listeners see those "
+                   + "controls locked with a box to unlock them — which is how YOU change them "
+                   + "on your own server from anywhere.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
                 Picker("Uncompressed audio", selection: $server.uncompressedAudio) {

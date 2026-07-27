@@ -1611,6 +1611,20 @@ select.btn { padding: 6px 8px; }
        panel above, so leaving these visible put TWO bias-T switches on one screen, one of
        them inert. A control that does nothing is worse than a missing one: it invites the
        user to conclude the hardware is broken (Stuart, 2026-07-26). -->
+  <!-- ★★ ADMIN UNLOCK. Shown only when the server actually HAS an admin password — an unlock
+       prompt on a server with nothing to unlock is a puzzle, not a feature. The controls below
+       it are the ones a visitor has no business touching on someone else's radio; they are
+       disabled rather than hidden, because a listener should be able to see that the operator
+       has protected them rather than wonder where the feature went. -->
+  <div class="mrow" id="adminRow" hidden>
+    <label>PROTECTED SETTINGS</label>
+    <div class="seg"><button class="btn" id="adminUnlock">UNLOCK</button></div>
+  </div>
+  <div class="lbl wrap" id="adminNote" hidden>
+    Bias-T, direct sampling and calibration are locked by this receiver's operator. Bias-T puts
+    DC on the feedline, and the other two change the radio for everyone who listens after you.
+    Enter the admin password to unlock them.
+  </div>
   <div class="mrow rtlOnly">
     <label for="ppm">PPM</label>
     <input type="range" id="ppm" min="-50" max="50" value="0">

@@ -9,7 +9,7 @@
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode } from './spectrum';
 import { AudioPlayer } from './audio';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
-import { resolveAuth, withAuth, type AuthState } from './auth';
+import { resolveAuth, withAuth, fetchAuthChallenge, vibeAuthToken, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 
@@ -179,6 +179,9 @@ function uuid(): string {
 type UncompressedPolicy = 'off' | 'choice' | 'compat';
 let srvUncompressed: UncompressedPolicy = 'off';
 let srvLocal = false;
+// ★ Does this server have an admin password at all? Only then is there anything to unlock.
+let srvAdminProtected = false;
+let adminUnlocked = false;
 const RAW_AUDIO_KEY = 'vibesdr.rawAudio';
 
 function prefersRawAudio(): boolean {
@@ -201,12 +204,56 @@ async function loadAudioPolicy(httpBase: string) {
     if (j.uncompressed === 'choice' || j.uncompressed === 'compat' || j.uncompressed === 'off')
       srvUncompressed = j.uncompressed;
     srvLocal = j.local === true;
+    srvAdminProtected = j.admin === true;
   } catch { /* leave the safe defaults */ }
 }
 
 /** ★ HIDDEN, not disabled, unless the operator opened it to listeners. An inert control still
  *  reads as an offer, and this one costs someone else 187 KB/s. Also hidden on loopback, where
  *  raw is unconditional and there is no choice left to present. */
+/** ★ Protected controls: visibly locked, not missing. A listener who cannot find bias-T
+ *  concludes the app lacks it; one who sees it greyed with a reason understands the operator
+ *  made a choice — and knows there is a way in if the receiver is theirs. */
+function refreshAdminRow() {
+  const show = srvAdminProtected;
+  const row = document.getElementById('adminRow');
+  const note = document.getElementById('adminNote');
+  if (row) row.hidden = !show;
+  if (note) note.hidden = !show || adminUnlocked;
+  const btn = document.getElementById('adminUnlock');
+  if (btn) {
+    btn.textContent = adminUnlocked ? 'UNLOCKED' : 'UNLOCK';
+    btn.classList.toggle('on', adminUnlocked);
+  }
+  // The protected controls themselves. Disabled while locked, and left alone entirely on a
+  // server with no admin password so nothing changes for the vast majority of hosts.
+  const locked = show && !adminUnlocked;
+  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb']) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (!el) continue;
+    el.disabled = locked;
+    const rowEl = el.closest('.mrow') as HTMLElement | null;
+    if (rowEl) rowEl.style.opacity = locked ? '0.45' : '1';
+  }
+}
+
+async function doAdminUnlock() {
+  if (adminUnlocked) return;
+  const pw = window.prompt("Admin password for this receiver");
+  if (pw == null || pw === '') return;
+  try {
+    // ★ The same challenge-response the PIN uses, and the same nonce endpoint. The password
+    // never crosses the wire, and reusing the scheme means it inherits the server's existing
+    // brute-force lockout rather than needing its own.
+    const ch = await fetchAuthChallenge(`http://${currentHost}`);
+    const nonce = ch.nonce;
+    if (!nonce) { alert('This server did not offer a challenge.'); return; }
+    spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
+  } catch (e) {
+    alert(`Could not reach the server to unlock: ${(e as Error).message}`);
+  }
+}
+
 function refreshRawAudioRow() {
   const show = srvUncompressed === 'choice' && !srvLocal;
   const row = document.getElementById('rawAudioRow');
@@ -277,6 +324,7 @@ async function connect(host: string, pin: string) {
   console.info(wantOpus ? '[audio] requesting Opus (WebCodecs supported)'
                         : `[audio] requesting uncompressed (${srvLocal ? 'loopback' : 'listener choice'})`);
   refreshRawAudioRow();   // the policy is only known now, and the panel may already be built
+  refreshAdminRow();
 
   // The shim only rejects a bad PIN at WS-upgrade time (401), so surface that
   // as a splash error rather than silently retrying forever.
@@ -343,6 +391,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onSummon: () => onSummoned(),
     onBusy: () => showBusy(),
     onDevice: (present) => showDeviceBanner(present),
+    onAdmin: (ok, refused) => {
+      if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
+      adminUnlocked = ok;
+      refreshAdminRow();
+      if (!ok) alert('That admin password was not accepted.');
+    },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       applyRadioCaps(radio ?? null);
