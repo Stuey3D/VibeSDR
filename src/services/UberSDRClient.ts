@@ -84,6 +84,32 @@ export interface RdsExt {
   mpx: number[];         // MPX spectrum, dB, integers in [-128, 0]
 }
 
+/** ★ WHAT THE CONNECTED RADIO ACTUALLY HAS, straight from the server (hwinfo.radio).
+ *  ★★ THE CLIENT MUST NOT GUESS. An Airspy HF+ has no tuner gain table, no LNA STATE ladder
+ *  and no IF gain reduction — it has an AGC, an 8-step attenuator and a preamp. Drawing a
+ *  dongle's gain slider for it is not a cosmetic error: the control does nothing useful and
+ *  the ones that would work are absent. Show only what the driver reports. */
+export interface RadioCaps {
+  driver: 'rtl' | 'sdrplay' | 'airspyhf' | string;
+  model: string;
+  // ── Airspy HF+ ──
+  attSteps?: number;        // 9 => 0..8
+  attStepDb?: number;       // 6 dB per step
+  hfLna?: boolean;          // +6 dB preamp
+  hfAgc?: boolean;
+  agcThreshold?: boolean;   // low/high
+  calPpb?: boolean;
+  /** ★ Tunable windows, Hz. The HF+ has a REAL HOLE at 31–60 MHz — not a weak spot, absent.
+   *  A client that does not know cannot stop someone parking on a dead frequency. */
+  ranges?: [number, number][];
+  rates?: number[];
+  // ── SDRplay RSP ──
+  lnaStates?: number;
+  ifGrMin?: number; ifGrMax?: number;
+  agcSetPoint?: boolean;
+  rfNotch?: boolean; dabNotch?: boolean; biasT?: boolean;
+}
+
 export interface SDRCallbacks {
   onSpectrum:   (bins: Float32Array, status: SDRStatus) => void;
   onStatus:     (status: SDRStatus) => void;
@@ -113,6 +139,8 @@ export interface SDRCallbacks {
   onHwLockedRate?: (rate: number) => void;
   /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
   onRdsExt?:    (x: RdsExt) => void;
+  /** What the serving radio is and what it can do (hwinfo.radio). */
+  onRadioCaps?: (caps: RadioCaps) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -508,6 +536,33 @@ export class UberSDRClient {
     }
   }
   private advRds = false;
+
+  /** Airspy HF+ controls. Keys are optional — send only what changed.
+   *  ★ AGC LAST, matching the server's own apply order: it owns the gain path, so applying it
+   *  before a manual attenuation would immediately override it. */
+  ahfControl(o: { att?: number; lna?: boolean; thresh?: boolean; ppb?: number; agc?: boolean }) {
+    const m: Record<string, unknown> = { type: 'ahf_control' };
+    if (o.att    !== undefined) m.att    = o.att;
+    if (o.lna    !== undefined) m.lna    = o.lna ? 1 : 0;
+    if (o.thresh !== undefined) m.thresh = o.thresh ? 1 : 0;
+    if (o.ppb    !== undefined) m.ppb    = o.ppb;
+    if (o.agc    !== undefined) m.agc    = o.agc ? 1 : 0;
+    this._sendCtl(m);
+  }
+
+  /** SDRplay RSP controls. Same shape — only the keys present are applied. */
+  rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
+                  rfNotch?: boolean; dabNotch?: boolean }) {
+    const m: Record<string, unknown> = { type: 'rsp_control' };
+    if (o.lna      !== undefined) m.lna      = o.lna;
+    if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
+    if (o.ifagc    !== undefined) m.ifagc    = o.ifagc ? 1 : 0;
+    if (o.agcset   !== undefined) m.agcset   = o.agcset;
+    if (o.rfNotch  !== undefined) m.rfNotch  = o.rfNotch ? 1 : 0;
+    if (o.dabNotch !== undefined) m.dabNotch = o.dabNotch ? 1 : 0;
+    this._sendCtl(m);
+  }
+
 
   private _flushView() {
     const p = this.pendingView;
@@ -1416,6 +1471,12 @@ export class UberSDRClient {
     }
     if (msg.type === 'hwinfo') {
       // VibeServer sent the serving device's tuner gains + offered sample rates.
+      // ★ The radio describes ITSELF. Everything the hardware panel offers is decided from
+      // this — see RadioCaps. Forwarded verbatim rather than normalised: a driver we do not
+      // know yet must still be able to say what it is.
+      if (msg.radio && typeof msg.radio === 'object') {
+        this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
+      }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate

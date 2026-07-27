@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from './PanelNav';
 import GainSlider from './GainSlider';
+import type { RadioCaps } from '../services/UberSDRClient';
 
 // VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
 // Gain (also mirrored in the demodulators popup), PPM, sample rate, bias-T,
@@ -67,6 +68,16 @@ export interface LocalHardwarePanelProps {
   onDeemph: (tau: number) => void;
   stereo: boolean;           // WFM stereo on (true) vs forced mono
   onStereo: (on: boolean) => void;
+  /** ★★ WHAT THE CONNECTED RADIO ACTUALLY IS, from the server. Null = unknown, in which case
+   *  we fall back to the dongle layout, which is what every VibeServer was before there were
+   *  other radios. ★ Never INFER the driver from what else is present: an Airspy HF+ was drawn
+   *  as a dongle for exactly that reason, and the controls it does have were nowhere. */
+  radio?: RadioCaps | null;
+  /** Airspy HF+ live state + setters (only used when radio.driver === 'airspyhf'). */
+  ahfAgc?: boolean;      onAhfAgc?: (on: boolean) => void;
+  ahfAgcHigh?: boolean;  onAhfAgcThreshold?: (high: boolean) => void;
+  ahfAtt?: number;       onAhfAtt?: (steps: number) => void;
+  ahfLna?: boolean;      onAhfLna?: (on: boolean) => void;
 }
 
 const DEEMPH_OPTS: { label: string; value: number }[] = [
@@ -98,6 +109,9 @@ function Seg<T>({ options, value, onChange, fmt, slot }: {
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
+  // ★ Decide from what the RADIO SAID, never from what else happens to be set.
+  const isAhf = p.radio?.driver === 'airspyhf';
+  const isRtl = !p.radio || p.radio.driver === 'rtl';
 
   // ★ One flat focus order over everything on the panel, claimed during render in JSX order —
   // the same pattern as the server picker, so the order is whatever is actually on screen.
@@ -140,13 +154,87 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
       }]}>
         <View style={styles.handleBar}>
-          <Text style={styles.title}>{p.isSpy ? 'SpyServer Controls' : 'RTL-SDR Controls'}</Text>
+          {/* ★ NAME THE ACTUAL RADIO. This said "RTL-SDR Controls" over a panel driving an
+              Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
+              app has misidentified their hardware. The server already reports a model string
+              taken from the USB descriptor, i.e. what is written on the box. */}
+          <Text style={styles.title}>
+            {p.isSpy ? 'SpyServer Controls'
+             : p.radio?.model ? `${p.radio.model} Controls`
+             : 'Local SDR Controls'}
+          </Text>
           <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
-          <Text style={styles.section}>GAIN</Text>
-          <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
-                      onAuto={p.onAuto} onGain={p.onGain} />
+          {/* ★★ GAIN IS NOT ONE CONTROL ACROSS RADIOS. A dongle has a tuner gain TABLE; an
+              HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
+              so the slider was drawing an empty/meaningless scale while the controls that do
+              work were missing entirely. */}
+          {isAhf ? (
+            <>
+              <Text style={styles.section}>GAIN — {p.radio?.model || 'Airspy HF+'}</Text>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Automatic gain (AGC)</Text>
+                <Switch value={!!p.ahfAgc} onValueChange={(v) => p.onAhfAgc?.(v)}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfAgc ? C.gold : '#ccc'} />
+              </View>
+              <Text style={styles.note}>
+                The radio's own AGC, and the right answer for most listening. Turn it off to set
+                the attenuator by hand.
+              </Text>
+
+              {p.radio?.agcThreshold && (
+                <>
+                  <Text style={styles.section}>AGC THRESHOLD</Text>
+                  <Seg slot={slot} options={[false, true]} value={!!p.ahfAgcHigh}
+                       onChange={(v) => p.onAhfAgcThreshold?.(v)}
+                       fmt={(v) => (v ? 'High' : 'Low')} />
+                  <Text style={styles.note}>
+                    The HF+'s only AGC adjustment. ★ Measured to have no audible effect above
+                    60 MHz — the API accepts it and the radio ignores it there.
+                  </Text>
+                </>
+              )}
+
+              {/* ATTENUATOR. Ignored by the hardware while the AGC is on, so say so rather
+                  than let someone drag a control that is being overridden. */}
+              <Text style={styles.section}>ATTENUATOR</Text>
+              <View style={styles.stepperRow}>
+                <TouchableOpacity
+                  style={[styles.stepBtn, slot(() => p.onAhfAtt?.(Math.max(0, (p.ahfAtt ?? 0) - 1)))
+                          && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                  onPress={() => p.onAhfAtt?.(Math.max(0, (p.ahfAtt ?? 0) - 1))}>
+                  <Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+                <Text style={styles.stepVal}>
+                  {(p.ahfAtt ?? 0) * (p.radio?.attStepDb ?? 6)} dB
+                </Text>
+                <TouchableOpacity
+                  style={[styles.stepBtn, slot(() => p.onAhfAtt?.(Math.min((p.radio?.attSteps ?? 9) - 1, (p.ahfAtt ?? 0) + 1)))
+                          && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                  onPress={() => p.onAhfAtt?.(Math.min((p.radio?.attSteps ?? 9) - 1, (p.ahfAtt ?? 0) + 1))}>
+                  <Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+              </View>
+              <Text style={styles.note}>
+                {p.ahfAgc
+                  ? 'The AGC is on, so the radio is setting this itself — turn AGC off to use it.'
+                  : `0–${((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)} dB in ${p.radio?.attStepDb ?? 6} dB steps. On an HF+ the useful range is attenuation, not gain.`}
+              </Text>
+
+              {p.radio?.hfLna && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>+6 dB preamp</Text>
+                  <Switch value={!!p.ahfLna} onValueChange={(v) => p.onAhfLna?.(v)}
+                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfLna ? C.gold : '#ccc'} />
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <Text style={styles.section}>GAIN</Text>
+              <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
+                          onAuto={p.onAuto} onGain={p.onGain} />
+            </>
+          )}
           {p.isSpy && <Text style={styles.note}>
             The SpyServer protocol sends a gain step, not a dB value — the labels are
             this receiver's nearest published gains. There is no auto-gain over the wire.
@@ -192,7 +280,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </View>
           <Text style={styles.note}>Off forces mono — cleaner on weak/noisy signals.</Text>
 
-          {!p.isSpy && <>
+          {/* ★ DONGLE-ONLY from here: PPM (the HF+ calibrates in parts per BILLION, and that
+              control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling
+              are all properties of an RTL dongle. Showing them for another radio is how the
+              panel became a hybrid of two receivers. */}
+          {!p.isSpy && isRtl && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
             <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>

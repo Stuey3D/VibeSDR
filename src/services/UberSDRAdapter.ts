@@ -110,6 +110,10 @@ export class UberSDRAdapter implements SDRBackend {
    *  ★ Anything added to UberSDRClient that the screen calls needs a line here. */
   get isVibe(): boolean { return this.client.isVibe; }
   setAdvRds(on: boolean) { this.client.setAdvRds(on); }
+  /** Radio-specific hardware controls. Forwarded for the same reason as above — the screen
+   *  holds the adapter, and an absent method on an `any`-cast call fails silently. */
+  ahfControl(o: Parameters<UberSDRClient['ahfControl']>[0]) { this.client.ahfControl(o); }
+  rspControl(o: Parameters<UberSDRClient['rspControl']>[0]) { this.client.rspControl(o); }
   /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
   setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }

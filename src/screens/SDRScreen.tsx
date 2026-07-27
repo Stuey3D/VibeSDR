@@ -40,7 +40,7 @@ import { useIsFocused } from '@react-navigation/native';
 import type { RootStackParamList }     from '../../App';
 import { splashBridge }                 from '../../App';
 
-import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt } from '../services/UberSDRClient';
+import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
@@ -1724,6 +1724,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // finding the panel mysteriously full of red labels weeks later would read as a fault.
   const [advRdsRaw,  setAdvRdsRaw]  = useState(false);
   const [advRdsTall, setAdvRdsTall] = useState(false);
+  // ★ What the serving radio IS. Everything the hardware panel offers hangs off this, so the
+  // controls match the receiver instead of assuming a dongle.
+  const [radioCaps, setRadioCaps] = useState<RadioCaps | null>(null);
+  // Airspy HF+ live state. Mirrors what we last SENT — the shim has no read-back message, and
+  // it is single-occupant, so our own last write is the truth.
+  const [ahfAgc,     setAhfAgc]     = useState(true);
+  const [ahfAgcHigh, setAhfAgcHigh] = useState(false);
+  const [ahfAtt,     setAhfAtt]     = useState(0);
+  const [ahfLna,     setAhfLna]     = useState(false);
   // ★ The idle saver reads TOUCHES, and an open analyser produces none — see the exemption
   // in the saver's tick. A ref because that tick closes over its creation-time scope.
   const advRdsOpenRef = useRef(false);
@@ -2366,6 +2375,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         } else { decoderImageRef.current?.imageDone(); }
       },
       onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
+      onRadioCaps:  (caps) => { if (!destroyed.current) setRadioCaps(caps); },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
         // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
@@ -5607,6 +5617,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       {isLocal ? (
         <LocalHardwarePanel
           isSpy={isSpy}
+          radio={radioCaps}
+          ahfAgc={ahfAgc}
+          onAhfAgc={(v) => { setAhfAgc(v); (client.current as any)?.ahfControl?.({ agc: v }); }}
+          ahfAgcHigh={ahfAgcHigh}
+          onAhfAgcThreshold={(v) => { setAhfAgcHigh(v); (client.current as any)?.ahfControl?.({ thresh: v }); }}
+          ahfAtt={ahfAtt}
+          // ★ Send the attenuation WITH agc:false. Setting it while the AGC owns the gain path
+          // does nothing, and a control that silently does nothing is the thing we are fixing.
+          onAhfAtt={(v) => { setAhfAtt(v); setAhfAgc(false);
+                             (client.current as any)?.ahfControl?.({ att: v, agc: false }); }}
+          ahfLna={ahfLna}
+          onAhfLna={(v) => { setAhfLna(v); (client.current as any)?.ahfControl?.({ lna: v }); }}
           visible={hwOpen}
           onClose={() => setHwOpen(false)}
           gains={hwGains}
