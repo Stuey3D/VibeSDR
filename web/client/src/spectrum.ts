@@ -338,6 +338,11 @@ export class SpectrumClient {
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null);
+        // ★ Seconds left on a limited session, sent on connect so the clock starts THEN
+        // rather than at the first warning. -1 = no limit / exempt.
+        if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft >= 0) {
+          this.cb.onSessionWarning?.(msg.sessionSecsLeft);
+        }
         break;
       case 'rds':
         this.cb.onRds?.({

@@ -2552,6 +2552,15 @@ struct LocalSdrShim::Impl {
           { std::lock_guard<std::mutex> al(g_vsAdminMtx); aset = !g_vsAdminSecret.empty(); }
           j += std::string(",\"adminSet\":") + (aset ? "true" : "false");
           j += std::string(",\"adminOk\":")  + (adminOk.load() ? "true" : "false"); }
+        // ★★ THE COUNTDOWN NEEDS A DEADLINE AT CONNECT, not just the two warnings. The first
+        // cut drove the client's timer ENTIRELY from session_warning at T-120 and T-30 — so on
+        // a 30-minute limit the listener saw nothing at all for 28 minutes and concluded the
+        // limit had not taken (Stuart, 2026-07-27, connected from his Mac). The warnings are
+        // the nudge; this is the clock.
+        // -1 = no limit, or this listener is exempt (loopback / admin).
+        { const int left = LocalSdrShim::instance().occupantSecsLeft();
+          j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
+          j += ",\"sessionSecsLeft\":" + std::to_string(left); }
         // A pinned rate is advertised so the client can HIDE its rate picker and say
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).
