@@ -3324,7 +3324,7 @@ function openSpotsMap() {
   // handler — and the MAP BUTTON THEN DID NOTHING, silently, for as long as that spot stayed
   // in the list. Closing the map and finding it would not reopen is exactly this
   // (Stuart, 2026-07-27). A bad decode must cost us that one spot, not the whole feature.
-  const rows: { s: SpotRow; p: { lat: number; lon: number } }[] = [];
+  const rows: { s: Spot; p: { lat: number; lon: number } }[] = [];
   let dropped = 0;
   for (const s of filteredSpots()) {
     const p = gridToLatLon(s.grid);

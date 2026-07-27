@@ -444,10 +444,6 @@ function WaterfallView({
   const specPath = useSharedValue<SkPath>(Skia.Path.Make());
   const peakPath = useSharedValue<SkPath>(Skia.Path.Make());
   const [liveRange, setLiveRange] = useState({ dbMin: -120, dbMax: -20 });
-  /** ★ TEMPORARY — see the instrument in the JSX below. No hysteresis: the whole
-   *  point is to see the small per-frame movement the axis labels hide. */
-  const [rangeDbg, setRangeDbg] = useState('');
-
   // ── Deterministic Skia disposal ─────────────────────────────────────────────
   // Hermes only sees the tiny JS wrappers, NOT the ~1MB native buffer behind
   // each waterfall image — it feels no memory pressure and lets dead images
@@ -813,11 +809,6 @@ function WaterfallView({
     // hovering on a .5 boundary flipped the rounded value every few frames,
     // re-rendering the whole WaterfallView tree at up to 10Hz (profiled:
     // React task execution was still ~a third of all JS post-meter-bus).
-    // ★ TEMPORARY instrument — raw window + span, every frame, one decimal.
-    setRangeDbg(
-      `max ${frame.dbMax.toFixed(1)}  min ${frame.dbMin.toFixed(1)}  ` +
-      `span ${(frame.dbMax - frame.dbMin).toFixed(1)}`,
-    );
     const rMin = Math.round(frame.dbMin), rMax = Math.round(frame.dbMax);
     setLiveRange(prev =>
       Math.abs(prev.dbMin - rMin) < 2 && Math.abs(prev.dbMax - rMax) < 2
@@ -1512,20 +1503,6 @@ function WaterfallView({
             {'LISTEN: ' + fmtHz(tuneHz)}
           </Text>
         )}
-
-        {/* ★ TEMPORARY INSTRUMENT (2026-07-26) — the auto-contrast window, live and
-            unrounded, so a tune/zoom dim can be READ instead of theorised about.
-            Two theories in a row explained half the evidence each. REMOVE once the
-            flicker is understood. */}
-        {__DEV__ || true ? (
-          <Text pointerEvents="none"
-                style={[styles.dbLabel, {
-                  fontFamily, top: specTop + 4, left: 8, width: 260,
-                  color: '#0ff', fontSize: 10,
-                }]}>
-            {rangeDbg}
-          </Text>
-        ) : null}
 
         {/* dB axis — amber, left edge of spectrum */}
         {dbLabels.map((d, i) => (
