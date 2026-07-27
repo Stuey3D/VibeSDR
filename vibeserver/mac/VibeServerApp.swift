@@ -29,8 +29,12 @@ final class LocationFinder: NSObject, ObservableObject, CLLocationManagerDelegat
     /// Human-readable outcome for the Settings pane — including refusals, which must be
     /// explained rather than left as a button that silently does nothing.
     @Published var status = ""
+    /// ★ Orange is the colour of a problem. The same field now carries a SUCCESS message, and
+    /// showing "it worked" in warning orange would undo the reassurance it exists to give.
+    @Published var statusIsError = true
     private let mgr = CLLocationManager()
     private var onFix: ((Double, Double, String?, String?) -> Void)?
+    private var timeout: Timer?
 
     override init() {
         super.init()
@@ -38,32 +42,76 @@ final class LocationFinder: NSObject, ObservableObject, CLLocationManagerDelegat
         mgr.desiredAccuracy = kCLLocationAccuracyKilometer   // we only need the square
     }
 
-    /// Ask for permission if needed, then a single fix. `done` gets lat, lon, and the
+    /// Ask for permission if needed, then a fix. `done` gets lat, lon, and the
     /// reverse-geocoded town and ISO country when those are available.
+    /// ★★ THREE FAULTS FIXED after HansVanEijsden hit all of them (2026-07-27): the button
+    /// stuck on "Locating…" forever with no prompt, permission had to be granted by hand, and
+    /// the eventual result was "kCLErrorDomain error 0".
     func find(_ done: @escaping (Double, Double, String?, String?) -> Void) {
         onFix = done
         status = ""
+        // ★ SYSTEM-WIDE LOCATION SERVICES CAN BE OFF, and then requestWhenInUseAuthorization()
+        // shows NO PROMPT and reports nothing — which is exactly the "no privacy popup, button
+        // just greys out" Hans saw. It is a different condition from our app being denied, and
+        // it needs a different instruction, so it is checked separately and first.
+        guard CLLocationManager.locationServicesEnabled() else {
+            statusIsError = true; status = "Location Services is switched off for this Mac — System Settings ▸ "
+                   + "Privacy & Security ▸ Location Services. You can type a locator instead."
+            return
+        }
         switch mgr.authorizationStatus {
         case .notDetermined:
-            busy = true
+            begin()
             mgr.requestWhenInUseAuthorization()   // the fix follows in the delegate
         case .denied, .restricted:
             // ★ Point at the fix. "Denied" with no route to undo it reads as a broken button.
-            status = "Location is turned off for VibeServer — System Settings ▸ Privacy & "
+            statusIsError = true; status = "Location is turned off for VibeServer — System Settings ▸ Privacy & "
                    + "Security ▸ Location Services. You can still type a locator instead."
         default:
-            busy = true
-            mgr.requestLocation()
+            begin()
+            requestFix()
         }
     }
+
+    /// ★★ ALWAYS TIME OUT. Every failure mode here is silent — no prompt, no callback, no
+    /// error — and without a deadline the button simply says "Locating…" until the app is
+    /// restarted, which is what Hans reported. A control that cannot fail visibly is worse
+    /// than one that fails.
+    private func begin() {
+        busy = true
+        timeout?.invalidate()
+        timeout = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.busy else { return }
+                self.finish()
+                self.statusIsError = true; self.status = "Could not get a location in time. A Mac locates itself from "
+                            + "nearby Wi-Fi networks, so this can fail indoors or on a wired "
+                            + "connection — type a locator instead."
+            }
+        }
+    }
+
+    private func finish() {
+        busy = false
+        timeout?.invalidate(); timeout = nil
+        mgr.stopUpdatingLocation()
+    }
+
+    /// ★ startUpdatingLocation, NOT requestLocation. requestLocation is ONE shot and gives up
+    /// with kCLErrorLocationUnknown if the first attempt misses — which is what produced Hans's
+    /// "kCLErrorDomain error 0" (that IS kCLErrorLocationUnknown, and it is usually transient).
+    /// Continuous updates let a fix arrive late; our own timeout bounds the wait.
+    private func requestFix() { mgr.startUpdatingLocation() }
 
     nonisolated func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
         Task { @MainActor in
             switch m.authorizationStatus {
-            case .authorized, .authorizedAlways: m.requestLocation()
+            case .authorized, .authorizedAlways:
+                self.begin()
+                self.requestFix()
             case .denied, .restricted:
-                busy = false
-                status = "Permission refused. Type a locator or coordinates instead."
+                self.finish()
+                self.statusIsError = true; self.status = "Permission refused. Type a locator or coordinates instead."
             default: break   // still undetermined: the prompt is on screen
             }
         }
@@ -76,7 +124,7 @@ final class LocationFinder: NSObject, ObservableObject, CLLocationManagerDelegat
         CLGeocoder().reverseGeocodeLocation(l) { marks, _ in
             let pm = marks?.first
             Task { @MainActor in
-                self.busy = false
+                self.finish()
                 self.status = ""
                 self.onFix?(l.coordinate.latitude, l.coordinate.longitude,
                             pm?.locality ?? pm?.subAdministrativeArea, pm?.isoCountryCode)
@@ -86,8 +134,12 @@ final class LocationFinder: NSObject, ObservableObject, CLLocationManagerDelegat
 
     nonisolated func locationManager(_ m: CLLocationManager, didFailWithError e: Error) {
         Task { @MainActor in
-            self.busy = false
-            self.status = "Could not get a location: \(e.localizedDescription)"
+            // ★ kCLErrorLocationUnknown is TRANSIENT — Core Location is saying "not yet", not
+            // "never". Reporting it as a failure is what turned a slow fix into an error
+            // message for Hans. Keep waiting; the timeout is what ends this.
+            if (e as? CLError)?.code == .locationUnknown { return }
+            self.finish()
+            self.statusIsError = true; self.status = "Could not get a location: \(e.localizedDescription)"
         }
     }
 }
@@ -931,30 +983,61 @@ struct SettingsView: View {
                 }
                 TextField("Or locator", text: $server.rxGrid, prompt: Text("IO92ng"))
                 HStack {
-                    Button(finder.busy ? "Locating…" : "Use this Mac's location") {
+                    // ★★ THE LABEL SETS THE EXPECTATION. "Use this Mac's location" promises a location and
+                    // delivers a SQUARE — Hans pressed it expecting coordinates, got "JO32bl", and had
+                    // to search the web to learn it was his own town (2026-07-27). Naming the output
+                    // costs nothing and removes the surprise before it happens.
+                    Button(finder.busy ? "Locating…" : "Fill in locator from this Mac") {
                         finder.find { lat, lon, town, iso in
                             // ★ Fill the LOCATOR, not the coordinates. See LocationFinder:
                             // publishing a square is the whole point of doing this coarsely,
                             // and the operator can still type exact coordinates if they want
                             // them. Anything already typed is left alone.
-                            server.rxGrid = server.maidenhead(lat, lon)
+                            let sq = server.maidenhead(lat, lon)
+                            server.rxGrid = sq
                             if server.rxPlace.trimmingCharacters(in: .whitespaces).isEmpty,
                                let t = town { server.rxPlace = t }
                             if let c = iso { server.rxIso = c.uppercased() }
+                            // ★★ SAY WHAT IT DID. It succeeded silently before: a locator
+                            // appeared in a field the user was not looking at, no coordinates
+                            // arrived because we deliberately do not publish them, and there
+                            // was no way to tell success from the failure they had just been
+                            // having. HansVanEijsden had to search the web for "JO32bl" to
+                            // find out whether it was his own town (2026-07-27).
+                            // ★ The reassurance matters as much as the fact: this is the ONE
+                            // control that touches their location, so "your exact position is
+                            // not published" belongs in the confirmation, not only in the help
+                            // text underneath that nobody reads before pressing a button.
+                            finder.statusIsError = false
+                            finder.status = town.map {
+                                "Filled in locator \(sq) — a square a few km across near \($0). "
+                                + "Your exact coordinates are not published."
+                            } ?? "Filled in locator \(sq) — a square a few km across. "
+                                + "Your exact coordinates are not published."
                         }
                     }
                     .disabled(finder.busy)
                     Spacer()
                 }
                 if !finder.status.isEmpty {
-                    Text(finder.status).font(.caption).foregroundStyle(.orange)
+                    Text(finder.status).font(.caption)
+                        .foregroundStyle(finder.statusIsError ? .orange : .green)
                 }
-                Text("Optional, and either will do. Coordinates give exact distances and bearings; "
-                     + "a locator gives the same to within a few km without publishing where you "
-                     + "live. Coordinates win if you give both.\n\n"
-                     + "\"Use this Mac's location\" fills in the LOCATOR, not your exact "
-                     + "coordinates — a square roughly 4 km across, which is all a distance or a "
-                     + "bearing needs. macOS will ask for permission the first time.")
+                // ★ Leads with WHY it is a grid square. A listener seeing only a locator reads it
+                // as the app being coy or limited; said plainly, it is a deliberate protection.
+                // Most operators are not happy publishing a home address to everyone who connects
+                // (Stuart, 2026-07-27, after Hans expected exact coordinates and had to look the
+                // square up to check it was even his town).
+                Text("A receiver's position is published to everyone who connects to it, so this "
+                     + "is a MAIDENHEAD GRID SQUARE rather than an address — roughly 4 km across, "
+                     + "which is all a distance or a bearing needs, and not enough to find you by."
+                     + "\n\n"
+                     + "\"Fill in locator from this Mac\" works that square out for you. macOS "
+                     + "asks for permission the first time, and needs Wi-Fi switched on — a Mac "
+                     + "locates itself from nearby networks, so it can fail on a wired connection."
+                     + "\n\n"
+                     + "You can type a locator by hand instead, or give exact coordinates if you "
+                     + "would rather — those win if you give both.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !server.locationJson().isEmpty && server.running {
                     Text("Restart the server to apply a change.")

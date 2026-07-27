@@ -198,14 +198,32 @@ float RdsDemod::rdsDeviationKHz() const {
     // dead carrier as "12.9 kHz - generous" beside no lock and 0.0 groups/s (Stuart,
     // 2026-07-27) — a reading that is not merely wrong but IMPOSSIBLE, the spec ceiling being
     // 7.5% = 5.6 kHz.
-    if (!best()) return -1.0f;
+    // ★★ SCOPED TO THE STATION, NOT TO THIS INSTANT. The first version gated on best() —
+    // "is a hypothesis synced RIGHT NOW" — which on a marginal signal flickers many times a
+    // second, so the reading blinked between a number and a dash (Stuart, 2026-07-27).
+    // ★ That contradicted the rule the sticky aggregate already follows: a new PI is a
+    // DIFFERENT STATION and is the only thing that invalidates any of this. Sync loss is not —
+    // the station is still there, and the estimate behind this is heavily smoothed, so it
+    // remains just as true through a fade as it was a second earlier.
+    // ★ groupTotal is exactly the right scope: it is zero until this station has produced
+    // groups and is cleared when the PI changes, so a dead carrier still reads "—" (which is
+    // the bug this gate exists for) while a fading one holds its last honest value.
+    if (agg_.groupTotal <= 0) return -1.0f;
 
     // ★ SUBTRACT THE FLOOR IN POWER. The guard band sees the same noise through the same
     // filter but no subcarrier, so what survives the subtraction is signal alone. If the
     // difference is not positive there is nothing above the noise, which is the honest answer
     // on a station this weak — better than a confident number built out of hiss.
     if (guardOn_) {
-        const float sigPow = rdsPow_ - guardPow_;
+        // ★★ SUBTRACT SLOWLY. rdsPow_ and guardPow_ are each smoothed with a 0.0005 coefficient
+        // at ~40 kHz — a 50 ms time constant, far faster than "smoothed" suggests. On a weak
+        // signal their DIFFERENCE therefore crosses zero many times a second, and every negative
+        // crossing returned -1, so the reading flashed between a value and a dash several times
+        // a second (Stuart, 2026-07-27).
+        // ★ A deviation is a property of the transmitter and should not flicker at 20 Hz. The
+        // difference is re-smoothed over seconds, and -1 is reserved for a subcarrier that is
+        // genuinely and persistently at or below the noise — not for one that dipped for 50 ms.
+        const float sigPow = sigPowSlow_;
         if (sigPow <= 0.0f) return -1.0f;
         // 1.381 = peak / RMS of a spec-shaped biphase envelope through our own +/-2.4 kHz
         // filter (tools/rdsdev_cal, stable to +/-0.2% from 192 to 320 kHz). NOT the 1.520 used
@@ -370,7 +388,7 @@ void RdsDemod::reset() {
     if (lpfQ_) lpfQ_->reset();
     if (lpfGI_) lpfGI_->reset();
     if (lpfGQ_) lpfGQ_->reset();
-    rdsPow_ = guardPow_ = 0.0f; guardPhase_ = 0.0;
+    rdsPow_ = guardPow_ = sigPowSlow_ = 0.0f; guardPhase_ = 0.0;
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
     mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
@@ -443,6 +461,13 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
         const float mag2 = sI_[i] * sI_[i] + sQ_[i] * sQ_[i];
         rdsRms_ += 0.0005f * (std::sqrt(mag2) - rdsRms_);
         rdsPow_ += 0.0005f * (mag2 - rdsPow_);
+    }
+    // ★ The noise-subtracted power, smoothed over SECONDS rather than milliseconds — see
+    // rdsDeviationKHz(). Clamped at zero first so a momentary negative excursion pulls the
+    // average down rather than latching the whole reading to "nothing".
+    if (guardOn_ && nb > 0) {
+        const float inst = std::max(0.0f, rdsPow_ - guardPow_);
+        sigPowSlow_ += 0.02f * (inst - sigPowSlow_);
     }
 
     // ★★ THE GUARD BAND — only when the operator has paid for it. Rotating the ALREADY

@@ -842,6 +842,7 @@ private:
     // the 1.520 peak/mean-envelope) — both measured by tools/rdsdev_cal.
     float rdsPow_ = 0.0f;              // smoothed mean-square of the RDS baseband
     float guardPow_ = 0.0f;            // ...and of the guard band beside it
+    float sigPowSlow_ = 0.0f;          // (rds - guard), smoothed over SECONDS
     double guardPhase_ = 0.0;          // guard NCO phase, carried across blocks
     double guardStep_ = 0.0;           // radians per sample for the guard offset
     bool  guardOn_ = false;            // costs a second filter pair — operator opt-in
