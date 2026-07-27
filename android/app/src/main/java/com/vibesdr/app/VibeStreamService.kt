@@ -42,6 +42,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -145,6 +146,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // Bypass password (rate-limit/ban bypass) — appended to the audio WS URL
     private var bypassPassword = ""
     private var instanceName = ""
+    /** Log an unknown audio frame format ONCE — it would otherwise fire per packet. */
+    private val unknownFormatLogged = AtomicBoolean(false)
     @Volatile private var lastPacketAt = 0L
     @Volatile private var packetCount = 0
 
@@ -692,8 +695,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     if (!externalAudio || muted) return
                     val b = bytes.toByteArray()
                     if (b.size <= 6) return
-                    // Frame: [0]=channels, [1]=format (0 raw / 1 ADPCM mono / 2 M/S),
-                    // [2..5]=rate LE, then payload.
+                    // Frame: [0]=channels, [1]=format, [2..5]=rate LE, then payload.
+                    // Formats: 0 = raw int16 PCM, 1 = IMA-ADPCM mono, 2 = IMA-ADPCM mid/side,
+                    //          3 = OPUS.
+                    // ★★★ EVERY FORMAT IS NAMED, and an unknown one is DROPPED. This used to be
+                    // "1, 2 -> adpcm, else -> raw PCM", which was true while raw was the only
+                    // other case. Opus then arrived as format 3, landed in `else`, and its
+                    // compressed bytes were played as samples — a loud buzz on every local radio
+                    // on Android, with a normal spectrum beside it (Stuart, 2026-07-27).
+                    // ★★ An `else` that means "the other one" cannot survive a third case. Decode
+                    // what we know and drop what we do not: silence is a bug you go and look for,
+                    // a buzz is one you blame on the radio.
                     val rate = ByteBuffer.wrap(b, 2, 4).order(ByteOrder.LITTLE_ENDIAN).int
                     if (rate <= 0) return
                     val format = b[1].toInt() and 0xFF
@@ -715,7 +727,16 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                                 } else Triple(rate, 1, mid)
                             }
                         }
-                        else -> {
+                        3 -> {
+                            // OPUS — decoded by libopus in our own native lib (the same one that
+                            // encodes it server-side). Stateful across packets, so no per-frame
+                            // decoder churn and no click at frame boundaries.
+                            val channels = if ((b[0].toInt() and 0xFF) == 2) 2 else 1
+                            val pkt = b.copyOfRange(6, b.size)
+                            val pcm = VibeLocalSDR.opusDecode(pkt, rate, channels)
+                            if (pcm == null) null else Triple(rate, channels, pcm)
+                        }
+                        0 -> {
                             val channels = b[0].toInt() and 0xFF
                             val n = (b.size - 6) / 2
                             if (n <= 0) null else {
@@ -723,6 +744,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                                 ByteBuffer.wrap(b, 6, n * 2).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
                                 Triple(rate, if (channels == 2) 2 else 1, shorts)
                             }
+                        }
+                        else -> {
+                            // A format this build does not know. Dropping it is the only safe
+                            // answer — see the note above.
+                            if (unknownFormatLogged.compareAndSet(false, true)) {
+                                Log.w(TAG, "local audio: unknown frame format $format — dropping")
+                            }
+                            null
                         }
                     } ?: return
                     lastPacketAt = SystemClock.elapsedRealtime()

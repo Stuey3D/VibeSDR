@@ -419,3 +419,70 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
     if (arr && !gains.empty()) env->SetIntArrayRegion(arr, 0, (jsize)gains.size(), gains.data());
     return arr;
 }
+
+// ── Opus decode, for the LOCAL AUDIO PUMP ────────────────────────────────────
+//
+// ★★★ WHY THIS EXISTS. The audio frame header's format byte is 0=raw PCM, 1/2=IMA-ADPCM,
+// 3=Opus. The Kotlin pump handled 1 and 2 and let EVERYTHING ELSE fall through to "treat the
+// payload as int16 PCM" — which was true when the only other case was raw. Opus then arrived
+// as a third case and was played as though its compressed bytes were samples: a loud buzz, on
+// every local radio on Android, with a perfectly normal spectrum beside it (Stuart, 2026-07-27).
+// ★★ THE SAME SHAPE AS THE "else means dongle" FAMILY: a two-case test whose `else` silently
+// means "the other one" mis-handles the third case rather than rejecting it.
+//
+// ★ iOS decodes Opus in its own audio engine (pushExternalOpus); Android had NO decoder at all,
+// even though libopus is already linked into this library for the ENCODER. So this is a decode
+// entry point next to an encoder we already ship, not a new dependency.
+//
+// ★ The decoder is STATEFUL and must persist across packets — Opus carries prediction between
+// frames, so a fresh decoder per packet would produce a click at every frame boundary. It is
+// rebuilt only when the rate or channel count actually changes.
+#ifdef VIBE_HAVE_OPUS
+#include <opus/opus.h>
+#include <mutex>
+namespace {
+std::mutex      g_opusDecMtx;
+OpusDecoder*    g_opusDec      = nullptr;
+int             g_opusDecRate  = 0;
+int             g_opusDecCh    = 0;
+}
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv* env, jobject,
+                                                   jbyteArray packet, jint rate, jint channels) {
+    if (!packet || rate <= 0 || (channels != 1 && channels != 2)) return nullptr;
+    const jsize n = env->GetArrayLength(packet);
+    if (n <= 0) return nullptr;
+    std::vector<jbyte> buf((size_t)n);
+    env->GetByteArrayRegion(packet, 0, n, buf.data());
+
+    std::lock_guard<std::mutex> lk(g_opusDecMtx);
+    if (!g_opusDec || g_opusDecRate != rate || g_opusDecCh != channels) {
+        if (g_opusDec) opus_decoder_destroy(g_opusDec);
+        int err = OPUS_OK;
+        g_opusDec = opus_decoder_create(rate, channels, &err);
+        if (!g_opusDec || err != OPUS_OK) {
+            g_opusDec = nullptr;
+            LOGE("opus_decoder_create failed: %d", err);
+            return nullptr;
+        }
+        g_opusDecRate = rate; g_opusDecCh = channels;
+    }
+    // 120 ms at 48 kHz is the largest an Opus packet can decode to — size for the worst case
+    // rather than for the frame size we happen to send, so a server-side change cannot
+    // silently truncate audio here.
+    const int maxSamples = rate / 1000 * 120;
+    std::vector<opus_int16> pcm((size_t)maxSamples * channels);
+    const int got = opus_decode(g_opusDec, (const unsigned char*)buf.data(), (opus_int32)n,
+                                pcm.data(), maxSamples, 0);
+    if (got <= 0) return nullptr;
+    const jsize outLen = (jsize)got * channels;
+    jshortArray out = env->NewShortArray(outLen);
+    if (out) env->SetShortArrayRegion(out, 0, outLen, (const jshort*)pcm.data());
+    return out;
+}
+#else
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv*, jobject, jbyteArray, jint, jint) {
+    return nullptr;   // no encoder in this build either — the client will not ask for Opus
+}
+#endif

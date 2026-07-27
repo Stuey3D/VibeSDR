@@ -115,6 +115,14 @@ object VibeLocalSDR {
         host: String, port: Int, centerFreq: Double, sampleRate: Double,
         gainTenthDb: Int, fftSize: Int, fftRate: Double, mode: String): Int
 
+    /** Decode ONE Opus packet to interleaved int16. Null on any failure — the caller must
+     *  DROP the frame rather than fall back to playing the bytes raw, which is the bug this
+     *  exists to fix. The decoder is stateful and lives in native code across calls. */
+    fun opusDecode(packet: ByteArray, rate: Int, channels: Int): ShortArray? {
+        ensureLoaded(); return nativeOpusDecode(packet, rate, channels)
+    }
+    private external fun nativeOpusDecode(packet: ByteArray, rate: Int, channels: Int): ShortArray?
+
     /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
      *  Call before startSpectrum(). */
     fun setServeOnLan(on: Boolean) { ensureLoaded(); nativeSetServeOnLan(on) }

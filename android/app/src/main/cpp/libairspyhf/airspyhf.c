@@ -890,6 +890,22 @@ static int airspyhf_open_init_ex(airspyhf_device_t** device, uint64_t serial_num
 			&lib_device->usb_device);
 		result = (libusb_error == 0 && lib_device->usb_device != NULL)
 			? AIRSPYHF_SUCCESS : AIRSPYHF_ERROR;
+
+		/* Adopting the handle is only HALF of what the enumerating path does. That path also
+		   claims interface 0 and selects alt setting 1, and without those every control
+		   transfer and the bulk stream fails — the device opens and then nothing works.
+		   NOTE: no libusb_set_configuration here. Android has already configured the device,
+		   and asking again on a wrapped fd fails (and can disturb a working configuration);
+		   claiming is both necessary and sufficient. */
+		if (result == AIRSPYHF_SUCCESS)
+		{
+			if (libusb_claim_interface(lib_device->usb_device, 0) != 0 ||
+				libusb_set_interface_alt_setting(lib_device->usb_device, 0, 1) != 0)
+			{
+				libusb_close(lib_device->usb_device);
+				result = AIRSPYHF_ERROR;
+			}
+		}
 		if (result != AIRSPYHF_SUCCESS)
 		{
 			lib_device->usb_device = NULL;
