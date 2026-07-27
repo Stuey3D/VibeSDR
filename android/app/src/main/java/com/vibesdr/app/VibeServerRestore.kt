@@ -128,6 +128,8 @@ object VibeServerRestore {
         // ★ Restore the protections too — see the note by the keys. Defaults here are the SAFE
         // ones only because they match the product defaults; the point is that the stored value
         // is used, not that the fallback is harmless.
+        Log.i(TAG, "restore cfg: adminPw=${(p.getString(K_ADMINPW, "") ?: "").length} chars, " +
+                   "limitMin=${p.getInt(K_LIMITMIN, 0)}")
         VibeLocalSDR.setVibeServerAdminSecret(p.getString(K_ADMINPW, "") ?: "")
         VibeLocalSDR.setVibeServerUncompressedAudio(p.getInt(K_UNCOMP, 0))
         VibeLocalSDR.setVibeServerSessionLimit(p.getInt(K_LIMITMIN, 0))

@@ -4156,10 +4156,13 @@ void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAu
 void LocalSdrShim::setVibeServerAdminSecret(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsAdminMtx);
     g_vsAdminSecret = secret;
+    LOGI("admin secret set (%zu chars)", secret.size());
 }
+
 
 void LocalSdrShim::setVibeServerSessionLimit(int minutes) {
     g_vsSessionLimitMin.store(minutes > 0 ? minutes : 0);
+    LOGI("session limit set to %d min", g_vsSessionLimitMin.load());
 }
 
 bool LocalSdrShim::isBusy() const {

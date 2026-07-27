@@ -315,8 +315,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setStarting(false);
       setError(e?.message ?? 'Could not start VibeServer. Is a supported SDR plugged in via USB OTG?');
     }
+  // ★★★ EVERY PIECE OF STATE THIS READS MUST BE LISTED. adminPw, uncomp and limitMin were
+  // missing, so `start` was frozen with their INITIAL values — '' and 0 — and no amount of
+  // typing changed what it sent. The server dutifully applied an empty password and no limit,
+  // and reported exactly that.
+  // ★★ IT ALSO ATE THE SETTINGS. This callback persists what it is about to send, so every
+  // Start wrote the STALE '' over the real password in storage — which is why the field came
+  // back BLANK next time and made it look like a save bug. One stale closure, two symptoms,
+  // and an evening of looking at the server for a fault that was three lines above it
+  // (Stuart, 2026-07-27).
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
-      webServer, autoRestore, locMode, locCity, checkBackgroundAllowed]);
+      webServer, autoRestore, locMode, locCity, checkBackgroundAllowed,
+      adminPw, uncomp, limitMin]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();

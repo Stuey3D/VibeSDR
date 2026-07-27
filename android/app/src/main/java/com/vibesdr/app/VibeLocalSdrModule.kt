@@ -340,6 +340,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
         VibeLocalSDR.setVibeServerCompressAudio(compress)
+        // ★ Diagnostic: the password itself is NEVER logged — only whether one arrived, and how
+        // long it is. Enough to tell "the setting did not reach the shim" from "the shim ignored
+        // it", which is exactly the question that cost an evening.
+        Log.i(TAG, "VibeServer cfg: adminPw=${adminPw.length} chars, limitMin=$limitMin, uncomp=$uncomp")
         VibeLocalSDR.setVibeServerAdminSecret(adminPw)
         VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
         VibeLocalSDR.setVibeServerSessionLimit(limitMin)
