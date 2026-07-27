@@ -8,7 +8,24 @@ It unlocks the configuration [[competitor_spyserver]] shows is an empty niche: o
 public SpyServers lock their tuning range for many users, and both belong to SpyServer's own
 author. A locked FM-band, many-listener receiver with our RDS analyser has no equivalent.
 
-## ★★★ DECIDED: PRESENT THEM SIDE BY SIDE. DO NOT BLEND.
+## ★★★ DECIDED: ONE CONTINUOUS BAND TO LOOK AT, ONE RADIO TO LISTEN TO, A CHOICE AT THE OVERLAP
+Stuart's actual design, and it is neither of the two things I first framed it as:
+- **NOT stitched** — the radios' data is never blended or averaged.
+- **NOT raw side-by-side** — the user does not hunt through profiles to find their station.
+
+**The PRESENTATION is unified; the DATA is never mixed.** The client sees one dial and one
+spectrum from 87 to 109 MHz. At any frequency it is listening to exactly ONE radio — chosen for
+it — and never an average of two. Where the windows overlap and there is a genuine choice, it
+says so and lets the user take it.
+
+★★ The distinction that makes it work: **selection, not blending.** Each part of the display is
+drawn from ONE radio (the one whose window that frequency sits furthest inside); the seam is a
+CHANGEOVER, not a crossfade. Nothing is ever synthesised from two receivers.
+★ Amplitude normalisation is then a DISPLAY-ONLY question — three noise floors in one waterfall
+looks broken — but it must never touch the audio or RDS path. Cosmetic tidying of the picture is
+fine; averaging what you are listening to is not.
+
+## ★★★ WHY NOT BLEND (the reason the above exists)
 The first version of this brief proposed STITCHING the radios into one seamless spectrum. Stuart
 rejected it, and he is right, for a reason that outranks the tidiness:
 
