@@ -596,6 +596,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    otherwise override anything set here.) */
 .rdsF { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .rdsF.rdsWide { grid-column: 1 / -1; }
+/* ★ AF entries are TAPPABLE — the tooltip has always said so; now they behave like it and,
+   just as importantly, LOOK like it. A comfortable hit area matters on a phone, where these
+   are two-character targets sitting side by side. */
+.afLink { color: var(--hi); text-decoration: none; border-bottom: 1px dotted rgba(255,229,102,0.5);
+          padding: 2px 3px; cursor: pointer; }
+.afLink:hover, .afLink:focus { background: rgba(255,160,0,0.18); border-radius: 3px; }
 .rdsF label {
   color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
   text-transform: uppercase; flex: 0 0 66px;

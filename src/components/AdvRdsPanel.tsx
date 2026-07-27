@@ -21,7 +21,8 @@
 
 import React, { useMemo, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
-import { Canvas, Circle, Path, Rect, Skia } from '@shopify/react-native-skia';
+import { Canvas, Circle, Path, Rect, Skia, Text as SkText, matchFont } from '@shopify/react-native-skia';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
 
@@ -233,18 +234,27 @@ function SymbolTrace({ xy, width, height }: { xy: number[]; width: number; heigh
   );
 }
 
-/** The MPX spectrum strip — dB integers in [-128, 0], one per bin. */
+/** ★ THE MPX SPECTRUM — everything the FM demodulator produces, DC to 100 kHz.
+ *  ★★ LABELLED AT THE LANDMARKS, because a spectrum of a signal most listeners have never seen
+ *  plotted is otherwise just a wiggly line: L+R audio at the bottom, the 19 kHz PILOT, the L−R
+ *  stereo sidebands at 38 kHz, and RDS at 57 kHz. Without them the plot cannot be read at all,
+ *  which is how it shipped on the phone first time round. */
+const MPX_SPAN = 100000;
+const MPX_MARKS: [number, string][] = [[19000, 'PILOT'], [38000, 'L−R'], [57000, 'RDS']];
+const mpxFont = matchFont({ fontFamily: 'monospace', fontSize: 8 });
+
 function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: number }) {
   const path = useMemo(() => {
     const p = Skia.Path.Make();
     if (!mpx.length) return p;
-    // Floor at -90 dB rather than -128: the bottom 38 dB is all noise and spending
-    // a third of the strip's height on it flattens everything worth looking at.
-    const FLOOR = -90;
+    // ★ AUTO-RANGE on what is present, as the web client does: injection levels vary, and a
+    // fixed floor either clips a loud station or flattens a quiet one into noise.
+    let lo = 999, hi = -999;
+    for (const v of mpx) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (hi - lo < 12) hi = lo + 12;
     for (let i = 0; i < mpx.length; i++) {
       const x = (i / (mpx.length - 1)) * width;
-      const norm = Math.max(0, Math.min(1, (mpx[i] - FLOOR) / (0 - FLOOR)));
-      const y = height - norm * height;
+      const y = height - ((mpx[i] - lo) / (hi - lo)) * (height - 12);
       if (i === 0) p.moveTo(x, y); else p.lineTo(x, y);
     }
     return p;
@@ -252,6 +262,20 @@ function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: num
   return (
     <Canvas style={{ width, height }}>
       <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      {/* L+R occupies DC..15 kHz — a band rather than a line, so shade it. */}
+      <Rect x={0} y={10} width={(15000 / MPX_SPAN) * width} height={height - 10}
+            color="rgba(255,170,60,0.07)" />
+      {mpxFont && <SkText x={2} y={8} text="L+R" font={mpxFont} color="rgba(255,190,110,0.85)" />}
+      {MPX_MARKS.map(([hz, label]) => {
+        const x = (hz / MPX_SPAN) * width;
+        return (
+          <React.Fragment key={label}>
+            <Rect x={x - 0.5} y={10} width={1} height={height - 10} color="rgba(255,170,60,0.30)" />
+            {mpxFont && <SkText x={Math.min(width - 26, x + 2)} y={8} text={label}
+                                font={mpxFont} color="rgba(255,190,110,0.85)" />}
+          </React.Fragment>
+        );
+      })}
       <Path path={path} color={C.good} style="stroke" strokeWidth={1.2} />
     </Canvas>
   );
@@ -403,7 +427,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     const r = rateRef.current;
     if (tot > r.tot && r.at > 0) {
       const dt = (now - r.at) / 1000;
-      if (dt > 0.2) {
+      // ★ A FULL SECOND MINIMUM. At ~5 frames a second, a 0.2s window turns ordinary arrival
+      // jitter into rate spikes — it read "11.9/s of 11.4", i.e. faster than the protocol
+      // permits, which makes the whole figure look invented. Measure over a longer window.
+      if (dt >= 1.0) {
         const inst = (tot - r.tot) / dt;
         r.rate = r.rate > 0 ? r.rate * 0.7 + inst * 0.3 : inst;
         r.tot = tot; r.at = now;
@@ -435,7 +462,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // the tell; RN's own types say maxHeight here should be a number.
   // Measure the window and work in pixels, minus the space the panel is anchored above.
   const { height: winH } = useWindowDimensions();
-  const avail = Math.max(180, winH - p.bottomOffset - 24);
+  // ★★ LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
+  // straight up past the notch, covering the clock and battery (Stuart's screenshot,
+  // 2026-07-27). The available height has to stop at the safe area, not at the window edge.
+  const insets = useSafeAreaInsets();
+  const avail = Math.max(180, winH - p.bottomOffset - insets.top - 16);
   // ★ Standard is generous on purpose: the plots are the point of this panel, and at 46% they
   // sat below the fold with nothing on screen to suggest scrolling.
   const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.58);

@@ -2904,6 +2904,45 @@ function renderRds() {
       ? `${grpRate.toFixed(1)}/s of 11.4 · ${tot} total`
       : `${tot} total`;
   }
+
+  // ── ALTERNATIVE FREQUENCIES ──────────────────────────────────────────────────
+  // ★★ THESE TWO FIELDS WERE DEAD. The markup, the labels and the tooltips have been here
+  // all along and NOTHING EVER WROTE TO THEM, so they showed a permanent dash — including
+  // the tooltip's promise that you can tap one to tune (Stuart: "i did wonder why i didnt
+  // see them populating", 2026-07-27). The data was on the wire the whole time.
+  // ★ A field that is always empty is indistinguishable from a station that never sends the
+  // thing. That is the real cost: it quietly libels the transmitter.
+  const af = rdsExt?.af ?? [];
+  const afSeen = rdsExt?.afseen ?? 0;
+  // ★ CONFIRMED against GLIMPSED. AF lists arrive spread over many group 0As and are only
+  // accepted after repetition, so a score below 100% means entries are arriving damaged —
+  // which is a useful signal-quality reading in its own right, not bookkeeping.
+  $('rxAfScore').textContent = afSeen > 0
+    ? `${af.length}/${afSeen} · ${Math.round((af.length / afSeen) * 100)}%`
+    : (rdsExt?.gtot ?? 0) > 0 ? 'none announced' : dash;
+
+  const afEl = $('rxAf');
+  if (!af.length) {
+    afEl.textContent = (rdsExt?.gtot ?? 0) > 0 ? 'none announced' : dash;
+  } else {
+    // Ascending, and de-duplicated: the same AF is re-announced constantly.
+    const list = [...new Set(af)].sort((a, b) => a - b);
+    afEl.innerHTML = list
+      .map(khz => `<a href="#" class="afLink" data-khz="${khz}">${(khz / 1000).toFixed(1)}</a>`)
+      .join('  ');
+    for (const a of Array.from(afEl.querySelectorAll<HTMLAnchorElement>('.afLink'))) {
+      a.onclick = (e) => {
+        e.preventDefault();
+        const khz = Number(a.dataset.khz);
+        if (!spec || !khz) return;
+        // Same tune path as a bookmark, and WFM explicitly: every AF is a broadcast FM
+        // frequency by definition, so inheriting the current mode would be wrong.
+        spec.tune(clampTune(khz * 1000), 'wfm' as SDRMode, { recenter: true, retarget: true });
+        setMode('wfm' as SDRMode, false);
+        renderFreq();
+      };
+    }
+  }
 }
 
 /** Pixels per unit, chosen so the mean lobe distance lands at a comfortable fraction of the
