@@ -1724,6 +1724,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // finding the panel mysteriously full of red labels weeks later would read as a fault.
   const [advRdsRaw,  setAdvRdsRaw]  = useState(false);
   const [advRdsTall, setAdvRdsTall] = useState(false);
+  // ★ The idle saver reads TOUCHES, and an open analyser produces none — see the exemption
+  // in the saver's tick. A ref because that tick closes over its creation-time scope.
+  const advRdsOpenRef = useRef(false);
+  useEffect(() => { advRdsOpenRef.current = advRdsOpen; }, [advRdsOpen]);
   const [decoderText,    setDecoderText]    = useState('');
   const [decoderStatus,  setDecoderStatus]  = useState('listening…');
   const [decoding,       setDecoding]       = useState(false);
@@ -2979,6 +2983,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       // backgrounds (pocket), isActive goes false and the saver DOES engage: that's the
       // wrist slowdown Buddy's pill explains (rows still flow via the native forwarder).
       if (watchProvider.isActive) return;
+      // ★★ AN OPEN RDS ANALYSER IS AN ACTIVE VIEWER, for the same reason the watch is: someone
+      // is reading a live readout and has no reason to touch anything for minutes at a time.
+      // ★ And here it does REAL harm, not just a stray pill — `rdsx` is emitted from inside the
+      // spectrum frame loop (sendRdsExt, every other frame), so idling the spectrum to 5 fps
+      // also halves the analyser to ~2.5 Hz. The constellation's whole value is watching it
+      // tighten or spread as you tune, and at that rate it reads as a still image. The saver
+      // would degrade the one thing the user was looking at, and then explain itself with a
+      // pill telling them to touch the screen to undo it.
+      if (advRdsOpenRef.current) return;
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
@@ -5533,7 +5546,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           // and outside WFM there is no RDS to analyse.
           advRdsAvail: !!(client.current as any)?.isVibe && status.mode === 'wfm',
           advRdsOn: advRdsOpen,
-          onAdvRds: () => { setModeSelOpen(false); setAdvRdsOpen(o => !o); },
+          // ★ Opening it is an interaction: the saver may ALREADY be engaged, and the
+          // exemption above only stops it re-engaging — it cannot undo a slowdown in progress.
+          onAdvRds: () => { markInteract(); setModeSelOpen(false); setAdvRdsOpen(o => !o); },
         } : null}
         spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',
