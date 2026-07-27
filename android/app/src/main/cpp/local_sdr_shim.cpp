@@ -2657,7 +2657,15 @@ struct LocalSdrShim::Impl {
         if (reqLine.find("/vibeserver/auth") != std::string::npos) {
             std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
             std::string body;
-            if (secret.empty()) body = "{\"required\":false}";
+            // ★★ A NONCE EVEN WITH NO PIN. This used to answer a bare {"required":false},
+            // which is correct for the PIN and useless for everything else — and the very
+            // configuration a PUBLIC receiver wants is NO PIN (everyone may listen) WITH an
+            // admin password (nobody may touch the hardware). Without a nonce there, the admin
+            // override had nothing to sign and would have had to send the password itself.
+            // ★ Issuing one costs nothing and tells an attacker nothing: it is random, single
+            // use, and worthless without the secret.
+            if (secret.empty())
+                body = "{\"required\":false,\"nonce\":\"" + g_vsAuthState.issue() + "\"}";
             else {
                 // Report a lockout HERE. The WS upgrade answers 429, but a WebSocket
                 // error gives the browser no status code at all — so a locked-out client
@@ -2707,10 +2715,14 @@ struct LocalSdrShim::Impl {
             // ★ The admin password may ride the connect URL, because an override has to be
             // decided BEFORE the slot is claimed — the existing admin_unlock message arrives
             // over a socket the client cannot open while the server is telling it "busy".
+            // ★ Admin override rides the connect URL as a nonce + HMAC pair — never the
+            // password — because the override has to be decided BEFORE the slot is claimed,
+            // and the admin_unlock message arrives over a socket a busy server will not open.
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
                      queryParam(reqLine, "codec") == "opus",
                      queryParam(reqLine, "channels") == "1", wantBins,
-                     urlDecode(queryParam(reqLine, "vs_admin")));
+                     queryParam(reqLine, "vs_admin_nonce"),
+                     queryParam(reqLine, "vs_admin_auth"));
         } else if (reqLine.find("/connection") != std::string::npos) {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
@@ -2956,7 +2968,8 @@ struct LocalSdrShim::Impl {
 
     void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
                   const std::string& session, bool wantsOpus, bool forceMono = false,
-                  int wantBins = 0, const std::string& adminToken = "") {
+                  int wantBins = 0, const std::string& adminNonce = "",
+                  const std::string& adminToken = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -3013,10 +3026,25 @@ struct LocalSdrShim::Impl {
             // an admin arriving is a deliberate, rare act by the owner, not a race between two
             // equal listeners.
             bool override_ = false;
-            if (occupied && !adminToken.empty()) {
+            if (occupied && !adminNonce.empty() && !adminToken.empty()) {
                 std::string secret;
                 { std::lock_guard<std::mutex> al(g_vsAdminMtx); secret = g_vsAdminSecret; }
-                override_ = !secret.empty() && adminToken == secret;
+                // ★★★ CHALLENGE-RESPONSE, NEVER THE PASSWORD ITSELF. The first cut of this put
+                // the admin password in the connect URL as a query parameter — which over plain
+                // HTTP puts it in the clear on the wire, and into proxy and server logs along
+                // the way. These receivers are going on the public internet, so that is exactly
+                // the wrong shape (Stuart, 2026-07-27).
+                // ★ Same VsAuth the PIN and admin_unlock already use: the server issues a nonce
+                // at /auth, the client returns HMAC(secret, nonce), and the secret never
+                // crosses the link. Reusing it also inherits the BRUTE-FORCE LOCKOUT — an
+                // override endpoint without one is an open guessing gallery, and unlike the PIN
+                // this one displaces a listener on success.
+                const std::string ip = sock->peerAddress();
+                override_ = !secret.empty()
+                         && !g_vsAuthState.blocked(ip)
+                         && g_vsAuthState.verify(secret, adminNonce, adminToken);
+                if (override_) g_vsAuthState.recordOk(ip);
+                else           g_vsAuthState.recordFail(ip);
                 if (override_) {
                     LOGI("admin override — evicting the current occupant");
                     static const char* kEvict = "{\"type\":\"evicted\"}";

@@ -9,7 +9,8 @@
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode } from './spectrum';
 import { AudioPlayer } from './audio';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
-import { resolveAuth, withAuth, fetchAuthChallenge, vibeAuthToken, type AuthState } from './auth';
+import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken,
+         type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 
@@ -287,6 +288,19 @@ async function connect(host: string, pin: string) {
       throw new Error(`Can't reach ${host} — check the address and that Server mode is running`);
     }
     throw e;
+  }
+
+  // ★★ ADMIN OVERRIDE, stashed by the IN USE screen before it reloaded. Folded into the auth
+  // query so it rides BOTH sockets, exactly like the PIN — the spectrum socket claims the slot
+  // and the audio socket must be recognised as the same occupant.
+  // ★ CONSUMED, not kept: removed the moment it is used, so it applies to this connect attempt
+  // and is not silently replayed on every future reload of the tab.
+  {
+    const ov = sessionStorage.getItem('vsAdminOverride');
+    if (ov) {
+      sessionStorage.removeItem('vsAdminOverride');
+      auth = { ...auth, query: auth.query ? `${auth.query}&${ov}` : ov };
+    }
   }
 
   // ★ ONE session id, on BOTH sockets. The server treats a session as a single occupant, and a
@@ -1770,9 +1784,29 @@ function showDeviceBanner(present: boolean) {
  *  lands — so say so plainly and STOP (the client already suppressed its auto-reconnect). A full
  *  overlay, not a toast: nothing else on the page will work, and a dismissable banner would just
  *  invite the user to sit staring at a dead waterfall. */
-function showBusy() { showRefusal('IN USE',
-  'This server is serving another listener. It handles one at a time.<br><br>' +
-  'Try again in a little while.'); }
+function showBusy() {
+  showRefusal('IN USE',
+    'This server is serving another listener. It handles one at a time.<br><br>' +
+    'Try again in a little while.',
+    // ★ The override box is offered ONLY on the IN USE screen, and only when the server says
+    // it HAS an admin password. Offering it everywhere would invite listeners to try guessing
+    // it, and offering it on a server with no password set is a puzzle with no answer.
+    srvAdminProtected);
+}
+
+/** ★★ TAKE THE RADIO BACK. The owner's escape hatch: their own receiver is busy and they need
+ *  it. Sends a nonce + HMAC on the connect URL, never the password — see resolveAdminOverride.
+ *  ★ A reload is the honest retry: it re-runs the preflight and re-opens both sockets cleanly,
+ *  carrying the override credentials this time. */
+async function doAdminOverride(password: string, status: HTMLElement) {
+  status.textContent = 'checking…';
+  const q = await resolveAdminOverride(location.origin, password);
+  if (!q) { status.textContent = 'this server cannot be overridden'; return; }
+  // Stash for the reload to pick up. sessionStorage, not localStorage: an override is for THIS
+  // visit, and a credential that outlives the tab is a credential left lying around.
+  sessionStorage.setItem('vsAdminOverride', q);
+  location.reload();
+}
 
 /** ★ The owner has taken their radio back. Not a fault, and worth saying so — being dropped
  *  with no explanation is what makes people assume the software broke. */
@@ -1798,7 +1832,7 @@ function showCooldown(secs: number) {
     `<br><br>Try again in about ${m} minute${m === 1 ? '' : 's'}.`);
 }
 
-function showRefusal(title: string, bodyHtml: string) {
+function showRefusal(title: string, bodyHtml: string, offerOverride = false) {
   const id = 'busyOverlay';
   if (document.getElementById(id)) return;
   const el = document.createElement('div');
@@ -1818,6 +1852,29 @@ function showRefusal(title: string, bodyHtml: string) {
   // A reload is the honest retry: it re-runs the /connection preflight and re-opens the sockets
   // from scratch, so a slot freed in the meantime is picked up cleanly.
   document.getElementById('busyRetry')?.addEventListener('click', () => location.reload());
+
+  if (offerOverride) {
+    const box = document.createElement('div');
+    box.style.cssText = 'margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,180,50,0.25)';
+    box.innerHTML =
+      '<div style="font-size:11px;opacity:0.65;letter-spacing:1px;margin-bottom:8px">' +
+      'OWNER OF THIS RECEIVER?</div>' +
+      '<input id="ovPw" type="password" placeholder="Admin password" ' +
+      'style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,180,50,0.4);color:#ffb833;' +
+      'border-radius:6px;padding:7px 10px;font:13px ui-monospace,monospace;width:190px">' +
+      '<button id="ovGo" style="margin-left:8px;background:none;border:1px solid rgba(255,180,50,0.5);' +
+      'color:#ffb833;border-radius:6px;padding:7px 14px;font:13px ui-monospace,monospace;cursor:pointer">' +
+      'Take over</button>' +
+      '<div id="ovStatus" style="font-size:11px;opacity:0.7;margin-top:8px;min-height:14px"></div>' +
+      '<div style="font-size:10px;opacity:0.5;margin-top:6px;line-height:1.4">' +
+      'The current listener is disconnected and told why.</div>';
+    el.querySelector('div')?.appendChild(box);
+    const pw = document.getElementById('ovPw') as HTMLInputElement | null;
+    const st = document.getElementById('ovStatus') as HTMLElement;
+    const go = () => { if (pw?.value) void doAdminOverride(pw.value, st); };
+    document.getElementById('ovGo')?.addEventListener('click', go);
+    pw?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') go(); });
+  }
 }
 
 /** The server says the person at the host machine is looking for this tab. */
