@@ -228,7 +228,9 @@ function refreshAdminRow() {
   // The protected controls themselves. Disabled while locked, and left alone entirely on a
   // server with no admin password so nothing changes for the vast majority of hosts.
   const locked = show && !adminUnlocked;
-  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb']) {
+  // ★ Buttons AND range inputs. bias-T is a .btn on the RSP panel and an <input> on the
+  // dongle one, so both shapes have to be handled or one radio's control stays live.
+  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb', 'rspBiasT']) {
     const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
     el.disabled = locked;
@@ -4630,8 +4632,18 @@ function initAhfControls() {
     const v = p[key];
     if (typeof v === 'number') $<HTMLInputElement>(id).value = String(v);
   }
-  if (typeof p['ahf_agc'] === 'boolean') $('ahfAgc').classList.toggle('on', p['ahf_agc']);
-  if (typeof p['ahf_lna'] === 'boolean') $('ahfLna').classList.toggle('on', p['ahf_lna']);
+  // ★★ SET THE LABEL AS WELL AS THE CLASS. The class is what pushAllAhfSettings reads and what
+  // gets sent to the radio; the TEXT is all the user sees. Restoring one without the other made
+  // the button lie — the preamp came back ON, was correctly pushed as ON, and the label still
+  // read OFF (Stuart, on reconnect, 2026-07-27). The radio was right and the button was wrong,
+  // which is the worse way round: you cannot tell by looking.
+  const setToggle = (id: string, on: boolean, onText: string, offText: string) => {
+    const el = $(id);
+    el.classList.toggle('on', on);
+    el.textContent = on ? onText : offText;
+  };
+  if (typeof p['ahf_agc'] === 'boolean') setToggle('ahfAgc', p['ahf_agc'], 'AUTO', 'MANUAL');
+  if (typeof p['ahf_lna'] === 'boolean') setToggle('ahfLna', p['ahf_lna'], 'ON', 'OFF');
 
   $('ahfAgc').onclick = () => {
     const on = !$('ahfAgc').classList.contains('on');
@@ -4657,8 +4669,18 @@ function initAhfControls() {
     ahfSend({ att: v }); savePref('ahf_att', v);
   };
   $<HTMLInputElement>('ahfPpb').oninput = () => {
+    const el = $<HTMLInputElement>('ahfPpb');
+    let v = Number(el.value);
+    // ★★ A CENTRE DETENT AT ZERO, the same idea as the RSP's AGC target snapping to -30.
+    // ±5000 ppb across a few hundred pixels means nudging this control is easy and getting
+    // back to exactly 0 is not — Stuart knocked it off centre and could not return
+    // (2026-07-27). Zero is the value everyone starts from and the one to come back to when
+    // an experiment did not help, so it has to be a gesture rather than a pixel hunt.
+    // ★ ±20 ppb is deliberately NARROW. An HF+'s own error runs to hundreds of ppb, so a
+    // generous detent would swallow legitimate corrections — this catches a slip, not a
+    // deliberate setting. (20 ppb is 2 Hz at 100 MHz.)
+    if (Math.abs(v) <= 20) { v = 0; el.value = '0'; }
     renderAhfVals();
-    const v = Number($<HTMLInputElement>('ahfPpb').value);
     ahfSend({ ppb: v }); savePref('ahf_ppb', v);
   };
   segment('ahfThreshSeg', 'th', (th) => ahfSend({ thresh: th }), 'ahf_thresh');
@@ -4686,7 +4708,12 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   if (gainRow) gainRow.hidden = isRsp || isAhf;
   const autoRow = $('gainAuto').closest('.mrow') as HTMLElement | null;
   if (autoRow) autoRow.hidden = isRsp || isAhf;
-  if (isAhf) { applyAhfCaps(caps); return; }
+  // ★ THE PROTECTED CONTROLS ARE BUILT HERE, so the lock has to be re-applied here. The
+  // Airspy and RSP panels only exist once the radio has announced itself, which happens AFTER
+  // the admin state is first resolved — so applying it only at connect left the per-radio
+  // controls (calibration especially) enabled on a protected server (Stuart, 2026-07-27).
+  refreshAdminRow();
+  if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); return; }
   if (!isRsp) return;
 
   const n = caps?.lnaStates ?? 10;

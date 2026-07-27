@@ -1593,7 +1593,10 @@ select.btn { padding: 6px 8px; }
          be far too coarse — one ppm step is 100 Hz at 100 MHz. -->
     <div class="mrow">
       <label for="ahfPpb">CALIBRATION</label>
-      <input type="range" id="ahfPpb" min="-5000" max="5000" value="0">
+      <!-- ★ step 5, not 1: 10,001 positions across a few hundred pixels is finer than anyone
+           can aim, and finer than the radio's own stability justifies. Plus a centre detent
+           at 0 in the handler. -->
+      <input type="range" id="ahfPpb" min="-5000" max="5000" step="5" value="0">
       <span class="val" id="ahfPpbVal">0 ppb</span>
     </div>
   </div>

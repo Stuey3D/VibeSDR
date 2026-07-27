@@ -1052,11 +1052,14 @@ struct SettingsView: View {
                 }
             }
             Section("Access") {
-                TextField("PIN", text: $server.pin, prompt: Text("Open — no PIN"))
+                // ★ Also a secret, and shoulder-surfable for the same reason.
+                SecureField("PIN", text: $server.pin, prompt: Text("Open — no PIN"))
                 Text("Network listeners must enter this. This Mac never has to.")
                     .font(.caption).foregroundStyle(.secondary)
-                TextField("Admin password", text: $server.adminPassword,
-                          prompt: Text("Not set — nothing is protected"))
+                // ★ SecureField, not TextField. It is a password, and a settings pane is exactly where
+                // someone reads over your shoulder (Stuart, 2026-07-27).
+                SecureField("Admin password", text: $server.adminPassword,
+                            prompt: Text("Not set — nothing is protected"))
                 Text("A SECOND password, for a different job. The PIN decides who may listen; "
                    + "this decides who may change the settings a visitor has no business "
                    + "touching on someone else's radio:\n\n"

@@ -2730,7 +2730,8 @@ struct LocalSdrShim::Impl {
                              + (g_vsWebEnabled.load() ? "true" : "false")
                              + ",\"uncompressed\":\""
                              + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
-                             + "\",\"local\":" + (loop ? "true" : "false") + "}";
+                             + "\",\"local\":" + (loop ? "true" : "false")
+                             + ",\"admin\":" + (adminSet ? "true" : "false") + "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
