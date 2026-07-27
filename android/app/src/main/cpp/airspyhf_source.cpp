@@ -3,7 +3,11 @@
 #include "airspyhf_source.h"
 
 #ifdef VIBE_HAVE_AIRSPYHF
-#include <libairspyhf/airspyhf.h>
+#ifdef VIBE_AIRSPYHF_HAS_FD
+#include "airspyhf.h"          /* vendored + patched (Android) */
+#else
+#include <libairspyhf/airspyhf.h>   /* system/Homebrew (desktop) */
+#endif
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -96,7 +100,35 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
         return false;
     }
     impl_->serial = sn;
+    return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
+}
 
+/** ★ OWNERSHIP OF THE DESCRIPTOR PASSES TO libusb. Do not close it here or in the caller: on
+ *  Android the UsbDeviceConnection must outlive the stream, and closing it twice takes the
+ *  radio down mid-capture. */
+bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
+                            int gainTenthDb, std::string& err) {
+#ifndef VIBE_AIRSPYHF_HAS_FD
+    (void)fd; (void)sampleRateHz; (void)centreHz; (void)gainTenthDb;
+    err = "this build's libairspyhf has no file-descriptor entry point";
+    return false;
+#else
+    if (open_) return true;
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    if (fd < 0) { err = "invalid USB file descriptor"; return false; }
+    if (airspyhf_open_fd(&impl_->dev, fd) != AIRSPYHF_SUCCESS || !impl_->dev) {
+        impl_->dev = nullptr;
+        err = "could not open the Airspy HF+ from the USB descriptor";
+        return false;
+    }
+    impl_->serial = 0;   // enumeration is unavailable here, so there is no serial to read
+    return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
+#endif
+}
+
+/** Everything after the handle exists — identical whichever way it was obtained. */
+bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
+                                int gainTenthDb, std::string& err) {
     // ★ ASK THE RADIO what rates it has. An HF+ Discovery tops out near 912 kHz where a dongle
     // does 2.4 MSPS, so a hard-coded list would offer rates it cannot do — and the failure
     // would be a stream that never starts rather than an error anyone could read.
@@ -268,6 +300,12 @@ int  AirspyHfSource::deviceCount() { return 0; }
 std::string AirspyHfSource::deviceName(int) { return ""; }
 bool AirspyHfSource::tuneRangeContains(double) { return true; }
 bool AirspyHfSource::open(int, double, double, int, std::string& err) {
+    err = "this build has no Airspy HF+ support"; return false;
+}
+bool AirspyHfSource::openFd(int, double, double, int, std::string& err) {
+    err = "this build has no Airspy HF+ support"; return false;
+}
+bool AirspyHfSource::finishOpen(double, double, int, std::string& err) {
     err = "this build has no Airspy HF+ support"; return false;
 }
 void AirspyHfSource::close() {}

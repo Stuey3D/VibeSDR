@@ -53,9 +53,25 @@ file(GLOB FT8_LIB_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fftr.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/common/monitor.c")
 
+# ★★ libairspyhf, VENDORED AND PATCHED. Upstream (BSD-3) has no file-descriptor entry point,
+# and Android's UsbManager hands you an fd and forbids enumeration — so a stock build cannot
+# open the radio at all. cpp/libairspyhf/ adds airspyhf_open_fd() on libusb_wrap_sys_device(),
+# exactly as librtlsdr's rtlsdr_open_sys_dev() does for dongles. See the note in airspyhf.c.
+# ★ Compiled here rather than prebuilt: it is two small C files, and vendoring the source keeps
+# the patch visible in the tree instead of buried in a binary nobody can inspect.
+set(AIRSPYHF_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/libairspyhf/airspyhf.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/libairspyhf/iqbalancer.c")
+
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     mdns_responder.cpp
+    # ★ BOTH radio sources, even though Android has no SDRplay. They are written as
+    # "real implementation #ifdef <SDK> #else no-op stubs", and the shim references their
+    # methods unconditionally — a runtime branch still emits a link-time symbol, so leaving
+    # one out does not save anything, it just fails to link (found on iOS, 2026-07-27).
+    sdrplay_source.cpp airspyhf_source.cpp
+    ${AIRSPYHF_SRC}
     spyserver/spyserver_messages.cpp spyserver/spyserver_client.cpp
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp
@@ -83,8 +99,17 @@ endif()
 target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/opus/include")
 target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_OPUS)
 
+# ★ VIBE_AIRSPYHF_HAS_FD says this libairspyhf is the patched one. AirspyHfSource::openFd()
+# refuses cleanly without it rather than pretending — a desktop linking Homebrew's stock build
+# genuinely has no such entry point.
+target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libairspyhf")
+target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_AIRSPYHF VIBE_AIRSPYHF_HAS_FD)
+
 target_link_libraries(vibelocalsdr PRIVATE
     vibedsp
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librtlsdr.so"
+    # libairspyhf needs libusb directly — the same one librtlsdr already uses, so the two
+    # drivers share a single libusb rather than each dragging in a copy.
+    "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libusb1.0.so"
     "${OPUS_A}"
     log)

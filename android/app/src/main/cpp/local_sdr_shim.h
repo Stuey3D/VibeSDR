@@ -113,6 +113,15 @@ public:
      *  getVibeServerStatus().sampleRate rather than assuming what you asked for. */
     int startAirspyHf(int index, double centerFreq, double sampleRate, int gainTenthDb,
                       int fftSize, double fftRate, const std::string& mode, std::string& err);
+    /** ★ Start an Airspy HF+ from a USB file descriptor — Android's only route in. Reached
+     *  from start() by VID/PID, so callers do not need to know which driver a device wants. */
+    int startAirspyHfFd(int fd, double centerFreq, double sampleRate, int gainTenthDb,
+                        int fftSize, double fftRate, const std::string& mode, std::string& err);
+private:
+    int startAirspyHfCommon(int index, int fd, double centerFreq, double sampleRate,
+                            int gainTenthDb, int fftSize, double fftRate,
+                            const std::string& mode, std::string& err);
+public:
     /** Airspy HF+ only controls. No-ops on any other source. */
     void setAhfAgc(bool on);
     void setAhfAgcThreshold(bool high);

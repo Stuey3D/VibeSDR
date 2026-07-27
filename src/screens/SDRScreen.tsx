@@ -40,7 +40,8 @@ import { useIsFocused } from '@react-navigation/native';
 import type { RootStackParamList }     from '../../App';
 import { splashBridge }                 from '../../App';
 
-import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
+import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt } from '../services/UberSDRClient';
+import AdvRdsPanel from '../components/AdvRdsPanel';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -1715,6 +1716,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Decoder ───────────────────────────────────────────────────────────────
 
   const [activeDecoder,  setActiveDecoder]  = useState<DecoderType>(null);
+  // ★ Advanced RDS. Separate from activeDecoder on purpose: it is a server-side analyser, not
+  // a DecoderClient decoder, and the two can be open at once without fighting.
+  const [advRdsOpen, setAdvRdsOpen] = useState(false);
+  const [advRds,     setAdvRds]     = useState<RdsExt | null>(null);
+  // ★ RAW is per user, per SESSION — deliberately not persisted. It is a diagnostic view, and
+  // finding the panel mysteriously full of red labels weeks later would read as a fault.
+  const [advRdsRaw,  setAdvRdsRaw]  = useState(false);
+  const [advRdsTall, setAdvRdsTall] = useState(false);
   const [decoderText,    setDecoderText]    = useState('');
   const [decoderStatus,  setDecoderStatus]  = useState('listening…');
   const [decoding,       setDecoding]       = useState(false);
@@ -1899,6 +1908,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [stopSpotFlush]);
 
   useEffect(() => stopSpotFlush, [stopSpotFlush]); // clear on unmount
+
+  // ★★ THE PANEL BEING OPEN IS THE SWITCH — there is no setting. The analyser costs the
+  // server real CPU and ~5 frames a second of extra traffic, so it is paid for exactly while
+  // somebody is looking at it, and there is nothing for a user to leave running by accident.
+  // ★ Also turns OFF when the mode leaves WFM or the connection drops: an analyser showing a
+  // frozen last frame is worse than one that is honestly closed.
+  useEffect(() => {
+    const c: any = client.current;
+    if (!c?.setAdvRds) return;                 // only VibeServer has the lever
+    const want = advRdsOpen && status.mode === 'wfm';
+    c.setAdvRds(want);
+    if (!want) setAdvRds(null);                // drop the stale frame with the switch
+  }, [advRdsOpen, status.mode, connected]);
 
   const openDecoder = useCallback((type: DecoderType) => {
     setActiveDecoder(type);
@@ -2339,6 +2361,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           else                    decoderImageRef.current?.wefaxLine(ev.line, ev.width, ev.pixels);
         } else { decoderImageRef.current?.imageDone(); }
       },
+      onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
         // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
@@ -4288,7 +4311,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // display back to the bookmark resolver on the next tune.
   useEffect(() => {
     const name = liveStation.name;
-    if (!name) {
+    // ★★ RDS IS NOT ONLY THE NAME, and gating the whole display on PS is why the phone showed
+    // less RDS than the web client on the same signal (Stuart, 2026-07-27). PS is assembled two
+    // characters at a time from 0A groups and then confirmed, so on a marginal station it can
+    // take many seconds or never complete — while RadioText (2A) is already arriving and
+    // perfectly good. The browser shows each field the moment it has it; we showed nothing at
+    // all until the name landed, which reads as "no RDS here" rather than "no name yet".
+    // ★ The text-only case still carries the RDS badge, so it is never mistaken for a bookmark.
+    const textOnly = !name && !!liveStation.text;
+    if (!name && !textOnly) {
       // Live data cleared (tuned away / mode change / voice idle) — dismiss the
       // held popup and re-evaluate bookmarks for the current spot, so a held RDS
       // name / DMR caller falls back to the channel's bookmark instead of nothing.
@@ -4299,11 +4330,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
       return;
     }
-    setVtsMenuName(name);
-    setVtsMenuFreq(status.frequency);
+    // ★ Only a real PS names the station for the menu — RadioText is a scrolling message, not
+    // an identity, and putting it here would offer "…We love the 80s…" as a bookmark name.
+    if (name) { setVtsMenuName(name); setVtsMenuFreq(status.frequency); }
     // RDS: append the scrolling radiotext after the station name (the VTS bar
     // marquees overflow). e.g. "BBC Nhtn — BBC Radio Northampton …We love …".
-    const display = liveStation.text ? `${name} — ${liveStation.text}` : name;
+    const display = name
+      ? (liveStation.text ? `${name} — ${liveStation.text}` : name)
+      : (liveStation.text ?? '');
     // WFM broadcast FM: show the RDS country flag + station logo (from PI/ECC).
     const wfm = status.mode === 'wfm';
     const flag = wfm && validIso(liveStation.countryIso) ? isoToFlag(liveStation.countryIso) : undefined;
@@ -5257,6 +5291,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
+      {advRdsOpen && status.mode === 'wfm' && (
+        <AdvRdsPanel
+          x={advRds}
+          ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
+          countryIso={liveStation.countryIso}
+          raw={advRdsRaw} onRaw={setAdvRdsRaw}
+          tall={advRdsTall} onTall={setAdvRdsTall}
+          bottomOffset={pillBottom + 8}
+          onClose={() => setAdvRdsOpen(false)}
+        />
+      )}
       {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH} />}
 
       {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
@@ -5484,6 +5529,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         decoderControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' && (!isLandscape || isTablet) ? {
           decMode: selDecoder, decOn: activeDecoder !== null && activeDecoder === selDecoder, isLocal,
           onDecToggle, rttySettings, onRttySettings, wefaxLpm, onWefaxLpm,
+          // ★ Offered only where it works: a VibeServer, in WFM. An UberSDR has no analyser,
+          // and outside WFM there is no RDS to analyse.
+          advRdsAvail: !!(client.current as any)?.isVibe && status.mode === 'wfm',
+          advRdsOn: advRdsOpen,
+          onAdvRds: () => { setModeSelOpen(false); setAdvRdsOpen(o => !o); },
         } : null}
         spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',

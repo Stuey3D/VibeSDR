@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- RTL-SDR (RTL2832U-based) USB dongles. VID/PID allowlist mirrors
-     VibeLocalSdrModule.RTL_SDR_VIDPIDS. Android device_filter uses DECIMAL. -->
+<!-- USB radios VibeSDR can drive directly. VID/PID allowlist mirrors
+     VibeLocalSdrModule.RTL_SDR_VIDPIDS. Android device_filter uses DECIMAL.
+     ★★ THIS FILE IS THE PLUG-AND-PLAY. Android offers "open VibeSDR with this device" only
+     for what is listed here, so a radio missing from it is one the user has to go and find
+     the app for — which is precisely the friction Fabian praised its absence of
+     ("Install app -> Plug in SDR -> Serve web -> Connect, done", 2026-07-27). -->
 <resources>
     <usb-device vendor-id="3034" product-id="10290" />  <!-- 0x0bda:0x2832 -->
     <usb-device vendor-id="3034" product-id="10296" />  <!-- 0x0bda:0x2838 -->
@@ -44,4 +48,8 @@
     <usb-device vendor-id="8013" product-id="51203" />  <!-- 0x1f4d:0xc803 -->
     <usb-device vendor-id="8013" product-id="53894" />  <!-- 0x1f4d:0xd286 -->
     <usb-device vendor-id="8013" product-id="55299" />  <!-- 0x1f4d:0xd803 -->
+
+    <!-- Airspy HF+ (Discovery / Dual Port). One VID/PID for the whole family — the models
+         are told apart by their serial, not by USB id. -->
+    <usb-device vendor-id="1003" product-id="32780" />  <!-- 0x03eb:0x800c -->
 </resources>

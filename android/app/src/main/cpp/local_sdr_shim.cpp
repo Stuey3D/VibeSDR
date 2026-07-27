@@ -2426,6 +2426,19 @@ struct LocalSdrShim::Impl {
         if (type == "notch") {
             LocalSdrShim::instance().setNotch(msg.find("\"on\":true") != std::string::npos); return;
         }
+        // ★★ THE ANALYSER SWITCH, ON THE CONTROL SOCKET. The web client turns the extended
+        // RDS stream on by ATTACHING A DECODER, which is right for it — it already holds the
+        // decoder websocket for every other extension. The phone does not: it would have to
+        // open, and keep alive, a second socket solely to set one boolean. So the same switch
+        // is offered here. Both paths set exactly the same two things, and the semantics are
+        // unchanged: while nobody is looking, neither the extra CPU nor the extra bytes are
+        // spent. Do not let these two drift apart.
+        if (type == "rdsx") {
+            const bool on = jsonNum(msg, "on", v) && v != 0.0;
+            rdsxOn.store(on);
+            rx.setRdsNoiseCorrection(on);   // honest deviation readout, only while it is read
+            return;
+        }
         if (type == "deemph") {
             // tau in SECONDS (0 = off, 50e-6 or 75e-6).
             if (jsonNum(msg, "tau", v)) LocalSdrShim::instance().setDeemphasis(v);
@@ -3469,6 +3482,7 @@ struct LocalSdrShim::Impl {
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
         int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, phaseDrift;
+        int berNow;   // ★ block error rate, ALSO here: the phase verdict needs it
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
@@ -3482,7 +3496,7 @@ struct LocalSdrShim::Impl {
           lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
           eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh;
           phaseDrift = rdsPhaseDrift;
-          pilotDev = rdsPilotDev; rdsDev_ = rdsDev; }
+          pilotDev = rdsPilotDev; rdsDev_ = rdsDev; berNow = rdsBer; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -3512,6 +3526,7 @@ struct LocalSdrShim::Impl {
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)
                       + ",\"rdsDev\":" + std::to_string(rdsDev_)
+                      + ",\"ber\":" + std::to_string(berNow)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";
@@ -3963,6 +3978,13 @@ LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; 
 int LocalSdrShim::start(int fd, int vid, int pid,
                         double centerFreq, double sampleRate, int gainTenthDb,
                         int fftSize, double fftRate, const std::string& mode, std::string& err) {
+    // ★★ AN AIRSPY HF+ ARRIVES DOWN THE SAME PIPE. Android hands us an fd together with the
+    // VID/PID it came from, so the radio can be identified HERE — no second JNI entry point, no
+    // parallel Kotlin path, and one place that decides which driver a descriptor belongs to.
+    if (vid == 0x03eb && pid == 0x800c) {
+        return startAirspyHfFd(fd, centerFreq, sampleRate, gainTenthDb,
+                               fftSize, fftRate, mode, err);
+    }
     std::lock_guard<std::mutex> life(g_lifecycle);
     // Recover from a stale shim left by a dirty exit (app swiped away while the
     // foreground service kept the process — and the shim — alive). Without this
@@ -4104,10 +4126,28 @@ static double nowSecsStatic() {
 // ★ Mirrors startSdrplay closely on purpose — same lifecycle, same ordering, same watchdog.
 // The differences are all in the source object: complex float instead of int16, a rate list
 // enumerated from the device, and a tuning range with a hole in it.
+// ★ Same as startAirspyHf() but from a USB descriptor. Only the acquisition differs, so the
+// two share everything through a common tail rather than drifting apart.
+int LocalSdrShim::startAirspyHfFd(int fd,
+                                  double centerFreq, double sampleRate, int gainTenthDb,
+                                  int fftSize, double fftRate, const std::string& mode,
+                                  std::string& err) {
+    return startAirspyHfCommon(-1, fd, centerFreq, sampleRate, gainTenthDb,
+                               fftSize, fftRate, mode, err);
+}
+
 int LocalSdrShim::startAirspyHf(int index,
                                 double centerFreq, double sampleRate, int gainTenthDb,
                                 int fftSize, double fftRate, const std::string& mode,
                                 std::string& err) {
+    return startAirspyHfCommon(index, -1, centerFreq, sampleRate, gainTenthDb,
+                               fftSize, fftRate, mode, err);
+}
+
+int LocalSdrShim::startAirspyHfCommon(int index, int fd,
+                                      double centerFreq, double sampleRate, int gainTenthDb,
+                                      int fftSize, double fftRate, const std::string& mode,
+                                      std::string& err) {
     std::lock_guard<std::mutex> life(g_lifecycle);
     if (p) { LOGI("stale shim found on Airspy HF+ start — tearing down"); stopLocked(); }
     auto* impl = new Impl();
@@ -4124,9 +4164,10 @@ int LocalSdrShim::startAirspyHf(int index,
         self->lastIqAt.store(nowSecsStatic(), std::memory_order_relaxed);
         self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
     });
-    if (!impl->ahf->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
-        delete impl; return -1;
-    }
+    const bool opened = (fd >= 0)
+        ? impl->ahf->openFd(fd, sampleRate, centerFreq, gainTenthDb, err)
+        : impl->ahf->open(index, sampleRate, centerFreq, gainTenthDb, err);
+    if (!opened) { delete impl; return -1; }
     // ★ THE RADIO DECIDES THE RATE, not the caller. An HF+ Discovery tops out near 768 kHz
     // where a dongle does 2.4 MSPS, so a saved preference from a previous radio would ask for
     // something impossible — open() has already snapped it to the nearest real one, and

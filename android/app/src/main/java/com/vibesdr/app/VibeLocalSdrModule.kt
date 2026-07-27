@@ -45,6 +45,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         return RTL_SDR_VIDPIDS.contains(key)
     }
 
+    /** ★ An Airspy HF+ (Discovery / Dual Port). One VID/PID for the whole family — the models
+     *  are told apart by serial, not by USB id. Kept beside isRtlSdr so the two allowlists that
+     *  decide "is this a radio we can drive" stay visibly together; device_filter.xml is the
+     *  third copy and must agree, or the app is offered for a device it then refuses. */
+    private fun isAirspyHf(dev: UsbDevice): Boolean =
+        dev.vendorId == AIRSPYHF_VID && dev.productId == AIRSPYHF_PID
+
+    /** Any radio we can open directly over USB. */
+    private fun isSupportedRadio(dev: UsbDevice): Boolean = isRtlSdr(dev) || isAirspyHf(dev)
+
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
         m.putString("deviceName", dev.deviceName)
@@ -66,7 +76,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val out: WritableArray = Arguments.createArray()
         for ((_, dev) in mgr.deviceList) {
-            if (!isRtlSdr(dev)) continue
+            if (!isSupportedRadio(dev)) continue
             out.pushMap(describe(dev, mgr.hasPermission(dev)))
         }
         promise.resolve(out)
@@ -82,7 +92,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openAndProbe(promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
 
         if (mgr.hasPermission(dev)) {
@@ -169,7 +179,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startSpectrum(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             // Reuse the permission flow, then retry once granted.
@@ -275,7 +285,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startVibeServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startVibeServerNow(mgr, dev, opts, promise) }
@@ -506,7 +516,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
@@ -790,5 +800,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             0x1d19 to 0x1104, 0x1f4d to 0xa803, 0x1f4d to 0xb803, 0x1f4d to 0xc803,
             0x1f4d to 0xd286, 0x1f4d to 0xd803
         ).map { (vid, pid) -> (vid shl 16) or pid }.toSet()
+
+        /** Airspy HF+ — see isAirspyHf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
+        internal const val AIRSPYHF_VID = 0x03eb
+        internal const val AIRSPYHF_PID = 0x800c
     }
 }

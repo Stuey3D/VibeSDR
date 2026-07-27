@@ -52,6 +52,11 @@ public:
     static bool tuneRangeContains(double hz);
 
     bool open(int index, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
+    /** ★★ OPEN AN ALREADY-OPEN USB FILE DESCRIPTOR — the only way in on Android, where
+     *  UsbManager hands you an fd and forbids enumeration entirely. Needs the vendored
+     *  libairspyhf (VIBE_AIRSPYHF_HAS_FD); Homebrew's build has no such entry point, so this
+     *  fails cleanly on a desktop rather than pretending. libusb takes ownership of the fd. */
+    bool openFd(int fd, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void close();
     bool isOpen() const { return open_; }
 
@@ -109,6 +114,7 @@ public:
     bool deviceLost() const { return lost_; }
 
 private:
+    bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     struct Impl;
     Impl* impl_ = nullptr;
     IqSink sink_;

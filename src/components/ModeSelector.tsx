@@ -154,6 +154,13 @@ interface ModeSelectorProps {
   decoderControls?: {
     decMode: string | null; decOn: boolean; isLocal: boolean;
     onDecToggle: (m: DecId) => void;
+    /** ★ ADVANCED RDS is NOT a DecoderClient decoder — it is a server-side analyser switched
+     *  by one control message, so it deliberately does not join the DecId union. It sits in
+     *  this row because that is where a user looks for "show me more about this signal",
+     *  and it appears only on a VibeServer in WFM, where it is the only place it means
+     *  anything. Offering a dead button elsewhere reads as broken support, not as
+     *  "unavailable here". */
+    advRdsAvail?: boolean; advRdsOn?: boolean; onAdvRds?: () => void;
     rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
     wefaxLpm?: number; onWefaxLpm?: (v: number) => void;
   } | null;
@@ -419,6 +426,19 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   )}</NavItem>
                 );
               })}
+              {decoderControls.advRdsAvail && (
+                <NavItem key="advrds" onPress={() => decoderControls.onAdvRds?.()}>{(navFocused, navRef) => (
+                <TouchableOpacity ref={navRef as any}
+                  style={[st.btn, { borderColor: decoderControls.advRdsOn ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                          decoderControls.advRdsOn && { backgroundColor: 'rgba(80,220,100,0.14)' },
+                          navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                  onPress={() => decoderControls.onAdvRds?.()} activeOpacity={0.8}>
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.advRdsOn ? DEC_COL : t.btnText }]}>
+                    ADV RDS
+                  </Text>
+                </TouchableOpacity>
+                )}</NavItem>
+              )}
             </View></NavRow>
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={dst.callout}>

@@ -55,6 +55,35 @@ export interface SDRStatus {
   trueCenterHz?: number;
 }
 
+/** ★ ONE FRAME OF THE ADVANCED RDS ANALYSER, exactly as VibeServer computes it.
+ *  ★★ NOTHING HERE IS DERIVED ON THE CLIENT — not the constellation, not the MPX curve, not
+ *  the confirmations. The analyser runs beside the decoder on the server, where the baseband
+ *  actually is; every client just draws this. That is why the phone can show the same panel
+ *  as the browser without a line of DSP, and why a fix to the decoder reaches all of them.
+ *  ★ Every gated field appears TWICE: the plain name is CONFIRMED BY REPETITION, the `*Raw`
+ *  one is what arrived this instant. The server always sends both and never picks — a viewer
+ *  switching to RAW must not change what another listener on the same receiver sees. */
+export interface RdsExt {
+  pty: number; tp: number; ta: number; ms: number; di: number;
+  ptyRaw: number; tpRaw: number; taRaw: number; msRaw: number; diRaw: number;
+  ct: number;            // minutes since midnight UTC, -1 = none
+  ctoff: number;         // local offset in HALF-hours (India is +11)
+  gtot: number;          // total groups decoded — 0 means no block sync at all
+  afseen: number;
+  rtpTitle: string; rtpArtist: string; longPs: string; ptyn: string;
+  lang: number; pinDay: number; pinHour: number; pinMin: number;
+  phase: number;         // RDS-to-pilot phase, degrees, folded to [0,90]
+  phaseDrift: number; phaseCoh: number;
+  pilotDev: number; rdsDev: number;   // kHz; rdsDev < 0 = not measurable
+  ber: number;           // block error rate %, -1 = unknown
+  grp: number[];         // per-group-type counts, 32 entries (0A,0B,1A...)
+  af: number[];          // alternative frequencies, kHz
+  eon: { pi: string; ps: string; af: number; ta: number }[];
+  oda: { aid: string; grp: number }[];
+  xy: number[];          // constellation, interleaved i/q, x100, clipped +/-127
+  mpx: number[];         // MPX spectrum, dB, integers in [-128, 0]
+}
+
 export interface SDRCallbacks {
   onSpectrum:   (bins: Float32Array, status: SDRStatus) => void;
   onStatus:     (status: SDRStatus) => void;
@@ -82,6 +111,8 @@ export interface SDRCallbacks {
   onHwRates?:   (rates: number[]) => void;
   /** >0 = the serving host PINNED the capture rate; the client hides its picker. */
   onHwLockedRate?: (rate: number) => void;
+  /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
+  onRdsExt?:    (x: RdsExt) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -466,6 +497,18 @@ export class UberSDRClient {
     }
   }
 
+  /** ★ Turn the Advanced RDS analyser on or off. Costs the server real CPU and ~5 frames a
+   *  second of extra traffic, so it is switched by the panel being OPEN — there is no setting
+   *  for a user to find, forget, and leave running. Remembered across reconnects, because the
+   *  server forgets on a new socket and the panel would otherwise go quietly blank. */
+  setAdvRds(on: boolean) {
+    this.advRds = on;
+    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+      this.spectrumWs.send(JSON.stringify({ type: 'rdsx', on: on ? 1 : 0 }));
+    }
+  }
+  private advRds = false;
+
   private _flushView() {
     const p = this.pendingView;
     if (!p) return;
@@ -749,6 +792,10 @@ export class UberSDRClient {
       // whatever rung we had settled on rather than silently jumping back to full rate.
       this.startLinkManager();
       this.link?.reassert();
+      // ★ The server forgets the analyser on a new socket. If the panel is open, say so again
+      // — otherwise a reconnect the user never noticed leaves it frozen on its last frame,
+      // which reads as "the decoder died" rather than "the link blipped".
+      if (this.advRds) ws.send(JSON.stringify({ type: 'rdsx', on: 1 }));
     };
 
     ws.onmessage = (e) => {
@@ -944,6 +991,11 @@ export class UberSDRClient {
    * from the caller, who has known all along, is the fix.
    */
   markVibeServer() { this.isVibeServer = true; }
+  /** ★ Read-only: is the far end a VibeServer? Clients use it to decide whether to OFFER a
+   *  VibeServer-only control at all. ★ Advertised is not the same as supported — a button
+   *  that does nothing on an UberSDR reads as "this feature is broken", which is worse than
+   *  not showing it (the lesson from the keyboard hints). */
+  get isVibe(): boolean { return this.isVibeServer; }
   private link: LinkManager | null = null;
   private specFrames = 0;              // frames counted in the current 1s window
   private specBytes  = 0;              // spectrum bytes in the current 1s window (audio is native)
@@ -1321,7 +1373,9 @@ export class UberSDRClient {
       (this.callbacks as any).onMetadata?.({
         stationName: ps || undefined,
         text: rt || undefined,
-        badge: ps ? 'RDS' : undefined,
+        // ★ Badge on ANY decoded RDS, not just a name — a text-only frame is still RDS, and
+        // without the badge it would show up unlabelled, indistinguishable from a bookmark.
+        badge: (ps || rt) ? 'RDS' : undefined,
         stereo,
         pi,
         // ECC + PI when the station sends an ECC; otherwise the PI's country nibble
@@ -1332,6 +1386,31 @@ export class UberSDRClient {
         // stations without inventing one for a foreign catch: a sporadic-E Spaniard's
         // nibble does not match a British receiver, so it stays blank.
         countryIso: resolveStationIso(ecc, pi, receiverIso()) || undefined,
+      });
+      return;
+    }
+    if (msg.type === 'rdsx') {
+      // ★ Trust the shape, not the sender: this arrives on the same socket as everything
+      // else and a field the server has not sent yet must not crash the panel. Numbers
+      // default to -1 (the "unknown" the renderers already understand), arrays to empty.
+      const num = (x: any, d = -1) => (typeof x === 'number' && isFinite(x) ? x : d);
+      const str = (x: any) => (typeof x === 'string' ? x : '');
+      const arr = (x: any): number[] => (Array.isArray(x) ? x.filter((n) => typeof n === 'number') : []);
+      this.callbacks.onRdsExt?.({
+        pty: num(msg.pty), tp: num(msg.tp), ta: num(msg.ta), ms: num(msg.ms), di: num(msg.di),
+        ptyRaw: num(msg.ptyRaw), tpRaw: num(msg.tpRaw), taRaw: num(msg.taRaw),
+        msRaw: num(msg.msRaw), diRaw: num(msg.diRaw),
+        ct: num(msg.ct), ctoff: num(msg.ctoff, 0), gtot: num(msg.gtot, 0), afseen: num(msg.afseen, 0),
+        rtpTitle: str(msg.rtpTitle), rtpArtist: str(msg.rtpArtist),
+        longPs: str(msg.longPs), ptyn: str(msg.ptyn),
+        lang: num(msg.lang), pinDay: num(msg.pinDay), pinHour: num(msg.pinHour), pinMin: num(msg.pinMin),
+        phase: num(msg.phase), phaseDrift: num(msg.phaseDrift), phaseCoh: num(msg.phaseCoh, 0),
+        pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev), ber: num(msg.ber),
+        grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
+        eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
+          pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
+        oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({
+          aid: str(o?.aid), grp: num(o?.grp, 0) })) : [],
       });
       return;
     }
