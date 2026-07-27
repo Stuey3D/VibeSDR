@@ -61,7 +61,7 @@ public:
 
     void setFrequency(double hz);
     /** The sample rates THIS radio offers, ascending. Enumerated from the device rather than
-     *  assumed: an HF+ Discovery tops out around 768 kHz where a dongle does 2.4 MSPS, so a
+     *  assumed: an HF+ Discovery tops out around 912 kHz where a dongle does 2.4 MSPS, so a
      *  hard-coded list would offer rates it cannot do. Empty until open(). */
     const std::vector<uint32_t>& sampleRates() const { return rates_; }
     /** Nearest supported rate to `hz` — the picker offers only real ones, but a saved

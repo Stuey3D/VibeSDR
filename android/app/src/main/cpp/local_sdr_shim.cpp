@@ -2399,7 +2399,7 @@ struct LocalSdrShim::Impl {
             // setting. Offer the real ceiling instead.
             j += "],\"rates\":[8000000,6000000,5000000,4000000,3000000,2048000,2000000]";
         else if (useAirspyHf()) {
-            // ★★★ THE RADIO'S OWN LIST, not ours. An HF+ Discovery tops out near 768 kHz where
+            // ★★★ THE RADIO'S OWN LIST, not ours. An HF+ Discovery tops out near 912 kHz where
             // the dongle list starts at 960 kHz — so EVERY rate we were offering was impossible,
             // and the picker was showing a list the hardware would refuse (Stuart, 2026-07-27:
             // "still got the RTL sample rates").

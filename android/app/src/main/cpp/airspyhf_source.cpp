@@ -97,7 +97,7 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
     }
     impl_->serial = sn;
 
-    // ★ ASK THE RADIO what rates it has. An HF+ Discovery tops out near 768 kHz where a dongle
+    // ★ ASK THE RADIO what rates it has. An HF+ Discovery tops out near 912 kHz where a dongle
     // does 2.4 MSPS, so a hard-coded list would offer rates it cannot do — and the failure
     // would be a stream that never starts rather than an error anyone could read.
     uint32_t n = 0;
@@ -107,7 +107,19 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
             rates_.clear();
         std::sort(rates_.begin(), rates_.end());
     }
-    if (rates_.empty()) rates_ = { 768000 };   // the Discovery's own maximum, as a last resort
+    // ★ A LAST RESORT ONLY — the real list comes from the radio. 912 kHz is the Discovery's
+    // top rate (measured on hardware 2026-07-27; earlier comments here said 768, which is
+    // the older HF+ Dual Port's ceiling, not this one).
+    if (rates_.empty()) rates_ = { 912000 };
+
+    // ★★★ ENABLE THE LIBRARY'S OWN DSP EXPLICITLY, never by inheriting a default. It does the
+    // IQ correction AND — the part that matters — the IF SHIFT: an HF+ runs LOW-IF at some
+    // sample rates (airspyhf_is_low_if reports which), and without this the tuned signal does
+    // not arrive at baseband at all. Everything downstream assumes zero-IF, so a wrong default
+    // here would be a quiet, whole-system sensitivity fault rather than an error anyone sees.
+    // ★ Upstream does default it on, so this is belt-and-braces — but a default we depend on
+    // this heavily should be stated, not assumed.
+    airspyhf_set_lib_dsp(impl_->dev, 1);
 
     if (!setSampleRate(sampleRateHz)) {
         err = "the Airspy HF+ refused that sample rate";
@@ -119,6 +131,12 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
 
     open_ = true;
     lost_ = false;
+    // ★ Say what we actually got. The requested rate is a hint (the radio's list wins) and
+    // low-IF vs zero-IF changes what the library is doing internally — both are worth having in
+    // a log when someone reports the radio being deafer than it should be.
+    std::fprintf(stderr, "airspyhf: open ok, rate %u Hz, %s-IF, %zu rates offered\n",
+                 (unsigned)nearestRate(sampleRateHz),
+                 airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero", rates_.size());
     return true;
 }
 
@@ -197,25 +215,39 @@ void AirspyHfSource::setGainTenthDb(int tenthDb) {
 void AirspyHfSource::setAgc(bool on) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     agc_ = on;
-    if (impl_->dev) airspyhf_set_hf_agc(impl_->dev, on ? 1 : 0);
+    if (!impl_->dev) return;
+    const int rc = airspyhf_set_hf_agc(impl_->dev, on ? 1 : 0);
+    std::fprintf(stderr, "airspyhf: agc %s -> rc %d\n", on ? "ON" : "off", rc);
 }
 
+// ★ LOGGED, because "this control does nothing" is indistinguishable from "this control never
+// arrived" — and several controls genuinely never arrived today. With the call visible in the
+// log, a reported no-op is a fact about the RADIO rather than a guess about our plumbing.
+// ★ Stuart reports the threshold making no audible difference (2026-07-27). Plumbing verified;
+// whether it has any effect in the 60-260 MHz window is unknown — the API documents no
+// semantics, and the VHF front end is different hardware from the HF one.
 void AirspyHfSource::setAgcThreshold(bool high) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     agcHigh_ = high;
-    if (impl_->dev) airspyhf_set_hf_agc_threshold(impl_->dev, high ? 1 : 0);
+    if (!impl_->dev) return;
+    const int rc = airspyhf_set_hf_agc_threshold(impl_->dev, high ? 1 : 0);
+    std::fprintf(stderr, "airspyhf: agc threshold %s -> rc %d\n", high ? "HIGH" : "low", rc);
 }
 
 void AirspyHfSource::setAttenuation(int steps) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     att_ = std::max(0, std::min(8, steps));
-    if (impl_->dev) airspyhf_set_hf_att(impl_->dev, (uint8_t)att_);
+    if (!impl_->dev) return;
+    const int rc = airspyhf_set_hf_att(impl_->dev, (uint8_t)att_);
+    std::fprintf(stderr, "airspyhf: attenuation %d dB -> rc %d\n", att_ * 6, rc);
 }
 
 void AirspyHfSource::setLna(bool on) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     lna_ = on;
-    if (impl_->dev) airspyhf_set_hf_lna(impl_->dev, on ? 1 : 0);
+    if (!impl_->dev) return;
+    const int rc = airspyhf_set_hf_lna(impl_->dev, on ? 1 : 0);
+    std::fprintf(stderr, "airspyhf: preamp %s -> rc %d\n", on ? "ON" : "off", rc);
 }
 
 void AirspyHfSource::setCalibrationPpb(int ppb) {

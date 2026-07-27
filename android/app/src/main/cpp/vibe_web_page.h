@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (327.6 KB)
+// Source: web/client/  (328.1 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -1571,10 +1571,10 @@ select.btn { padding: 6px 8px; }
     <!-- The HF+'s only AGC adjustment: a low or high threshold. HIGH lets the front end run
          hotter before it backs off — better sensitivity on a quiet band, worse on a crowded one. -->
     <div class="mrow" id="rowAhfThresh">
-      <label>AGC THRESHOLD</label>
+      <label title="The signal level at which the AGC starts backing the front end off. HIGH tolerates a stronger signal before engaging, so more gain is kept — better on weak stations, less protection against overload. LOW engages earlier and stays conservative — better on a crowded band with strong locals.">AGC THRESHOLD</label>
       <div class="seg" id="ahfThreshSeg">
-        <button class="btn on" data-th="0">LOW</button>
-        <button class="btn" data-th="1">HIGH</button>
+        <button class="btn on" data-th="0" title="Backs off earlier. Conservative — for a crowded band with strong local stations.">LOW</button>
+        <button class="btn" data-th="1" title="Backs off later, keeping more gain. Better for weak stations; more overload risk.">HIGH</button>
       </div>
     </div>
     <!-- ★ ATTENUATION, labelled as attenuation. It would be easy to invert this into a "gain"
