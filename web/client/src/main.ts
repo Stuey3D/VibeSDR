@@ -240,10 +240,27 @@ function refreshAdminRow() {
   }
 }
 
-async function doAdminUnlock() {
-  if (adminUnlocked) return;
-  const pw = window.prompt("Admin password for this receiver");
-  if (pw == null || pw === '') return;
+/** ★★ WIRED UP AT LAST. `doAdminUnlock` existed and NOTHING EVER CALLED IT — the UNLOCK button
+ *  only ever had its label set, so pressing it did precisely nothing (Stuart, 2026-07-27).
+ *  ★ A control that is drawn, enabled and inert is worse than a missing one: the user concludes
+ *  the feature is broken rather than absent, and there is nothing on screen to contradict them. */
+function initAdminUnlock() {
+  const btn = document.getElementById('adminUnlock');
+  const row = document.getElementById('adminPwRow');
+  const inp = document.getElementById('adminPwInput') as HTMLInputElement | null;
+  btn?.addEventListener('click', () => {
+    if (adminUnlocked) return;
+    if (!row) return;
+    row.hidden = !row.hidden;          // second press hides it again
+    if (!row.hidden) inp?.focus();
+  });
+  const go = () => { const v = inp?.value ?? ''; if (v) void doAdminUnlock(v); };
+  document.getElementById('adminPwGo')?.addEventListener('click', go);
+  inp?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') go(); });
+}
+
+async function doAdminUnlock(pw: string) {
+  if (adminUnlocked || !pw) return;
   try {
     // ★ The same challenge-response the PIN uses, and the same nonce endpoint. The password
     // never crosses the wire, and reusing the scheme means it inherits the server's existing
@@ -414,6 +431,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAdmin: (ok, refused) => {
       if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
       adminUnlocked = ok;
+      // ★ Never leave the password sitting in the box, whichever way it went.
+      const pwIn = document.getElementById('adminPwInput') as HTMLInputElement | null;
+      if (pwIn) pwIn.value = '';
+      const pwRow = document.getElementById('adminPwRow');
+      if (pwRow) pwRow.hidden = ok;    // wrong password: leave it open to try again
+      if (!ok) setStatus('error', 'admin');
       refreshAdminRow();
       if (!ok) alert('That admin password was not accepted.');
     },
@@ -550,6 +573,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
   else initDecoders(host, auth);
   initIdleThrottle();
+  initAdminUnlock();
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
   requestAnimationFrame(loop);

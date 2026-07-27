@@ -963,6 +963,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 .mrow.dim { opacity: .38; }
 .mrow .val { color: var(--unit); font-size: 11px; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
 .mrow input[type=range] { flex: 1 1 auto; width: auto; min-width: 90px; }
+/* Admin password entry — plain text input in a menu row, styled like the rest of the panel. */
+#adminPwInput { flex: 1 1 auto; min-width: 0; background: rgba(0,0,0,0.35);
+  border: 1px solid var(--bdr); border-radius: 5px; color: var(--hi);
+  padding: 4px 7px; font: inherit; }
 .mrow select { flex: 1 1 auto; }
 /* Segmented rows WRAP and never shrink. Flex items shrink below their content
    by default, so a 5-button row (RTTY shift) in a 520px panel squeezed the
@@ -1638,6 +1642,15 @@ select.btn { padding: 6px 8px; }
   <div class="mrow" id="adminRow" hidden>
     <label>PROTECTED SETTINGS</label>
     <div class="seg"><button class="btn" id="adminUnlock">UNLOCK</button></div>
+  </div>
+  <!-- ★ MASKED, INLINE. This was a window.prompt(), which renders the password in CLEAR TEXT
+       in a dialog — the exact thing the operator-side field was made secure about. An inline
+       type=password also lets Enter submit and keeps the whole exchange in the panel. -->
+  <div class="mrow" id="adminPwRow" hidden>
+    <label>PASSWORD</label>
+    <input type="password" id="adminPwInput" autocomplete="off" spellcheck="false"
+           placeholder="admin password">
+    <div class="seg"><button class="btn" id="adminPwGo">GO</button></div>
   </div>
   <div class="lbl wrap" id="adminNote" hidden>
     Bias-T, direct sampling and calibration are locked by this receiver's operator. Bias-T puts
