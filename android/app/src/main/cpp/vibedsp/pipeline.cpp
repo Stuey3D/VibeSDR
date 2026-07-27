@@ -431,6 +431,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.constXY = xy; x.nPts = np;
                 x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
                 x.pilotPhaseCoherence = rdsDemod_.pilotPhaseCoherence();
+                x.pilotPhaseDriftDegPerSec = rdsDemod_.pilotPhaseDriftDegPerSec();
                 x.pilotDevKHz = pll_.pilotDeviationKHz();
                 x.mpx = mpxOut_.empty() ? nullptr : mpxOut_.data();
                 x.nMpx = (int)mpxOut_.size();

@@ -458,6 +458,13 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 .group { display: flex; gap: 0.35em; align-items: center; flex-wrap: nowrap; }
 .sep { width: 1px; height: 1.8em; background: var(--bar-border); flex: 0 0 1px; }
 .lbl { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+/* ★★ PROSE MUST WRAP. `.lbl` is nowrap because most uses are short labels sitting beside a
+   control, where wrapping would look broken — but the class is also used for explanatory
+   PARAGRAPHS, and there nowrap makes the text run off the panel, which then scrolls sideways
+   to chase it (Stuart, 2026-07-27). Same class, two jobs, opposite needs.
+   ★ Added as a modifier rather than by changing `.lbl`: dozens of short labels depend on the
+   nowrap, and flipping the default would move the bug rather than fix it. */
+.lbl.wrap { white-space: normal; line-height: 1.45; letter-spacing: 0.04em; }
 
 input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
@@ -1318,7 +1325,7 @@ select.btn { padding: 6px 8px; }
     <label>UNCOMPRESSED AUDIO</label>
     <div class="seg"><button class="btn" id="rawAudio">OFF</button></div>
   </div>
-  <div class="lbl" id="rawAudioNote" hidden>
+  <div class="lbl wrap" id="rawAudioNote" hidden>
     Off, audio is compressed to around 10 KB/s. On, you get the raw stream — about 187 KB/s,
     roughly twenty times more, out of the operator's connection. Worth it on a fast link if
     you can hear the difference; a courtesy to leave off if you can't.
@@ -1421,7 +1428,7 @@ select.btn { padding: 6px 8px; }
 
   <h2>RECEIVER LOCATION</h2>
   <div class="lbl" id="rxLoc">Not published by this server</div>
-  <div class="lbl" style="margin-bottom:6px">
+  <div class="lbl wrap" style="margin-bottom:6px">
     Distances and the band plan are measured from the RECEIVER, not from you —
     the server may be in another town. Set a grid here only if the server hasn't
     published its own location.

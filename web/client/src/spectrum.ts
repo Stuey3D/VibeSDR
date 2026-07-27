@@ -83,7 +83,10 @@ export interface RdsExt {
   eon: { pi: string; ps: string; af: number; ta: number }[];
   oda: { aid: string; grp: number }[];
   phase: number;         // RDS-to-pilot phase, degrees (-1 = no lock)
-  phaseCoh: number;      // 0..1 — how steady that phase is; below ~0.35 it is meaningless
+  phaseCoh: number;
+  /** deg/s the RDS-to-pilot phase is turning. >0 means the station's encoder is not locked
+   *  to its own pilot — a transmitter fault, not a reception one. */
+  phaseDrift: number;      // 0..1 — how steady that phase is; below ~0.35 it is meaningless
   pilotDev: number;      // pilot injection, kHz deviation (spec 6.0–7.5)
   rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6)
   xy: number[];          // interleaved x,y as signed bytes (x100)
@@ -335,6 +338,7 @@ export class SpectrumClient {
           oda: Array.isArray(msg.oda) ? msg.oda : [],
           phase: Number(msg.phase ?? -1),
           phaseCoh: Number(msg.phaseCoh ?? 0),
+          phaseDrift: Number(msg.phaseDrift ?? 0),
           pilotDev: Number(msg.pilotDev ?? 0),
           rdsDev: Number(msg.rdsDev ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],

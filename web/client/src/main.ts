@@ -2733,12 +2733,30 @@ function renderRds() {
     // ★ FAULT is now reserved for genuinely far out (>40 degrees from BOTH nominals) and
     // still requires a solid estimate — calling a broadcaster's transmitter defective
     // deserves the higher bar.
-    const verdict = near <= 12 ? (d0 <= d90 ? 'in phase' : 'quadrature')
-                  : near <= 40 ? 'off nominal'
-                  : coh > 0.7  ? 'FAULT'
-                  : 'off nominal';
-    phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
-    phEl.style.color = near <= 12 ? '#7dff9a' : near <= 40 ? '#ffd479' : '#ff8a7d';
+    // ★★ SLOW ROTATION LOOKS PERFECTLY STEADY. Coherence collapses only when the phase turns
+    // FAST relative to the averaging window — Classic FM does, draws a circle, and is caught by
+    // the branch above. A station whose encoder is only slightly off its pilot keeps coherence
+    // high (67%) while the angle walks the whole range, so it slipped through and displayed a
+    // number that swept 0->90 and back (Stuart, on Harborough FM, 2026-07-27).
+    // ★ The rate is the honest test, and it does not depend on coherence at all. Our 57 kHz
+    // reference IS the station's own pilot tripled, so a locked encoder sits still however weak
+    // the signal — a steady march means the subcarrier genuinely is not 3x the pilot.
+    // ★ 2 deg/s: comfortably above the wander of a noisy estimate, and it takes 45 s to cross
+    // the range at that rate, so nothing that drifts this steadily is doing it by accident.
+    // ★ NO EARLY RETURN — this runs inside renderRds(), and everything below (the PI
+    // decomposition and the rest of the panel) still has to happen.
+    const drift = rdsExt?.phaseDrift ?? 0;
+    if (drift >= 2) {
+      phEl.textContent = `rotating ${drift.toFixed(0)}°/s — encoder not locked to pilot`;
+      phEl.style.color = '#ffd479';
+    } else {
+      const verdict = near <= 12 ? (d0 <= d90 ? 'in phase' : 'quadrature')
+                    : near <= 40 ? 'off nominal'
+                    : coh > 0.7  ? 'FAULT'
+                    : 'off nominal';
+      phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
+      phEl.style.color = near <= 12 ? '#7dff9a' : near <= 40 ? '#ffd479' : '#ff8a7d';
+    }
   }
 
   // ── PI decomposition — free, it is arithmetic on a number we already have ──────

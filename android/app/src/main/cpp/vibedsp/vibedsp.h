@@ -573,6 +573,9 @@ private:
     int afHits_[kMaxAf] = {0};
     int afN_ = 0;
     int di_ = 0, diSeen_ = 0;
+    // ★ The local-time OFFSET is constant for a station, so unlike the time itself it can
+    // be confirmed by repetition. See the note in parseGroup's 4A branch.
+    int ctOffCand_ = 0; bool ctOffSeen_ = false;
     // RT+ : group 3A names which group type carries the tags (commonly 11A), so we cannot
     // parse them until that announcement arrives. -1 = not yet announced.
     int  rtpGroup_ = -1;
@@ -685,6 +688,14 @@ public:
      *  Heavily smoothed: it is a transmitter characteristic, not something that should
      *  flicker. -1 = no lock. */
     float pilotPhaseDeg() const;
+    /** ★ Degrees per second the RDS-to-pilot phase is turning. Our 57 kHz reference IS the
+     *  station's own pilot tripled, so a locked encoder sits still no matter how weak the
+     *  signal — a steady march means the station's subcarrier is genuinely not 3x its pilot,
+     *  which is a transmitter fault and not a reception one. -1 = not measurable. */
+    float pilotPhaseDriftDegPerSec() const { return phDriftDeg_; }
+private:
+    void measurePhaseDrift();
+public:
     /** ★★ HOW COHERENT that phase estimate is, 0..1 — and the reason the number above must
      *  never be shown without it. The estimate averages a unit vector at twice the symbol
      *  angle: if the phase is STEADY the vectors agree and the average keeps its length, but
@@ -752,6 +763,7 @@ public:
 private:
     std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
+    double mpxRate_ = 0.0;             // channel rate, for the sample-derived clock
     // RDS baseband is +/-2.4 kHz but arrives at the CHANNEL rate (~300 kHz) — over a
     // hundred times oversampled. The LPF decimates by this, so both it and the biphase
     // loop below run at ~40 kHz instead. bclk_ is the bit clock subsampled to match.
@@ -838,6 +850,17 @@ private:
     // Doubled-angle accumulator: doubling folds the two BPSK lobes onto one, so they can be
     // averaged without cancelling. Slow, because this describes the transmitter.
     float phCos2_ = 0.0f, phSin2_ = 0.0f;
+    // ★★★ HOW FAST THE PHASE IS TURNING, deg/s. Coherence alone cannot answer this: it
+    // collapses only when rotation is FAST relative to the averaging window, so a slowly
+    // rotating station keeps a high "steady" figure while the angle marches all the way round
+    // underneath it. Both are the same transmitter fault seen at two speeds — Classic FM
+    // rotates fast (constellation draws a CIRCLE, coherence dies, already detected) and
+    // Harborough FM rotates slowly (67% steady, phase walking 0->82 deg in six seconds, and
+    // the old detector said nothing). Stuart caught the slow one on air, 2026-07-27.
+    float phDriftDeg_ = 0.0f;      // smoothed |drift|, degrees per second
+    float phLastDeg_  = -1.0f;     // previous sample of the RAW (unfolded) angle
+    double phLastAt_  = 0.0;       // seconds, for dt
+    double phClock_   = 0.0;       // sample-derived clock; no wall time in the DSP layer
     // Constellation ring — written by whichever hypothesis is currently winning, so the
     // plot shows what the DECODER is actually working with rather than an also-ran.
     Agg agg_{};
@@ -920,6 +943,7 @@ public:
             const float* constXY; int nPts;
             float pilotPhaseDeg;
             float pilotPhaseCoherence;
+            float pilotPhaseDriftDegPerSec;   // >0 = the phase is turning; see the note on it
             float pilotDevKHz;      // pilot injection, kHz deviation
             float rdsDevKHz;        // RDS injection, kHz deviation
             /** ★★ THE MPX SPECTRUM, 0-100 kHz — the view SDRconnect calls "MPX SP" and the

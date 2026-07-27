@@ -1262,6 +1262,9 @@ struct LocalSdrShim::Impl {
     int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
     float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
     float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
+    // ★ How fast that phase is TURNING, deg/s. Coherence only catches FAST rotation; a slow
+    // one keeps coherence high while the angle walks all the way round. See vibedsp.h.
+    float rdsPhaseDrift = 0.0f;
     float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
     std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
     std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
@@ -1678,6 +1681,7 @@ struct LocalSdrShim::Impl {
         t->rdsOda.assign(x.oda, x.oda + x.nOda);
         t->rdsPhase = x.pilotPhaseDeg;
         t->rdsPhaseCoh = x.pilotPhaseCoherence;
+        t->rdsPhaseDrift = x.pilotPhaseDriftDegPerSec;
         t->rdsPilotDev = x.pilotDevKHz;
         t->rdsDev      = x.rdsDevKHz;
     }
@@ -3381,7 +3385,7 @@ struct LocalSdrShim::Impl {
         if (!sock || !sock->isOpen()) return;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
-        int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_;
+        int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, phaseDrift;
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
@@ -3394,6 +3398,7 @@ struct LocalSdrShim::Impl {
           rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
           lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
           eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh;
+          phaseDrift = rdsPhaseDrift;
           pilotDev = rdsPilotDev; rdsDev_ = rdsDev; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
@@ -3420,6 +3425,7 @@ struct LocalSdrShim::Impl {
                       + ",\"pinHour\":" + std::to_string(pinH)
                       + ",\"pinMin\":" + std::to_string(pinM)
                       + ",\"phase\":" + std::to_string(phase)
+                      + ",\"phaseDrift\":" + std::to_string(phaseDrift)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)
                       + ",\"rdsDev\":" + std::to_string(rdsDev_)

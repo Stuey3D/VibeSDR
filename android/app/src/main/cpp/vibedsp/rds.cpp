@@ -231,6 +231,38 @@ void RdsDemod::setNoiseCorrection(bool on) {
     guardPow_ = 0.0f;
 }
 
+// ★★ ROTATION IS A RATE, SO MEASURE A RATE. Sampled a few times a second and differenced
+// against the previous reading, unwrapped so a pass through +/-90 does not read as a jump.
+// ★ The RAW angle is used, not the folded display one: folding reflects at 90 degrees, which
+// would turn a steady rotation into a triangle wave and its rate into nonsense at every turn.
+void RdsDemod::measurePhaseDrift() {
+    const float m = std::sqrt(phCos2_ * phCos2_ + phSin2_ * phSin2_);
+    // Nothing to measure without a usable estimate — and saying "not rotating" because the
+    // signal is absent would be the same confident-wrong-answer this panel exists to avoid.
+    if (m < 0.05f) { phDriftDeg_ = 0.0f; phLastDeg_ = -1.0f; return; }
+
+    // Half the doubled angle, in [0,180) — the raw estimate before the display fold.
+    float deg = 0.5f * std::atan2(phSin2_, phCos2_) * 180.0f / (float)M_PI;
+    while (deg < 0.0f) deg += 180.0f;
+    while (deg >= 180.0f) deg -= 180.0f;
+
+    const double dt = phClock_ - phLastAt_;
+    if (dt < 0.25) return;                    // a few times a second is plenty for a drift
+    if (phLastDeg_ >= 0.0f) {
+        // Unwrap across the 180-degree boundary the BPSK ambiguity imposes: a step of more
+        // than half a turn is really a smaller step the other way.
+        float d = deg - phLastDeg_;
+        while (d >  90.0f) d -= 180.0f;
+        while (d < -90.0f) d += 180.0f;
+        const float rate = std::fabs(d) / (float)dt;
+        // ★ Smoothed hard. This is a transmitter characteristic; it should not flicker, and a
+        // single noisy sample must not be able to accuse a broadcaster of anything.
+        phDriftDeg_ += 0.15f * (rate - phDriftDeg_);
+    }
+    phLastDeg_ = deg;
+    phLastAt_  = phClock_;
+}
+
 float RdsDemod::pilotPhaseCoherence() const {
     // The accumulator holds an average of UNIT vectors, so its length is the agreement
     // between them: 1 = every symbol reports the same angle, 0 = uniformly distributed.
@@ -278,6 +310,7 @@ void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
     // near 1187 Hz) and causing ISI. The probe said otherwise — no improvement anywhere and
     // a clear loss at moderate noise — and it then measured 0% block errors at zero noise,
     // which rules out ISI in this filter as the source of any error floor at all.
+    mpxRate_ = mpxRate;
     const double cut = 2400.0 / mpxRate;
     std::vector<float> taps = designLowpass(cut, cut);
     // ★ DECIMATE. The RDS baseband is +/-2.4 kHz, but everything here ran at the channel
@@ -341,6 +374,7 @@ void RdsDemod::reset() {
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
     mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
+    phDriftDeg_ = 0.0f; phLastDeg_ = -1.0f; phLastAt_ = 0.0; phClock_ = 0.0;
     agg_ = Agg{}; aggEonN_ = 0; aggOdaN_ = 0;
     for (int k = 0; k < NPH; ++k) {
         accI_[k] = accQ_[k] = 0.0f; prevPh_[k] = 0.0f;
@@ -395,6 +429,12 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
         }
         constBest_ = nb2;
     }
+    // ★ A CLOCK FROM THE SAMPLES, not from the wall. The DSP layer has no business calling
+    // the system clock — it runs on a callback thread whose timing is not the signal's — and
+    // sample count IS the elapsed time as far as the radio is concerned.
+    phClock_ += (double)n / mpxRate_;
+    measurePhaseDrift();
+
     // Smoothed RMS of the complex RDS baseband — the level the detector actually sees.
     // ★ Mean-square is tracked alongside the mean envelope: the envelope feeds the legacy
     // uncorrected deviation and subcarrierRelDb, the POWER feeds the noise subtraction, which
@@ -649,6 +689,7 @@ void RdsDecoder::reset() {
     ptyCand_ = tpCand_ = -1; ptySeen_ = false; trustedB_ = false;
     for (int i = 0; i < kMaxAf; ++i) afHits_[i] = 0;
     di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
+    ctOffCand_ = 0; ctOffSeen_ = false;
     taCand_ = msCand_ = -1;
     diCandBit_[0] = diCandBit_[1] = diCandBit_[2] = diCandBit_[3] = -1;
     rtpGroup_ = -1; lpsSeen_ = 0; rtAb_ = 0; rtAbSeen_ = false;
@@ -992,8 +1033,22 @@ void RdsDecoder::parseGroup() {
             const int sign = (blk_[3] >> 5) & 0x1;
             const int off  = blk_[3] & 0x1F;
             if (hour < 24 && min < 60) {
+                // The TIME is single-shot by nature: every CT is different, so there is
+                // nothing to compare it against and no repetition can confirm it.
                 ctMin_ = hour * 60 + min;
-                ctOff_ = sign ? -off : off;
+                // ★★ BUT THE OFFSET IS A CONSTANT, so it CAN be confirmed — and it was being
+                // taken on one sighting, which is how a station reported UTC+3 and then
+                // UTC-4.5 minutes apart on a signal at 41% block errors (Stuart, 2026-07-27).
+                // ★ Same rule as PTY/TP/TA/MS/DI: a clean block is trusted at once, a repaired
+                // one must agree with the previous reception before it is allowed to change
+                // anything. It rides in block D, so trust follows block D alone.
+                // ★ Note this does NOT rescue the time — a wrong offset and a wrong time come
+                // from the same corrupt block, and only one of them is checkable. The panel
+                // should keep saying "damaged" when the group did not arrive clean.
+                const int offVal = sign ? -off : off;
+                const bool trustedD = (blkRepair_[3] == 0);
+                if (trustedD || (ctOffSeen_ && offVal == ctOffCand_)) ctOff_ = offVal;
+                ctOffCand_ = offVal; ctOffSeen_ = true;
             }
         }
     } else if (gtype == 2) {                            // 2A/2B — RadioText
