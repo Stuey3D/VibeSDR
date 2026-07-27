@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Modal, View, Text, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
+  Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
   Switch, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -74,6 +74,16 @@ export interface LocalHardwarePanelProps {
    *  other radios. ★ Never INFER the driver from what else is present: an Airspy HF+ was drawn
    *  as a dongle for exactly that reason, and the controls it does have were nowhere. */
   radio?: RadioCaps | null;
+  /** ★★ ADMIN LOCK. The server ENFORCES this already — bias-T, PPM, direct sampling and
+   *  calibration are all refused without it. What was missing was any sign of it here: the
+   *  controls drew as normal and the user found out only when one silently did nothing
+   *  (Stuart, 2026-07-27). A protection nobody can see is not obviously protecting anything. */
+  adminSet?: boolean;
+  adminOk?: boolean;
+  /** Password entered by the user. Resolving it to a nonce+HMAC is the screen's job. */
+  onAdminUnlock?: (password: string) => void;
+  /** Set when the server refused something, so the panel can say why rather than sit there. */
+  adminRefused?: boolean;
   /** Airspy HF+ live state + setters (only used when radio.driver === 'airspyhf'). */
   ahfAgc?: boolean;      onAhfAgc?: (on: boolean) => void;
   ahfAgcHigh?: boolean;  onAhfAgcThreshold?: (high: boolean) => void;
@@ -110,8 +120,11 @@ function Seg<T>({ options, value, onChange, fmt, slot }: {
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
+  const [adminPw, setAdminPw] = useState('');
   // ★ Decide from what the RADIO SAID, never from what else happens to be set.
   const isAhf = p.radio?.driver === 'airspyhf';
+  // ★ Locked = the server has a password and this session has not cleared it.
+  const locked = !!p.adminSet && !p.adminOk;
   const isRtl = !p.radio || p.radio.driver === 'rtl';
 
   // ★ One flat focus order over everything on the panel, claimed during render in JSX order —
@@ -167,6 +180,39 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+          {/* ★ The lock notice goes FIRST, before any control — it explains the whole panel,
+              and finding it underneath the thing it applies to would be no use. */}
+          {p.adminSet && (
+            <View style={[styles.adminCard, p.adminOk && styles.adminCardOk]}>
+              <Text style={styles.adminTitle}>
+                {p.adminOk ? 'UNLOCKED' : 'PROTECTED BY THE OWNER'}
+              </Text>
+              <Text style={styles.note}>
+                {p.adminOk
+                  ? 'Full settings are unlocked for this session.'
+                  : 'Bias-T, frequency correction and direct sampling are locked on this '
+                    + 'receiver. Gain, sample rate and tuning stay open.'}
+              </Text>
+              {!p.adminOk && (
+                <View style={styles.adminRow}>
+                  <TextInput
+                    value={adminPw} onChangeText={setAdminPw}
+                    placeholder="Admin password" placeholderTextColor="rgba(200,210,225,0.45)"
+                    secureTextEntry autoCapitalize="none" autoCorrect={false}
+                    style={styles.adminInput} />
+                  <TouchableOpacity style={styles.adminBtn}
+                    onPress={() => { p.onAdminUnlock?.(adminPw); setAdminPw(''); }}>
+                    <Text style={styles.adminBtnTxt}>UNLOCK</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {p.adminRefused && !p.adminOk && (
+                <Text style={[styles.note, { color: '#ff8a7d' }]}>
+                  That control is locked. Enter the owner's password to use it.
+                </Text>
+              )}
+            </View>
+          )}
           {/* ★★ GAIN IS NOT ONE CONTROL ACROSS RADIOS. A dongle has a tuner gain TABLE; an
               HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
               so the slider was drawing an empty/meaningless scale while the controls that do
@@ -342,6 +388,16 @@ const styles = StyleSheet.create({
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
   stepBtnTxt: { fontSize: 20, color: C.gold },
+  adminCard: { borderWidth: 1, borderColor: 'rgba(255,140,60,0.55)', borderRadius: 8,
+               padding: 12, marginBottom: 14, backgroundColor: 'rgba(255,140,60,0.08)' },
+  adminCardOk: { borderColor: 'rgba(120,220,140,0.5)', backgroundColor: 'rgba(120,220,140,0.08)' },
+  adminTitle: { color: C.gold, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
+  adminRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  adminInput: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 6,
+                paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontSize: 14 },
+  adminBtn:  { borderWidth: 1, borderColor: C.abtn, borderRadius: 6,
+               paddingHorizontal: 14, paddingVertical: 9 },
+  adminBtnTxt: { color: C.gold, fontSize: 12, letterSpacing: 1 },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   sliderEnd: { color: C.dim, fontSize: 12, minWidth: 26, textAlign: 'center' },
   stepVal: { fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },

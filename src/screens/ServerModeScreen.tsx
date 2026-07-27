@@ -705,6 +705,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </View>
             )}
 
+            {/* ★ SAY THERE IS NO SAVE BUTTON. Every setting here persists the moment it is
+                changed and START applies them — but a settings screen with no Save invites the
+                reasonable worry that nothing was kept (Stuart: "there is no save button but I
+                assumed pressing start server was the save button", 2026-07-27). He was right,
+                and having to assume is the problem. */}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 16, textAlign: 'center' }]}>
+              Settings are saved as you change them. Starting the server applies them.
+            </Text>
             <TouchableOpacity style={[styles.startBtn, { borderColor: C.green, backgroundColor: C.green + '18' }]}
               onPress={start} disabled={starting}>
               {starting

@@ -141,6 +141,9 @@ export interface SDRCallbacks {
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */
   onRadioCaps?: (caps: RadioCaps) => void;
+  /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
+   *  `refused` fires when a protected control was rejected — the honest moment to say why. */
+  onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean }) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -536,6 +539,14 @@ export class UberSDRClient {
     }
   }
   private advRds = false;
+  private adminSet = false;
+
+  /** ★ Unlock the protected controls. Challenge-response: the caller has already turned the
+   *  password into an HMAC over a server-issued nonce, so the password never crosses the link
+   *  — the same scheme as the PIN, and it inherits the same brute-force lockout. */
+  adminUnlock(nonce: string, token: string) {
+    this._sendCtl({ type: 'admin_unlock', nonce, token });
+  }
 
   /** Airspy HF+ controls. Keys are optional — send only what changed.
    *  ★ AGC LAST, matching the server's own apply order: it owns the gain path, so applying it
@@ -1444,6 +1455,11 @@ export class UberSDRClient {
       });
       return;
     }
+    if (msg.type === 'admin') {
+      this.callbacks.onAdminState?.({
+        set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true });
+      return;
+    }
     if (msg.type === 'rdsx') {
       // ★ Trust the shape, not the sender: this arrives on the same socket as everything
       // else and a field the server has not sent yet must not crash the panel. Numbers
@@ -1476,6 +1492,10 @@ export class UberSDRClient {
       // know yet must still be able to say what it is.
       if (msg.radio && typeof msg.radio === 'object') {
         this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
+      }
+      if (typeof msg.adminSet === 'boolean') {
+        this.adminSet = msg.adminSet;
+        this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);

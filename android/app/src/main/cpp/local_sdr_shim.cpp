@@ -2542,6 +2542,16 @@ struct LocalSdrShim::Impl {
         // destroying RDS all evening. A client cannot present that honestly unless it is
         // told, so it is told.
         j += LocalSdrShim::instance().radioCapsJson();
+        // ★★ IS THERE AN ADMIN PASSWORD, AND ARE WE THROUGH IT? Advertised for the same reason
+        // as everything else here: the server ENFORCES the lock (bias-T, PPM, direct sampling
+        // and calibration all go through adminGate), but a client that is not told simply draws
+        // the controls as normal and the user finds out only when one silently does nothing
+        // (Stuart, 2026-07-27: "all controls for the SDR still present"). Enforcement without
+        // advertisement is a protection nobody can see.
+        { bool aset;
+          { std::lock_guard<std::mutex> al(g_vsAdminMtx); aset = !g_vsAdminSecret.empty(); }
+          j += std::string(",\"adminSet\":") + (aset ? "true" : "false");
+          j += std::string(",\"adminOk\":")  + (adminOk.load() ? "true" : "false"); }
         // A pinned rate is advertised so the client can HIDE its rate picker and say
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).

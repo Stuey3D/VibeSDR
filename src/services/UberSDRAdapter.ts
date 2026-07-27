@@ -114,6 +114,7 @@ export class UberSDRAdapter implements SDRBackend {
    *  holds the adapter, and an absent method on an `any`-cast call fails silently. */
   ahfControl(o: Parameters<UberSDRClient['ahfControl']>[0]) { this.client.ahfControl(o); }
   rspControl(o: Parameters<UberSDRClient['rspControl']>[0]) { this.client.rspControl(o); }
+  adminUnlock(nonce: string, token: string) { this.client.adminUnlock(nonce, token); }
   /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
   setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }

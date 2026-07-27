@@ -42,6 +42,7 @@ import { splashBridge }                 from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
+import { resolveVibeAdminAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -1727,6 +1728,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ What the serving radio IS. Everything the hardware panel offers hangs off this, so the
   // controls match the receiver instead of assuming a dongle.
   const [radioCaps, setRadioCaps] = useState<RadioCaps | null>(null);
+  // ★ Admin lock, mirrored from the server. `set` comes with hwinfo, `ok` changes when we
+  // unlock — so the panel can show the lock the server is ALREADY enforcing.
+  const [adminSet, setAdminSet] = useState(false);
+  const [adminOk,  setAdminOk]  = useState(false);
+  const [adminRefused, setAdminRefused] = useState(false);
   // Airspy HF+ live state. Mirrors what we last SENT — the shim has no read-back message, and
   // it is single-occupant, so our own last write is the truth.
   const [ahfAgc,     setAhfAgc]     = useState(true);
@@ -2376,6 +2382,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
       onRadioCaps:  (caps) => { if (!destroyed.current) setRadioCaps(caps); },
+      onAdminState: (st) => {
+        if (destroyed.current) return;
+        setAdminSet(st.set); setAdminOk(st.ok);
+        if (st.refused) setAdminRefused(true);
+        if (st.ok) setAdminRefused(false);
+      },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
         // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
@@ -5622,6 +5634,18 @@ export default function SDRScreen({ route, navigation }: Props) {
         <LocalHardwarePanel
           isSpy={isSpy}
           radio={radioCaps}
+          adminSet={adminSet}
+          adminOk={adminOk}
+          adminRefused={adminRefused}
+          onAdminUnlock={async (pw) => {
+            // ★ HMAC over a server-issued nonce — the password never crosses the link, and the
+            // server applies the same brute-force lockout it uses for the PIN.
+            const q = await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
+            const nonce = /vs_admin_nonce=([^&]*)/.exec(q)?.[1];
+            const token = /vs_admin_auth=([^&]*)/.exec(q)?.[1];
+            if (!nonce || !token) { setAdminRefused(true); return; }
+            (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
+          }}
           ahfAgc={ahfAgc}
           onAhfAgc={(v) => { setAhfAgc(v); (client.current as any)?.ahfControl?.({ agc: v }); }}
           ahfAgcHigh={ahfAgcHigh}
