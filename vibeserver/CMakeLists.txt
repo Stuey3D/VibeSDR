@@ -129,9 +129,35 @@ endif()
 # ★ NOT libairspy. An Airspy R2 or Mini speaks a different API entirely (see airspyhf_source.h),
 # which is also GPL-2.0 and deprecated upstream after a relicence. Different decision, not a
 # flag on this one.
+# ★★★ BUILD OUR VENDORED COPY, NOT HOMEBREW'S. Both platforms must carry the same libairspyhf
+# or a fix lands on one and not the other — which is exactly what happened: upstream 1.6.8's
+# airspyhf_close() frees USB transfers AFTER destroying the context that owns them, a
+# use-after-free that is fatal and reproducible on Android and merely lucky on a desktop. The
+# Android build was patched and the Mac kept linking the unpatched Homebrew archive
+# (Stuart, 2026-07-27: "all these fixes if needed need to be in the mac version").
+# ★ Same source, same patches, one place to fix anything found next. Homebrew's remains the
+# fallback so a checkout without the vendored tree still builds.
+set(AHF_VENDOR "${CPP_DIR}/libairspyhf")
+if(EXISTS "${AHF_VENDOR}/airspyhf.c")
+  message(STATUS "libairspyhf: vendored (patched) at ${AHF_VENDOR}")
+  target_sources(vibeserver_core PRIVATE
+    "${AHF_VENDOR}/airspyhf.c" "${AHF_VENDOR}/iqbalancer.c")
+  target_include_directories(vibeserver_core PUBLIC "${AHF_VENDOR}")
+  # ★ libairspyhf.c includes <libusb.h> unqualified; Homebrew puts it in libusb-1.0/.
+  find_path(LIBUSB_INC libusb.h PATH_SUFFIXES libusb-1.0
+            HINTS /opt/homebrew/include /usr/local/include /usr/include)
+  if(LIBUSB_INC)
+    target_include_directories(vibeserver_core PRIVATE "${LIBUSB_INC}")
+  endif()
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPYHF VIBE_AIRSPYHF_HAS_FD)
+  set(AIRSPYHF_VENDORED TRUE)
+endif()
+
 find_library(AIRSPYHF_LIB NAMES airspyhf libairspyhf.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_path(AIRSPYHF_INC libairspyhf/airspyhf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
-if(AIRSPYHF_LIB AND AIRSPYHF_INC)
+if(AIRSPYHF_VENDORED)
+  # already handled above
+elseif(AIRSPYHF_LIB AND AIRSPYHF_INC)
   # Prefer the static archive next to whatever find_library cached, exactly as the librtlsdr and
   # libopus blocks do — a cached dylib path is how a notarised build ships broken.
   get_filename_component(_ahf_dir "${AIRSPYHF_LIB}" DIRECTORY)
