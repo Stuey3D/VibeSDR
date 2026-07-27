@@ -197,6 +197,45 @@ export function parseServerAddress(
            explicitScheme, hasPath: path.length > 0 };
 }
 
+/** ★★ Occupancy of a VibeServer, from its identity endpoint.
+ *  A VibeServer serves ONE listener at a time, so a public one that is busy has to say so
+ *  BEFORE someone taps it — otherwise a busy server is indistinguishable from a broken one,
+ *  and the user's conclusion is that our software does not work (Stuart, 2026-07-27). */
+export interface ServerOccupancy {
+  busy: boolean;
+  /** Seconds until the current listener's time limit expires. -1 = no limit set, so the
+   *  honest answer to "how long?" is "no idea", NOT "any moment now". */
+  freeInSec: number;
+  /** The owner's per-listener limit in minutes, 0 = unlimited. */
+  limitMin: number;
+  /** Does this server have an admin password? Only then is an override box worth offering. */
+  admin: boolean;
+}
+
+/** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
+ *  does not answer — callers must treat that as "unknown", never as "free". */
+export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
+    Promise<ServerOccupancy | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(baseUrl.replace(/\/$/, '') + '/vibeserver.json',
+                          { signal: ctrl.signal, cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || j.server !== 'vibeserver') return null;
+    return {
+      busy:      j.busy === true,
+      // ★ Older servers predate these fields. Defaulting freeInSec to -1 keeps "unknown"
+      // distinct from "free now", which are very different things to show someone.
+      freeInSec: typeof j.freeInSec === 'number' ? j.freeInSec : -1,
+      limitMin:  typeof j.limitMin === 'number' ? j.limitMin : 0,
+      admin:     j.admin === true,
+    };
+  } catch { return null; }
+  finally { clearTimeout(t); }
+}
+
 export async function probeServer(
   host: string, port: number, hint?: BackendType | null, baseUrl?: string,
 ): Promise<BackendType | null> {

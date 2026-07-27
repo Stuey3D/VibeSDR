@@ -37,6 +37,7 @@ import {
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
 import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
+         fetchOccupancy, type ServerOccupancy,
          type BackendType, type ServerType } from '../services/sdrTypes';
 import { vibeServerNeedsPin } from '../services/vibeAuth';
 
@@ -1375,6 +1376,38 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     );
   };
 
+  // ★★ OCCUPANCY OF SAVED VibeSERVERS. One client per radio means a public receiver is a
+  // queue of one, so a busy server MUST say so before it is tapped — otherwise "in use" is
+  // indistinguishable from "broken", and the conclusion people reach is that our software
+  // does not work (Stuart, 2026-07-27).
+  // ★ Absent from the map = UNKNOWN (old server, or unreachable). Never rendered as "free":
+  // claiming a server is available and then failing to connect is worse than saying nothing.
+  const [occupancy, setOccupancy] = useState<Record<string, ServerOccupancy>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      const targets = favourites.filter(f => (f.serverType ?? '') === 'vibeserver');
+      if (!targets.length) return;
+      // Sequential, not parallel: this is a courtesy poll of somebody else's receiver, and
+      // firing a burst at every saved server each cycle is the kind of thing that gets a
+      // client blocked. The list is short.
+      for (const f of targets) {
+        if (cancelled) return;
+        const occ = await fetchOccupancy(f.url).catch(() => null);
+        if (cancelled) return;
+        setOccupancy(prev => {
+          if (!occ) { const { [f.url]: _drop, ...rest } = prev; return rest; }
+          return { ...prev, [f.url]: occ };
+        });
+      }
+    };
+    void poll();
+    // 20s: fast enough that a freed radio is noticed while you are still looking at the
+    // list, slow enough not to be a nuisance to a server that is already busy serving.
+    const t = setInterval(poll, 20_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [favourites]);
+
   const renderItem = ({ item, index, getIndex, drag, isActive }: {
     item: ListItem; index?: number; getIndex?: () => number | undefined;
     drag?: () => void; isActive?: boolean;
@@ -1448,6 +1481,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </Text>
               </View>
               <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }} numberOfLines={1}>{fav.url}</Text>
+              {(() => {
+                // ★ IN USE, with a time when we can give one. "in use" alone leaves someone
+                // refreshing forever; "free in 4 min" tells them whether to wait or move on.
+                // ★ No badge at all when occupancy is UNKNOWN — silence is honest, a green
+                // "free" that then fails to connect is not.
+                const occ = occupancy[fav.url];
+                if (!occ || !occ.busy) return null;
+                const left = occ.freeInSec;
+                const txt = left > 60 ? `IN USE · free in ~${Math.ceil(left / 60)} min`
+                          : left >= 0 ? 'IN USE · free shortly'
+                          : 'IN USE';
+                return (
+                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: '#ffd479',
+                                 letterSpacing: 0.5, marginTop: 2 }}>
+                    {txt}{occ.admin ? '  ·  admin can override' : ''}
+                  </Text>
+                );
+              })()}
               {(() => {
                 const bits: string[] = [];
                 if (favSort === 'nearest') {

@@ -325,6 +325,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val adminPw    = if (opts.hasKey("adminPassword")) opts.getString("adminPassword") ?: "" else ""
         // 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt.
         val uncomp     = if (opts.hasKey("uncompressedAudio")) opts.getInt("uncompressedAudio") else 0
+        val limitMin   = if (opts.hasKey("sessionLimitMin")) opts.getInt("sessionLimitMin") else 0
         val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
         // Only needed so a CRASH-restored server re-advertises as the app would have.
         val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
@@ -341,6 +342,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerCompressAudio(compress)
         VibeLocalSDR.setVibeServerAdminSecret(adminPw)
         VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
+        VibeLocalSDR.setVibeServerSessionLimit(limitMin)
         VibeLocalSDR.setVibeServerWebEnabled(webSrv)
         VibeLocalSDR.setVibeServerLockedRate(lockedRate)
         VibeLocalSDR.setServeOnLan(true)
@@ -403,6 +405,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setVibeServerUncompressedAudio(mode: Double) {
         VibeLocalSDR.setVibeServerUncompressedAudio(mode.toInt())
+    }
+
+    @ReactMethod
+    fun setVibeServerSessionLimit(minutes: Double) {
+        VibeLocalSDR.setVibeServerSessionLimit(minutes.toInt())
     }
 
     /** Hand the web client's search its station list (JSON array), served at

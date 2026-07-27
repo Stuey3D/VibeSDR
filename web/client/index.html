@@ -105,6 +105,12 @@ html, body {
 }
 #rxName  { font-size: 0.95em; color: var(--amber); letter-spacing: 0.04em; }
 #rxWhere { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
+/* ★ The countdown earns attention only as it runs out — amber under two minutes, red under
+   thirty seconds. Steady grey the rest of the time, so a 30-minute session is not a clock
+   nagging you for 28 of them. */
+#rxTimeLeft { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
+#rxTimeLeft.warn { color: #ffd479; }
+#rxTimeLeft.crit { color: #ff8a7d; }
 
 /* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
 /* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,
@@ -1043,6 +1049,10 @@ select.btn { padding: 6px 8px; }
   <div id="rxBadge" hidden>
     <div id="rxName"></div>
     <div id="rxWhere"></div>
+    <!-- ★ Time remaining on a limited session, under the receiver's name and location because
+         that is where "whose radio is this" already lives. Hidden entirely when the server sets
+         no limit, which is every private receiver. -->
+    <div id="rxTimeLeft" hidden></div>
   </div>
 <!-- Decoder output box. Floats bottom-left above the control bar and PERSISTS
      until dismissed (OpenWebRX behaviour) — you keep listening and tuning while

@@ -137,6 +137,14 @@ export interface SpectrumCallbacks {
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   /** The server is already serving someone else — do not retry. */
   onBusy?: () => void;
+  /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
+  onSessionWarning?: (secs: number) => void;
+  /** The limit expired; we have been disconnected. `cooldown` = seconds before we may return. */
+  onSessionEnded?: (cooldown: number) => void;
+  /** Refused because we are still inside our cooldown. */
+  onCooldown?: (secs: number) => void;
+  /** The owner took the radio back using the admin password. */
+  onEvicted?: () => void;
   onRtt?:    (ms: number) => void;
   /** Bytes received on the spectrum socket — the BIGGER half of the link. */
   onBytes?:  (n: number) => void;
@@ -292,6 +300,30 @@ export class SpectrumClient {
         // server forever, which is the OWRX-style bad-neighbour behaviour we avoid elsewhere).
         this.refused = true;
         this.cb.onBusy?.();
+        break;
+      // ★★★ ALL THREE OF THESE SET `refused`, and that is the whole safety of the feature.
+      // Every one is the server DELIBERATELY turning us away, and the default 3s retry would
+      // hammer it forever — the same reconnect war that made takeover the wrong default for
+      // ordinary clients. A deliberate refusal must be terminal until the user acts.
+      case 'session_expired':
+        // Our time was up. Say so plainly, with how long before we may try again.
+        this.refused = true;
+        this.cb.onSessionEnded?.(Number(msg.cooldown) || 0);
+        break;
+      case 'cooldown':
+        // We came back too soon after a timeout.
+        this.refused = true;
+        this.cb.onCooldown?.(Number(msg.secs) || 0);
+        break;
+      case 'evicted':
+        // The owner took their radio back with the admin password. Not a fault, and not
+        // something to retry into.
+        this.refused = true;
+        this.cb.onEvicted?.();
+        break;
+      case 'session_warning':
+        // Still connected — this is a countdown, not a refusal. Do NOT set refused.
+        this.cb.onSessionWarning?.(Number(msg.secs) || 0);
         break;
       case 'device':
         // The server has lost (or regained) its radio. Without this the page just stops updating

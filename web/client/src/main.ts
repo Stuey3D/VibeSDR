@@ -392,6 +392,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onSummon: () => onSummoned(),
     onBusy: () => showBusy(),
+    onEvicted: () => showEvicted(),
+    onSessionEnded: (cd) => showSessionEnded(cd),
+    onCooldown: (secs) => showCooldown(secs),
+    onSessionWarning: (secs) => setTimeLeft(secs),
     onDevice: (present) => showDeviceBanner(present),
     onAdmin: (ok, refused) => {
       if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
@@ -1766,7 +1770,35 @@ function showDeviceBanner(present: boolean) {
  *  lands — so say so plainly and STOP (the client already suppressed its auto-reconnect). A full
  *  overlay, not a toast: nothing else on the page will work, and a dismissable banner would just
  *  invite the user to sit staring at a dead waterfall. */
-function showBusy() {
+function showBusy() { showRefusal('IN USE',
+  'This server is serving another listener. It handles one at a time.<br><br>' +
+  'Try again in a little while.'); }
+
+/** ★ The owner has taken their radio back. Not a fault, and worth saying so — being dropped
+ *  with no explanation is what makes people assume the software broke. */
+function showEvicted() { showRefusal('TAKEN OVER',
+  'The owner of this receiver has taken control using the admin password.<br><br>' +
+  'You can try again shortly.'); }
+
+/** ★★ The session limit. Say WHY it ended and WHEN they may return — a bare disconnect on a
+ *  public receiver reads as a crash, and the listener blames us rather than understanding they
+ *  had a share of a shared radio. */
+function showSessionEnded(cooldownSec: number) {
+  const m = Math.max(1, Math.round(cooldownSec / 60));
+  showRefusal('TIME UP',
+    'Your session on this shared receiver has ended, so someone else can have a turn.' +
+    `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`);
+}
+
+/** Refused because we came back before our cooldown finished. */
+function showCooldown(secs: number) {
+  const m = Math.max(1, Math.round(secs / 60));
+  showRefusal('PLEASE WAIT',
+    'You have just had a turn on this shared receiver.' +
+    `<br><br>Try again in about ${m} minute${m === 1 ? '' : 's'}.`);
+}
+
+function showRefusal(title: string, bodyHtml: string) {
   const id = 'busyOverlay';
   if (document.getElementById(id)) return;
   const el = document.createElement('div');
@@ -1777,9 +1809,8 @@ function showBusy() {
     'font:15px ui-monospace,monospace;color:#ffb833';
   el.innerHTML =
     '<div style="max-width:340px;padding:24px"><div style="font-size:20px;letter-spacing:4px;' +
-    'margin-bottom:12px">IN USE</div>' +
-    '<div style="opacity:0.8;line-height:1.5">This server is serving another listener. It handles ' +
-    'one at a time.<br><br>Try again in a little while.</div>' +
+    `margin-bottom:12px">${title}</div>` +
+    `<div style="opacity:0.8;line-height:1.5">${bodyHtml}</div>` +
     '<button id="busyRetry" style="margin-top:18px;background:none;border:1px solid rgba(255,180,50,0.5);' +
     'color:#ffb833;border-radius:6px;padding:8px 18px;font:13px ui-monospace,monospace;cursor:pointer">' +
     'Try again</button></div>';
@@ -2300,6 +2331,35 @@ function locLine(): string {
   // grid (nothing to qualify) or when it would just repeat the place name.
   const where = (country && !isGrid && country !== place) ? `${place}, ${country}` : place;
   return grid && !isGrid ? `${where} ${grid}` : where;
+}
+
+// ── Session countdown ────────────────────────────────────────────────────────
+// ★ The server sends a warning at two minutes and again at thirty seconds; the display ticks
+// LOCALLY in between. Sending a countdown frame every second would be a message per second per
+// listener for a number the client can work out for itself.
+// ★ It also means the clock keeps running if a warning frame is lost — the deadline is what we
+// hold, not the remaining seconds.
+let sessionDeadline = 0;      // epoch ms, 0 = no limit
+let sessionTicker: ReturnType<typeof setInterval> | null = null;
+
+function setTimeLeft(secs: number) {
+  sessionDeadline = Date.now() + secs * 1000;
+  if (!sessionTicker) sessionTicker = setInterval(paintTimeLeft, 1000);
+  paintTimeLeft();
+}
+
+function paintTimeLeft() {
+  const el = document.getElementById('rxTimeLeft');
+  if (!el) return;
+  if (!sessionDeadline) { el.hidden = true; return; }
+  const left = Math.max(0, Math.round((sessionDeadline - Date.now()) / 1000));
+  const mm = Math.floor(left / 60), ss = left % 60;
+  // ★ Say what the clock IS. A bare "1:47" over a waterfall is a mystery; people assume it is
+  // a recording timer or the station's clock.
+  el.textContent = `Your turn ends in ${mm}:${String(ss).padStart(2, '0')}`;
+  el.className = left <= 30 ? 'crit' : left <= 120 ? 'warn' : '';
+  el.hidden = false;
+  $('rxBadge').hidden = false;   // the badge may be empty if the owner set no name
 }
 
 async function loadServerLocation(host: string) {

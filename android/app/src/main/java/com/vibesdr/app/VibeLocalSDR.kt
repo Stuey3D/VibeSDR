@@ -135,6 +135,8 @@ object VibeLocalSDR {
     fun setVibeServerAdminSecret(secret: String) { ensureLoaded(); nativeSetVibeServerAdminSecret(secret) }
     /** 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt. */
     fun setVibeServerUncompressedAudio(mode: Int) { ensureLoaded(); nativeSetVibeServerUncompressedAudio(mode) }
+    /** Per-listener time limit, minutes. 0 = unlimited. Loopback + admin sessions exempt. */
+    fun setVibeServerSessionLimit(minutes: Int) { ensureLoaded(); nativeSetVibeServerSessionLimit(minutes) }
     fun setVibeServerCompressAudio(on: Boolean) { ensureLoaded(); nativeSetVibeServerCompressAudio(on) }
     /** Serve the browser client at GET /. Off = app-only: a browser gets 403. */
     fun setVibeServerWebEnabled(on: Boolean) { ensureLoaded(); nativeSetVibeServerWebEnabled(on) }
@@ -173,6 +175,7 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerCompressAudio(on: Boolean)
     private external fun nativeSetVibeServerAdminSecret(secret: String)
     private external fun nativeSetVibeServerUncompressedAudio(mode: Int)
+    private external fun nativeSetVibeServerSessionLimit(minutes: Int)
     private external fun nativeSetStationsJson(json: String)
     private external fun nativeSetLocationJson(json: String)
 

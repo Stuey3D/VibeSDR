@@ -11,7 +11,7 @@ import { themeFor } from '../constants/theme';
 import { getServerName, saveServerName } from '../services/rtlTcpServer';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio,
-  setVibeServerAdminSecret, setVibeServerUncompressedAudio,
+  setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
@@ -48,7 +48,7 @@ const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
   webServer: 'vs_webserver', autoRestore: 'vs_autorestore',
-  adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed',
+  adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
 };
 
 export default function ServerModeScreen({ navigation, route }: Props) {
@@ -69,6 +69,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [showAdminPw, setShowAdminPw] = useState(false);
   // 0 = off, 1 = listener's choice, 2 = compatibility only.
   const [uncomp, setUncomp]       = useState<0 | 1 | 2>(0);
+  // ★ Per-listener time limit, minutes. 0 = unlimited — right for a private receiver.
+  const [limitMin, setLimitMin]   = useState(0);
   const [webServer, setWebServer] = useState(true);
   const [autoRestore, setAutoRestore] = useState(true);
   const [bmCount, setBmCount] = useState<number | null>(null);
@@ -92,13 +94,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
-        const [p, a, pm, sp, r, fp, cp, ws, ar, apw, unc] = await Promise.all([
+        const [p, a, pm, sp, r, fp, cp, ws, ar, apw, unc, lim] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
           AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
           AsyncStorage.getItem(K.autoRestore),
           AsyncStorage.getItem(K.adminPw), AsyncStorage.getItem(K.uncomp),
+          AsyncStorage.getItem(K.limitMin),
         ]);
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
@@ -106,6 +109,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (ar != null) setAutoRestore(ar !== '0');
         if (apw != null) setAdminPw(apw);
         if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
+        if (lim != null) setLimitMin(Number(lim) || 0);
         setLocMode(await getServerLocationMode());
         setLocCity((await getManualServerLocation())?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
@@ -244,7 +248,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.fps, fps], [K.compress, compress ? '1' : '0'],
       [K.webServer, webServer ? '1' : '0'],
       [K.autoRestore, autoRestore ? '1' : '0'],
-      [K.adminPw, adminPw], [K.uncomp, String(uncomp)],
+      [K.adminPw, adminPw], [K.uncomp, String(uncomp)], [K.limitMin, String(limitMin)],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -279,6 +283,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         compressAudio: compress,
         adminPassword: adminPw,
         uncompressedAudio: uncomp,
+        sessionLimitMin: limitMin,
         webServer,
         advertise,
         autoRestore,
@@ -445,8 +450,32 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
         {proto === 'vibeserver' ? (
           <>
+            {/* ★★ SECURITY — the PIN and the admin password TOGETHER, because they are two
+                secrets with two different jobs and having them in separate parts of the screen
+                invited the reading that one replaces the other (Stuart, 2026-07-27).
+                The distinction in one line each: the PIN is the DOOR, the password is the
+                CONTROLS INSIDE. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>SECURITY</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, fontSize: 14 }]}>
+                Two separate protections
+              </Text>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                <Text style={{ color: C.gold }}>PIN — protects the CONNECTION.</Text>{'\n'}
+                Decides who may connect and listen at all. Without it, anyone who can reach this
+                server can use the radio.{'\n\n'}
+                <Text style={{ color: C.gold }}>Password — protects the SERVER and HARDWARE.</Text>{'\n'}
+                Anyone already listening can still tune and set the gain — that is what a
+                receiver is for. The password guards the few settings that can damage equipment
+                or leave the radio broken for the next person: bias-T, direct sampling and
+                calibration.{'\n\n'}
+                They are independent on purpose. A public receiver has NO PIN so everyone can
+                listen, and a password so no visitor can put DC on the feedline.
+              </Text>
+            </View>
+
             {/* PIN */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PIN</Text>
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PIN — WHO MAY CONNECT</Text>
             <View style={styles.pillRow}>
               {(['random', 'custom', 'off'] as PinMode[]).map(m => (
                 <Pill key={m} C={C} F={F} active={pinMode === m}
@@ -624,8 +653,28 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               your UPLINK, and listening on the same device never touches it.
             </Text>
 
+            {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>
+            {([[0, 'Unlimited'], [15, '15 minutes'], [30, '30 minutes'],
+               [60, '1 hour'], [120, '2 hours']] as const).map(([v, label]) => (
+              <OptRow key={v} C={C} F={F} active={limitMin === v} label={label}
+                onPress={() => { setLimitMin(v); AsyncStorage.setItem(K.limitMin, String(v));
+                                 if (runningRef.current) setVibeServerSessionLimit(v); }} />
+            ))}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              For a receiver you have put on the internet. This server serves ONE listener at a
+              time, so without a limit the first person to connect can hold it all evening and
+              everyone else just sees IN USE.{'\n\n'}
+              A listener is warned at two minutes and again at thirty seconds, then disconnected
+              with an explanation. Their address is then held off for two minutes — otherwise
+              their client would simply reconnect and carry on, and the limit would achieve
+              nothing.{'\n\n'}
+              You are not affected: listening on this phone is exempt, and so is any session
+              unlocked with the admin password. Leave it Unlimited for a private receiver.
+            </Text>
+
             {/* ★★ ADMIN PASSWORD — control, not access. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ADMIN PASSWORD</Text>
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PASSWORD — WHO MAY CHANGE THINGS</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <TextInput value={adminPw}
                 onChangeText={(v) => { setAdminPw(v); AsyncStorage.setItem(K.adminPw, v);

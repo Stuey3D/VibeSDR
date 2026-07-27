@@ -160,6 +160,12 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerUncompressedAudio(JNIEnv*, 
     vibe::LocalSdrShim::setVibeServerUncompressedAudio((int)mode);
 }
 
+// Per-listener time limit, minutes. 0 = unlimited. Loopback and admin sessions exempt.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSessionLimit(JNIEnv*, jobject, jint minutes) {
+    vibe::LocalSdrShim::setVibeServerSessionLimit((int)minutes);
+}
+
 // VibeServer compatibility limits. <=0 = no cap / server default. BEFORE start().
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLimits(JNIEnv*, jobject,

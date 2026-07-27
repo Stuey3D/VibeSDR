@@ -50,6 +50,11 @@ typedef struct {
      *  ★ NULL/"" = no admin password, and then nothing is protected — a host who has not asked
      *  for this must not find controls mysteriously refusing to work. */
     const char* adminPassword;
+    /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). Only meaningful on a
+     *  PUBLIC receiver: one client per radio makes the server a queue of one, so without a
+     *  limit the first listener holds it all evening. Loopback and admin sessions are exempt,
+     *  and an expired listener is held on a short cooldown so they cannot simply retake it. */
+    int sessionLimitMin;
     int    port;           // 0 = first free in 48000-48049; otherwise this port or fail
     double maxBandwidthHz; // 0 = uncapped   ─┐ operator ceilings
     double maxFftRate;     // 0 = default    ─┘

@@ -773,6 +773,22 @@ static std::atomic<int>    g_vsUncompressedAudio{0};   // VsUncompressedAudio
 // for this should not find controls mysteriously refusing to work.
 static std::mutex          g_vsAdminMtx;
 static std::string         g_vsAdminSecret;
+/** ★★ SESSION TIME LIMIT, minutes. 0 = unlimited (the default, and what every private
+ *  receiver wants). Exists because one client per radio plus one radio per server means a
+ *  PUBLIC VibeServer is a queue of one, and without a limit the first listener holds it all
+ *  evening (Stuart, 2026-07-27).
+ *  ★ LOOPBACK IS EXEMPT, always: the host listening on their own machine is not queueing for
+ *  anything, and timing them out of their own radio would be absurd. Admin sessions are
+ *  exempt too — the owner should not be able to lock themselves out. */
+static std::atomic<int>     g_vsSessionLimitMin{0};
+/** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
+ *  plain disconnect would be a blip: the same listener would retake the free radio within
+ *  seconds and carry on, and the limit would be decorative. After a timeout the address is
+ *  refused for this long, which is the window in which somebody else can actually get in.
+ *  ★ Keyed on IP, chosen deliberately over the session id: the id is CLIENT-GENERATED, so a
+ *  cooldown on it is advisory at best — clear it and you are back in. The cost is a household
+ *  behind one router shares a cooldown, which is the accepted trade (Stuart, 2026-07-27). */
+static constexpr int        kSessionCooldownSec = 120;
 
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
@@ -1345,6 +1361,16 @@ struct LocalSdrShim::Impl {
     // The single occupant's session id (empty = free). Guarded by clientMtx. A client's spectrum +
     // audio sockets share this id; a second client is refused while it is held. See acceptWs.
     std::string occupantSession;
+    /** When the current occupant claimed the slot (seconds, monotonic). 0 = nobody. Guarded by
+     *  clientMtx alongside occupantSession — one lock for one piece of state. */
+    double occupantSince = 0;
+    /** The occupant's address, so a timeout can put THAT address on cooldown. */
+    std::string occupantAddr;
+    /** Warnings already sent this session, so each fires once: bit 0 = 2 min, bit 1 = 30 s.
+     *  ★ A limit that ends a session with no warning reads as a crash. */
+    int occupantWarned = 0;
+    /** address -> monotonic time the cooldown ends. Pruned lazily on lookup. */
+    std::map<std::string, double> cooldownUntil;
     std::atomic<uint64_t> frameCounter{0};
 
     std::mutex sendMtx; // serialises all WS writes (both directions are split, sends here)
@@ -1482,6 +1508,7 @@ struct LocalSdrShim::Impl {
             // the cloud tighten or spread as you tune. ~5 Hz, and only while the decoder is
             // open, so an ordinary listener never pays for it.
             if (rdsxOn.load() && n % 2 == 0) sendRdsExt(sock);
+            if (n % 2 == 0) enforceSessionLimit();
         }
         // Tuned-channel power for squelch (peak dB in the demod passband).
         {
@@ -2677,9 +2704,13 @@ struct LocalSdrShim::Impl {
                 wantBins = bq.empty() ? OUT_BINS : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
             }
+            // ★ The admin password may ride the connect URL, because an override has to be
+            // decided BEFORE the slot is claimed — the existing admin_unlock message arrives
+            // over a socket the client cannot open while the server is telling it "busy".
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
                      queryParam(reqLine, "codec") == "opus",
-                     queryParam(reqLine, "channels") == "1", wantBins);
+                     queryParam(reqLine, "channels") == "1", wantBins,
+                     urlDecode(queryParam(reqLine, "vs_admin")));
         } else if (reqLine.find("/connection") != std::string::npos) {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
@@ -2744,7 +2775,18 @@ struct LocalSdrShim::Impl {
                              + ",\"uncompressed\":\""
                              + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
-                             + ",\"admin\":" + (adminSet ? "true" : "false") + "}";
+                             + ",\"admin\":" + (adminSet ? "true" : "false")
+                             // ★★ OCCUPANCY IN THE IDENTITY RESPONSE. The picker already fetches
+                             // this for every known server, so an IN USE badge costs nothing
+                             // extra — and a public receiver that is one-client-at-a-time has to
+                             // say so BEFORE someone taps it, or every busy server looks broken.
+                             + ",\"busy\":" + (LocalSdrShim::instance().isBusy() ? "true" : "false")
+                             + ",\"limitMin\":" + std::to_string(g_vsSessionLimitMin.load())
+                             // Seconds the current listener has left, -1 = no limit / free. Lets
+                             // the picker say "free in 4 min" instead of a bare "in use", which
+                             // is the difference between waiting and giving up.
+                             + ",\"freeInSec\":" + std::to_string(LocalSdrShim::instance().occupantSecsLeft())
+                             + "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
@@ -2914,7 +2956,7 @@ struct LocalSdrShim::Impl {
 
     void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
                   const std::string& session, bool wantsOpus, bool forceMono = false,
-                  int wantBins = 0) {
+                  int wantBins = 0, const std::string& adminToken = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -2937,10 +2979,58 @@ struct LocalSdrShim::Impl {
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             const std::string me = session.empty() ? ("anon:" + sock->peerAddress()) : session;
+
+            // ★★ COOLDOWN FIRST — before occupancy. Someone serving a cooldown must be refused
+            // even when the radio is FREE; that is the entire point of it. Checking occupancy
+            // first would let them straight back in the instant their own timeout freed the slot.
+            // ★ Loopback is never on cooldown: it is never timed out in the first place.
+            if (!isLoopback(sock->peerAddress())) {
+                const double now = Impl::nowSecs();
+                const auto it = cooldownUntil.find(sock->peerAddress());
+                if (it != cooldownUntil.end()) {
+                    if (it->second > now) {
+                        const int left = (int)(it->second - now + 0.5);
+                        LOGI("%s WS refused — cooling down %ds", isAudio ? "audio" : "spectrum", left);
+                        const std::string m = "{\"type\":\"cooldown\",\"secs\":"
+                                            + std::to_string(left) + "}";
+                        sendWs(sock, 0x1, (const uint8_t*)m.data(), m.size());
+                        sock->close();
+                        return;
+                    }
+                    cooldownUntil.erase(it);   // expired — prune on the way past
+                }
+            }
+
             const bool occupied = !occupantSession.empty()
                 && occupantSession != me
                 && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()));
-            if (occupied) {
+
+            // ★★★ ADMIN OVERRIDE — the ONE case where takeover is allowed, and it must not
+            // restart the reconnect war that made takeover the wrong default everywhere else.
+            // Plain takeover failed because every client auto-reconnects on close, so two of
+            // them displaced each other forever. The difference here is the DISPLACED client is
+            // told WHY ("evicted"), which the clients treat as terminal and do not retry — and
+            // an admin arriving is a deliberate, rare act by the owner, not a race between two
+            // equal listeners.
+            bool override_ = false;
+            if (occupied && !adminToken.empty()) {
+                std::string secret;
+                { std::lock_guard<std::mutex> al(g_vsAdminMtx); secret = g_vsAdminSecret; }
+                override_ = !secret.empty() && adminToken == secret;
+                if (override_) {
+                    LOGI("admin override — evicting the current occupant");
+                    static const char* kEvict = "{\"type\":\"evicted\"}";
+                    if (specClient  && specClient->isOpen())
+                        { sendWs(specClient,  0x1, (const uint8_t*)kEvict, strlen(kEvict)); specClient->close(); }
+                    if (audioClient && audioClient->isOpen())
+                        { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); audioClient->close(); }
+                    occupantSession.clear();
+                    // ★ NOT put on cooldown. They were evicted by the owner, not caught
+                    // overstaying — punishing them for someone else's decision would be wrong.
+                }
+            }
+
+            if (occupied && !override_) {
                 // Tell them plainly, as a WS text frame (we have already upgraded), then close. The
                 // client shows "in use, try again later" and must NOT retry-storm — see the web
                 // client's handling of type:"busy".
@@ -2949,6 +3039,15 @@ struct LocalSdrShim::Impl {
                        (const uint8_t*)"{\"type\":\"busy\"}", 15);
                 sock->close();
                 return;
+            }
+            // ★ Start the clock on a NEW occupant only. A client opens two sockets (spectrum
+            // and audio) and reconnects across blips with the same id — restarting the timer
+            // on each would make the limit unenforceable, and resetting it on the second
+            // socket of the same session would be a quiet bug nobody would ever see.
+            if (occupantSession != me) {
+                occupantSince   = Impl::nowSecs();
+                occupantWarned  = 0;
+                occupantAddr    = sock->peerAddress();
             }
             occupantSession = me;   // claim (or re-affirm) the slot for this client
             // ★ A NEW CLIENT IS NOT THE ADMIN. Clearing here means an unlock cannot outlive the
@@ -3590,6 +3689,56 @@ struct LocalSdrShim::Impl {
         sendText(sock, j);
     }
 
+    /** ★★ THE SESSION TIME LIMIT. Warn, then evict, then hold the address on cooldown.
+     *
+     *  ★ EXEMPTIONS ARE NOT POLITENESS, THEY ARE CORRECTNESS. Loopback is the host listening on
+     *  their own machine — they are not queueing for anything, and the limit rations a queue.
+     *  An admin session is the owner, who must not be able to lock themselves out of their own
+     *  receiver from across the house.
+     *
+     *  ★ WARN BEFORE ENDING IT. A session that simply stops reads as a crash, and the listener
+     *  blames the software rather than understanding they had a share of a shared radio. */
+    void enforceSessionLimit() {
+        const int limitMin = g_vsSessionLimitMin.load();
+        if (limitMin <= 0) return;                       // unlimited: the default
+        if (adminOk.load()) return;                      // the owner is exempt
+
+        std::shared_ptr<net::Socket> spec, aud;
+        std::string addr; double since; int warned;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          if (occupantSession.empty() || occupantSince <= 0) return;
+          spec = specClient; aud = audioClient;
+          addr = occupantAddr; since = occupantSince; warned = occupantWarned; }
+        if (addr.empty() || isLoopback(addr)) return;    // the host's own listening
+
+        const double elapsed = Impl::nowSecs() - since;
+        const double left    = (double)limitMin * 60.0 - elapsed;
+
+        if (left > 0) {
+            // Two warnings, each once: enough notice to finish listening to something, then a
+            // final one. Sent to the spectrum socket, which every client holds.
+            const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
+            if (stage > 0 && !(warned & stage)) {
+                { std::lock_guard<std::mutex> lk(clientMtx); occupantWarned |= stage; }
+                const std::string m = "{\"type\":\"session_warning\",\"secs\":"
+                                    + std::to_string((int)(left + 0.5)) + "}";
+                if (spec && spec->isOpen()) sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size());
+            }
+            return;
+        }
+
+        LOGI("session limit reached (%d min) — ending %s", limitMin, addr.c_str());
+        const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
+                            + std::to_string(kSessionCooldownSec) + "}";
+        // ★ TELL THEM FIRST, THEN CLOSE. The message is what stops the client treating this as
+        // a dropped link and retry-storming a server that is deliberately turning it away.
+        if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); spec->close(); }
+        if (aud  && aud->isOpen())  { aud->close(); }
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
+          occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear(); }
+    }
+
     /** Tell every connected client whether we currently have a radio. They draw the message. */
     void notifyDeviceState() {
         std::shared_ptr<net::Socket> sock;
@@ -3961,6 +4110,30 @@ void LocalSdrShim::setVibeServerAdminSecret(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsAdminMtx);
     g_vsAdminSecret = secret;
 }
+
+void LocalSdrShim::setVibeServerSessionLimit(int minutes) {
+    g_vsSessionLimitMin.store(minutes > 0 ? minutes : 0);
+}
+
+bool LocalSdrShim::isBusy() const {
+    if (!p) return false;
+    std::lock_guard<std::mutex> lk(p->clientMtx);
+    return !p->occupantSession.empty()
+        && ((p->specClient && p->specClient->isOpen())
+         || (p->audioClient && p->audioClient->isOpen()));
+}
+
+int LocalSdrShim::occupantSecsLeft() const {
+    const int limitMin = g_vsSessionLimitMin.load();
+    if (!p || limitMin <= 0) return -1;
+    if (p->adminOk.load()) return -1;                    // owner: exempt, so no countdown
+    std::lock_guard<std::mutex> lk(p->clientMtx);
+    if (p->occupantSession.empty() || p->occupantSince <= 0) return -1;
+    if (p->occupantAddr.empty() || isLoopback(p->occupantAddr)) return -1;
+    const double left = (double)limitMin * 60.0 - (Impl::nowSecs() - p->occupantSince);
+    return left > 0 ? (int)(left + 0.5) : 0;
+}
+
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
@@ -4128,10 +4301,6 @@ static const int kR820tGains[] = {
     297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496
 };
 
-static double nowSecsStatic() {
-    using namespace std::chrono;
-    return duration<double>(steady_clock::now().time_since_epoch()).count();
-}
 
 /**
  * Start on an SDRplay RSP.
@@ -4182,7 +4351,7 @@ int LocalSdrShim::startAirspyHfCommon(int index, int fd,
     impl->ahf = std::make_unique<vibe::AirspyHfSource>();
     Impl* self = impl;
     impl->ahf->setSink([self](const float* iq, int n) {
-        self->lastIqAt.store(nowSecsStatic(), std::memory_order_relaxed);
+        self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
     });
     const bool opened = (fd >= 0)
@@ -4255,7 +4424,7 @@ int LocalSdrShim::startSdrplay(int index,
     impl->sdrp = std::make_unique<vibe::SdrplaySource>();
     Impl* self = impl;
     impl->sdrp->setSink([self](const int16_t* iq, int n) {
-        self->lastIqAt.store(nowSecsStatic(), std::memory_order_relaxed);
+        self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         self->enqueueIqInt16(iq, n, /*blockIfFull=*/false);
     });
     if (!impl->sdrp->open(index, sampleRate, centerFreq, gainTenthDb, err)) {

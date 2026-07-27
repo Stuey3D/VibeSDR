@@ -69,6 +69,16 @@ public:
      *  Independent of the PIN on purpose: a public receiver may be open to all listeners and
      *  still refuse a visitor putting DC on the feedline. Empty = nothing is protected. */
     static void setVibeServerAdminSecret(const std::string& secret);
+    /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). For a PUBLIC receiver,
+     *  where one client per radio makes the server a queue of one. Loopback and admin sessions
+     *  are exempt. On expiry the listener is told, disconnected, and their address held on a
+     *  short cooldown — without that they would simply reconnect and carry on. */
+    static void setVibeServerSessionLimit(int minutes);
+    /** Is a listener currently holding the radio? Used by the identity endpoint. */
+    bool isBusy() const;
+    /** Seconds until the current listener's limit expires; -1 when there is no limit,
+     *  nobody is listening, or the listener is exempt (loopback / admin). */
+    int  occupantSecsLeft() const;
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */

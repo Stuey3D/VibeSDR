@@ -46,7 +46,11 @@ export type VibeServerConfig = {
   adminPassword?: string;
   /** 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
    *  ★ Loopback is OUTSIDE this setting entirely — it rations the owner's uplink. */
-  uncompressedAudio?: 0 | 1 | 2;  // default true
+  uncompressedAudio?: 0 | 1 | 2;
+  /** ★ Per-listener time limit, MINUTES. 0 = unlimited (default, and right for a private
+   *  receiver). Loopback and admin sessions are exempt; an expired listener is held on a short
+   *  cooldown, without which their client would simply reconnect and carry on. */
+  sessionLimitMin?: number;  // default true
   /** Serve the browser client at GET /. Off = only the VibeSDR app can connect,
    *  so a stranger can't stumble in from a URL. Default true. */
   webServer?: boolean;
@@ -95,6 +99,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     compressAudio: cfg.compressAudio ?? true,
     adminPassword: cfg.adminPassword ?? '',
     uncompressedAudio: cfg.uncompressedAudio ?? 0,
+    sessionLimitMin: cfg.sessionLimitMin ?? 0,
     webServer: cfg.webServer ?? true,
     lockedRate: cfg.lockedRate ?? 0,
     advertise: cfg.advertise ?? true,
@@ -458,6 +463,9 @@ export function setVibeServerAdminSecret(secret: string): void {
 }
 export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
   try { Local?.setVibeServerUncompressedAudio?.(mode); } catch {}
+}
+export function setVibeServerSessionLimit(minutes: number): void {
+  try { Local?.setVibeServerSessionLimit?.(minutes); } catch {}
 }
 
 // A fresh random 6-digit default PIN. The user can keep it, set their own, or

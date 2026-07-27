@@ -187,6 +187,9 @@ final class Server: ObservableObject {
     /// receiver is usually open to every listener and must still refuse a stranger switching
     /// the bias-T on.
     @AppStorage("adminPassword") var adminPassword = ""
+    /// ★ Per-listener time limit, minutes. 0 = unlimited, and the right answer for a private
+    /// receiver. See the help text beside the picker.
+    @AppStorage("sessionLimitMin") var sessionLimitMin = 0
     @AppStorage("port")     var wantedPort = 0        // 0 = first free 48000-48049
     @AppStorage("serveWeb") var serveWeb   = true
     /// Owner policy — see the Settings picker for the reasoning. Off by default:
@@ -444,6 +447,7 @@ final class Server: ObservableObject {
         starting = true
         lastError = nil
         let modeS = mode, pinS = pin, admS = adminPassword
+        let limitS = sessionLimitMin
         DispatchQueue.global(qos: .userInitiated).async {
             var cfg2 = cfg
             var port2 = -1
@@ -455,6 +459,7 @@ final class Server: ObservableObject {
                     cfg2.mode = modePtr
                     cfg2.pin  = pinPtr
                     cfg2.adminPassword = admPtr
+                    cfg2.sessionLimitMin = Int32(limitS)
                     cfg2.locationJson = locJson.isEmpty ? nil : locPtr
                     var err = [CChar](repeating: 0, count: 256)
                     port2 = Int(vs_start(&cfg2, &err, 256))
@@ -1058,6 +1063,20 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 // ★ SecureField, not TextField. It is a password, and a settings pane is exactly where
                 // someone reads over your shoulder (Stuart, 2026-07-27).
+                // ★★ SECURITY, as ONE section. Two secrets with two different jobs; kept
+                // apart on the screen, they invited the reading that one replaces the other
+                // (Stuart, 2026-07-27). PIN = the door. Password = the controls inside.
+                Text("SECURITY").font(.headline).padding(.top, 6)
+                Text("Two separate protections, and they are independent on purpose.\n\n"
+                   + "PIN — PROTECTS THE CONNECTION. Decides who may connect and listen at all. "
+                   + "Without it, anyone who can reach this server can use the radio.\n\n"
+                   + "PASSWORD — PROTECTS THE SERVER AND HARDWARE. Anyone already listening can "
+                   + "still tune and set the gain; that is what a receiver is for. The password "
+                   + "guards the few settings that can damage equipment or leave the radio "
+                   + "broken for the next person: bias-T, direct sampling and calibration.\n\n"
+                   + "A public receiver typically has NO PIN, so everyone can listen — and a "
+                   + "password, so no visitor can put DC on your feedline.")
+                    .font(.caption).foregroundStyle(.secondary)
                 SecureField("Admin password", text: $server.adminPassword,
                             prompt: Text("Not set — nothing is protected"))
                 Text("A SECOND password, for a different job. The PIN decides who may listen; "
@@ -1074,6 +1093,27 @@ struct SettingsView: View {
                    + "Leave it blank and nothing is protected. Set it, and listeners see those "
                    + "controls locked with a box to unlock them — which is how YOU change them "
                    + "on your own server from anywhere.")
+                    .font(.caption).foregroundStyle(.secondary)
+                // ★★ THE TIME LIMIT. Only earns its place on a PUBLIC receiver, which is
+                // why the default is Unlimited and the help says plainly when to leave it alone.
+                Picker("Time limit per listener", selection: $server.sessionLimitMin) {
+                    Text("Unlimited").tag(0)
+                    Text("15 minutes").tag(15)
+                    Text("30 minutes").tag(30)
+                    Text("45 minutes").tag(45)
+                    Text("1 hour").tag(60)
+                    Text("2 hours").tag(120)
+                }
+                Text("For a receiver you have put on the internet. This server serves ONE "
+                   + "listener at a time, so without a limit the first person to connect can "
+                   + "hold it all evening and everyone else just sees IN USE.\n\n"
+                   + "A listener is warned at two minutes and again at thirty seconds, then "
+                   + "disconnected with an explanation. Their address is then held off for two "
+                   + "minutes — otherwise their client would simply reconnect and carry on, and "
+                   + "the limit would achieve nothing.\n\n"
+                   + "YOU are not affected: listening on this Mac is exempt, and so is any "
+                   + "session unlocked with the admin password. Leave it Unlimited for a private "
+                   + "receiver.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
                 Picker("Uncompressed audio", selection: $server.uncompressedAudio) {
