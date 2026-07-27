@@ -193,8 +193,21 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
 }
 
 float RdsDemod::rdsDeviationKHz() const {
-    // Complex baseband RMS → peak equivalent (×√2), on the MPX's ±1 = ±75 kHz scale.
-    return rdsRms_ * 1.41421356f * 75.0f;
+    // ★★ CREST FACTOR, NOT √2. rdsRms_ is a smoothed MEAN OF THE ENVELOPE (see process()),
+    // not an RMS and not a sinusoid, so the sinusoid's √2 RMS→peak conversion that used to
+    // sit here was simply the wrong constant for the quantity — it under-read by ~7%.
+    // What we need is the peak/mean ratio of a spec-shaped biphase envelope after OUR own
+    // ±2.4 kHz baseband filter. That depends on the filter, so there is no closed form:
+    // measured by simulation (tools/rdsdev_cal) at 1.520, stable to ±0.2% across every
+    // channel rate from 192 to 320 kHz, which confirms it is a waveform property.
+    // ★ KNOWN REMAINING ERROR, ~1.3 dB: against HansVanEijsden's Pira analyser over six
+    // stations we still read ~14% low after this fix. That residual is NOT in here — it
+    // looks like genuine subcarrier loss in the WFM channel filter (pipeline.cpp chHalf
+    // = 100 kHz clips the FM sidebands, which attenuates the TOP of the MPX while leaving
+    // the 19 kHz pilot exact — matching the evidence that pilot deviation agrees on 6/6
+    // while RDS is low on 6/6). Fix that at source; do NOT absorb it into this constant,
+    // because if it is real we are also losing that much RDS decode margin.
+    return rdsRms_ * 1.520f * 75.0f;
 }
 
 float RdsDemod::pilotPhaseCoherence() const {
@@ -208,9 +221,20 @@ float RdsDemod::pilotPhaseDeg() const {
     const float m = std::sqrt(phCos2_ * phCos2_ + phSin2_ * phSin2_);
     if (m < 1e-9f) return -1.0f;
     float deg = 0.5f * std::atan2(phSin2_, phCos2_) * 180.0f / (float)M_PI;
-    // Modulo 180 into [0,180): the ambiguity is inherent to BPSK, and 0-vs-90 survives it.
+    // Modulo 180 into [0,180): the ambiguity is inherent to BPSK.
     while (deg < 0.0f)    deg += 180.0f;
     while (deg >= 180.0f) deg -= 180.0f;
+    // ★★ THEN FOLD TO [0,90] — the quantity is an unsigned ANGULAR DISTANCE, and a
+    // subcarrier at -8 degrees is 8 degrees out, not 172. Reporting the raw [0,180) value
+    // made every station read as its own reflection: 8->172, 45->131, 2->174.
+    // ★ Why it survived: the two cases anyone checks against are the two the bug cannot
+    // touch. At 0 the reflection is 180 (still "near 0 mod 180") and at 90 the two
+    // branches COINCIDE — so a correctly-phased station and a quadrature station both
+    // read right, and only the faults in between were wrong. Confirmed against
+    // HansVanEijsden's Pira analyser over six stations (2026-07-27): our 89 vs its 90 on
+    // quadrature Oost is precisely the case that proves nothing, and was what made this
+    // look correct for a month.
+    if (deg > 90.0f) deg = 180.0f - deg;
     return deg;
 }
 

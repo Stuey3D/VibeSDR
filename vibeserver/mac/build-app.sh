@@ -33,8 +33,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>        <string>VibeServer</string>
   <key>CFBundleIconFile</key>          <string>AppIcon</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.4.0</string>
-  <key>CFBundleVersion</key>           <string>15</string>
+  <key>CFBundleShortVersionString</key><string>0.4.1</string>
+  <key>CFBundleVersion</key>           <string>16</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
@@ -42,6 +42,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
        system prompt be the user's first experience of the app. -->
   <key>NSLocalNetworkUsageDescription</key>
   <string>VibeServer shares this Mac's radio with your phone, watch and browser on your local network.</string>
+  <!-- Optional, and only ever on an explicit button press: it fills in the receiver's Maidenhead
+       LOCATOR (a square a few km across), never exact published coordinates. Listeners need a
+       rough position for distances, bearings and the band plan's ITU region. -->
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Fills in this receiver's approximate location — a map square a few kilometres across — so listeners can see distances and bearings to the stations they hear. Your exact position is never published.</string>
   <!-- App Transport Security blocks cleartext HTTP by default, which silently killed the EiBi
        download — eibispace.de serves the schedule over plain http only (no https). Scope the
        exception to that one domain rather than allowing arbitrary loads; everything else stays
@@ -87,6 +92,7 @@ swiftc \
   $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" \
   -lc++ \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
+  -framework CoreLocation \
   -o "$APP/Contents/MacOS/VibeServer"
 
 # The web client the server hands to browsers is baked into the core, so there is nothing to copy.

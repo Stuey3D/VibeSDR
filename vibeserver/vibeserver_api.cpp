@@ -53,7 +53,7 @@ void vs_default_config(VsConfig* cfg) {
     cfg->lockedRate     = 0;
     cfg->serveWebClient = true;
     cfg->forceIdleSaver = false;
-    cfg->allowUncompressedAudio = false;   // owner's uplink is not a client's to spend
+    cfg->uncompressedAudio = VS_UNCOMP_OFF;  // owner's uplink is not a client's to spend
 }
 
 int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
@@ -67,7 +67,7 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     LocalSdrShim::setVibeServerLockedRate(cfg->lockedRate);
     LocalSdrShim::setVibeServerWebEnabled(cfg->serveWebClient);
     LocalSdrShim::setVibeServerForceIdleSaver(cfg->forceIdleSaver);
-    LocalSdrShim::setVibeServerAllowUncompressedAudio(cfg->allowUncompressedAudio);
+    LocalSdrShim::setVibeServerUncompressedAudio(cfg->uncompressedAudio);
     if (cfg->locationJson && *cfg->locationJson)
         LocalSdrShim::setLocationJson(cfg->locationJson);
 

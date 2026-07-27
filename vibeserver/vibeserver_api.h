@@ -15,6 +15,21 @@
 extern "C" {
 #endif
 
+/** ★ How a NETWORKED listener may get raw PCM instead of Opus. ★★ THIS SETTING DOES NOT
+ *  APPLY TO LOOPBACK AT ALL: the host's own browser ALWAYS gets uncompressed audio, in
+ *  every mode including OFF. Every reason to compress is a bandwidth reason, and a client
+ *  on 127.0.0.1 crosses no network — so there is nothing for the operator to ration and
+ *  nothing for this enum to decide. Anything with a network hop, LAN included, obeys it.
+ *  ★ The distinction between CHOICE and COMPAT is who decides, not what is possible: both
+ *  serve raw PCM, but only CHOICE puts a control in front of the listener. COMPAT exists so
+ *  an operator can keep the safety net for old browsers WITHOUT advertising a 187 KB/s
+ *  option to everyone who opens the audio menu. */
+typedef enum {
+    VS_UNCOMP_OFF    = 0,  // never; a client that cannot decode Opus is refused with a reason
+    VS_UNCOMP_CHOICE = 1,  // listener may switch it on from the audio menu (defaults to Opus)
+    VS_UNCOMP_COMPAT = 2,  // automatic fallback only — no control is shown to the listener
+} VsUncompressedAudio;
+
 /** Everything set before a start. Zero-initialise, then override what you care about. */
 typedef struct {
     int    deviceIndex;    // RTL-SDR index (0 = first)
@@ -31,9 +46,14 @@ typedef struct {
     double lockedRate;     // 0 = client may change the capture rate
     bool   serveWebClient; // serve the browser client at GET /
     bool   forceIdleSaver; // listeners may NOT switch off idle power-saving (solar/cellular hosts)
-    // Serve RAW audio to a client that cannot decode Opus? ~187 KB/s each, ~20x
-    // the compressed stream, out of the OWNER's uplink. Default (zero-init) = false.
-    bool   allowUncompressedAudio;
+    /** Serve RAW audio instead of Opus to NETWORKED listeners? ~187 KB/s each, ~20x the
+     *  compressed stream, out of the OWNER's uplink — which is why it is off by default
+     *  (zero-init = VS_UNCOMP_OFF). Loopback ignores this field entirely; see above.
+     *  ★ Why this got richer than a bool: Opus is audibly compressed on decent headphones —
+     *  HansVanEijsden (FMDX.org) identified the codec by ear within moments of first
+     *  listening (2026-07-27). Quality is a real reason to want raw, distinct from the
+     *  old "your browser cannot decode Opus" reason, and the two want different defaults. */
+    int    uncompressedAudio;   // VsUncompressedAudio
     /** ★ RECEIVER LOCATION as the JSON served at GET /location:
      *    {"name":"…","iso":"GB","lat":52.24,"lon":-0.90,"label":"Northampton","grid":"IO92ng"}
      *  NULL/"" = unknown, and everything that depends on it degrades honestly rather than

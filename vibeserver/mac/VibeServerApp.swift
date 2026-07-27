@@ -13,6 +13,84 @@
 import SwiftUI
 import AppKit
 import ServiceManagement
+import CoreLocation
+
+// ── Coarse location from the Mac itself ──────────────────────────────────────
+// ★★ DELIBERATELY COARSE, and it fills the LOCATOR rather than the coordinate fields.
+// The operator is publishing where their ANTENNA is to anyone who connects, and a 6-character
+// Maidenhead square (~4 x 2.5 km) gives every consumer — distances, bearings, map centring,
+// ITU region, RDS country — exactly what it needs without announcing a home address. That is
+// the same trade the manual "Or locator" field already offers; this just removes the typing.
+// ★ macOS is asked for REDUCED accuracy for the same reason: requesting precision we then
+// throw away would be a worse permission prompt for no benefit.
+@MainActor
+final class LocationFinder: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published var busy = false
+    /// Human-readable outcome for the Settings pane — including refusals, which must be
+    /// explained rather than left as a button that silently does nothing.
+    @Published var status = ""
+    private let mgr = CLLocationManager()
+    private var onFix: ((Double, Double, String?, String?) -> Void)?
+
+    override init() {
+        super.init()
+        mgr.delegate = self
+        mgr.desiredAccuracy = kCLLocationAccuracyKilometer   // we only need the square
+    }
+
+    /// Ask for permission if needed, then a single fix. `done` gets lat, lon, and the
+    /// reverse-geocoded town and ISO country when those are available.
+    func find(_ done: @escaping (Double, Double, String?, String?) -> Void) {
+        onFix = done
+        status = ""
+        switch mgr.authorizationStatus {
+        case .notDetermined:
+            busy = true
+            mgr.requestWhenInUseAuthorization()   // the fix follows in the delegate
+        case .denied, .restricted:
+            // ★ Point at the fix. "Denied" with no route to undo it reads as a broken button.
+            status = "Location is turned off for VibeServer — System Settings ▸ Privacy & "
+                   + "Security ▸ Location Services. You can still type a locator instead."
+        default:
+            busy = true
+            mgr.requestLocation()
+        }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+        Task { @MainActor in
+            switch m.authorizationStatus {
+            case .authorized, .authorizedAlways: m.requestLocation()
+            case .denied, .restricted:
+                busy = false
+                status = "Permission refused. Type a locator or coordinates instead."
+            default: break   // still undetermined: the prompt is on screen
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ m: CLLocationManager, didUpdateLocations locs: [CLLocation]) {
+        guard let l = locs.last else { return }
+        // Reverse-geocode for the town and country. ★ Best-effort: a fix with no name is still
+        // a perfectly good fix, so the callback fires either way rather than failing the lot.
+        CLGeocoder().reverseGeocodeLocation(l) { marks, _ in
+            let pm = marks?.first
+            Task { @MainActor in
+                self.busy = false
+                self.status = ""
+                self.onFix?(l.coordinate.latitude, l.coordinate.longitude,
+                            pm?.locality ?? pm?.subAdministrativeArea, pm?.isoCountryCode)
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ m: CLLocationManager, didFailWithError e: Error) {
+        Task { @MainActor in
+            self.busy = false
+            self.status = "Could not get a location: \(e.localizedDescription)"
+        }
+    }
+}
 
 // ── Server: the one object that owns the core ────────────────────────────────
 @MainActor
@@ -55,9 +133,11 @@ final class Server: ObservableObject {
     @AppStorage("pin")      var pin        = ""
     @AppStorage("port")     var wantedPort = 0        // 0 = first free 48000-48049
     @AppStorage("serveWeb") var serveWeb   = true
-    /// Owner policy — see the Settings toggle for the reasoning. Off by default:
+    /// Owner policy — see the Settings picker for the reasoning. Off by default:
     /// uncompressed audio is ~187 KB/s per listener out of THIS machine's uplink.
-    @AppStorage("allowUncompressedAudio") var allowUncompressed = false
+    /// 0 = off, 1 = listener's choice, 2 = compatibility fallback only (VsUncompressedAudio).
+    /// ★ This Mac's own browser is not governed by it and always gets uncompressed audio.
+    @AppStorage("uncompressedAudio") var uncompressedAudio = 0
     // ★★ RECEIVER LOCATION. It is the SERVER's position, never the listener's: distances,
     // map centring and the ITU REGION all follow the ANTENNA (80m is 3.5-3.8 in R1 but
     // 3.5-4.0 in R2), and a VibeServer may well be left at a relative's house.
@@ -65,6 +145,10 @@ final class Server: ObservableObject {
     // it needs either an Extended Country Code off the air or the PI's country nibble
     // VALIDATED against the receiver's country — so with no location set, every station's
     // country stayed blank and it looked like a decoder fault (found on air 2026-07-26).
+    /// ★ The receiver's PUBLISHED NAME — what listeners see over the spectrum, and the one
+    /// piece of identity a shared receiver really needs ("Northampton RSP1B", "G0XYZ shack").
+    /// Empty is fine: the overlay then shows the location alone rather than inventing a name.
+    @AppStorage("rxName")  var rxName  = ""
     @AppStorage("rxPlace") var rxPlace = ""
     @AppStorage("rxLat")   var rxLat   = ""
     @AppStorage("rxLon")   var rxLon   = ""
@@ -213,8 +297,11 @@ final class Server: ObservableObject {
         if lat == nil || lon == nil, let c = gridCentre(grid) { lat = c.lat; lon = c.lon }
         let place = rxPlace.trimmingCharacters(in: .whitespaces)
         let iso = rxIso.trimmingCharacters(in: .whitespaces).uppercased()
-        if lat == nil && lon == nil && place.isEmpty && iso.isEmpty && grid.isEmpty { return "" }
+        let name = rxName.trimmingCharacters(in: .whitespaces)
+        if lat == nil && lon == nil && place.isEmpty && iso.isEmpty && grid.isEmpty
+            && name.isEmpty { return "" }
         var parts: [String] = []
+        if !name.isEmpty  { parts.append("\"name\":\"\(jsonEscaped(name))\"") }
         if !iso.isEmpty   { parts.append("\"iso\":\"\(jsonEscaped(iso))\"") }
         if !place.isEmpty { parts.append("\"label\":\"\(jsonEscaped(place))\"") }
         if let la = lat, let lo = lon, la >= -90, la <= 90, lo >= -180, lo <= 180 {
@@ -264,7 +351,7 @@ final class Server: ObservableObject {
 
     /// Maidenhead locator — what every other operator will ask for, and it is pure arithmetic
     /// on the coordinates, so asking the user for it as well would be asking twice.
-    private func maidenhead(_ lat: Double, _ lon: Double) -> String {
+    func maidenhead(_ lat: Double, _ lon: Double) -> String {
         let a = Int(UnicodeScalar("A").value)
         let lo = lon + 180.0, la = lat + 90.0
         let f1 = Int(lo / 20.0), f2 = Int(la / 10.0)
@@ -284,7 +371,7 @@ final class Server: ObservableObject {
         activeDevice = devices.indices.contains(deviceIndex) ? devices[deviceIndex] : ""
         cfg.port     = Int32(wantedPort)
         cfg.serveWebClient = serveWeb
-        cfg.allowUncompressedAudio = allowUncompressed
+        cfg.uncompressedAudio = Int32(uncompressedAudio)
         cfg.maxFftRate     = maxFps
         cfg.maxBandwidthHz = maxBwHz
         cfg.lockedRate     = lockedRate
@@ -752,6 +839,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // ── Settings (SwiftUI inside the AppKit shell) ───────────────────────────────
 struct SettingsView: View {
     @ObservedObject var server: Server
+    @StateObject private var finder = LocationFinder()
 
     var body: some View {
         Form {
@@ -828,6 +916,10 @@ struct SettingsView: View {
             // ★ Country alone is enough for the RDS flag, and it defaults from the Mac, so the
             // common case needs no typing at all.
             Section("Location") {
+                TextField("Receiver name", text: $server.rxName, prompt: Text("Northampton RSP1B"))
+                Text("Shown to listeners over the spectrum, with the place below it. Leave it "
+                     + "blank and they just see the location.")
+                    .font(.caption).foregroundStyle(.secondary)
                 TextField("Country", text: $server.rxIso, prompt: Text("GB"))
                 Text("Two-letter code. Sets the RDS country and flag, and the band plan's ITU region. "
                      + "Filled in from this Mac's own region.")
@@ -838,9 +930,31 @@ struct SettingsView: View {
                     TextField("Longitude", text: $server.rxLon, prompt: Text("-0.90"))
                 }
                 TextField("Or locator", text: $server.rxGrid, prompt: Text("IO92ng"))
+                HStack {
+                    Button(finder.busy ? "Locating…" : "Use this Mac's location") {
+                        finder.find { lat, lon, town, iso in
+                            // ★ Fill the LOCATOR, not the coordinates. See LocationFinder:
+                            // publishing a square is the whole point of doing this coarsely,
+                            // and the operator can still type exact coordinates if they want
+                            // them. Anything already typed is left alone.
+                            server.rxGrid = server.maidenhead(lat, lon)
+                            if server.rxPlace.trimmingCharacters(in: .whitespaces).isEmpty,
+                               let t = town { server.rxPlace = t }
+                            if let c = iso { server.rxIso = c.uppercased() }
+                        }
+                    }
+                    .disabled(finder.busy)
+                    Spacer()
+                }
+                if !finder.status.isEmpty {
+                    Text(finder.status).font(.caption).foregroundStyle(.orange)
+                }
                 Text("Optional, and either will do. Coordinates give exact distances and bearings; "
                      + "a locator gives the same to within a few km without publishing where you "
-                     + "live. Coordinates win if you give both.")
+                     + "live. Coordinates win if you give both.\n\n"
+                     + "\"Use this Mac's location\" fills in the LOCATOR, not your exact "
+                     + "coordinates — a square roughly 4 km across, which is all a distance or a "
+                     + "bearing needs. macOS will ask for permission the first time.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !server.locationJson().isEmpty && server.running {
                     Text("Restart the server to apply a change.")
@@ -852,18 +966,25 @@ struct SettingsView: View {
                 Text("Network listeners must enter this. This Mac never has to.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
-                Toggle("Allow uncompressed audio (compatibility)", isOn: $server.allowUncompressed)
-                Text("Off, listeners use the compressed audio stream — around 10 KB/s each. On, a "
-                   + "client that cannot decode it gets raw audio instead: roughly 187 KB/s per "
-                   + "listener out of YOUR connection, some twenty times more for no gain in "
-                   + "quality.\n\n"
-                   + "Everything that connects to VibeServer today decodes the compressed stream — "
-                   + "VibeSDR 10 and later, VibeSDR Jr, and the browser client. So there is really "
-                   + "only one reason to switch this on: ANY VibeSDR BEFORE VERSION 10 NEEDS IT. "
-                   + "(A pre-2017 browser would too — Safari 11 was the last major browser to add "
-                   + "Opus — but nothing that old can run the client anyway.)\n\n"
-                   + "Leave it off unless someone tells you they have no audio, especially if your "
-                   + "uplink is modest.")
+                Picker("Uncompressed audio", selection: $server.uncompressedAudio) {
+                    Text("Off").tag(0)
+                    Text("Listener's choice").tag(1)
+                    Text("Compatibility only").tag(2)
+                }
+                Text("Listeners normally get compressed audio — around 10 KB/s each. Uncompressed "
+                   + "is roughly 187 KB/s per listener out of YOUR connection, some twenty times "
+                   + "more.\n\n"
+                   + "OFF — nobody gets it. A client too old to decode the compressed stream is "
+                   + "turned away with an explanation rather than left in silence.\n\n"
+                   + "LISTENER'S CHOICE — a switch appears in each listener's audio menu, off by "
+                   + "default. Compression is audible on good headphones, so a DXer on a fast link "
+                   + "may well want the raw stream; this lets them take it without imposing it on "
+                   + "everyone else.\n\n"
+                   + "COMPATIBILITY ONLY — no switch is offered, but a client that cannot decode "
+                   + "the compressed stream still gets raw audio rather than silence. Choose this "
+                   + "to keep the safety net without advertising a 187 KB/s option.\n\n"
+                   + "This Mac's own browser always gets uncompressed audio whatever you pick "
+                   + "here — it never touches your uplink, so there is nothing to ration.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Advertise on the network", isOn: Binding(
                     get: { server.advertise },

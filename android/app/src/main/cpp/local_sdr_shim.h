@@ -61,7 +61,9 @@ public:
     static void setVibeServerCompressAudio(bool on);
     /// Owner policy: may a client that cannot decode Opus be served RAW audio
     /// (~187 KB/s of the owner's uplink each)? Default OFF.
-    static void setVibeServerAllowUncompressedAudio(bool on);
+    /** VsUncompressedAudio: 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
+     *  Loopback clients are outside this setting entirely and always get raw PCM. */
+    static void setVibeServerUncompressedAudio(int mode);
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
@@ -196,6 +198,11 @@ private:
     LocalSdrShim() = default;
     void stopLocked();      // teardown; caller must hold g_lifecycle
     struct Impl;
+    /** ★ Replay the listener's DSP choices (de-emphasis, squelch, NR, notch, stereo) onto a
+     *  freshly built Impl. Every start path replaces `p` with a `new Impl`, which would
+     *  otherwise revert those choices to constructor defaults while the client's UI carried on
+     *  showing what the user had picked. Call at EVERY `p = impl` site. */
+    static void applyDesiredDsp(Impl* impl);
     Impl* p = nullptr;
 };
 

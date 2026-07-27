@@ -1025,7 +1025,7 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label title="RDS injection. Typically 2–4 kHz; 7.5% (5.6 kHz) is the ceiling. Higher means the station is pushing its RDS hard, which helps reception. Inferred after filtering, so indicative rather than calibrated.">RDS dev</label><span id="rxRdsDev">—</span></div>
         <!-- ★★★ The measurement FM-DXers carry a Pira analyser to get. Near 0 or near 90 is
              correct; anything in between is a transmitter fault. -->
-        <div class="rdsF"><label title="Phase between the station's RDS subcarrier and its own 19 kHz pilot. Correct is near 0°, or near 90° for quadrature encoding — anything between indicates a transmitter fault. Modulo 180° (inherent to BPSK).">RDS↔pilot</label><span id="rxPhase">—</span></div>
+        <div class="rdsF"><label title="Phase between the station's RDS subcarrier and its own 19 kHz pilot. Correct is near 0°, or near 90° for quadrature encoding — anything between indicates a transmitter fault. Reported as an unsigned angle 0-90°, the same convention a broadcast analyser uses.">RDS↔pilot</label><span id="rxPhase">—</span></div>
         <div class="rdsF rdsWide"><label>RadioText</label><span id="rxRt">—</span></div>
         <!-- ★ Asked for directly by the FM-DX community: RT+ carves artist and title out of
              RadioText using start/length pointers (ODA 4BD7, announced in group 3A), and Long
@@ -1227,6 +1227,18 @@ select.btn { padding: 6px 8px; }
       <div id="sqlNeedle" class="sqlNeedle"><span class="sqlBall"></span></div>
     </div>
     <div class="sqlNote" id="sqlNote">Off — audio always passes.</div>
+  </div>
+  <!-- ★ Only shown when the operator has set "listener's choice" — on any other setting the
+       row is hidden entirely rather than disabled, because an inert control still reads as an
+       offer. Changing it reconnects the audio socket: the codec is fixed at connect time. -->
+  <div class="mrow" id="rawAudioRow" hidden>
+    <label>UNCOMPRESSED AUDIO</label>
+    <div class="seg"><button class="btn" id="rawAudio">OFF</button></div>
+  </div>
+  <div class="lbl" id="rawAudioNote" hidden>
+    Off, audio is compressed to around 10 KB/s. On, you get the raw stream — about 187 KB/s,
+    roughly twenty times more, out of the operator's connection. Worth it on a fast link if
+    you can hear the difference; a courtesy to leave off if you can't.
   </div>
   <div class="mrow">
     <label for="nr">NOISE REDUCTION</label>

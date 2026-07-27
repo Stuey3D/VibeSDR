@@ -167,6 +167,55 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+// ── Audio codec policy ────────────────────────────────────────────────────────
+// The operator's setting and OUR OWN position relative to the server, both from
+// /vibeserver.json. Read once at connect, because the codec is a query parameter on the
+// audio socket's URL and so has to be decided before that socket exists.
+type UncompressedPolicy = 'off' | 'choice' | 'compat';
+let srvUncompressed: UncompressedPolicy = 'off';
+let srvLocal = false;
+const RAW_AUDIO_KEY = 'vibesdr.rawAudio';
+
+function prefersRawAudio(): boolean {
+  try { return localStorage.getItem(RAW_AUDIO_KEY) === '1'; } catch { return false; }
+}
+function setPrefersRawAudio(on: boolean) {
+  try { localStorage.setItem(RAW_AUDIO_KEY, on ? '1' : '0'); } catch { /* private mode */ }
+}
+
+async function loadAudioPolicy(httpBase: string) {
+  // ★ Defaults stand if this fails. An older VibeServer has no such fields and a
+  // non-VibeServer has no such endpoint — both should leave us on Opus rather than
+  // guessing our way into 187 KB/s of someone else's uplink.
+  srvUncompressed = 'off';
+  srvLocal = false;
+  try {
+    const r = await fetch(`${httpBase}/vibeserver.json`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.uncompressed === 'choice' || j.uncompressed === 'compat' || j.uncompressed === 'off')
+      srvUncompressed = j.uncompressed;
+    srvLocal = j.local === true;
+  } catch { /* leave the safe defaults */ }
+}
+
+/** ★ HIDDEN, not disabled, unless the operator opened it to listeners. An inert control still
+ *  reads as an offer, and this one costs someone else 187 KB/s. Also hidden on loopback, where
+ *  raw is unconditional and there is no choice left to present. */
+function refreshRawAudioRow() {
+  const show = srvUncompressed === 'choice' && !srvLocal;
+  const row = document.getElementById('rawAudioRow');
+  const note = document.getElementById('rawAudioNote');
+  const btn = document.getElementById('rawAudio');
+  if (row) row.hidden = !show;
+  if (note) note.hidden = !show;
+  if (btn) {
+    const on = prefersRawAudio();
+    btn.textContent = on ? 'ON' : 'OFF';
+    btn.classList.toggle('on', on);
+  }
+}
+
 async function connect(host: string, pin: string) {
   currentHost = host;
   const httpBase = `http://${host}`;
@@ -204,9 +253,25 @@ async function connect(host: string, pin: string) {
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
-  const wantOpus = await AudioPlayer.supportsOpus();
+  // ★★ …unless we would rather have the RAW stream. Opus at 64 kbps is not transparent:
+  // HansVanEijsden (FMDX.org) named the codec by ear on first listen (2026-07-27), and for
+  // a DXer straining to pull a station out of the noise, compression artefacts are exactly
+  // the thing they are trying to listen past.
+  //   • On LOOPBACK we always take raw. The only argument for compressing is bandwidth, and
+  //     the host's own browser spends none — so there is nothing to trade against quality.
+  //   • Over a network it is the operator's call (see VsUncompressedAudio): "choice" puts a
+  //     switch in the audio menu, anything else leaves us on Opus.
+  // ★ `?opus` forces Opus even on loopback. Without it the Opus path would be untestable on
+  // the Mac dev loop, which is where it is developed — a default that hides a code path from
+  // the only machine that exercises it is how that path rots.
+  await loadAudioPolicy(httpBase);
+  const forceOpus = new URLSearchParams(location.search).has('opus');
+  const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
+  const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
   const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
-  if (wantOpus) console.info('[audio] requesting Opus (WebCodecs supported)');
+  console.info(wantOpus ? '[audio] requesting Opus (WebCodecs supported)'
+                        : `[audio] requesting uncompressed (${srvLocal ? 'loopback' : 'listener choice'})`);
+  refreshRawAudioRow();   // the policy is only known now, and the panel may already be built
 
   // The shim only rejects a bad PIN at WS-upgrade time (401), so surface that
   // as a splash error rather than silently retrying forever.
@@ -3626,6 +3691,16 @@ function buildMenu() {
     spec!.setStereo(on);
   }, 'stereo', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
+
+  // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
+  // other row talks to the shim's DSP over the open socket; the codec is a query parameter
+  // on the audio socket's URL, so it is fixed for that socket's lifetime and changing it
+  // means reconnecting. Hence the reload rather than a setter call.
+  $('rawAudio').onclick = () => {
+    setPrefersRawAudio(!prefersRawAudio());
+    location.reload();   // last tune and every other setting are restored on connect
+  };
+  refreshRawAudioRow();
 
   // ── Display / Waterfall / Spectrum ───────────────────────────────────────
   // The full set the app exposes, split into the sections it uses. All of it

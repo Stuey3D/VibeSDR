@@ -631,9 +631,11 @@ public:
     /** ★ RDS DEVIATION IN kHz, on the same ±1 = ±75 kHz scale as the pilot. Typical is
      *  2-4 kHz with 7.5% (5.6 kHz) the ceiling — a station pushing 4.9 is being generous,
      *  which is good for reception and worth being able to see.
-     *  ★ Derived from the RMS of the recovered baseband and scaled to a peak equivalent, so
-     *  treat it as indicative rather than as a calibrated measurement: an analyser measures
-     *  the deviation directly, we infer it after filtering. */
+     *  ★ Derived from the mean envelope of the recovered baseband and scaled to a peak by a
+     *  SIMULATED crest factor, so treat it as indicative rather than calibrated: an analyser
+     *  measures the deviation directly, we infer it after filtering. Known to read ~1.3 dB
+     *  low against a Pira analyser — see rdsDeviationKHz() in rds.cpp for why that residual
+     *  is believed to be a real signal-path loss rather than a scaling error. */
     float rdsDeviationKHz() const;
     /** ★★★ RDS-TO-PILOT PHASE, in degrees — the measurement HansVanEijsden (FMDX.org,
      *  2026-07-26) called "one verrrrry much requested thing… as far as I know, no software
@@ -644,9 +646,13 @@ public:
      *  PILOT tripled, so the angle the constellation sits at IS the phase between the
      *  station's subcarrier and its own pilot. It was removed an hour earlier purely to make
      *  the plot look conventional.
-     *  ★ BPSK is 180-degree ambiguous, so this is reported modulo 180 — which is exactly
-     *  enough to tell 0 from 90, the distinction that matters. Heavily smoothed: it is a
-     *  transmitter characteristic, not something that should flicker. -1 = no lock. */
+     *  ★ BPSK is 180-degree ambiguous, so the raw estimate is modulo 180 — but this returns
+     *  it folded into [0,90], an unsigned angular DISTANCE, which is what an analyser reports
+     *  and what "8 degrees out" means. ★★ It used to return the raw [0,180) value, so every
+     *  station read as its own reflection (8->172, 45->131); it looked right only because the
+     *  0 and 90 cases are the two the error cannot affect. See pilotPhaseDeg() in rds.cpp.
+     *  Heavily smoothed: it is a transmitter characteristic, not something that should
+     *  flicker. -1 = no lock. */
     float pilotPhaseDeg() const;
     /** ★★ HOW COHERENT that phase estimate is, 0..1 — and the reason the number above must
      *  never be shown without it. The estimate averages a unit vector at twice the symbol

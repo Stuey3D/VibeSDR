@@ -740,13 +740,25 @@ static std::atomic<bool>   g_vsCompressAudio{true};
 // affordance in a familiar place; keeping it costs nothing, and removing it
 // later would surprise anyone who had come to rely on it.
 //
-// ★ DEFAULTS TO FALSE. The compatibility worry turned out to be almost empty:
+// ★ DEFAULTS TO OFF. The compatibility worry turned out to be almost empty:
 // VibeServer debuted in v8, so App Store 6.1 cannot see a VibeServer at all, and
 // the ONLY client that opens /ws/audio without a `codec` parameter is TestFlight
 // 9.0.1 — the build this release replaces. So the cost of defaulting off is one
 // superseded TestFlight build, against every visitor otherwise silently spending
 // ~187 KB/s of the owner's uplink.
-static std::atomic<bool>   g_vsAllowUncompressedAudio{false};
+//
+// ★★ NOW THREE-WAY (VsUncompressedAudio), because there are TWO different reasons to
+// want raw audio and they need different answers. The original reason was compatibility
+// — a browser that cannot decode Opus should get sound rather than silence — and that
+// wants NO user-facing control at all. The second reason is QUALITY: Opus at 64 kbps is
+// audibly compressed on good headphones, which HansVanEijsden identified by ear within
+// moments (2026-07-27), and that one is precisely a listener's choice to make.
+// A single bool had to serve both and so served neither: switching it on to keep old
+// browsers working also silently offered 187 KB/s to every visitor.
+//   OFF(0)    never, for networked clients
+//   CHOICE(1) listener may switch it on; a control appears in the audio menu
+//   COMPAT(2) automatic fallback only, no control shown
+static std::atomic<int>    g_vsUncompressedAudio{0};   // VsUncompressedAudio
 
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
@@ -2578,9 +2590,19 @@ struct LocalSdrShim::Impl {
             // of the web client, and gating it would reintroduce the same bug.
             bool pinOn;
             { std::lock_guard<std::mutex> lk(g_vsMtx); pinOn = !g_vsSecret.empty(); }
+            // ★ `uncompressed` is the OPERATOR's policy and `local` is this requester's
+            // own situation; the client needs both to decide what to ask for and what to
+            // offer in its menu. Sent from here rather than over the audio socket because
+            // the decision has to be made BEFORE that socket is opened — the codec is a
+            // query parameter on the connect URL.
+            const int um = g_vsUncompressedAudio.load();
+            const bool loop = isLoopback(sock->peerAddress());
             std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
                              + (pinOn ? "true" : "false") + ",\"web\":"
-                             + (g_vsWebEnabled.load() ? "true" : "false") + "}";
+                             + (g_vsWebEnabled.load() ? "true" : "false")
+                             + ",\"uncompressed\":\""
+                             + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
+                             + "\",\"local\":" + (loop ? "true" : "false") + "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
@@ -2792,8 +2814,10 @@ struct LocalSdrShim::Impl {
         // ★ A client that cannot take Opus, on a server that does not allow raw,
         // is turned away HERE with a reason rather than being handed a stream it
         // cannot decode (silence) or one the owner cannot afford (187 KB/s).
-        // Loopback is exempt: the host's own browser costs no uplink.
-        if (isAudio && !wantsOpus && !g_vsAllowUncompressedAudio.load()
+        // ★★ Loopback is exempt IN EVERY MODE, including OFF — it is not a policy
+        // exemption but a category error to apply the policy at all: this setting
+        // rations the owner's UPLINK, and 127.0.0.1 does not touch it.
+        if (isAudio && !wantsOpus && g_vsUncompressedAudio.load() == 0
             && !isLoopback(sock->peerAddress())) {
             LOGI("audio WS refused — uncompressed audio not allowed by the owner");
             static const char* kMsg = "{\"type\":\"needs_codec\",\"codec\":\"opus\"}";
@@ -3528,6 +3552,54 @@ struct LocalSdrShim::Impl {
 // Serialises start()/stop() so concurrent app-teardown calls can't double-free.
 static std::mutex g_lifecycle;
 
+// ★★★ THE LISTENER'S DSP CHOICES, HELD OUTSIDE `p` SO THEY SURVIVE A RADIO RESTART.
+//
+// `p` is a raw Impl* that FIVE separate start paths replace with a fresh `new Impl()`, and
+// every one of those resets these fields to their constructor defaults. So anything the
+// client had chosen was silently reverted by a rate change, a USB nudge, an idle resume or
+// simply being the first client to arrive before the radio was up — while the client's own
+// UI went on displaying the choice it had made. A setter called while `p` was null did not
+// even get that far: `if (!p) return` dropped it on the floor.
+//
+// ★ De-emphasis is where it was NOTICED, because it is the one setting you can HEAR being
+// wrong: HansVanEijsden reported the panel reading OFF over obviously de-emphasised audio,
+// and "a quick settings change fixes it" — the change re-sent the value to a live Impl
+// (Stuart had seen it before too, 2026-07-27). Squelch, NR, notch and stereo had the same
+// bug and no such tell; NR and notch silently OFF just sound like a slightly worse receiver.
+//
+// ★ Defaults MUST match Impl's own field initialisers, or applying this record at startup
+// would itself change the radio. Kept next to each other deliberately.
+struct DesiredDsp {
+    std::atomic<double> deempTau{50e-6};    // Impl::deempTau
+    std::atomic<bool>   squelchOn{false};   // Impl::squelchOn
+    std::atomic<float>  squelchDb{-50.0f};  // Impl::squelchDb
+    std::atomic<bool>   nrOn{false};        // Impl::nrOn
+    std::atomic<float>  nrStrength{-1.0f};  // <0 = never set, so leave the engine alone
+    std::atomic<bool>   notchOn{false};     // Impl::notchOn
+    std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
+};
+static DesiredDsp g_dsp;
+
+// Replay the listener's choices onto a freshly built Impl. ★ Call this at EVERY `p = impl`
+// site — there are five, one per source type, and a new one that forgets to call it
+// reintroduces exactly the bug this exists to kill.
+void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
+    if (!impl) return;
+    impl->squelchOn.store(g_dsp.squelchOn.load());
+    impl->squelchDb.store(g_dsp.squelchDb.load());
+    impl->nrOn.store(g_dsp.nrOn.load());
+    impl->notchOn.store(g_dsp.notchOn.load());
+    impl->rx.setStereoEnabled(g_dsp.stereoOn.load());
+    impl->deempTau = g_dsp.deempTau.load();
+    impl->rx.setDeemphasis(impl->deempTau);
+    const float nrs = g_dsp.nrStrength.load();
+    if (nrs >= 0.0f) {   // only if the client ever set one; else leave the engine's own
+        std::lock_guard<std::mutex> lk(impl->nrMtx);
+        if (!impl->nrEng) impl->nrEng = new AudioNR();
+        impl->nrEng->setStrength(nrs);
+    }
+}
+
 // VibeServer LAN-bind opt-in (g_serveOnLan is declared above the Impl struct so
 // its members can read it). A separate act rather than a start() parameter: it
 // exposes a tuning-control channel, so it must never be a defaulted argument.
@@ -3573,7 +3645,7 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
-void LocalSdrShim::setVibeServerAllowUncompressedAudio(bool on) { g_vsAllowUncompressedAudio.store(on); }
+void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAudio.store(mode); }
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
@@ -3721,6 +3793,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
 
     p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
     LOGI("local SDR started: center=%.0f rate=%.0f fft=%d mode=%s port=%d",
          centerFreq, sampleRate, fftSize, impl->mode.c_str(), chosen);
     return chosen;
@@ -3803,6 +3876,7 @@ int LocalSdrShim::startSdrplay(int index,
     impl->startDspThread();
 
     p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
     LOGI("SDRplay started: index=%d center=%.0f rate=%.0f port=%d",
          index, centerFreq, sampleRate, chosen);
     return chosen;
@@ -3879,6 +3953,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); });
 
     p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
     LOGI("RTL-TCP started: %s:%d center=%.0f rate=%.0f tuner=%d port=%d",
          host.c_str(), port, centerFreq, sampleRate, impl->tcpTunerType, chosen);
     return chosen;
@@ -4017,6 +4092,7 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     impl->spyFftThread = std::thread([impl]{ impl->spyFftLoop(); });
 
     p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
     LOGI("SpyServer started: %s:%d center=%.0f decim=%d iqRate=%.0f fftSpan=%.0f "
          "control=%d port=%d",
          host.c_str(), port, centerFreq, decim, impl->sampleRate, impl->spyFftSpan,
@@ -4113,6 +4189,7 @@ int LocalSdrShim::startDecoderService(std::string& err) {
     impl->serverRunning.store(true);
     impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
     p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
     LOGI("decoder service started: port=%d", chosen);
     return chosen;
 }
@@ -4199,18 +4276,24 @@ void LocalSdrShim::setDirectSampling(int mode) {
     if (!p->dev) return;
     rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
 }
+// ★ Each of these records the choice in g_dsp FIRST and only then touches the live radio, so
+// the value is remembered even when there is no radio to apply it to yet. applyDesiredDsp()
+// replays the record onto every newly built Impl.
 void LocalSdrShim::setSquelch(bool on, float db) {
+    g_dsp.squelchOn.store(on); g_dsp.squelchDb.store(db);
     if (!p) return;
     p->squelchOn.store(on); p->squelchDb.store(db);
     LOGI("squelch: %d @ %.1f dB", on, db);
 }
 void LocalSdrShim::setNR(bool on) {
+    g_dsp.nrOn.store(on);
     if (!p) return;
     p->nrOn.store(on);
     if (!on) { std::lock_guard<std::mutex> lk(p->nrMtx); if (p->nrEng) p->nrEng->reset(); }
     LOGI("audio NR: %d", on);
 }
 void LocalSdrShim::setNrStrength(float s) {
+    g_dsp.nrStrength.store(s);
     if (!p) return;
     std::lock_guard<std::mutex> lk(p->nrMtx);
     if (!p->nrEng) p->nrEng = new AudioNR();
@@ -4218,12 +4301,14 @@ void LocalSdrShim::setNrStrength(float s) {
 }
 float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
 void LocalSdrShim::setNotch(bool on) {
+    g_dsp.notchOn.store(on);
     if (!p) return;
     p->notchOn.store(on);
     if (!on) { std::lock_guard<std::mutex> lk(p->notchMtx); if (p->notchEng) p->notchEng->reset(); }
     LOGI("auto notch: %d", on);
 }
 void LocalSdrShim::setStereoEnabled(bool on) {
+    g_dsp.stereoOn.store(on);
     if (!p) return;
     p->rx.setStereoEnabled(on);           // engine blends L-R out when off (-> mono)
     LOGI("stereo: %s", on ? "on" : "forced mono");
@@ -4301,6 +4386,7 @@ void LocalSdrShim::setSampleRate(double rate) {
 }
 void LocalSdrShim::setDeemphasis(double tau) {
     std::lock_guard<std::mutex> life(g_lifecycle);
+    g_dsp.deempTau.store(tau);   // ★ remembered even if there is no radio yet
     if (!p) return;
     if (p->deempTau == tau) return;
     p->deempTau = tau;
