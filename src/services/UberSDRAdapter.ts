@@ -100,6 +100,16 @@ export class UberSDRAdapter implements SDRBackend {
   resetView()                                   { this.client.resetView(); }
 
   setRate(divisor: number) { this.client.setRate(divisor); }
+
+  /** ★★ FORWARD, or the feature is unreachable. Same trap as `linkMode` above: SDRScreen holds
+   *  the ADAPTER, not the client, so a method that exists only on UberSDRClient is simply
+   *  absent — and both of these are read with `?.`, so the failure is SILENT. `isVibe` gates
+   *  whether the ADV RDS button is offered at all and `setAdvRds` is the switch, so missing
+   *  them meant the analyser could never be shown and never be turned on, with nothing
+   *  anywhere to say why (Stuart: "it was in WFM and indicating stereo", 2026-07-27).
+   *  ★ Anything added to UberSDRClient that the screen calls needs a line here. */
+  get isVibe(): boolean { return this.client.isVibe; }
+  setAdvRds(on: boolean) { this.client.setAdvRds(on); }
   /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
   setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }

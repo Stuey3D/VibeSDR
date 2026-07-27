@@ -39,7 +39,14 @@ export type VibeServerConfig = {
   pin: string;              // '' = open access (no PIN)
   maxBandwidthHz?: number;  // 0 = no cap
   maxFftRate?: number;      // 0 = server default (20 fps)
-  compressAudio?: boolean;  // default true
+  compressAudio?: boolean;
+  /** ★ Admin password — gates CONTROL (bias-T, direct sampling, calibration), NOT access.
+   *  Separate from the listening PIN: a public receiver can welcome every listener and still
+   *  refuse a visitor putting DC on the feedline. Empty = nothing protected. */
+  adminPassword?: string;
+  /** 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
+   *  ★ Loopback is OUTSIDE this setting entirely — it rations the owner's uplink. */
+  uncompressedAudio?: 0 | 1 | 2;  // default true
   /** Serve the browser client at GET /. Off = only the VibeSDR app can connect,
    *  so a stranger can't stumble in from a URL. Default true. */
   webServer?: boolean;
@@ -86,6 +93,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     maxBandwidthHz: cfg.maxBandwidthHz ?? 0,
     maxFftRate: cfg.maxFftRate ?? 0,
     compressAudio: cfg.compressAudio ?? true,
+    adminPassword: cfg.adminPassword ?? '',
+    uncompressedAudio: cfg.uncompressedAudio ?? 0,
     webServer: cfg.webServer ?? true,
     lockedRate: cfg.lockedRate ?? 0,
     advertise: cfg.advertise ?? true,
@@ -441,6 +450,14 @@ export async function getVibeServerStatus(): Promise<VibeServerStatus | null> {
 // if a client hits a decode issue).
 export function setVibeServerCompressAudio(on: boolean): void {
   try { Local?.setVibeServerCompressAudio?.(on); } catch {}
+}
+
+// Live, no restart — the same two levers the Mac exposes while serving.
+export function setVibeServerAdminSecret(secret: string): void {
+  try { Local?.setVibeServerAdminSecret?.(secret); } catch {}
+}
+export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
+  try { Local?.setVibeServerUncompressedAudio?.(mode); } catch {}
 }
 
 // A fresh random 6-digit default PIN. The user can keep it, set their own, or

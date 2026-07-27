@@ -141,6 +141,25 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerAuth(JNIEnv* env, jobject, 
     if (secret && s) env->ReleaseStringUTFChars(secret, s);
 }
 
+// ★ ADMIN PASSWORD — a second secret, gating CONTROL rather than ACCESS. The PIN decides who
+// may LISTEN; this decides who may touch bias-T, direct sampling and calibration. Independent
+// of the PIN on purpose: a public receiver can be open to every listener and still refuse a
+// visitor putting DC on the feedline. Empty = nothing is protected.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerAdminSecret(JNIEnv* env, jobject, jstring secret) {
+    const char* s = secret ? env->GetStringUTFChars(secret, nullptr) : nullptr;
+    vibe::LocalSdrShim::setVibeServerAdminSecret(s ? s : "");
+    if (secret && s) env->ReleaseStringUTFChars(secret, s);
+}
+
+// Uncompressed audio policy: 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
+// ★ Loopback is outside this setting entirely — it rations the owner's UPLINK, and 127.0.0.1
+// does not touch it.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerUncompressedAudio(JNIEnv*, jobject, jint mode) {
+    vibe::LocalSdrShim::setVibeServerUncompressedAudio((int)mode);
+}
+
 // VibeServer compatibility limits. <=0 = no cap / server default. BEFORE start().
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLimits(JNIEnv*, jobject,

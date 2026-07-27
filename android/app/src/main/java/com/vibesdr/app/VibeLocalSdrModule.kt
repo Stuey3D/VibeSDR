@@ -320,6 +320,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val compress   = if (opts.hasKey("compressAudio")) opts.getBoolean("compressAudio") else true
         // Web client on/off, and a pinned capture rate (0 = client-controlled).
         val webSrv     = if (opts.hasKey("webServer")) opts.getBoolean("webServer") else true
+        // ★ Admin password gates CONTROL (bias-T, direct sampling, calibration), not access —
+        // separate from the listening PIN on purpose. Empty = nothing protected.
+        val adminPw    = if (opts.hasKey("adminPassword")) opts.getString("adminPassword") ?: "" else ""
+        // 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt.
+        val uncomp     = if (opts.hasKey("uncompressedAudio")) opts.getInt("uncompressedAudio") else 0
         val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
         // Only needed so a CRASH-restored server re-advertises as the app would have.
         val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
@@ -334,6 +339,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
         VibeLocalSDR.setVibeServerCompressAudio(compress)
+        VibeLocalSDR.setVibeServerAdminSecret(adminPw)
+        VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
         VibeLocalSDR.setVibeServerWebEnabled(webSrv)
         VibeLocalSDR.setVibeServerLockedRate(lockedRate)
         VibeLocalSDR.setServeOnLan(true)
@@ -388,6 +395,15 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     /** Live toggle: switch compressed audio on/off without restarting the server. */
     @ReactMethod
     fun setVibeServerCompressAudio(on: Boolean) { VibeLocalSDR.setVibeServerCompressAudio(on) }
+
+    /** Live, no restart — the operator can lock the controls on a running server. */
+    @ReactMethod
+    fun setVibeServerAdminSecret(secret: String) { VibeLocalSDR.setVibeServerAdminSecret(secret) }
+
+    @ReactMethod
+    fun setVibeServerUncompressedAudio(mode: Double) {
+        VibeLocalSDR.setVibeServerUncompressedAudio(mode.toInt())
+    }
 
     /** Hand the web client's search its station list (JSON array), served at
      *  GET /stations. The app owns the EiBi download + cache; the browser can't

@@ -130,6 +130,11 @@ object VibeLocalSDR {
     // VibeServer PIN (empty = open access) + compatibility limits + audio codec.
     fun setVibeServerAuth(secret: String) { ensureLoaded(); nativeSetVibeServerAuth(secret) }
     fun setVibeServerLimits(maxBwHz: Double, maxFftRate: Double) { ensureLoaded(); nativeSetVibeServerLimits(maxBwHz, maxFftRate) }
+    /** Admin password — gates CONTROL (bias-T, direct sampling, calibration), not access.
+     *  Empty = nothing protected. Independent of the listening PIN. */
+    fun setVibeServerAdminSecret(secret: String) { ensureLoaded(); nativeSetVibeServerAdminSecret(secret) }
+    /** 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt. */
+    fun setVibeServerUncompressedAudio(mode: Int) { ensureLoaded(); nativeSetVibeServerUncompressedAudio(mode) }
     fun setVibeServerCompressAudio(on: Boolean) { ensureLoaded(); nativeSetVibeServerCompressAudio(on) }
     /** Serve the browser client at GET /. Off = app-only: a browser gets 403. */
     fun setVibeServerWebEnabled(on: Boolean) { ensureLoaded(); nativeSetVibeServerWebEnabled(on) }
@@ -166,6 +171,8 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerAuth(secret: String)
     private external fun nativeSetVibeServerLimits(maxBwHz: Double, maxFftRate: Double)
     private external fun nativeSetVibeServerCompressAudio(on: Boolean)
+    private external fun nativeSetVibeServerAdminSecret(secret: String)
+    private external fun nativeSetVibeServerUncompressedAudio(mode: Int)
     private external fun nativeSetStationsJson(json: String)
     private external fun nativeSetLocationJson(json: String)
 

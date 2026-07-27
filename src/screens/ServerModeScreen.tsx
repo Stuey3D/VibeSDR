@@ -11,6 +11,7 @@ import { themeFor } from '../constants/theme';
 import { getServerName, saveServerName } from '../services/rtlTcpServer';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio,
+  setVibeServerAdminSecret, setVibeServerUncompressedAudio,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
@@ -47,6 +48,7 @@ const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
   webServer: 'vs_webserver', autoRestore: 'vs_autorestore',
+  adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed',
 };
 
 export default function ServerModeScreen({ navigation, route }: Props) {
@@ -60,6 +62,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [rate, setRate]           = useState(0);          // 0 = client-controlled
   const [fps, setFps]             = useState<FpsTier>('full');
   const [compress, setCompress]   = useState(true);
+  // ★ Admin password — protects the CONTROLS (bias-T, direct sampling, calibration), not
+  // access. Deliberately separate from the listening PIN: Hans's server is open to everyone
+  // and still must not let a visitor put DC on the feedline.
+  const [adminPw, setAdminPw]     = useState('');
+  const [showAdminPw, setShowAdminPw] = useState(false);
+  // 0 = off, 1 = listener's choice, 2 = compatibility only.
+  const [uncomp, setUncomp]       = useState<0 | 1 | 2>(0);
   const [webServer, setWebServer] = useState(true);
   const [autoRestore, setAutoRestore] = useState(true);
   const [bmCount, setBmCount] = useState<number | null>(null);
@@ -83,17 +92,20 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
-        const [p, a, pm, sp, r, fp, cp, ws, ar] = await Promise.all([
+        const [p, a, pm, sp, r, fp, cp, ws, ar, apw, unc] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
           AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
           AsyncStorage.getItem(K.autoRestore),
+          AsyncStorage.getItem(K.adminPw), AsyncStorage.getItem(K.uncomp),
         ]);
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (ws != null) setWebServer(ws !== '0');
         if (ar != null) setAutoRestore(ar !== '0');
+        if (apw != null) setAdminPw(apw);
+        if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
         setLocMode(await getServerLocationMode());
         setLocCity((await getManualServerLocation())?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
@@ -232,6 +244,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.fps, fps], [K.compress, compress ? '1' : '0'],
       [K.webServer, webServer ? '1' : '0'],
       [K.autoRestore, autoRestore ? '1' : '0'],
+      [K.adminPw, adminPw], [K.uncomp, String(uncomp)],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -264,6 +277,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         pin: effectivePin,
         maxFftRate: fpsForTier(fps),
         compressAudio: compress,
+        adminPassword: adminPw,
+        uncompressedAudio: uncomp,
         webServer,
         advertise,
         autoRestore,
@@ -574,7 +589,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <OptRow key={t.key} C={C} F={F} active={fps === t.key} label={t.label} onPress={() => setFps(t.key)} />
             ))}
 
-            {/* Compressed audio */}
+            {/* Compressed audio. ★ The codec is OPUS now — this said IMA-ADPCM long after
+                Opus replaced it, which is worse than saying nothing: it names the wrong
+                format to anyone deciding whether their client can cope. */}
             <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -584,9 +601,54 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                IMA-ADPCM (~4x lighter). Turn off for maximum compatibility.
+                Opus — about 20x lighter than raw audio. Turn off only if a listener's
+                client cannot decode it.
               </Text>
             </View>
+
+            {/* ★★ UNCOMPRESSED AUDIO — the owner's UPLINK policy, three-way.
+                Raw is 48 kHz stereo int16: ~187 KB/s per listener, which is why this is not
+                a plain switch. Hans asked for it after hearing Opus on a good system. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>UNCOMPRESSED AUDIO</Text>
+            {([
+              [0, 'Off', 'Never send raw audio. Listeners who cannot decode Opus are turned away with a reason.'],
+              [1, "Listener's choice", 'An UNCOMPRESSED button appears in each listener\u2019s audio menu. Defaults to Opus.'],
+              [2, 'Compatibility only', 'Raw only as a fallback for a client that cannot decode Opus — no user-facing switch.'],
+            ] as const).map(([v, label, hint]) => (
+              <OptRow key={v} C={C} F={F} active={uncomp === v} label={label} hint={hint}
+                onPress={() => { setUncomp(v as 0 | 1 | 2); AsyncStorage.setItem(K.uncomp, String(v));
+                                 if (runningRef.current) setVibeServerUncompressedAudio(v as 0 | 1 | 2); }} />
+            ))}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              This phone always gets uncompressed audio from its own server — the setting rations
+              your UPLINK, and listening on the same device never touches it.
+            </Text>
+
+            {/* ★★ ADMIN PASSWORD — control, not access. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ADMIN PASSWORD</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TextInput value={adminPw}
+                onChangeText={(v) => { setAdminPw(v); AsyncStorage.setItem(K.adminPw, v);
+                                       if (runningRef.current) setVibeServerAdminSecret(v); }}
+                placeholder="none — controls are open" placeholderTextColor={C.goldDim}
+                autoCapitalize="none" autoCorrect={false}
+                // ★ Dots by default: this gets typed at a rally or a club night with people
+                // stood behind you (Stuart, 2026-07-27).
+                secureTextEntry={!showAdminPw}
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
+              <TouchableOpacity onPress={() => setShowAdminPw(v => !v)}
+                style={[styles.card, { borderColor: C.border, paddingVertical: 10, paddingHorizontal: 12 }]}>
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>
+                  {showAdminPw ? 'HIDE' : 'SHOW'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Protects the settings that can damage hardware or spoil the band for everyone —
+              bias-T, direct sampling, frequency calibration. Separate from the listening PIN:
+              a receiver can be open to every listener and still refuse a visitor putting DC on
+              the feedline. Leave empty and nothing is protected.
+            </Text>
 
             {error && (
               <View style={[styles.card, { borderColor: C.red, marginTop: 14 }]}>
@@ -647,10 +709,20 @@ function Pill({ C, F, active, label, onPress }: any) {
   );
 }
 
-function OptRow({ C, F, active, label, onPress }: any) {
+function OptRow({ C, F, active, label, hint, onPress }: any) {
   return (
     <TouchableOpacity style={[styles.optRow, { borderColor: active ? C.amber : C.border }]} onPress={onPress}>
-      <Text style={{ color: active ? C.amber : C.gold, fontFamily: F, fontSize: 15 }}>{label}</Text>
+      {/* ★ The label column must FLEX and the tick stay fixed — a three-way policy choice
+          needs a sentence to be choosable at all, and without the flex a long hint pushes
+          the tick off the row. */}
+      <View style={{ flex: 1, paddingRight: 10 }}>
+        <Text style={{ color: active ? C.amber : C.gold, fontFamily: F, fontSize: 15 }}>{label}</Text>
+        {!!hint && (
+          <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 3, lineHeight: 15 }}>
+            {hint}
+          </Text>
+        )}
+      </View>
       {active && <Text style={{ color: C.amber, fontFamily: F }}>✓</Text>}
     </TouchableOpacity>
   );
