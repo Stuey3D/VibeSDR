@@ -464,6 +464,13 @@ export function setVibeServerAdminSecret(secret: string): void {
 export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
   try { Local?.setVibeServerUncompressedAudio?.(mode); } catch {}
 }
+/** ★ The radio currently plugged in, from its USB descriptor — no device open, no permission
+ *  prompt. Null when nothing supported is attached. Used to draw the right menus BEFORE the
+ *  server exists; the radio's definitive capabilities still come from hwinfo once running. */
+export async function getConnectedRadio(): Promise<{ driver: string; model: string } | null> {
+  try { return (await Local?.getConnectedRadio?.()) ?? null; } catch { return null; }
+}
+
 export function setVibeServerSessionLimit(minutes: number): void {
   try { Local?.setVibeServerSessionLimit?.(minutes); } catch {}
 }

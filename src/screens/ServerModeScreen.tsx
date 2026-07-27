@@ -10,7 +10,7 @@ import { RootStackParamList } from '../../App';
 import { themeFor } from '../constants/theme';
 import { getServerName, saveServerName } from '../services/rtlTcpServer';
 import {
-  startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio,
+  startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
@@ -37,11 +37,24 @@ type PinMode = 'random' | 'custom' | 'off';
 // RTL-TCP server's overrideRate). Anything else PINS the rate — the client's picker
 // is then hidden and told the server set it, because a rate it can't change is a
 // rate it shouldn't offer.
-const RATE_OPTIONS = [
+// ★★ PER RADIO. These were a dongle's rates offered to whatever was plugged in, so an Airspy
+// HF+ — which tops out near 912 kHz — was shown 2.4 MHz, 1.2 MHz and 960 kHz: every option
+// impossible (Stuart, 2026-07-27). The shim would snap a pinned rate to the nearest real one,
+// so the menu was lying rather than breaking, which is worse.
+// ★ FIFTH time today the same shape has bitten: a list written when there was one radio.
+const RATE_OPTIONS_RTL = [
   { label: 'Client-controlled', value: 0 },
   { label: 'Full · 2.4 MHz',  value: 2_400_000 },
   { label: '1.2 MHz',         value: 1_200_000 },
   { label: '960 kHz (light)', value: 960_000 },
+];
+// Airspy HF+ Discovery / Dual Port. ★ The radio's own list still wins once it is running —
+// this is which menu to draw, not a claim about the hardware.
+const RATE_OPTIONS_AHF = [
+  { label: 'Client-controlled', value: 0 },
+  { label: 'Full · 912 kHz',  value: 912_000 },
+  { label: '768 kHz',         value: 768_000 },
+  { label: '384 kHz (light)', value: 384_000 },
 ];
 
 const K = {
@@ -71,6 +84,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [uncomp, setUncomp]       = useState<0 | 1 | 2>(0);
   // ★ Per-listener time limit, minutes. 0 = unlimited — right for a private receiver.
   const [limitMin, setLimitMin]   = useState(0);
+  // ★ Which radio is attached, so the menus match it. VID/PID only — see getConnectedRadio.
+  const [radio, setRadio] = useState<{ driver: string; model: string } | null>(null);
+  useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
+  const rateOptions = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF : RATE_OPTIONS_RTL;
+  // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
+  const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz' : '2.4 MHz';
   const [webServer, setWebServer] = useState(true);
   const [autoRestore, setAutoRestore] = useState(true);
   const [bmCount, setBmCount] = useState<number | null>(null);
@@ -294,7 +313,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       if (advertise) advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
     } catch (e: any) {
       setStarting(false);
-      setError(e?.message ?? 'Could not start VibeServer. Is an RTL-SDR plugged in via USB OTG?');
+      setError(e?.message ?? 'Could not start VibeServer. Is a supported SDR plugged in via USB OTG?');
     }
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, autoRestore, locMode, locCity, checkBackgroundAllowed]);
@@ -343,7 +362,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
           <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>VibeServer</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-            Serving this phone's RTL-SDR with server-side DSP. Leaving this screen
+            {`Serving this phone's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
             stops the server and frees the dongle.
           </Text>
 
@@ -413,7 +432,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
         <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>Server mode</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          Share this phone's RTL-SDR over your network.
+          {`Share this phone's ${radio?.model ?? 'SDR'} over your network.`}
         </Text>
 
         {/* Protocol picker */}
@@ -576,10 +595,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BANDWIDTH</Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
               {rate === 0
-                ? 'Clients choose their own span, up to the full 2.4 MHz.'
+                ? `Clients choose their own span, up to the full ${topRateLabel}.`
                 : 'Pinned — clients cannot change the span. Lower it to save processing power on a low-end phone.'}
             </Text>
-            {RATE_OPTIONS.map(o => (
+            {rateOptions.map(o => (
               <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
             ))}
 

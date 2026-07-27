@@ -408,6 +408,24 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerUncompressedAudio(mode.toInt())
     }
 
+    /** ★★ WHICH RADIO IS PLUGGED IN, before anything is opened. The server settings screen
+     *  runs BEFORE the shim exists, so it cannot ask radioCapsJson() — and without this it
+     *  offered a dongle's 2.4 MHz to an Airspy HF+, which tops out near 912 kHz, so every rate
+     *  on the menu was impossible (Stuart, 2026-07-27).
+     *  ★ VID/PID only: no USB open, no permission prompt, and nothing for the user to approve
+     *  just to draw a menu. The radio's exact rate list still comes from the radio once it is
+     *  running — this decides which menu to show, not what the hardware will accept. */
+    @ReactMethod
+    fun getConnectedRadio(promise: Promise) {
+        val mgr = usbManager ?: run { promise.resolve(null); return }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+            ?: run { promise.resolve(null); return }
+        val res = Arguments.createMap()
+        res.putString("driver", if (isAirspyHf(dev)) "airspyhf" else "rtl")
+        res.putString("model", dev.productName ?: (if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"))
+        promise.resolve(res)
+    }
+
     @ReactMethod
     fun setVibeServerSessionLimit(minutes: Double) {
         VibeLocalSDR.setVibeServerSessionLimit(minutes.toInt())
