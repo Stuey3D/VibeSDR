@@ -38,10 +38,15 @@ his signal could show that.
 
 ### Added — uncompressed audio, because he heard the codec
 
-Hans identified Opus **by ear** within moments of first listening. Compression is now a
-three-way operator choice — off, listener's choice, or compatibility fallback — and
-anything on the host machine itself always gets raw audio, since the only argument for
-compressing is bandwidth and a browser on `localhost` uses none.
+Hans identified Opus **by ear** within moments of first listening, and then named the
+reason it matters more than it sounds: **Bluetooth headphones re-encode whatever you send
+them.** Opus into SBC or AAC is two generations of lossy compression stacked, and the
+artefacts compound. He reports "no more compression cascading effects on bluetooth
+headphones" with raw audio.
+
+Compression is now a three-way operator choice — off, listener's choice, or compatibility
+fallback — and anything on the host machine itself always gets raw audio, since the only
+argument for compressing is bandwidth and a browser on `localhost` uses none.
 
 ### Fixed — several panel and control bugs he reported
 
