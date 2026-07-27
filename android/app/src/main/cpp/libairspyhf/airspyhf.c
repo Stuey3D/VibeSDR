@@ -1053,8 +1053,23 @@ int ADDCALL airspyhf_close(airspyhf_device_t* device)
 		pthread_cond_destroy(&device->consumer_cv);
 		pthread_mutex_destroy(&device->consumer_mp);
 
-		airspyhf_open_exit(device);
+		/* ★★★ FREE THE TRANSFERS BEFORE DESTROYING THE CONTEXT THAT OWNS THEM.
+		   Upstream has these the other way round: airspyhf_open_exit() calls libusb_close()
+		   and libusb_exit(), and free_transfers() then calls libusb_free_transfer() on
+		   transfers belonging to a context that no longer exists. libusb_free_transfer
+		   dereferences the transfer's internal state and takes a context lock, so this is a
+		   use-after-free.
+
+		   On a desktop it usually gets away with it — the allocator has not reused the memory
+		   yet. On Android it is fatal and reproducible: SIGSEGV in libusb_free_transfer with
+		   "FORTIFY: pthread_mutex_lock called on a destroyed mutex" alongside, every time the
+		   user backed out of VibeServer (Stuart, 2026-07-27).
+
+		   Swapping the two lines is the whole fix. free_transfers() cancels nothing — that has
+		   already happened in airspyhf_stop() above — so there is no ordering reason for it to
+		   come second. */
 		free_transfers(device);
+		airspyhf_open_exit(device);
 		free(device->supported_samplerates);
 		free(device->samplerate_architectures);
 		iq_balancer_destroy(device->iq_balancer);
