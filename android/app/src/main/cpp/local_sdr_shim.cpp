@@ -335,14 +335,9 @@ ModeParams paramsFor(const std::string& mode) {
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
     if (mode == "am" || mode == "sam") return {ModeParams::AM, 15000, 10000, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
-    // ★★ FM-DX IS WFM WITH A DIFFERENT TRADE, not a different demodulator. Same MPX chain and
-    // the same stereo/RDS decoders; what changes is the channel filter, which widens to give
-    // the RDS subcarrier back the ~1.9 dB the standard filter costs it — at the price of about
-    // 2 dB of audio SNR near the FM threshold (tools/wfm_mpx_loss.cpp).
-    // ★ THAT TRADE BELONGS TO THE LISTENER, not to the operator and not to a default. A DXer
-    // chasing a PI spends audio quality gladly; someone listening to music does not. Hence a
-    // MODE next to WFM rather than a global setting (Stuart, 2026-07-27) — the first version
-    // widened the default and would have made ordinary FM quietly noisier for everyone.
+    // ★ "fmdx" WAS a mode here and is gone: it widened the channel filter, which measured 10 dB
+    // WORSE for RDS SNR (see pipeline.cpp chHalf). Accepted as an alias for wfm so a client with
+    // it saved in a preference still tunes rather than falling through to NFM.
     if (mode == "fmdx")           return {ModeParams::WFM, 250000, 200000, 2};
     if (mode == "wfm")            return {ModeParams::WFM, 250000, 200000, 2};  // NB: ifRate field is unused/dead
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
@@ -769,9 +764,6 @@ static std::atomic<bool>   g_vsCompressAudio{true};
 //   CHOICE(1) listener may switch it on; a control appears in the audio menu
 //   COMPAT(2) automatic fallback only, no control shown
 static std::atomic<int>    g_vsUncompressedAudio{0};   // VsUncompressedAudio
-// ★ Operator opt-in to the expensive RDS path. Read by the pipeline when it builds the channel
-// filter, so it takes effect on the next rebuild (a retune or mode change) as well as at start.
-static std::atomic<bool>   g_vsRdsMaxPerf{false};
 
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
@@ -1981,12 +1973,6 @@ struct LocalSdrShim::Impl {
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp.kind);
-        // ★ FM-DX: the wide channel and the RDS noise correction, chosen by the LISTENER via
-        // the mode. The operator's rdsMaxPerformance switch is a PERMISSION and a floor — it
-        // turns the expensive path on for everyone, and a host that has not granted it still
-        // lets a listener pick FM-DX. If the CPU cost ever needs to be refused outright, this
-        // is the one place to gate it.
-        rx.setRdsMaxPerformance(mode == "fmdx" || g_vsRdsMaxPerf.load());
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
         // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
@@ -3005,7 +2991,16 @@ struct LocalSdrShim::Impl {
         // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
         // work and the extra bytes are paid for only while somebody is looking at them, and
         // there is no setting to explain (Stuart, 2026-07-26).
-        if (ext == "rds") { rdsxOn.store(true); return; }
+        if (ext == "rds") {
+            rdsxOn.store(true);
+            // ★ THE ANALYSER BEING OPEN IS THE SWITCH. The guard-band noise measurement exists
+            // solely to make the DEVIATION READOUT honest, so it is worth its CPU exactly while
+            // somebody is reading it — the same reasoning that gates the extended stream itself.
+            // ★ It replaces an operator setting that also widened the channel filter; that half
+            // was measured to cost 10 dB of RDS SNR and has been removed entirely.
+            rx.setRdsNoiseCorrection(true);
+            return;
+        }
         if (ext == "sstv")  { startSstv(msg);  return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
@@ -3114,6 +3109,7 @@ struct LocalSdrShim::Impl {
     }
     void stopDecoder() {
         rdsxOn.store(false);
+        rx.setRdsNoiseCorrection(false);   // nobody looking: stop paying for it
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
@@ -3836,12 +3832,6 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
 void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAudio.store(mode); }
-void LocalSdrShim::setVibeServerRdsMaxPerformance(bool on) {
-    g_vsRdsMaxPerf.store(on);
-    std::lock_guard<std::mutex> life(g_lifecycle);
-    auto& self = instance();
-    if (self.p) self.p->rx.setRdsMaxPerformance(on);   // live: rebuilds on the next tune
-}
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }

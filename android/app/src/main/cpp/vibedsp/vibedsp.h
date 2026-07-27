@@ -965,10 +965,12 @@ public:
     // FM de-emphasis time constant (seconds): 0 = off, 50e-6 (EU/UK), 75e-6 (US).
     // Applies to WFM and NFM. Takes effect on the next tune/rebuild.
     void setDeemphasis(double tauSec) { deempTau_ = tauSec; dirty_ = true; }
-    /** ★ Operator opt-in: widen the WFM channel and enable the RDS guard-band noise
-     *  measurement. Costs CPU everywhere downstream — see VsConfig::rdsMaxPerformance.
-     *  Marks the chain dirty so it takes effect on the next rebuild. */
-    void setRdsMaxPerformance(bool on) { rdsMaxPerf_ = on; dirty_ = true; }
+    /** ★ Turn on the RDS guard-band noise measurement — the second filter pair that makes the
+     *  DEVIATION READOUT honest on a weak signal. Costs CPU, and buys nothing but accuracy of a
+     *  number, so it is driven by whether anyone has the analyser OPEN rather than by a setting.
+     *  ★ It does NOT touch the channel filter. Widening that was tried and measured to cost
+     *  10 dB of RDS SNR — see the chHalf note in pipeline.cpp before considering it again. */
+    void setRdsNoiseCorrection(bool on) { rdsNoiseCorr_ = on; dirty_ = true; }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     float stereoBlend()  const { return stereoBlend_; }
@@ -1018,7 +1020,7 @@ private:
     bool lastStereo_ = false;
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
-    std::atomic<bool>   rdsMaxPerf_{false};  // wider channel + RDS noise correction
+    std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;

@@ -17,7 +17,7 @@
  *      link. Keep _sendView.
  */
 
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'fmdx';
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
@@ -27,7 +27,6 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   cwu: [-200, 200],    cwl: [-200, 200],
   fm:  [-6000, 6000],  nfm: [-5000, 5000],
   wfm: [-100000, 100000],
-  fmdx: [-100000, 100000],   // same RF channel; the SERVER widens its filter (see paramsFor)
 };
 
 const SPEC_MAGIC    = 0x43455053; // 'SPEC' little-endian

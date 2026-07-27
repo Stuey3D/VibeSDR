@@ -66,23 +66,10 @@ void RxPipeline::rebuildAudio() {
     double targetCh = std::max(bwHz_ * 3.0, 12000.0);
     // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
     // real channel regardless of the RF bandwidth the user picked.
-    // ★★ FM-DX needs enough channel to carry a 120 kHz passband PLUS its transition — about
-    // 360 kHz of Nyquist room. It does NOT need a particular rate, and asking for one was a
-    // mistake with real consequences.
-    // ★★★ 2.0x (400 kHz) LOOKED FINE AND WAS WRONG ON A NARROW RADIO. targetCh is a floor that
-    // `floor(fs / targetCh)` turns into a decimation, so on a 2.4 MSPS dongle 400 kHz gives
-    // decim 6 -> 400 kHz, but on an Airspy HF+ sampling 768 kHz it gives decim ONE — no
-    // decimation at all, and the whole MPX chain, stereo PLL and sixteen RDS hypotheses running
-    // at 768 kHz, 2.5x anything this design has been tested at. Stuart saw it immediately:
-    // "oddly RDS is slower in FM-DX mode" (2026-07-27).
-    // ★ 1.8x asks for what is actually required and lands correctly on both: 2.4 MSPS -> decim 6
-    // -> 400 kHz, 768 kHz -> decim 2 -> 384 kHz. At 384 kHz a 120 kHz passband with a 60 kHz
-    // transition reaches its stopband at 180 kHz, comfortably inside the 192 kHz Nyquist — so
-    // the RDS benefit is identical for HALF the CPU.
-    // ★ THE LESSON: a "target rate" multiplier is a decimation in disguise. State the BANDWIDTH
-    // the filter needs and let each radio's own sample rate decide the divisor.
-    if (mode_ == Mode::WFM)
-        targetCh = std::max(bwHz_ * (rdsMaxPerf_.load() ? 1.8 : 1.5), 150000.0);
+    // ★★★ FM-DX NO LONGER WIDENS THE CHANNEL — the premise was wrong, and measurement killed
+    // it. See the chHalf note below: widening recovers subcarrier AMPLITUDE and destroys
+    // subcarrier SNR, which is the thing that actually decodes.
+    if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
@@ -115,39 +102,31 @@ void RxPipeline::rebuildAudio() {
     // an UberSDR recording of the same signal, we were 37 dB down over 2.0-2.7 kHz.
     const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB ||
                           mode_ == Mode::CW);
-    // ★★★ WFM NEEDS MORE THAN HALF ITS CHANNEL — the FM sidebands are wider than the channel
-    // they are quoted as occupying. At 75 kHz deviation modulated up to 57 kHz, Carson puts
-    // real energy out past ±130 kHz, so cutting at bw/2 = 100 kHz clipped the outer sidebands.
-    // That does NOT attenuate the MPX evenly: it takes the TOP of it, so 57 kHz RDS suffers
-    // while the 19 kHz pilot does not notice.
-    // ★ MEASURED, not reasoned (tools/wfm_mpx_loss.cpp): at bw/2 the recovered RDS subcarrier
-    // was 1.86 dB down with the pilot at 0.00 dB. That is the asymmetry HansVanEijsden's Pira
-    // analyser saw from the other end — RDS deviation low on six stations out of six while
-    // pilot deviation was exact on all six (2026-07-27). We were RECEIVING RDS weak, not
-    // merely displaying it low, and paying for it in decode margin on weak stations.
-    // ★★★ BUT WIDENING IS NOT FREE, AND THE COST IS AUDIO. A wider channel admits more noise
-    // into the discriminator, and near the FM threshold — exactly where the weak stations
-    // live — that is audible. Measured on the same harness with noise added:
-    //     bw/2       RDS -1.86 dB   audio SNR +11.72 dB
-    //     0.55       RDS -0.85 dB   audio SNR +11.09 dB   (1.0 dB of RDS for 0.6 dB of audio)
-    //     0.60       RDS -0.27 dB   audio SNR  +9.74 dB   (1.6 dB of RDS for 2.0 dB of audio)
-    // ★ So it trades roughly one for one, and worse the further it goes. That makes it a
-    // LISTENER'S choice per station, not a global default: a DXer chasing a PI will spend
-    // audio quality happily, someone listening to music will not (Stuart, 2026-07-27, who
-    // spotted this before it shipped — the first version widened the default and would have
-    // quietly made ordinary FM noisier for everyone).
-    // ★★ HENCE THE DEFAULT STAYS AT bw/2. The widening lives behind FM-DX, chosen per session
-    // by whoever is listening.
-    // ★ THE COST IS ADJACENT-CHANNEL REJECTION, which is the thing this filter exists for:
-    // measured 98 dB -> 93 dB at a 200 kHz offset. Still far beyond the ~74 dB the deepStop
-    // note below sets as the bar. Re-measure before widening further: tools/wfm_mpx_loss.cpp
-    // reports adjacent rejection alongside the MPX loss, precisely so the trade is visible.
-    // ★ NOTE the deepStop note below says to check "test_demod's alias-rejection case" — there
-    // is no such case in test_demod (checked 2026-07-27). The tool above is the real check.
-    // 0.60 needs the 400 kHz channel rate selected above; 0.5 is plain WFM, unchanged.
-    const double wfmFrac = rdsMaxPerf_.load() ? 0.60 : 0.5;
-    const double chHalf = std::max(1.0, ssbLike ? bwHz_
-                                       : (mode_ == Mode::WFM ? bwHz_ * wfmFrac : bwHz_ * 0.5));
+    // ★★★ bw/2, AND THE ATTEMPT TO WIDEN IT IS RECORDED HERE SO IT IS NOT REPEATED.
+    //
+    // The observation that started it is real: at bw/2 the recovered RDS subcarrier is 1.86 dB
+    // down while the pilot is untouched, because the filter clips the outer FM sidebands and
+    // that takes the TOP of the MPX. It is why our RDS deviation reads low against a Pira
+    // analyser (HansVanEijsden's six stations, 2026-07-27).
+    //
+    // ★★ THE FIX WAS WRONG BECAUSE THE MEASUREMENT WAS OF THE WRONG QUANTITY. Widening was
+    // justified by RDS AMPLITUDE recovered. What decides whether RDS decodes is subcarrier
+    // SNR, and FM's noise triangle puts noise power up as the SQUARE of baseband frequency —
+    // so a wider IF dumps disproportionately more noise at exactly 57 kHz. Numerator measured,
+    // denominator ignored.
+    //
+    // Measured properly (tools/wfm_mpx_loss.cpp, RDS SNR column):
+    //                        2.4 MSPS        768 kHz (Airspy HF+)
+    //     bw/2               +32.9 dB        +36.5 dB
+    //     0.60 (was FM-DX)   +33.1 dB        +26.5 dB   <-- TEN dB worse
+    //
+    // ★ It looked harmless on a dongle, which is why simulation passed it. On a narrow-band
+    // radio it is a catastrophe, and Stuart found it in one A/B on a strong local: constellation
+    // scatter 16% -> 39%, block sync lost entirely, on a station WFM decodes instantly.
+    // ★★ SO THE CHANNEL FILTER COSTS US READOUT ACCURACY, NOT DECODE MARGIN. An earlier version
+    // of this comment claimed we were "RECEIVING RDS weak and losing decode margin" — that was
+    // inferred from the amplitude figure and is not true. Do not re-derive it.
+    const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
     // The absolute transition width the old single-stage design worked out to. Keep it
     // identical so the audible filter shape does not change.
     const double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);
@@ -294,7 +273,7 @@ void RxPipeline::rebuildAudio() {
                 if (self->cb_.rdsPi) self->cb_.rdsPi(self->cb_.ctx, pi);
             };
             rdsDemod_.configure(chFs_, rcb);
-            rdsDemod_.setNoiseCorrection(rdsMaxPerf_.load());
+            rdsDemod_.setNoiseCorrection(rdsNoiseCorr_.load());
             break;
         }
     }

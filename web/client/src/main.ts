@@ -41,10 +41,12 @@ import {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-// ★ FM-DX sits next to WFM because it IS WFM, with the channel filter traded the other way:
-// ~1.9 dB more RDS subcarrier for ~2 dB less audio SNR near the threshold. A DXer wants that
-// swap, a listener does not, so it is a mode rather than a setting (Stuart, 2026-07-27).
-const MODES: SDRMode[] = ['wfm', 'fmdx', 'nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl'];
+// ★ NO FM-DX. It briefly sat next to WFM, widening the channel filter to recover RDS subcarrier
+// amplitude — and measured TEN dB worse for RDS signal-to-noise on a narrow-band radio, which
+// Stuart caught in one A/B on a strong local (scatter 16% -> 39%, block sync lost, 2026-07-27).
+// The useful half — the noise-corrected deviation readout — now switches itself on whenever the
+// Advanced RDS analyser is open, so there is nothing left for a mode to do.
+const MODES: SDRMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl'];
 const LS_SERVERS = 'vibesdr_web_servers_v1';   // { "host:port": pin }
 const LS_PREFS   = 'vibesdr_web_prefs_v1';
 
@@ -1355,8 +1357,7 @@ function buildControls() {
   for (const m of MODES) {
     const b = document.createElement('button');
     b.className = 'btn';
-    b.textContent = m === 'fmdx' ? 'FM-DX' : m.toUpperCase();
-    if (m === 'fmdx') b.title = 'Wide FM for DX: more RDS reach on weak stations, at the cost of some audio quality. Opens the RDS analyser.';
+    b.textContent = m.toUpperCase();
     b.dataset.mode = m;
     b.onclick = () => setMode(m, true);
     modes.appendChild(b);
@@ -2431,18 +2432,8 @@ function initDecoders(host: string, auth: AuthState) {
   $('decPrev').onclick = () => toggleDecPrev();
   $('decSave').onclick = () => saveDecImage();
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
-  $('decHide').onclick = () => {
-    // ★★ CLOSING THE ANALYSER LEAVES FM-DX. The mode exists to feed this panel, and it costs
-    // ~2 dB of audio SNR to do it — so with the panel shut a listener would be paying for
-    // something they can no longer see. Worse, nothing on screen would say why the audio was
-    // noisier than plain WFM. Mode and panel are one state (Stuart, 2026-07-27).
-    // ★ Only on a deliberate CLOSE, not on hideDecBox() generally: switching to another
-    // decoder is not a decision to stop DXing.
-    const leavingFmdx = spec?.mode === 'fmdx';
-    stopDecoder(); decoders!.setSpots(false);
-    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox();
-    if (leavingFmdx) setMode('wfm', true);
-  };
+  $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
+    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
 }
 
 /** Wire a segmented control; `on` marks the selected button. */
@@ -4016,27 +4007,9 @@ function setMode(m: SDRMode, send: boolean) {
   for (const b of Array.from($('modes').children) as HTMLButtonElement[]) {
     b.classList.toggle('on', b.dataset.mode === m);
   }
-  // ★ FM CARRIES RDS IN BOTH FLAVOURS — clearing on a wfm->fmdx switch would throw away a
-  // station's identity for a change that does not leave the FM band.
-  if (m !== 'wfm' && m !== 'fmdx') {
+  if (m !== 'wfm') {
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
-  }
-  // ★ FM-DX is the DX workflow, and the analyser IS that workflow — someone choosing this
-  // mode is chasing an identification, so open it rather than making them find it under
-  // Decoders. It stays an ordinary optional decoder for plain WFM, exactly as before.
-  // ★★ ATTACH IT, do not merely SHOW IT. showDecBox() opens the panel; `attach` is what tells
-  // the server to start sending the extended RDS stream at all (rdsxOn — selecting the decoder
-  // IS the toggle, deliberately, so the extra work is only paid for while someone is looking).
-  // The first version called showDecBox alone, so FM-DX opened a permanently EMPTY panel: every
-  // field dashed and "no lock", while the station bar beside it decoded perfectly, because the
-  // bar uses the ordinary RDS callbacks and the panel needs the extended one
-  // (Stuart, 2026-07-27, screenshot of Heart decoding under a blank analyser).
-  if (m === 'fmdx' && send && activeDec !== 'rds') {
-    activeDec = 'rds';
-    decoders!.attach('rds', decParams('rds'));
-    showDecBox('rds');
-    syncDecButtons();
   }
   updateVts();
   syncBw();
@@ -4055,7 +4028,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   am: 20000,    sam: 20000,
   cwu: 2000,    cwl: 2000,
   fm: 30000,    nfm: 30000,
-  wfm: 250000,  fmdx: 250000,
+  wfm: 250000,
 };
 
 let bwSync = false;

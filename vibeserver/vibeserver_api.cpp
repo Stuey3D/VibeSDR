@@ -55,7 +55,6 @@ void vs_default_config(VsConfig* cfg) {
     cfg->serveWebClient = true;
     cfg->forceIdleSaver = false;
     cfg->uncompressedAudio = VS_UNCOMP_OFF;
-    cfg->rdsMaxPerformance = false;   // the CPU is the operator's to spend
 }
 
 int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
@@ -70,7 +69,6 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     LocalSdrShim::setVibeServerWebEnabled(cfg->serveWebClient);
     LocalSdrShim::setVibeServerForceIdleSaver(cfg->forceIdleSaver);
     LocalSdrShim::setVibeServerUncompressedAudio(cfg->uncompressedAudio);
-    LocalSdrShim::setVibeServerRdsMaxPerformance(cfg->rdsMaxPerformance);
     if (cfg->locationJson && *cfg->locationJson)
         LocalSdrShim::setLocationJson(cfg->locationJson);
 

@@ -54,26 +54,13 @@ typedef struct {
      *  listening (2026-07-27). Quality is a real reason to want raw, distinct from the
      *  old "your browser cannot decode Opus" reason, and the two want different defaults. */
     int    uncompressedAudio;   // VsUncompressedAudio
-    /** ★★ SPEND MORE CPU ON RDS. Off by default, because the cost lands on the SERVER and the
-     *  benefit lands on a listener who may not be there.
-     *  On, two things change:
-     *    • the WFM channel filter widens (120 kHz at a 400 kHz channel rate instead of 110 at
-     *      300), recovering most of the remaining subcarrier loss — measured 1.86 dB down at
-     *      the old bw/2 setting, 0.85 at the current default, 0.27 here
-     *      (tools/wfm_mpx_loss.cpp);
-     *    • the deviation readout gains its guard-band noise subtraction, so it stops reading
-     *      high on a weak signal.
-     *  ★ The rate rise is the expensive half: EVERYTHING downstream — stereo, RDS's sixteen
-     *  hypotheses, the audio chain — then runs at 400 kHz instead of 300, a third more samples
-     *  through the most expensive part of the engine. On a Pi 3 or a phone that is a real cost;
-     *  on a Mac or a Pi 5 it is not.
-     *  ★ MEASURED (tools/pi-bench, 2026-07-27, Apple silicon @ 2.4 MSPS): 3.1% of a core for
-     *  plain WFM stereo, 3.5% with RDS, 5.0% for FM-DX — so ~45% on top of RDS and ~60% on top
-     *  of plain stereo. Treat the RATIO as the transferable figure; the absolute percentages
-     *  are this machine's.
-     *  ★ A listener can also select FM-DX per station from the mode buttons, which costs the
-     *  same but only while it is in use. This flag is the always-on form. */
-    bool   rdsMaxPerformance;
+    /** ★ REMOVED (2026-07-27): rdsMaxPerformance. It widened the WFM channel filter, which
+     *  measured TEN dB worse for RDS signal-to-noise on a narrow-band radio — the justification
+     *  had measured subcarrier AMPLITUDE, not SNR. Its other half, the guard-band noise
+     *  correction on the deviation readout, now switches itself on whenever a listener has the
+     *  Advanced RDS analyser open, which is the only time it is worth anything.
+     *  Left as a comment so the idea is not re-proposed without reading pipeline.cpp's chHalf
+     *  note first. */
 
     /** ★ RECEIVER LOCATION as the JSON served at GET /location:
      *    {"name":"…","iso":"GB","lat":52.24,"lon":-0.90,"label":"Northampton","grid":"IO92ng"}

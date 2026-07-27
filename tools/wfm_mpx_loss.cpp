@@ -40,8 +40,10 @@ static double toneAmp(const std::vector<float>& x, double fs, double f, int skip
     return 2.0 * std::sqrt(re * re + im * im) / (double)n;
 }
 
+static void runAll(double fsIn);
+
 struct Result { int decim; double chFs, chHalf, trans;
-                double pilotLoss, rdsLoss, adjRej, audioSnr; };
+                double pilotLoss, rdsLoss, adjRej, audioSnr, rdsSnr; };
 
 /** Build the WFM cascade for a given channel half-width and target rate, exactly as
  *  pipeline.cpp does, then measure what it costs the MPX and what it rejects at 200 kHz. */
@@ -123,6 +125,19 @@ static Result run(const std::vector<cf>& iq, const std::vector<cf>& adj,
         }
         const double noisePow = std::max(1e-9, tot / cnt - 0.5 * sig * sig);
         R.audioSnr = 10.0 * std::log10((0.5 * sig * sig) / noisePow);
+
+        // ★★★ THE METRIC THAT ACTUALLY DECIDES WHETHER RDS DECODES: subcarrier SNR at 57 kHz,
+        // not subcarrier AMPLITUDE. Everything above measures how much 57 kHz tone survives the
+        // channel filter — and widening does recover some. But FM's noise triangle puts noise
+        // power up as the SQUARE of baseband frequency, so a wider IF dumps disproportionately
+        // more noise at exactly 57 kHz. Measuring the numerator and ignoring the denominator is
+        // how "widening helps RDS" survived simulation and then failed on air: Stuart's A/B on
+        // a strong local showed constellation scatter going 16% -> 39% in FM-DX (2026-07-27).
+        // ★ Noise taken at 63 kHz — clear of the subcarrier, same corner of the MPX, so it is
+        // the noise the RDS decoder is actually fighting.
+        const double rdsAmp   = toneAmp(mN, chFs, RDS_HZ, sk);
+        const double nearAmp  = toneAmp(mN, chFs, RDS_HZ + 6000.0, sk);
+        R.rdsSnr = 20.0 * std::log10(std::max(1e-9, rdsAmp) / std::max(1e-9, nearAmp));
     }
 
     const std::vector<float> mF = demod(filt, chFs), mC = demod(ctrl, chFs);
@@ -146,7 +161,16 @@ static Result run(const std::vector<cf>& iq, const std::vector<cf>& adj,
 }
 
 int main() {
-    const double fsIn = 2400000.0;
+    // ★ BOTH capture rates. The geometry is NOT the same: at 768 kHz (an Airspy HF+) a 200 kHz
+    // channel decimates by 2 either way, so FM-DX's wider filter has to fit its stopband under
+    // a 192 kHz Nyquist instead of the 200 kHz it gets on a dongle. Testing only at 2.4 MSPS is
+    // how a mode that measured well ended up making RDS visibly WORSE on air (2026-07-27).
+    for (double fsIn : {2400000.0, 768000.0})
+    runAll(fsIn);
+    return 0;
+}
+
+static void runAll(double fsIn) {
     const double audioDev = 55000.0, pilotDev = 6750.0, rdsDev = 2000.0;
     const long N = (long)(fsIn * 0.25);
 
@@ -178,14 +202,13 @@ int main() {
         { "128 kHz @ 480k",       128000.0, 480000.0 },
         { "140 kHz @ 480k",       140000.0, 480000.0 },
     };
-    printf("  %-18s %5s %8s %9s %9s %11s %10s\n",
-           "channel filter", "decim", "chFs", "pilot dB", "RDS dB", "adj@200k", "audio SNR");
+    printf("== capture %.3f MSPS ==\n", fsIn / 1e6);
+    printf("  %-18s %5s %8s %9s %11s %10s %9s\n",
+           "channel filter", "decim", "chFs", "RDS ampl", "adj@200k", "audio SNR", "RDS SNR");
     for (const auto& c : cands) {
         const Result r = run(iq, adj, noisy, fsIn, c.chHalf, c.targetCh);
-        printf("  %-18s %5d %8.0f %+9.2f %+9.2f %+11.1f %+10.2f\n",
-               c.name, r.decim, r.chFs, r.pilotLoss, r.rdsLoss, r.adjRej, r.audioSnr);
+        printf("  %-18s %5d %8.0f %+9.2f %+11.1f %+10.2f %+9.2f\n",
+               c.name, r.decim, r.chFs, r.rdsLoss, r.adjRej, r.audioSnr, r.rdsSnr);
     }
-    printf("\n  RDS dB is the loss vs the transmitted subcarrier; Hans's Pira gap is -1.3 dB.\n");
-    printf("  adj@200k is how much of an adjacent carrier SURVIVES — more negative is better.\n");
-    return 0;
+    printf("\n");
 }
