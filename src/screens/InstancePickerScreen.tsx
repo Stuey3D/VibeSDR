@@ -1183,6 +1183,39 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // subtitle in style — quiet prose under the title — but not a permanent one: a touch user
   // never needs it, and showing it to them would be teaching a lesson nobody asked for.
   const [kbHint, setKbHint] = useState(false);
+
+  // ★★ OCCUPANCY OF SAVED VibeSERVERS. One client per radio means a public receiver is a
+  // queue of one, so a busy server MUST say so before it is tapped — otherwise "in use" is
+  // indistinguishable from "broken", and the conclusion people reach is that our software
+  // does not work (Stuart, 2026-07-27).
+  // ★ Absent from the map = UNKNOWN (old server, or unreachable). Never rendered as "free":
+  // claiming a server is available and then failing to connect is worse than saying nothing.
+  const [occupancy, setOccupancy] = useState<Record<string, ServerOccupancy>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      const targets = favourites.filter(f => (f.serverType ?? '') === 'vibeserver');
+      if (!targets.length) return;
+      // Sequential, not parallel: this is a courtesy poll of somebody else's receiver, and
+      // firing a burst at every saved server each cycle is the kind of thing that gets a
+      // client blocked. The list is short.
+      for (const f of targets) {
+        if (cancelled) return;
+        const occ = await fetchOccupancy(f.url).catch(() => null);
+        if (cancelled) return;
+        setOccupancy(prev => {
+          if (!occ) { const { [f.url]: _drop, ...rest } = prev; return rest; }
+          return { ...prev, [f.url]: occ };
+        });
+      }
+    };
+    void poll();
+    // 20s: fast enough that a freed radio is noticed while you are still looking at the
+    // list, slow enough not to be a nuisance to a server that is already busy serving.
+    const t = setInterval(poll, 20_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [favourites]);
+
   useEffect(() => {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
@@ -1375,38 +1408,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       </TouchableOpacity>
     );
   };
-
-  // ★★ OCCUPANCY OF SAVED VibeSERVERS. One client per radio means a public receiver is a
-  // queue of one, so a busy server MUST say so before it is tapped — otherwise "in use" is
-  // indistinguishable from "broken", and the conclusion people reach is that our software
-  // does not work (Stuart, 2026-07-27).
-  // ★ Absent from the map = UNKNOWN (old server, or unreachable). Never rendered as "free":
-  // claiming a server is available and then failing to connect is worse than saying nothing.
-  const [occupancy, setOccupancy] = useState<Record<string, ServerOccupancy>>({});
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      const targets = favourites.filter(f => (f.serverType ?? '') === 'vibeserver');
-      if (!targets.length) return;
-      // Sequential, not parallel: this is a courtesy poll of somebody else's receiver, and
-      // firing a burst at every saved server each cycle is the kind of thing that gets a
-      // client blocked. The list is short.
-      for (const f of targets) {
-        if (cancelled) return;
-        const occ = await fetchOccupancy(f.url).catch(() => null);
-        if (cancelled) return;
-        setOccupancy(prev => {
-          if (!occ) { const { [f.url]: _drop, ...rest } = prev; return rest; }
-          return { ...prev, [f.url]: occ };
-        });
-      }
-    };
-    void poll();
-    // 20s: fast enough that a freed radio is noticed while you are still looking at the
-    // list, slow enough not to be a nuisance to a server that is already busy serving.
-    const t = setInterval(poll, 20_000);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [favourites]);
 
   const renderItem = ({ item, index, getIndex, drag, isActive }: {
     item: ListItem; index?: number; getIndex?: () => number | undefined;
