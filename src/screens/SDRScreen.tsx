@@ -4905,7 +4905,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
-      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0) ? (
+      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
         <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>
@@ -5314,7 +5314,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
-      {advRdsOpen && status.mode === 'wfm' && (
+      {/* ★ PORTRAIT ONLY on a phone, like the decoder box: 24 fields and three plots need
+          vertical space landscape does not have, and the rotate banner below says where it
+          went. A tablet has the room. */}
+      {advRdsOpen && status.mode === 'wfm' && (!isLandscape || isTablet) && (
         <AdvRdsPanel
           x={advRds}
           ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
@@ -5376,6 +5379,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverUrl={baseUrl}
         onClose={() => setMenuOpen(false)}
         onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
+        radioModel={radioCaps?.model}
         isTcp={!!route.params.isTcp}
         onColormap={setColormap}
         onDbMin={setDbMin}

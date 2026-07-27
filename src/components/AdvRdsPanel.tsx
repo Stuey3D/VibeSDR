@@ -19,8 +19,8 @@
  * spend the extra CPU and bytes. Closing it must turn that back off.
  */
 
-import React, { useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useMemo, useRef } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Canvas, Circle, Path, Rect, Skia } from '@shopify/react-native-skia';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
@@ -103,6 +103,75 @@ function Row({ label, value, colour, conf, raw }: {
   );
 }
 
+/** ★ Scale that fits the MEAN LOBE DISTANCE to a fixed fraction of the box.
+ *  ★★ NEVER SCALE TO A CONSTANT. A constellation's meaning is its SHAPE — how tight the lobes
+ *  are and how far from centre — so absolute magnitude is not information. Pinning the scale
+ *  made a strong station's points fly out of the box and a weak one's huddle at the origin. */
+function constellationScale(xy: number[], box: number): number {
+  let n = 0, sum = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const r = Math.hypot(xy[i], xy[i + 1]);
+    if (r < 1) continue;
+    n++; sum += r;
+  }
+  if (!n) return (box / 2) / 110;
+  return (box * 0.30) / Math.max(1, sum / n);
+}
+
+/** ★★ Rotation that lays the two BPSK lobes on the horizontal. Our detector is DIFFERENTIAL —
+ *  it cancels carrier phase in the arithmetic rather than physically de-rotating — so the
+ *  constellation arrives tilted by however far our pilot-derived 57 kHz reference sits from the
+ *  station's subcarrier. That tilt is real information, but it makes the plot incomparable with
+ *  SDR++ or a hardware receiver, where a Costas loop has already flattened it.
+ *  BPSK's 180-degree ambiguity is handled by DOUBLING each angle (folding both lobes onto one),
+ *  magnitude-weighting so the strong symbols dominate, averaging, then halving. */
+function constellationAngle(xy: number[]): number {
+  let sx = 0, sy = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const x = xy[i], y = xy[i + 1];
+    const r2 = x * x + y * y;
+    if (r2 < 1) continue;
+    const a2 = 2 * Math.atan2(y, x);
+    sx += r2 * Math.cos(a2);
+    sy += r2 * Math.sin(a2);
+  }
+  return (sx || sy) ? -0.5 * Math.atan2(sy, sx) : 0;
+}
+
+/** ★ A plain-English verdict, because the plot assumes you can already read it.
+ *  ★★ DE-ROTATE FIRST — computing this on the raw points while only the DRAWING was de-rotated
+ *  counted the whole carrier phase offset as error, and a visibly clean constellation reported
+ *  "299% EVM". Two consumers of one transform is exactly where that bug lives: share it. */
+function constellationVerdict(xy: number[], phaseCoh: number, ber: number):
+    { text: string; colour: string } {
+  const rot = constellationAngle(xy);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const rx: number[] = [], ry: number[] = [];
+  let n = 0, sumAbsX = 0, sumY2 = 0, sumXErr2 = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const r2 = xy[i] * xy[i] + xy[i + 1] * xy[i + 1];
+    if (r2 < 1) continue;
+    const x = xy[i] * cr - xy[i + 1] * sr;
+    const y = xy[i] * sr + xy[i + 1] * cr;
+    rx.push(x); ry.push(y);
+    n++; sumAbsX += Math.abs(x); sumY2 += y * y;
+  }
+  if (n < 8) return { text: 'no lock', colour: C.bad };
+  const meanAbsX = sumAbsX / n;
+  if (meanAbsX < 1) return { text: 'no lock', colour: C.bad };
+  for (let i = 0; i < rx.length; i++) { const dx = Math.abs(rx[i]) - meanAbsX; sumXErr2 += dx * dx; }
+  const evm = (Math.sqrt((sumY2 + sumXErr2) / n) / meanAbsX) * 100;
+  // ★ EVM assumes two lobes. A ROTATING constellation defeats that — the points are ordered,
+  // not scattered — so it reports a huge figure for a signal decoding flawlessly.
+  if (phaseCoh < 0.35 && ber >= 0 && ber < 20)
+    return { text: 'rotating — unlocked encoder', colour: C.warn };
+  // ★ "SCATTER", not "EVM": the correct term means nothing to someone new to this, and the
+  // whole panel is written to explain itself rather than assume.
+  if (evm < 45) return { text: `clean · ${evm.toFixed(0)}% scatter`,  colour: C.good };
+  if (evm < 80) return { text: `usable · ${evm.toFixed(0)}% scatter`, colour: C.warn };
+  return { text: `noisy · ${evm.toFixed(0)}% scatter`, colour: C.bad };
+}
+
 /** ★★ The constellation. Two tight lobes = a clean BPSK subcarrier; a RING means the encoder
  *  is sweeping against the pilot, which is a diagnosis and not a fault of ours. Points arrive
  *  pre-scaled x100 and clipped to +/-127 by the server. */
@@ -110,9 +179,13 @@ function Constellation({ xy, size }: { xy: number[]; size: number }) {
   const pts = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     const half = size / 2;
+    const rot = constellationAngle(xy);
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const k = constellationScale(xy, size);
     for (let i = 0; i + 1 < xy.length; i += 2) {
-      out.push({ x: half + (xy[i] / 127) * half * 0.92,
-                 y: half - (xy[i + 1] / 127) * half * 0.92 });
+      const x = xy[i] * cr - xy[i + 1] * sr;
+      const y = xy[i] * sr + xy[i + 1] * cr;
+      out.push({ x: half + x * k, y: half - y * k });
     }
     return out;
   }, [xy, size]);
@@ -123,6 +196,38 @@ function Constellation({ xy, size }: { xy: number[]; size: number }) {
       <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color="rgba(255,160,0,0.18)" />
       {pts.map((p, i) => (
         <Circle key={i} cx={p.x} cy={p.y} r={1.2} color="rgba(125,255,154,0.75)" />
+      ))}
+    </Canvas>
+  );
+}
+
+/** ★★ THE SYMBOL TRACE — the "two lines" read, and the one most people find easier than the
+ *  constellation. Symbol value against time: two clean bands with a clear gap means every bit
+ *  is being decided with margin; a filled gap means bits are landing near the threshold, and
+ *  the block errors follow. Same de-rotation and scale as the constellation — |x| after
+ *  de-rotation is the wanted component. */
+function SymbolTrace({ xy, width, height }: { xy: number[]; width: number; height: number }) {
+  const pts = useMemo(() => {
+    const out: { x: number; y: number }[] = [];
+    if (xy.length < 4) return out;
+    const rot = constellationAngle(xy);
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const k = constellationScale(xy, height) * 0.9;   // same scale, a touch of headroom
+    const mid = height / 2;
+    const n = xy.length / 2;
+    for (let i = 0; i < n; i++) {
+      const x = xy[i * 2] * cr - xy[i * 2 + 1] * sr;
+      out.push({ x: (i / (n - 1)) * (width - 2) + 1, y: mid - x * k });
+    }
+    return out;
+  }, [xy, width, height]);
+  return (
+    <Canvas style={{ width, height }}>
+      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      {/* The decision threshold — the line a symbol must not stray across. */}
+      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.35)" />
+      {pts.map((p, i) => (
+        <Circle key={i} cx={p.x} cy={p.y} r={0.9} color="rgba(120,255,140,0.85)" />
       ))}
     </Canvas>
   );
@@ -233,27 +338,111 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     }
   }
 
-  // ── Clock. The offset is in HALF-hours, which is why India works. ───────────
-  let ctTxt = DASH;
-  if (x && x.ct >= 0) {
-    const local = x.ct + (x.ctoff ?? 0) * 30;
-    const wrapped = ((local % 1440) + 1440) % 1440;
-    const hh = String(Math.floor(wrapped / 60)).padStart(2, '0');
-    const mm = String(wrapped % 60).padStart(2, '0');
-    const off = (x.ctoff ?? 0) / 2;
-    ctTxt = `${hh}:${mm} · UTC${off >= 0 ? '+' : ''}${off}`;
+  // ── DI — decoder identification, four bits across four groups ───────────────
+  const diV = (raw ? x?.diRaw : x?.di) ?? -1;
+  let diTxt = DASH;
+  if (diV >= 0) {
+    const d: string[] = [diV & 1 ? 'Stereo' : 'Mono'];
+    if (diV & 2) d.push('Artificial head');
+    if (diV & 4) d.push('Compressed');
+    if (diV & 8) d.push('Dynamic PTY');
+    diTxt = d.join(' · ');
   }
 
+  // ── Clock (4A). ★ Shown as TRANSMITTED with its offset stated, not converted to local —
+  // the offset identifies the network's timezone and is information in its own right.
+  // ★★ CT arrives ONCE A MINUTE against ~11 groups a second — about one group in 660 — and
+  // needs both blocks C and D intact with no repetition to fall back on. So a dash means
+  // "not caught yet" far more often than "not transmitted"; saying "waiting" stops the user
+  // concluding the station does not send it.
+  const ctV = x?.ct ?? -1;
+  const g4a = x?.grp?.[8] ?? 0;          // group 4A = index 4*2+0
+  let ctTxt = DASH;
+  if (ctV < 0) {
+    if ((x?.gtot ?? 0) > 0) ctTxt = g4a > 0 ? 'seen, damaged' : 'waiting… (1/min)';
+  } else {
+    const hh = String(Math.floor(ctV / 60)).padStart(2, '0');
+    const mm = String(ctV % 60).padStart(2, '0');
+    const off = x!.ctoff;
+    ctTxt = `${hh}:${mm} ${off === 0 ? 'UTC' : `UTC${off > 0 ? '+' : '−'}${Math.abs(off) / 2}`}`;
+  }
+
+  // ── PIN — the scheduled start of the current programme (1A) ─────────────────
+  const pinTxt = (x && x.pinDay > 0)
+    ? `day ${x.pinDay} ${String(x.pinHour).padStart(2, '0')}:${String(x.pinMin).padStart(2, '0')}`
+    : DASH;
+
+  // ── Country. ★ Say WHY it is blank: the flag logic refuses to guess, so "waiting" is the
+  // honest reading rather than a bare dash that looks like a failure.
+  const countryTxt = p.countryIso
+    ? `${p.countryIso.toUpperCase()} · from PI`
+    : (x?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : DASH;
+
+  // ── Group share + rate ──────────────────────────────────────────────────────
+  const grp = x?.grp ?? [];
+  const tot = x?.gtot ?? 0;
+  let groupShareTxt = DASH;
+  if (tot > 0) {
+    const parts: { n: string; pc: number }[] = [];
+    for (let i = 0; i < grp.length; i++) {
+      if (!grp[i]) continue;
+      parts.push({ n: `${i >> 1}${(i & 1) ? 'B' : 'A'}`, pc: Math.round((grp[i] / tot) * 100) });
+    }
+    parts.sort((a, b) => b.pc - a.pc);
+    // ★ SAY WHAT THE PERCENTAGES ARE OF. There are two percentage figures on this panel —
+    // this one and the block ERROR RATE — and a bare "0A 40%" gives no clue which it is.
+    if (parts.length) groupShareTxt = `of ${tot} groups: ${parts.map(q => `${q.n} ${q.pc}%`).join('  ')}`;
+  }
+
+  // ★★ RATE FROM SUCCESSIVE DELTAS, never total-over-elapsed. `gtot` accumulates from when the
+  // DECODER started, but the panel opens later — dividing one by the other reported 113/s
+  // against a theoretical maximum of 11.4. Two clocks with different origins is not a rate.
+  const rateRef = useRef({ tot: 0, at: 0, rate: 0 });
+  {
+    const now = Date.now();
+    const r = rateRef.current;
+    if (tot > r.tot && r.at > 0) {
+      const dt = (now - r.at) / 1000;
+      if (dt > 0.2) {
+        const inst = (tot - r.tot) / dt;
+        r.rate = r.rate > 0 ? r.rate * 0.7 + inst * 0.3 : inst;
+        r.tot = tot; r.at = now;
+      }
+    } else if (tot !== r.tot) { r.tot = tot; r.at = now; }
+  }
+  const rateTxt = tot > 0
+    ? (rateRef.current.rate > 0
+        ? `${rateRef.current.rate.toFixed(1)}/s of 11.4 · ${tot} total`
+        : `${tot} total`)
+    : DASH;
+
+  // ── AF score: confirmed against glimpsed. Below 100% means entries arrive damaged.
+  const afSeen = x?.afseen ?? 0;
+  const afScoreTxt = afSeen > 0
+    ? `${(x?.af.length ?? 0)}/${afSeen} · ${Math.round(((x?.af.length ?? 0) / afSeen) * 100)}%`
+    : DASH;
+
+  const verdict = constellationVerdict(x?.xy ?? [], coh, ber);
   const odas = x?.oda ?? [];
   const eons = x?.eon ?? [];
   const afs  = x?.af ?? [];
   const nowPlaying = [x?.rtpArtist, x?.rtpTitle].filter(Boolean).join(' — ');
 
-  const height = p.tall ? '78%' : '46%';
+  // ★★ A PERCENTAGE HEIGHT NEEDS A PARENT WITH A HEIGHT. This was maxHeight:'46%' on a child
+  // of an absolutely-positioned wrap that sets only left/right/bottom — so the percentage had
+  // nothing to resolve against and the panel came out small and floating mid-screen
+  // (Stuart, 2026-07-27). ★ The `as any` needed to force that string past the type checker was
+  // the tell; RN's own types say maxHeight here should be a number.
+  // Measure the window and work in pixels, minus the space the panel is anchored above.
+  const { height: winH } = useWindowDimensions();
+  const avail = Math.max(180, winH - p.bottomOffset - 24);
+  // ★ Standard is generous on purpose: the plots are the point of this panel, and at 46% they
+  // sat below the fold with nothing on screen to suggest scrolling.
+  const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.58);
 
   return (
     <View style={[s.wrap, { bottom: p.bottomOffset }]}>
-      <View style={[s.inner, { maxHeight: height as any }]}>
+      <View style={[s.inner, { maxHeight: maxH }]}>
         <View style={s.header}>
           <Text style={s.title}>ADV RDS</Text>
           <View style={{ flex: 1 }} />
@@ -261,8 +450,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             style={[s.hbtn, raw && s.hbtnActive]}>
             <Text style={[s.hbtnTxt, raw && s.hbtnTxtActive]}>RAW</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => p.onTall(!p.tall)} style={s.hbtn}>
-            <Text style={s.hbtnTxt}>{p.tall ? '▾' : '▴'}</Text>
+          {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
+              was broken it also appeared to do nothing at all. */}
+          <TouchableOpacity onPress={() => p.onTall(!p.tall)}
+                            style={[s.hbtn, p.tall && s.hbtnActive]} hitSlop={6}>
+            <Text style={[s.hbtnTxt, p.tall && s.hbtnTxtActive]}>{p.tall ? 'SMALL' : 'BIG'}</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={p.onClose} style={s.hbtn} hitSlop={8}>
             <Text style={[s.hbtnTxt, { color: C.closeCl }]}>✕</Text>
@@ -279,57 +471,79 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             </Text>
           )}
 
-          <Row raw={raw} label="PI"      value={p.pi ?? DASH} />
-          <Row raw={raw} label="PI DETAIL" value={piNum > 0
-            ? `${COV[(piNum >> 8) & 0xF]} · ref ${piNum & 0xFF} · cc ${(piNum >> 12) & 0xF}`
-            : DASH} />
-          <Row raw={raw} label="PS"      value={p.ps || DASH} />
-          <Row raw={raw} label="LONG PS" value={x?.longPs || DASH} />
-          <Row raw={raw} label="PTY"     value={ptyTxt}
-               conf={(x?.pty ?? -1) >= 0 || ptyV < 0 ? (x?.pty ?? -1) >= 0 : false} />
-          <Row raw={raw} label="PTYN"    value={x?.ptyn || DASH} />
-          <Row raw={raw} label="FLAGS"   value={flags.length ? flags.join(' · ') : DASH}
+          {/* ★★ THE LABELS AND THE VALUES MATCH THE WEB CLIENT EXACTLY, field for field and in
+              its order. Two clients describing the same decoder differently is worse than one
+              of them being sparse: a DXer comparing a phone against a laptop on the same
+              station cannot tell a real difference from a naming difference. */}
+          <Row raw={raw} label="PI"          value={p.pi ?? DASH} />
+          <Row raw={raw} label="Station"     value={p.ps || DASH} />
+          <Row raw={raw} label="Type"        value={ptyTxt}
+               conf={(x?.pty ?? -1) >= 0} />
+          <Row raw={raw} label="Flags"       value={flags.length ? flags.join(' · ') : DASH}
                conf={(x?.tp ?? -1) >= 0 || (x?.ms ?? -1) >= 0} />
-          <Row raw={raw} label="RADIOTEXT" value={p.rt || DASH} />
-          <Row raw={raw} label="NOW PLAYING" value={nowPlaying || DASH} />
-          <Row raw={raw} label="LANGUAGE" value={x?.lang ? (LANGS[x.lang] ?? `code ${x.lang}`) : DASH} />
-          <Row raw={raw} label="CLOCK"   value={ctTxt} />
-          <Row raw={raw} label="BER"     value={ber >= 0 ? `${ber}%` : DASH} />
-          <Row raw={raw} label="GROUPS"  value={x && x.gtot > 0 ? String(x.gtot) : DASH} />
-
-          <Text style={s.section}>SIGNAL</Text>
-          {/* ★ Say what the level is relative to: on its own a bare number invites the
-              reading that the signal is weak, when it is a normal injection ratio. */}
-          <Row raw={raw} label="PILOT DEV" value={pilotTxt} colour={pilotCol} />
-          <Row raw={raw} label="RDS DEV"   value={rdsDevTxt} colour={rdsDevCol} />
-          <Row raw={raw} label="RDS PHASE" value={phaseTxt} colour={phaseCol} />
-
-          <Text style={s.section}>NETWORK</Text>
-          <Row raw={raw} label="ODA" value={odas.length
+          {/* Block error rate, before correction, last 12 groups. */}
+          <Row raw={raw} label="Errors"      value={ber >= 0 ? `${ber}%` : DASH} />
+          <Row raw={raw} label="Pilot dev"   value={pilotTxt} colour={pilotCol} />
+          <Row raw={raw} label="RDS dev"     value={rdsDevTxt} colour={rdsDevCol} />
+          <Row raw={raw} label="RDS↔pilot"   value={phaseTxt} colour={phaseCol} />
+          <Row raw={raw} label="RadioText"   value={p.rt || DASH} />
+          <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
+          <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />
+          <Row raw={raw} label="PTYN"        value={x?.ptyn || DASH} />
+          <Row raw={raw} label="Language"    value={x?.lang ? (LANGS[x.lang] ?? `code ${x.lang}`) : DASH} />
+          <Row raw={raw} label="PIN"         value={pinTxt} />
+          <Row raw={raw} label="ODA"         value={odas.length
             ? odas.map(o => `${ODA_NAMES[o.aid] ?? o.aid} in ${o.grp >> 1}${(o.grp & 1) ? 'B' : 'A'}`).join(', ')
             : DASH} />
-          {/* ★ EON — the sister stations. TA on one of them is why a car radio switches over. */}
-          <Row raw={raw} label="EON" value={eons.length
+          {/* EON — the sister stations. TA on one of them is why a car radio switches over. */}
+          <Row raw={raw} label="Other networks" value={eons.length
             ? eons.map(e => {
                 const ps = e.ps.trim();
                 const f = e.af ? ` ${(e.af / 1000).toFixed(1)}` : '';
                 return `${ps || e.pi}${f}${e.ta === 1 ? ' [TA]' : ''}`;
               }).join('  ')
             : DASH} />
-          <Row raw={raw} label="AF" value={afs.length
-            ? afs.map(a => (a / 1000).toFixed(1)).join(' ') : DASH} />
+          {/* DI — four single bits spread across four groups, so one bad group could once set
+              a flag for the whole session. In RAW you can watch them flicker: a genuine flag
+              sits steady across hundreds of groups, corruption does not. */}
+          <Row raw={raw} label="DI"          value={diTxt} conf={(x?.di ?? -1) >= 0} />
+          <Row raw={raw} label="Clock"       value={ctTxt} />
+          <Row raw={raw} label="Country"     value={countryTxt} />
+          <Row raw={raw} label="PI detail"   value={piNum > 0
+            ? `${COV[(piNum >> 8) & 0xF]} · ref ${piNum & 0xFF} · cc ${(piNum >> 12) & 0xF}`
+            : DASH} />
+          <Row raw={raw} label="Rate"        value={rateTxt} />
+          {/* ★ AF score and AF MHz are DEAD FIELDS in the web client — the markup is there but
+              nothing ever fills them, so they show a permanent dash. The data is already on
+              the wire (af[] and afseen), so they are populated properly here. */}
+          <Row raw={raw} label="AF score"    value={afScoreTxt} />
+          <Row raw={raw} label="AF MHz"      value={afs.length
+            ? afs.map(a => (a / 1000).toFixed(1)).join('  ') : DASH} />
+          <Row raw={raw} label="Group share" value={groupShareTxt} />
 
           <Text style={s.section}>PLOTS</Text>
           <View style={s.plots}>
             <View>
               <Text style={s.plotLbl}>CONSTELLATION</Text>
               <Constellation xy={x?.xy ?? []} size={120} />
+              <Text style={[s.verdict, { color: verdict.colour }]}>{verdict.text}</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.plotLbl}>MPX</Text>
               <Mpx mpx={x?.mpx ?? []} width={180} height={120} />
             </View>
           </View>
+          {/* ★ THE SYMBOL TRACE, full width — the "two lines" read, and the one most people
+              find easier than the constellation. It was missing entirely (Stuart, 2026-07-27),
+              which mattered because it is the plot that actually explains the error rate:
+              two clean bands = every bit decided with margin, a filled gap = bits landing on
+              the threshold and the block errors that follow. */}
+          <Text style={s.plotLbl}>SYMBOL TRACE</Text>
+          <SymbolTrace xy={x?.xy ?? []} width={310} height={80} />
+          <Text style={s.plotNote}>
+            Two clear bands = every bit decided with margin. A filled gap means symbols are
+            landing on the decision line, and the errors follow.
+          </Text>
 
           {!!p.ps && (
             <View style={s.logoWrap}>
@@ -372,6 +586,8 @@ const s = StyleSheet.create({
   section: { fontFamily: FONT, fontSize: 9, letterSpacing: 2, color: C.goldDim,
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
-  plotLbl: { fontFamily: FONT, fontSize: 8, letterSpacing: 1, color: C.muted, marginBottom: 2 },
+  plotLbl: { fontFamily: FONT, fontSize: 8, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
+  verdict: { fontFamily: FONT, fontSize: 10, marginTop: 3 },
+  plotNote: { fontFamily: FONT, fontSize: 10, color: C.muted, marginTop: 4, lineHeight: 14 },
   logoWrap: { alignItems: 'center', marginTop: 10 },
 });

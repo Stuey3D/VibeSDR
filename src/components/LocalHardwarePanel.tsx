@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from './PanelNav';
 import GainSlider from './GainSlider';
+import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
 
 // VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
@@ -196,24 +197,32 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 </>
               )}
 
-              {/* ATTENUATOR. Ignored by the hardware while the AGC is on, so say so rather
-                  than let someone drag a control that is being overridden. */}
+              {/* ATTENUATOR — a SLIDER, like every other gain control in the app. It is a
+                  continuous quantity you sweep while watching the noise floor, not something
+                  you step to a known number, and steppers make that a chore.
+                  ★ Ignored by the hardware while the AGC is on, so say so rather than let
+                  someone drag a control that is being overridden. */}
               <Text style={styles.section}>ATTENUATOR</Text>
-              <View style={styles.stepperRow}>
-                <TouchableOpacity
-                  style={[styles.stepBtn, slot(() => p.onAhfAtt?.(Math.max(0, (p.ahfAtt ?? 0) - 1)))
-                          && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
-                  onPress={() => p.onAhfAtt?.(Math.max(0, (p.ahfAtt ?? 0) - 1))}>
-                  <Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
-                <Text style={styles.stepVal}>
-                  {(p.ahfAtt ?? 0) * (p.radio?.attStepDb ?? 6)} dB
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider
+                  style={{ flex: 1, height: 40 }}
+                  minimumValue={0}
+                  maximumValue={(p.radio?.attSteps ?? 9) - 1}
+                  step={1}
+                  value={p.ahfAtt ?? 0}
+                  onValueChange={(v) => p.onAhfAtt?.(Math.round(v))}
+                  minimumTrackTintColor={C.abtn}
+                  maximumTrackTintColor="#444"
+                  thumbTintColor={C.gold}
+                />
+                <Text style={styles.sliderEnd}>
+                  {((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)}
                 </Text>
-                <TouchableOpacity
-                  style={[styles.stepBtn, slot(() => p.onAhfAtt?.(Math.min((p.radio?.attSteps ?? 9) - 1, (p.ahfAtt ?? 0) + 1)))
-                          && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
-                  onPress={() => p.onAhfAtt?.(Math.min((p.radio?.attSteps ?? 9) - 1, (p.ahfAtt ?? 0) + 1))}>
-                  <Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
               </View>
+              <Text style={styles.stepVal}>
+                {(p.ahfAtt ?? 0) * (p.radio?.attStepDb ?? 6)} dB
+              </Text>
               <Text style={styles.note}>
                 {p.ahfAgc
                   ? 'The AGC is on, so the radio is setting this itself — turn AGC off to use it.'
@@ -333,6 +342,8 @@ const styles = StyleSheet.create({
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
   stepBtnTxt: { fontSize: 20, color: C.gold },
+  sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sliderEnd: { color: C.dim, fontSize: 12, minWidth: 26, textAlign: 'center' },
   stepVal: { fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
   toggleLabel: { fontSize: 14, color: C.muted },

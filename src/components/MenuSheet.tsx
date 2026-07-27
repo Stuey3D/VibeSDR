@@ -211,7 +211,9 @@ export interface MenuSheetProps {
 
   onClose:          () => void;
   onBack?:          () => void;
-  /** V4 local hardware: opens the RTL-SDR controls submenu (Android only). */
+  /** The connected radio's model, from the server — names the controls button. */
+  radioModel?: string;
+  /** V4 local hardware: opens the radio's controls submenu (Android only). */
   onLocalHardware?: () => void;
   /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
   isTcp?:          boolean;
@@ -629,7 +631,7 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
+  onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   isFavourite = false, onToggleFavourite,
@@ -896,7 +898,10 @@ export default function MenuSheet({
             {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
             {onLocalHardware && (<>
               <SectionLabel label="LOCAL HARDWARE" icon="hardware" first />
-              <Btn label="RTL-SDR Controls  ›" full onPress={onLocalHardware} />
+              {/* ★ The BUTTON has to name the radio too, not just the panel it opens. The
+                  header was fixed and this was not, so the menu still announced an RTL-SDR
+                  while the panel behind it said Airspy (Stuart, 2026-07-27). */}
+              <Btn label={`${radioModel || 'Local SDR'} Controls  \u203a`} full onPress={onLocalHardware} />
             </>)}
 
             {/* PROFILE moved to the FREQUENCY popup: on OWRX a profile IS a frequency
