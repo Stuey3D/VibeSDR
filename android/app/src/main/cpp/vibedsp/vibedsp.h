@@ -537,6 +537,9 @@ private:
     char rt_[65] = {0};
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
     int pty_ = -1, tp_ = -1, ta_ = -1, ms_ = -1;
+    // Confirmation state for the block-B fields — see the note in parseGroup.
+    int ptyCand_ = -1, tpCand_ = -1;
+    bool ptySeen_ = false, trustedB_ = false;
     // ★ CONFIRMATION BY REPETITION, as everything else here uses. An AF that arrived once
     // could be a mis-corrected block; the list repeats endlessly, so a real one comes back
     // within seconds. Nothing is published until it has been seen kAfConfirm times.

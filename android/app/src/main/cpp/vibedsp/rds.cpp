@@ -561,6 +561,7 @@ void RdsDecoder::reset() {
     ecc_ = 0;
     piLast_ = 0; piSeen_ = false; grpRepairBits_ = 0; piConfirmedVal_ = 0;
     pty_ = tp_ = ta_ = ms_ = -1; afN_ = 0;
+    ptyCand_ = tpCand_ = -1; ptySeen_ = false; trustedB_ = false;
     for (int i = 0; i < kMaxAf; ++i) afHits_[i] = 0;
     di_ = 0; diSeen_ = 0; ctMin_ = -1; ctOff_ = 0;
     rtpGroup_ = -1; lpsSeen_ = 0; rtAb_ = 0; rtAbSeen_ = false;
@@ -710,9 +711,21 @@ void RdsDecoder::parseGroup() {
     const uint16_t pi = haveA ? blk_[0] : piConfirmedVal_;
     const int gtype = (blk_[1] >> 12) & 0xF;
     const int ver   = (blk_[1] >> 11) & 1;
-    // ★ FREE, from a block B we have already validated: PTY and TP are in EVERY group.
-    pty_ = (blk_[1] >> 5) & 0x1F;
-    tp_  = (blk_[1] >> 10) & 1;
+    // ★★ CONFIRMED BY REPETITION, like everything else here. PTY and TP ride in block B of
+    // EVERY group, and were accepted unconditionally — so on a weak signal ONE mis-corrected
+    // block B set a wrong programme type and it STUCK, because the sticky aggregate cannot
+    // tell a good reading from a bad one (Stuart, on a station at 85% block errors,
+    // 2026-07-27: "the programme type is wrong but otherwise its all there").
+    // ★ They arrive ~11 times a second, so demanding two agreeing readings costs under
+    // 200 ms and removes the whole class of one-bad-group poisoning. A clean group is
+    // trusted at once; only a repaired one has to prove itself.
+    {
+        const int pty = (blk_[1] >> 5) & 0x1F;
+        const int tp  = (blk_[1] >> 10) & 1;
+        if (trustedB_ || (ptySeen_ && pty == ptyCand_)) pty_ = pty;
+        if (trustedB_ || (ptySeen_ && tp  == tpCand_))  tp_  = tp;
+        ptyCand_ = pty; tpCand_ = tp; ptySeen_ = true;
+    }
     const int gidx = gtype * 2 + ver;
     if (gidx >= 0 && gidx < 32) { ++grpCount_[gidx]; ++grpTotal_; }
 
@@ -722,6 +735,9 @@ void RdsDecoder::parseGroup() {
     // A group with no repaired blocks is trusted outright; one that needed correction
     // must agree with the previous reception before it is allowed to change anything.
     const bool trusted = (grpRepairBits_ == 0);
+    // Block B specifically — PTY and TP live there, so their trust depends on B alone
+    // rather than on whether some other block in the group needed repair.
+    trustedB_ = (blkRepair_[1] == 0);
     const bool piConfirmed = (piSeen_ && pi == piLast_) || (!haveA && pi == piConfirmedVal_);
     if (haveA) { piLast_ = pi; piSeen_ = true; }
     if (!trusted && !piConfirmed) return;
