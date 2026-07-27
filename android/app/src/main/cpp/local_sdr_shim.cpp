@@ -3244,11 +3244,32 @@ struct LocalSdrShim::Impl {
             }
             // chat / cw-spot / subscribe_chat messages are ignored (no server here).
         }
-        stopDecoder();
-        stopSpots();
-        { std::lock_guard<std::mutex> lk(clientMtx); if (dxClient == sock) dxClient = nullptr; }
+        // ★★★ ONLY TEAR DOWN IF WE ARE STILL THE CURRENT CLIENT — a DEPARTING socket must never
+        // switch off state a NEWER one has already asked for.
+        //
+        // The old code guarded the POINTER against a newer client but tore the decoder and the
+        // spots down unconditionally, which loses a race that a backgrounded browser tab runs
+        // reliably:
+        //   1. the tab is frozen, its socket drops, and this thread is scheduled to exit;
+        //   2. the client reconnects 3s later, re-attaches `rds` and re-subscribes spots —
+        //      the shim keeps no per-client state, so re-asserting is CORRECT and expected;
+        //   3. only THEN does this tail run, calling stopDecoder() (rdsxOn = false) and
+        //      stopSpots() — killing the new client's stream;
+        //   4. `dxClient == sock` is false, so the pointer is left alone, which HID the damage.
+        // The client is none the wiser: its socket is open and it was told "attached", so it
+        // never retries. The Advanced RDS box goes BLANK and stays blank, and digital spots
+        // stop — together, after the tab has been in the background (Stuart, 2026-07-27).
+        //
+        // ★★ Same shape as the per-client-state-in-globals family: state owned by the SERVER
+        // but switched by whichever CLIENT happened to speak last. Guard the ACTION, not just
+        // the bookkeeping that follows it.
+        bool stillCurrent;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          stillCurrent = (dxClient == sock);
+          if (stillCurrent) dxClient = nullptr; }
+        if (stillCurrent) { stopDecoder(); stopSpots(); }
         sock->close();
-        LOGI("dxcluster WS disconnected");
+        LOGI("dxcluster WS disconnected%s", stillCurrent ? "" : " (superseded — kept decoder)");
     }
 
     // ── IQ producer (runs on the libusb/socket reader thread) ───────────────

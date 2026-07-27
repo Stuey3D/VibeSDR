@@ -3314,11 +3314,25 @@ function initSpotFilters() {
  * Opens even with no spots — a button that does nothing reads as broken.
  */
 function openSpotsMap() {
-  const rows = filteredSpots().filter(s => s.grid && s.grid.length >= 4);
   const me = myPos();
 
-  const pts = rows.map(s => {
-    const p = gridToLatLon(s.grid)!;
+  // ★★★ PARSE, THEN FILTER — never filter by LENGTH and then assert the parse. `gridToLatLon`
+  // is strict (^[A-R]{2}[0-9]{2}([A-X]{2})?$), so plenty of strings pass "length >= 4" and
+  // still return null: a 5-character grid, a 7-character one, or junk like "AB1X" out of a
+  // corrupt FT8 decode. The old code asserted the result non-null with `!` and then read
+  // `p.lat`, so ONE malformed grid anywhere in the list threw a TypeError inside the click
+  // handler — and the MAP BUTTON THEN DID NOTHING, silently, for as long as that spot stayed
+  // in the list. Closing the map and finding it would not reopen is exactly this
+  // (Stuart, 2026-07-27). A bad decode must cost us that one spot, not the whole feature.
+  const rows: { s: SpotRow; p: { lat: number; lon: number } }[] = [];
+  let dropped = 0;
+  for (const s of filteredSpots()) {
+    const p = gridToLatLon(s.grid);
+    if (p) rows.push({ s, p }); else if (s.grid) dropped++;
+  }
+  if (dropped) console.warn(`[map] ${dropped} spot(s) had an unparseable grid`);
+
+  const pts = rows.map(({ s, p }) => {
     return {
       callsign: s.callsign, grid: s.grid, mode: s.mode, band: s.band, snr: s.snr,
       frequency: s.frequency, timestamp: s.timestamp,
