@@ -107,6 +107,18 @@ public:
     void setRfNotch(bool on);
     void setDabNotch(bool on);
     void setBiasT(bool on);
+    /** Start on an Airspy HF+ (Discovery / Dual Port). Returns the port, or -1 with err set.
+     *  ★ The requested sample rate is a HINT — the radio's own list wins, so read back
+     *  getVibeServerStatus().sampleRate rather than assuming what you asked for. */
+    int startAirspyHf(int index, double centerFreq, double sampleRate, int gainTenthDb,
+                      int fftSize, double fftRate, const std::string& mode, std::string& err);
+    /** Airspy HF+ only controls. No-ops on any other source. */
+    void setAhfAgc(bool on);
+    void setAhfAgcThreshold(bool high);
+    void setAhfAttenuation(int steps);
+    void setAhfLna(bool on);
+    void setAhfCalibrationPpb(int ppb);
+
     /** Start on an SDRplay RSP (14-bit). Returns the port, or -1 with err set. */
     int startSdrplay(int index, double centerFreq, double sampleRate, int gainTenthDb,
                      int fftSize, double fftRate, const std::string& mode, std::string& err);

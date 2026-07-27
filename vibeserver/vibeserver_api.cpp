@@ -3,6 +3,7 @@
 #include "vibeserver_api.h"
 #include "local_sdr_shim.h"
 #include "sdrplay_source.h"
+#include "airspyhf_source.h"
 
 #ifdef VIBE_HAVE_LIBRTLSDR
 #include <rtl-sdr.h>
@@ -76,6 +77,15 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     std::string err;
     // ★ Route to whichever driver owns this index. See vs_device_count for the flat list.
     const int nRtl = rtlCount();
+    const int nRsp = vibe::SdrplaySource::deviceCount();
+    if (cfg->deviceIndex >= nRtl + nRsp) {
+        const int port3 = LocalSdrShim::instance().startAirspyHf(
+            cfg->deviceIndex - nRtl - nRsp, cfg->centreHz, cfg->sampleRate, cfg->gainTenthDb,
+            cfg->fftSize, cfg->fftRate, cfg->mode ? cfg->mode : "wfm", err);
+        if (port3 <= 0) { copyStr(errOut, errCap, err.empty() ? "could not start" : err); g_port = 0; return -1; }
+        g_port = port3;
+        return port3;
+    }
     if (cfg->deviceIndex >= nRtl) {
         const int port2 = LocalSdrShim::instance().startSdrplay(
             cfg->deviceIndex - nRtl, cfg->centreHz, cfg->sampleRate, cfg->gainTenthDb,
@@ -129,12 +139,21 @@ void vs_sdrplay_retry(void) { vibe::SdrplaySource::retryApi(); }
 
 int vs_sdrplay_api_stuck(void) { return vibe::SdrplaySource::apiUnresponsive() ? 1 : 0; }
 
+// ★ ONE FLAT LIST, now three drivers deep: dongles, then RSPs, then Airspy HF+. The operator
+// picks a RECEIVER; which of three APIs it happens to speak is our problem. Order is fixed so
+// an index means the same thing on the next launch.
 int vs_device_count(void) {
-    return rtlCount() + vibe::SdrplaySource::deviceCount();
+    return rtlCount() + vibe::SdrplaySource::deviceCount()
+                      + vibe::AirspyHfSource::deviceCount();
 }
 
 const char* vs_device_name(int index) {
     const int nRtl = rtlCount();
+    const int nRsp = vibe::SdrplaySource::deviceCount();
+    if (index >= nRtl + nRsp) {
+        g_deviceName = vibe::AirspyHfSource::deviceName(index - nRtl - nRsp);
+        return g_deviceName.c_str();
+    }
     if (index >= nRtl) {
         g_deviceName = vibe::SdrplaySource::deviceName(index - nRtl);
         return g_deviceName.c_str();

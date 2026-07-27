@@ -310,6 +310,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       noteFrame();
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
+      updateRangeGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
       // Drop stale waterfall history when the new window shares no frequency with
@@ -2363,6 +2364,7 @@ function initDecoders(host: string, auth: AuthState) {
 
   initRdsResize();
   initRspControls();
+  initAhfControls();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
 
@@ -4023,7 +4025,19 @@ function setMode(m: SDRMode, send: boolean) {
   // ★ FM-DX is the DX workflow, and the analyser IS that workflow — someone choosing this
   // mode is chasing an identification, so open it rather than making them find it under
   // Decoders. It stays an ordinary optional decoder for plain WFM, exactly as before.
-  if (m === 'fmdx' && send && !rdsPanelOpen()) showDecBox('rds');
+  // ★★ ATTACH IT, do not merely SHOW IT. showDecBox() opens the panel; `attach` is what tells
+  // the server to start sending the extended RDS stream at all (rdsxOn — selecting the decoder
+  // IS the toggle, deliberately, so the extra work is only paid for while someone is looking).
+  // The first version called showDecBox alone, so FM-DX opened a permanently EMPTY panel: every
+  // field dashed and "no lock", while the station bar beside it decoded perfectly, because the
+  // bar uses the ordinary RDS callbacks and the panel needs the extended one
+  // (Stuart, 2026-07-27, screenshot of Heart decoding under a blank analyser).
+  if (m === 'fmdx' && send && activeDec !== 'rds') {
+    activeDec = 'rds';
+    decoders!.attach('rds', decParams('rds'));
+    showDecBox('rds');
+    syncDecButtons();
+  }
   updateVts();
   syncBw();
 }
@@ -4234,8 +4248,106 @@ function syncStep() {
 const MIN_TUNE_HZ = 10_000;
 const MAX_TUNE_HZ = 1_800_000_000;
 
+// ★★ A DETENT AT A HARDWARE GAP, not a silent clamp and not a hard wall. An Airspy HF+ tunes
+// 0.5 kHz-31 MHz and 60-260 MHz with NOTHING in between — the gap is absent hardware, not a
+// weak spot. Three ways to handle it and only one is honest:
+//   • allow it — the dial sits on a dead frequency and the radio looks broken;
+//   • clamp silently — the dial stops moving with no reason given, which reads as a bug;
+//   • BOUNCE, and say why. Tuning into the gap parks you on the edge with a message; tune
+//     again in the same direction and you jump to the far side (Stuart's design, 2026-07-27).
+// It teaches the shape of the radio instead of hiding it.
+let gapNudgeDir = 0;        // which way the last bounce was heading, 0 = not bounced
+
+/** Where the running radio can actually tune, or null when it has no gaps (a dongle). */
+function tuneRanges(): [number, number][] | null {
+  const r = radioCaps?.ranges;
+  return r && r.length > 1 ? r : null;
+}
+
 function clampTune(hz: number): number {
-  return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, Math.round(hz)));
+  const want = Math.round(hz);
+  const ranges = tuneRanges();
+  if (!ranges) { gapNudgeDir = 0; return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want)); }
+
+  // Inside a real window: nothing to do, and any pending bounce is cancelled.
+  for (const [lo, hi] of ranges) if (want >= lo && want <= hi) { gapNudgeDir = 0; return want; }
+
+  // In a gap. Work out which way we were travelling and which edges bracket us.
+  const cur = spec?.frequency ?? want;
+  const dir = want >= cur ? 1 : -1;
+  let below = -Infinity, above = Infinity;
+  for (const [lo, hi] of ranges) {
+    if (hi < want && hi > below) below = hi;
+    if (lo > want && lo < above) above = lo;
+  }
+  // ★ Second nudge the SAME way = jump the gap. The first parks on the edge and explains; only
+  // a deliberate repeat crosses, so a fast scroll cannot fling you into another band by
+  // accident.
+  if (gapNudgeDir === dir) {
+    gapNudgeDir = 0;
+    const target = dir > 0 ? above : below;
+    if (Number.isFinite(target)) {
+      showTuneGapMsg(`Jumped to ${(target / 1e6).toFixed(3)} MHz`);
+      return target;
+    }
+  }
+  gapNudgeDir = dir;
+  const edge = dir > 0 ? below : above;
+  if (!Number.isFinite(edge)) return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want));
+  const other = dir > 0 ? above : below;
+  showTuneGapMsg(Number.isFinite(other)
+    ? `${(edge / 1e6).toFixed(3)} MHz is the edge of this radio's range — tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
+    : `${(edge / 1e6).toFixed(3)} MHz is the edge of this radio's range`);
+  return edge;
+}
+
+/** ★ Black out the part of the window the radio cannot tune, and say what it is.
+ *  Only ever ONE region: the visible span is far narrower than any real gap, so a window can
+ *  overlap at most one edge. Handling several would be code for a case that cannot occur. */
+function updateRangeGap(centerHz: number, bwHz: number) {
+  const el = document.getElementById('rangeGap');
+  const note = document.getElementById('rangeGapNote');
+  const ranges = tuneRanges();
+  if (!el || !note || !ranges || bwHz <= 0) { el?.classList.remove('show'); return; }
+
+  const lo = centerHz - bwHz / 2, hi = centerHz + bwHz / 2;
+  // The window's own edges, and the range that contains the middle of it.
+  const inRange = ranges.find(([a, b]) => centerHz >= a && centerHz <= b);
+  if (!inRange) { el.classList.remove('show'); return; }
+  const [rLo, rHi] = inRange;
+
+  let x0 = 0, x1 = 0, msg = '';
+  if (hi > rHi) {                       // dead space on the RIGHT
+    x0 = (rHi - lo) / bwHz; x1 = 1;
+    const next = ranges.filter(([a]) => a > rHi).sort((p, q) => p[0] - q[0])[0];
+    msg = next
+      ? `${(rHi / 1e6).toFixed(3)} MHz is the top of this range.\nTune up again to jump to ${(next[0] / 1e6).toFixed(3)} MHz.`
+      : `${(rHi / 1e6).toFixed(3)} MHz is the top of this radio's range.`;
+  } else if (lo < rLo) {                // dead space on the LEFT
+    x0 = 0; x1 = (rLo - lo) / bwHz;
+    const prev = ranges.filter(([, b]) => b < rLo).sort((p, q) => q[1] - p[1])[0];
+    msg = prev
+      ? `${(rLo / 1e6).toFixed(3)} MHz is the bottom of this range.\nTune down again to jump to ${(prev[1] / 1e6).toFixed(3)} MHz.`
+      : `${(rLo / 1e6).toFixed(3)} MHz is the bottom of this radio's range.`;
+  } else { el.classList.remove('show'); return; }
+
+  x0 = Math.max(0, Math.min(1, x0)); x1 = Math.max(0, Math.min(1, x1));
+  if (x1 - x0 <= 0.005) { el.classList.remove('show'); return; }   // a sliver is just noise
+  el.style.left  = `${x0 * 100}%`;
+  el.style.width = `${(x1 - x0) * 100}%`;
+  note.textContent = msg;
+  el.classList.add('show');
+  el.hidden = false;
+}
+
+let gapMsgTimer: number | null = null;
+function showTuneGapMsg(text: string) {
+  const el = document.getElementById('tuneGapMsg');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add('show');
+  if (gapMsgTimer) clearTimeout(gapMsgTimer);
+  gapMsgTimer = window.setTimeout(() => el.classList.remove('show'), 4000);
 }
 
 function nudge(hz: number) {
@@ -4417,22 +4529,119 @@ const AGC_DEFAULT = -30;
 
 let radioCaps: import('./spectrum').RadioCaps | null = null;
 
+// ── Airspy HF+ ───────────────────────────────────────────────────────────────
+const AHF_PREFS = { ahfAtt: 'ahf_att', ahfPpb: 'ahf_ppb' } as const;
+
+function ahfSend(msg: Record<string, unknown>) { spec?.send({ type: 'ahf_control', ...msg }); }
+
+/** Push every current HF+ setting. Called when the radio announces itself, so a reconnect or a
+ *  server restart restores what the user chose — the same contract pushAllRspSettings has, and
+ *  for the same reason: the server rebuilds its state and would otherwise open on defaults
+ *  while the panel still showed the operator's choices. */
+function pushAllAhfSettings() {
+  if (radioCaps?.driver !== 'airspyhf') return;
+  ahfSend({
+    att:    Number($<HTMLInputElement>('ahfAtt').value),
+    lna:    $('ahfLna').classList.contains('on') ? 1 : 0,
+    thresh: $('ahfThreshSeg').querySelector('.on')?.getAttribute('data-th') === '1' ? 1 : 0,
+    ppb:    Number($<HTMLInputElement>('ahfPpb').value),
+  });
+  // ★ AGC LAST. It owns the gain path, so sending it first would let it immediately override
+  // the manual attenuation we just set — the same ordering trap the RSP's IFGR has.
+  ahfSend({ agc: $('ahfAgc').classList.contains('on') ? 1 : 0 });
+}
+
+/** Manual gain controls are meaningless while the radio's own AGC owns the front end. Disable
+ *  rather than hide: they are still the right controls, just not yours to set at that moment,
+ *  and hiding them would make AUTO look like it removed features. */
+function renderAhfEnabled() {
+  const auto = $('ahfAgc').classList.contains('on');
+  $<HTMLElement>('rowAhfAtt').style.opacity = auto ? '0.45' : '1';
+  $<HTMLInputElement>('ahfAtt').disabled = auto;
+  $<HTMLElement>('rowAhfThresh').style.opacity = auto ? '1' : '0.45';
+  for (const b of Array.from($('ahfThreshSeg').children) as HTMLButtonElement[]) b.disabled = !auto;
+}
+
+function renderAhfVals() {
+  const att = Number($<HTMLInputElement>('ahfAtt').value);
+  const stepDb = radioCaps?.attStepDb ?? 6;
+  $('ahfAttVal').textContent = `${att * stepDb} dB${att === 0 ? ' · none' : ''}`;
+  const ppb = Number($<HTMLInputElement>('ahfPpb').value);
+  $('ahfPpbVal').textContent = `${ppb} ppb`;
+}
+
+function applyAhfCaps(caps: import('./spectrum').RadioCaps | null) {
+  const steps = (caps?.attSteps ?? 9) - 1;
+  $<HTMLInputElement>('ahfAtt').max = String(Math.max(0, steps));
+  renderAhfVals();
+  renderAhfEnabled();
+  // The radio has just told us what it is — the moment to tell it what the user last chose.
+  pushAllAhfSettings();
+}
+
+function initAhfControls() {
+  const p = prefs();
+  for (const [id, key] of Object.entries(AHF_PREFS)) {
+    const v = p[key];
+    if (typeof v === 'number') $<HTMLInputElement>(id).value = String(v);
+  }
+  if (typeof p['ahf_agc'] === 'boolean') $('ahfAgc').classList.toggle('on', p['ahf_agc']);
+  if (typeof p['ahf_lna'] === 'boolean') $('ahfLna').classList.toggle('on', p['ahf_lna']);
+
+  $('ahfAgc').onclick = () => {
+    const on = !$('ahfAgc').classList.contains('on');
+    $('ahfAgc').classList.toggle('on', on);
+    $('ahfAgc').textContent = on ? 'AUTO' : 'MANUAL';
+    savePref('ahf_agc', on);
+    renderAhfEnabled();
+    ahfSend({ agc: on ? 1 : 0 });
+    // ★ Re-assert the attenuation on the way OUT of auto: the radio has been moving it, so the
+    // slider and the hardware have drifted apart and the slider is the user's intent.
+    if (!on) ahfSend({ att: Number($<HTMLInputElement>('ahfAtt').value) });
+  };
+  $('ahfLna').onclick = () => {
+    const on = !$('ahfLna').classList.contains('on');
+    $('ahfLna').classList.toggle('on', on);
+    $('ahfLna').textContent = on ? 'ON' : 'OFF';
+    savePref('ahf_lna', on);
+    ahfSend({ lna: on ? 1 : 0 });
+  };
+  $<HTMLInputElement>('ahfAtt').oninput = () => {
+    renderAhfVals();
+    const v = Number($<HTMLInputElement>('ahfAtt').value);
+    ahfSend({ att: v }); savePref('ahf_att', v);
+  };
+  $<HTMLInputElement>('ahfPpb').oninput = () => {
+    renderAhfVals();
+    const v = Number($<HTMLInputElement>('ahfPpb').value);
+    ahfSend({ ppb: v }); savePref('ahf_ppb', v);
+  };
+  segment('ahfThreshSeg', 'th', (th) => ahfSend({ thresh: th }), 'ahf_thresh');
+}
+
+
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
   const isRsp = caps?.driver === 'sdrplay';
+  const isAhf = caps?.driver === 'airspyhf';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
+  $<HTMLElement>('ahfCtls').hidden = !isAhf;
   // Dongle-only controls: hidden on anything that is not a dongle, so no inert switches.
+  // ★ PPM lives in here, and an HF+ must not show it — it has its own calibration in PARTS
+  // PER BILLION, and two frequency-correction controls disagreeing about units is exactly the
+  // "which one is real?" confusion the RSP bias-T duplication caused.
   for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
-    el.hidden = isRsp;
+    el.hidden = isRsp || isAhf;
   $('radioName').textContent = caps?.model
     ? (isRsp ? `SDRplay ${caps.model}` : caps.model)
     : (caps?.driver === 'rtl' ? 'RTL-SDR' : '—');
-  // The dongle's single gain slider is meaningless on an RSP — hide it rather than leave a
-  // control that does something unrelated to its label.
+  // The dongle's single gain slider is meaningless on an RSP, and on an HF+ there is no
+  // variable gain stage at all — hide it rather than leave a control whose label lies.
   const gainRow = $('gain').closest('.mrow') as HTMLElement | null;
-  if (gainRow) gainRow.hidden = isRsp;
+  if (gainRow) gainRow.hidden = isRsp || isAhf;
   const autoRow = $('gainAuto').closest('.mrow') as HTMLElement | null;
-  if (autoRow) autoRow.hidden = isRsp;
+  if (autoRow) autoRow.hidden = isRsp || isAhf;
+  if (isAhf) { applyAhfCaps(caps); return; }
   if (!isRsp) return;
 
   const n = caps?.lnaStates ?? 10;

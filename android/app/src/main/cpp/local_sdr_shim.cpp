@@ -15,6 +15,7 @@
 
 #include "local_sdr_shim.h"
 #include "sdrplay_source.h"
+#include "airspyhf_source.h"
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -925,6 +926,7 @@ struct LocalSdrShim::Impl {
     // where the dongle is 8 — and 2026-07-26 established that RDS is limited by the FRONT
     // END, not by our decoder, so this is how that gets tested rather than argued about.
     std::unique_ptr<vibe::SdrplaySource> sdrp;
+    std::unique_ptr<vibe::AirspyHfSource> ahf;   // Airspy HF+ (Discovery / Dual Port)
     int  sdrpIndex = 0;
     // ★★ One-shot AGC kick, once the stream is genuinely running. Cycling it inside open()
     // — immediately after Init, before any samples have flowed — still left it inert, so
@@ -938,6 +940,7 @@ struct LocalSdrShim::Impl {
     bool sdrpAgcWanted = true;
     bool sdrpSettling = true;      // true while the AGC is being kicked and settling
     bool useSdrplay() const { return (bool)sdrp; }
+    bool useAirspyHf() const { return (bool)ahf; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
 
@@ -1236,6 +1239,7 @@ struct LocalSdrShim::Impl {
         }
         else if (useTcp()) sendTcpCmd(0x01, hz);
         else if (useSdrplay()) sdrp->setFrequency((double)hz);
+        else if (useAirspyHf()) ahf->setFrequency((double)hz);
         else if (dev) rtlsdr_set_center_freq(dev, hz);
     }
 
@@ -2214,6 +2218,19 @@ struct LocalSdrShim::Impl {
         // silently did nothing (Stuart, 2026-07-26).
         // ★ One message for the lot: these exist on one kind of radio, so they have no place
         // in the shared tune/gain vocabulary that every source must understand.
+        // ★ Airspy HF+ controls, on the SPECTRUM socket like the RSP ones — that is the
+        // connection a client's control messages travel on. The first RSP attempt put them in
+        // the audio loop where nothing ever sent them, and every control silently did nothing.
+        if (type == "ahf_control") {
+            if (jsonNum(msg, "att", v))    LocalSdrShim::instance().setAhfAttenuation((int)v);
+            if (jsonNum(msg, "lna", v))    LocalSdrShim::instance().setAhfLna(v != 0);
+            if (jsonNum(msg, "thresh", v)) LocalSdrShim::instance().setAhfAgcThreshold(v != 0);
+            if (jsonNum(msg, "ppb", v))    LocalSdrShim::instance().setAhfCalibrationPpb((int)v);
+            // ★ AGC LAST, matching the client's own send order: it owns the gain path, so
+            // applying it before the manual attenuation would let it immediately override it.
+            if (jsonNum(msg, "agc", v))    LocalSdrShim::instance().setAhfAgc(v != 0);
+            return;
+        }
         if (type == "rsp_control") {
             if (jsonNum(msg, "lna", v))      LocalSdrShim::instance().setLnaState((int)v);
             if (jsonNum(msg, "ifgr", v))     LocalSdrShim::instance().setIfGainReduction((int)v);
@@ -2395,6 +2412,23 @@ struct LocalSdrShim::Impl {
             // reaches for, so the dropped samples read as a bad receiver rather than a bad
             // setting. Offer the real ceiling instead.
             j += "],\"rates\":[8000000,6000000,5000000,4000000,3000000,2048000,2000000]";
+        else if (useAirspyHf()) {
+            // ★★★ THE RADIO'S OWN LIST, not ours. An HF+ Discovery tops out near 768 kHz where
+            // the dongle list starts at 960 kHz — so EVERY rate we were offering was impossible,
+            // and the picker was showing a list the hardware would refuse (Stuart, 2026-07-27:
+            // "still got the RTL sample rates").
+            // ★ FOURTH time this exact shape has bitten today: `if (isSdrplay()) ... else
+            // <dongle>`. A two-source world written as "the other one" mis-handles the third
+            // EVERY time — see radioCapsJson and resumeCaptureIdle. Name every source.
+            j += "],\"rates\":[";
+            const auto& rl = ahf->sampleRates();
+            // Descending, to match the order the other two lists use — the client shows them
+            // in the order given and a list that runs the other way looks like a different
+            // control.
+            for (size_t i = rl.size(); i-- > 0; )
+                j += std::to_string(rl[i]) + (i ? "," : "");
+            j += "]";
+        }
         else
             j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
         // ★ And WHICH radio, plus the controls it really has. A single gain slider is a lie
@@ -3182,6 +3216,33 @@ struct LocalSdrShim::Impl {
         iqCv.notify_one();
     }
 
+    // ★ COMPLEX FLOAT STRAIGHT IN. The Airspy HF+ hands libairspyhf's callback interleaved
+    // float at roughly +/-1 — the engine's own format — so this path does no conversion at all.
+    // Routing it through the int16 one would quantise an 18-bit-effective radio down to 16 and
+    // straight back up, throwing away the dynamic range that is the entire reason to own one.
+    void enqueueIqFloat(const float* interleaved, int sampCount, bool blockIfFull) {
+        if (sampCount <= 0) return;
+        if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
+        std::vector<cf32> v((size_t)sampCount);
+        std::memcpy(v.data(), interleaved, (size_t)sampCount * sizeof(cf32));
+        {
+            std::unique_lock<std::mutex> lk(iqMtx);
+            if (iqMaxSamples > 0) {
+                if (blockIfFull) {
+                    iqSpaceCv.wait(lk, [this]{
+                        return iqQueuedSamples < iqMaxSamples || !dspRunning.load();
+                    });
+                    if (!dspRunning.load()) return;
+                } else if (iqQueuedSamples >= iqMaxSamples) {
+                    dropOldestLocked();
+                }
+            }
+            iqQueuedSamples += v.size();
+            iqQueue.push_back(std::move(v));
+        }
+        iqCv.notify_one();
+    }
+
     // Caller holds iqMtx. Counts what it discards — this used to be silent, which
     // is why the server could report a healthy link while the client broke up.
     void dropOldestLocked() {
@@ -3276,8 +3337,12 @@ struct LocalSdrShim::Impl {
     std::atomic<bool> captureIdle{false};
     void pauseCaptureIdle() {
         if (captureIdle.exchange(true)) return;               // already paused
+        // ★★ EVERY SOURCE NAMED EXPLICITLY. The final `else` used to mean "must be a dongle",
+        // which was true with two sources and silently wrong with three — see resumeCaptureIdle
+        // for what that cost.
         if (useTcp()) { tcpRunning.store(false); }
         else if (useSdrplay()) { sdrp->setPaused(true); }
+        else if (useAirspyHf()) { ahf->setPaused(true); }
         else          { restarting.store(true); if (dev) rtlsdr_cancel_async(dev); }
         if (rtlThread.joinable()) rtlThread.join();
         // ★★ LET LIBUSB FINISH REAPING THE CANCELLED TRANSFERS. rtlsdr_read_async can
@@ -3298,8 +3363,17 @@ struct LocalSdrShim::Impl {
     }
     void resumeCaptureIdle() {
         if (!captureIdle.exchange(false)) return;             // wasn't paused
+        // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
+        // is null, so the dongle branch called launchCapture() anyway — rtlsdr_read_async(NULL)
+        // returned instantly, captureDown went true, and the watchdog then could not find an RTL
+        // device and declared the receiver LOST. The Airspy had never stopped streaming, so the
+        // result was audio playing happily under a banner saying "No radio connected to this
+        // server" (Stuart, 2026-07-27, with a screenshot of exactly that).
+        // ★ Same shape as radioCapsJson's `if (!useSdrplay())`: a two-source world expressed as
+        // "the other one" quietly mis-handles the third. Name every source.
         if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
         else if (useSdrplay()) { sdrp->setPaused(false); }
+        else if (useAirspyHf()) { ahf->setPaused(false); }
         else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
         LOGI("listener connected — dongle capture resumed");
     }
@@ -3518,7 +3592,12 @@ struct LocalSdrShim::Impl {
                 // cure. Safe in-process recovery needs `dev` behind a mutex that every rtlsdr_*
                 // call site respects; that is a real refactor, not a late-night patch.
                 // For now: report the truth and let the operator restart.
-                const bool back = findOurDevice() >= 0;
+                // ★ "IS IT BACK?" IS PER-SOURCE. findOurDevice() enumerates DONGLES, so asking
+                // it about an Airspy or an RSP always answers no — which would report a
+                // perfectly present radio as gone the moment this line was ever reached.
+                const bool back = useAirspyHf() ? (vibe::AirspyHfSource::deviceCount() > 0)
+                                : useSdrplay()  ? (vibe::SdrplaySource::deviceCount() > 0)
+                                                : (findOurDevice() >= 0);
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);
                     notifyDeviceState();
@@ -3657,6 +3736,14 @@ struct DesiredDsp {
     std::atomic<int>  rspIfAgc{-1};      // tri-state: -1 unset, 0 off, 1 on
     std::atomic<int>  rspRfNotch{-1};
     std::atomic<int>  rspDabNotch{-1};
+    // ★ Airspy HF+ controls, held here for exactly the reason the RSP ones are: five start
+    // paths each build a fresh Impl, and a setter that only writes through `p` is lost the
+    // moment one of them runs. Same sentinels — -1 means "the listener never chose".
+    std::atomic<int>  ahfAgc{-1};        // tri-state: -1 unset, 0 off, 1 on
+    std::atomic<int>  ahfAgcHigh{-1};
+    std::atomic<int>  ahfAtt{-1};        // 0..8, 6 dB steps
+    std::atomic<int>  ahfLna{-1};
+    std::atomic<int>  ahfPpb{INT32_MIN}; // calibration; INT32_MIN = never set
 };
 static DesiredDsp g_dsp;
 
@@ -3685,6 +3772,15 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         if (agc >= 0) impl->sdrp->setIfAgc(agc != 0);
         if (agc == 0 && g_dsp.rspIfGr.load() >= 0)
             impl->sdrp->setIfGainReduction(g_dsp.rspIfGr.load());
+    }
+    if (impl->useAirspyHf() && impl->ahf) {
+        if (g_dsp.ahfAtt.load()     >= 0) impl->ahf->setAttenuation(g_dsp.ahfAtt.load());
+        if (g_dsp.ahfLna.load()     >= 0) impl->ahf->setLna(g_dsp.ahfLna.load() != 0);
+        if (g_dsp.ahfAgcHigh.load() >= 0) impl->ahf->setAgcThreshold(g_dsp.ahfAgcHigh.load() != 0);
+        // ★ AGC LAST, as with the RSP: it owns the gain path, so setting it after the manual
+        // controls is what makes "AGC off + a chosen attenuation" land in that order.
+        if (g_dsp.ahfAgc.load()     >= 0) impl->ahf->setAgc(g_dsp.ahfAgc.load() != 0);
+        if (g_dsp.ahfPpb.load() != INT32_MIN) impl->ahf->setCalibrationPpb(g_dsp.ahfPpb.load());
     }
     const float nrs = g_dsp.nrStrength.load();
     if (nrs >= 0.0f) {   // only if the client ever set one; else leave the engine's own
@@ -3922,6 +4018,78 @@ static double nowSecsStatic() {
  * ★ The samples land in enqueueIqInt16 — the SAME queue the SpyServer path already fills,
  * which is why 14-bit hardware needed no new DSP: the shim has handled int16 IQ all along.
  */
+// ★ Mirrors startSdrplay closely on purpose — same lifecycle, same ordering, same watchdog.
+// The differences are all in the source object: complex float instead of int16, a rate list
+// enumerated from the device, and a tuning range with a hole in it.
+int LocalSdrShim::startAirspyHf(int index,
+                                double centerFreq, double sampleRate, int gainTenthDb,
+                                int fftSize, double fftRate, const std::string& mode,
+                                std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on Airspy HF+ start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->fftRate = fftRate;
+    impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "wfm" : mode;
+    impl->lastGainTenthDb = gainTenthDb;
+
+    impl->ahf = std::make_unique<vibe::AirspyHfSource>();
+    Impl* self = impl;
+    impl->ahf->setSink([self](const float* iq, int n) {
+        self->lastIqAt.store(nowSecsStatic(), std::memory_order_relaxed);
+        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
+    });
+    if (!impl->ahf->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
+        delete impl; return -1;
+    }
+    // ★ THE RADIO DECIDES THE RATE, not the caller. An HF+ Discovery tops out near 768 kHz
+    // where a dongle does 2.4 MSPS, so a saved preference from a previous radio would ask for
+    // something impossible — open() has already snapped it to the nearest real one, and
+    // everything downstream (FFT size, channel decimation) must be built from THAT, not from
+    // what was requested.
+    const auto& rl = impl->ahf->sampleRates();
+    impl->sampleRate = rl.empty() ? sampleRate : (double)impl->ahf->nearestRate(sampleRate);
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->startEngine();
+    impl->buildAudio();
+
+    if (!impl->ahf->start(err)) {
+        impl->teardownAudio(); impl->rx.stop();
+        impl->ahf->close(); delete impl; return -1;
+    }
+
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
+        impl->teardownAudio(); impl->rx.stop();
+        impl->ahf->close(); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startDspThread();
+
+    p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);
+    impl->startHotplugWatch();   // same silence watchdog as every other source
+    LOGI("Airspy HF+ started: index=%d center=%.0f rate=%.0f port=%d",
+         index, centerFreq, impl->sampleRate, chosen);
+    return chosen;
+}
+
 int LocalSdrShim::startSdrplay(int index,
                                double centerFreq, double sampleRate, int gainTenthDb,
                                int fftSize, double fftRate, const std::string& mode,
@@ -4245,6 +4413,20 @@ void LocalSdrShim::stopLocked() {
         impl->spy->close();
     }
     if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
+    // ★★★ STOP THE CALLBACK SOURCES HERE, BEFORE ANYTHING IS DESTROYED. libairspyhf and the
+    // SDRplay API each run their OWN streaming thread and keep calling our sink until told to
+    // stop — so leaving it to `delete impl` means that thread reaches a half-destroyed Impl.
+    // ★ Observed on the first Airspy build (Stuart, 2026-07-27): refreshing the browser tore
+    // the shim down and libairspyhf's consumer thread called enqueueIqFloat() on an Impl whose
+    // mutexes had already been destructed — std::mutex::lock() threw system_error and the
+    // process SIGABRTed. The stack was unambiguous:
+    //     consumer_threadproc -> streamCb -> enqueueIqFloat -> std::mutex::lock -> abort
+    // ★ The RSP has exactly the same shape and had only been getting away with it: its Uninit
+    // happened in ~SdrplaySource during `delete impl`, i.e. already inside teardown, with
+    // member destruction order the only thing standing between it and this same crash. Both
+    // are stopped explicitly now, in the same place every other source is.
+    if (impl->useAirspyHf()) { impl->ahf->stop(); impl->ahf->close(); }
+    if (impl->useSdrplay())  { impl->sdrp->close(); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
     // tearing the engine down, so no rx.feed runs against a destroyed engine.
@@ -4485,6 +4667,13 @@ void LocalSdrShim::setSampleRate(double rate) {
     impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
     else if (rsp) { impl->sdrp->setPaused(false); }
+    else if (impl->useAirspyHf()) {
+        // ★ The radio's own list decides — see startAirspyHf. Re-read it rather than trusting
+        // what was asked for, or every rate-derived figure downstream is built on a fiction.
+        impl->ahf->setSampleRate(rate);
+        impl->sampleRate = (double)impl->ahf->nearestRate(rate);
+        impl->ahf->setPaused(false);
+    }
     else {
         impl->launchCapture();
         impl->restarting.store(false);   // back to normal: a stop now really is an unplug
@@ -4577,6 +4766,30 @@ bool LocalSdrShim::isSdrplay() const { return p && p->useSdrplay(); }
 
 std::string LocalSdrShim::radioCapsJson() const {
     if (!p) return "";
+    // ★ AIRSPY FIRST. The RTL branch below is an `if (!useSdrplay())` early return, so ANY
+    // third driver falls into it and is reported as a dongle — which is exactly what happened:
+    // an Airspy HF+ announced itself as driver "rtl" and the client drew dongle controls for
+    // it (Stuart, 2026-07-27). A two-driver test written as "not the other one" silently
+    // mis-describes the third.
+    if (p->useAirspyHf()) {
+        // ★ WHAT THIS RADIO ACTUALLY HAS — the client shows Airspy controls only when it sees
+        // this, exactly as it does for an RSP. An HF+ has no LNA STATE table and no IF gain
+        // reduction; it has a preamp switch, an 8-step attenuator and its own AGC, so telling
+        // the client "sdrplay-shaped" would draw the wrong controls entirely.
+        auto& a = *p->ahf;
+        std::string j = ",\"radio\":{\"driver\":\"airspyhf\",\"model\":\"" + a.model() + "\"";
+        j += ",\"attSteps\":9,\"attStepDb\":6";     // 0..8 => 0..48 dB
+        j += ",\"hfLna\":true,\"hfAgc\":true,\"agcThreshold\":true,\"calPpb\":true";
+        // ★ THE TUNING HOLE, published. 31-60 MHz does not exist on this hardware, and a client
+        // that does not know cannot stop a user parking on a dead frequency and blaming us.
+        j += ",\"ranges\":[[500,31000000],[60000000,260000000]]";
+        j += ",\"rates\":[";
+        const auto& rl = a.sampleRates();
+        for (size_t i = 0; i < rl.size(); ++i)
+            j += (i ? "," : "") + std::to_string(rl[i]);
+        j += "]}";
+        return j;
+    }
     if (!p->useSdrplay()) {
         // ★ Name the dongle too. The client had nothing to show for a receiver, which is an
         // odd thing for a radio application to be coy about — and the USB descriptor carries
@@ -4604,6 +4817,26 @@ std::string LocalSdrShim::radioCapsJson() const {
     return j;
 }
 
+void LocalSdrShim::setAhfAgc(bool on) {
+    g_dsp.ahfAgc.store(on ? 1 : 0);
+    if (p && p->useAirspyHf()) p->ahf->setAgc(on);
+}
+void LocalSdrShim::setAhfAgcThreshold(bool high) {
+    g_dsp.ahfAgcHigh.store(high ? 1 : 0);
+    if (p && p->useAirspyHf()) p->ahf->setAgcThreshold(high);
+}
+void LocalSdrShim::setAhfAttenuation(int steps) {
+    g_dsp.ahfAtt.store(steps);
+    if (p && p->useAirspyHf()) p->ahf->setAttenuation(steps);
+}
+void LocalSdrShim::setAhfLna(bool on) {
+    g_dsp.ahfLna.store(on ? 1 : 0);
+    if (p && p->useAirspyHf()) p->ahf->setLna(on);
+}
+void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
+    g_dsp.ahfPpb.store(ppb);
+    if (p && p->useAirspyHf()) p->ahf->setCalibrationPpb(ppb);
+}
 void LocalSdrShim::setLnaState(int v)       { g_dsp.rspLna.store(v);
                                               if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
 void LocalSdrShim::setIfGainReduction(int v){ g_dsp.rspIfGr.store(v);

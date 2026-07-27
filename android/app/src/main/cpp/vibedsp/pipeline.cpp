@@ -66,11 +66,23 @@ void RxPipeline::rebuildAudio() {
     double targetCh = std::max(bwHz_ * 3.0, 12000.0);
     // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
     // real channel regardless of the RF bandwidth the user picked.
-    // ★ MAX-PERFORMANCE RDS buys a wider channel, and a wider channel needs a higher rate to
-    // carry it: 120 kHz of passband plus its transition will not fit under a 150 kHz Nyquist.
-    // 2.0x lands on 400 kHz for a 200 kHz channel, which is what tools/wfm_mpx_loss measured.
+    // ★★ FM-DX needs enough channel to carry a 120 kHz passband PLUS its transition — about
+    // 360 kHz of Nyquist room. It does NOT need a particular rate, and asking for one was a
+    // mistake with real consequences.
+    // ★★★ 2.0x (400 kHz) LOOKED FINE AND WAS WRONG ON A NARROW RADIO. targetCh is a floor that
+    // `floor(fs / targetCh)` turns into a decimation, so on a 2.4 MSPS dongle 400 kHz gives
+    // decim 6 -> 400 kHz, but on an Airspy HF+ sampling 768 kHz it gives decim ONE — no
+    // decimation at all, and the whole MPX chain, stereo PLL and sixteen RDS hypotheses running
+    // at 768 kHz, 2.5x anything this design has been tested at. Stuart saw it immediately:
+    // "oddly RDS is slower in FM-DX mode" (2026-07-27).
+    // ★ 1.8x asks for what is actually required and lands correctly on both: 2.4 MSPS -> decim 6
+    // -> 400 kHz, 768 kHz -> decim 2 -> 384 kHz. At 384 kHz a 120 kHz passband with a 60 kHz
+    // transition reaches its stopband at 180 kHz, comfortably inside the 192 kHz Nyquist — so
+    // the RDS benefit is identical for HALF the CPU.
+    // ★ THE LESSON: a "target rate" multiplier is a decimation in disguise. State the BANDWIDTH
+    // the filter needs and let each radio's own sample rate decide the divisor.
     if (mode_ == Mode::WFM)
-        targetCh = std::max(bwHz_ * (rdsMaxPerf_.load() ? 2.0 : 1.5), 150000.0);
+        targetCh = std::max(bwHz_ * (rdsMaxPerf_.load() ? 1.8 : 1.5), 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 

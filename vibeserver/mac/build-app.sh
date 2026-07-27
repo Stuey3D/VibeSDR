@@ -33,8 +33,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>        <string>VibeServer</string>
   <key>CFBundleIconFile</key>          <string>AppIcon</string>
   <key>CFBundlePackageType</key>       <string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.4.2</string>
-  <key>CFBundleVersion</key>           <string>17</string>
+  <key>CFBundleShortVersionString</key><string>0.5.0</string>
+  <key>CFBundleVersion</key>           <string>18</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
@@ -72,6 +72,10 @@ LIBS=$(cd "$BUILD" && ls libvibeserver_core.a libvibedsp.a 2>/dev/null | sed "s|
 RTLSDR=$(grep -m1 '^RTLSDR_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 USBLIB=$(grep -m1 '^USB_LIB:'    "$BUILD/CMakeCache.txt" | cut -d= -f2)
 OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)
+# ★ libairspyhf — BSD-3 and shipped as a real .a, so it links STATICALLY and the Airspy HF+ is
+# plug-and-play with nothing for the user to install. Optional: a machine without it still
+# builds, and simply reports no HF+ devices.
+AHFLIB=$(grep -m1 '^AIRSPYHF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 # ★ FORCE THE STATIC ARCHIVE for EVERY Homebrew lib, next to whatever find_library cached. A notarised
 # hardened-runtime app that links a Homebrew DYLIB crashes on launch for everyone: absent on machines
 # without Homebrew, and even on the dev box the hardened runtime rejects it for a Team-ID mismatch
@@ -81,6 +85,9 @@ OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)
 _rtldir=$(dirname "$RTLSDR"); [ -f "$_rtldir/librtlsdr.a" ]  && RTLSDR="$_rtldir/librtlsdr.a"
 _usbdir=$(dirname "$USBLIB"); [ -f "$_usbdir/libusb-1.0.a" ] && USBLIB="$_usbdir/libusb-1.0.a"
 _opusdir=$(dirname "$OPUSLIB"); [ -f "$_opusdir/libopus.a" ] && OPUSLIB="$_opusdir/libopus.a"
+if [ -n "$AHFLIB" ]; then
+  _ahfdir=$(dirname "$AHFLIB"); [ -f "$_ahfdir/libairspyhf.a" ] && AHFLIB="$_ahfdir/libairspyhf.a"
+fi
 
 swiftc \
   -O -target arm64-apple-macos14.0 \
@@ -89,7 +96,7 @@ swiftc \
   -I "$ROOT/vibeserver" \
   "$MAC/VibeServerApp.swift" \
   "$MAC/EibiStations.swift" \
-  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" \
+  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} \
   -lc++ \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
   -framework CoreLocation \

@@ -39,6 +39,19 @@ const BAND_FLUSH_FRAC      = 0.4;   // recentre > 40% of visible BW → flush hi
 
 const RANGE_MARGIN         = 5;     // dB margin added beyond floor/ceiling
 const NOISE_PERCENTILE     = 0.10;  // 10th percentile = noise floor estimate
+// ★★★ IGNORE THE EDGES OF THE CAPTURE WINDOW WHEN AUTO-RANGING. Every receiver rolls off at the
+// edges of its own sample window, and an SDRplay or an Airspy HF+ does so hard enough to raise
+// large skirts either side of the span. Those are the FILTER, not the band — but the auto-range
+// counted them as bins like any other, so the noise percentile and the peak were both computed
+// partly from an artefact, the scale stretched to cover it, and the waterfall blew out to white.
+// ★ The tell was decisive: zooming in ONE CLICK made it normal, because zooming excludes the
+// skirts (Stuart, 2026-07-27 — he had already seen the same thing on the RSP).
+// ★ Applied ALWAYS, not just at full span: the processor is not told the zoom level, and at any
+// zoom the outer few per cent contribute nothing the middle does not. Cheap insurance against a
+// statistic being dominated by the one part of the spectrum that is guaranteed not to be signal.
+// ★ STATISTICS ONLY. Every bin is still DISPLAYED — hiding the roll-off would be a different and
+// much worse lie than mis-scaling it.
+const EDGE_EXCLUDE_FRAC    = 0.06;  // per side, from the auto-range statistics only
 // ★★ The ceiling ignores the very top of the distribution rather than taking the single
 // strongest bin. A retune puts a brief DC/LO spike at the centre bin — one or two bins
 // tens of dB above anything real — and a single-bin maximum hands the whole palette to it,
@@ -325,7 +338,11 @@ export class SignalProcessor {
       let absoluteMax = -Infinity;
       let count = 0;
       const src = this.dbAvg!;   // the PROCESSED signal (averaged / bg-subtracted), so the scale tracks what's shown
-      for (let i = 0; i < n; i++) {
+      // ★ Skip the roll-off skirts — see EDGE_EXCLUDE_FRAC. Guarded so a very narrow frame
+      // cannot exclude itself down to nothing.
+      let edge = Math.floor(n * EDGE_EXCLUDE_FRAC);
+      if (n - 2 * edge < 16) edge = 0;
+      for (let i = edge; i < n - edge; i++) {
         const db = src[i];
         if (!isFinite(db)) continue;
         count++;

@@ -60,6 +60,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/net_shim.cpp"
     "${CPP_DIR}/mdns_responder.cpp"
     "${CPP_DIR}/sdrplay_source.cpp"
+    "${CPP_DIR}/airspyhf_source.cpp"
     "${CPP_DIR}/spyserver/spyserver_client.cpp"
     "${CPP_DIR}/spyserver/spyserver_messages.cpp"
     "${CPP_DIR}/decoders/fsk_decoder.cpp"
@@ -117,6 +118,32 @@ if(SDRPLAY_INC)
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_SDRPLAY)
 else()
   message(STATUS "SDRplay headers not found — building without RSP support")
+endif()
+
+# ── libairspyhf: Airspy HF+ Discovery / Dual Port ─────────────────────────────
+# ★★ STATIC, AND THAT IS THE WHOLE POINT — the opposite of the SDRplay block above. libairspyhf
+# is BSD-3-Clause and ships a real .a, so it links straight in: the radio is plug-and-play with
+# nothing for the user to install, and there is no dylib to be missing at launch. The RSP needs
+# dlopen only because its API is closed-source and separately installed; that objection simply
+# does not apply here.
+# ★ NOT libairspy. An Airspy R2 or Mini speaks a different API entirely (see airspyhf_source.h),
+# which is also GPL-2.0 and deprecated upstream after a relicence. Different decision, not a
+# flag on this one.
+find_library(AIRSPYHF_LIB NAMES airspyhf libairspyhf.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_path(AIRSPYHF_INC libairspyhf/airspyhf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+if(AIRSPYHF_LIB AND AIRSPYHF_INC)
+  # Prefer the static archive next to whatever find_library cached, exactly as the librtlsdr and
+  # libopus blocks do — a cached dylib path is how a notarised build ships broken.
+  get_filename_component(_ahf_dir "${AIRSPYHF_LIB}" DIRECTORY)
+  if(EXISTS "${_ahf_dir}/libairspyhf.a")
+    set(AIRSPYHF_LIB "${_ahf_dir}/libairspyhf.a")
+  endif()
+  message(STATUS "libairspyhf: ${AIRSPYHF_LIB}")
+  target_include_directories(vibeserver_core PUBLIC "${AIRSPYHF_INC}")
+  target_link_libraries(vibeserver_core PUBLIC "${AIRSPYHF_LIB}")
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPYHF)
+else()
+  message(STATUS "libairspyhf not found — building without Airspy HF+ support")
 endif()
 
 # ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────

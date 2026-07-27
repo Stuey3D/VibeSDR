@@ -512,6 +512,29 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
 
 /* ── Decoder output box (persistent, bottom-left) ─────────────────────────── */
+#tuneGapMsg {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+  z-index: 46; pointer-events: none;
+  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border); border-radius: 8px;
+  padding: 8px 14px; color: var(--btn-text); font-size: 12px; letter-spacing: 0.4px;
+  font-family: var(--mono, monospace); max-width: 70vw; text-align: center;
+  opacity: 0; transition: opacity .18s ease-out;
+}
+#tuneGapMsg.show { opacity: 1; }
+#rangeGap {
+  position: absolute; top: 0; bottom: 0; z-index: 20; pointer-events: none;
+  background: #000;
+  /* A hard edge, not a fade: the boundary is a real hardware fact and softening it would
+     suggest the signal merely tails off. */
+  border-left: 1px solid var(--btn-border); border-right: 1px solid var(--btn-border);
+  display: none; align-items: center; justify-content: center;
+}
+#rangeGap.show { display: flex; }
+#rangeGapNote {
+  color: var(--text-dim); font-size: 11px; letter-spacing: 0.5px; text-align: center;
+  padding: 0 10px; max-width: 260px; line-height: 1.4;
+  font-family: var(--mono, monospace);
+}
 #decBox {
   /* Absolute inside #wfWrap, NOT fixed to the viewport — fixed + bottom:0 put it
      underneath the control bar. This way it always floats above the bar, whatever
@@ -989,6 +1012,18 @@ select.btn { padding: 6px 8px; }
   <canvas id="bands"></canvas>
   <canvas id="scale"></canvas>
   <div id="wfWrap"><canvas id="wf"></canvas>
+  <!-- ★★ HONEST DEAD SPACE. Near a band edge, half the window is frequencies the radio cannot
+       reach — an Airspy HF+ has nothing between 31 and 60 MHz. The FFT still produces SOMETHING
+       there (noise, and the mirror of what is below), and drawing it as spectrum would be a
+       lie: it looks like a quiet band rather than absent hardware. So it is blacked out and
+       labelled, and the label doubles as the instruction for getting across the gap
+       (Stuart's design, 2026-07-27). -->
+  <div id="rangeGap" hidden><span id="rangeGapNote"></span></div>
+  <!-- ★ The BOUNCE toast. The blacked-out region above explains the dead space permanently;
+       this confirms the ACTION — that your tune was caught by the edge and a second one in the
+       same direction will cross. Two messages because they answer two different questions:
+       "what is this black area" and "why did my dial stop". -->
+  <div id="tuneGapMsg"></div>
   <!-- Receiver identity, top-right of the spectrum (the shape UberSDR uses): the
        server's name, and under it where it actually is. Both come from the SERVER
        (GET /location) — the location half is absent unless the host opted in. -->
@@ -1506,6 +1541,53 @@ select.btn { padding: 6px 8px; }
         <button class="btn" id="rspDabNotch" title="DAB band notch, same reasoning as the FM notch">DAB NOTCH</button>
         <button class="btn" id="rspBiasT" title="Bias-T — powers an active antenna or a mast-head amplifier">BIAS-T</button>
       </div>
+    </div>
+  </div>
+  <!-- ★★ AIRSPY HF+ CONTROLS. An HF+ is neither a dongle nor an RSP: there is NO variable
+       gain stage at all. What it has is a fixed front end, a switchable +6 dB preamp and an
+       attenuator — so the useful adjustment is how far you back the front end OFF, which is
+       the opposite instinct to every other radio here. Presenting the generic "gain" slider
+       for that would describe the hardware wrongly, exactly as it did for the RSP.
+       ★ Its own AGC is genuinely good (unlike a dongle's), so AUTO is the right default and
+       the manual controls grey out under it rather than pretending to work. -->
+  <div id="ahfCtls" hidden>
+    <!-- ★ "AGC", not "HF AGC". libairspyhf names every control hf_* — set_hf_agc, set_hf_att,
+         set_hf_lna — but the "hf" is the PRODUCT (HF+), not the HF band: they act on the whole
+         device, in both tuning windows, so the AGC works on FM exactly as it does on 40 m
+         (Stuart noticed it working on FM and asked, 2026-07-27). Carrying the library's naming
+         into the UI would have told users it was band-limited when it is not. -->
+    <div class="mrow">
+      <label>AGC</label>
+      <div class="seg"><button class="btn on" id="ahfAgc">AUTO</button></div>
+    </div>
+    <!-- The HF+'s only AGC adjustment: a low or high threshold. HIGH lets the front end run
+         hotter before it backs off — better sensitivity on a quiet band, worse on a crowded one. -->
+    <div class="mrow" id="rowAhfThresh">
+      <label>AGC THRESHOLD</label>
+      <div class="seg" id="ahfThreshSeg">
+        <button class="btn on" data-th="0">LOW</button>
+        <button class="btn" data-th="1">HIGH</button>
+      </div>
+    </div>
+    <!-- ★ ATTENUATION, labelled as attenuation. It would be easy to invert this into a "gain"
+         slider for consistency, but on HF the operator is deliberately reducing input to keep a
+         strong broadcast band out of the mixer — that intent should be visible, not hidden
+         behind a friendlier word. 0-48 dB in 6 dB steps is the hardware's own granularity. -->
+    <div class="mrow" id="rowAhfAtt">
+      <label for="ahfAtt">ATTENUATION</label>
+      <input type="range" id="ahfAtt" min="0" max="8" value="0">
+      <span class="val" id="ahfAttVal">0 dB</span>
+    </div>
+    <div class="mrow">
+      <label>PREAMP (+6 dB)</label>
+      <div class="seg"><button class="btn" id="ahfLna">OFF</button></div>
+    </div>
+    <!-- ★ PARTS PER BILLION, not ppm. An HF+ reference is good enough that a ppm control would
+         be far too coarse — one ppm step is 100 Hz at 100 MHz. -->
+    <div class="mrow">
+      <label for="ahfPpb">CALIBRATION</label>
+      <input type="range" id="ahfPpb" min="-5000" max="5000" value="0">
+      <span class="val" id="ahfPpbVal">0 ppb</span>
     </div>
   </div>
   <div class="mrow" id="rowRate">

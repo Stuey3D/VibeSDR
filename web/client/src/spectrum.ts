@@ -94,7 +94,7 @@ export interface RdsExt {
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
  *  different controls, and a client that assumes one will misrepresent the other. */
 export interface RadioCaps {
-  driver: 'rtl' | 'sdrplay' | string;
+  driver: 'rtl' | 'sdrplay' | 'airspyhf' | string;
   model?: string;
   lnaStates?: number;
   ifGrMin?: number;
@@ -102,6 +102,17 @@ export interface RadioCaps {
   rfNotch?: boolean;
   dabNotch?: boolean;
   biasT?: boolean;
+  // ── Airspy HF+ ────────────────────────────────────────────────────────────
+  attSteps?: number;      // count of attenuator positions (9 = 0..8)
+  attStepDb?: number;     // dB per step (6)
+  hfLna?: boolean;        // has the +6 dB preamp
+  hfAgc?: boolean;        // has its own AGC
+  agcThreshold?: boolean; // ...with a low/high threshold
+  calPpb?: boolean;       // calibration is in parts per BILLION, not ppm
+  rates?: number[];       // the rates THIS radio offers, ascending
+  /** ★ Tunable windows, Hz. An HF+ Discovery has a REAL GAP at 31-60 MHz — not a weak spot,
+   *  absent — so a client that does not know will let a user park on a dead frequency. */
+  ranges?: [number, number][];
 }
 
 export interface SpectrumCallbacks {
