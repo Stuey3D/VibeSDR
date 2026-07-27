@@ -1,6 +1,8 @@
 // Airspy HF+ capture source — see airspyhf_source.h for why this exists and how it differs
 // from the dongle and RSP paths.
 #include "airspyhf_source.h"
+#include <atomic>
+#include <chrono>
 
 #ifdef VIBE_HAVE_AIRSPYHF
 #ifdef VIBE_AIRSPYHF_HAS_FD
@@ -23,6 +25,8 @@ struct CbCtx {
     AirspyHfSource::IqSink* sink;
     bool* lost;
     bool* paused;
+    /** ★ Stamped on EVERY buffer, before the idle-park drop — see lastRxSecs(). */
+    std::atomic<double>* lastRx;
 };
 }  // namespace
 
@@ -30,6 +34,7 @@ struct AirspyHfSource::Impl {
     airspyhf_device_t* dev = nullptr;
     uint64_t serial = 0;
     CbCtx ctx{};
+    std::atomic<double> lastRx{0.0};   // see AirspyHfSource::lastRxSecs()
     // ★ Serialises every library call on this device. The shim's watchdog and the control
     // sockets both reach in, and libairspyhf makes no promise about concurrent use of one
     // handle. Cheap: these are configuration calls, not the sample path.
@@ -77,10 +82,19 @@ AirspyHfSource::~AirspyHfSource() { close(); delete impl_; }
 // ★ Samples are ALREADY interleaved complex float at roughly +/-1 — the engine's own format.
 // The dongle and RSP paths hand the shim int16 and it converts; going through int16 here would
 // quantise an 18-bit-effective radio down to 16 and back for no reason at all.
+static double nowSecsMono() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
 static int streamCb(airspyhf_transfer_t* t) {
     if (!t || !t->ctx) return 0;
     auto* c = (CbCtx*)t->ctx;
     if (!c->sink || !*c->sink || t->sample_count <= 0) return 0;
+    // ★★ LIVENESS FIRST, BEFORE THE DROP. This buffer is proof the radio is alive; whether we
+    // keep it is our decision, not the hardware's. Stamping after the pause check made an
+    // idle-parked radio indistinguishable from an unplugged one.
+    if (c->lastRx) c->lastRx->store(nowSecsMono(), std::memory_order_relaxed);
     if (c->paused && *c->paused) return 0;   // idle: drop, never tear the device down
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming
@@ -106,6 +120,8 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
 /** ★ OWNERSHIP OF THE DESCRIPTOR PASSES TO libusb. Do not close it here or in the caller: on
  *  Android the UsbDeviceConnection must outlive the stream, and closing it twice takes the
  *  radio down mid-capture. */
+double AirspyHfSource::lastRxSecs() const { return impl_->lastRx.load(std::memory_order_relaxed); }
+
 bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
                             int gainTenthDb, std::string& err) {
 #ifndef VIBE_AIRSPYHF_HAS_FD
@@ -176,7 +192,7 @@ bool AirspyHfSource::start(std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!open_ || !impl_->dev) { err = "device not open"; return false; }
     if (streaming_) return true;
-    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_ };
+    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx };
     if (airspyhf_start(impl_->dev, &streamCb, &impl_->ctx) != AIRSPYHF_SUCCESS) {
         err = "the Airspy HF+ would not start streaming";
         return false;
@@ -321,5 +337,6 @@ void AirspyHfSource::setAttenuation(int) {}
 void AirspyHfSource::setLna(bool) {}
 void AirspyHfSource::setCalibrationPpb(int) {}
 std::string AirspyHfSource::model() const { return ""; }
+double AirspyHfSource::lastRxSecs() const { return 0.0; }
 }  // namespace vibe
 #endif

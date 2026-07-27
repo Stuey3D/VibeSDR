@@ -3861,7 +3861,12 @@ struct LocalSdrShim::Impl {
                 // ★ SILENCE = GONE. 3s is far longer than any legitimate gap (a rate change is
                 // flagged by `restarting`, and normal delivery is continuous), and short enough
                 // that the message arrives while the user is still holding the plug.
-                const double last = lastIqAt.load(std::memory_order_relaxed);
+                double last = lastIqAt.load(std::memory_order_relaxed);
+                // ★★ ASK THE RADIO, NOT THE PIPELINE. `lastIqAt` is stamped by the SINK, so
+                // it stops advancing whenever we idle-park and throw samples away — which made a
+                // parked Airspy look exactly like an unplugged one. The source knows when the
+                // hardware last delivered, whatever we then did with it.
+                if (useAirspyHf()) last = std::max(last, ahf->lastRxSecs());
                 const bool silent = last > 0 && (nowSecs() - last) > 3.0;
 
                 // ★★★ AN RSP STALL IS RECOVERABLE IN PLACE — and unlike a dongle, nothing has

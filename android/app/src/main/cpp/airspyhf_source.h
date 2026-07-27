@@ -113,6 +113,16 @@ public:
      *  exactly as the dongle and RSP paths are. */
     bool deviceLost() const { return lost_; }
 
+    /** ★★ WHEN THE RADIO LAST DELIVERED, regardless of whether we KEPT the samples.
+     *  The silence watchdog asks "is the radio still producing?", and while idle-parked the
+     *  answer is YES — we are simply throwing the samples away. Timing liveness off the shim's
+     *  sink instead meant a parked Airspy looked identical to an unplugged one: after three
+     *  seconds with no listener the server declared the radio lost, and the next client to
+     *  connect (or REFRESH) was told "no radio connected" over perfectly working audio
+     *  (Stuart, 2026-07-27).
+     *  ★ Seconds on the same monotonic clock the shim uses. 0 = nothing yet. */
+    double lastRxSecs() const;
+
 private:
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     struct Impl;
