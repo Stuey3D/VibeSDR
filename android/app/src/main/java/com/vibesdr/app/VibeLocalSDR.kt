@@ -68,6 +68,14 @@ object VibeLocalSDR {
         nativeStopSpectrum()
     }
 
+    /** Stop and WAIT for the radio to be closed. The caller owns the USB connection and must
+     *  not close it until this returns — see the note on nativeStopSpectrumSync. */
+    fun stopSpectrumSync() {
+        if (!loaded) return
+        nativeStopSpectrumSync()
+    }
+    private external fun nativeStopSpectrumSync()
+
     // Hardware controls (no-ops if no session running). gainTenthDb < 0 = auto.
     fun setGain(gainTenthDb: Int) { if (loaded) nativeSetGain(gainTenthDb) }
     fun setPpm(ppm: Int) { if (loaded) nativeSetPpm(ppm) }

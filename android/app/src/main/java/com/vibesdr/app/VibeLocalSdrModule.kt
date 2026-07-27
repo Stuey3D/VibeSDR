@@ -540,8 +540,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopSpectrum(promise: Promise) {
-        stopSpectrumInternal()
-        promise.resolve(null)
+        // ★ Off the bridge thread: the teardown is synchronous now (it must be — see
+        // stopSpectrumInternal) and can take a moment on a USB cancel plus thread joins.
+        // Leaving a local session must never freeze the UI.
+        Thread {
+            stopSpectrumInternal()
+            promise.resolve(null)
+        }.start()
     }
 
     // ── RTL-TCP SERVER (share this device's USB dongle over the network) ──────
@@ -761,7 +766,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     }
 
     private fun stopSpectrumInternal() {
-        try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
+        // ★★★ SYNCHRONOUS, AND THAT IS THE POINT. This used to fire the native teardown at a
+        // DETACHED THREAD and return immediately — then closed the UsbDeviceConnection on the
+        // next line, pulling the file descriptor out from under libusb while it was still
+        // closing the radio.
+        // ★ Fatal on the Airspy, whose handle is a WRAPPED fd: libusb_close aborted with
+        // "pthread_mutex_lock called on a destroyed mutex" every time the user backed out of
+        // VibeServer (Stuart, 2026-07-27). The dongle had the same race and was getting away
+        // with it, which is why this survived so long.
+        // ★ It also fixes a second race nobody had noticed: startVibeServerNow() calls this and
+        // then immediately REOPENS the device, so an async stop put the old close and the new
+        // open in a straight race.
+        // ★ The cost is that teardown now blocks its caller. The user-facing @ReactMethod hands
+        // this to a background thread so the bridge never stalls; the internal callers WANT to
+        // wait, because every one of them is about to touch the device again.
+        try { VibeLocalSDR.stopSpectrumSync() } catch (_: Throwable) {}
         tcpWifiLock.release()
         sessionConn?.let { try { it.close() } catch (_: Exception) {} }
         sessionConn = null

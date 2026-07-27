@@ -257,6 +257,21 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetLocationJson(JNIEnv* env, jobject, js
     if (json && s) env->ReleaseStringUTFChars(json, s);
 }
 
+/** ★★★ TEAR DOWN AND WAIT. The async sibling below returns before the radio is closed, and the
+ *  Kotlin caller then closes the UsbDeviceConnection — pulling the FILE DESCRIPTOR OUT FROM
+ *  UNDER libusb while it is still closing the device.
+ *  ★ Fatal on the Airspy, whose handle is a WRAPPED fd (libusb_wrap_sys_device): libusb_close
+ *  aborted with "pthread_mutex_lock called on a destroyed mutex" every time the user backed out
+ *  of VibeServer (Stuart, 2026-07-27). The dongle path had the same race and had merely been
+ *  getting away with it.
+ *  ★ Also the right call before RESTARTING: startVibeServerNow() stops and immediately reopens
+ *  the device, which with an async stop was a straight race between the old close and the new
+ *  open. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrumSync(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::instance().stop();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     // Tear down on a detached thread so the JS/bridge caller never blocks if the
