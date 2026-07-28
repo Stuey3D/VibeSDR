@@ -102,13 +102,12 @@ port (`hasPort`) — correct, but worth remembering when it "doesn't run".
   `vibe.fmdx.stations`, the phone is per-server with timestamps).
 - Manual floor/ceiling + hold-menu return — `BRIEF-jr-display-manual-range.md`.
 
-## 8. ★ The session pill is main-screen only
+## 8. ~~The session pill is main-screen only~~ — NOT AN ISSUE (Stuart, 07-28)
 
-Built on the waterfall view. `DabView` and `AircraftView` are separate screens, so
-a listener sitting in DAB or ADS-B when the limit expires gets cut off with no
-warning — the exact failure the pill exists to prevent. Same applies to the
-bandwidth advisory.
+I flagged that DAB and ADS-B would miss the countdown. They cannot: the session
+limit is a VIBESERVER feature, and DAB/ADS-B only exist on OWRX, which has no
+per-listener limit. The pill can never be needed on those screens.
 
-Fix: hoist the pill + notice into whatever wraps all three, rather than adding a
-third copy. ★ The mechanism is already wired (SpikeLink.showSessionPill /
-sessionNotice); this is placement only.
+★ The TERMINAL screens (time limit reached, taken over) are at the app root
+anyway, so they cover every screen regardless — which is right, because those
+say why a connection ENDED and that can be seen from anywhere.

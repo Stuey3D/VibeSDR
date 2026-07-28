@@ -634,6 +634,7 @@ struct HardwareSheet: View {
   @ObservedObject var radio: UberClient
   @State private var adminPass = ""
   @State private var gainArmed = false
+  @State private var attArmed = false
   @State private var gainCrown = 0.0
   @State private var lastGainDetent = 0
   @State private var showSpan = false
@@ -747,29 +748,6 @@ struct HardwareSheet: View {
           .foregroundColor(.white.opacity(0.75))
           .padding(.horizontal, 2)
         }
-        if radio.adminSet && !radio.adminOk {
-          VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-              Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold))
-              Text("Owner-locked").font(.system(size: 12, weight: .semibold))
-            }.foregroundColor(.orange)
-            Text("These controls belong to the owner. Enter the admin password to unlock them.")
-              .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
-            SecureField("Admin password", text: $adminPass)
-              .font(.system(size: 14, design: .rounded))
-            Button {
-              let p = adminPass.trimmingCharacters(in: .whitespaces)
-              adminPass = ""
-              radio.adminUnlock(p)
-            } label: {
-              Text("Unlock").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent).tint(.orange)
-            .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
-          }
-          .padding(10)
-          .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
-        }
         // Row 1 — GAIN (crown-armed) · AUTO
         // ★ Hidden entirely on an RSP (its gain is LNA state + IF gain reduction, not one
         // slider) and on an HF+ (no variable gain stage AT ALL). A slider that cannot
@@ -777,7 +755,7 @@ struct HardwareSheet: View {
         if radio.radioHasSimpleGain {
         HStack(spacing: 7) {
           Button {
-            if !radio.gainAuto { gainArmed.toggle(); crownFocused = gainArmed }
+            if !radio.gainAuto { gainArmed.toggle(); crownFocused = gainArmed; if gainArmed { attArmed = false } }
           } label: {
             cell(title: "GAIN", value: radio.gainAuto ? "Auto" : String(format: "%.1f dB", radio.gainValue / 10),
                  lit: gainArmed && !radio.gainAuto, litColor: .cyan, dim: radio.gainAuto)
@@ -789,16 +767,8 @@ struct HardwareSheet: View {
             .buttonStyle(.plain)
         }
         }
-        // Row 2 — BIAS-T · DIGITAL AGC
-        // ★ BIAS-T is owner-gated (adminGate on the server). Drawn DIM and inert while
-        // locked, so it reads as "not yours" rather than as a control that does
-        // nothing — the difference between a policy and a fault.
+        // Row 2 — DIGITAL AGC (a client-side control, always yours)
         HStack(spacing: 7) {
-          if radio.radioHasBiasT {
-            Button { radio.setBiasT(!radio.biasT) } label: {
-              cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT && !ownerLocked, dim: ownerLocked)
-            }.buttonStyle(.plain).disabled(ownerLocked)
-          }
           Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
         }
         // Row 3 — SPAN (picker) · PPM (inline ±)
@@ -833,14 +803,61 @@ struct HardwareSheet: View {
           if radio.hasRadioAgc {
             onOff("AGC", on: radio.ahfAgc) { radio.setAhfAgc(!radio.ahfAgc) }
           }
+          // ★ ON THE CROWN, like the dongle's gain. ± buttons felt unresponsive here:
+          // the attenuator is a range you SWEEP while listening to the effect, and a
+          // watch's crown is the precise control for that — a tap-tap-tap on a 41 mm
+          // target is not (Stuart, 2026-07-28). Tap to arm, then turn.
           if radio.attSteps > 0 {
-            stepCell(title: "ATTENUATOR", value: "\(radio.ahfAtt * radio.attStepDb) dB",
-                     dec: { radio.setAhfAtt(radio.ahfAtt - 1) },
-                     inc: { radio.setAhfAtt(radio.ahfAtt + 1) })
-              .opacity(radio.ahfAgc ? 0.35 : 1).disabled(radio.ahfAgc)
+            Button {
+              if !radio.ahfAgc { attArmed.toggle(); crownFocused = attArmed; if attArmed { gainArmed = false } }
+            } label: {
+              cell(title: attArmed ? "ATTENUATOR — TURN CROWN" : "ATTENUATOR",
+                   value: "\(radio.ahfAtt * radio.attStepDb) dB",
+                   lit: attArmed && !radio.ahfAgc, litColor: .cyan, dim: radio.ahfAgc)
+            }.buttonStyle(.plain).disabled(radio.ahfAgc)
           }
           if radio.hasPreamp {
             onOff("PREAMP (+6 dB)", on: radio.ahfPreamp) { radio.setAhfPreamp(!radio.ahfPreamp) }
+          }
+        }
+        // ══ OWNER-ONLY, BELOW THE LINE ══════════════════════════════════════
+        // ★ ORDER IS THE POINT: what you can use, then the lock, then what you
+        // cannot. The unlock box sat at the TOP, so the first thing a visitor met
+        // was a password prompt for controls they had not looked for yet — it read
+        // as "this radio is not for you" rather than "most of this is". Everything
+        // below the line goes through the server's adminGate.
+        if radio.adminSet && !radio.adminOk {
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+              Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold))
+              Text("Owner-locked").font(.system(size: 12, weight: .semibold))
+            }.foregroundColor(.orange)
+            Text("These controls belong to the owner. Enter the admin password to unlock them.")
+              .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+            SecureField("Admin password", text: $adminPass)
+              .font(.system(size: 14, design: .rounded))
+            Button {
+              let p = adminPass.trimmingCharacters(in: .whitespaces)
+              adminPass = ""
+              radio.adminUnlock(p)
+            } label: {
+              Text("Unlock").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).tint(.orange)
+            .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
+          }
+          .padding(10)
+          .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
+        }
+        if radio.adminSet || radio.radioHasBiasT {
+          if radio.radioHasBiasT {
+            HStack(spacing: 7) {
+              Button { radio.setBiasT(!radio.biasT) } label: {
+                cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF",
+                     lit: radio.biasT && !ownerLocked, dim: ownerLocked)
+              }.buttonStyle(.plain).disabled(ownerLocked)
+              Spacer(minLength: 0)
+            }
           }
         }
         // FM de-emphasis — full width
@@ -879,16 +896,24 @@ struct HardwareSheet: View {
         }
       }.navigationTitle("Span")
     }
-    .focusable(gainArmed && !radio.gainAuto)
+    // ★ ONE crown, either armed control. Two separate crown bindings in one view do
+    // not work — SwiftUI gives the crown to whichever is focused, so arming one must
+    // disarm the other (see the arming buttons) and the handler routes by whichever
+    // is live.
+    .focusable((gainArmed && !radio.gainAuto) || (attArmed && !radio.ahfAgc))
     .focused($crownFocused)
     .digitalCrownRotation($gainCrown, from: 0, through: 1000, by: 1, sensitivity: .low, isContinuous: true)
     .onChange(of: gainCrown) { _, new in
-      guard gainArmed, !radio.gainAuto, !radio.offeredGains.isEmpty else { return }
       let detent = Int(new.rounded())
       var delta = detent - lastGainDetent
       if delta > 500 { delta -= 1000 }; if delta < -500 { delta += 1000 }
       lastGainDetent = detent
       guard delta != 0 else { return }
+      if attArmed, !radio.ahfAgc, radio.attSteps > 0 {
+        radio.setAhfAtt(radio.ahfAtt + delta)
+        return
+      }
+      guard gainArmed, !radio.gainAuto, !radio.offeredGains.isEmpty else { return }
       let gains = radio.offeredGains
       let cur = gains.firstIndex(where: { abs(radio.gainValue - Double($0)) < 0.5 }) ?? gains.count / 2
       let ni = min(gains.count - 1, max(0, cur + delta))
