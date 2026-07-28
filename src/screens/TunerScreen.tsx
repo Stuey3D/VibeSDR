@@ -717,6 +717,13 @@ export default function TunerScreen({ route, navigation }: Props) {
       return { lo, hi };
     });
   }, [displayFreq, fmLo, clampFm]);
+  // The zoom KEYS in dial terms. onDialZoom is a pixel drag (span × 0.5^(px/90)),
+  // so a tap is the 90 px that makes exactly one octave — the rung the ± buttons
+  // have always moved — and a held sweep is a third of one, small enough to ramp
+  // smoothly instead of leaping an octave per tick. Same split as SDRScreen.
+  const onZoomKeyStep  = useCallback((dir: -1 | 1) => onDialZoom(dir * 90), [onDialZoom]);
+  const onZoomKeySweep = useCallback((dir: -1 | 1) => onDialZoom(dir * 30), [onDialZoom]);
+
   kbRefs.current.stepTune = stepTune;   // arrows — see the keyboard block above
   kbRefs.current.dialZoom = onDialZoom;
 
@@ -1065,6 +1072,15 @@ export default function TunerScreen({ route, navigation }: Props) {
         stepList={FM_STEPS}
         vfoKeys={vfoKeys}
         zoomKeys={zoomKeys}
+        // ★ WITHOUT THESE THE KEYS RENDER AND DO NOTHING. ControlsBar falls back to
+        // `onStep={onVfoStep ?? noStep}` — a SILENT no-op, so a screen that turns the
+        // keys on but forgets the handlers looks exactly like working hardware that
+        // ignores you. The drums were wired (onVfoDelta/onBwDelta) and the keys were
+        // not: the failure mode this screen keeps hitting, per the standing rule that
+        // anything added to SDRScreen needs a conscious decision about TunerScreen.
+        onVfoStep={stepTune}
+        onZoomStep={onZoomKeyStep}
+        onZoomSweep={onZoomKeySweep}
         meterLabel={st ? `${Math.round(st.sig)} dBf` : ''}
         freqFormat={(hz) => (hz / 1e6).toFixed(3)}
       />
