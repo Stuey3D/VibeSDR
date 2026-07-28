@@ -944,6 +944,9 @@ final class SpikeLink: ObservableObject {
   /// Push the DSP auto-contrast (0–20) to the active backend. Re-asserted on connect/reconnect
   /// because each client seeds its own default (5) at start — see ContentView.applyTone.
   func setAutoContrast(_ v: Double) { client?.setAutoContrast(v) }
+  func setManualRange(_ on: Bool, floor: Double, ceil: Double) {
+    client?.setManualRange(on, floor: floor, ceil: ceil)
+  }
 
   // ── Squelch ─────────────────────────────────────────────────────────────────
   // The GATE is SERVER-SIDE (client.setSquelch → radiod's audio gate) — proven to mute correctly, same

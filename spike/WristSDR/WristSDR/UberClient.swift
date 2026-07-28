@@ -81,7 +81,8 @@ final class UberClient: ObservableObject {
   private func saveVibeHw() {
     guard isVibe, !vibeHwRestoring else { return }
     UserDefaults.standard.set(["auto": gainAuto, "gain": gainValue, "biasT": biasT,
-                               "agc": agc, "ppm": ppm, "rate": sampleRate, "deemph": deemph],
+                               "agc": agc, "ppm": ppm, "rate": sampleRate, "deemph": deemph,
+                               "rfnotch": rspRfNotch, "dabnotch": rspDabNotch],
                               forKey: vibeHwKey)
   }
   /// Replay the saved settings. Driven by `hwinfo` rather than by connect because the gain steps and capture
@@ -97,6 +98,11 @@ final class UberClient: ObservableObject {
     if let v = s["biasT"]  as? Bool, v != biasT  { setBiasT(v) }
     if let v = s["ppm"]    as? Int,  v != ppm    { setPpm(v) }
     if let v = s["deemph"] as? Int,  v != deemph { setDeemph(v) }
+    // ★ Restore the notch PREFERENCE even on a radio that lacks them — the user may move
+    //   between servers, and a setting silently dropped is a setting that never comes back.
+    //   pushAllRadioSettings() gates the actual send on the advertised capability.
+    if let v = s["rfnotch"]  as? Bool { rspRfNotch  = v }
+    if let v = s["dabnotch"] as? Bool { rspDabNotch = v }
 
     // Capture rate only if the host hasn't pinned it and the server actually offers it.
     if lockedRate == 0, let r = s["rate"] as? Int, r > 0, offeredRates.contains(r), r != sampleRate {
@@ -145,6 +151,11 @@ final class UberClient: ObservableObject {
   @Published var rspLna = 0
   @Published var rspIfGr = 40
   @Published var rspIfAgc = true
+  /// The RSP's broadcast notches, and whether this model actually has them.
+  @Published var rspRfNotch = false
+  @Published var rspDabNotch = false
+  @Published var radioHasRfNotch = false
+  @Published var radioHasDabNotch = false
   @Published var ahfAtt = 0
   @Published var ahfPreamp = false
   @Published var ahfAgc = true
@@ -161,6 +172,11 @@ final class UberClient: ObservableObject {
   /// Seconds before we may return — the server's number, not a guess.
   @Published var cooldownSecs = 0
   @Published var sysGainDb = 0.0
+  /// ★★ The RSP's gain loop is still SETTLING — from rspstat. Until this clears, the gain
+  /// figures above it are a loop in motion, not a reading. Stuart asked for the controls to be
+  /// cycled behind an initialising state on connect so the AGC cannot come up stuck, which is a
+  /// bug that has bitten twice; this is the visible half of that.
+  @Published var radioSettling = false
   @Published var rspOverload = false
   /// Human name for the hardware sheet's header.
   var radioName: String {
@@ -213,6 +229,10 @@ final class UberClient: ObservableObject {
       attStepDb  = (r["attStepDb"] as? NSNumber)?.intValue ?? 6
       hasPreamp  = (r["hfLna"] as? Bool) ?? false
       hasRadioAgc = (r["hfAgc"] as? Bool) ?? false
+      // ★ The RSP's two notches. Advertised per MODEL — not every RSP has both — so ask
+      //   rather than assume, the same rule as everything else in this block.
+      radioHasRfNotch  = (r["rfNotch"] as? Bool) ?? false
+      radioHasDabNotch = (r["dabNotch"] as? Bool) ?? false
       if rspIfGr < ifGrMin || rspIfGr > ifGrMax { rspIfGr = min(max(40, ifGrMin), ifGrMax) }
     }
     if let g = j["gains"] as? [Int] { offeredGains = g }
@@ -228,6 +248,8 @@ final class UberClient: ObservableObject {
   func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]); saveVibeHw() }
   func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]); saveVibeHw() }
   func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]); saveVibeHw() }
+  func setRspRfNotch(_ on: Bool)  { rspRfNotch = on;  rspSend(["rfnotch": on ? 1 : 0]);  saveVibeHw() }
+  func setRspDabNotch(_ on: Bool) { rspDabNotch = on; rspSend(["dabnotch": on ? 1 : 0]); saveVibeHw() }
 
   // ── Per-radio gain (SDRplay / Airspy HF+) ───────────────────────────────────
   // ★ The wrist gets the GAIN controls and not the calibration: ppm/ppb is a very
@@ -350,6 +372,8 @@ final class UberClient: ObservableObject {
       rspSend(["lna": max(0, lnaStates - 1) - rspLna])
       if !rspIfAgc { rspSend(["ifgr": rspIfGr]) }
       rspSend(["ifagc": rspIfAgc ? 1 : 0])
+      if radioHasRfNotch  { rspSend(["rfnotch": rspRfNotch ? 1 : 0]) }
+      if radioHasDabNotch { rspSend(["dabnotch": rspDabNotch ? 1 : 0]) }
     case "airspyhf":
       if hasPreamp { ahfSend(["lna": ahfPreamp ? 1 : 0]) }
       if !ahfAgc, attSteps > 0 { ahfSend(["att": ahfAtt]) }
@@ -1295,6 +1319,7 @@ final class UberClient: ObservableObject {
       rspLna    = max(0, lnaStates - 1) - ((j["lna"] as? NSNumber)?.intValue ?? 0)
       rspIfGr   = (j["ifgr"] as? NSNumber)?.intValue ?? rspIfGr
       rspOverload = ((j["overload"] as? NSNumber)?.intValue ?? 0) != 0
+      radioSettling = ((j["settling"] as? NSNumber)?.intValue ?? 0) != 0
       return
     }
     if type == "admin" {
@@ -1709,6 +1734,9 @@ final class UberClient: ObservableObject {
   var tuneMinHz: Double { freqMin }
   var tuneMaxHz: Double { freqMax }
   func setAutoContrast(_ v: Double) { proc.autoContrast = v }
+  func setManualRange(_ on: Bool, floor: Double, ceil: Double) {
+    proc.manualRange = on; proc.manualFloorDb = floor; proc.manualCeilDb = ceil
+  }
   /// SNR audio gate → radiod, same wire as the phone: +30 corrects radiod's audio-stream floor offset.
   func setSquelch(_ minSnr: Double) {
     audioSock.send(json: ["type": "set_audio_gate", "min_snr": minSnr <= -999 ? -999 : Int((minSnr + 30).rounded())])

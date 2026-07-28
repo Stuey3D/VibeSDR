@@ -87,6 +87,9 @@ protocol SDRClient: AnyObject {
   /// primary visibility control; Brightness/Contrast are post-normalisation tweaks on top. Default
   /// no-op for a backend with no waterfall DSP (FM-DX).
   func setAutoContrast(_ v: Double)
+  /// ★ MANUAL waterfall range. `on == false` returns to auto-contrast. Floor/ceiling are dBFS,
+  /// the same units as the phone's dbMin/dbMax so the two can be compared side by side.
+  func setManualRange(_ on: Bool, floor: Double, ceil: Double)
   /// SNR squelch (audio gate): mute below `minSnr` dB. ≤ -999 = OFF/open. Default no-op for backends
   /// with no squelch (FM-DX). UberSDR/VibeServer send it to radiod's audio gate.
   func setSquelch(_ minSnr: Double)
@@ -130,6 +133,7 @@ extension SDRClient {
   var coverMinHz: Double { tuneMinHz }
   var coverMaxHz: Double { tuneMaxHz }
   func setAutoContrast(_ v: Double) {}
+  func setManualRange(_ on: Bool, floor: Double, ceil: Double) {}
   func setSquelch(_ minSnr: Double) {}
 }
 
@@ -202,6 +206,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   var tuneMinHz: Double { 0 }
   var tuneMaxHz: Double { rxBw }   // server-reported coverage top (30 MHz, or narrower/converted)
   func setAutoContrast(_ v: Double) { proc.autoContrast = v }
+  func setManualRange(_ on: Bool, floor: Double, ceil: Double) {
+    proc.manualRange = on; proc.manualFloorDb = floor; proc.manualCeilDb = ceil
+  }
 
   private var everFrame = false
   private var errorShown = false

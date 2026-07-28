@@ -180,6 +180,15 @@ struct ContentView: View {
   /// frame counter so the render clock no longer invalidates this whole body.
   @State private var showNumpad = false
   @State private var showMenu = false
+  /// ★★ When the user last left the menu to adjust a Display setting. Hold-menu then returns to
+  /// the Display sheet instead of the root — but only for a WHILE. A display tweak made an hour
+  /// ago silently changing what the menu button does is worse than the navigation it saves
+  /// (BRIEF-jr-display-manual-range.md §4).
+  @State private var displayTweakAt: Date?
+  private var displayShortcutLive: Bool {
+    guard let t = displayTweakAt else { return false }
+    return Date().timeIntervalSince(t) < 60
+  }
   /// What the crown does. Explicit and persistent — never a timed-out HUD, because
   /// on a wrist you must always know what a turn is about to do.
   @State private var crownMode: CrownMode = .tune
@@ -245,6 +254,9 @@ struct ContentView: View {
   /// `wfAutoContrast` is the DSP dynamic-range squeeze 0–20 (the primary visibility control, default
   /// 5); brightness/contrast are tweaks on top. Palette/VFO default to "sync" (match the phone).
   @AppStorage("wfAutoContrast") private var wfAutoContrast = 5.0
+  @AppStorage("wfManualRange")  private var wfManualRange  = false
+  @AppStorage("wfFloorDb")      private var wfFloorDb      = -110.0
+  @AppStorage("wfCeilDb")       private var wfCeilDb       = -30.0
   @AppStorage("wfPalette")      private var wfPalette      = "sync"
   @AppStorage("wfVfoColour")    private var wfVfoColour    = "sync"
   @AppStorage("wfPeakHold")     private var wfPeakHold     = true
@@ -274,7 +286,9 @@ struct ContentView: View {
     link.waterfall.brightness = wfBright
     link.waterfall.contrast = wfContrast
     // The client seeds autoContrast=5 at start, so re-assert the saved value after (re)connect.
-    link.setAutoContrast(wfAutoContrast)
+link.setAutoContrast(wfAutoContrast)
+    // ★ Manual range must be re-asserted on (re)connect too — the processor is seeded fresh.
+    link.setManualRange(wfManualRange, floor: wfFloorDb, ceil: wfCeilDb)
     link.applyPalette(wfPalette)
     link.applyVfo(wfVfoColour)
     link.peakHold = wfPeakHold
@@ -648,7 +662,12 @@ struct ContentView: View {
       NumpadView().environmentObject(link)
     }
     .navigationDestination(isPresented: $showMenu) {
-      ControlMenu { mode in crownMode = mode; crownUsedAt = Date() }
+      ControlMenu(onPickCrown: { mode in
+        crownMode = mode; crownUsedAt = Date()
+        // ★ Remember that we left the menu FOR A DISPLAY ADJUSTMENT, so the next hold-menu
+        //   can put the user back where they were rather than at the root.
+        displayTweakAt = DisplaySheet.isDisplayMode(mode) ? Date() : nil
+      }, openDisplay: displayShortcutLive)
         .environmentObject(link)
         .environmentObject(bookmarks)
     }
@@ -772,8 +791,36 @@ struct ContentView: View {
         wfContrast = clamp(wfContrast + Double(delta) * 0.04)
         link.waterfall.contrast = wfContrast
       case .autoContrast:
-        wfAutoContrast = min(20, max(0, wfAutoContrast + Double(delta) * 0.5))
-        link.setAutoContrast(wfAutoContrast)
+        // ★★ ONE DETENT BELOW 0 IS MANUAL. Auto strength reads 0…20; turning down past 0 hands
+        // you MAN, and turning back up leaves it. Same gesture, no new menu to find
+        // (BRIEF-jr-display-manual-range.md §3).
+        if wfManualRange {
+          if delta > 0 {                       // back up out of manual
+            wfManualRange = false
+            wfAutoContrast = 0
+            link.setManualRange(false, floor: wfFloorDb, ceil: wfCeilDb)
+            link.setAutoContrast(0)
+          }
+        } else {
+          let next = wfAutoContrast + Double(delta) * 0.5
+          if next < 0 {
+            wfManualRange = true
+            link.setManualRange(true, floor: wfFloorDb, ceil: wfCeilDb)
+          } else {
+            wfAutoContrast = min(20, next)
+            link.setAutoContrast(wfAutoContrast)
+          }
+        }
+      // ★ Floor and ceiling in dBFS — the same units as the phone's dbMin/dbMax, so a reading
+      //   means the same thing on both when they are compared side by side.
+      //   ★ They cannot cross: a floor above the ceiling is not a range, it is a bug that
+      //     renders as a white slab and looks like the waterfall broke.
+      case .wfFloor:
+        wfFloorDb = min(wfCeilDb - 10, max(-140, wfFloorDb + Double(delta)))
+        link.setManualRange(true, floor: wfFloorDb, ceil: wfCeilDb)
+      case .wfCeil:
+        wfCeilDb = max(wfFloorDb + 10, min(0, wfCeilDb + Double(delta)))
+        link.setManualRange(true, floor: wfFloorDb, ceil: wfCeilDb)
       }
     }
     // Volume mode hands the crown to the native WKInterfaceVolumeControl; releasing the
@@ -801,6 +848,9 @@ struct ContentView: View {
       // ★ Record the REAL scene state up front — this is the honest "is the wrist up" signal the
       // warning/glyph logic needs, independent of the lagging status string (see deliberatelyPaused).
       link.sceneActive = (phase == .active)
+      // ★ Coming back to the wrist is a FRESH INTENT — drop the Display shortcut rather than
+      //   have the menu button behave oddly for a tweak made before the screen slept.
+      if phase != .active { displayTweakAt = nil }
       // YOU LEFT — the mode ends, and the spike drops its spectrum socket (audio keeps
       // playing in the background, which is the whole point of WKBackgroundModes=[audio]).
       guard phase == .active else {
@@ -1210,6 +1260,7 @@ struct ContentView: View {
     case .brightness:   return .yellow
     case .contrast:     return .white
     case .autoContrast: return .orange
+    case .wfFloor, .wfCeil: return .orange
     // Muted must be unmistakable at a glance: the bar still shows the level the phone
     // will return to, but nothing is coming out of it.
     case .volume:     return link.muted ? .red : .green
@@ -1225,7 +1276,11 @@ struct ContentView: View {
     // -1…+1 mapped onto the bar, so centre = "no change from the phone".
     case .brightness:   return (wfBright + 1) / 2
     case .contrast:     return (wfContrast + 1) / 2
-    case .autoContrast: return wfAutoContrast / 20
+    case .autoContrast: return wfManualRange ? 0.001 : wfAutoContrast / 20
+    // Floor spans -140…0, ceiling the same — so the ring reads as "where in the usable
+    // range am I", which is the only thing a ring can usefully say about a dB figure.
+    case .wfFloor:      return (wfFloorDb + 140) / 140
+    case .wfCeil:       return (wfCeilDb + 140) / 140
     // The iPhone's REAL system volume — so a phone sitting at 50% reads half a bar, not
     // a full one. That lie is the entire reason this feature was rebuilt.
     case .volume:     return link.volume

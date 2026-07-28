@@ -109,6 +109,9 @@ final class OwrxClient: ObservableObject, SDRClient {
   var coverMinHz: Double { 0 }
   var coverMaxHz: Double { 2_000_000_000 }
   func setAutoContrast(_ v: Double) { proc.autoContrast = v }
+  func setManualRange(_ on: Bool, floor: Double, ceil: Double) {
+    proc.manualRange = on; proc.manualFloorDb = floor; proc.manualCeilDb = ceil
+  }
 
   // ── Endpoint ──
   private let hostPart: String          // host:port

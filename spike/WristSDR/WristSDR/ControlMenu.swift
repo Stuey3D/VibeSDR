@@ -211,7 +211,7 @@ struct BatteryPillV: View {
 }
 
 enum CrownMode: Equatable {
-  case tune, zoom, brightness, contrast, autoContrast, volume
+  case tune, zoom, brightness, contrast, autoContrast, volume, wfFloor, wfCeil
 
   var glyph: String {
     switch self {
@@ -220,6 +220,8 @@ enum CrownMode: Equatable {
     case .brightness:   return "sun.max.fill"
     case .contrast:     return "circle.lefthalf.filled"
     case .autoContrast: return "wand.and.stars"
+    case .wfFloor: return "arrow.down.to.line"
+    case .wfCeil:  return "arrow.up.to.line"
     case .volume:       return "speaker.wave.2.fill"
     }
   }
@@ -228,6 +230,8 @@ enum CrownMode: Equatable {
     case .tune: return "Tune"; case .zoom: return "Zoom"; case .volume: return "Volume"
     case .brightness: return "Bright"; case .contrast: return "Contrast"
     case .autoContrast: return "Auto"
+    case .wfFloor: return "Floor"
+    case .wfCeil:  return "Ceiling"
     }
   }
   /// Double-Tap cycles just the three primary crown modes.
@@ -301,6 +305,12 @@ struct ControlMenu: View {
   /// Set by the caller when Volume or Zoom is chosen: the menu closes and the
   /// waterfall returns with the crown in that mode.
   let onPickCrown: (CrownMode) -> Void
+
+  /// ★★ Open straight into the Display sheet. Manual range is inherently a PAIR — set the floor,
+  /// look, set the ceiling, look — and every adjustment dismisses to the waterfall, so without
+  /// this each tweak costs a full menu → Display → row walk, on a watch, outdoors
+  /// (BRIEF-jr-display-manual-range.md §4). The caller decides when this applies and expires it.
+  var openDisplay = false
 
   @State private var showModes = false
   @State private var showSteps = false
@@ -544,6 +554,8 @@ struct ControlMenu: View {
         closeAll:    { showDisplay = false; dismiss() }
       ).environmentObject(link)
     }
+    // ★ Straight into Display when the caller says the user is mid-adjustment.
+    .onAppear { if openDisplay { showDisplay = true } }
   }
 
   /// Total passband width in kHz, for the BW tile readout.
@@ -739,6 +751,14 @@ struct HardwareSheet: View {
                 .font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
                 .foregroundColor(radio.rspOverload ? .red : .green)
             }
+            // ★★ SETTLING — the gain loop is still moving, so the number beside it is not yet
+            // a reading. Without this an AGC that is working and one that came up STUCK look
+            // identical for the first few seconds, and "stuck on initial load" is a bug that
+            // has bitten this project twice (Stuart, 2026-07-28).
+            if radio.radioSettling {
+              Text("SETTLING").font(.system(size: 9, weight: .bold))
+                .foregroundColor(.orange)
+            }
             // OVERLOAD is worth shouting about: it means the front end is being driven
             // too hard and everything you hear is suspect.
             if radio.rspOverload {
@@ -798,6 +818,14 @@ struct HardwareSheet: View {
                    dec: { radio.setRspIfGr(radio.rspIfGr - 1) },
                    inc: { radio.setRspIfGr(radio.rspIfGr + 1) })
             .opacity(radio.rspIfAgc ? 0.35 : 1).disabled(radio.rspIfAgc)
+          // ★ The two broadcast notches. Offered ONLY where the model advertises them —
+          //   not every RSP has both, and a control that cannot work is worse than absent.
+          if radio.radioHasRfNotch {
+            onOff("FM/MW NOTCH", on: radio.rspRfNotch) { radio.setRspRfNotch(!radio.rspRfNotch) }
+          }
+          if radio.radioHasDabNotch {
+            onOff("DAB NOTCH", on: radio.rspDabNotch) { radio.setRspDabNotch(!radio.rspDabNotch) }
+          }
         }
         if radio.radioDriver == "airspyhf" {
           if radio.hasRadioAgc {
@@ -1218,6 +1246,16 @@ struct BookmarksView: View {
 /// readability far more than the phone). Palette + VFO colour open a crown-preview picker and CAN
 /// track the phone via "Sync". Peak hold is a plain toggle (exposes a control that was hardwired on).
 struct DisplaySheet: View {
+  /// ★ Which crown modes belong to this sheet. Used by the waterfall to decide whether a
+  ///   hold-menu should come back HERE. Deliberately ALL of them, not just the range pair:
+  ///   brightness and contrast are adjusted in the same look-tweak-look loop.
+  static func isDisplayMode(_ m: CrownMode) -> Bool {
+    switch m {
+    case .brightness, .contrast, .autoContrast, .wfFloor, .wfCeil: return true
+    default: return false
+    }
+  }
+
   @EnvironmentObject var link: SpikeLink
   let onPickCrown: (CrownMode) -> Void   // arms a waterfall crown mode + closes the menu
   let closeAll: () -> Void               // closes the Display sheet + the menu, back to the spectrum
@@ -1230,6 +1268,11 @@ struct DisplaySheet: View {
   @AppStorage("wfPalette")      private var wfPalette      = "sonar"
   @AppStorage("wfVfoColour")    private var wfVfoColour    = "orange"
   @AppStorage("wfPeakHold")     private var wfPeakHold     = true
+  // ★ MANUAL RANGE — watch-GLOBAL, like brightness and contrast, because it is a readability
+  //   setting rather than a property of the aerial (BRIEF-jr-display-manual-range.md, open Q3).
+  @AppStorage("wfManualRange")  private var wfManualRange  = false
+  @AppStorage("wfFloorDb")      private var wfFloorDb      = -110.0
+  @AppStorage("wfCeilDb")       private var wfCeilDb       = -30.0
   @AppStorage("meterUnit")      private var meterUnit      = "snr"
 
   @State private var showPalette = false
@@ -1246,14 +1289,25 @@ struct DisplaySheet: View {
   private var isDefaultPalette: Bool { wfPalette == "sonar" || wfPalette == "sync" }
   private var isDefaultVfo: Bool { wfVfoColour == "orange" || wfVfoColour == "sync" }
   private var displayDirty: Bool {
-    wfAutoContrast != 5 || wfBright != 0 || wfContrast != 0
+    wfAutoContrast != 5 || wfBright != 0 || wfContrast != 0 || wfManualRange
       || !isDefaultPalette || !isDefaultVfo || !wfPeakHold || meterUnit != "snr"
   }
 
   var body: some View {
     List {
       Section("Tone") {
-        toneRow(icon: "wand.and.stars",        label: "Auto contrast", value: "\(Int(wfAutoContrast))") { onPickCrown(.autoContrast) }
+        // ★ MAN sits one crown detent BELOW 0 on this same row — same gesture, no new menu to
+        //   find. See handleCrown(.autoContrast).
+        toneRow(icon: "wand.and.stars",        label: "Auto contrast",
+                value: wfManualRange ? "MAN" : "\(Int(wfAutoContrast))") { onPickCrown(.autoContrast) }
+        // ★★ Floor and Ceiling appear ONLY in manual — in auto they are not merely inactive,
+        //    they are meaningless, and an inert row still reads as an offer.
+        if wfManualRange {
+          toneRow(icon: "arrow.down.to.line", label: "Floor",
+                  value: "\(Int(wfFloorDb)) dBFS") { onPickCrown(.wfFloor) }
+          toneRow(icon: "arrow.up.to.line",   label: "Ceiling",
+                  value: "\(Int(wfCeilDb)) dBFS") { onPickCrown(.wfCeil) }
+        }
         toneRow(icon: "sun.max.fill",          label: "Brightness",    value: steps(wfBright))          { onPickCrown(.brightness) }
         toneRow(icon: "circle.lefthalf.filled", label: "Contrast",      value: steps(wfContrast))        { onPickCrown(.contrast) }
       }
@@ -1289,7 +1343,10 @@ struct DisplaySheet: View {
       Section {
         Button(role: .destructive) {
           wfAutoContrast = 5; wfBright = 0; wfContrast = 0
+          // ★ Reset must cover the new state too — back to AUTO at 5, floor/ceiling cleared.
+          wfManualRange = false; wfFloorDb = -110; wfCeilDb = -30
           wfPalette = "sonar"; wfVfoColour = "orange"; wfPeakHold = true
+          link.setManualRange(false, floor: -110, ceil: -30)
           link.setAutoContrast(5); link.waterfall.brightness = 0; link.waterfall.contrast = 0
           link.applyPalette("sonar"); link.applyVfo("orange")
           link.peakHold = true; link.waterfall.peakHold = true
