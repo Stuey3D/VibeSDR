@@ -32,6 +32,28 @@ the sockets with a token that must be rejected — then retries twice and report
 - ★ Do not retry a known-wrong PIN. The server locks out after too many tries
   (`lockedFor`), so a silent retry loop actively harms the user.
 
+## 2b. ★★ mDNS ALSO dies when the Android host power-saves — cause NOT yet known
+
+2026-07-28, Moto in power saving: `vibesdr-moto-g35.local` dead, **direct IP
+connected instantly**. So the process, the foreground service and the listening
+TCP socket all survived — only the mDNS answer stopped.
+
+★ THE OBVIOUS EXPLANATION IS WRONG. Android drops multicast to an app in
+power-save unless it holds a `WifiManager.MulticastLock` — but VibeServer
+ALREADY acquires one on start (`VibeLocalSdrModule.kt:367`, released at :394).
+So the lock is held and `.local` still stopped answering. Do not "fix" this by
+adding a lock that is already there.
+
+Worth checking next, with evidence rather than theory:
+- Is the native responder's thread still alive and its socket still joined to
+  224.0.0.251 after a doze transition? A dropped IGMP group membership would
+  look exactly like this and would need a re-join on network change.
+- Does the responder answer if queried immediately after a wake?
+- Is this Doze proper (which the MulticastLock does not prevent) rather than
+  WiFi power-save?
+
+★ Either way it strengthens the decision below: tell users to enter an IP.
+
 ## 2. ★★ mDNS does not resolve over the Bluetooth link
 
 `vibesdr-moto-g35.local` fails when the watch is on Bluetooth rather than WiFi;
