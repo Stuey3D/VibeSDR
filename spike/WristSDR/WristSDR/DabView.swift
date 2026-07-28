@@ -12,6 +12,10 @@ import Combine
 /// spun past). The speed-fix lives in the header (the dablin chipmunk workaround), as Stuart asked.
 struct DabView: View {
   @EnvironmentObject var link: SpikeLink
+  // ★★★ ControlMenu needs this, and a navigationDestination does NOT inherit an environment
+  // injected on THIS view's body — the destination is resolved against the NavigationStack above
+  // it. So it must be passed to ControlMenu inside the closure, exactly as ContentView does.
+  @EnvironmentObject var bookmarks: BookmarkStore
 
   @State private var cursor = 0
   @State private var crown = 0.0
@@ -93,7 +97,7 @@ struct DabView: View {
         .environmentObject(link)
     }
     .navigationDestination(isPresented: $showMenu) {
-      ControlMenu { _ in }.environmentObject(link)
+      ControlMenu { _ in }.environmentObject(link).environmentObject(bookmarks)
     }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     // Passive status icons in the clock's band, top-left (clock keeps the right corner).
@@ -124,7 +128,7 @@ struct DabView: View {
   private var chrome: some View {
     HStack(spacing: 6) {
       BatteryPill(level: link.battery)
-      ConnGlyph(transport: link.transport).font(.system(size: 11))
+      ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
       QualityGlyph(link: link)
     }
     .padding(.leading, 28).padding(.top, 3)

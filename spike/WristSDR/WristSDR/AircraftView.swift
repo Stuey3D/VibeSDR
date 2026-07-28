@@ -9,6 +9,10 @@ import MapKit
 /// the DAB screen; profiles/servers live in the hold-menu (long-press the header — works over the map too).
 struct AircraftView: View {
   @EnvironmentObject var link: SpikeLink
+  // ★★★ ControlMenu needs this, and a navigationDestination does NOT inherit an environment
+  // injected on THIS view's body — the destination is resolved against the NavigationStack above
+  // it. So it must be passed to ControlMenu inside the closure, exactly as ContentView does.
+  @EnvironmentObject var bookmarks: BookmarkStore
   @State private var showMap = false
   @State private var showMenu = false
   @State private var showChat = false
@@ -39,7 +43,7 @@ struct AircraftView: View {
     .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
-    .navigationDestination(isPresented: $showMenu) { ControlMenu { _ in }.environmentObject(link) }
+    .navigationDestination(isPresented: $showMenu) { ControlMenu { _ in }.environmentObject(link).environmentObject(bookmarks) }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     .onAppear { if !seenAdsbTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showAdsbTut = true } } }
     .sheet(isPresented: $showAdsbTut) {
@@ -54,7 +58,7 @@ struct AircraftView: View {
   private var chrome: some View {
     HStack(spacing: 6) {
       BatteryPill(level: link.battery)
-      ConnGlyph(transport: link.transport).font(.system(size: 11))
+      ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
       QualityGlyph(link: link)
     }
     .padding(.leading, 28).padding(.top, 3)   // clear the rounded top-left corner
@@ -198,15 +202,49 @@ struct AircraftView: View {
   }
 }
 
-/// The connection-method glyph (iPhone relay / wifi / cellular), shared by the DAB + ADS-B headers.
+/// The connection-method glyph (iPhone relay / wifi / cellular), shared by the DAB, ADS-B and
+/// FM-DX headers.
+///
+/// ★★ IT USED TO BE STATIC WHITE — so on those three screens the glyph was PRESENT but never said
+/// anything, which is worse than absent: it looks like a working indicator reporting "fine"
+/// (Stuart, 2026-07-28). The main waterfall screen had the tinted, breathing version all along;
+/// this brings the same reading everywhere rather than keeping two glyphs that disagree.
+///
+/// ★ What the colour promises (same wording as the main screen): green = "this much data is
+/// comfortable for a Bluetooth link in good conditions". Linear hue 0.33→0.0 over 20→30 KB/s:
+/// 21 yellow-green · 25-26 amber · 28-29 nearly red · 30 red and breathing. relayLoad is 0 on
+/// wifi/cellular, so the fade is only ever seen on the relay.
 struct ConnGlyph: View {
   let transport: Transport
+  /// 0…1 against the relay's comfortable ceiling. Defaults to 0 so a caller that has no reading
+  /// gets the old resting appearance rather than a false alarm.
+  var relayLoad: Double = 0
+  @State private var breathe = false
+
+  private var relayTint: Color {
+    let l = max(0, min(1, relayLoad))
+    return Color(hue: 0.33 * (1 - l), saturation: 0.95, brightness: 1.0)
+  }
+
   var body: some View {
-    switch transport {
-    case .iphone:   Image(systemName: "iphone").foregroundStyle(.white.opacity(0.8))
-    case .wifi:     Image(systemName: "wifi").foregroundStyle(.white.opacity(0.8))
-    case .cellular: Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.white.opacity(0.8))
-    case .none:     Image(systemName: "xmark").foregroundStyle(.red)
+    Group {
+      switch transport {
+      case .iphone:
+        Image(systemName: "iphone")
+          .foregroundStyle(relayTint)
+          // ★ Past the ceiling it BREATHES. A colour alone is easy to miss on a wrist, and this
+          //   is the moment the user can actually act — move nearer the phone, or use wifi.
+          .opacity(relayLoad >= 1 && breathe ? 0.35 : 1)
+          .animation(.easeInOut(duration: 0.4), value: relayLoad)
+      case .wifi:     Image(systemName: "wifi").foregroundStyle(.white.opacity(0.8))
+      case .cellular: Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.white.opacity(0.8))
+      case .none:     Image(systemName: "xmark").foregroundStyle(.red)
+      }
+    }
+    // The rhythm always runs; only the opacity binding above decides whether it shows. Keeps a
+    // single breathing cadence rather than starting one on a state change.
+    .onAppear {
+      withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { breathe = true }
     }
   }
 }

@@ -183,19 +183,32 @@ struct WristSDRApp: App {
               .environmentObject(bookmarks)
               .environmentObject(favs)      // the PIN sheet saves to a favourite
               .navigationBarHidden(true)
+          // ★★★ EVERY SCREEN GETS `bookmarks`, NOT JUST THE WATERFALL. All four can open
+          // ControlMenu, and ControlMenu declares @EnvironmentObject var bookmarks — a MISSING
+          // environment object is a FATAL SwiftUI trap the instant the body evaluates, not a
+          // blank view. So pressing the menu button on DAB or ADS-B killed the app back to the
+          // watch face, while the hold-gesture on the waterfall worked fine: ContentView passed
+          // bookmarks and these three did not (Stuart, 2026-07-28 — crash report
+          // WristSDR-2026-07-28-234339: EXC_BREAKPOINT in libswiftCore via SwiftUICore, main
+          // thread, during body evaluation).
+          // ★ Injected HERE rather than at each ControlMenu call site: there are four of those
+          //   and this is the one place that cannot be forgotten by the next screen added.
           case .dab:
             DabView()
               .environmentObject(link)
+              .environmentObject(bookmarks)
               .environmentObject(favs)
               .navigationBarHidden(true)
           case .adsb:
             AircraftView()
               .environmentObject(link)
+              .environmentObject(bookmarks)
               .environmentObject(favs)
               .navigationBarHidden(true)
           case .fmdx:
             FmdxView()
               .environmentObject(link)
+              .environmentObject(bookmarks)
               .environmentObject(favs)
               .navigationBarHidden(true)
           }

@@ -55,7 +55,7 @@ struct FmdxView: View {
       // the connection method + link-quality pair the DAB/ADS-B screens carry.
       ZStack(alignment: .topTrailing) {
         HStack(spacing: 6) {
-          ConnGlyph(transport: link.transport).font(.system(size: 11))
+          ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
           QualityGlyph(link: link)
           BatteryPill(level: link.battery, scrim: false)
         }
