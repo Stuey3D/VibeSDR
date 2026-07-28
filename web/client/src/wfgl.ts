@@ -35,6 +35,7 @@ uniform float uHead;       // newest row index in the ring
 uniform float uRows;       // ring height (fixed, generous)
 uniform float uVisible;    // how many rows the display actually shows (the waterfall pixel height)
 uniform float uCols;       // ring width (bins)
+uniform float uSharp;      // 0 = off; unsharp-mask amount (see below)
 varying vec2 vUv;
 void main() {
   // Top of the output (vUv.y = 0) is the newest row = head; walk down uVisible rows into the ring.
@@ -44,6 +45,25 @@ void main() {
   float a = texture2D(uRing, vec2(vUv.x, ty)).r;
   float b = texture2D(uRing, vec2(vUv.x + 1.0 / uCols, ty)).r;   // peak-preserve across the bin
   float v = max(a, b);
+
+  // ★★ UNSHARP MASK — the web waterfall was visibly SOFTER than the app's for the
+  // same signal, and the sharpness slider did nothing because nothing here read it
+  // (Stuart, 2026-07-28). The app sharpens in its SkSL shader; this is the WebGL
+  // equivalent.
+  //
+  // ★ ALONG FREQUENCY ONLY. The detail a DXer is looking for is a narrow carrier —
+  // one bin wide, many rows tall — so blurring across TIME to sharpen would fight
+  // the very thing being sharpened, and would also make the scroll shimmer. The
+  // neighbours are one bin either side; at the edges the sample clamps to itself,
+  // which yields zero correction rather than a bright rim.
+  if (uSharp > 0.0) {
+    float dx = 1.0 / uCols;
+    float l = texture2D(uRing, vec2(max(vUv.x - dx, 0.0), ty)).r;
+    float r = texture2D(uRing, vec2(min(vUv.x + dx, 1.0), ty)).r;
+    // v - blur, i.e. how much this bin stands above its neighbourhood.
+    float hi = v - (l + r) * 0.5;
+    v = clamp(v + hi * uSharp, 0.0, 1.0);
+  }
   gl_FragColor = texture2D(uLut, vec2(v, 0.5));
 }`;
 
@@ -69,6 +89,9 @@ export class WaterfallGL {
   private uRows: WebGLUniformLocation;
   private uVisible: WebGLUniformLocation;
   private uCols: WebGLUniformLocation;
+  private uSharp: WebGLUniformLocation;
+  /** 0…10 from the UI, mapped to the mask amount at draw time. */
+  sharpness = 0;
   // Reusable RGBA upload buffer (the dB index packed into R). The ring is RGBA, not LUMINANCE, so it
   // is a color-RENDERABLE format — the FBO that preserves history across a resize needs that.
   private rgba: Uint8Array | null = null;
@@ -102,6 +125,7 @@ export class WaterfallGL {
     this.uRows = gl.getUniformLocation(prog, 'uRows')!;
     this.uVisible = gl.getUniformLocation(prog, 'uVisible')!;
     this.uCols = gl.getUniformLocation(prog, 'uCols')!;
+    this.uSharp = gl.getUniformLocation(prog, 'uSharp')!;
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   }
 
@@ -187,6 +211,18 @@ export class WaterfallGL {
     gl.uniform1f(this.uRows, this.ringH);
     gl.uniform1f(this.uVisible, Math.min(visibleRows, this.ringH));
     gl.uniform1f(this.uCols, this.ringW);
+    // ★★ THE APP'S EXACT MAPPING, so the same slider position means the same thing in
+    // both clients. WaterfallView.tsx: uSharp = base × (wfSharpness / 5), with base
+    // chosen per frame rate (3 at 30fps, 2 at 20fps, 1.5 native). The web has no
+    // frame-interpolation blur to compensate for, so it takes the 20fps base — the
+    // app's common case — giving 2.0 at the default slider 5 and 4.0 at 10.
+    // ★ The mask itself is the same formula the SkSL shader uses:
+    //   c + uSharp * (c - (l + r) * 0.5)
+    // ★ LINEAR, not squared. The app's curve used to be quadratic and the bottom half
+    // of the slider did nothing (slider 2 = 0.16× base, imperceptible); it was made
+    // linear so every step moves something. Do not reintroduce the curve here.
+    const SHARP_BASE = 2.0;
+    gl.uniform1f(this.uSharp, Math.max(0, Math.min(10, this.sharpness)) / 5 * SHARP_BASE);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 

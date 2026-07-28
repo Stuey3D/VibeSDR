@@ -223,6 +223,7 @@ export class Waterfall {
     try {
       this.glCanvas = document.createElement('canvas');
       this.gl = new WaterfallGL(this.glCanvas);
+      this.gl.sharpness = this.proc.getSettings().wfSharpness;   // a saved pref must apply at start
       this.gl.setLUT(this.lut);
     } catch { this.gl = null; this.glCanvas = null; }
     this.resize();
@@ -276,7 +277,14 @@ export class Waterfall {
 
   getSpecRatio(): number { return this.specRatio; }
 
-  applySettings(patch: Partial<SignalProcessorSettings>) { this.proc.applySettings(patch); }
+  applySettings(patch: Partial<SignalProcessorSettings>) {
+    this.proc.applySettings(patch);
+    // ★ THE SHARPNESS SLIDER USED TO GO NOWHERE. It was stored in the processor's
+    // settings and never read by this renderer, so the control moved and nothing
+    // happened — while the app, which sharpens in its SkSL shader, looked visibly
+    // crisper on the same signal (Stuart, 2026-07-28). The GPU path now takes it.
+    if (patch.wfSharpness !== undefined && this.gl) this.gl.sharpness = patch.wfSharpness;
+  }
   getSettings(): SignalProcessorSettings { return this.proc.getSettings(); }
   getRange() { return this.proc.getRange(); }
 
