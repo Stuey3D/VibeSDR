@@ -59,10 +59,22 @@ that is talking to us, right now. No probe, no cost, checked every single ping.
 | yes | never / failed | Address right, nothing can get IN — port forward or ISP. |
 
 ★★ **"Reported correctly" in the strong sense** — that the address reaches THIS server and
-not merely *a* server — is the **key echo**. On the connect-back the server returns the
-key it was issued in `/vibeserver.json`. This catches the nasty case: a typo'd hostname
-that happens to belong to somebody else's working receiver. DNS-vs-source-IP catches most
-of it; only the key echo catches all of it.
+not merely *a* server — needs the server to prove it holds the key. This catches the nasty
+case: a typo'd hostname that happens to belong to somebody else's working receiver.
+DNS-vs-source-IP catches most of it; only this catches all of it.
+
+★★★ **DO NOT ECHO THE KEY — the probe runs over PLAIN HTTP.** The inbound connection is to
+the user's own server on their own port, so an echoed key (which IS the identity) would
+cross the wire in the clear on every verification, and anyone on the path could take over
+the listing. Challenge-response instead, the same scheme used three times already in this
+project (PIN, admin override, watch pairing):
+
+```
+GET /vibeserver.json?dirNonce=<nonce>
+→ { …, "dirProof": "<HMAC-SHA256(key, nonce)>" }
+```
+
+The key never leaves the server; a listener gets a single-use hash worth nothing.
 
 **The accuracy chain:** claim an address → prove the hostname points at you (DNS vs source
 IP) → prove the address reaches you (key echo over connect-back) → re-check the cheap half
@@ -219,6 +231,31 @@ outcome, and a £5/month decision made with evidence rather than up front.
 
 ## Privacy and safety — decide BEFORE the first deploy
 
+### ★★★ Encryption — Stuart's requirement, 2026-07-28
+
+> *"our site is HTTPS so I would like all traffic between VibeServer and vibesdr.net to be
+> encrypted. If a user has setup a HTTP ddns then its their choice to make, but we respect
+> privacy at all stages"*
+
+- **VibeServer → VibeSDR.net: ALWAYS HTTPS.** Register, ping, delist. No plain-HTTP
+  fallback, and no "retry over HTTP if TLS fails" — that is how a fallback becomes the
+  path an attacker forces.
+- **VibeSDR.net → the user's server: HTTP if that is what they run** — their machine,
+  their choice — but ★★ **NOTHING SECRET EVER CROSSES IT.** A nonce out, a hash back.
+- ★ **Publish the hostname, NOT the resolved IP.** The directory needs the source IP to do
+  its checks; it does not need to print it. Avoids pinning a specific address into a public
+  page and a search index.
+- ★ Source IP is **verification state, not a record to accumulate**. Keep it no longer than
+  the check needs.
+
+★★ **ARCHITECTURAL CONSEQUENCE: the directory client lives in the PLATFORM layer, not the
+C++ shim.** `net_shim` is raw sockets with no TLS, and bundling BoringSSL into the shim to
+make one HTTPS POST would be a maintenance burden for nothing. Kotlin/OkHttp on Android,
+`URLSession` on the Mac — both get the system trust store, certificate validation and TLS
+upkeep for free. The shim exposes the state; the platform does the talking.
+
+### Publishing an address at all
+
 ★★★ **This publishes a home IP address on a public web page.**
 
 1. **Opt-in only.** Never a default, never inferred from "the server is reachable".
@@ -249,7 +286,26 @@ a moderation commitment, not just an endpoint.
    both off it, and asking users to re-forward to 8080 is a bad ask.
 2. D1 schema + register/ping/delist + the DNS-vs-source-IP check.
 3. The map page.
-4. VibeServer UI: address box, self-check, List my server, share duration, delist.
+4. **VibeServer UI — as simple as it gets** (Stuart's design):
+
+   ```
+   PUBLIC LISTING
+   Address   [ stuey3d.freemyip.com:8073 ]   ✓ reachable
+
+     ( ) List permanently
+     ( ) List temporarily
+   ```
+
+   Both off = not listed, the safe default, needing no explanation. The two switches are
+   mutually exclusive and the ONLY thing that differs behind them is **what happens when
+   the pings stop**: permanent keeps the entry and expects it back (a reboot does not lose
+   your listing); temporary expires shortly after and does not return on its own.
+
+   ★ Turning a switch off sends an immediate **delist** — it goes now, rather than lapsing.
+   ★ The address box's tick is the SELF-CHECK: instant feedback that you typed it right.
+     It does not decide the listing (see above), it just separates "I typed it wrong" from
+     "something is wrong somewhere".
+   ★ No duration picker in v1. "Temporary" already means "expires when I stop".
 5. Client pickers: directory source, top spot, live reachability probe.
 
 ## Open questions
