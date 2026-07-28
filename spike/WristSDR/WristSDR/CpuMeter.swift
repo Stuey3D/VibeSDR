@@ -39,7 +39,67 @@ final class CpuMeter: ObservableObject {
   /// Whole-process CPU as a percentage of ONE core (>100% is possible and normal —
   /// render, audio and any DSP are different threads). Copied verbatim in method
   /// from the spike's Vitals so the comparison is exact.
+  // ★★★ CUMULATIVE, NOT INSTANTANEOUS. `thread_basic_info.cpu_usage` is the scheduler's
+  // SNAPSHOT of what each thread is doing at the instant you ask — so it misses everything that
+  // happened between samples, and on watchOS 27 it now reads 0 for this process every time
+  // (Stuart's screenshot, 2026-07-29: a proud "CPU 0%" over a running waterfall). The July notes
+  // already flagged it as noisy — "catches lulls between frames" — and a method that can report
+  // zero for a busy app is not a measurement, it is an accident that used to work.
+  //
+  // ★ This instead totals the process's CONSUMED CPU TIME (live threads via TASK_THREAD_TIMES_INFO
+  // plus already-exited ones via MACH_TASK_BASIC_INFO — you need BOTH, or short-lived worker
+  // threads vanish from the total) and divides the delta by elapsed wall time. Nothing can happen
+  // between two samples without appearing in it.
+  //
+  // ★ Returns 0 on the FIRST call — there is no interval yet. That is honest; the reading settles
+  // one tick later.
+  private static var lastCpuSecs: Double = 0
+  private static var lastSampleAt: Double = 0
+  private static var lastPct: Double = 0
+
   static func processCpuPercent() -> Double {
+    var secs = 0.0
+
+    var basic = mach_task_basic_info()
+    var bCount = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+    let krB = withUnsafeMutablePointer(to: &basic) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(bCount)) {
+        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &bCount)
+      }
+    }
+    if krB == KERN_SUCCESS {
+      secs += Double(basic.user_time.seconds)   + Double(basic.user_time.microseconds)   / 1e6
+      secs += Double(basic.system_time.seconds) + Double(basic.system_time.microseconds) / 1e6
+    }
+
+    var times = task_thread_times_info()
+    var tCount = mach_msg_type_number_t(MemoryLayout<task_thread_times_info>.size / MemoryLayout<natural_t>.size)
+    let krT = withUnsafeMutablePointer(to: &times) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(tCount)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_THREAD_TIMES_INFO), $0, &tCount)
+      }
+    }
+    if krT == KERN_SUCCESS {
+      secs += Double(times.user_time.seconds)   + Double(times.user_time.microseconds)   / 1e6
+      secs += Double(times.system_time.seconds) + Double(times.system_time.microseconds) / 1e6
+    }
+    guard krB == KERN_SUCCESS || krT == KERN_SUCCESS else { return -1 }
+
+    let now = ProcessInfo.processInfo.systemUptime
+    let prevSecs = lastCpuSecs, prevAt = lastSampleAt
+    // ★ Too short an interval is noise, not a reading — hold the last answer rather than divide
+    //   a rounding error by a rounding error. Makes the meter safe to call at any cadence.
+    if prevAt > 0, now - prevAt < 0.5 { return lastPct }
+    lastCpuSecs = secs; lastSampleAt = now
+    guard prevAt > 0, now > prevAt else { return 0 }
+    // % of ONE core, the same denominator every earlier watch measurement used.
+    lastPct = max(0, (secs - prevSecs) / (now - prevAt) * 100.0)
+    return lastPct
+  }
+
+  /// The OLD instantaneous method, kept only so the two can be compared on the same wrist if the
+  /// difference is ever questioned. ★ Do not use it for a reading — see above.
+  static func processCpuPercentInstantaneous() -> Double {
     var threadList: thread_act_array_t?
     var threadCount = mach_msg_type_number_t(0)
     guard task_threads(mach_task_self_, &threadList, &threadCount) == KERN_SUCCESS,
