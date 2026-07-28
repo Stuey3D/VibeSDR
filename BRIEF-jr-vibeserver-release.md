@@ -1,5 +1,10 @@
 # BRIEF — Jr ↔ VibeServer, the release-blocking set
 
+> **STATUS 2026-07-28, Jr build 57 — VERIFIED ON HARDWARE:** PIN prompt (1),
+> port scan (7), session limit + countdown (3), admin takeover BOTH WAYS (4).
+> Remaining: mDNS guidance copy (2), Airspy auto-contrast (5), the per-radio
+> panels beyond gain (6), and the initialising screen.
+
 From on-air testing 2026-07-28 (Jr 48, Moto G35 VibeServer). Ordered by whether
 it stops a tester getting on the air.
 
