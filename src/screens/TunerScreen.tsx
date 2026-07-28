@@ -25,6 +25,7 @@ import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
 import { dialKeyFor, pruneDial, stampUndatedDial } from '../services/dialSync';
 import { requestSync } from '../services/cloudSync';
+import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from '../constants/fmBand';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -71,8 +72,9 @@ const PTY = [
   'Documentary', 'Alarm Test', 'Alarm',
 ];
 
-const FM_LO = 87_500_000, FM_HI = 108_000_000;
-const clampFm = (hz: number) => Math.min(FM_HI, Math.max(FM_LO, hz));
+const FM_HI = FMDX_TUNE_HI;
+/** Storage key for the per-server extended-band toggle and the learned floor. */
+const extKeyFor = (base: string) => `fmdx_ext:${base}`;
 /** Best country for flag/logo: transmitter ITU (reliable) → RDS country_iso
  *  (only if a real code, not 'UN'/blank). Returns ISO alpha-2 or ''. */
 function countryOf(st: FmdxState | null): string {
@@ -163,7 +165,80 @@ export default function TunerScreen({ route, navigation }: Props) {
    *  from here, so the watch needs it to make "46 km" mean anything. */
   const rxNameRef = useRef('');
   const [freqModalOpen, setFreqModalOpen] = useState(false);
-  const [dialView, setDialView] = useState({ lo: FM_LO, hi: FM_HI });
+
+  // ── Band extent ─────────────────────────────────────────────────────────────
+  // ★ THE DIAL GROWS ONLY ON A CONFIRMED TUNE — never on an attempted one.
+  //
+  // The dial reads 87.5–108 as it always has, which is the right scale for very
+  // nearly every server: a 44 MHz dial would squash the band all the listening
+  // happens in to make room for frequencies most receivers never visit. It
+  // stretches down only to where this radio has been SEEN to tune.
+  //
+  // "Seen", not "asked". An out-of-range T<kHz> is dropped by the server in
+  // silence (server/index.js) and our display snaps back a second or so later —
+  // so growing on the attempt would leave a nudge towards 71 MHz with a
+  // permanently stretched dial and nothing down there. Only the server's own
+  // reported frequency counts as proof.
+  //
+  // Tuning itself is NOT clamped at 87.5 — that clamp is what put a server parked
+  // on 84 MHz out of reach. It is clamped to the receiver's 64 MHz sweep instead;
+  // anything the owner disallows simply doesn't take, and we say so.
+  const [confirmedLo, setConfirmedLo] = useState(FMDX_DIAL_VIEW_LO);
+  const confirmedLoRef = useRef(confirmedLo);
+  /** Dial floor: 1 MHz of headroom below the lowest confirmed frequency, so the
+   *  proven edge isn't jammed against the dial's end and there is somewhere to
+   *  tune next. Never above the standard band's own 87.5. */
+  const fmLo = confirmedLo >= FMDX_DIAL_VIEW_LO ? FMDX_DIAL_VIEW_LO
+             : Math.max(FMDX_TUNE_LO, Math.floor((confirmedLo - 1_000_000) / 1_000_000) * 1_000_000);
+  const extended = fmLo < FMDX_DIAL_VIEW_LO;
+  /** Clamp to what the RADIO can reach, not to what the dial happens to show —
+   *  the dial can only learn to grow if we let the tune out of the band first. */
+  const clampFm = useCallback((hz: number) => Math.min(FM_HI, Math.max(FMDX_TUNE_LO, hz)), []);
+  const EXT_KEY = extKeyFor(baseUrl);
+  useEffect(() => {
+    AsyncStorage.getItem(EXT_KEY).then((raw) => {
+      if (destroyed.current || !raw) return;
+      const lo = Number(JSON.parse(raw)?.confirmedLo);
+      if (Number.isFinite(lo)) {
+        const clamped = Math.min(FMDX_DIAL_VIEW_LO, Math.max(FMDX_TUNE_LO, lo));
+        confirmedLoRef.current = clamped;
+        setConfirmedLo(clamped);
+      }
+    }).catch(() => {});
+  }, [EXT_KEY]);
+  /** Record a frequency the server ITSELF reported. Below 87.5 that is proof this
+   *  radio tunes there, and the dial stretches to match — once, and remembered. */
+  const confirmReach = useCallback((hz: number) => {
+    if (!(hz > 0) || hz >= confirmedLoRef.current) return;
+    const lo = Math.max(FMDX_TUNE_LO, hz);
+    confirmedLoRef.current = lo;
+    setConfirmedLo(lo);
+    AsyncStorage.setItem(EXT_KEY, JSON.stringify({ confirmedLo: lo })).catch(() => {});
+  }, [EXT_KEY]);
+  /** Forget what we learned — the dial goes back to a plain 87.5–108. */
+  const resetReach = useCallback(() => {
+    confirmedLoRef.current = FMDX_DIAL_VIEW_LO;
+    setConfirmedLo(FMDX_DIAL_VIEW_LO);
+    AsyncStorage.removeItem(EXT_KEY).catch(() => {});
+  }, [EXT_KEY]);
+
+  const [dialView, setDialView] = useState({ lo: FMDX_DIAL_VIEW_LO, hi: FMDX_DIAL_VIEW_HI });
+
+  // Keep the tuned frequency inside the dial window. Widening the band means the
+  // window can now sit somewhere the radio isn't; slide it (span preserved)
+  // rather than snapping the zoom the user chose.
+  useEffect(() => {
+    if (displayFreq <= 0) return;
+    setDialView((v) => {
+      const inBand = v.lo >= fmLo && v.hi <= FM_HI;
+      if (inBand && displayFreq >= v.lo && displayFreq <= v.hi) return v;
+      const sp = Math.min(FM_HI - fmLo, Math.max(1, v.hi - v.lo));
+      let lo = displayFreq - sp / 2, hi = lo + sp;
+      if (lo < fmLo) { lo = fmLo; hi = lo + sp; }
+      if (hi > FM_HI) { hi = FM_HI; lo = hi - sp; }
+      return { lo, hi };
+    });
+  }, [displayFreq, fmLo]);
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
@@ -206,10 +281,24 @@ export default function TunerScreen({ route, navigation }: Props) {
   // the display doesn't bounce back to the old frequency.
   const targetFreqRef = useRef<number | null>(null);
   const convergeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** One-line explanation of a refused tune, shown under the dial until the next one. */
+  const [bandNote, setBandNote] = useState<string | null>(null);
   const armTarget = useCallback((f: number) => {
+    setBandNote(null);
     targetFreqRef.current = f;
     if (convergeTimer.current) clearTimeout(convergeTimer.current);
-    convergeTimer.current = setTimeout(() => { targetFreqRef.current = null; }, 3000);
+    convergeTimer.current = setTimeout(() => {
+      const missed = targetFreqRef.current;
+      targetFreqRef.current = null;
+      // Never converged, and the display is about to snap back to where the radio
+      // really is. Out of band that means the owner's tuning limit dropped the
+      // command in silence — worth saying, because a snap-back with no explanation
+      // reads as a bug. In band it means nothing reliable (a locked or spectator
+      // server refuses everything), so we say nothing. Either way the DIAL does
+      // not move: it grows on confirmation only.
+      if (missed == null || missed >= FMDX_DIAL_VIEW_LO) return;
+      setBandNote(`This server refused ${(missed / 1e6).toFixed(1)} MHz — its owner limits tuning`);
+    }, 3000);
   }, []);
 
   // Chat
@@ -311,6 +400,12 @@ export default function TunerScreen({ route, navigation }: Props) {
           lastNpTitle.current = npTitle;
           VibePowerModule?.setNowPlaying?.(npTitle, instanceName ?? 'FM-DX');
         }
+        // ★ THE ONE PLACE THE DIAL IS ALLOWED TO GROW. s.freqHz is where the radio
+        // actually is — a frequency it has been seen to reach, whether we asked for
+        // it (a confirmed tune) or found it parked there (the 84 MHz server that
+        // started this). An out-of-range command never gets this far: the server
+        // drops it and keeps reporting the old frequency.
+        confirmReach(s.freqHz);
         if (dragFreqRef.current != null) return;          // dragging — drum owns the display
         const target = targetFreqRef.current;
         if (target != null) {
@@ -612,16 +707,16 @@ export default function TunerScreen({ route, navigation }: Props) {
   const onDialZoom = useCallback((px: number) => {
     setDialView((v) => {
       const sp0 = v.hi - v.lo;
-      const full = FM_HI - FM_LO;
+      const full = FM_HI - fmLo;
       const sp = Math.max(2_000_000, Math.min(full, sp0 * Math.pow(0.5, px / 90)));
       const anchor = clampFm(displayFreq);
       const rel = sp0 > 0 ? (anchor - v.lo) / sp0 : 0.5;
       let lo = anchor - rel * sp, hi = lo + sp;
-      if (lo < FM_LO) { lo = FM_LO; hi = lo + sp; }
+      if (lo < fmLo) { lo = fmLo; hi = lo + sp; }
       if (hi > FM_HI) { hi = FM_HI; lo = hi - sp; }
       return { lo, hi };
     });
-  }, [displayFreq]);
+  }, [displayFreq, fmLo, clampFm]);
   kbRefs.current.stepTune = stepTune;   // arrows — see the keyboard block above
   kbRefs.current.dialZoom = onDialZoom;
 
@@ -835,7 +930,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
         <FmdxDial
           freqHz={displayFreq}
-          loHz={FM_LO}
+          loHz={fmLo}
           hiHz={FM_HI}
           stations={dialStations}
           onTune={onDialTune}
@@ -843,6 +938,26 @@ export default function TunerScreen({ route, navigation }: Props) {
           view={dialView}
           onViewChange={setDialView}
         />
+
+        {/* Band extent. Absent entirely on a normal server — the dial reads
+            87.5–108 as it always has. It appears only once the dial has GROWN,
+            to say how far it grew and to offer the way back. */}
+        {(extended || !!bandNote) && (
+          <View style={styles.bandRow}>
+            {extended && (
+              <TouchableOpacity
+                style={[styles.bandChip, styles.bandChipOn]}
+                onPress={() => { resetReach(); setBandNote(null); }}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.bandChipText, styles.bandChipTextOn]}>
+                  {`EXTENDED · ${(fmLo / 1e6).toFixed(1)}–108 · TAP FOR 87.5`}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {!!bandNote && <Text style={styles.bandNote}>{bandNote}</Text>}
+          </View>
+        )}
 
         {/* PI (signal reading lives under the mode label; station name + RDS
             RadioText moved to the VTS strip above the island) */}
@@ -1049,7 +1164,9 @@ export default function TunerScreen({ route, navigation }: Props) {
         onClose={() => setFreqModalOpen(false)}
         unit="mhz"
         lockUnit
-        minHz={FM_LO}
+        // The numpad accepts the RECEIVER's range, not the dial's — typing 84.0
+        // on a server nobody has proved yet must be allowed to try.
+        minHz={FMDX_TUNE_LO}
         maxHz={FM_HI}
       />
 
@@ -1165,5 +1282,11 @@ function makeStyles(t: ThemeTokens) {
     afRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
     afChip: { backgroundColor: t.btnBg, borderWidth: 1, borderColor: t.btnBorder, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 7 },
     afChipTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15, fontWeight: 'bold' },
+    bandRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: -4 },
+    bandChip: { backgroundColor: t.btnBg, borderWidth: 1, borderColor: t.btnBorder, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
+    bandChipOn: { borderColor: t.btnActiveText },
+    bandChipText: { color: t.unitColor, fontFamily: F, fontSize: 11, fontWeight: 'bold', letterSpacing: 1.5 },
+    bandChipTextOn: { color: t.btnActiveText },
+    bandNote: { color: t.unitColor, fontFamily: F, fontSize: 11, flexShrink: 1 },
   });
 }

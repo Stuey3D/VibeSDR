@@ -84,7 +84,20 @@ final class FmDxClient: SDRClient {
   var rowsPushed = 0
   var framesPerSec: Double = 0
   var displaySpanHz: Double { 0 }
-  var tuneMinHz: Double { 87_500_000 }
+  /// ★ THE BAND GROWS ON EVIDENCE, it is not assumed.
+  ///
+  /// An FM-DX Webserver exposes its tuning range in NO machine-readable form —
+  /// `webserver.tuningLowerLimit` lives in its config.json and appears in neither
+  /// /static_data, /api nor the /text payload — so we cannot ask. A flat 87.5 MHz
+  /// floor here put an OIRT server, a Japanese-band server and one owner parked on
+  /// 84 MHz permanently out of reach.
+  ///
+  /// So the floor drops to the TEF6686's real 64 MHz sweep the moment the server
+  /// reports a frequency below 87.5 — proof the radio goes there. Unlike the phone,
+  /// the wrist does NOT open the band on a tune-down: a crown is easy to nudge, and
+  /// 23 MHz of empty band is a miserable place to strand someone with no keyboard.
+  @Published private(set) var extendedBand = false
+  var tuneMinHz: Double { extendedBand ? 64_000_000 : 87_500_000 }
   var tuneMaxHz: Double { 108_000_000 }
   var bwLow: Double { 0 }
   var bwHigh: Double { 0 }
@@ -239,6 +252,10 @@ final class FmDxClient: SDRClient {
     i.antennas = antennaList
     if info != i { info = i }
     if frequency != i.freq { frequency = i.freq }
+    // The band grows ONLY on a frequency the server itself reports — proof this
+    // radio reaches there. An out-of-range tune is dropped silently and never
+    // shows up here, so an attempt can never stretch the scale.
+    if i.freq > 0 && i.freq < 87_500_000 && !extendedBand { extendedBand = true }
     lastKhz = Int((i.freq / 1000).rounded())
     if clients != i.users { clients = i.users }
     if stationName != i.ps { stationName = i.ps }
@@ -343,7 +360,7 @@ final class FmDxClient: SDRClient {
 func tune(delta: Int, step: Double) {
     // FM broadcast is a fixed 100 kHz raster — IGNORE the shared UI's step (which is set for SDR bands).
     let target = (frequency > 0 ? frequency : Double(lastKhz) * 1000) + Double(delta) * 100_000
-    tuneTo(max(87_500_000, min(108_000_000, target)))
+    tuneTo(max(tuneMinHz, min(tuneMaxHz, target)))
   }
 
   // ── No-ops / stubs for the SDR surface FM-DX doesn't have ──
