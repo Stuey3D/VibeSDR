@@ -162,6 +162,9 @@ final class SpikeLink: ObservableObject {
   /// indistinguishable from a crash, and the listener blames us rather than reading
   /// it as the owner's policy working.
   @Published var sessionEnded = false
+  /// ★ The owner took the receiver over. Like sessionEnded this is TERMINAL and
+  /// explained — being dumped back to a list with no reason is the complaint.
+  @Published var evicted = false
 
   /// Leave the current server and go back to the picker (the picker is shown
   /// whenever `serverName` is empty — see WristSDRApp).
@@ -170,6 +173,7 @@ final class SpikeLink: ObservableObject {
     client = nil
     serverName = ""
     sessionEnded = false
+    evicted = false
     showSessionPill = false
     sessionNotice = nil
   }
@@ -400,6 +404,7 @@ final class SpikeLink: ObservableObject {
     sessionSecsLeft = -1; sessionLimitMin = 0
     sessionShownMarks.removeAll(); sessionNoticeDone = false
     sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false
+    evicted = false
     client?.goIdle()
     everGotRow = false
     lastRowsPushed = 0
@@ -469,6 +474,7 @@ final class SpikeLink: ObservableObject {
     let wantsPin = (client as? UberClient)?.needsPin ?? false
     if needsPin != wantsPin { needsPin = wantsPin }
     if let u = client as? UberClient {
+      if evicted != u.evicted { evicted = u.evicted }
       if sessionSecsLeft != u.sessionSecsLeft { sessionSecsLeft = u.sessionSecsLeft }
       if sessionLimitMin != u.sessionLimitMin { sessionLimitMin = u.sessionLimitMin }
       updateSessionPill(now: now)

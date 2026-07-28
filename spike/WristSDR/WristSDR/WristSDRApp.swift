@@ -156,6 +156,7 @@ struct WristSDRApp: App {
             ContentView()
               .environmentObject(link)
               .environmentObject(bookmarks)
+              .environmentObject(favs)      // the PIN sheet saves to a favourite
               .navigationBarHidden(true)
           case .dab:
             DabView()
@@ -179,7 +180,27 @@ struct WristSDRApp: App {
       // FM-DX alike. A per-screen overlay would miss whichever one the listener happens
       // to be on when their slot runs out, which is precisely when they need telling.
       .overlay {
-        if link.sessionEnded {
+        // ★ TAKEN OVER BY THE OWNER. Same treatment as the time limit and for the same
+        // reason: the disconnection is legitimate, so EXPLAIN it. Without this the
+        // watch simply went quiet and started reconnecting against a server that will
+        // refuse it — indistinguishable from the app breaking.
+        if link.evicted {
+          VStack(spacing: 8) {
+            Image(systemName: "person.badge.key.fill").font(.system(size: 24)).foregroundColor(.orange)
+            Text("Receiver taken over").font(.system(size: 15, weight: .semibold))
+            Text("The owner has taken control of this receiver. Returning to the servers list.")
+              .font(.system(size: 11)).foregroundColor(.white.opacity(0.7))
+              .multilineTextAlignment(.center)
+          }
+          .padding(16)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(.black.opacity(0.88))
+          .transition(.opacity)
+          .task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            link.leaveServer()
+          }
+        } else if link.sessionEnded {
           VStack(spacing: 8) {
             Text("00:00").font(.system(size: 26, weight: .bold, design: .rounded)).monospacedDigit()
               .foregroundColor(.red)

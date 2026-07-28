@@ -118,6 +118,42 @@ final class UberClient: ObservableObject {
   @Published var sessionSecsLeft = -1          // -1 = no limit, or we are exempt (loopback/admin)
   @Published var adminSet = false              // the owner has set an admin password
   @Published var adminOk = false               // …and we are through it
+  // ── Which radio the server actually has ─────────────────────────────────────
+  @Published var radioDriver = ""              // "rtl" | "sdrplay" | "airspyhf"
+  @Published var radioModel = ""               // e.g. "RSPdx", "Airspy HF+ Discovery"
+  @Published var radioHasBiasT = true
+  // Per-radio gain capability, straight from the server's advert.
+  @Published var lnaStates = 0                 // SDRplay: number of LNA states
+  @Published var ifGrMin = 20                  // SDRplay: IF gain-reduction range, dB
+  @Published var ifGrMax = 59
+  @Published var attSteps = 0                  // Airspy HF+: attenuator positions (9 = 0..8)
+  @Published var attStepDb = 6                 // …dB per step
+  @Published var hasPreamp = false             // HF+ +6 dB preamp
+  @Published var hasRadioAgc = false           // HF+ own AGC
+  // Current per-radio gain state (what we last sent — the server does not echo these back).
+  @Published var rspLna = 0
+  @Published var rspIfGr = 40
+  @Published var rspIfAgc = true
+  @Published var ahfAtt = 0
+  @Published var ahfPreamp = false
+  @Published var ahfAgc = true
+  /// Live from the server's `rspstat`: total system gain and the overload flag.
+  /// The owner took this receiver. Terminal — never auto-retried.
+  @Published var evicted = false
+  @Published var sysGainDb = 0.0
+  @Published var rspOverload = false
+  /// Human name for the hardware sheet's header.
+  var radioName: String {
+    if radioModel.isEmpty { return radioDriver == "rtl" ? "RTL-SDR" : "—" }
+    return radioDriver == "sdrplay" ? "SDRplay \(radioModel)" : radioModel
+  }
+  /// ★ A dongle's single gain slider is meaningless on an RSP, and an HF+ has NO
+  /// variable gain stage. Hide, rather than offer a control whose label lies.
+  var radioHasSimpleGain: Bool { radioDriver != "sdrplay" && radioDriver != "airspyhf" }
+  /// PPM is an RTL trim. The HF+ calibrates in parts per BILLION and the RSP has its
+  /// own scheme — two correction controls disagreeing about units is exactly the
+  /// "which one is real?" confusion to avoid.
+  var radioHasPpm: Bool { radioDriver != "sdrplay" && radioDriver != "airspyhf" }
   @Published var maxFftRate = 0
 
   // ── VibeServer hardware controls (the client drives the radio over the spectrum WS) ──
@@ -131,11 +167,40 @@ final class UberClient: ObservableObject {
   var hasHardwareControls: Bool { isVibe }
 
   private func onHwInfo(_ j: [String: Any]) {
+    // ★★ SESSION LIMIT AND ADMIN STATE RIDE **HWINFO**, not config. I read them off
+    // `config` first and nothing ever appeared — no notice, no countdown, no lock —
+    // because that message simply does not carry them (local_sdr_shim.cpp builds
+    // them into `{"type":"hwinfo",…}`). A field parsed from the wrong message is
+    // silent: no error, no warning, just a feature that never happens.
+    if let n = (j["sessionLimitMin"] as? NSNumber)?.intValue { sessionLimitMin = n }
+    if let n = (j["sessionSecsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = n }
+    if let b = j["adminSet"] as? Bool { adminSet = b }
+    if let b = j["adminOk"] as? Bool { adminOk = b }
+    // ★★ WHICH RADIO IS THIS? Jr drew RTL-SDR controls whatever was plugged in, so an
+    // Airspy HF+ showed a gain slider it does not have (no variable gain stage at all)
+    // and a PPM trim whose units are wrong for it — calibration on an HF+ is in parts
+    // per BILLION. Controls that cannot work are worse than absent: the user cannot
+    // tell a dead control from a dead radio. The server has always advertised this.
+    // See [[one_radio_assumption_family]] — ask what it is, do not assume.
+    if let r = j["radio"] as? [String: Any] {
+      radioDriver = (r["driver"] as? String ?? "").lowercased()
+      radioModel  = (r["model"] as? String ?? "")
+      radioHasBiasT = (r["biasT"] as? Bool) ?? (radioDriver == "rtl")
+      lnaStates  = (r["lnaStates"] as? NSNumber)?.intValue ?? 0
+      ifGrMin    = (r["ifGrMin"] as? NSNumber)?.intValue ?? 20
+      ifGrMax    = (r["ifGrMax"] as? NSNumber)?.intValue ?? 59
+      attSteps   = (r["attSteps"] as? NSNumber)?.intValue ?? 0
+      attStepDb  = (r["attStepDb"] as? NSNumber)?.intValue ?? 6
+      hasPreamp  = (r["hfLna"] as? Bool) ?? false
+      hasRadioAgc = (r["hfAgc"] as? Bool) ?? false
+      if rspIfGr < ifGrMin || rspIfGr > ifGrMax { rspIfGr = min(max(40, ifGrMin), ifGrMax) }
+    }
     if let g = j["gains"] as? [Int] { offeredGains = g }
     if let r = j["rates"] as? [Int] { offeredRates = r }
     lockedRate = (j["lockedRate"] as? NSNumber)?.intValue ?? 0
     maxFftRate = (j["maxFftRate"] as? NSNumber)?.intValue ?? 0   // owner ceiling (needs a Moto update to appear)
     restoreVibeHw()          // the server has now declared what it offers — put the radio back
+    pushAllRadioSettings()   // …including the per-radio gain path, see below
   }
 
   /// All hardware controls ride the SPECTRUM WS as JSON (matches UberSDRClient._sendCtl / the shim).
@@ -143,6 +208,72 @@ final class UberClient: ObservableObject {
   func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]); saveVibeHw() }
   func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]); saveVibeHw() }
   func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]); saveVibeHw() }
+
+  // ── Per-radio gain (SDRplay / Airspy HF+) ───────────────────────────────────
+  // ★ The wrist gets the GAIN controls and not the calibration: ppm/ppb is a very
+  // fine trim that nobody sets from a watch, and it is the one control where a
+  // mis-tap is hard to notice and hard to undo. Gain is the opposite — you change
+  // it because of what you are hearing right now.
+  private func rspSend(_ m: [String: Any]) { guard isVibe else { return }; specSock.send(json: m.merging(["type": "rsp_control"]) { a, _ in a }) }
+  private func ahfSend(_ m: [String: Any]) { guard isVibe else { return }; specSock.send(json: m.merging(["type": "ahf_control"]) { a, _ in a }) }
+
+  /// SDRplay LNA. ★ The UI speaks GAIN (higher = more), the hardware wants a STATE
+  /// (higher = less), so it is inverted on the way out — same as the web client.
+  func setRspLna(_ gainIdx: Int) {
+    let g = max(0, min(max(0, lnaStates - 1), gainIdx))
+    rspLna = g
+    rspSend(["lna": max(0, lnaStates - 1) - g])
+  }
+  func setRspIfGr(_ db: Int) {
+    rspIfGr = max(ifGrMin, min(ifGrMax, db))
+    if !rspIfAgc { rspSend(["ifgr": rspIfGr]) }
+  }
+  func setRspIfAgc(_ on: Bool) {
+    rspIfAgc = on
+    rspSend(["ifagc": on ? 1 : 0])
+    if !on { rspSend(["ifgr": rspIfGr]) }      // hand back the manual value it now owns
+  }
+  func setAhfAtt(_ step: Int) {
+    ahfAtt = max(0, min(max(0, attSteps - 1), step))
+    if !ahfAgc { ahfSend(["att": ahfAtt]) }
+  }
+  func setAhfPreamp(_ on: Bool) { ahfPreamp = on; ahfSend(["lna": on ? 1 : 0]) }
+  /// ★ AGC LAST when turning it OFF, so the manual attenuation we hand back is not
+  /// immediately overridden by the AGC that still owns the gain path.
+  func setAhfAgc(_ on: Bool) {
+    ahfAgc = on
+    if on { ahfSend(["agc": 1]) }
+    else { ahfSend(["att": ahfAtt]); ahfSend(["agc": 0]) }
+  }
+
+  /// Re-assert every per-radio setting the moment the radio announces itself.
+  ///
+  /// ★★ THIS IS WHAT STOPS THE RSP's AGC SITTING INERT. The server-side cause was
+  /// fixed in 05f330f (gRdB must be SEEDED before the AGC is handed the register —
+  /// writing it afterwards is refused, which is why "disable AGC, wiggle the IF
+  /// slider, re-enable" used to be the workaround). The client half is this: send
+  /// the settings again on every hwinfo, which covers a server restart, a reconnect
+  /// and a fresh launch alike. Without it the radio comes back on defaults while the
+  /// sheet still shows the positions you chose — controls and hardware quietly
+  /// disagreeing, which is worse than losing them, because nothing looks wrong.
+  ///
+  /// ★ ORDER MATTERS. AGC LAST, and a manual gain-reduction only while AGC is OFF —
+  /// otherwise the server correctly refuses it and the value vanishes in silence.
+  func pushAllRadioSettings() {
+    guard isVibe else { return }
+    switch radioDriver {
+    case "sdrplay":
+      guard lnaStates > 0 else { return }
+      rspSend(["lna": max(0, lnaStates - 1) - rspLna])
+      if !rspIfAgc { rspSend(["ifgr": rspIfGr]) }
+      rspSend(["ifagc": rspIfAgc ? 1 : 0])
+    case "airspyhf":
+      if hasPreamp { ahfSend(["lna": ahfPreamp ? 1 : 0]) }
+      if !ahfAgc, attSteps > 0 { ahfSend(["att": ahfAtt]) }
+      if hasRadioAgc { ahfSend(["agc": ahfAgc ? 1 : 0]) }
+    default: break
+    }
+  }
 
   /// Unlock the owner-protected controls with the admin password.
   ///
@@ -1020,6 +1151,28 @@ final class UberClient: ObservableObject {
     // nudge.
     // The server's verdict on an unlock attempt. `refused` means the password was
     // wrong (or we are locked out); either way adminOk is the server's word.
+    // ★ THE AGC MADE VISIBLE. sysGain moves as the loop works, which is the only way
+    // to tell a working AGC from a stuck one without disabling it and wiggling a
+    // slider — the very workaround that diagnosed the original bug.
+    // ★★ EVICTED — the owner took the receiver with an admin override. TERMINAL: the
+    // shim's comment is explicit that the displaced client must not retry, because
+    // every client auto-reconnecting is what made plain takeover unworkable (two
+    // listeners displacing each other forever). Jr ignored this message entirely, so
+    // the watch just saw the socket close and started reconnecting — the listener was
+    // thrown off with no idea why (Stuart, on the wrist, 2026-07-28).
+    if type == "evicted" {
+      evicted = true
+      goingIdle = true          // stop the reconnect path dead
+      status = "taken over by the owner"
+      return
+    }
+    if type == "rspstat" {
+      sysGainDb = (j["sysGain"] as? NSNumber)?.doubleValue ?? sysGainDb
+      rspLna    = max(0, lnaStates - 1) - ((j["lna"] as? NSNumber)?.intValue ?? 0)
+      rspIfGr   = (j["ifgr"] as? NSNumber)?.intValue ?? rspIfGr
+      rspOverload = ((j["overload"] as? NSNumber)?.intValue ?? 0) != 0
+      return
+    }
     if type == "admin" {
       adminOk = (j["ok"] as? Bool) ?? false
       if (j["refused"] as? Bool) == true { status = "admin password refused" }
@@ -1030,10 +1183,6 @@ final class UberClient: ObservableObject {
       return
     }
     guard type == "config" else { return }
-    if let n = (j["sessionLimitMin"] as? NSNumber)?.intValue { sessionLimitMin = n }
-    if let n = (j["sessionSecsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = n }
-    if let b = j["adminSet"] as? Bool { adminSet = b }
-    if let b = j["adminOk"] as? Bool { adminOk = b }
     if let bc = j["binCount"] as? Int { binCount = bc }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
     if let cf = j["centerFreq"] as? Double { centerHz = cf }

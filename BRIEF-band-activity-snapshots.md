@@ -94,3 +94,50 @@ the diurnal pattern, not the instant.
 - `BRIEF-vibeserver-multiradio-gui.md` — the multi-user mode this depends on, and the idle/park
   behaviour it interacts with.
 - Reuses the same peak-held FFT→bins resample the spectrum path already does; no new DSP.
+
+---
+
+## Keeping an IDLE public server reachable (2026-07-28)
+
+Raised while planning to port-forward a Samsung tablet to the internet: with no
+users, will Android power management sleep the app and never wake it for a remote
+connection?
+
+★★ **Two real gaps found, before any testing:**
+
+1. **No WifiLock on the VibeServer path.** `VibeWifiLock` exists and documents the
+   exact failure ("WiFi enters power-save between beacons"), but it is acquired
+   only for the rtl_tcp client/server paths — `startVibeServer` takes none. While
+   streaming, constant traffic hides this. While IDLE — which is the whole
+   scenario — power-save is exactly when an inbound connection cannot reach us.
+2. **The foreground service is MEDIA-typed.** `VibeStreamService` uses
+   `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`, which is honest while audio flows and
+   questionable for a server with no listeners. If that service is not running,
+   nothing is holding the process up at all.
+
+★ Samsung and Motorola both ship aggressive app-standby on top of stock Doze, so
+"it works on my Pixel" is not evidence. Test the actual tablet.
+
+### Why the snapshots idea fits
+
+Stuart's instinct: an "idle keep-awake" switch that keeps the SDR IN USE. That is
+the same work this brief already describes — periodically sweeping the band to
+build an activity map. The server is then never idle in the OS's eyes, and the
+sweeping is not make-work: it produces the band-activity data a visitor wants
+before they tune anywhere.
+
+★ It also gives the keep-awake an HONEST JUSTIFICATION for the foreground service
+notification, which matters if this ever goes near the Play Store: "scanning the
+band" is a real ongoing task, where "staying awake in case someone connects" is
+the kind of thing OEM power managers exist to kill.
+
+### Order of work
+
+1. Acquire the WifiLock whenever the server is listening, not only when streaming.
+   Cheapest fix, and it is the one that stops "unreachable until I touch the phone".
+2. Confirm what keeps the process alive with zero listeners; give the service a
+   type that matches what it is actually doing.
+3. Then the periodic sweep, which subsumes the keep-awake switch.
+
+★ Costs battery and heat — fine on a plugged-in tablet, wrong as a default on a
+phone. Make it a setting, defaulting OFF, and say what it costs.

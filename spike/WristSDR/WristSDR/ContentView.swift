@@ -190,6 +190,7 @@ struct ContentView: View {
   /// PIN prompt for a VibeServer that wants one. Driven by `link.needsPin`, so it
   /// appears however the user connected — discovered, favourite or typed IP.
   @State private var pinEntry = ""
+  @EnvironmentObject var favs: FavStore
   @State private var showHardware = false
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
   /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
@@ -683,6 +684,23 @@ struct ContentView: View {
               Text("Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
             }
             .disabled(pinEntry.trimmingCharacters(in: .whitespaces).isEmpty)
+            // ★ SAVE & CONNECT MATTERS MORE ON A WATCH THAN ANYWHERE ELSE. Typing a PIN
+            // on a 41 mm screen is miserable once; doing it on every connection is a
+            // reason to stop using the app. Saved against the favourite for this host,
+            // so the next connect is a tap. (The picker's mDNS sheet always had this;
+            // the sheet you actually reach over Bluetooth did not.)
+            if let c = link.lastConnect {
+              Button {
+                let p = pinEntry.trimmingCharacters(in: .whitespaces)
+                pinEntry = ""
+                favs.saveVibe(name: c.name, host: c.host, pin: p)
+                link.retryWithPin(p)
+              } label: {
+                Text("Save & Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+              }
+              .tint(.green)
+              .disabled(pinEntry.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
             Text("This server is password protected. The owner sets the PIN.")
               .font(.system(size: 11)).foregroundColor(.secondary)
           }

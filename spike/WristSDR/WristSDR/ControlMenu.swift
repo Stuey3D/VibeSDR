@@ -685,6 +685,23 @@ struct HardwareSheet: View {
     }.buttonStyle(.plain).listRowInsets(EdgeInsets())
   }
 
+  /// A full-width − / value / + row. Same shape the old PPM cell used — big targets,
+  /// no dragging, and the value never moves under your thumb.
+  private func stepCell(title: String, value: String,
+                        dec: @escaping () -> Void, inc: @escaping () -> Void) -> some View {
+    VStack(spacing: 2) {
+      Text(title).font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.55))
+      HStack(spacing: 14) {
+        Button(action: dec) { Image(systemName: "minus") }.buttonStyle(.plain)
+        Text(value).font(.system(size: 15, weight: .semibold, design: .rounded))
+          .monospacedDigit().frame(minWidth: 62)
+        Button(action: inc) { Image(systemName: "plus") }.buttonStyle(.plain)
+      }.font(.system(size: 13, weight: .semibold))
+    }
+    .frame(maxWidth: .infinity).frame(height: cellH).foregroundColor(.white)
+    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.14)))
+  }
+
   private let cellH: CGFloat = 56
 
   /// The owner has locked the radio and we are not through it. Everything the
@@ -704,6 +721,32 @@ struct HardwareSheet: View {
         // ★ Only shown when the owner HAS set a password (`adminSet`) and we are not
         // already through it: an unlock box on a server with nothing to unlock is a
         // puzzle, which is exactly why the shim advertises the flag.
+        // ★ SAY WHICH RADIO. Without it the sheet is a set of controls with no subject,
+        // and on a shared server you cannot tell whether you are looking at the dongle
+        // you expected or something else entirely.
+        if !radio.radioName.isEmpty && radio.radioName != "—" {
+          HStack(spacing: 5) {
+            Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 10, weight: .bold))
+            Text(radio.radioName).font(.system(size: 12, weight: .semibold))
+            Spacer()
+            // ★ TOTAL SYSTEM GAIN, LIVE. On an RSP this is the only way to SEE the AGC
+            // working — the number moves as the loop tracks. Without it a working AGC
+            // and a stuck one look identical, which is exactly how the original
+            // "AGC never engages" bug hid (fixed server-side in 05f330f).
+            if radio.radioDriver == "sdrplay" && radio.sysGainDb != 0 {
+              Text(String(format: "%.1f dB", radio.sysGainDb))
+                .font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
+                .foregroundColor(radio.rspOverload ? .red : .green)
+            }
+            // OVERLOAD is worth shouting about: it means the front end is being driven
+            // too hard and everything you hear is suspect.
+            if radio.rspOverload {
+              Text("OVLD").font(.system(size: 10, weight: .bold)).foregroundColor(.red)
+            }
+          }
+          .foregroundColor(.white.opacity(0.75))
+          .padding(.horizontal, 2)
+        }
         if radio.adminSet && !radio.adminOk {
           VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
@@ -728,6 +771,10 @@ struct HardwareSheet: View {
           .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
         }
         // Row 1 — GAIN (crown-armed) · AUTO
+        // ★ Hidden entirely on an RSP (its gain is LNA state + IF gain reduction, not one
+        // slider) and on an HF+ (no variable gain stage AT ALL). A slider that cannot
+        // move the radio is worse than no slider.
+        if radio.radioHasSimpleGain {
         HStack(spacing: 7) {
           Button {
             if !radio.gainAuto { gainArmed.toggle(); crownFocused = gainArmed }
@@ -741,14 +788,17 @@ struct HardwareSheet: View {
           } label: { cell(title: "AUTO GAIN", value: radio.gainAuto ? "ON" : "OFF", lit: radio.gainAuto) }
             .buttonStyle(.plain)
         }
+        }
         // Row 2 — BIAS-T · DIGITAL AGC
         // ★ BIAS-T is owner-gated (adminGate on the server). Drawn DIM and inert while
         // locked, so it reads as "not yours" rather than as a control that does
         // nothing — the difference between a policy and a fault.
         HStack(spacing: 7) {
-          Button { radio.setBiasT(!radio.biasT) } label: {
-            cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT && !ownerLocked, dim: ownerLocked)
-          }.buttonStyle(.plain).disabled(ownerLocked)
+          if radio.radioHasBiasT {
+            Button { radio.setBiasT(!radio.biasT) } label: {
+              cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT && !ownerLocked, dim: ownerLocked)
+            }.buttonStyle(.plain).disabled(ownerLocked)
+          }
           Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
         }
         // Row 3 — SPAN (picker) · PPM (inline ±)
@@ -757,7 +807,41 @@ struct HardwareSheet: View {
             cell(title: "SPAN", value: radio.sampleRate > 0 ? String(format: "%.1f MHz", Double(radio.sampleRate) / 1_000_000) : "—",
                  lit: false, dim: radio.lockedRate != 0)
           }.buttonStyle(.plain).disabled(radio.lockedRate != 0)
-          ppmCell.opacity(ownerLocked ? 0.35 : 1).disabled(ownerLocked)
+        }
+        // ★ CALIBRATION IS NOT A WRIST CONTROL. ppm (and the HF+'s parts-per-BILLION
+        // equivalent) is an extremely fine trim you set once against a known
+        // reference — not something anyone adjusts from a watch, and the one control
+        // where a mis-tap is both easy and hard to notice. Deliberately absent; it
+        // lives on the phone and the web client. (Stuart, 2026-07-28.)
+
+        // ── The radio's OWN gain controls ──────────────────────────────────────
+        // ★ These are the opposite of calibration: you reach for them because of what
+        // you are hearing right now, which is exactly the wrist case.
+        if radio.radioDriver == "sdrplay" && radio.lnaStates > 0 {
+          stepCell(title: "LNA GAIN", value: "\(radio.rspLna)/\(max(0, radio.lnaStates - 1))",
+                   dec: { radio.setRspLna(radio.rspLna - 1) },
+                   inc: { radio.setRspLna(radio.rspLna + 1) })
+          onOff("IF AGC", on: radio.rspIfAgc) { radio.setRspIfAgc(!radio.rspIfAgc) }
+          // Manual IF gain reduction is the AGC's to own while it is on — dimmed, not
+          // hidden: it is still the right control, just not yours at that moment.
+          stepCell(title: "IF GAIN REDUCTION", value: "\(radio.rspIfGr) dB",
+                   dec: { radio.setRspIfGr(radio.rspIfGr - 1) },
+                   inc: { radio.setRspIfGr(radio.rspIfGr + 1) })
+            .opacity(radio.rspIfAgc ? 0.35 : 1).disabled(radio.rspIfAgc)
+        }
+        if radio.radioDriver == "airspyhf" {
+          if radio.hasRadioAgc {
+            onOff("AGC", on: radio.ahfAgc) { radio.setAhfAgc(!radio.ahfAgc) }
+          }
+          if radio.attSteps > 0 {
+            stepCell(title: "ATTENUATOR", value: "\(radio.ahfAtt * radio.attStepDb) dB",
+                     dec: { radio.setAhfAtt(radio.ahfAtt - 1) },
+                     inc: { radio.setAhfAtt(radio.ahfAtt + 1) })
+              .opacity(radio.ahfAgc ? 0.35 : 1).disabled(radio.ahfAgc)
+          }
+          if radio.hasPreamp {
+            onOff("PREAMP (+6 dB)", on: radio.ahfPreamp) { radio.setAhfPreamp(!radio.ahfPreamp) }
+          }
         }
         // FM de-emphasis — full width
         VStack(spacing: 3) {
