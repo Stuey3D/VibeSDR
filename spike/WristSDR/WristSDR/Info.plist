@@ -39,7 +39,17 @@
 
 	     This is exactly the kind of thing the spike exists to find: JR needs it, and no
 	     amount of reasoning about AVAudioSession would ever have surfaced it. -->
-	<key>WKBackgroundModes</key>
+	<!-- ★★ CORRECTED 2026-07-28 at App Store validation: `audio` is NOT a valid
+	     WKBackgroundModes value. Apple's list is workout-processing / self-care /
+	     mindfulness / physical-therapy / alarm / underwater-depth, and the upload was
+	     rejected with "The value for the key 'WKBackgroundModes' ... is invalid".
+	     A single-target watchOS app (WKApplication) declares background audio with the
+	     iOS-style key instead.
+	     ★ RE-TEST WRIST-DOWN AUDIO after this. The note that used to sit here said
+	     UIBackgroundModes was silently ignored and WKBackgroundModes was the fix — that
+	     was written against an older template, but if wrist-down listening dies, this
+	     change is the first suspect. -->
+	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>

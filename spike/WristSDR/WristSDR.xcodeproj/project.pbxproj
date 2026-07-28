@@ -1,94 +1,132 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
-	objectVersion = 56;
+	classes = {
+	};
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA0000000000000000000001 /* WristSDR.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		0F8DE29AEFEBEA31B44B98FA /* FmdxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E755991ACFFF693E13C9B464 /* FmdxView.swift */; };
 		113C3A754441A7C12D9192AB /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10CE8998C4E2A9D6C2D4AB73 /* AircraftView.swift */; };
-		427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */; };
-		EFFBFE3DA8A548A9B1A5906C /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = D363E607DCD2E02F223F5B09 /* BandPlan.swift */; };
-		4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4434780FAA0BCA12A4738A /* BandwidthView.swift */; };
-		4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB51A8941C99A626615A0FC /* Chat.swift */; };
 		1ADDB622AF9179CABE199142 /* CloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = C66B81E885A802F50F032812 /* CloudSync.swift */; };
 		1ADDB622AF9179CABE199143 /* WFPalettes.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = C66B81E885A802F50F032813 /* WFPalettes.generated.swift */; };
-		AD5CAC9826C2285975A9606C /* CloudSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */; };
-		70EE588C003629B12094698A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C7CA3AAA59DBED958D0315 /* ContentView.swift */; };
-		AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0192327755EB9D29ED557A5 /* ControlMenu.swift */; };
-		84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */; };
-		3F732DB5186C7323FF018599 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09436CC1B635338E3E4DD851 /* DabView.swift */; };
-		D0EC43E7337B45D852942651 /* FmDxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D1A340FCDD8315E6BC8086C /* FmDxClient.swift */; };
-		92F20CE6946AA32256E9DA24 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */; };
-		E06C7A835869C607636C4B96 /* FmdxSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BD3236140BA1A61CD183211 /* FmdxSettings.swift */; };
-		0F8DE29AEFEBEA31B44B98FA /* FmdxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E755991ACFFF693E13C9B464 /* FmdxView.swift */; };
-		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
-		AEFAB93D0CD1C4F7BE78D548 /* ImaAdpcm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6772E1A8FFA7DF393020C6B /* ImaAdpcm.swift */; };
-		AC2382A451E5459DE54D634F /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3337F8EA18D635A21DF13495 /* InstancePickerView.swift */; };
-		4BBBE5A5D455F015F2705056 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1629C7E4EFDC0509FC3A567 /* KiwiClient.swift */; };
-		ED426686EBCF9B6F4013EB19 /* LinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D80FAB7F6B9EE572A0EDFC /* LinkManager.swift */; };
-		F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82634AF74EECC78CED58ED93 /* NumpadView.swift */; };
-		CF6770252230AC24E8731FA1 /* OpusDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */; };
-		559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEA65462FB06374237A24A2 /* OwrxClient.swift */; };
-		F2566A4100EC8550A4BEFB78 /* OwrxSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */; };
-		BF96B321B6B5696F03092EF8 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */; };
-		5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FF50C437861299AAC27394 /* SignalProcessor.swift */; };
-		27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967BF6CB775E6B40E9E614BA /* SpikeLink.swift */; };
-		A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43A131B3C936F106D8872A6 /* UberClient.swift */; };
 		27D69CCA8F02B23C062007B8 /* VibeMdns.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E9C61BCE51423C017D58E7 /* VibeMdns.swift */; };
-		90E549E2A30949199198FC09 /* Vitals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4C0C76743B617E12A64820 /* Vitals.swift */; };
+		27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967BF6CB775E6B40E9E614BA /* SpikeLink.swift */; };
+		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
 		39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */; };
-		BDECEB72319CA3A97B96D106 /* WatchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA18D942D5BEDA2D586530E /* WatchAudio.swift */; };
-		BACD927341B2F98BE72ADDD6 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */; };
+		3F732DB5186C7323FF018599 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09436CC1B635338E3E4DD851 /* DabView.swift */; };
+		427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */; };
 		49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */; };
-		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
+		4BBBE5A5D455F015F2705056 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1629C7E4EFDC0509FC3A567 /* KiwiClient.swift */; };
+		4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4434780FAA0BCA12A4738A /* BandwidthView.swift */; };
+		4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB51A8941C99A626615A0FC /* Chat.swift */; };
+		559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEA65462FB06374237A24A2 /* OwrxClient.swift */; };
+		5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FF50C437861299AAC27394 /* SignalProcessor.swift */; };
+		70EE588C003629B12094698A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C7CA3AAA59DBED958D0315 /* ContentView.swift */; };
+		84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */; };
+		90E549E2A30949199198FC09 /* Vitals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4C0C76743B617E12A64820 /* Vitals.swift */; };
+		92F20CE6946AA32256E9DA24 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */; };
 		9C8ACBFE98E4C6CC5D3C3CEC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FB5962ADE3FED0012F31D5D /* Assets.xcassets */; };
+		A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43A131B3C936F106D8872A6 /* UberClient.swift */; };
+		AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0192327755EB9D29ED557A5 /* ControlMenu.swift */; };
+		AC2382A451E5459DE54D634F /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3337F8EA18D635A21DF13495 /* InstancePickerView.swift */; };
+		AD5CAC9826C2285975A9606C /* CloudSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */; };
+		AEFAB93D0CD1C4F7BE78D548 /* ImaAdpcm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6772E1A8FFA7DF393020C6B /* ImaAdpcm.swift */; };
+		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
+		BACD927341B2F98BE72ADDD6 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */; };
+		BDECEB72319CA3A97B96D106 /* WatchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA18D942D5BEDA2D586530E /* WatchAudio.swift */; };
+		BF96B321B6B5696F03092EF8 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */; };
+		CF6770252230AC24E8731FA1 /* OpusDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */; };
+		D0EC43E7337B45D852942651 /* FmDxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D1A340FCDD8315E6BC8086C /* FmDxClient.swift */; };
+		E06C7A835869C607636C4B96 /* FmdxSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BD3236140BA1A61CD183211 /* FmdxSettings.swift */; };
+		ED426686EBCF9B6F4013EB19 /* LinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83D80FAB7F6B9EE572A0EDFC /* LinkManager.swift */; };
+		EFFBFE3DA8A548A9B1A5906C /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = D363E607DCD2E02F223F5B09 /* BandPlan.swift */; };
+		F2566A4100EC8550A4BEFB78 /* OwrxSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */; };
+		F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82634AF74EECC78CED58ED93 /* NumpadView.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		AA0000000000000000000004 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0E8A3AD980EC179856012B7E;
+			remoteInfo = WristSDR;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AA0000000000000000000002 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				AA0000000000000000000001 /* WristSDR.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		10CE8998C4E2A9D6C2D4AB73 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AircraftView.swift"; sourceTree = "<group>"; };
-		95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AudioSocket.swift"; sourceTree = "<group>"; };
-		D363E607DCD2E02F223F5B09 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BandPlan.swift"; sourceTree = "<group>"; };
-		1D4434780FAA0BCA12A4738A /* BandwidthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BandwidthView.swift"; sourceTree = "<group>"; };
-		0AB51A8941C99A626615A0FC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Chat.swift"; sourceTree = "<group>"; };
-		C66B81E885A802F50F032812 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSync.swift"; sourceTree = "<group>"; };
-		C66B81E885A802F50F032813 /* WFPalettes.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WFPalettes.generated.swift"; sourceTree = "<group>"; };
-		EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSyncEngine.swift"; sourceTree = "<group>"; };
-		A5C7CA3AAA59DBED958D0315 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
-		A0192327755EB9D29ED557A5 /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlMenu.swift"; sourceTree = "<group>"; };
-		7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CpuMeter.swift"; sourceTree = "<group>"; };
-		09436CC1B635338E3E4DD851 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DabView.swift"; sourceTree = "<group>"; };
-		8D1A340FCDD8315E6BC8086C /* FmDxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FmDxClient.swift"; sourceTree = "<group>"; };
-		3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FmdxMp3Decoder.swift"; sourceTree = "<group>"; };
-		8BD3236140BA1A61CD183211 /* FmdxSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FmdxSettings.swift"; sourceTree = "<group>"; };
-		E755991ACFFF693E13C9B464 /* FmdxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FmdxView.swift"; sourceTree = "<group>"; };
-		925623A77CBA453D1DCBC89C /* Gzip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Gzip.swift"; sourceTree = "<group>"; };
-		D6772E1A8FFA7DF393020C6B /* ImaAdpcm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ImaAdpcm.swift"; sourceTree = "<group>"; };
-		3337F8EA18D635A21DF13495 /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "InstancePickerView.swift"; sourceTree = "<group>"; };
-		C1629C7E4EFDC0509FC3A567 /* KiwiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KiwiClient.swift"; sourceTree = "<group>"; };
-		83D80FAB7F6B9EE572A0EDFC /* LinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LinkManager.swift"; sourceTree = "<group>"; };
-		82634AF74EECC78CED58ED93 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NumpadView.swift"; sourceTree = "<group>"; };
-		E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpusDecoder.swift"; sourceTree = "<group>"; };
-		3EEA65462FB06374237A24A2 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OwrxClient.swift"; sourceTree = "<group>"; };
-		DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OwrxSocket.swift"; sourceTree = "<group>"; };
-		4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SDRDirectory.swift"; sourceTree = "<group>"; };
-		69FF50C437861299AAC27394 /* SignalProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SignalProcessor.swift"; sourceTree = "<group>"; };
-		967BF6CB775E6B40E9E614BA /* SpikeLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpikeLink.swift"; sourceTree = "<group>"; };
-		D43A131B3C936F106D8872A6 /* UberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UberClient.swift"; sourceTree = "<group>"; };
-		75E9C61BCE51423C017D58E7 /* VibeMdns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VibeMdns.swift"; sourceTree = "<group>"; };
-		5C4C0C76743B617E12A64820 /* Vitals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Vitals.swift"; sourceTree = "<group>"; };
-		F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VolumeControl.swift"; sourceTree = "<group>"; };
-		DDA18D942D5BEDA2D586530E /* WatchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WatchAudio.swift"; sourceTree = "<group>"; };
-		95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WaterfallBuffer.swift"; sourceTree = "<group>"; };
-		37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WristSDRApp.swift"; sourceTree = "<group>"; };
+		09436CC1B635338E3E4DD851 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
+		0AB51A8941C99A626615A0FC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
+		10CE8998C4E2A9D6C2D4AB73 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
-		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
+		1D4434780FAA0BCA12A4738A /* BandwidthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandwidthView.swift; sourceTree = "<group>"; };
+		3337F8EA18D635A21DF13495 /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
+		37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSDRApp.swift; sourceTree = "<group>"; };
+		3EEA65462FB06374237A24A2 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
+		3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxMp3Decoder.swift; sourceTree = "<group>"; };
+		4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		4FB5962ADE3FED0012F31D5D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WristSDR.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		59DAE86B3018C5CD0063BC93 /* WristSDRStub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WristSDRStub.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C4C0C76743B617E12A64820 /* Vitals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Vitals.swift; sourceTree = "<group>"; };
+		69FF50C437861299AAC27394 /* SignalProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalProcessor.swift; sourceTree = "<group>"; };
+		75E9C61BCE51423C017D58E7 /* VibeMdns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeMdns.swift; sourceTree = "<group>"; };
+		7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CpuMeter.swift; sourceTree = "<group>"; };
+		82634AF74EECC78CED58ED93 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumpadView.swift; sourceTree = "<group>"; };
+		83D80FAB7F6B9EE572A0EDFC /* LinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkManager.swift; sourceTree = "<group>"; };
+		8BD3236140BA1A61CD183211 /* FmdxSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxSettings.swift; sourceTree = "<group>"; };
+		8D1A340FCDD8315E6BC8086C /* FmDxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmDxClient.swift; sourceTree = "<group>"; };
+		925623A77CBA453D1DCBC89C /* Gzip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gzip.swift; sourceTree = "<group>"; };
+		95B3D08B56DDAF308887CC1B /* WaterfallBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaterfallBuffer.swift; sourceTree = "<group>"; };
+		95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSocket.swift; sourceTree = "<group>"; };
+		967BF6CB775E6B40E9E614BA /* SpikeLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeLink.swift; sourceTree = "<group>"; };
+		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
+		A0192327755EB9D29ED557A5 /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlMenu.swift; sourceTree = "<group>"; };
+		A5C7CA3AAA59DBED958D0315 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		C1629C7E4EFDC0509FC3A567 /* KiwiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KiwiClient.swift; sourceTree = "<group>"; };
+		C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WristSDR.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C66B81E885A802F50F032812 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSync.swift; sourceTree = "<group>"; };
+		C66B81E885A802F50F032813 /* WFPalettes.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WFPalettes.generated.swift; sourceTree = "<group>"; };
+		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
+		D363E607DCD2E02F223F5B09 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPlan.swift; sourceTree = "<group>"; };
+		D43A131B3C936F106D8872A6 /* UberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UberClient.swift; sourceTree = "<group>"; };
+		D6772E1A8FFA7DF393020C6B /* ImaAdpcm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImaAdpcm.swift; sourceTree = "<group>"; };
+		DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxSocket.swift; sourceTree = "<group>"; };
+		DDA18D942D5BEDA2D586530E /* WatchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAudio.swift; sourceTree = "<group>"; };
+		E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpusDecoder.swift; sourceTree = "<group>"; };
+		E755991ACFFF693E13C9B464 /* FmdxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxView.swift; sourceTree = "<group>"; };
+		EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncEngine.swift; sourceTree = "<group>"; };
+		F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeControl.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		59DAE86C3018C5CD0063BC93 /* WristSDRStub */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = WristSDRStub; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		59DAE8683018C5CD0063BC93 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6E718DEFDC00C08E6BB49068 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -100,14 +138,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		EDA6D6223944636B9C5B54AA = {
-			isa = PBXGroup;
-			children = (
-				E54ED815E4F7D7A7177E9F81 /* WristSDR */,
-				FBDC4F23F93125BBEEAE800C /* Products */,
-			);
-			sourceTree = "<group>";
-		};
 		E54ED815E4F7D7A7177E9F81 /* WristSDR */ = {
 			isa = PBXGroup;
 			children = (
@@ -151,7 +181,16 @@
 				1C35F1528A85321526664EFB /* Info.plist */,
 				FA1EA5780940B5B8F774A00E /* opus */,
 			);
-			path = "WristSDR";
+			path = WristSDR;
+			sourceTree = "<group>";
+		};
+		EDA6D6223944636B9C5B54AA = {
+			isa = PBXGroup;
+			children = (
+				E54ED815E4F7D7A7177E9F81 /* WristSDR */,
+				59DAE86C3018C5CD0063BC93 /* WristSDRStub */,
+				FBDC4F23F93125BBEEAE800C /* Products */,
+			);
 			sourceTree = "<group>";
 		};
 		FA1EA5780940B5B8F774A00E /* opus */ = {
@@ -166,6 +205,7 @@
 			isa = PBXGroup;
 			children = (
 				C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */,
+				59DAE86B3018C5CD0063BC93 /* WristSDRStub.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -175,17 +215,43 @@
 /* Begin PBXNativeTarget section */
 		0E8A3AD980EC179856012B7E /* WristSDR */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A84914A248ECE76BE3466291;
+			buildConfigurationList = A84914A248ECE76BE3466291 /* Build configuration list for PBXNativeTarget "WristSDR" */;
 			buildPhases = (
 				D30B74E6013F892C432C9426 /* Sources */,
 				6E718DEFDC00C08E6BB49068 /* Frameworks */,
 				49114E07FF772345755937AC /* Resources */,
 			);
-			buildRules = ();
-			dependencies = ();
-			name = "WristSDR";
-			productName = "WristSDR";
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WristSDR;
+			productName = WristSDR;
 			productReference = C5BA2F1BDDF9000888BF07C4 /* WristSDR.app */;
+			productType = "com.apple.product-type.application";
+		};
+		59DAE86A3018C5CD0063BC93 /* WristSDRStub */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 59DAE8753018C5CD0063BC93 /* Build configuration list for PBXNativeTarget "WristSDRStub" */;
+			buildPhases = (
+				59DAE8673018C5CD0063BC93 /* Sources */,
+				59DAE8683018C5CD0063BC93 /* Frameworks */,
+				59DAE8693018C5CD0063BC93 /* Resources */,
+				AA0000000000000000000002 /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000003 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				59DAE86C3018C5CD0063BC93 /* WristSDRStub */,
+			);
+			name = WristSDRStub;
+			packageProductDependencies = (
+			);
+			productName = WristSDRStub;
+			productReference = 59DAE86B3018C5CD0063BC93 /* WristSDRStub.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -201,19 +267,26 @@
 					0E8A3AD980EC179856012B7E = {
 						CreatedOnToolsVersion = 27.0;
 					};
+					59DAE86A3018C5CD0063BC93 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
-			buildConfigurationList = 3636BF9D9D120B7D481CC01A;
+			buildConfigurationList = 3636BF9D9D120B7D481CC01A /* Build configuration list for PBXProject "WristSDR" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
-			knownRegions = (en, Base);
+			knownRegions = (
+				en,
+				Base,
+			);
 			mainGroup = EDA6D6223944636B9C5B54AA;
 			productRefGroup = FBDC4F23F93125BBEEAE800C /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				0E8A3AD980EC179856012B7E /* WristSDR */,
+				59DAE86A3018C5CD0063BC93 /* WristSDRStub */,
 			);
 		};
 /* End PBXProject section */
@@ -227,9 +300,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		59DAE8693018C5CD0063BC93 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		59DAE8673018C5CD0063BC93 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D30B74E6013F892C432C9426 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -274,30 +361,226 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		AA0000000000000000000003 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0E8A3AD980EC179856012B7E /* WristSDR */;
+			targetProxy = AA0000000000000000000004 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		578FA19F61E97FCBC567CC3B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WristSDR.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 58;
+				DEVELOPMENT_TEAM = 6PV2X6THHM;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/WristSDR/opus/include/opus",
+				);
+				INFOPLIST_FILE = WristSDR/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/WristSDR/opus",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "WristSDR/WristSDR-Bridging-Header.h";
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+		59DAE8733018C5CD0063BC93 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_KEY_ITSWatchOnlyContainer = YES;
+				INFOPLIST_KEY_LSApplicationLaunchProhibited = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 58;
+				DEVELOPMENT_TEAM = 6PV2X6THHM;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "WristSDRStub-Info.plist";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		59DAE8743018C5CD0063BC93 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_KEY_ITSWatchOnlyContainer = YES;
+				INFOPLIST_KEY_LSApplicationLaunchProhibited = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 58;
+				DEVELOPMENT_TEAM = 6PV2X6THHM;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "WristSDRStub-Info.plist";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		B7FA539DD3CEC2073ED82B7E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = watchos;
-				/* arm64 ONLY. watchOS defaults to building arm64_32 as well (Series 4-8),
-				   and our libopus has no such slice — nor should it: JR targets Series 9+,
-				   which is exactly where Apple went 64-bit and where they are dropping the
-				   Ultra 1 in watchOS 27. The link error IS the product decision. */
-				ARCHS = arm64;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-				ONLY_ACTIVE_ARCH = YES;
 			};
 			name = Debug;
 		};
@@ -305,6 +588,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				COPY_PHASE_STRIP = NO;
@@ -312,13 +596,12 @@
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				SDKROOT = watchos;
-				ARCHS = arm64;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
 				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Release;
 		};
@@ -326,56 +609,40 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WristSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "WristSDR/Info.plist";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/WristSDR/opus/include/opus",
+				);
+				INFOPLIST_FILE = WristSDR/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
-				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/WristSDR/opus",
+				);
 				MARKETING_VERSION = 1.0;
-				CODE_SIGN_ENTITLEMENTS = "WristSDR.entitlements";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.stuey3d.wristsdr";
+				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = NO;
+				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "WristSDR/WristSDR-Bridging-Header.h";
-				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus/include/opus");
-				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus");
 				WATCHOS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Debug;
 		};
-		578FA19F61E97FCBC567CC3B /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
-				DEVELOPMENT_TEAM = 6PV2X6THHM;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "WristSDR/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
-				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 1.0;
-				CODE_SIGN_ENTITLEMENTS = "WristSDR.entitlements";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.stuey3d.wristsdr";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "WristSDR/WristSDR-Bridging-Header.h";
-				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus/include/opus");
-				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/WristSDR/opus");
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		3636BF9D9D120B7D481CC01A = {
+		3636BF9D9D120B7D481CC01A /* Build configuration list for PBXProject "WristSDR" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B7FA539DD3CEC2073ED82B7E /* Debug */,
@@ -384,7 +651,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A84914A248ECE76BE3466291 = {
+		59DAE8753018C5CD0063BC93 /* Build configuration list for PBXNativeTarget "WristSDRStub" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				59DAE8733018C5CD0063BC93 /* Debug */,
+				59DAE8743018C5CD0063BC93 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A84914A248ECE76BE3466291 /* Build configuration list for PBXNativeTarget "WristSDR" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				F0C894AECE8BEC7608E4AC90 /* Debug */,

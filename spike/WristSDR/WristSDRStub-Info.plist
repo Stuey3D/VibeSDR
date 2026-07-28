@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ★★ THE WATCH-ONLY CONTAINER. Jr is an INDEPENDENT watchOS app; Apple requires
+	     an iOS "stub" target purely to carry the root bundle id and to package the
+	     watch app for the App Store ("Xcode doesn't create an iOS executable for the
+	     stub" — Creating independent watchOS apps).
+
+	     These two keys are what make it a container rather than a real iPhone app, and
+	     the App Store REFUSES the pair without them when the watch app declares
+	     WKWatchOnly: error 90753. ★ Xcode's INFOPLIST_KEY_* build settings do NOT work
+	     for them — that mapping only covers keys Xcode knows — so the stub carries a
+	     real Info.plist instead of a generated one. -->
+	<key>ITSWatchOnlyContainer</key>
+	<true/>
+	<!-- Stops the empty stub appearing or launching on iPhone. -->
+	<key>LSApplicationLaunchProhibited</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>VibeSDR Jr</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>
