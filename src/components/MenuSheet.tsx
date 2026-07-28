@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
+  Share,
   Dimensions,
   Image,
   Modal,
@@ -39,7 +40,7 @@ import {
 import { type UserBookmark } from '../services/userBookmarks';
 import {
   getSyncStatus, loadSyncEnabled, onSyncStatus, setSyncEnabled, resetCloudToThisDevice,
-  type SyncStatus,
+  syncDiagnostic, type SyncStatus,
 } from '../services/cloudSync';
 import { linkDebug } from '../services/linkManager';
 import { APP_VERSION } from '../constants/version';
@@ -575,6 +576,17 @@ function ICloudRow() {
              active={false} onPress={resetting ? () => {} : onReset} />
       </BtnRow>
       <SubLabel small label="Clears leftovers from an old build or a device you no longer have." />
+      {/* ★ Evidence, not inference. A resurrecting entry has several possible
+          causes that look identical from the outside; this shows which one it
+          is — every item on both sides with the key it resolves to and its
+          timestamp, plus the tombstones and the deletion snapshot. */}
+      <BtnRow>
+        <Btn label="SHARE SYNC DIAGNOSTIC" active={false} onPress={() => {
+          syncDiagnostic()
+            .then((text) => Share.share({ message: text }))
+            .catch((e) => Alert.alert('Diagnostic failed', String(e?.message ?? e)));
+        }} />
+      </BtnRow>
     </>)}
   </>);
 }

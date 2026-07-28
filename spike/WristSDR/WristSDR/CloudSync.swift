@@ -98,6 +98,22 @@ enum CloudSync {
     tombs.filter { now - $0.value < tombTTL * 1000 }
   }
 
+  /// ★★★ A TIMESTAMP FROM THE FUTURE MAKES AN ITEM IMMORTAL. A tombstone only
+  /// wins over an item OLDER than the delete — right, so a real re-add survives
+  /// a stale deletion, but it means an item stamped ahead of now can never be
+  /// tombstoned by anything: delete it and the next sync restores it, on every
+  /// device, with no way to clear it from inside the app. (Hit for real
+  /// 2026-07-28 — a favourite and a bookmark from an early test build.)
+  ///
+  /// A future stamp is damage, not data — a bad clock or a seconds/ms mix-up —
+  /// so it reads as 1, the same "never knowingly edited" value untimed entries
+  /// get, which puts it back within a tombstone's reach. Must match sane() in
+  /// src/services/cloudSync.ts or the two devices disagree about what is alive.
+  static func saneStamp(_ at: Any?, now: Double) -> Double {
+    guard let v = at as? Double, v.isFinite, v > 0, v <= now + 5 * 60_000 else { return 1 }
+    return v
+  }
+
   /// Deletions are derived from a SNAPSHOT DIFF, exactly as on the phone: the
   /// keys present at the last sync, minus the keys present now. Deriving it
   /// means no call site can forget to record a delete — and a resurrected

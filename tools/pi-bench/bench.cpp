@@ -105,7 +105,7 @@ struct Result {
 
 static Result runOne(double fs, RxPipeline::Mode mode, double bwHz,
                      int fftSize, double fftRate, double seconds, bool rds,
-                     bool fmdx = false) {
+                     bool fmdx = false, bool adv = false) {
     // Callbacks just count — we're measuring DSP cost, not I/O.
     struct Ctx { long rows = 0; long frames = 0; int rate = 48000; } ctx;
 
@@ -126,11 +126,27 @@ static Result runOne(double fs, RxPipeline::Mode mode, double bwHz,
         cb.rdsPs   = [](void*, uint16_t, const char*) {};
         cb.rdsText = [](void*, const char*) {};
     }
+    // ★ ADVANCED RDS IS A SEPARATE SUBSCRIPTION, and the same trap as above one level
+    // down: pipeline.cpp gates the whole ADV payload on `cb_.rdsExt` alone, so a bench
+    // that registered only rdsPs/rdsText measured a receiver with the ADV panel CLOSED
+    // and called it RDS. What this row adds is real work, not bookkeeping — an MPX FFT
+    // (kMpxFft, accumulated across blocks), the constellation, and the assembly of every
+    // field the basic decoder throws away.
+    if (adv) {
+        cb.rdsExt = [](void*, const RxPipeline::Callbacks::RdsExt&) {};
+    }
 
     RxPipeline pipe;
-    // ★ FM-DX BEFORE start(), so the first channel build already uses the wide filter — set
-    // afterwards it would measure one rebuild's worth of the narrow chain as well.
-    pipe.setRdsMaxPerformance(fmdx);
+    // ★ BEFORE start(), so the first channel build already includes it — set afterwards,
+    // this would measure one rebuild's worth of the plain chain as well.
+    // ★★ RENAMED, AND THE MEANING CHANGED WITH IT. This was setRdsMaxPerformance() and it
+    // WIDENED THE CHANNEL FILTER; that was measured to cost ~10 dB of RDS SNR and reverted
+    // (see the chHalf note in pipeline.cpp). What FM-DX buys now is the guard-band NOISE
+    // MEASUREMENT that makes the deviation readout honest on a weak signal — a second
+    // filter pair, not a wider chain. The bench had not compiled since the rename, so every
+    // FM-DX figure predating this came from a stale binary measuring a design we no longer
+    // ship.
+    pipe.setRdsNoiseCorrection(fmdx);
     pipe.start(fs, fftSize, fftRate, 48000, cb);
     pipe.setTune(200000.0, mode, bwHz);   // 200 kHz off centre
 
@@ -183,7 +199,7 @@ int main(int argc, char** argv) {
     printf("  100%% = one whole core. Lower is better.\n");
     printf("\n");
 
-    struct Case { const char* name; RxPipeline::Mode mode; double bw; bool rds; bool fmdx; };
+    struct Case { const char* name; RxPipeline::Mode mode; double bw; bool rds; bool fmdx; bool adv; };
     const Case cases[] = {
         // WFM appears three times because they are three genuinely different users, and the
         // gaps between them are the two things an operator is deciding about:
@@ -196,12 +212,14 @@ int main(int argc, char** argv) {
         // ★ THIS IS THE ROW TO LOOK AT before enabling FM-DX on a small host. Shipped
         // un-benchmarked on 2026-07-27 with a warning on the switch rather than a number we
         // had made up; this row replaces the guess.
-        {"WFM (stereo)",         RxPipeline::Mode::WFM,     180000.0, false, false},
-        {"WFM (stereo + RDS)",   RxPipeline::Mode::WFM,     180000.0, true,  false},
-        {"FM-DX (wide + RDS)",   RxPipeline::Mode::WFM,     180000.0, true,  true },
-        {"NFM",                  RxPipeline::Mode::NFM,      12500.0, false, false},
-        {"AM",                   RxPipeline::Mode::AM,       10000.0, false, false},
-        {"SSB (USB)",            RxPipeline::Mode::SSB_USB,   2800.0, false, false},
+        {"WFM (stereo)",         RxPipeline::Mode::WFM,     180000.0, false, false, false},
+        {"WFM (stereo + RDS)",   RxPipeline::Mode::WFM,     180000.0, true,  false, false},
+        {"WFM + ADV RDS",        RxPipeline::Mode::WFM,     180000.0, true,  false, true },
+        {"FM-DX (RDS + noise)",   RxPipeline::Mode::WFM,     180000.0, true,  true , false},
+        {"FM-DX + ADV RDS",      RxPipeline::Mode::WFM,     180000.0, true,  true , true },
+        {"NFM",                  RxPipeline::Mode::NFM,      12500.0, false, false, false},
+        {"AM",                   RxPipeline::Mode::AM,       10000.0, false, false, false},
+        {"SSB (USB)",            RxPipeline::Mode::SSB_USB,   2800.0, false, false, false},
     };
     const double rates[] = {2400000.0, 2048000.0, 1024000.0};
 
@@ -211,7 +229,7 @@ int main(int argc, char** argv) {
         for (const auto& c : cases) {
             const Result r = runOne(fs, c.mode, c.bw, 1024,
                                     getenv("WFPS") ? atof(getenv("WFPS")) : 20.0,
-                                    seconds, c.rds, c.fmdx);
+                                    seconds, c.rds, c.fmdx, c.adv);
             const double pct = r.coreFrac * 100.0;
             // Leave one core's worth of headroom for USB capture, the WebSocket
             // server, ADPCM and the OS — do not promise the last core.

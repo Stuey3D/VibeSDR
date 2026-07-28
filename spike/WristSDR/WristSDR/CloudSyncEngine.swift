@@ -95,13 +95,20 @@ final class CloudSyncEngine: ObservableObject {
     // SAVED IT BACK. FavStore.loadOK now reports the truth, so an empty list can
     // only mean the user emptied it, and its deletions tombstone normally.
     guard store.loadOK else { return true }
-    for k in snap where !localKeys.contains(k) && tombs[k] == nil { tombs[k] = now }
+    // ★★★ ALWAYS RE-STAMP — `tombs[k] == nil` made an item PERMANENTLY UNDELETABLE
+    // once its key had been tombstoned and then outranked by a re-add. See the
+    // long note in src/services/cloudSync.ts; both engines must agree or one
+    // device keeps reviving what the other buries.
+    for k in snap where !localKeys.contains(k) { tombs[k] = now }
 
     // Remote first, then fold local over it, so the rule is applied per key
     // rather than one side winning wholesale.
     var byKey: [String: [String: Any]] = [:]
     for item in doc.items {
-      if let url = item["url"] as? String { byKey[CloudSync.favouriteKey(url)] = item }
+      guard let url = item["url"] as? String else { continue }
+      var it = item                                   // heal a poisoned stamp on the way in
+      it["updatedAt"] = CloudSync.saneStamp(it["updatedAt"], now: now)
+      byKey[CloudSync.favouriteKey(url)] = it
     }
     for f in local {
       let mine = favDict(f, now: now)
@@ -151,7 +158,7 @@ final class CloudSyncEngine: ObservableObject {
       // ★★ 1, NOT `now`. See FavStore.stamp(): stamping an untimed entry with the
       // current time makes it beat every tombstone, so a favourite deleted on the
       // phone is resurrected by the watch on the very next sync — forever.
-      "updatedAt": f.updatedAt ?? 1,
+      "updatedAt": CloudSync.saneStamp(f.updatedAt, now: now),
     ]
     if let v = f.latitude  { d["latitude"] = v }
     if let v = f.longitude { d["longitude"] = v }
@@ -207,10 +214,15 @@ final class CloudSyncEngine: ObservableObject {
     let localKeys = Set(local.map { "\($0.name)|\(Int($0.frequency.rounded()))" })
     let snap = CloudSync.snapshot("bookmarks")
     guard store.loadOK else { return true }                // see syncFavourites
-    for k in snap where !localKeys.contains(k) && tombs[k] == nil { tombs[k] = now }
+    for k in snap where !localKeys.contains(k) { tombs[k] = now }   // always re-stamp, see syncFavourites
 
     var byKey: [String: [String: Any]] = [:]
-    for item in doc.items { if let k = key(item) { byKey[k] = item } }
+    for item in doc.items {
+      guard let k = key(item) else { continue }
+      var it = item                                   // heal a poisoned stamp on the way in
+      it["updatedAt"] = CloudSync.saneStamp(it["updatedAt"], now: now)
+      byKey[k] = it
+    }
     for b in local {
       let mine = bmDict(b, now: now)
       guard let k = key(mine) else { continue }
@@ -246,7 +258,7 @@ final class CloudSyncEngine: ObservableObject {
       // ALL SERVERS bookmark, which is the same meaning.
       "scope": "",
       "synced": true,
-      "updatedAt": b.updatedAt ?? 1,
+      "updatedAt": CloudSync.saneStamp(b.updatedAt, now: now),
     ]
   }
 

@@ -260,6 +260,28 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
   }
   const isEligible = spec.eligible ?? (() => true);
 
+  // ★★★ A TIMESTAMP FROM THE FUTURE MAKES AN ITEM IMMORTAL, so it is not
+  // believed. A tombstone only wins over an item OLDER than the delete
+  // (see below), which is right — a genuine re-add on another device must
+  // survive a stale deletion. But it means an item stamped ahead of now can
+  // never be tombstoned by anything, ever: delete it, and the next sync a
+  // second later restores it from the cloud. No amount of deleting helps,
+  // on any device, and nothing in the app could clear it. (Stuart's zombie
+  // favourite + bookmark, left by an early test build, 2026-07-28.)
+  //
+  // A future stamp is not data, it is damage — a bad clock, a unit mix-up
+  // (seconds vs ms), or a build that wrote something silly. So it is read as
+  // 1, the same "exists but never knowingly edited" value untimed items get,
+  // which lets a tombstone reach it. The healed value is written back to both
+  // the device and the cloud, so this repairs the document rather than
+  // working around it forever.
+  //
+  // The allowance covers a device whose clock is legitimately a little ahead;
+  // beyond that, no honest edit can claim to have happened yet.
+  const SKEW_MS = 5 * 60_000;
+  const sane = (at: unknown): number =>
+    typeof at === 'number' && Number.isFinite(at) && at > 0 && at <= now + SKEW_MS ? at : 1;
+
   // Stamp anything that predates sync so it has an ordering at all.
   //
   // ★★ STAMPED WITH 1, NOT `now`, AND THAT IS THE WHOLE POINT. Stamping an
@@ -275,12 +297,19 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
   // precisely what a tombstone is for.
   let stampedLocally = false;
   const localEligible = localAll.filter(isEligible).map(it => {
-    if (typeof it.updatedAt === 'number') return it;
-    stampedLocally = true;
-    return { ...it, updatedAt: 1 };
+    const at = sane(it.updatedAt);
+    if (it.updatedAt === at) return it;
+    stampedLocally = true;                 // untimed, or an implausible stamp healed
+    return { ...it, updatedAt: at };
   });
 
-  const remote = parseDoc<T>(await kvsGet(spec.cloudKey));
+  const remoteDoc = parseDoc<T>(await kvsGet(spec.cloudKey));
+  // Heal the cloud's copies on the way in, for the same reason.
+  const remote = {
+    ...remoteDoc,
+    items: remoteDoc.items.map(it =>
+      it && typeof it === 'object' ? { ...it, updatedAt: sane((it as T).updatedAt) } : it),
+  };
 
   // Deletions: anything that was here at the last sync and is not here now.
   let snapshot: string[] = [];
@@ -294,8 +323,24 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
   // Anything present at the last sync and absent now was deleted here. Safe to
   // do unconditionally: a read that FAILED never reaches this line (it returned
   // above), so an empty list can only mean the user emptied it.
+  // ★★★ ALWAYS RE-STAMP. `&& !tombs[k]` used to guard this, and it made an item
+  // PERMANENTLY UNDELETABLE once its key had ever been tombstoned and lost.
+  //
+  // A tombstone only beats an item OLDER than the delete, which is right: a
+  // genuine re-add on another device must survive a stale deletion. But pair
+  // that with "don't overwrite an existing tombstone" and there is no way back.
+  // Delete it (tombstone at T1) → anything re-adds or re-stamps it at T2 > T1 →
+  // the item wins, correctly → and now every future delete writes NOTHING,
+  // because a tombstone for that key already exists. The stale T1 stays, forever
+  // older than the item, so the item returns on every sync no matter how many
+  // times it is deleted, on any device. (Stuart's zombie favourite: item at
+  // …554553.241, tombstone at …515455.04 — 39 seconds too early, and stuck.)
+  //
+  // The delete happened NOW, so the tombstone says now. It is refreshed once per
+  // actual deletion, not repeatedly: a successful pass rewrites the snapshot
+  // without the key, so the diff stops firing for it.
   for (const k of snapshot) {
-    if (!localKeys.has(k) && !tombs[k]) tombs[k] = now;
+    if (!localKeys.has(k)) tombs[k] = now;
   }
 
   // Union. Remote first, then fold local over it — so the merge is applied per
@@ -360,7 +405,11 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
   // Write back to iCloud only when it would actually change.
   const nextDoc: CloudDoc<T> = { v: 1, items: merged, tombs };
   const nextRaw = JSON.stringify(nextDoc);
-  if (nextRaw !== JSON.stringify({ v: 1, items: remote.items, tombs: remote.tombs ?? {} })) {
+  // ★ Compared against what was ACTUALLY IN THE STORE (remoteDoc), not the
+  // healed copy — otherwise a document whose only fault is a poisoned timestamp
+  // compares equal to its own repair and is never written back, leaving the
+  // damage in iCloud to be re-read forever.
+  if (nextRaw !== JSON.stringify({ v: 1, items: remoteDoc.items, tombs: remoteDoc.tombs ?? {} })) {
     await kvsSet(spec.cloudKey, nextRaw);
   }
 
@@ -464,6 +513,50 @@ export async function resetCloudToThisDevice(): Promise<void> {
     return;
   }
   await syncAll();          // re-upload this device's lists into the empty store
+}
+
+/**
+ * What is ACTUALLY stored, on both sides, for every synced collection.
+ *
+ * ★ Because reasoning about this from the source has now been wrong twice. A
+ * resurrecting item has several possible causes that look identical from the
+ * outside — a stamp that outranks every tombstone, a key that never enters the
+ * snapshot, two spellings of one URL colliding on `keyOf` — and they need
+ * different fixes. This prints the evidence: the local list, the remote
+ * document, the tombstones, and the snapshot the deletions are inferred from,
+ * with the KEY each item resolves to alongside its raw url.
+ */
+export async function syncDiagnostic(): Promise<string> {
+  const now = Date.now();
+  const when = (v: unknown) =>
+    typeof v === 'number' ? `${v}${v > now ? ' ★FUTURE' : ''}` : String(v);
+  const out: string[] = [`now=${now}  (${new Date(now).toISOString()})`];
+  for (const spec of collections.values()) {
+    out.push(`\n═══ ${spec.name} (${spec.cloudKey}) ═══`);
+    let local: any[] = [];
+    try { local = await spec.load(); out.push(`local: ${local.length} item(s)`); }
+    catch (e: any) { out.push(`local: READ FAILED — ${e?.message ?? e}`); }
+    for (const it of local) {
+      out.push(`  L key=${spec.keyOf(it)}  at=${when(it.updatedAt)}  ${JSON.stringify(it).slice(0, 200)}`);
+    }
+    const raw = await kvsGet(spec.cloudKey);
+    if (raw == null) { out.push('cloud: (no document)'); }
+    else {
+      const doc = parseDoc<any>(raw);
+      out.push(`cloud: ${doc.items.length} item(s), ${Object.keys(doc.tombs ?? {}).length} tombstone(s)`);
+      for (const it of doc.items) {
+        out.push(`  C key=${spec.keyOf(it)}  at=${when(it.updatedAt)}  ${JSON.stringify(it).slice(0, 200)}`);
+      }
+      for (const [k, at] of Object.entries(doc.tombs ?? {})) out.push(`  T ${k} = ${when(at)}`);
+    }
+    let snap: string[] = [];
+    try {
+      const s = await AsyncStorage.getItem(snapKey(spec.name));
+      if (s) snap = JSON.parse(s);
+    } catch {}
+    out.push(`snapshot(${snapKey(spec.name)}): ${JSON.stringify(snap)}`);
+  }
+  return out.join('\n');
 }
 
 export function requestSync(delayMs = 1500): void {
