@@ -98,7 +98,11 @@ final class SignalProcessor {
   func process(_ bins: [Float], centerHz: Double, bwHz: Double) -> [UInt8] {
     let n = bins.count
     guard n > 0 else { return [] }
-    let now = Date().timeIntervalSince1970 * 1000
+    // ★ systemUptime over Date(): this runs on EVERY frame, and Date() builds a calendar-
+    //   capable value from wall-clock time when all we need is a monotonic stopwatch for the two
+    //   history windows. It is also immune to the clock being stepped, which Date() is not — an
+    //   NTP correction could otherwise expire or freeze both histories at once.
+    let now = ProcessInfo.processInfo.systemUptime * 1000
 
     if dbAvg.count != n {
       dbAvg  = bins                      // prime from real data: no settling delay
