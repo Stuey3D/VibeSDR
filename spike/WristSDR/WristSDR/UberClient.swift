@@ -148,6 +148,9 @@ final class UberClient: ObservableObject {
   @Published var ahfAtt = 0
   @Published var ahfPreamp = false
   @Published var ahfAgc = true
+  /// ★ True once the USER has actually set one of these controls in this session.
+  /// Until then we have nothing worth asserting and must leave the radio alone.
+  private var radioDirty = false
   /// Live from the server's `rspstat`: total system gain and the overload flag.
   /// The owner took this receiver. Terminal — never auto-retried.
   @Published var evicted = false
@@ -237,27 +240,36 @@ final class UberClient: ObservableObject {
   /// SDRplay LNA. ★ The UI speaks GAIN (higher = more), the hardware wants a STATE
   /// (higher = less), so it is inverted on the way out — same as the web client.
   func setRspLna(_ gainIdx: Int) {
+    radioDirty = true
     let g = max(0, min(max(0, lnaStates - 1), gainIdx))
     rspLna = g
     rspSend(["lna": max(0, lnaStates - 1) - g])
   }
   func setRspIfGr(_ db: Int) {
+    radioDirty = true
     rspIfGr = max(ifGrMin, min(ifGrMax, db))
     if !rspIfAgc { rspSend(["ifgr": rspIfGr]) }
   }
   func setRspIfAgc(_ on: Bool) {
+    radioDirty = true
     rspIfAgc = on
     rspSend(["ifagc": on ? 1 : 0])
     if !on { rspSend(["ifgr": rspIfGr]) }      // hand back the manual value it now owns
   }
   func setAhfAtt(_ step: Int) {
+    radioDirty = true
     ahfAtt = max(0, min(max(0, attSteps - 1), step))
     if !ahfAgc { ahfSend(["att": ahfAtt]) }
   }
-  func setAhfPreamp(_ on: Bool) { ahfPreamp = on; ahfSend(["lna": on ? 1 : 0]) }
+  func setAhfPreamp(_ on: Bool) {
+    radioDirty = true
+    ahfPreamp = on
+    ahfSend(["lna": on ? 1 : 0])
+  }
   /// ★ AGC LAST when turning it OFF, so the manual attenuation we hand back is not
   /// immediately overridden by the AGC that still owns the gain path.
   func setAhfAgc(_ on: Bool) {
+    radioDirty = true
     ahfAgc = on
     if on { ahfSend(["agc": 1]) }
     else { ahfSend(["att": ahfAtt]); ahfSend(["agc": 0]) }
@@ -317,6 +329,21 @@ final class UberClient: ObservableObject {
   /// otherwise the server correctly refuses it and the value vanishes in silence.
   func pushAllRadioSettings() {
     guard isVibe else { return }
+    // ★★★ NEVER PUSH DEFAULTS WE INVENTED. This re-assert exists so a server restart
+    // does not lose the settings the USER chose — but until they have chosen any, our
+    // fields hold constructor defaults, and pushing those SETS THE RADIO to them.
+    //
+    // It did real damage: rspLna starts at 0 and the hardware wants a STATE where
+    // higher = less gain, so the push sent lnaStates-1 — MINIMUM GAIN — and on an HF+
+    // it sent lna:0, turning the PREAMP OFF. Re-asserted on every hwinfo, so every
+    // reconnect quietly wrecked the owner's front end. RDS is the first casualty when
+    // sensitivity drops, which is how it surfaced: "struggling on stations that
+    // worked before" (Stuart, 2026-07-28).
+    //
+    // ★ The web client's contract is the same shape but has the precondition Jr
+    // lacked: it pushes values the user picked, held in its own prefs. No choice, no
+    // push. We only speak when we have something of the user's to say.
+    guard radioDirty else { return }
     switch radioDriver {
     case "sdrplay":
       guard lnaStates > 0 else { return }
