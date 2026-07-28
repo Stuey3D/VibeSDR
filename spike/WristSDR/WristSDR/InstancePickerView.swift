@@ -477,6 +477,15 @@ struct CustomServerSheet: View {
       Section("ADDRESS") {
         TextField("sdr.example.com", text: $url).font(.system(size: 14)).autocorrectionDisabled()
         TextField("Name (optional)", text: $name).font(.system(size: 14))
+        // ★ SAY "USE THE IP", because a `.local` name is the one address that fails
+        // on the link a watch most often has. mDNS needs multicast, which does not
+        // survive the iPhone's Bluetooth relay — and it also stops answering when an
+        // Android host power-saves (2026-07-28, both seen on the same day). An IP
+        // works over Bluetooth, WiFi and cellular alike. Promising `.local` and then
+        // failing is worse than never offering it.
+        Text("For your own VibeServer, enter its IP address — e.g. 192.168.1.5. "
+             + "A “.local” name only works on Wi-Fi, not over the phone’s Bluetooth link.")
+          .font(.system(size: 10)).foregroundColor(.secondary)
       }
       Section("TYPE") {
         Toggle("Auto-detect", isOn: $auto).font(.system(size: 14))
@@ -525,7 +534,8 @@ struct CustomServerSheet: View {
       }
       await MainActor.run {
         detecting = false; auto = false
-        detectMsg = "Couldn't find it. If you set a CUSTOM port, add it to the address (e.g. 192.168.1.5:8080), then pick the type below."
+        detectMsg = "Couldn't find it. Try the IP address rather than a “.local” name — "
+                  + "and if you set a CUSTOM port, add it (e.g. 192.168.1.5:8080), then pick the type below."
       }
     }
   }

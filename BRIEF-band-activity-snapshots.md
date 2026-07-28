@@ -143,3 +143,21 @@ the kind of thing OEM power managers exist to kill.
 
 ★ Costs battery and heat — fine on a plugged-in tablet, wrong as a default on a
 phone. Make it a setting, defaulting OFF, and say what it costs.
+
+### Field result 2026-07-28: 4 hours up, plugged in, instant connects
+
+The Moto served for 4+ hours and still connected immediately **by IP**. ★ It was
+ON MAINS — and Stuart's point stands: anyone running a long-term Android server
+will be on power, which relaxes Doze substantially. The realistic deployment case
+is the one that works, so the "idle server sleeps and never wakes" fear is much
+weaker than it looked this morning.
+
+★ What this does NOT clear:
+- `.local` still stopped answering under power-save (see the Jr brief, §2b) —
+  and that is a MULTICAST problem, not a wake problem.
+- The spectrum stall happened on this same plugged-in Moto, so it is not power
+  management either.
+
+So the keep-awake switch is not urgent. The band-sweep idea stands on its own
+merits — an activity map is worth having whether or not it also keeps the host
+busy.
