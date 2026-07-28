@@ -811,8 +811,10 @@ struct HardwareSheet: View {
             Button {
               if !radio.ahfAgc { attArmed.toggle(); crownFocused = attArmed; if attArmed { gainArmed = false } }
             } label: {
+              // ★ "set by AGC", not a stale number: the AGC owns the front end and the driver
+              // has no getter to tell us what it picked.
               cell(title: attArmed ? "ATTENUATOR — TURN CROWN" : "ATTENUATOR",
-                   value: "\(radio.ahfAtt * radio.attStepDb) dB",
+                   value: radio.ahfAgc ? "set by AGC" : "\(radio.ahfAtt * radio.attStepDb) dB",
                    lit: attArmed && !radio.ahfAgc, litColor: .cyan, dim: radio.ahfAgc)
             }.buttonStyle(.plain).disabled(radio.ahfAgc)
           }

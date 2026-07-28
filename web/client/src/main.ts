@@ -4868,12 +4868,19 @@ function renderAhfEnabled() {
   $<HTMLInputElement>('ahfAtt').disabled = auto;
   $<HTMLElement>('rowAhfThresh').style.opacity = auto ? '1' : '0.45';
   for (const b of Array.from($('ahfThreshSeg').children) as HTMLButtonElement[]) b.disabled = !auto;
+  renderAhfVals();
 }
 
 function renderAhfVals() {
   const att = Number($<HTMLInputElement>('ahfAtt').value);
   const stepDb = radioCaps?.attStepDb ?? 6;
-  $('ahfAttVal').textContent = `${att * stepDb} dB${att === 0 ? ' · none' : ''}`;
+  // ★ Under AGC the slider's number is NOT what the radio is doing — the AGC owns the front end
+  //   and libairspyhf has no getter to ask it what it chose. Showing the last MANUAL figure made
+  //   a greyed "48 dB" read as 48 dB of applied attenuation when the AGC was actually running
+  //   wide open. Say who is in charge instead of quoting a number that is not in effect.
+  $('ahfAttVal').textContent = $('ahfAgc').classList.contains('on')
+    ? 'set by AGC'
+    : `${att * stepDb} dB${att === 0 ? ' · none' : ''}`;
   const ppb = Number($<HTMLInputElement>('ahfPpb').value);
   $('ahfPpbVal').textContent = `${ppb} ppb`;
 }

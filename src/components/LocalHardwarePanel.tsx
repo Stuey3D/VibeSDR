@@ -266,8 +266,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   {((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)}
                 </Text>
               </View>
+              {/* ★ Never quote a dB figure the radio is not applying. While the AGC is on it owns
+                  the front end and libairspyhf offers no getter to read back what it chose, so the
+                  last manual value would sit here looking like it was in effect. */}
               <Text style={styles.stepVal}>
-                {(p.ahfAtt ?? 0) * (p.radio?.attStepDb ?? 6)} dB
+                {p.ahfAgc ? 'set by AGC' : `${(p.ahfAtt ?? 0) * (p.radio?.attStepDb ?? 6)} dB`}
               </Text>
               <Text style={styles.note}>
                 {p.ahfAgc
