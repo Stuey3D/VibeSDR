@@ -11,6 +11,7 @@ import StationLogo from './StationLogo';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   Image,
@@ -37,7 +38,8 @@ import {
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
 import {
-  getSyncStatus, loadSyncEnabled, onSyncStatus, setSyncEnabled, type SyncStatus,
+  getSyncStatus, loadSyncEnabled, onSyncStatus, setSyncEnabled, resetCloudToThisDevice,
+  type SyncStatus,
 } from '../services/cloudSync';
 import { linkDebug } from '../services/linkManager';
 import { APP_VERSION } from '../constants/version';
@@ -524,9 +526,28 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
  */
 function ICloudRow() {
   const [s, setS] = useState<SyncStatus>(getSyncStatus());
+  const [resetting, setResetting] = useState(false);
   useEffect(() => {
     void loadSyncEnabled();
     return onSyncStatus(setS);
+  }, []);
+  // ★ Destructive and remote, so it CONFIRMS. Everything else in this menu is a
+  // toggle you can flip back; this reaches other devices and cannot be undone.
+  const onReset = useCallback(() => {
+    Alert.alert(
+      'Replace iCloud with this device?',
+      'Everything VibeSDR keeps in iCloud is discarded and re-uploaded from this iPhone. '
+      + 'Nothing on this device is deleted.\n\n'
+      + 'Use this to clear entries left behind by an old build or a device you no longer have. '
+      + 'Another device still holding one will re-add it when it next syncs.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace', style: 'destructive', onPress: () => {
+          setResetting(true);
+          resetCloudToThisDevice().finally(() => setResetting(false));
+        } },
+      ],
+    );
   }, []);
   if (!s.supported) return null;
   const when = s.lastSyncAt
@@ -545,6 +566,16 @@ function ICloudRow() {
       : when              ? `Synced ${when}.`
       :                     'Syncing…'
     } />
+    {/* Sync MERGES, so anything already in iCloud keeps coming back — including
+        entries from a build or a device that is long gone. This is the only way
+        to say "throw that away", and it needs a person to mean it. */}
+    {s.enabled && (<>
+      <BtnRow>
+        <Btn label={resetting ? 'REPLACING…' : 'REPLACE iCLOUD WITH THIS DEVICE'}
+             active={false} onPress={resetting ? () => {} : onReset} />
+      </BtnRow>
+      <SubLabel small label="Clears leftovers from an old build or a device you no longer have." />
+    </>)}
   </>);
 }
 

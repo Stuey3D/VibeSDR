@@ -366,9 +366,21 @@ final class FavStore: ObservableObject {
   private static let key = "vibe.spike.favourites"
   private static let sortKey = "vibe.spike.favsort"
 
+  /// ★★ DID THE LOAD ACTUALLY WORK? `try?` turns a decode failure into an empty
+  /// list, which is indistinguishable from "the user deleted everything" — and
+  /// the sync engine, seeing an empty list, would tombstone the lot across every
+  /// device. The engine used to GUESS around that by refusing to delete a whole
+  /// list at once, which had a hidden cost: the LAST favourite could never be
+  /// deleted, because removing it emptied the list and triggered the refusal.
+  /// Reporting the truth here lets the engine stop guessing. Matches
+  /// getFavouritesStrict() on the phone.
+  private(set) var loadOK = true
+
   init() {
-    if let raw = UserDefaults.standard.data(forKey: Self.key),
-       let f = try? JSONDecoder().decode([Favourite].self, from: raw) { favourites = f }
+    if let raw = UserDefaults.standard.data(forKey: Self.key) {
+      if let f = try? JSONDecoder().decode([Favourite].self, from: raw) { favourites = f }
+      else { loadOK = false }              // data present but unreadable — a REAL failure
+    }                                       // no data at all ⇒ genuinely empty, not a failure
     if let s = UserDefaults.standard.string(forKey: Self.sortKey), let fs = FavSort(rawValue: s) { sort = fs }
   }
 
@@ -738,9 +750,14 @@ final class BookmarkStore: ObservableObject {
 
   private static let key = "vibe.spike.bookmarks"
 
+  /// See FavStore.loadOK — a decode failure must not read as "user deleted all".
+  private(set) var loadOK = true
+
   init() {
-    if let raw = UserDefaults.standard.data(forKey: Self.key),
-       let b = try? JSONDecoder().decode([Bookmark].self, from: raw) { bookmarks = b }
+    if let raw = UserDefaults.standard.data(forKey: Self.key) {
+      if let b = try? JSONDecoder().decode([Bookmark].self, from: raw) { bookmarks = b }
+      else { loadOK = false }
+    }
   }
 
   private func persist() {

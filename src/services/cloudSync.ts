@@ -21,6 +21,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState } from 'react-native';
 import {
   kvsAvailable, kvsGet, kvsSet, kvsSupported, kvsSynchronize, onKvsChanged,
+  kvsAllKeys, kvsRemove,
 } from './cloudKvs';
 
 // ── Keys ────────────────────────────────────────────────────────────────────
@@ -240,7 +241,23 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
   if (!status.enabled || !(await kvsAvailable())) return null;
   const now = Date.now();
 
-  const localAll = await spec.load();
+  // ★★ A FAILED READ ABORTS THIS COLLECTION, TOUCHING NOTHING. Storage faults
+  // used to surface as an empty list, indistinguishable from "the user deleted
+  // everything" — so the engine guessed, refusing to tombstone a wholesale
+  // disappearance. That guess had a cost nobody spotted: emptying a list (or
+  // deleting its LAST item) then fell through to the merge below, which refilled
+  // it from the cloud and SAVED IT BACK LOCALLY. The item was immortal.
+  //
+  // The loaders now throw on a real failure and return [] only when the list is
+  // genuinely empty, so there is nothing left to guess about: an empty list is
+  // an empty list, and its deletions tombstone normally.
+  let localAll: T[];
+  try {
+    localAll = await spec.load();
+  } catch (e) {
+    setStatus({ lastError: `${spec.name}: could not read local list — sync skipped.` });
+    return null;
+  }
   const isEligible = spec.eligible ?? (() => true);
 
   // Stamp anything that predates sync so it has an ordering at all.
@@ -274,22 +291,11 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
   const localKeys = new Set(localEligible.map(spec.keyOf));
   const tombs = pruneTombs({ ...(remote.tombs ?? {}) }, now);
 
-  // ★★ NEVER TOMBSTONE A WHOLESALE DISAPPEARANCE. Every local read in this app
-  // swallows its errors and returns [] on failure (getFavourites,
-  // loadUserBookmarks), so a transient AsyncStorage fault is indistinguishable
-  // from "the user deleted everything" — and this loop would then delete their
-  // entire favourites list on every other device, permanently.
-  //
-  // A user emptying a list one item at a time still syncs fine: each pass sees
-  // one key vanish. It is only the all-at-once case that is refused, and that is
-  // far likelier to be a failed read than a real intention.
-  const vanished = localEligible.length === 0 && snapshot.length > 0;
-  if (vanished) {
-    setStatus({ lastError: `${spec.name}: local list read as empty — not syncing deletions.` });
-  } else {
-    for (const k of snapshot) {
-      if (!localKeys.has(k) && !tombs[k]) tombs[k] = now;
-    }
+  // Anything present at the last sync and absent now was deleted here. Safe to
+  // do unconditionally: a read that FAILED never reaches this line (it returned
+  // above), so an empty list can only mean the user emptied it.
+  for (const k of snapshot) {
+    if (!localKeys.has(k) && !tombs[k]) tombs[k] = now;
   }
 
   // Union. Remote first, then fold local over it — so the merge is applied per
@@ -358,12 +364,7 @@ export async function syncCollection<T extends Syncable>(spec: Collection<T>): P
     await kvsSet(spec.cloudKey, nextRaw);
   }
 
-  // Leave the snapshot ALONE when the read looked bogus: overwriting it with an
-  // empty set would make the next pass believe the list was legitimately empty
-  // all along, and the guard above would never fire again.
-  if (!vanished) {
-    try { await AsyncStorage.setItem(snapKey(spec.name), JSON.stringify([...seen])); } catch {}
-  }
+  try { await AsyncStorage.setItem(snapKey(spec.name), JSON.stringify([...seen])); } catch {}
   return merged;
 }
 
@@ -419,6 +420,52 @@ export async function syncAll(): Promise<void> {
 }
 
 /** Coalescing, debounced sync — safe to call after every local write. */
+/**
+ * REPLACE WHAT IS IN iCLOUD WITH WHAT IS ON THIS DEVICE.
+ *
+ * ★ The one operation the inferred path cannot safely perform. Everything else
+ * here MERGES, because a device that has been offline for a week must not lose
+ * what the others added — which also means anything already in the cloud comes
+ * back, including entries seeded by a build or a device that no longer exists.
+ * There was no way to say "that is rubbish, throw it away", so it accumulated.
+ *
+ * ★★ Pressing a button IS unambiguous intent, which is exactly what the engine
+ * cannot infer from an empty list. So this is allowed to do what no automatic
+ * pass may: drop the remote document outright.
+ *
+ * It does NOT delete anything local, and it writes NO tombstones. Local lists
+ * are re-uploaded by the sync that follows, so this device's state becomes the
+ * cloud's state. Another device still holding a stale entry will re-add it on
+ * its next sync — that is a merge working as designed, not a failure; clear it
+ * there too, or clear it here once it arrives.
+ */
+export async function resetCloudToThisDevice(): Promise<void> {
+  if (!(await kvsAvailable(true))) {
+    setStatus({ available: false, lastError: 'iCloud unavailable — nothing was reset.' });
+    return;
+  }
+  // Every key this app owns: the collections, plus the per-server families
+  // (colours, last tune, FM-DX dials) which are keyed by server slug.
+  const ours = (k: string) =>
+    Object.values(CK).includes(k as any) || Object.values(CKP).some(p => k.startsWith(p));
+  try {
+    for (const k of (await kvsAllKeys()).filter(ours)) await kvsRemove(k);
+    // Drop the local snapshots too. A snapshot lists what was in the cloud at the
+    // last sync, so leaving them would make the very next pass read every item as
+    // "deleted elsewhere" and tombstone this device's own lists — the reset would
+    // eat the data it exists to preserve.
+    for (const name of collections.keys()) {
+      try { await AsyncStorage.removeItem(snapKey(name)); } catch {}
+    }
+    await kvsSynchronize();
+    setStatus({ lastError: null });
+  } catch (e: any) {
+    setStatus({ lastError: `Reset failed: ${e?.message ?? e}` });
+    return;
+  }
+  await syncAll();          // re-upload this device's lists into the empty store
+}
+
 export function requestSync(delayMs = 1500): void {
   if (!status.supported) return;
   if (pending) clearTimeout(pending);

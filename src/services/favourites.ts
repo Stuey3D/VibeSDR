@@ -34,7 +34,7 @@ export type Favourite = {
 export const favouritesCollection: Collection<Favourite> = {
   name: 'favourites',
   cloudKey: CK.favourites,
-  load: getFavourites,
+  load: getFavouritesStrict,
   save: (items) => saveFavourites(items),
   // NOT the raw url — see favouriteKey(): ws:// and http:// spellings of the
   // same VibeServer were arriving as two separate favourites.
@@ -94,6 +94,25 @@ export async function getFavourites(): Promise<Favourite[]> {
   } catch {
     return [];
   }
+}
+
+/** The same read, but a FAILURE THROWS instead of looking like an empty list.
+ *
+ * ★★ Only the sync engine uses this, and the distinction is the whole reason it
+ * exists. `getFavourites()` returns [] on a storage fault, which is right for
+ * the UI (show nothing, carry on) and catastrophic for sync, where "empty" is
+ * indistinguishable from "the user deleted everything" and would tombstone the
+ * lot across every device. The engine used to guess with a heuristic — refusing
+ * to delete a whole list at once — which made the LAST item of a list
+ * undeletable. Asking storage to be honest is the fix; the guess was the bug.
+ *
+ * A MISSING key is not a failure: it means no favourites yet, legitimately []. */
+export async function getFavouritesStrict(): Promise<Favourite[]> {
+  const raw = await AsyncStorage.getItem(KEY);     // throws ⇒ real read failure
+  if (raw == null) return [];                      // never written ⇒ genuinely empty
+  const arr = JSON.parse(raw);                     // throws ⇒ corrupt, also a failure
+  if (!Array.isArray(arr)) throw new Error('favourites: stored value is not a list');
+  return arr;
 }
 
 export async function saveFavourites(favs: Favourite[]): Promise<void> {

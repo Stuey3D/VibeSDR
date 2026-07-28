@@ -86,15 +86,16 @@ final class CloudSyncEngine: ObservableObject {
     var tombs = CloudSync.pruneTombs(doc.tombs, now: now)
     let localKeys = Set(local.map { CloudSync.favouriteKey($0.url) })
     let snap = CloudSync.snapshot("favourites")
-    // ★★ NEVER TOMBSTONE A WHOLESALE DISAPPEARANCE. A failed or not-yet-loaded
-    // store reads as an empty list, which is indistinguishable from "the user
-    // deleted everything" — and would then wipe their favourites on every other
-    // device. Deleting them one at a time still syncs normally; only the
-    // all-at-once case is refused, and that is far likelier to be a bad read.
-    let vanished = local.isEmpty && !snap.isEmpty
-    if !vanished {
-      for k in snap where !localKeys.contains(k) && tombs[k] == nil { tombs[k] = now }
-    }
+    // ★★ A FAILED LOAD SKIPS THE PASS ENTIRELY, touching neither the cloud nor
+    // the local list. It used to read as an empty list — indistinguishable from
+    // "the user deleted everything" — so this guessed instead, refusing to
+    // tombstone a wholesale disappearance. The hidden cost of that guess: the
+    // LAST favourite could never be deleted. Removing it emptied the list, the
+    // refusal fired, and the merge below then restored it from the cloud AND
+    // SAVED IT BACK. FavStore.loadOK now reports the truth, so an empty list can
+    // only mean the user emptied it, and its deletions tombstone normally.
+    guard store.loadOK else { return true }
+    for k in snap where !localKeys.contains(k) && tombs[k] == nil { tombs[k] = now }
 
     // Remote first, then fold local over it, so the rule is applied per key
     // rather than one side winning wholesale.
@@ -133,9 +134,7 @@ final class CloudSyncEngine: ObservableObject {
     doc.items = merged
     doc.tombs = tombs
     let ok = CloudSync.writeDoc(CloudSync.favKey, doc)
-    // Leave a suspicious snapshot alone, or the next pass believes the empty
-    // list was legitimate and the guard never fires again.
-    if !vanished { CloudSync.setSnapshot("favourites", seen) }
+    CloudSync.setSnapshot("favourites", seen)
     return ok
   }
 
@@ -207,10 +206,8 @@ final class CloudSyncEngine: ObservableObject {
     var tombs = CloudSync.pruneTombs(doc.tombs, now: now)
     let localKeys = Set(local.map { "\($0.name)|\(Int($0.frequency.rounded()))" })
     let snap = CloudSync.snapshot("bookmarks")
-    let vanished = local.isEmpty && !snap.isEmpty          // see syncFavourites
-    if !vanished {
-      for k in snap where !localKeys.contains(k) && tombs[k] == nil { tombs[k] = now }
-    }
+    guard store.loadOK else { return true }                // see syncFavourites
+    for k in snap where !localKeys.contains(k) && tombs[k] == nil { tombs[k] = now }
 
     var byKey: [String: [String: Any]] = [:]
     for item in doc.items { if let k = key(item) { byKey[k] = item } }
@@ -235,7 +232,7 @@ final class CloudSyncEngine: ObservableObject {
     doc.items = merged
     doc.tombs = tombs
     let ok = CloudSync.writeDoc(CloudSync.bmKey, doc)
-    if !vanished { CloudSync.setSnapshot("bookmarks", Set(merged.compactMap(key))) }
+    CloudSync.setSnapshot("bookmarks", Set(merged.compactMap(key)))
     return ok
   }
 

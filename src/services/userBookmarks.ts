@@ -66,6 +66,18 @@ export async function loadUserBookmarks(): Promise<UserBookmark[]> {
   }
 }
 
+/** Sync's copy of the read: a FAILURE THROWS rather than reading as "the user
+ *  deleted everything". See getFavouritesStrict() for why that distinction is
+ *  the difference between deletions working and the last item being immortal.
+ *  A missing key is genuinely empty, not a failure. */
+export async function loadUserBookmarksStrict(): Promise<UserBookmark[]> {
+  const raw = await AsyncStorage.getItem(KEY);     // throws ⇒ real read failure
+  if (raw == null) return [];                      // never written ⇒ genuinely empty
+  const arr = JSON.parse(raw);                     // throws ⇒ corrupt, also a failure
+  if (!Array.isArray(arr)) throw new Error('bookmarks: stored value is not a list');
+  return arr.filter((b) => b && b.name && b.frequency);
+}
+
 export async function saveUserBookmarks(list: UserBookmark[]): Promise<void> {
   await AsyncStorage.setItem(KEY, JSON.stringify(list));
 }

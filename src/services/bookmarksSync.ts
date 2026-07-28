@@ -13,7 +13,7 @@
  * not reach react-native, directly or transitively.
  */
 import { CK, type Collection } from './cloudSync';
-import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from './userBookmarks';
+import { loadUserBookmarksStrict, saveUserBookmarks, type UserBookmark } from './userBookmarks';
 
 /** ★ Bookmarks merge (union by name|frequency) rather than replace, and only
  *  the opted-in ones ever leave the device. A deletion is caught by the sync
@@ -22,7 +22,7 @@ import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from './userB
 export const bookmarksCollection: Collection<UserBookmark> = {
   name: 'bookmarks',
   cloudKey: CK.bookmarks,
-  load: loadUserBookmarks,
+  load: loadUserBookmarksStrict,
   save: (items) => saveUserBookmarks(items),
   keyOf: (b) => `${b.name}|${b.frequency}`,
   eligible: (b) => b.synced === true,
