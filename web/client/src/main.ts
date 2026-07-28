@@ -2444,7 +2444,12 @@ function paintTimeLeft() {
     el.className = 'crit';
     el.hidden = false;
     if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
-    showSessionOver();
+    // ★ NO CARD HERE. The app already shows one — showRefusal('TIME UP', …) fires
+    // when the server closes the session, and it says MORE than a card of ours
+    // could: it names the cooldown ("you can reconnect in about 2 minutes") and
+    // offers Try again. Adding a second overlay for the same moment would just be
+    // two things racing to explain one event. All this needs to do is stop the
+    // clock at 0:00 and leave it there.
     return;
   }
   // ★ Say what the clock IS. A bare "1:47" over a waterfall is a mystery; people assume it is
@@ -2453,23 +2458,6 @@ function paintTimeLeft() {
   el.className = left <= 30 ? 'crit' : left <= 120 ? 'warn' : '';
   el.hidden = false;
   $('rxBadge').hidden = false;   // the badge may be empty if the owner set no name
-}
-
-/** The end-of-session card. Deliberately NOT dismissible: the session really is
- *  over, so offering a way to carry on would be a lie. */
-function showSessionOver() {
-  if (document.getElementById('sessionOver')) return;   // once
-  const d = document.createElement('div');
-  d.id = 'sessionOver';
-  d.setAttribute('role', 'alertdialog');
-  d.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;'
-    + 'justify-content:center;background:rgba(0,0,0,.86);backdrop-filter:blur(3px);'
-    + 'color:#fff;font:500 16px/1.5 system-ui,sans-serif;text-align:center;padding:24px';
-  d.innerHTML = '<div><div style="font:700 40px/1 ui-monospace,monospace;color:#ff6b6b;'
-    + 'margin-bottom:14px">0:00</div><div style="font-size:18px;font-weight:600;'
-    + 'margin-bottom:6px">Session time limit reached</div>'
-    + '<div style="opacity:.75;font-size:14px">Thank you for listening.</div></div>';
-  document.body.appendChild(d);
 }
 
 async function loadServerLocation(host: string) {
