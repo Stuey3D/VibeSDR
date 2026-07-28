@@ -820,6 +820,26 @@ struct HardwareSheet: View {
             onOff("PREAMP (+6 dB)", on: radio.ahfPreamp) { radio.setAhfPreamp(!radio.ahfPreamp) }
           }
         }
+        // FM de-emphasis — full width
+        VStack(spacing: 3) {
+          Text("FM DE-EMPHASIS").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+          HStack(spacing: 6) {
+            ForEach([(0, "Off"), (50, "50µs"), (75, "75µs")], id: \.0) { tau, label in
+              let active = radio.deemph == tau
+              Button { radio.setDeemph(tau) } label: {
+                Text(label).font(.system(size: 13, weight: .semibold))
+                  .frame(maxWidth: .infinity).padding(.vertical, 7)
+                  .background(active ? Color.orange : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                  .foregroundColor(active ? .black : .white)
+              }.buttonStyle(.plain)
+            }
+          }
+        }.padding(.top, 3)
+
+        if gainArmed, !radio.gainAuto {
+          Text("Turn the crown to set gain").font(.system(size: 10)).foregroundColor(.cyan)
+        }
+
         // ══ OWNER-ONLY, BELOW THE LINE ══════════════════════════════════════
         // ★ ORDER IS THE POINT: what you can use, then the lock, then what you
         // cannot. The unlock box sat at the TOP, so the first thing a visitor met
@@ -859,25 +879,6 @@ struct HardwareSheet: View {
               Spacer(minLength: 0)
             }
           }
-        }
-        // FM de-emphasis — full width
-        VStack(spacing: 3) {
-          Text("FM DE-EMPHASIS").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
-          HStack(spacing: 6) {
-            ForEach([(0, "Off"), (50, "50µs"), (75, "75µs")], id: \.0) { tau, label in
-              let active = radio.deemph == tau
-              Button { radio.setDeemph(tau) } label: {
-                Text(label).font(.system(size: 13, weight: .semibold))
-                  .frame(maxWidth: .infinity).padding(.vertical, 7)
-                  .background(active ? Color.orange : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                  .foregroundColor(active ? .black : .white)
-              }.buttonStyle(.plain)
-            }
-          }
-        }.padding(.top, 3)
-
-        if gainArmed, !radio.gainAuto {
-          Text("Turn the crown to set gain").font(.system(size: 10)).foregroundColor(.cyan)
         }
       }
       .padding(.horizontal, 6).padding(.bottom, 10)
