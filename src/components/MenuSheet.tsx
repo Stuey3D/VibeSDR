@@ -537,10 +537,11 @@ function ICloudRow() {
   const onReset = useCallback(() => {
     Alert.alert(
       'Replace iCloud with this device?',
-      'Everything VibeSDR keeps in iCloud is discarded and re-uploaded from this iPhone. '
-      + 'Nothing on this device is deleted.\n\n'
-      + 'Use this to clear entries left behind by an old build or a device you no longer have. '
-      + 'Another device still holding one will re-add it when it next syncs.',
+      'iCloud is replaced by what is on this iPhone. Nothing here is deleted.\n\n'
+      + 'Anything NOT on this iPhone is deleted everywhere — including favourites or '
+      + 'bookmarks added on the watch that never reached this device. Your other devices '
+      + 'will remove them when they next sync.\n\n'
+      + 'Use this to clear entries left behind by an old build or a device you no longer have.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Replace', style: 'destructive', onPress: () => {

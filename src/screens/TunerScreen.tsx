@@ -24,6 +24,7 @@ import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
 import { dialKeyFor, pruneDial, stampUndatedDial } from '../services/dialSync';
+import { fmdxDeclaredRange } from '../services/fmdxDirectory';
 import { requestSync } from '../services/cloudSync';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from '../constants/fmBand';
 
@@ -188,12 +189,43 @@ export default function TunerScreen({ route, navigation }: Props) {
   /** Dial floor: 1 MHz of headroom below the lowest confirmed frequency, so the
    *  proven edge isn't jammed against the dial's end and there is somewhere to
    *  tune next. Never above the standard band's own 87.5. */
-  const fmLo = confirmedLo >= FMDX_DIAL_VIEW_LO ? FMDX_DIAL_VIEW_LO
+  const evidenceFloor = confirmedLo >= FMDX_DIAL_VIEW_LO ? null
              : Math.max(FMDX_TUNE_LO, Math.floor((confirmedLo - 1_000_000) / 1_000_000) * 1_000_000);
+
+  // ★★★ THE SERVER DOES DECLARE ITS RANGE — just not to us. `server/fmdx_list.js`
+  // posts a `bwLimit` string ("65 - 108 MHz") to the fm-dx.org directory, which
+  // this app already fetches and, until now, threw away. Confirmed by the
+  // webserver's author: "they do announce it, but only on maps, i might have to
+  // add something in the API tho" (2026-07-28).
+  //
+  // ★ This is strictly better than growing on confirmation, and it covers the one
+  // case confirmation CANNOT: a server that limits tuning refuses out-of-range
+  // commands in silence, so it can never prove its own floor by being tuned to.
+  // Matched by host, so a manually typed URL that happens to be listed benefits
+  // too; anything unlisted returns null and falls back to the learned path.
+  const [declared, setDeclared] = useState<{ lo: number; hi: number } | null>(null);
+  useEffect(() => {
+    let live = true;
+    fmdxDeclaredRange(baseUrl).then((r) => { if (live && r) setDeclared(r); }).catch(() => {});
+    return () => { live = false; };
+  }, [baseUrl]);
+
+  // A declaration sets the dial outright — including NARROWING it, which is right:
+  // a server limited to 100–108 should show 100–108, not 20 MHz it will refuse.
+  // Evidence still wins if it is lower, because a stale declaration must not lock
+  // out a frequency the radio has actually been seen to reach.
+  const fmLo = declared ? Math.min(declared.lo, evidenceFloor ?? declared.lo)
+                        : (evidenceFloor ?? FMDX_DIAL_VIEW_LO);
+  const fmHi = declared ? Math.max(declared.hi, FMDX_DIAL_VIEW_HI) : FM_HI;
   const extended = fmLo < FMDX_DIAL_VIEW_LO;
   /** Clamp to what the RADIO can reach, not to what the dial happens to show —
-   *  the dial can only learn to grow if we let the tune out of the band first. */
-  const clampFm = useCallback((hz: number) => Math.min(FM_HI, Math.max(FMDX_TUNE_LO, hz)), []);
+   *  the dial can only learn to grow if we let the tune out of the band first.
+   *  ★ With a declared range we clamp to THAT instead: there is no point letting
+   *  the user tune into a region the owner has told us will be dropped. */
+  const bandRef = useRef({ lo: FMDX_TUNE_LO, hi: FM_HI });
+  bandRef.current = { lo: declared ? fmLo : FMDX_TUNE_LO, hi: fmHi };
+  const clampFm = useCallback((hz: number) =>
+    Math.min(bandRef.current.hi, Math.max(bandRef.current.lo, hz)), []);
   const EXT_KEY = extKeyFor(baseUrl);
   useEffect(() => {
     AsyncStorage.getItem(EXT_KEY).then((raw) => {
@@ -230,15 +262,15 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (displayFreq <= 0) return;
     setDialView((v) => {
-      const inBand = v.lo >= fmLo && v.hi <= FM_HI;
+      const inBand = v.lo >= fmLo && v.hi <= fmHi;
       if (inBand && displayFreq >= v.lo && displayFreq <= v.hi) return v;
-      const sp = Math.min(FM_HI - fmLo, Math.max(1, v.hi - v.lo));
+      const sp = Math.min(fmHi - fmLo, Math.max(1, v.hi - v.lo));
       let lo = displayFreq - sp / 2, hi = lo + sp;
       if (lo < fmLo) { lo = fmLo; hi = lo + sp; }
-      if (hi > FM_HI) { hi = FM_HI; lo = hi - sp; }
+      if (hi > fmHi) { hi = fmHi; lo = hi - sp; }
       return { lo, hi };
     });
-  }, [displayFreq, fmLo]);
+  }, [displayFreq, fmLo, fmHi]);
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
@@ -722,16 +754,16 @@ export default function TunerScreen({ route, navigation }: Props) {
   const onDialZoom = useCallback((px: number) => {
     setDialView((v) => {
       const sp0 = v.hi - v.lo;
-      const full = FM_HI - fmLo;
+      const full = fmHi - fmLo;
       const sp = Math.max(2_000_000, Math.min(full, sp0 * Math.pow(0.5, px / 90)));
       const anchor = clampFm(displayFreq);
       const rel = sp0 > 0 ? (anchor - v.lo) / sp0 : 0.5;
       let lo = anchor - rel * sp, hi = lo + sp;
       if (lo < fmLo) { lo = fmLo; hi = lo + sp; }
-      if (hi > FM_HI) { hi = FM_HI; lo = hi - sp; }
+      if (hi > fmHi) { hi = fmHi; lo = hi - sp; }
       return { lo, hi };
     });
-  }, [displayFreq, fmLo, clampFm]);
+  }, [displayFreq, fmLo, fmHi, clampFm]);
   // The zoom KEYS in dial terms. onDialZoom is a pixel drag (span × 0.5^(px/90)),
   // so a tap is the 90 px that makes exactly one octave — the rung the ± buttons
   // have always moved — and a held sweep is a third of one, small enough to ramp
@@ -964,7 +996,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         <FmdxDial
           freqHz={displayFreq}
           loHz={fmLo}
-          hiHz={FM_HI}
+          hiHz={fmHi}
           stations={dialStations}
           onTune={onDialTune}
           theme={theme}
@@ -1208,8 +1240,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         lockUnit
         // The numpad accepts the RECEIVER's range, not the dial's — typing 84.0
         // on a server nobody has proved yet must be allowed to try.
-        minHz={FMDX_TUNE_LO}
-        maxHz={FM_HI}
+        minHz={declared ? fmLo : FMDX_TUNE_LO}
+        maxHz={fmHi}
       />
 
       <ChatDrawer

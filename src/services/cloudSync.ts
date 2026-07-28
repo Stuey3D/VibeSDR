@@ -482,23 +482,49 @@ export async function syncAll(): Promise<void> {
  * cannot infer from an empty list. So this is allowed to do what no automatic
  * pass may: drop the remote document outright.
  *
- * It does NOT delete anything local, and it writes NO tombstones. Local lists
- * are re-uploaded by the sync that follows, so this device's state becomes the
- * cloud's state. Another device still holding a stale entry will re-add it on
- * its next sync — that is a merge working as designed, not a failure; clear it
- * there too, or clear it here once it arrives.
+ * It does NOT delete anything local. It DOES tombstone every entry the cloud
+ * holds that this device does not, because otherwise it cannot do its job:
+ * emptying the store simply invites the next device to sync to refill it from
+ * its own copy, which is exactly what happened — delete a favourite, reset,
+ * and Jr uploaded it straight back (2026-07-28). A tombstone is the only thing
+ * that tells another device an entry is DEAD rather than merely missing here.
+ *
+ * ★ So this is genuinely destructive across devices, and that is the point:
+ * "replace iCloud with this device" means anything not on this device dies,
+ * including something added on the watch and never synced here. The wording and
+ * the confirmation say so.
  */
 export async function resetCloudToThisDevice(): Promise<void> {
   if (!(await kvsAvailable(true))) {
     setStatus({ available: false, lastError: 'iCloud unavailable — nothing was reset.' });
     return;
   }
-  // Every key this app owns: the collections, plus the per-server families
-  // (colours, last tune, FM-DX dials) which are keyed by server slug.
-  const ours = (k: string) =>
-    Object.values(CK).includes(k as any) || Object.values(CKP).some(p => k.startsWith(p));
+  const now = Date.now();
   try {
-    for (const k of (await kvsAllKeys()).filter(ours)) await kvsRemove(k);
+    // ── Collections: keep this device's items, BURY everything else ──
+    for (const spec of collections.values()) {
+      let localKeys = new Set<string>();
+      try {
+        const isEligible = spec.eligible ?? (() => true);
+        localKeys = new Set((await spec.load()).filter(isEligible).map(spec.keyOf));
+      } catch {
+        // Can't read this list ⇒ can't say what belongs here. Leave it alone
+        // rather than burying the user's entire collection on a bad read.
+        continue;
+      }
+      const doc = parseDoc<any>(await kvsGet(spec.cloudKey));
+      const tombs: Record<string, number> = pruneTombs({ ...(doc.tombs ?? {}) }, now);
+      for (const it of doc.items) {
+        if (!it || typeof it !== 'object') continue;
+        const k = spec.keyOf(it);
+        if (!localKeys.has(k)) tombs[k] = now;      // in the cloud, not here ⇒ dead
+      }
+      await kvsSet(spec.cloudKey, JSON.stringify({ v: 1, items: [], tombs }));
+    }
+    // ── Per-server families (colours, last tune, dials): last-writer-wins, no
+    // tombstones exist for them, so dropping the keys IS the reset. ──
+    const perServer = (k: string) => Object.values(CKP).some(p => k.startsWith(p));
+    for (const k of (await kvsAllKeys()).filter(perServer)) await kvsRemove(k);
     // Drop the local snapshots too. A snapshot lists what was in the cloud at the
     // last sync, so leaving them would make the very next pass read every item as
     // "deleted elsewhere" and tombstone this device's own lists — the reset would

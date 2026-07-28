@@ -1070,8 +1070,10 @@ struct DisplaySheet: View {
   @AppStorage("wfAutoContrast") private var wfAutoContrast = 5.0
   @AppStorage("wfBright")       private var wfBright       = 0.0
   @AppStorage("wfContrast")     private var wfContrast     = 0.0
-  @AppStorage("wfPalette")      private var wfPalette      = "sync"
-  @AppStorage("wfVfoColour")    private var wfVfoColour    = "sync"
+  // ★ Defaults are real palettes now, not "sync" — that option promised to follow the phone
+  // and never did (it resolved to Sonar Green). The picker offers the phone's full list instead.
+  @AppStorage("wfPalette")      private var wfPalette      = "sonar"
+  @AppStorage("wfVfoColour")    private var wfVfoColour    = "orange"
   @AppStorage("wfPeakHold")     private var wfPeakHold     = true
   @AppStorage("meterUnit")      private var meterUnit      = "snr"
 
@@ -1082,10 +1084,15 @@ struct DisplaySheet: View {
   private func steps(_ v: Double) -> String { let n = Int((v / 0.04).rounded()); return n > 0 ? "+\(n)" : "\(n)" }
 
   private var palette: WFPalette { SpikeLink.palettes.first { $0.id == wfPalette } ?? .sonar }
-  private var vfo: VfoColour { SpikeLink.vfoColours.first { $0.id == wfVfoColour } ?? SpikeLink.vfoColours[1] }
+  private var vfo: VfoColour { SpikeLink.vfoColours.first { $0.id == wfVfoColour } ?? SpikeLink.vfoColours[0] }
+  /// ★ "sync" counts as default: a wrist upgrading from the old build has it stored, and it always
+  /// rendered as Sonar Green / Orange anyway. Without this, Reset would look enabled on a watch the
+  /// user has never touched.
+  private var isDefaultPalette: Bool { wfPalette == "sonar" || wfPalette == "sync" }
+  private var isDefaultVfo: Bool { wfVfoColour == "orange" || wfVfoColour == "sync" }
   private var displayDirty: Bool {
     wfAutoContrast != 5 || wfBright != 0 || wfContrast != 0
-      || wfPalette != "sync" || wfVfoColour != "sync" || !wfPeakHold || meterUnit != "snr"
+      || !isDefaultPalette || !isDefaultVfo || !wfPeakHold || meterUnit != "snr"
   }
 
   var body: some View {
@@ -1127,9 +1134,9 @@ struct DisplaySheet: View {
       Section {
         Button(role: .destructive) {
           wfAutoContrast = 5; wfBright = 0; wfContrast = 0
-          wfPalette = "sync"; wfVfoColour = "sync"; wfPeakHold = true
+          wfPalette = "sonar"; wfVfoColour = "orange"; wfPeakHold = true
           link.setAutoContrast(5); link.waterfall.brightness = 0; link.waterfall.contrast = 0
-          link.applyPalette("sync"); link.applyVfo("sync")
+          link.applyPalette("sonar"); link.applyVfo("orange")
           link.peakHold = true; link.waterfall.peakHold = true
           meterUnit = "snr"; link.meterUnit = "snr"
           WKInterfaceDevice.current().play(.success)

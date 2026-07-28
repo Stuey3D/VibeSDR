@@ -746,11 +746,11 @@ final class SpikeLink: ObservableObject {
 
   /// The selectable palettes (plus the SYNC sentinel first — see WFPalette.sync). LUTs are built
   /// lazily on first use and cached by the struct.
-  static let palettes: [WFPalette] = [.sync, .sonar, .sonarOrange, .nightVision, .classic, .jet, .viridis, .grey, .blackHot]
+  static let palettes: [WFPalette] = WFPalette.all
 
-  /// The selectable VFO colours (SYNC first — falls back to the orange default until iCloud lands).
+  /// The selectable VFO colours. ★ There was a "Sync" entry here that was just Orange under another
+  /// name — it promised to follow the phone and never did. Removed; pick a colour.
   static let vfoColours: [VfoColour] = [
-    .init(id: "sync",    name: "Sync",    hex: "#FF8C00"),   // shows the fallback colour until iCloud
     .init(id: "orange",  name: "Orange",  hex: "#FF8C00"),
     .init(id: "red",     name: "Red",     hex: "#FF3B30"),
     .init(id: "yellow",  name: "Yellow",  hex: "#FFD60A"),
@@ -761,17 +761,20 @@ final class SpikeLink: ObservableObject {
     .init(id: "white",   name: "White",   hex: "#FFFFFF"),
   ]
 
-  /// Apply a saved palette choice to the waterfall. `sync` resolves to the phone's palette once the
-  /// iCloud layer exists; until then it falls back to Sonar Green (the historical default).
+  /// Apply a saved palette choice to the waterfall.
+  /// ★ A wrist that already stored "sync" keeps working: it resolved to Sonar Green in practice, so
+  /// that is what it still means. Without this the upgrade would fall through to the default anyway,
+  /// but silently — say it instead.
   func applyPalette(_ id: String) {
-    let chosen = id == "sync" ? "sonar" : id            // TODO(iCloud): map sync → phone's palette
+    let chosen = id == "sync" ? "sonar" : id            // legacy pref, see note above
     let p = SpikeLink.palettes.first { $0.id == chosen } ?? .sonar
     waterfall.setLUT(p.lut)
   }
 
-  /// Apply a saved VFO-colour choice. `sync` → phone's colour later; orange fallback for now.
+  /// Apply a saved VFO-colour choice. Legacy "sync" was Orange all along.
   func applyVfo(_ id: String) {
-    let v = SpikeLink.vfoColours.first { $0.id == id } ?? SpikeLink.vfoColours[1]
+    let chosen = id == "sync" ? "orange" : id
+    let v = SpikeLink.vfoColours.first { $0.id == chosen } ?? SpikeLink.vfoColours[0]
     needle = Color(hex: v.hex) ?? .orange
   }
 
@@ -860,25 +863,12 @@ struct WFPalette: Identifiable {
     }
   }
 
-  // Stops copied verbatim from the phone's COLORMAPS_STOPS (src/assets/colormaps.ts) so the wrist
-  // matches the phone. "Sync" tracks the phone's own choice once iCloud lands; preview = sonar for now.
-  static let sync = WFPalette(id: "sync", name: "Sync",
-    hex: ["#000000","#000800","#001a00","#003300","#005000","#007800","#00aa00","#00cc00","#00ff00","#80ff80","#ccffcc","#efffff"])
-  static let sonar = WFPalette(id: "sonar", name: "Sonar Green",
-    hex: ["#000000","#000800","#001a00","#003300","#005000","#007800","#00aa00","#00cc00","#00ff00","#80ff80","#ccffcc","#efffff"])
-  static let sonarOrange = WFPalette(id: "sonarorange", name: "Sonar Orange",
-    hex: ["#000000","#0d0400","#1a0800","#2e1000","#4a1a00","#6e2800","#9e3c00","#c85000","#e86800","#ff8c20","#ffb860","#fff0cc"])
-  static let nightVision = WFPalette(id: "nightvision", name: "Night Vision",
-    hex: ["#000000","#0c0000","#1a0000","#2e0000","#4a0000","#700000","#a00000","#cc0000","#ee1010","#ff4040","#ff8080","#ffcccc"])
-  static let classic = WFPalette(id: "classic", name: "Classic",
-    hex: ["#000020","#000030","#000050","#000091","#1E90FF","#FFFFFF","#FFFF00","#FE6D16","#FE6D16","#FF0000","#FF0000","#C60000","#9F0000","#750000","#4A0000"])
-  static let jet = WFPalette(id: "jet", name: "Jet",
-    hex: ["#00008f","#0000ff","#00ffff","#ffff00","#ff0000","#800000"])
-  // The canonical 10-stop viridis (matplotlib) — perceptually uniform, dark-purple → teal → yellow.
-  static let viridis = WFPalette(id: "viridis", name: "Viridis",
-    hex: ["#440154","#482878","#3e4a89","#31688e","#26828e","#1f9e89","#35b779","#6ece58","#b5de2b","#fde725"])
-  static let grey = WFPalette(id: "grey", name: "Greyscale", hex: ["#000000","#FFFFFF"])
-  static let blackHot = WFPalette(id: "blackhot", name: "Black Hot", hex: ["#FFFFFF","#000000"])
+  // ★ The palette TABLE lives in WFPalettes.generated.swift, resampled from the phone's own
+  // colormaps.ts by tools/gen-watch-palettes.mjs — including `sonar`, the default and the fallback
+  // every lookup lands on. It used to be eight hand-copied gradients against the phone's twenty-six,
+  // so a colour chosen on the phone was usually UNREACHABLE on the wrist — which is where the "Sync"
+  // option came from. Sync never worked (it resolved to Sonar Green with a TODO beside it); offering
+  // the same list is the honest fix.
 }
 
 /// A selectable VFO (tuned-carrier line) colour.

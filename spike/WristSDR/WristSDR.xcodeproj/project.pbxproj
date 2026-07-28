@@ -12,6 +12,7 @@
 		4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4434780FAA0BCA12A4738A /* BandwidthView.swift */; };
 		4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB51A8941C99A626615A0FC /* Chat.swift */; };
 		1ADDB622AF9179CABE199142 /* CloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = C66B81E885A802F50F032812 /* CloudSync.swift */; };
+		1ADDB622AF9179CABE199143 /* WFPalettes.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = C66B81E885A802F50F032813 /* WFPalettes.generated.swift */; };
 		AD5CAC9826C2285975A9606C /* CloudSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */; };
 		70EE588C003629B12094698A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C7CA3AAA59DBED958D0315 /* ContentView.swift */; };
 		AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0192327755EB9D29ED557A5 /* ControlMenu.swift */; };
@@ -51,6 +52,7 @@
 		1D4434780FAA0BCA12A4738A /* BandwidthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BandwidthView.swift"; sourceTree = "<group>"; };
 		0AB51A8941C99A626615A0FC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Chat.swift"; sourceTree = "<group>"; };
 		C66B81E885A802F50F032812 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSync.swift"; sourceTree = "<group>"; };
+		C66B81E885A802F50F032813 /* WFPalettes.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WFPalettes.generated.swift"; sourceTree = "<group>"; };
 		EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSyncEngine.swift"; sourceTree = "<group>"; };
 		A5C7CA3AAA59DBED958D0315 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
 		A0192327755EB9D29ED557A5 /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlMenu.swift"; sourceTree = "<group>"; };
@@ -115,6 +117,7 @@
 				1D4434780FAA0BCA12A4738A /* BandwidthView.swift */,
 				0AB51A8941C99A626615A0FC /* Chat.swift */,
 				C66B81E885A802F50F032812 /* CloudSync.swift */,
+				C66B81E885A802F50F032813 /* WFPalettes.generated.swift */,
 				EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */,
 				A5C7CA3AAA59DBED958D0315 /* ContentView.swift */,
 				A0192327755EB9D29ED557A5 /* ControlMenu.swift */,
@@ -237,6 +240,7 @@
 				4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */,
 				4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */,
 				1ADDB622AF9179CABE199142 /* CloudSync.swift in Sources */,
+				1ADDB622AF9179CABE199143 /* WFPalettes.generated.swift in Sources */,
 				AD5CAC9826C2285975A9606C /* CloudSyncEngine.swift in Sources */,
 				70EE588C003629B12094698A /* ContentView.swift in Sources */,
 				AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */,
@@ -323,7 +327,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 45;
+				CURRENT_PROJECT_VERSION = 46;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -348,7 +352,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 45;
+				CURRENT_PROJECT_VERSION = 46;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
