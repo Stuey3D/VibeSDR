@@ -133,6 +133,29 @@ struct WristSDRApp: App {
   @StateObject private var link = SpikeLink()
   /// Admin password for the IN USE takeover. Cleared the moment it is used.
   @State private var adminPass = ""
+
+  /// A server turning us away, said plainly. ★ Every one of these is TERMINAL —
+  /// retrying automatically would hammer a receiver that is deliberately refusing
+  /// us, which is the reconnect war the server's own comments warn about. So the
+  /// only way on is a tap.
+  @ViewBuilder private func refusalScreen(title: String, body: String, note: String) -> some View {
+    ScrollView {
+      VStack(spacing: 8) {
+        Text(title).font(.system(size: 17, weight: .bold)).foregroundColor(.orange)
+        Text(body).font(.system(size: 11)).foregroundColor(.white.opacity(0.75))
+          .multilineTextAlignment(.center)
+        Text(note).font(.system(size: 11)).foregroundColor(.white.opacity(0.75))
+          .multilineTextAlignment(.center)
+        Button("Try again") { link.retryConnect() }
+          .font(.system(size: 13, weight: .semibold)).tint(.orange)
+        Button("Back to servers") { link.leaveServer() }
+          .font(.system(size: 12)).tint(.gray)
+      }
+      .padding(14)
+    }
+    .background(.black.opacity(0.92))
+    .transition(.opacity)
+  }
   @StateObject private var favs = FavStore()
   @StateObject private var bookmarks = BookmarkStore()
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
@@ -242,23 +265,17 @@ struct WristSDRApp: App {
             link.leaveServer()
           }
         } else if link.sessionEnded {
-          VStack(spacing: 8) {
-            Text("00:00").font(.system(size: 26, weight: .bold, design: .rounded)).monospacedDigit()
-              .foregroundColor(.red)
-            Text("Time limit reached").font(.system(size: 15, weight: .semibold))
-            Text("VibeSDR Jr will return you to the servers list.")
-              .font(.system(size: 11)).foregroundColor(.white.opacity(0.7))
-              .multilineTextAlignment(.center)
-          }
-          .padding(16)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(.black.opacity(0.88))
-          .transition(.opacity)
-          .task {
-            // Long enough to read and understand, short enough not to strand them.
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
-            link.leaveServer()
-          }
+          // ★ SAME WORDS AS THE WEB CLIENT. A listener who uses both should meet the
+          // same explanation, and "when may I come back" is the part that turns a
+          // disconnection into a shared receiver working as intended rather than a
+          // crash. No auto-return: they choose when to leave the message.
+          refusalScreen(title: "TIME UP",
+                        body: "Your session on this shared receiver has ended, so someone else can have a turn.",
+                        note: "You can reconnect in \(link.cooldownText).")
+        } else if link.cooldownRefused {
+          refusalScreen(title: "PLEASE WAIT",
+                        body: "You have just had a turn on this shared receiver.",
+                        note: "Try again in \(link.cooldownText).")
         }
       }
       // First card on APP OPEN — the Return-to-App setting behind wrist-down listening. Then each screen

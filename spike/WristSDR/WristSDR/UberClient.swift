@@ -151,6 +151,12 @@ final class UberClient: ObservableObject {
   /// Live from the server's `rspstat`: total system gain and the overload flag.
   /// The owner took this receiver. Terminal — never auto-retried.
   @Published var evicted = false
+  /// Our slot expired (server said so). Terminal.
+  @Published var sessionEnded = false
+  /// Refused because we came back inside our cooldown. Terminal.
+  @Published var cooldownRefused = false
+  /// Seconds before we may return — the server's number, not a guess.
+  @Published var cooldownSecs = 0
   @Published var sysGainDb = 0.0
   @Published var rspOverload = false
   /// Human name for the hardware sheet's header.
@@ -1219,6 +1225,26 @@ final class UberClient: ObservableObject {
     // listeners displacing each other forever). Jr ignored this message entirely, so
     // the watch just saw the socket close and started reconnecting — the listener was
     // thrown off with no idea why (Stuart, on the wrist, 2026-07-28).
+    // ★★ THE SERVER TURNING US AWAY IS TERMINAL — never retried. Each of these is
+    // a deliberate refusal, and the default reconnect would hammer a receiver that
+    // is busy telling us to go away, while showing our own user nothing but
+    // "reconnecting". The web client has said this properly for a while; Jr and the
+    // phone handled NEITHER message, so a listener whose time ran out simply
+    // dropped and started reconnecting (2026-07-28).
+    if type == "session_expired" {
+      sessionEnded = true
+      cooldownSecs = (j["cooldown"] as? NSNumber)?.intValue ?? 0
+      goingIdle = true
+      status = "session ended"
+      return
+    }
+    if type == "cooldown" {
+      cooldownRefused = true
+      cooldownSecs = (j["secs"] as? NSNumber)?.intValue ?? 0
+      goingIdle = true
+      status = "cooldown"
+      return
+    }
     if type == "evicted" {
       evicted = true
       goingIdle = true          // stop the reconnect path dead

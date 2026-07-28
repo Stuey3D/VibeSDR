@@ -20,6 +20,7 @@ import React, {
 import {
   Alert,
   AppState,
+  Modal,
   BackHandler,
   ActivityIndicator,
   Dimensions,
@@ -389,6 +390,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const sessionLimitMins: number = route.params.sessionLimitMins ?? 0;
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
+  /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
+  const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
   const noticeShownRef = useRef(false);
   // Per-device persistence suffix so each local source keeps its OWN remembered
   // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
@@ -2267,6 +2270,31 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
+      // ★★ THE SERVER TURNING US AWAY, SAID PLAINLY — the same two screens the web
+      // client shows, with the same words, because a listener who uses both should
+      // meet the same explanation. Both are TERMINAL: the client stops retrying
+      // (see `refused` in UberSDRClient), so nothing here races a reconnect.
+      // ★ The part that matters is WHEN THEY MAY RETURN. A public receiver that
+      // just goes quiet reads as our bug; one that says "someone else can have a
+      // turn, come back in 2 minutes" reads as a shared radio working.
+      onSessionEnded: (cooldownSec: number) => {
+        if (destroyed.current) return;
+        const m = Math.max(1, Math.round(cooldownSec / 60));
+        setRefusal({
+          title: 'TIME UP',
+          body: 'Your session on this shared receiver has ended, so someone else can have a turn.',
+          note: `You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`,
+        });
+      },
+      onCooldown: (secs: number) => {
+        if (destroyed.current) return;
+        const m = Math.max(1, Math.round(secs / 60));
+        setRefusal({
+          title: 'PLEASE WAIT',
+          body: 'You have just had a turn on this shared receiver.',
+          note: `Try again in about ${m} minute${m === 1 ? '' : 's'}.`,
+        });
+      },
       onReconnecting: (busy: boolean) => {
         // Tell the WRIST a recovery is under way. There are two links in series and
         // they fail independently; from the watch, "the phone is healing its server
@@ -5520,6 +5548,29 @@ export default function SDRScreen({ route, navigation }: Props) {
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
       />
 
+      {/* ★ THE SERVER TURNED US AWAY — TIME UP or PLEASE WAIT, matching the web
+          client word for word. Not dismissible by tapping outside: the session
+          really has ended, and a message you can flick away by accident is one the
+          user never reads. Try again reconnects; Back returns to the picker. */}
+      <Modal visible={!!refusal} transparent animationType="fade"
+             onRequestClose={() => { setRefusal(null); navigation.goBack(); }}>
+        <View style={styles.noticeBackdrop}>
+          <View style={styles.noticeCard}>
+            <Text style={styles.noticeTitle}>{refusal?.title ?? ''}</Text>
+            <Text style={styles.noticeBody}>{refusal?.body ?? ''}</Text>
+            <Text style={styles.noticeItem}>{refusal?.note ?? ''}</Text>
+            <TouchableOpacity style={styles.noticeBtn}
+              onPress={() => { setRefusal(null); navigation.replace('SDR', route.params); }}>
+              <Text style={styles.noticeBtnTxt}>TRY AGAIN</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.noticeBtn}
+              onPress={() => { setRefusal(null); navigation.goBack(); }}>
+              <Text style={styles.noticeBtnTxt}>BACK TO SERVERS</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
       <KeyboardShortcuts visible={keyHelpOpen} onClose={() => setKeyHelpOpen(false)} />
@@ -5835,6 +5886,27 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // ★ The server-refusal card (TIME UP / PLEASE WAIT). Deliberately plain and
+  // centred: it is the only thing on screen that matters at that moment.
+  noticeBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.86)',
+    alignItems: 'center', justifyContent: 'center', padding: 28,
+  },
+  noticeCard: {
+    backgroundColor: '#0d0d0d', borderColor: '#ffa000', borderWidth: 1,
+    borderRadius: 12, padding: 20, gap: 10, maxWidth: 420, width: '100%',
+  },
+  noticeTitle: {
+    color: '#ffa000', fontSize: 20, fontWeight: 'bold',
+    letterSpacing: 3, textAlign: 'center',
+  },
+  noticeBody: { color: '#e8e8e8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  noticeItem: { color: '#bdbdbd', fontSize: 13, textAlign: 'center' },
+  noticeBtn: {
+    borderColor: '#ffa000', borderWidth: 1, borderRadius: 8,
+    paddingVertical: 10, alignItems: 'center', marginTop: 2,
+  },
+  noticeBtnTxt: { color: '#ffa000', fontSize: 13, fontWeight: 'bold', letterSpacing: 1.5 },
   rotateBanner: {
     position: 'absolute', alignSelf: 'center', zIndex: 55,
     backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,

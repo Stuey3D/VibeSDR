@@ -144,6 +144,16 @@ export interface SDRCallbacks {
   /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
    *  `refused` fires when a protected control was rejected — the honest moment to say why. */
   onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean }) => void;
+  /** ★★ THE SERVER DELIBERATELY TURNING US AWAY. Each of these is TERMINAL: the
+   *  reconnect that serves a dropped link would here hammer a receiver that is
+   *  busy saying "not you, not now", while showing our own user nothing but
+   *  "reconnecting". The web client has always treated them as final; the phone
+   *  ignored both messages entirely, so a listener whose time ran out just
+   *  dropped and started retrying (2026-07-28).
+   *  `cooldownSec` is the server's own number — when they may come back. */
+  onSessionEnded?: (cooldownSec: number) => void;
+  /** Refused because we returned inside our cooldown. */
+  onCooldown?: (secs: number) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -540,6 +550,12 @@ export class UberSDRClient {
   }
   private advRds = false;
   private adminSet = false;
+  /** ★★ The server has DELIBERATELY turned us away (time up, cooldown). Terminal:
+   *  the 3-second reconnect below is right for a dropped link and utterly wrong
+   *  here — it would hammer a receiver that is telling us not to come back yet,
+   *  which is exactly the reconnect war the shim's own comments warn about. Only
+   *  a fresh user-initiated connect clears it. */
+  private refused = false;
 
   /** ★ Unlock the protected controls. Challenge-response: the caller has already turned the
    *  password into an HMAC over a server-issued nonce, so the password never crosses the link
@@ -1455,6 +1471,16 @@ export class UberSDRClient {
       });
       return;
     }
+    if (msg.type === 'session_expired') {
+      this.refused = true;                    // never auto-retry a deliberate refusal
+      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0);
+      return;
+    }
+    if (msg.type === 'cooldown') {
+      this.refused = true;
+      this.callbacks.onCooldown?.(Number(msg.secs) || 0);
+      return;
+    }
     if (msg.type === 'admin') {
       this.callbacks.onAdminState?.({
         set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true });
@@ -1612,6 +1638,7 @@ export class UberSDRClient {
    *  black screen. */
   private _scheduleReconnect() {
     if (this.destroyed || this.pausedByApp) return;
+    if (this.refused) return;        // a refusal is final until the user acts
     this._setReconnecting(true);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

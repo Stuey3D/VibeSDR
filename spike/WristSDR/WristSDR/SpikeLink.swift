@@ -178,6 +178,14 @@ final class SpikeLink: ObservableObject {
   /// IN USE screen the web client has — try again, or take over as the owner.
   @Published var serverBusy = false
   @Published var takeoverPossible = false
+  /// Refused because we returned inside our cooldown, and how long is left.
+  @Published var cooldownRefused = false
+  @Published var cooldownSecs = 0
+  /// "about 2 minutes" — the same rounding the web client uses, so the two agree.
+  var cooldownText: String {
+    let m = max(1, Int((Double(cooldownSecs) / 60.0).rounded()))
+    return "about \(m) minute\(m == 1 ? "" : "s")"
+  }
 
   /// Retry a busy server without re-entering anything.
   func retryConnect() {
@@ -202,6 +210,7 @@ final class SpikeLink: ObservableObject {
     sessionEnded = false
     evicted = false
     serverBusy = false
+    cooldownRefused = false; cooldownSecs = 0
     showSessionPill = false
     sessionNotice = nil
   }
@@ -507,6 +516,11 @@ final class SpikeLink: ObservableObject {
     if needsPin != wantsPin { needsPin = wantsPin }
     if let u = client as? UberClient {
       if evicted != u.evicted { evicted = u.evicted }
+      // ★ The SERVER's word on the session, not our local clock. The countdown is a
+      // courtesy; these messages are the truth, and they carry the cooldown.
+      if u.sessionEnded, !sessionEnded { sessionEnded = true }
+      if cooldownRefused != u.cooldownRefused { cooldownRefused = u.cooldownRefused }
+      if cooldownSecs != u.cooldownSecs { cooldownSecs = u.cooldownSecs }
       if serverBusy != u.serverBusy { serverBusy = u.serverBusy }
       if takeoverPossible != u.takeoverPossible { takeoverPossible = u.takeoverPossible }
       if sessionLimitMin != u.sessionLimitMin { sessionLimitMin = u.sessionLimitMin }
