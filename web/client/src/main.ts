@@ -1877,6 +1877,14 @@ function showCooldown(secs: number) {
 function showRefusal(title: string, bodyHtml: string, offerOverride = false) {
   const id = 'busyOverlay';
   if (document.getElementById(id)) return;
+  // ★★★ STOP THE AUDIO SOCKET TOO. It reconnects every 3s on its own (audio.ts:430,
+  // guarded only by `closedByUs`), and the spectrum's `refused` flag does not reach
+  // it — so after a session ended, the audio path kept knocking and got back IN the
+  // moment the cooldown lapsed. The listener sat looking at "TIME UP" while the
+  // station started playing again a few minutes later (Stuart, 2026-07-28).
+  // ★ Every refusal here is TERMINAL, so every socket must be told, not just the one
+  // that received the message.
+  try { audio?.close(); } catch {}
   const el = document.createElement('div');
   el.id = id;
   el.style.cssText =
@@ -2502,24 +2510,13 @@ async function loadServerLocation(host: string) {
   }
 }
 
-// ── ADV RDS: RAW vs CONFIRMED ────────────────────────────────────────────────
-// ★★ A CLIENT-SIDE VIEW, NOT A SERVER MODE. The server always publishes both the confirmed and
-// the unconfirmed value for every gated field, so this switch changes nothing for anyone else
-// on a shared receiver — which it would if RAW meant "turn confirmation off at the source".
-// It also means there is no state to reset and no way to leave a receiver degraded for the
-// next listener.
-let rdsRawMode = false;
-
-/** Mark a field's LABEL with its confirmation state. Only visible in RAW (see the CSS).
- *  `confirmed` — the gated value has arrived, i.e. this is what CONFIRMED mode would show.
- *  `present`   — anything at all is being displayed; a field with nothing yet stays neutral
- *                rather than shouting red about data that simply has not been transmitted. */
-function markConf(id: string, confirmed: boolean, present: boolean) {
-  const row = document.getElementById(id)?.closest('.rdsF');
-  if (!row) return;
-  row.classList.toggle('conf', present && confirmed);
-  row.classList.toggle('unconf', present && !confirmed);
-}
+// ★ RAW vs CONFIRMED was REMOVED 2026-07-28 (Stuart: "it doesn't actually do
+// anything extra"). It was a client-side view that showed the unconfirmed value for
+// the five block-B fields (PTY/TP/TA/MS/DI) and coloured their labels by confirmation
+// state — and on any decent signal the two values are identical, so the button looked
+// inert. A control that appears to do nothing is worse than no control.
+// ★ The server still sends both, so this is a UI removal only and can be reinstated
+// if the raw view ever earns its place (it would need to cover more than five fields).
 
 /** Distance to a spot, km — null when either end is unknown. */
 function spotDistanceKm(grid?: string): number | null {
@@ -2646,21 +2643,6 @@ function initDecoders(host: string, auth: AuthState) {
   // Output box chrome.
   initSpotFilters();
   $('decClr').onclick = () => { $('decText').textContent = ''; };
-  // ★ Sticky across retunes and reloads: a DXer who has switched to RAW is investigating a
-  // signal and would not thank us for silently putting the gate back. The button stays lit,
-  // so the state is never hidden.
-  rdsRawMode = prefs()['rdsRaw'] === true;
-  const paintRaw = () => {
-    $('rdsRaw').classList.toggle('on', rdsRawMode);
-    $('decBox').classList.toggle('rdsRawMode', rdsRawMode);
-    if (rdsPanelOpen()) renderRds();
-  };
-  paintRaw();
-  $('rdsRaw').onclick = () => {
-    rdsRawMode = !rdsRawMode;
-    savePref('rdsRaw', rdsRawMode);
-    paintRaw();
-  };
   $('decPrev').onclick = () => toggleDecPrev();
   $('decSave').onclick = () => saveDecImage();
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
@@ -2742,7 +2724,6 @@ function showDecBox(what: string) {
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   $('rdsSize').classList.toggle('show', isRds);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
-  $('rdsRaw').style.display = isRds ? '' : 'none';
   if (isRds) applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
@@ -2885,21 +2866,18 @@ function renderRds() {
   // A field is "confirmed" when the confirmed value has actually arrived (>= 0) — that is the
   // same test the panel already uses for "known", so red simply means "seen but not yet
   // trusted" and green means "this is what CONFIRMED mode would show".
-  const pty = (rdsRawMode ? rdsExt?.ptyRaw : rdsExt?.pty) ?? -1;
+  const pty = rdsExt?.pty ?? -1;
   $('rxPty').textContent = pty >= 0 ? `${PTY_EU[pty] ?? '?'} (${pty})` : dash;
-  markConf('rxPty', (rdsExt?.pty ?? -1) >= 0, pty >= 0);
   // TP/TA/MS are one-bit flags; show the ones that are SET rather than a row of noes.
-  const tpV = (rdsRawMode ? rdsExt?.tpRaw : rdsExt?.tp) ?? -1;
-  const taV = (rdsRawMode ? rdsExt?.taRaw : rdsExt?.ta) ?? -1;
-  const msV = (rdsRawMode ? rdsExt?.msRaw : rdsExt?.ms) ?? -1;
+  const tpV = rdsExt?.tp ?? -1;
+  const taV = rdsExt?.ta ?? -1;
+  const msV = rdsExt?.ms ?? -1;
   const f: string[] = [];
   if (tpV === 1) f.push('TP');
   if (taV === 1) f.push('TA');
   if (msV === 1) f.push('Music'); else if (msV === 0) f.push('Speech');
   $('rxFlags').textContent = f.length ? f.join(' · ') : dash;
   // All three share block B, so they confirm together — one label for the row is honest.
-  markConf('rxFlags', (rdsExt?.tp ?? -1) >= 0 || (rdsExt?.ms ?? -1) >= 0,
-           tpV >= 0 || taV >= 0 || msV >= 0);
   $('rxBer').textContent = rdsBer >= 0 ? `${rdsBer}%` : dash;
   // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
   // signal is weak, when it is the normal injection ratio for a healthy station.
@@ -3019,7 +2997,7 @@ function renderRds() {
   // so a single mis-corrected block used to set one permanently. In RAW you can now watch them
   // flicker: a genuine flag sits steady across hundreds of groups, corruption does not — which
   // is the only way to tell "this station really is compressed" from "one bad block said so".
-  const di = (rdsRawMode ? rdsExt?.diRaw : rdsExt?.di) ?? -1;
+  const di = rdsExt?.di ?? -1;
   if (di < 0) $('rxDi').textContent = dash;
   else {
     const d: string[] = [];
@@ -3029,7 +3007,6 @@ function renderRds() {
     if (di & 8) d.push('Dynamic PTY');
     $('rxDi').textContent = d.join(' · ');
   }
-  markConf('rxDi', (rdsExt?.di ?? -1) >= 0, di >= 0);
 
   // ★ CT — transmitted once a minute, so RECEIVING one at all proves whole groups are
   // arriving intact, and its offset identifies the network's timezone.

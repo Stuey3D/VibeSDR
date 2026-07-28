@@ -5858,7 +5858,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         // moves into their own native engines in a later phase — until then the
         // OWRX waterfall works but audio is off (don't point the Opus engine at it).
         // v4 local hardware (isLocal) uses LocalAudioPlayer below instead.
-        baseUrl={tuneLoaded && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? baseUrl : null}
+        // ★★ A REFUSAL MUST SILENCE THE AUDIO. It is a SEPARATE native stream, so
+        // stopping the client's reconnect does not touch it — on the web client the
+        // audio socket kept knocking and came back under a "TIME UP" screen once the
+        // cooldown lapsed (Stuart, 2026-07-28). null is the existing "off" contract.
+        baseUrl={!refusal && tuneLoaded && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? baseUrl : null}
         password={password}
         frequency={status.frequency}
         mode={status.mode}
@@ -5869,7 +5873,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* v4 local hardware: audio from the on-device shim's /ws/audio (PCM) */}
       {route.params.isLocal && route.params.localPort != null ? (
         <LocalAudioPlayer
-          port={tuneLoaded ? route.params.localPort : null}
+          port={!refusal && tuneLoaded ? route.params.localPort : null}   // see the note on AudioPlayer
           frequency={status.frequency}
           mode={status.mode}
           bandwidthLow={status.bandwidthLow}

@@ -494,10 +494,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
         <View style={s.header}>
           <Text style={s.title}>ADV RDS</Text>
           <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={() => p.onRaw(!raw)}
-            style={[s.hbtn, raw && s.hbtnActive]}>
-            <Text style={[s.hbtnTxt, raw && s.hbtnTxtActive]}>RAW</Text>
-          </TouchableOpacity>
+          {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
+              fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
+              but in the field the raw and confirmed values were always identical, so the
+              data never changed and only three labels ever went green (Stuart). A
+              control that appears to do nothing is worse than no control.
+              ★ The server still sends both sets, so this is a UI removal: reinstating it
+              means making it cover more than five fields, not re-adding a button. */}
           {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
               was broken it also appeared to do nothing at all. */}
           <TouchableOpacity onPress={() => p.onTall(!p.tall)}

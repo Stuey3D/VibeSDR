@@ -705,13 +705,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 /* Each field reserves two lines, so a value wrapping onto a second line does not shove
    everything below it down the panel. */
-/* ★★ RAW MODE COLOURS THE LABEL, NOT THE VALUE. The value is what you are reading; recolouring
-   it would make the data itself look like a status light and would fight the panel's existing
-   green/amber/red verdicts (RDS↔pilot already uses those to mean something quite different).
-   The LABEL is inert otherwise, so it is free to carry the confirmation state.
-   Red = arriving but not yet confirmed, green = confirmed. Only ever applied in RAW. */
-#decBox.rdsRawMode .rdsF.unconf label { color: #ff8a7d; }
-#decBox.rdsRawMode .rdsF.conf   label { color: #7dff9a; }
+/* (The RAW/CONFIRMED label colouring lived here; removed with the RAW view, 2026-07-28.) */
 .rdsF { min-height: 2.1em; align-items: flex-start; line-height: 1.25; }
 .rdsF label { padding-top: 1px; }
 @media (max-width: 560px) {
@@ -1111,13 +1105,6 @@ select.btn { padding: 6px 8px; }
          continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
     <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>
     <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
-    <!-- ★★ RAW vs CONFIRMED, ADV RDS only. Everything the panel shows is normally confirmed by
-         repetition, so a single mis-corrected block cannot poison a field. RAW drops that gate
-         and shows what is arriving live — labels start RED and turn GREEN as each field earns
-         confirmation, so you watch the panel resolve. Purely a CLIENT choice: the server always
-         sends both, so switching cannot affect other listeners on a shared receiver. -->
-    <button class="btn" id="rdsRaw" style="display:none"
-            title="Show unconfirmed data as it arrives. Red = not yet confirmed, green = confirmed.">RAW</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★ Sits with minimise and close, where a window's size controls belong — the user
          already knows to look there, and it needs no explaining (Stuart, 2026-07-26). -->

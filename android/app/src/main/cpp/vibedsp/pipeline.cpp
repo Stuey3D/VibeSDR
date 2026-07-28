@@ -284,6 +284,17 @@ void RxPipeline::rebuildAudio() {
 }
 
 void RxPipeline::feed(const cf32* iq, int n) {
+    // ★★ A GAP IN THE STREAM INVALIDATES EVERY RECURSIVE STATE. Honoured HERE because
+    // this is the thread that owns them (see requestReset). The RDS decoder is the one
+    // that mattered in the field: its timing hypotheses kept their scores across an
+    // idle pause, so a stale one could out-score the correctly-aligned one for good.
+    if (resetReq_.exchange(false, std::memory_order_relaxed)) {
+        rdsDemod_.reset();
+        pll_.configure(19000.0, chFs_);      // re-seed the pilot loop from scratch
+        deemph_.reset();
+        deemphR_.reset();
+        dirty_ = true;                       // and rebuild the audio chain around them
+    }
     if (dirty_) rebuildAudio();
 
     // ── Spectrum ───────────────────────────────────────────────────────────

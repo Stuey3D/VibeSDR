@@ -996,6 +996,22 @@ public:
      *  ★ It does NOT touch the channel filter. Widening that was tried and measured to cost
      *  10 dB of RDS SNR — see the chHalf note in pipeline.cpp before considering it again. */
     void setRdsNoiseCorrection(bool on) { rdsNoiseCorr_ = on; dirty_ = true; }
+
+    /** ★★ DROP STALE STATE AFTER A BREAK IN THE SAMPLE STREAM.
+     *
+     *  A pause (VibeServer stops capture when the last listener leaves) puts a hard
+     *  discontinuity in the middle of every recursive filter, the pilot PLL and — the
+     *  one that bites — the RDS decoder's timing hypotheses and their scores. Nothing
+     *  reset them, so on resume a STALE hypothesis could hold the best-score slot:
+     *  enough to keep the group counter, AF and PTY alive while the correctly-aligned
+     *  one never won, so PI and the station name never appeared. Perfect RDS before
+     *  the idle, half-dead after it (Stuart, 2026-07-28, Heart at 61 dB SNR).
+     *
+     *  ★ A REQUEST, not a reset: feed() runs on the DSP thread and this is called from
+     *  a socket thread, so the flag is honoured where the state is owned. Same
+     *  discipline as `dirty_`.
+     */
+    void requestReset() { resetReq_.store(true, std::memory_order_relaxed); }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     float stereoBlend()  const { return stereoBlend_; }
@@ -1046,6 +1062,7 @@ private:
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
+    std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;

@@ -1261,20 +1261,32 @@ final class UberClient: ObservableObject {
     if type == "session_expired" {
       sessionEnded = true
       cooldownSecs = (j["cooldown"] as? NSNumber)?.intValue ?? 0
-      goingIdle = true
+      // ★ goIdle(), not just the latch: the latch stops REOPENING, but the audio
+      // socket already open keeps playing. The web client had exactly this —
+      // audio came back under a "TIME UP" screen once the cooldown lapsed. A
+      // terminal refusal must reach EVERY socket, not only the one that heard it.
+      goIdle()
       status = "session ended"
       return
     }
     if type == "cooldown" {
       cooldownRefused = true
       cooldownSecs = (j["secs"] as? NSNumber)?.intValue ?? 0
-      goingIdle = true
+      // ★ goIdle(), not just the latch: the latch stops REOPENING, but the audio
+      // socket already open keeps playing. The web client had exactly this —
+      // audio came back under a "TIME UP" screen once the cooldown lapsed. A
+      // terminal refusal must reach EVERY socket, not only the one that heard it.
+      goIdle()
       status = "cooldown"
       return
     }
     if type == "evicted" {
       evicted = true
-      goingIdle = true          // stop the reconnect path dead
+      // ★ goIdle(), not just the latch: the latch stops REOPENING, but the audio
+      // socket already open keeps playing. The web client had exactly this —
+      // audio came back under a "TIME UP" screen once the cooldown lapsed. A
+      // terminal refusal must reach EVERY socket, not only the one that heard it.
+      goIdle()
       status = "taken over by the owner"
       return
     }

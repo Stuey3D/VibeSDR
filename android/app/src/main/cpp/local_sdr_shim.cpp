@@ -3649,7 +3649,14 @@ struct LocalSdrShim::Impl {
         else if (useSdrplay()) { sdrp->setPaused(false); }
         else if (useAirspyHf()) { ahf->setPaused(false); }
         else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
-        LOGI("listener connected — dongle capture resumed");
+        // ★★ AND RESET THE DSP. Restarting the capture alone leaves every recursive
+        // state holding values from before the pause — filters, the pilot PLL, and the
+        // RDS decoder's timing hypotheses, which is what actually broke: after an idle
+        // period RDS came back HALF working (groups, AF and PTY fine; PI, station name
+        // and RadioText never appearing) at 61 dB SNR, and a retune could not clear it
+        // because a retune rebuilds the channel, not the decoder (Stuart, 2026-07-28).
+        rx.requestReset();
+        LOGI("listener connected — dongle capture resumed, DSP state reset");
     }
 
     /** Advanced RDS: the fields the normal path discards, plus the constellation.

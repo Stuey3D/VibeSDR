@@ -60,6 +60,22 @@ void StereoPLL::advance(float mpx) {
         oscC_ *= g; oscS_ *= g;
     }
 
+    // ★★★ A NaN HERE IS FOREVER. Every state in this loop is recursive, so one
+    // non-finite sample — from anywhere upstream — multiplies through every
+    // subsequent one and never leaves. The audible result is silence plus frozen
+    // RDS while the spectrum (which does not pass through here) carries on
+    // perfectly, and only a restart clears it. There are no other isnan guards in
+    // the DSP, so this is the one place that can catch it cheaply: the check costs
+    // a compare per pilot sample and turns a permanent failure into a glitch.
+    //
+    // ★ Re-seed rather than zero: a zeroed oscillator would sit dead, whereas this
+    // re-acquires exactly as it does at start-up.
+    if (!std::isfinite(oscC_) || !std::isfinite(oscS_) || !std::isfinite(lockAmp_)) {
+        oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0;
+        lockAmp_ = 0.0f; lockState_ = false; trackState_ = false;
+        return;
+    }
+
     // Lock metric: slowly-smoothed in-phase pilot energy (mpx correlated with
     // cos), then a hysteretic state so static can't toggle stereo.
     lockAmp_ += lockSmooth_ * (mpx * c * 2.0f - lockAmp_);
