@@ -276,6 +276,7 @@ final class Server: ObservableObject {
 
     init() {
         refreshDevices()
+        startPlugWatch()      // notice a radio attached after launch — see startPlugWatch()
         // ★ Resolve the .local hostname ONCE, OFF THE MAIN THREAD. BOTH Host.current().name AND
         // ProcessInfo.hostName can do a BLOCKING reverse-DNS lookup that stalls for up to ~30s on a
         // slow/flaky network — and doing it synchronously on the menu path HUNG the whole app (the
@@ -323,6 +324,36 @@ final class Server: ObservableObject {
     /// ★ Deliberately NOT `reconnectRadio()`, which stops and restarts. If a radio is already
     /// serving happily, pressing Refresh must not drop the listener — the button means "look
     /// again", not "start over".
+    /// ★★ WATCH FOR A RADIO BEING PLUGGED IN, so the app can genuinely "live in the
+    /// menu bar waiting for a radio" — plug one in, click once, you are serving.
+    /// Until now a radio attached after launch stayed INVISIBLE until you pressed
+    /// Refresh, which is a step nobody should have to know about.
+    ///
+    /// ★ IT DOES NOT AUTO-START. `rescan()` starts serving when it finds a device, and
+    /// that is right for an explicit "Refresh" (the user is saying "try again") but
+    /// wrong here: plugging a dongle in must never put a receiver ON AIR by itself.
+    /// This only makes the radio APPEAR; going live stays a deliberate click.
+    ///
+    /// ★ It polls ONLY while idle with nothing attached — precisely the window where
+    /// you are waiting for a plug-in — and stops the moment a radio shows up or the
+    /// server starts. That keeps the ~0% idle CPU that makes this app forgettable in
+    /// the best way, which is the property worth protecting.
+    private var plugWatch: Timer?
+    func startPlugWatch() {
+        plugWatch?.invalidate()
+        plugWatch = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            Task { @MainActor in
+                guard !self.running, self.devices.isEmpty else { return }   // idle and empty only
+                let before = self.deviceCount
+                self.refreshDevices()
+                if self.deviceCount != before, self.deviceCount > 0 {
+                    NSSound(named: "Tink")?.play()   // a radio appeared; the click is yours
+                }
+            }
+        }
+    }
+
     func rescan() {
         // ★ An explicit Refresh is the user saying "I have fixed it" — the one moment it is
         // right to re-probe an API we had written off.
