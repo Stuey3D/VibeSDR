@@ -229,12 +229,31 @@ final class FmDxClient: SDRClient {
 
     if let pty = j["pty"] { i.pty = Self.ptyName(pty) }
 
+    var itu = ""
     if let tx = j["txInfo"] as? [String: Any] {
       i.tx = (tx["tx"] as? String ?? "").trimmingCharacters(in: .whitespaces)
       i.city = (tx["city"] as? String ?? "").trimmingCharacters(in: .whitespaces)
       i.dist = (tx["dist"] as? NSNumber)?.doubleValue ?? Double((tx["dist"] as? String) ?? "") ?? 0
+      itu = (tx["itu"] as? String ?? "").trimmingCharacters(in: .whitespaces)
     }
-    if let cc = j["country_iso"] as? String { i.flag = Self.flag(cc) }
+    // ★ THE TRANSMITTER'S country beats the RDS one. `country_iso` is decoded off
+    // air and reads "UN" until the ECC arrives — often never on a weak signal —
+    // so taking it at face value flew the UN flag over a Newcastle transmitter we
+    // had already identified and printed the town for (Stuart, on the wrist).
+    // The txInfo ITU symbol comes from the transmitter database: if the server
+    // knows which mast this is, it knows the country. Mirrors countryOf() in
+    // TunerScreen.tsx — keep the two in step.
+    i.flag = Self.flag(Self.ituToIso(itu))
+    if i.flag.isEmpty, let cc = j["country_iso"] as? String, Self.validIso(cc) {
+      i.flag = Self.flag(cc)
+    }
+    // ★★ A FLAG IS A CLAIM ABOUT A STATION, so it needs a station. Tuned to static
+    // the server keeps reporting the last txInfo it matched, and the flag sat there
+    // over open noise (Stuart, on the wrist). No PI and no RDS means nothing is
+    // identified, whatever the stale fields say — so fly nothing. ★ Better no flag
+    // than the wrong one: that is also why an unknown ITU falls through to empty
+    // rather than guessing from "UN".
+    if i.pi.isEmpty && !i.rds { i.flag = "" }
 
     Task { @MainActor in self.adopt(i) }
   }
@@ -386,6 +405,31 @@ func tune(delta: Int, step: Double) {
     if let n = v as? NSNumber { return n.intValue != 0 }
     if let s = v as? String { return s == "1" || s.lowercased() == "true" }
     return false
+  }
+
+  /// FMLIST/ITU broadcasting symbol → ISO alpha-2, from the phone's rdsCountry.ts.
+  /// ★ Keep in step with that table; a country here and not there (or vice versa) shows as a
+  /// missing flag on one device only, which reads as a rendering bug rather than a data gap.
+  nonisolated static let ituToIsoTable: [String: String] = [
+    "G": "GB", "F": "FR", "D": "DE", "I": "IT", "E": "ES", "HOL": "NL",
+    "BEL": "BE", "LUX": "LU", "AUT": "AT", "SUI": "CH", "POR": "PT", "IRL": "IE",
+    "NOR": "NO", "S": "SE", "FIN": "FI", "DNK": "DK", "POL": "PL", "CZE": "CZ",
+    "SVK": "SK", "HNG": "HU", "ROU": "RO", "BUL": "BG", "GRC": "GR", "HRV": "HR",
+    "SVN": "SI", "SRB": "RS", "UKR": "UA", "RUS": "RU", "EST": "EE", "LVA": "LV",
+    "LTU": "LT", "ISL": "IS", "TUR": "TR", "ALB": "AL", "MKD": "MK", "BIH": "BA",
+    "MNE": "ME", "AND": "AD", "LIE": "LI", "MCO": "MC", "SMR": "SM", "MLT": "MT",
+    "CYP": "CY"
+  ]
+  nonisolated static func ituToIso(_ itu: String) -> String {
+    ituToIsoTable[itu.trimmingCharacters(in: .whitespaces).uppercased()] ?? ""
+  }
+
+  /// ★ "UN"/"XX" are NOT countries — they are the decoder saying it does not know yet.
+  /// Same rule as validIso() on the phone.
+  nonisolated static func validIso(_ iso: String) -> Bool {
+    let c = iso.trimmingCharacters(in: .whitespaces).uppercased()
+    return c.count == 2 && c != "UN" && c != "XX"
+      && c.unicodeScalars.allSatisfy { $0.value >= 65 && $0.value <= 90 }
   }
 
   /// ISO-2 country code → flag emoji (regional-indicator letters), like the other list screens.

@@ -632,6 +632,7 @@ struct ControlMenu: View {
 /// sample rates come from the server's `hwinfo`; the sample-rate picker hides when the host pinned the rate.
 struct HardwareSheet: View {
   @ObservedObject var radio: UberClient
+  @State private var adminPass = ""
   @State private var gainArmed = false
   @State private var gainCrown = 0.0
   @State private var lastGainDetent = 0
@@ -686,9 +687,46 @@ struct HardwareSheet: View {
 
   private let cellH: CGFloat = 56
 
+  /// The owner has locked the radio and we are not through it. Everything the
+  /// server's adminGate refuses is drawn dim and inert while this holds.
+  private var ownerLocked: Bool { radio.adminSet && !radio.adminOk }
+
   var body: some View {
     ScrollView {
       VStack(spacing: 7) {
+        // ★★ THE ADMIN LOCK, WHERE THE LOCKED CONTROLS ARE. The server enforces it —
+        // bias-T, PPM, direct sampling and calibration all go through adminGate — but
+        // a client that is not told draws every control as normal and the user finds
+        // out only when one silently does nothing. So: say it, and put the way in
+        // right here rather than back in a menu, because this is where the
+        // frustration happens.
+        //
+        // ★ Only shown when the owner HAS set a password (`adminSet`) and we are not
+        // already through it: an unlock box on a server with nothing to unlock is a
+        // puzzle, which is exactly why the shim advertises the flag.
+        if radio.adminSet && !radio.adminOk {
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+              Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold))
+              Text("Owner-locked").font(.system(size: 12, weight: .semibold))
+            }.foregroundColor(.orange)
+            Text("These controls belong to the owner. Enter the admin password to unlock them.")
+              .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+            SecureField("Admin password", text: $adminPass)
+              .font(.system(size: 14, design: .rounded))
+            Button {
+              let p = adminPass.trimmingCharacters(in: .whitespaces)
+              adminPass = ""
+              radio.adminUnlock(p)
+            } label: {
+              Text("Unlock").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).tint(.orange)
+            .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
+          }
+          .padding(10)
+          .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
+        }
         // Row 1 — GAIN (crown-armed) · AUTO
         HStack(spacing: 7) {
           Button {
@@ -704,8 +742,13 @@ struct HardwareSheet: View {
             .buttonStyle(.plain)
         }
         // Row 2 — BIAS-T · DIGITAL AGC
+        // ★ BIAS-T is owner-gated (adminGate on the server). Drawn DIM and inert while
+        // locked, so it reads as "not yours" rather than as a control that does
+        // nothing — the difference between a policy and a fault.
         HStack(spacing: 7) {
-          Button { radio.setBiasT(!radio.biasT) } label: { cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT) }.buttonStyle(.plain)
+          Button { radio.setBiasT(!radio.biasT) } label: {
+            cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT && !ownerLocked, dim: ownerLocked)
+          }.buttonStyle(.plain).disabled(ownerLocked)
           Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
         }
         // Row 3 — SPAN (picker) · PPM (inline ±)
@@ -714,7 +757,7 @@ struct HardwareSheet: View {
             cell(title: "SPAN", value: radio.sampleRate > 0 ? String(format: "%.1f MHz", Double(radio.sampleRate) / 1_000_000) : "—",
                  lit: false, dim: radio.lockedRate != 0)
           }.buttonStyle(.plain).disabled(radio.lockedRate != 0)
-          ppmCell
+          ppmCell.opacity(ownerLocked ? 0.35 : 1).disabled(ownerLocked)
         }
         // FM de-emphasis — full width
         VStack(spacing: 3) {

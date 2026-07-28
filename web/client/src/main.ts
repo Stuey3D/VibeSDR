@@ -2435,12 +2435,41 @@ function paintTimeLeft() {
   if (!sessionDeadline) { el.hidden = true; return; }
   const left = Math.max(0, Math.round((sessionDeadline - Date.now()) / 1000));
   const mm = Math.floor(left / 60), ss = left % 60;
+  // ★ RAN OUT. Unlike Jr there is no server list to return to, so the page simply
+  // says what happened and stays there — a browser tab that goes quiet with no
+  // explanation reads as the receiver having broken. Shown once; the ticker stops
+  // so nothing overwrites it, and it remains until the tab is closed.
+  if (left === 0) {
+    el.textContent = 'Your turn ends in 0:00';
+    el.className = 'crit';
+    el.hidden = false;
+    if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
+    showSessionOver();
+    return;
+  }
   // ★ Say what the clock IS. A bare "1:47" over a waterfall is a mystery; people assume it is
   // a recording timer or the station's clock.
   el.textContent = `Your turn ends in ${mm}:${String(ss).padStart(2, '0')}`;
   el.className = left <= 30 ? 'crit' : left <= 120 ? 'warn' : '';
   el.hidden = false;
   $('rxBadge').hidden = false;   // the badge may be empty if the owner set no name
+}
+
+/** The end-of-session card. Deliberately NOT dismissible: the session really is
+ *  over, so offering a way to carry on would be a lie. */
+function showSessionOver() {
+  if (document.getElementById('sessionOver')) return;   // once
+  const d = document.createElement('div');
+  d.id = 'sessionOver';
+  d.setAttribute('role', 'alertdialog');
+  d.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;'
+    + 'justify-content:center;background:rgba(0,0,0,.86);backdrop-filter:blur(3px);'
+    + 'color:#fff;font:500 16px/1.5 system-ui,sans-serif;text-align:center;padding:24px';
+  d.innerHTML = '<div><div style="font:700 40px/1 ui-monospace,monospace;color:#ff6b6b;'
+    + 'margin-bottom:14px">0:00</div><div style="font-size:18px;font-weight:600;'
+    + 'margin-bottom:6px">Session time limit reached</div>'
+    + '<div style="opacity:.75;font-size:14px">Thank you for listening.</div></div>';
+  document.body.appendChild(d);
 }
 
 async function loadServerLocation(host: string) {

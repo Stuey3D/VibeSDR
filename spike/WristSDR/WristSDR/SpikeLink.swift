@@ -140,6 +140,76 @@ final class SpikeLink: ObservableObject {
   /// Non-fatal "heavy server for the phone link" advisory — set only when on the iPhone relay and the
   /// inbound load sits above what that relay reliably carries. nil = nothing to say.
   @Published var bandwidthWarning: String? = nil
+
+  // ── Session limit (owner policy) ────────────────────────────────────────────
+  /// Seconds left on this listener's slot, mirrored from the client. -1 = no limit
+  /// (or we are exempt: loopback / admin).
+  @Published var sessionSecsLeft = -1
+  /// The owner's limit in minutes, for the one-off "you have XX minutes" notice.
+  @Published var sessionLimitMin = 0
+  /// True while the countdown pill should be ON SCREEN. ★ Not a permanent readout:
+  /// a clock ticking down all session long is nagging, and one that only appears at
+  /// the very end is a shock. So it SHOWS at the marks that matter and stays put
+  /// once the end is genuinely near.
+  @Published var showSessionPill = false
+  private var sessionShownMarks = Set<Int>()
+  private var sessionPillUntil: Double = 0
+  /// The owner's limit, announced once per connection.
+  @Published var sessionNotice: String? = nil
+  private var sessionNoticeDone = false
+  /// ★ The slot has RUN OUT. The server ends the session either way; this exists so
+  /// the ending is EXPLAINED. Being dropped back to a list with no word for it is
+  /// indistinguishable from a crash, and the listener blames us rather than reading
+  /// it as the owner's policy working.
+  @Published var sessionEnded = false
+
+  /// Leave the current server and go back to the picker (the picker is shown
+  /// whenever `serverName` is empty — see WristSDRApp).
+  func leaveServer() {
+    client?.goIdle()
+    client = nil
+    serverName = ""
+    sessionEnded = false
+    showSessionPill = false
+    sessionNotice = nil
+  }
+
+  /// Decide whether the pill is up, from the seconds remaining.
+  ///
+  /// Schedule (Stuart's): announce on connect and hold the pill ~10 s, then show it
+  /// again at 20, 10 and 5 minutes remaining, then keep it up for the last 2 minutes
+  /// until the server ends the session.
+  private func updateSessionPill(now: Double) {
+    let left = sessionSecsLeft
+    guard left >= 0 else {            // no limit for us — nothing to say, ever
+      showSessionPill = false; sessionNotice = nil; return
+    }
+    if !sessionNoticeDone {
+      sessionNoticeDone = true
+      if sessionLimitMin > 0 {
+        sessionNotice = "The owner limits each listener to \(sessionLimitMin) minutes."
+      }
+      sessionPillUntil = now + 10     // hold it up while the notice is read
+    }
+    // ★ Marks are consumed ONCE. Without this the pill re-arms every tick for the
+    // whole minute it is inside a mark, which is the nagging this schedule avoids.
+    for mark in [20, 10, 5] where left <= mark * 60 && left > mark * 60 - 15 {
+      if sessionShownMarks.insert(mark).inserted { sessionPillUntil = now + 10 }
+    }
+    showSessionPill = left <= 120 || now < sessionPillUntil
+    // Ran out. Hold 00:00 on screen with the reason, then hand back to the picker —
+    // WristSDRApp does the waiting so the message survives the disconnect.
+    if left == 0 && !sessionEnded {
+      sessionEnded = true
+      showSessionPill = true
+    }
+  }
+
+  /// "12:34" — the countdown as shown on the pill.
+  var sessionLeftText: String {
+    let l = max(0, sessionSecsLeft)
+    return String(format: "%d:%02d", l / 60, l % 60)
+  }
   /// The glyph for whatever `bandwidthWarning` currently says. A server-side kick is not a
   /// connection problem, so it must not wear the Wi-Fi icon — that alone would send someone off to
   /// change their connection.
@@ -305,11 +375,31 @@ final class SpikeLink: ObservableObject {
   @Published var serverName = ""
   private var booted = false
 
+  /// ★ The server is asking for a PIN we do not have. Mirrored from the client each
+  /// tick so the UI can prompt no matter HOW the user got here — discovered,
+  /// favourite, or a typed IP. The last two are the only routes that work over the
+  /// Bluetooth relay, and neither could ever prompt before.
+  @Published var needsPin = false
+  /// What we last connected to, so a PIN entered at the prompt can retry it.
+  private(set) var lastConnect: (url: String, host: String, type: ServerType, name: String)?
+
+  /// Retry the current server with a PIN the user has just typed.
+  func retryWithPin(_ pin: String) {
+    guard let c = lastConnect else { return }
+    needsPin = false
+    start(url: c.url, host: c.host, type: c.type, name: c.name, pin: pin)
+  }
+
   /// Start (or switch to) a chosen server from the picker. Builds the backend client for the
   /// server's type (UberSDR or KiwiSDR), tearing down any previous one. One-time boot (battery +
   /// path monitor) runs on the first pick.
   func start(url: String, host: String, type: ServerType, name: String, pin: String = "") {
     serverName = name
+    lastConnect = (url, host, type, name)
+    needsPin = false
+    sessionSecsLeft = -1; sessionLimitMin = 0
+    sessionShownMarks.removeAll(); sessionNoticeDone = false
+    sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false
     client?.goIdle()
     everGotRow = false
     lastRowsPushed = 0
@@ -375,6 +465,14 @@ final class SpikeLink: ObservableObject {
     if backendStatus != client.status { backendStatus = client.status }
     if dbgFps != client.framesPerSec { dbgFps = client.framesPerSec }
     if dbgKbps != client.kbps { dbgKbps = client.kbps }
+    // Only a VibeServer (UberClient in vibe mode) can ask for a PIN.
+    let wantsPin = (client as? UberClient)?.needsPin ?? false
+    if needsPin != wantsPin { needsPin = wantsPin }
+    if let u = client as? UberClient {
+      if sessionSecsLeft != u.sessionSecsLeft { sessionSecsLeft = u.sessionSecsLeft }
+      if sessionLimitMin != u.sessionLimitMin { sessionLimitMin = u.sessionLimitMin }
+      updateSessionPill(now: now)
+    }
     // ★ NEVER let a 0 blank the count. While we are CONNECTED, 0 is not a truthful listener
     // count — we are ourselves a client — so it only ever means "the server has not told us
     // yet". OWRX sends `clients` on CHANGE, so after a reconnect or a profile switch there may

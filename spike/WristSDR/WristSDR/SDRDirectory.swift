@@ -86,25 +86,40 @@ func hostPort(_ urlStr: String) -> String {
 /// DRIFTS (48000 taken → 48001) and re-typing a changing port on a wrist is miserable. This scans the
 /// FULL DEFAULT RANGE (48000..48049). NOT a full 1-65535 scan: that is minutes + battery over the BT
 /// relay and an App-Store grey area, and a DELIBERATELY custom port is one the operator knows and can
-/// append (:port). Concurrent, short timeout; returns the first "http://host:port" that answers
-/// /vibeserver/auth, else nil.
+/// append (:port). Returns the first "http://host:port" that answers /vibeserver/auth, else nil.
+///
+/// ★★ BATCHED, NOT ALL-AT-ONCE, and the reason is the LINK. This fired all fifty
+/// probes simultaneously with a 2 s timeout, which is fine on WiFi and hopeless
+/// over the Bluetooth relay: high latency, low throughput, fifty sockets at once,
+/// and they all time out together. The scan "stopped working" without a line of
+/// it changing — it had simply moved onto a slower link (Stuart, 2026-07-28).
+///
+/// ★ A scan that FINISHES beats one that is fast and finds nothing. Worst case
+/// here is ~7 batches × 5 s, and it still returns the moment anything answers.
 func probeVibeServerPort(_ host: String) async -> String? {
-  await withTaskGroup(of: String?.self) { group in
-    for port in 48000...48049 {
-      group.addTask {
-        let base = "http://\(host):\(port)"
-        guard let u = URL(string: base + "/vibeserver/auth") else { return nil }
-        var req = URLRequest(url: u); req.timeoutInterval = 2
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              j["required"] != nil else { return nil }   // /vibeserver/auth → {"required": …} identifies it
-        return base
+  let ports = Array(48000...48049)
+  let batch = 8
+  for start in stride(from: 0, to: ports.count, by: batch) {
+    let slice = ports[start..<min(start + batch, ports.count)]
+    let hit = await withTaskGroup(of: String?.self) { group -> String? in
+      for port in slice {
+        group.addTask {
+          let base = "http://\(host):\(port)"
+          guard let u = URL(string: base + "/vibeserver/auth") else { return nil }
+          var req = URLRequest(url: u); req.timeoutInterval = 5
+          guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                (resp as? HTTPURLResponse)?.statusCode == 200,
+                let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                j["required"] != nil else { return nil }   // /vibeserver/auth → {"required": …} identifies it
+          return base
+        }
       }
+      for await r in group where r != nil { group.cancelAll(); return r }
+      return nil
     }
-    for await r in group where r != nil { group.cancelAll(); return r }
-    return nil
+    if let hit { return hit }
   }
+  return nil
 }
 
 func detectServerType(_ url: String) async -> ServerType? {

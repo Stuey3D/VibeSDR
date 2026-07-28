@@ -33,6 +33,18 @@ final class UberClient: ObservableObject {
   var secure = true
   /// The PIN, if the VibeServer requires one (resolved to `authSuffix` during connect).
   var vibePin = ""
+  /// ★★ SET WHEN THE SERVER WANTS A PIN AND WE HAVEN'T GOT A WORKING ONE.
+  ///
+  /// A missing PIN used to be indistinguishable from a bad link: the server issues
+  /// a nonce regardless, so we HMAC'd it with an EMPTY key, opened the sockets with
+  /// a token that could only be rejected, and then RETRIED — leaving the user on
+  /// "authenticating…" then "reconnecting" with nothing ever asking for a PIN.
+  /// Stuart could only get onto the Moto by turning its PIN off (2026-07-28).
+  ///
+  /// The prompt existed, but only on the mDNS path (`ad.pinRequired`), so a
+  /// favourite or a typed IP — the only routes that work over Bluetooth — had no
+  /// way in at all. This flag is what the UI watches, whichever route was used.
+  @Published var needsPin = false
   private var authSuffix = ""
   private var scheme: String { secure ? "wss" : "ws" }
   private var vibeAdopted = false      // adopted the server's tune on the first config yet?
@@ -96,6 +108,16 @@ final class UberClient: ObservableObject {
   @Published var offeredRates: [Int] = []
   @Published var offeredGains: [Int] = []      // tuner gain steps (tenths of dB) from hwinfo
   @Published var lockedRate = 0                // >0 = the host pinned the capture rate; hide the picker
+  // ── Owner policy: session limit + admin lock ────────────────────────────────
+  /// ★ The server ENFORCES both of these; the client's job is to SAY SO. A limit
+  /// nobody is told about reads as a crash, and controls that are locked but drawn
+  /// normally read as a broken radio ("all controls for the SDR still present").
+  /// Both arrive on the config message — the shim advertises them precisely so a
+  /// client need not guess.
+  @Published var sessionLimitMin = 0           // owner's per-listener limit, minutes (0 = none)
+  @Published var sessionSecsLeft = -1          // -1 = no limit, or we are exempt (loopback/admin)
+  @Published var adminSet = false              // the owner has set an admin password
+  @Published var adminOk = false               // …and we are through it
   @Published var maxFftRate = 0
 
   // ── VibeServer hardware controls (the client drives the radio over the spectrum WS) ──
@@ -121,6 +143,33 @@ final class UberClient: ObservableObject {
   func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]); saveVibeHw() }
   func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]); saveVibeHw() }
   func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]); saveVibeHw() }
+
+  /// Unlock the owner-protected controls with the admin password.
+  ///
+  /// ★ SAME HANDSHAKE AS THE PIN — GET /vibeserver/auth for a nonce, HMAC-SHA256 it
+  /// with the password, send `admin_unlock`. The server answers with an `admin`
+  /// message and re-advertises `adminOk` on the next config, so we do not guess at
+  /// success: `adminOk` is whatever the SERVER says it is.
+  func adminUnlock(_ password: String) {
+    guard isVibe, !password.isEmpty else { return }
+    Task { [weak self] in
+      guard let self else { return }
+      let httpScheme = secure ? "https" : "http"
+      guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth"),
+            let (data, _) = try? await httpSession.data(from: url),
+            let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let nonce = j["nonce"] as? String, !nonce.isEmpty else {
+        await MainActor.run { self.status = "admin: can't reach server" }
+        return
+      }
+      let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8),
+                                                using: SymmetricKey(data: Data(password.utf8)))
+      let token = mac.map { String(format: "%02x", $0) }.joined()
+      await MainActor.run {
+        self.specSock.send(json: ["type": "admin_unlock", "nonce": nonce, "token": token])
+      }
+    }
+  }
   func setAgc(_ on: Bool) { guard isVibe else { return }; agc = on; specSock.send(json: ["type": "agc", "on": on]); saveVibeHw() }
   func setPpm(_ v: Int) { guard isVibe else { return }; ppm = v; specSock.send(json: ["type": "ppm", "value": v]); saveVibeHw() }
   func setCaptureRate(_ hz: Int) { guard isVibe else { return }; sampleRate = hz; specSock.send(json: ["type": "sampleRate", "value": hz]); saveVibeHw() }
@@ -428,7 +477,10 @@ final class UberClient: ObservableObject {
       // backoff before giving up; the bounded session timeout (makeSession) keeps each try honest.
       var ok = await resolveVibeAuth()
       var tries = 0
-      while !ok, tries < 2, !goingIdle {
+      // ★ needsPin is NOT a transient failure — retrying cannot fix a PIN we do not
+      // have, and each attempt walks the server closer to locking us out. Stop and
+      // let the UI ask.
+      while !ok, !needsPin, tries < 2, !goingIdle {
         tries += 1
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         guard !goingIdle else { return }
@@ -961,7 +1013,27 @@ final class UberClient: ObservableObject {
       rdsText = (j["radiotext"] as? String ?? "").trimmingCharacters(in: .whitespaces)
       return
     }
+    // ★ Session warnings arrive as their own message (T-120 / T-30). Treat them as a
+    // clock correction, not as the only source of truth: driving the countdown purely
+    // off these showed a 30-minute listener NOTHING for 28 minutes, which reads as the
+    // limit not having taken. `sessionSecsLeft` on config is the deadline; this is the
+    // nudge.
+    // The server's verdict on an unlock attempt. `refused` means the password was
+    // wrong (or we are locked out); either way adminOk is the server's word.
+    if type == "admin" {
+      adminOk = (j["ok"] as? Bool) ?? false
+      if (j["refused"] as? Bool) == true { status = "admin password refused" }
+      return
+    }
+    if type == "session_warning" {
+      if let left = (j["secsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = left }
+      return
+    }
     guard type == "config" else { return }
+    if let n = (j["sessionLimitMin"] as? NSNumber)?.intValue { sessionLimitMin = n }
+    if let n = (j["sessionSecsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = n }
+    if let b = j["adminSet"] as? Bool { adminSet = b }
+    if let b = j["adminOk"] as? Bool { adminOk = b }
     if let bc = j["binCount"] as? Int { binCount = bc }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
     if let cf = j["centerFreq"] as? Double { centerHz = cf }
@@ -1163,13 +1235,29 @@ final class UberClient: ObservableObject {
       if !((j["required"] as? Bool) ?? false) { authSuffix = ""; return true }   // no PIN
       guard let nonce = j["nonce"] as? String, !nonce.isEmpty else {
         let locked = (j["lockedFor"] as? NSNumber)?.intValue ?? 0
-        status = locked > 0 ? "locked \(locked)s — too many PIN tries" : "PIN needed"
+        // ★ Do NOT re-prompt while locked out: more attempts extend the lockout,
+        // so asking for a PIN we cannot try yet actively harms the user.
+        if locked > 0 {
+          status = "locked \(locked)s — too many PIN tries"
+        } else {
+          needsPin = true
+          status = "PIN needed"
+        }
+        return false
+      }
+      // ★ No PIN and one is required ⇒ ASK, do not sign with an empty key. Signing
+      // anyway produces a token the server must refuse, which the retry loop then
+      // reads as a flaky connection and hides behind "reconnecting".
+      if vibePin.isEmpty {
+        needsPin = true
+        status = "PIN required"
         return false
       }
       // HMAC key = the PIN bytes, message = the nonce's ASCII-hex STRING (not decoded), lowercase hex out.
       let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: Data(vibePin.utf8)))
       let token = mac.map { String(format: "%02x", $0) }.joined()
       authSuffix = "&vs_nonce=\(nonce)&vs_auth=\(token)"
+      needsPin = false
       return true
     } catch {
       status = "can't reach server"

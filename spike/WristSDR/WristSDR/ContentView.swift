@@ -187,6 +187,9 @@ struct ContentView: View {
   @AppStorage("seenSdrTutorial") private var seenSdrTut = false
   @State private var showSdrTut = false
   @State private var showChat = false
+  /// PIN prompt for a VibeServer that wants one. Driven by `link.needsPin`, so it
+  /// appears however the user connected — discovered, favourite or typed IP.
+  @State private var pinEntry = ""
   @State private var showHardware = false
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
   /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
@@ -312,23 +315,10 @@ struct ContentView: View {
         }
       } else { placeholder }
 
-      // ── DEBUG counter (Stuart's request) — live incoming rate + fps over the waterfall.
-      // Top-leading (clear of the settled clock pill and the band row), tiny, hit-testing off so it
-      // never eats a waterfall tap. Only while a feed is actually flowing.
-      if link.everGotRow {
-        // CENTRED and dropped below the top chrome — the top corners are the watch's rounded bezel
-        // and ate the left-hand digits when it sat top-leading.
-        VStack {
-          Text(String(format: "%.0f k/s · %.0f fps", link.dbgKbps, link.dbgFps))
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundColor(.green.opacity(0.85))
-            .padding(.horizontal, 7).padding(.vertical, 2)
-            .background(Color.black.opacity(0.5), in: Capsule())
-            .padding(.top, 34)
-          Spacer()
-        }
-        .allowsHitTesting(false)
-      }
+      // ★ The live "k/s · fps" counter that used to sit here is GONE — it was a
+      // development read-out for the transport work (see SpikeLink.dbgKbps/dbgFps,
+      // still published for anyone debugging), and a green telemetry capsule over
+      // the waterfall is not something to ship to testers. Removed for release.
 
       // STATUS CLUSTER — bottom-right, a vertical pill (method above quality) on its own scrim.
       // Method = what the watch is connected THROUGH (iPhone relay / WiFi / cellular / none);
@@ -462,6 +452,39 @@ struct ContentView: View {
             .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
             .padding(.bottom, 2)
             .transition(.opacity)
+        }
+        // ★ SESSION COUNTDOWN. The owner's limit is enforced by the SERVER; being cut
+        // off without warning reads as our bug, so this says it out loud. Shown on a
+        // schedule rather than permanently (see SpikeLink.updateSessionPill): a clock
+        // ticking all session is nagging, one that appears only at the end is a shock.
+        // Turns red for the last two minutes, when it also stops going away.
+        if link.showSessionPill {
+          HStack(spacing: 4) {
+            Image(systemName: "hourglass").font(.system(size: 10, weight: .bold))
+            Text(link.sessionLeftText).font(.system(size: 12, weight: .semibold, design: .rounded))
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 9).padding(.vertical, 4)
+          .background((link.sessionSecsLeft <= 120 ? Color.red : Color.black).opacity(0.75), in: Capsule())
+          .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 1))
+          .padding(.bottom, 2)
+          .transition(.opacity)
+        }
+        // The one-off "the owner limits each listener to XX minutes" notice, so the
+        // countdown that follows has a reason rather than appearing from nowhere.
+        if let note = link.sessionNotice {
+          Button { link.sessionNotice = nil } label: {
+            HStack(alignment: .top, spacing: 5) {
+              Image(systemName: "clock.badge.exclamationmark").font(.system(size: 11, weight: .bold))
+              Text(note).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.blue.opacity(0.9), in: RoundedRectangle(cornerRadius: 10))
+          }
+          .buttonStyle(.plain)
+          .padding(.bottom, 2)
+          .transition(.opacity)
         }
         // Heavy-server advisory — non-fatal, dismissible. Only appears on the phone relay with a
         // cranked server (see SpikeLink.bandwidthWarning). Tap to dismiss; re-arms if it clears.
@@ -640,6 +663,31 @@ struct ContentView: View {
     }
     .sheet(isPresented: $showChat) {
       NavigationStack { ChatSheet().environmentObject(link) }
+    }
+    // ★ THE PIN PROMPT, ON EVERY ROUTE. It used to live only on the mDNS row in the
+    // picker, so a favourite or a typed IP — the only ways in over Bluetooth — sat
+    // on "authenticating" forever with nothing to type into. Driven by the CLIENT
+    // saying it needs one, so the route no longer matters.
+    .sheet(isPresented: Binding(get: { link.needsPin }, set: { if !$0 { link.needsPin = false } })) {
+      NavigationStack {
+        List {
+          Section("PIN — \(link.serverName)") {
+            TextField("PIN", text: $pinEntry)
+              .font(.system(size: 18, design: .rounded))
+              .multilineTextAlignment(.center)
+            Button {
+              let p = pinEntry.trimmingCharacters(in: .whitespaces)
+              pinEntry = ""
+              link.retryWithPin(p)
+            } label: {
+              Text("Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+            }
+            .disabled(pinEntry.trimmingCharacters(in: .whitespaces).isEmpty)
+            Text("This server is password protected. The owner sets the PIN.")
+              .font(.system(size: 11)).foregroundColor(.secondary)
+          }
+        }
+      }
     }
     .ignoresSafeArea()
     // Non-focusable in volume mode so SwiftUI RELINQUISHES the crown entirely — otherwise this

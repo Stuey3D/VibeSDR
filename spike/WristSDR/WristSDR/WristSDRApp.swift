@@ -175,6 +175,30 @@ struct WristSDRApp: App {
           }
         }
       }
+      // ★★ TIME LIMIT REACHED — at the ROOT, so it covers the waterfall, DAB, ADS-B and
+      // FM-DX alike. A per-screen overlay would miss whichever one the listener happens
+      // to be on when their slot runs out, which is precisely when they need telling.
+      .overlay {
+        if link.sessionEnded {
+          VStack(spacing: 8) {
+            Text("00:00").font(.system(size: 26, weight: .bold, design: .rounded)).monospacedDigit()
+              .foregroundColor(.red)
+            Text("Time limit reached").font(.system(size: 15, weight: .semibold))
+            Text("VibeSDR Jr will return you to the servers list.")
+              .font(.system(size: 11)).foregroundColor(.white.opacity(0.7))
+              .multilineTextAlignment(.center)
+          }
+          .padding(16)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(.black.opacity(0.88))
+          .transition(.opacity)
+          .task {
+            // Long enough to read and understand, short enough not to strand them.
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            link.leaveServer()
+          }
+        }
+      }
       // First card on APP OPEN — the Return-to-App setting behind wrist-down listening. Then each screen
       // shows its own one-time tutorial on first connect (see ContentView/DabView/AircraftView).
       .onAppear {
