@@ -76,6 +76,25 @@ final class SignalProcessor {
   private var prevCenterHz: Double = 0
 
   /// One raw dBFS frame in, one 0–255 intensity row out.
+  /// ★★★ DROP EVERY DERIVED VALUE. Nothing ever called this because it did not exist: the
+  /// processor is created once per client and its state — the noise-floor and ceiling
+  /// histories, the frozen floor, the smoothed frame — survived every disconnect and
+  /// reconnect. So a run of corrupt frames on a marginal link could latch a range that a
+  /// RECONNECT COULD NOT CLEAR, and only force-quitting the app would (Stuart, 2026-07-28:
+  /// "i did try reconnecting … a full force quit and restart fixed it").
+  ///
+  /// ★★ Same shape as the server-side bug fixed the same morning — resumeCaptureIdle
+  /// restarted the capture and never reset the DSP, so stale RDS hypotheses survived a
+  /// stream discontinuity. A discontinuity in the sample stream is PRECISELY when derived
+  /// state should be dropped. See [[vibeserver_idle_resume_breaks_rds]].
+  func reset() {
+    dbAvg.removeAll(); tmp.removeAll(); outRow.removeAll()
+    minHistory.removeAll(); maxHistory.removeAll()
+    frozenFloorDb = nil
+    prevCenterHz = 0
+    snrDb = 0; level = 0
+  }
+
   func process(_ bins: [Float], centerHz: Double, bwHz: Double) -> [UInt8] {
     let n = bins.count
     guard n > 0 else { return [] }
@@ -136,6 +155,9 @@ final class SignalProcessor {
 
       // Ceiling ALWAYS tracks the strongest bin — a signal appearing as you zoom in
       // must still set the top of the scale.
+      // ★ A non-finite target would poison a history that persists for seconds; and since the
+      //   histories are averaged, one such entry makes every frame in the window wrong.
+      guard targetMin.isFinite, targetMax.isFinite else { return outRow }
       maxHistory.append((targetMax, now))
       while let f = maxHistory.first, now - f.t > maxHistoryMs { maxHistory.removeFirst() }
       let sumMax = maxHistory.reduce(0.0) { $0 + $1.v }

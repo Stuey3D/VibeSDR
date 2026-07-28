@@ -521,7 +521,9 @@ final class UberClient: ObservableObject {
     UserDefaults.standard.set(uuid, forKey: "wristsdr.session.uuid")
     return true
   }
-  private let proc = SignalProcessor()
+  // ★★ decodeQueue ONLY (see the spectrum path) — never main, so no lock is needed.
+  nonisolated(unsafe) private let proc = SignalProcessor()
+  nonisolated(unsafe) private let specDecodeQueue = DispatchQueue(label: "uber.spec")
   private let opus = OpusDecoder()
   private let audio = WatchAudio()
 
@@ -702,6 +704,13 @@ final class UberClient: ObservableObject {
 
   private func connect() async {
     guard !goingIdle else { return }   // discarded mid-connect (server switch) — don't open anything
+
+    // ★★★ A NEW STREAM GETS A CLEAN PROCESSOR. Without this the waterfall's derived range
+    // outlived the connection that produced it, so a run of corrupt frames on a marginal link
+    // left a black waterfall that RECONNECTING COULD NOT FIX — only force-quitting the app.
+    // ★ Stuart saw it on VibeServer and reports the same on UberSDR, which fits: both paths
+    //   share this one processor instance.
+    specDecodeQueue.async { self.proc.reset() }
 
     // VibeServer: resolve the PIN handshake up front (GET /vibeserver/auth → nonce → HMAC), then open the
     // sockets with the auth suffix. No UberSDR /connection preflight — the shim answers that unconditionally
@@ -1168,22 +1177,37 @@ final class UberClient: ObservableObject {
     for i in 0..<half { unwrapped[i] = bins[half + i] }
     for i in 0..<half { unwrapped[half + i] = bins[i] }
 
-    let row = proc.process(unwrapped, centerHz: freq, bwHz: binBandwidth * Double(n))
-    signalLevel = proc.level      // SNR bar — computed for free inside process()
-    // Meter SNR from radiod's per-packet CHANNEL SNR (zoom-independent, the true number, same as the
-    // phone) when we have it; fall back to the spectrum SNR only until the first audio packet lands.
-    signalDb    = chanSnr.isNaN ? proc.snrDb : chanSnr
-    signalDbfs  = chanDbfs
-    let dec = decimate(row, to: WaterfallBuffer.width)
-    // WaterfallBuffer DROPS rows that aren't exactly its width, silently. A blank waterfall
-    // with a healthy frame count is exactly what that looks like.
-    // DELAY THE ROW instead of drawing it now. The audio runs a ~1s cushion for stability,
-    // so a live spectrum sits ~1s AHEAD of the sound — you see a signal, then hear it a beat
-    // later, which with a trace on screen is glaring. Hold each row the same ~1s and the two
-    // line up. Drained on the main actor from the render tick (see drainSpectrum).
-    if dec.count == WaterfallBuffer.width {
-      rowsPushed += 1
-      specQueue.append((ProcessInfo.processInfo.systemUptime, dec))
+    // ★★★ THE DSP RUNS OFF MAIN. It used to run here, on the main actor, every frame — the
+    // histogram, the 5-tap smooth, the normalise/clip/stretch and the decimate. On a watch that
+    // competes with UI rendering and keeps a core awake that could otherwise idle, so it costs
+    // responsiveness AND battery (Stuart, 2026-07-28: "we need to optimise for CPU and Power
+    // consumption"). Main now only hands over a buffer and takes back a finished row.
+    // ★ `proc`, `out256` and the working copy live on specDecodeQueue and are touched nowhere else.
+    let work = unwrapped
+    let centre = freq, span = binBandwidth * Double(n), packetSnr = chanSnr, packetDbfs = chanDbfs
+    specDecodeQueue.async { [weak self] in
+      guard let self else { return }
+      let row = self.proc.process(work, centerHz: centre, bwHz: span)
+      let dec = self.decimate(row, to: WaterfallBuffer.width)
+      let lvl = self.proc.level, snr = self.proc.snrDb
+      Task { @MainActor in
+        self.signalLevel = lvl      // SNR bar — computed for free inside process()
+        // Meter SNR from radiod's per-packet CHANNEL SNR (zoom-independent, the true number, same
+        // as the phone) when we have it; fall back to the spectrum SNR only until the first audio
+        // packet lands.
+        self.signalDb   = packetSnr.isNaN ? snr : packetSnr
+        self.signalDbfs = packetDbfs
+        // WaterfallBuffer DROPS rows that aren't exactly its width, silently. A blank waterfall
+        // with a healthy frame count is exactly what that looks like.
+        // DELAY THE ROW instead of drawing it now. The audio runs a ~1s cushion for stability,
+        // so a live spectrum sits ~1s AHEAD of the sound — you see a signal, then hear it a beat
+        // later, which with a trace on screen is glaring. Hold each row the same ~1s and the two
+        // line up. Drained on the main actor from the render tick (see drainSpectrum).
+        if dec.count == WaterfallBuffer.width {
+          self.rowsPushed += 1
+          self.specQueue.append((ProcessInfo.processInfo.systemUptime, dec))
+        }
+      }
     }
   }
 
@@ -1222,7 +1246,7 @@ final class UberClient: ObservableObject {
   ///
   /// PEAK, not mean. Averaging four bins together buries a narrow carrier in the noise
   /// beside it — the signal you are hunting is exactly the one a mean would erase.
-  private func decimate(_ row: [UInt8], to width: Int) -> [UInt8] {
+  nonisolated private func decimate(_ row: [UInt8], to width: Int) -> [UInt8] {
     let n = row.count
     if n == width { return row }
     guard n > 0 else { return [] }
@@ -1240,7 +1264,7 @@ final class UberClient: ObservableObject {
 
   private var bins: [Float] = []
   private var unwrapped: [Float] = []
-  private var out: [UInt8] = []
+  nonisolated(unsafe) private var out: [UInt8] = []   // specDecodeQueue only, with proc
   /// Non-zero = the server is sending a frame format we do not decode, and the waterfall is
   /// black for a reason that has nothing to do with the waterfall.
   @Published var unknownFlags: UInt8 = 0
@@ -1446,6 +1470,9 @@ final class UberClient: ObservableObject {
     // gate in onSpectrumBinary). Reset the fail-open counter for this fresh wait.
     specSubscribeSeq &+= 1
     gatedFrames = 0
+    // ★ The scale is about to change under us — drop the derived range with it rather than
+    //   average the new span against the old one's history.
+    specDecodeQueue.async { self.proc.reset() }
     let msg: [String: Any] = ["type": "zoom",
                               "frequency": Int(freq.rounded()),
                               "binBandwidth": binBw]

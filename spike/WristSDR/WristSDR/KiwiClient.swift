@@ -273,7 +273,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private let sndSock = AudioSocket(name: "kiwi-snd")
   nonisolated(unsafe) private let wfSock  = AudioSocket(name: "kiwi-wf")
   nonisolated(unsafe) let waterfall: WaterfallBuffer
-  private let proc = SignalProcessor()
+  // ★★ wfDecodeQueue ONLY (see onWf) — never main, so no lock is needed.
+  nonisolated(unsafe) private let proc = SignalProcessor()
+  nonisolated(unsafe) private let wfDecodeQueue = DispatchQueue(label: "kiwi.wf")
   // audio + the persistent ADPCM decoder run on the SND socket's serial queue (OFF the main actor,
   // like UberClient) so the audio path never fights the waterfall for the main thread — a saturated
   // main actor freezes the UI AND stalls the keepalive, which is what made Kiwi drop us.
@@ -303,6 +305,8 @@ final class KiwiClient: ObservableObject, SDRClient {
 
   // ── Lifecycle ──
   func start() {
+    // ★ On the decode queue, because that is the only place `proc` is otherwise touched.
+    wfDecodeQueue.async { self.proc.reset() }
     // ★ Sync the off-actor mirror to whatever rung the controller OPENED on, before the handshake
     //   sends the first wf_speed. Without this the mirror's own default wins and a user who pinned
     //   Full Rate (or Low Data) would silently get the adaptive mid-ladder rate instead — the
@@ -648,7 +652,7 @@ final class KiwiClient: ObservableObject, SDRClient {
   }
 
   // ── Waterfall (W/F binary) ──
-  private var out256 = [UInt8]()
+  nonisolated(unsafe) private var out256 = [UInt8]()   // wfDecodeQueue only, with proc
   private func onWf(_ buf: [UInt8]) {
     guard buf.count >= 16 else { return }
     let zoomFlags = UInt32(buf[8]) | (UInt32(buf[9]) << 8) | (UInt32(buf[10]) << 16) | (UInt32(buf[11]) << 24)
@@ -659,12 +663,22 @@ final class KiwiClient: ObservableObject, SDRClient {
     // u8 → dBm-ish (bin − 255); the auto-contrast in SignalProcessor ranges it.
     let floats = bins.map { Float($0) - 255 }
     markFrame()
-    let row = proc.process(floats, centerHz: viewCenter, bwHz: viewBw)
-    signalLevel = proc.level
-    let dec = decimate(row, to: WaterfallBuffer.width)
-    if dec.count == WaterfallBuffer.width {
-      rowsPushed += 1
-      specQueue.append((ProcessInfo.processInfo.systemUptime, dec))
+    // ★★★ THE DSP RUNS OFF MAIN — same reasoning as UberClient and OwrxClient. On a watch,
+    // per-frame DSP on the main actor competes with UI rendering and keeps a core awake that
+    // could otherwise idle, so it costs responsiveness AND battery.
+    let centre = viewCenter, span = viewBw
+    wfDecodeQueue.async { [weak self] in
+      guard let self else { return }
+      let row = self.proc.process(floats, centerHz: centre, bwHz: span)
+      let dec = self.decimate(row, to: WaterfallBuffer.width)
+      let lvl = self.proc.level
+      Task { @MainActor in
+        self.signalLevel = lvl
+        if dec.count == WaterfallBuffer.width {
+          self.rowsPushed += 1
+          self.specQueue.append((ProcessInfo.processInfo.systemUptime, dec))
+        }
+      }
     }
     viewInit = true
   }
@@ -679,7 +693,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     }
   }
 
-  private func decimate(_ row: [UInt8], to width: Int) -> [UInt8] {
+  nonisolated private func decimate(_ row: [UInt8], to width: Int) -> [UInt8] {
     let n = row.count
     if n == width { return row }
     guard n > 0 else { return [] }

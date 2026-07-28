@@ -172,7 +172,8 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private var latestFft: [UInt8]? = nil
   nonisolated(unsafe) private var fftScheduled = false
   nonisolated(unsafe) let waterfall: WaterfallBuffer
-  private let proc = SignalProcessor()
+  // ★★ Touched ONLY on decodeQueue (see sliceAndProcess) — never from main, so no lock is needed.
+  nonisolated(unsafe) private let proc = SignalProcessor()
   nonisolated(unsafe) private let audio = WatchAudio()
   nonisolated(unsafe) private let audioDec = OwrxAudioDecoder()      // 12k
   nonisolated(unsafe) private let hdAudioDec = OwrxAudioDecoder()    // 48k HD/WFM
@@ -208,6 +209,8 @@ final class OwrxClient: ObservableObject, SDRClient {
 
   // ── Lifecycle ──
   func start() {
+    // ★ On decodeQueue, because that is the only place `proc` is otherwise touched.
+    decodeQueue.async { self.proc.reset() }
     started = true
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
@@ -859,7 +862,27 @@ final class OwrxClient: ObservableObject, SDRClient {
                             // waterfall is flowing just because audio momentarily gapped.
     if !sawFirstFrame { sawFirstFrame = true; Task { @MainActor in self.everFrame = true; if self.status != "live" { self.status = "live" } } }
     lastRow = row
-    Task { @MainActor in self.pushSlice(row) }
+    // ★★★ THE DSP MUST NOT RUN ON MAIN. It used to: this hopped straight to `pushSlice`, which
+    // copies up to 8192 floats, runs the histogram, the 5-tap smooth, the normalise/clip/stretch
+    // and the decimate — all on the main thread, at ~6 fps, for a WHOLE-PROFILE FFT. That is the
+    // freeze on an OWRX profile change, and it is why the link indicator "wasn't reacting"
+    // (Stuart, 2026-07-28): you cannot report a freeze from the thread that is frozen.
+    // ★ The comment above this function always SAID "hop to main to enqueue the row" — enqueueing
+    //   is all that ever needed main. The slice and the DSP had come along for the ride.
+    // ★ Two cheap hops: read the view geometry on main (four Doubles), do the work on
+    //   decodeQueue, hand the finished row back. `proc`/`out256` stay decodeQueue-only.
+    Task { @MainActor in
+      let vc = self.viewCenter, vb = self.viewBw, cf = self.centerFreq, sr = self.sampRate
+      self.decodeQueue.async {
+        guard let out = self.sliceAndProcess(row, viewCenter: vc, viewBw: vb,
+                                             centerFreq: cf, sampRate: sr) else { return }
+        Task { @MainActor in
+          self.signalLevel = out.level
+          self.rowsPushed += 1
+          self.specQueue.append((ProcessInfo.processInfo.systemUptime, out.row))
+        }
+      }
+    }
   }
   nonisolated(unsafe) private var fftCompressionSnapshot = "none"
 
@@ -870,21 +893,32 @@ final class OwrxClient: ObservableObject, SDRClient {
   // ── View slice: the FFT spans center±sampRate/2; extract [viewCenter±viewBw/2], decimate to width.
   private var specQueue: [(t: Double, row: [UInt8])] = []
   private let spectrumDelay = 0.15
-  private var out256 = [UInt8]()
+  nonisolated(unsafe) private var out256 = [UInt8]()   // decodeQueue only, with proc
 
-  private func pushSlice(_ row: [Float]) {
-    guard sampRate > 0, !row.isEmpty else { return }
+  /// The slice + DSP, off the main actor. Geometry is passed IN rather than read from MainActor
+  /// state, so this needs no hop and no lock.
+  nonisolated private func sliceAndProcess(_ row: [Float], viewCenter: Double, viewBw: Double,
+                                           centerFreq: Double, sampRate: Double)
+                                           -> (row: [UInt8], level: Double)? {
+    guard sampRate > 0, viewBw > 0, !row.isEmpty else { return nil }
     let n = row.count
     let lo = centerFreq - sampRate / 2
     let hzPerBin = sampRate / Double(n)
+    guard hzPerBin > 0 else { return nil }
     let vlo = viewCenter - viewBw / 2, vhi = viewCenter + viewBw / 2
-    var i0 = Int((vlo - lo) / hzPerBin), i1 = Int((vhi - lo) / hzPerBin)
+    // ★ Int(Double) TRAPS on NaN/infinite and on anything outside Int's range. A profile switch is
+    //   exactly when the view geometry can be momentarily inconsistent with the new span, so clamp
+    //   in Double before converting rather than trusting the arithmetic.
+    let f0 = ((vlo - lo) / hzPerBin), f1 = ((vhi - lo) / hzPerBin)
+    guard f0.isFinite, f1.isFinite else { return nil }
+    var i0 = Int(max(0, min(Double(n - 1), f0)))
+    var i1 = Int(max(0, min(Double(n), f1)))
     i0 = max(0, min(n - 1, i0)); i1 = max(i0 + 1, min(n, i1))
     let slice = Array(row[i0..<i1])
     let processed = proc.process(slice, centerHz: viewCenter, bwHz: viewBw)
-    signalLevel = proc.level
     let dec = decimate(processed, to: WaterfallBuffer.width)
-    if dec.count == WaterfallBuffer.width { rowsPushed += 1; specQueue.append((ProcessInfo.processInfo.systemUptime, dec)) }
+    guard dec.count == WaterfallBuffer.width else { return nil }
+    return (dec, proc.level)
   }
 
   func drainSpectrum(now: Double) {
@@ -893,7 +927,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     }
   }
 
-  private func decimate(_ r: [UInt8], to width: Int) -> [UInt8] {
+  nonisolated private func decimate(_ r: [UInt8], to width: Int) -> [UInt8] {
     let n = r.count
     if n == width { return r }
     guard n > 0 else { return [] }
