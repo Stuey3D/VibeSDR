@@ -181,7 +181,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   showServerMaps = false, onServerMap, owrxPages,
   decoderControls, spotsControls }: ModeSelectorProps) {
   const { theme: t } = useTheme();
-  const { height: winH } = useWindowDimensions();
+  const { height: winH, width: winW } = useWindowDimensions();
+  // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
+  //   room to spare. Only the very narrowest phones need the short form (Stuart, 2026-07-28).
+  const advRdsLabel = winW >= 340 ? 'ADVANCED RDS' : 'ADV RDS';
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
   const [bwSync, setBwSync] = useState(false);
@@ -433,8 +436,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                           decoderControls.advRdsOn && { backgroundColor: 'rgba(80,220,100,0.14)' },
                           navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                   onPress={() => decoderControls.onAdvRds?.()} activeOpacity={0.8}>
-                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.advRdsOn ? DEC_COL : t.btnText }]}>
-                    ADV RDS
+                  <Text numberOfLines={1}
+                        style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.advRdsOn ? DEC_COL : t.btnText }]}>
+                    {advRdsLabel}
                   </Text>
                 </TouchableOpacity>
                 )}</NavItem>

@@ -1142,8 +1142,13 @@ function ControlsBar({
         borderRadius: RADIUS,
       },
     ]}>
-      {/* High-intensity blur so waterfall colour bleeds through the pill */}
-      <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+      {/* ★★ THE TINT IS THE SAME ON BOTH PLATFORMS — only BlurView differs, so only BlurView is
+          adjusted. On iOS it is a real UIVisualEffect and at 80 it stacked with the tint into a
+          near-opaque slab; Android's is far weaker, which is why identical code showed the
+          waterfall through the island on the Moto and blanked it on the iPhone.
+          ★ ANDROID IS THE TARGET, NOT THE THING TO CHANGE (Stuart, 2026-07-28): "android cannot
+          get any clearer… iOS just needs to get to android level". Hence iOS-only. */}
+      <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
       {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
       <View style={[StyleSheet.absoluteFill, root.tint, { borderRadius: RADIUS }]}
             pointerEvents="none" />
@@ -1170,7 +1175,7 @@ const root = StyleSheet.create({
   // Semi-transparent tint: waterfall colours show through but content is legible
   tint: {
     backgroundColor: 'rgba(8,6,2,0.55)',
-    inset: 1,              // keeps tint inside the border ring visually
+    inset: 1,              // keeps tint inside the border ring visually             // keeps tint inside the border ring visually
   },
   border: {
     ...StyleSheet.absoluteFill,

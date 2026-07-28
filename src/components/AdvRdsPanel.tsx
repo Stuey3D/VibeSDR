@@ -20,14 +20,18 @@
  */
 
 import React, { useMemo, useRef } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { Canvas, Circle, Path, Rect, Skia, Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
 
 const C = {
-  bg:      'rgba(10,8,4,0.95)',
+  // ★ 0.95 was an opaque slab that blanked the waterfall behind it on BOTH platforms. Softened
+  //   so the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
+  //   against it, which is what the control island has always done.
+  bg:      'rgba(10,8,4,0.72)',
   border:  'rgba(255,160,0,0.28)',
   gold:    '#ffb833',
   goldDim: 'rgba(255,160,0,0.70)',
@@ -301,6 +305,8 @@ function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: num
 export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const { x, raw } = p;
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
+  /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
+  const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
 
   // ── PTY ─────────────────────────────────────────────────────────────────────
   const ptyV = (raw ? x?.ptyRaw : x?.pty) ?? -1;
@@ -324,7 +330,12 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     pilotTxt = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}`;
     pilotCol = ok ? C.good : C.warn;
   }
-  let rdsDevTxt = DASH, rdsDevCol: string | undefined;
+  // ★★ NEVER FALL BACK TO A DASH HERE. The measurement drops below the 0.2 kHz floor for a frame
+  // or two on a marginal signal, so the row flipped value→dash→value several times a second:
+  // "no point showing a dash with a figure quickly snapping in then going again" (Stuart,
+  // 2026-07-28). Hold the last real reading briefly, then say zero honestly — a steady "0.0 kHz"
+  // is information, a strobing dash is not.
+  let rdsDevTxt = '0.0 kHz · none', rdsDevCol: string | undefined = C.muted;
   if (rdev > 0.2) {
     // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the
     // spec maximum; a reading past it is evidence of a MEASUREMENT problem, never of a
@@ -333,6 +344,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     rdsDevTxt = `${rdev.toFixed(1)} kHz · ${
       impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
     rdsDevCol = impossible ? C.bad : low ? C.warn : C.good;
+    rdsHold.current = { txt: rdsDevTxt, col: rdsDevCol, at: Date.now() };
+  } else if (rdsHold.current && Date.now() - rdsHold.current.at < 4000) {
+    // Within the hold window — keep showing what we last actually measured.
+    rdsDevTxt = rdsHold.current.txt;
+    rdsDevCol = rdsHold.current.col;
   }
 
   // ── ★★★ RDS-to-pilot phase — the field this panel exists for ────────────────
@@ -484,15 +500,26 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // 2026-07-27). The available height has to stop at the safe area, not at the window edge.
   const insets = useSafeAreaInsets();
   const avail = Math.max(180, winH - p.bottomOffset - insets.top - 16);
-  // ★ Standard is generous on purpose: the plots are the point of this panel, and at 46% they
-  // sat below the fold with nothing on screen to suggest scrolling.
-  const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.58);
+  // ★★ SMALL IS A SUMMARY, NOT A SHORTER SCROLL. Both modes used to render every field and the
+  // plots, differing only in viewport height — so SMALL still buried the waterfall and BIG
+  // "didn't make much difference, just a couple of lines" (Stuart, 2026-07-28). SMALL now shows
+  // the seven fields you glance at while tuning and nothing else; BIG is the full instrument.
+  const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.34);
 
   return (
     <View style={[s.wrap, { bottom: p.bottomOffset }]}>
       <View style={[s.inner, { maxHeight: maxH }]}>
+        {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
+            it. The control island next to it has used BlurView since it was built, which is
+            exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
+            plus a light tint: the spectrum reads through it, the text still reads on top. */}
+        {Platform.OS === 'ios' &&
+          <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />}
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: C.bg }]} pointerEvents="none" />
         <View style={s.header}>
-          <Text style={s.title}>ADV RDS</Text>
+          {/* ★ Matches the button that opens it — an abbreviation in one place and the full
+              name in the other reads as two different features. */}
+          <Text style={s.title} numberOfLines={1}>ADVANCED RDS</Text>
           <View style={{ flex: 1 }} />
           {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
               fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
@@ -534,11 +561,21 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                conf={(x?.tp ?? -1) >= 0 || (x?.ms ?? -1) >= 0} />
           {/* Block error rate, before correction, last 12 groups. */}
           <Row raw={raw} label="Errors"      value={ber >= 0 ? `${ber}%` : DASH} />
+          {/* ★ The two deviations stay in SMALL: they are the readings you watch while tuning,
+              not reference material (Stuart, 2026-07-28). */}
           <Row raw={raw} label="Pilot dev"   value={pilotTxt} colour={pilotCol} />
           <Row raw={raw} label="RDS dev"     value={rdsDevTxt} colour={rdsDevCol} />
-          <Row raw={raw} label="RDS↔pilot"   value={phaseTxt} colour={phaseCol}
-               reserve="rotating 00°/s — encoder not locked to pilot" />
           <Row raw={raw} label="RadioText"   value={p.rt || DASH} />
+          <Row raw={raw} label="Rate"        value={rateTxt} />
+
+          {/* ── Everything below is BIG only. ───────────────────────────────────────── */}
+          {p.tall && <>
+          {/* ★ U+21D4 ⇔, NOT U+2194 ↔. The latter has EMOJI presentation by default and iOS
+              rendered it as a blue tile mid-label (Stuart's screenshot, 2026-07-28). U+21D4
+              has no emoji form, so it stays a glyph on every platform without a variation
+              selector to get lost in a copy-paste. */}
+          <Row raw={raw} label="RDS⇔pilot"   value={phaseTxt} colour={phaseCol}
+               reserve="rotating 00°/s — encoder not locked to pilot" />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
           <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />
           <Row raw={raw} label="PTYN"        value={x?.ptyn || DASH} />
@@ -564,7 +601,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="PI detail"   value={piNum > 0
             ? `${COV[(piNum >> 8) & 0xF]} · ref ${piNum & 0xFF} · cc ${(piNum >> 12) & 0xF}`
             : DASH} />
-          <Row raw={raw} label="Rate"        value={rateTxt} />
+          {/* ★ Rate is shown in SMALL too — it moved up with the other essentials. */}
           {/* ★ AF score and AF MHz are DEAD FIELDS in the web client — the markup is there but
               nothing ever fills them, so they show a permanent dash. The data is already on
               the wire (af[] and afseen), so they are populated properly here. */}
@@ -602,6 +639,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <StationLogo name={p.ps} itu={p.countryIso} size={72} />
             </View>
           )}
+          </>}
         </ScrollView>
       </View>
     </View>
@@ -611,7 +649,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 const s = StyleSheet.create({
   wrap:  { position: 'absolute', left: 8, right: 8, zIndex: 200 },
   inner: {
-    backgroundColor: C.bg,
+    // ★ NO backgroundColor here — the BlurView is the first child and an opaque parent would
+    //   sit behind it doing the very blanking the blur exists to avoid.
     borderWidth: 1, borderColor: C.border, borderRadius: 14,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.80, shadowRadius: 14, elevation: 16,

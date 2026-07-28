@@ -31,9 +31,11 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { newLocalSession } from '../services/localSession';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -392,6 +394,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
   /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
   const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
+  /** Admin takeover, offered on the IN USE refusal. See the modal for why it reconnects. */
+  const [takeoverPw, setTakeoverPw] = useState('');
+  const [takeoverErr, setTakeoverErr] = useState<string | null>(null);
+  /** ★ Set while a takeover attempt is in flight. resolveVibeAdminAuth CANNOT tell a wrong
+   *  password from a right one — it just HMACs whatever was typed — so the only evidence is
+   *  the server refusing us a second time. Without this, a wrong password looked identical to
+   *  never having tried. */
+  const takeoverTried = useRef(false);
   const noticeShownRef = useRef(false);
   // Per-device persistence suffix so each local source keeps its OWN remembered
   // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
@@ -2294,6 +2304,32 @@ export default function SDRScreen({ route, navigation }: Props) {
           body: 'You have just had a turn on this shared receiver.',
           note: `Try again in about ${m} minute${m === 1 ? '' : 's'}.`,
         });
+      },
+      // ★★ The remaining three refusals, at last matching the web client and Jr word for word.
+      onBusy: () => {
+        if (destroyed.current) return;
+        const rejected = takeoverTried.current;
+        takeoverTried.current = false;
+        setTakeoverErr(rejected ? 'That admin password was not accepted.' : null);
+        setRefusal({
+          title: 'IN USE',
+          body: 'Someone else is listening on this receiver, and it serves one listener at a time.',
+          note: 'Try again in a few minutes, or pick another server.',
+        });
+      },
+      onEvicted: () => {
+        if (destroyed.current) return;
+        setRefusal({
+          title: 'TAKEN BACK',
+          body: "This receiver's owner has taken it back with the admin password.",
+          note: 'Not a fault — the radio is theirs. Try again later, or pick another server.',
+        });
+      },
+      // ★ The server's own countdown is AUTHORITATIVE — re-base the local clock on it rather
+      //   than letting our interpolation drift, which is the bug that froze Jr's timer.
+      onSessionWarning: (secs: number) => {
+        if (destroyed.current) return;
+        setSessionEndsAt(Date.now() + secs * 1000);
       },
       onReconnecting: (busy: boolean) => {
         // Tell the WRIST a recovery is under way. There are two links in series and
@@ -5353,6 +5389,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
       )}
 
+      {/* ★★ THE SESSION COUNTDOWN, FULL SIZE. It existed only as a ⏳m:ss squeezed beside the
+          clock in the controls island — invisible in practice, and gone entirely whenever the
+          controls were hidden. On a shared receiver the single most important thing on screen is
+          how long you have left, and there is room for it (Stuart, 2026-07-28).
+          ★ Mirrors the web client's wording so a listener moving between the two reads the same
+          sentence. Goes red under two minutes, which is also when the server sends its first
+          warning — so the colour change and the server's own countdown agree. */}
+      {sessionLeftMs != null && (
+        <View pointerEvents="none" style={{
+          position: 'absolute', top: insets.top + 46, right: Math.max(12, insets.right + 8),
+          zIndex: 210, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
+          borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)',
+          borderColor: sessionLeftMs < 120_000 ? 'rgba(255,90,90,0.75)' : 'rgba(255,160,0,0.45)',
+          alignItems: 'flex-end',
+        }}>
+          <Text style={{ fontFamily: 'Nixie One', fontSize: 9, letterSpacing: 1.5,
+                         color: sessionLeftMs < 120_000 ? 'rgba(255,140,140,0.95)' : 'rgba(255,160,0,0.65)' }}>
+            YOUR TURN ENDS IN
+          </Text>
+          <Text style={{ fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26,
+                         color: sessionLeftMs < 120_000 ? '#ff6b6b' : '#ffb833' }}>
+            {`${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`}
+          </Text>
+        </View>
+      )}
+
       {/* VTS popup — station / band-crossing notifications above the pill */}
       {/* ★ PORTRAIT ONLY on a phone, like the decoder box: 24 fields and three plots need
           vertical space landscape does not have, and the rotate banner below says where it
@@ -5559,6 +5621,44 @@ export default function SDRScreen({ route, navigation }: Props) {
             <Text style={styles.noticeTitle}>{refusal?.title ?? ''}</Text>
             <Text style={styles.noticeBody}>{refusal?.body ?? ''}</Text>
             <Text style={styles.noticeItem}>{refusal?.note ?? ''}</Text>
+            {/* ★★★ ADMIN TAKEOVER — and it MUST ride the CONNECT URL, not a socket message.
+                The phone's only admin box was LocalHardwarePanel's, which sends `admin_unlock`
+                over an OPEN socket: that unlocks protected settings on a session you already
+                hold and CANNOT take an occupied receiver, because a busy server closes the
+                socket before the message could ever arrive. So entering the password there
+                "went back to the IN USE error" — it was the wrong door, not a wrong password
+                (Stuart, 2026-07-28). Web and Jr both do it this way; the phone never did.
+                ★ The password itself never crosses the link: HMAC over a server-issued nonce. */}
+            {refusal?.title === 'IN USE' && (
+              <>
+                <Text style={styles.noticeItem}>
+                  If this is your receiver, enter its admin password to take it back.
+                </Text>
+                <TextInput
+                  value={takeoverPw} onChangeText={setTakeoverPw}
+                  placeholder="Admin password" placeholderTextColor="rgba(255,160,0,0.35)"
+                  secureTextEntry autoCapitalize="none" autoCorrect={false}
+                  style={styles.noticeInput}
+                />
+                <TouchableOpacity style={styles.noticeBtn} disabled={!takeoverPw}
+                  onPress={async () => {
+                    const q = await resolveVibeAdminAuth(baseUrl, takeoverPw).catch(() => '');
+                    if (!q) { setTakeoverErr('That password was not accepted.'); return; }
+                    setTakeoverErr(null); setTakeoverPw(''); setRefusal(null);
+                    takeoverTried.current = true;
+                    navigation.replace('SDR', {
+                      ...route.params,
+                      authSuffix: (route.params.authSuffix ?? '') + q,
+                      localGen: newLocalSession(),
+                    });
+                  }}>
+                  <Text style={[styles.noticeBtnTxt, !takeoverPw && { opacity: 0.4 }]}>
+                    TAKE OVER
+                  </Text>
+                </TouchableOpacity>
+                {!!takeoverErr && <Text style={styles.noticeItem}>{takeoverErr}</Text>}
+              </>
+            )}
             <TouchableOpacity style={styles.noticeBtn}
               onPress={() => { setRefusal(null); navigation.replace('SDR', route.params); }}>
               <Text style={styles.noticeBtnTxt}>TRY AGAIN</Text>
@@ -5906,6 +6006,9 @@ const styles = StyleSheet.create({
   },
   noticeBody: { color: '#e8e8e8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
   noticeItem: { color: '#bdbdbd', fontSize: 13, textAlign: 'center' },
+  noticeInput: { alignSelf: 'stretch', marginTop: 10, paddingHorizontal: 12, paddingVertical: 9,
+                 borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 8,
+                 color: '#ffe566', fontSize: 15, textAlign: 'center' },
   noticeBtn: {
     borderColor: '#ffa000', borderWidth: 1, borderRadius: 8,
     paddingVertical: 10, alignItems: 'center', marginTop: 2,

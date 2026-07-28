@@ -5227,33 +5227,64 @@ std::string LocalSdrShim::radioCapsJson() const {
     return j;
 }
 
+// ★★★ EVERY HARDWARE CALL BELOW RUNS UNDER modeMtx. They did not, and that is a strong
+// candidate for the audio/RDS freeze that a retune cures:
+//
+//   • These setters are invoked straight off the WEBSOCKET MESSAGE THREAD (ahf_control /
+//     rsp_control), while the DSP thread holds modeMtx per buffer and tuneHw() runs under it.
+//   • This file already learned the lesson for TUNING — "modeMtx serialises this against
+//     retune()… both call the non-thread-safe tuneHw(); racing them corrupted the tuner PLL
+//     (off-tune-until-nudged bug)" — but the gain/notch setters were never brought under it.
+//   • libairspyhf and the SDRplay API are not documented thread-safe, and each of these is a
+//     USB control transfer into a device that is mid-stream.
+//
+// ★ Stuart, 2026-07-28, gave the trigger that pointed here: "IF i change any SDR settings in
+//   the menu sometimes it will trigger that glitch". Intermittent = a race; cured by a retune =
+//   the state the retune rebuilds is what got corrupted; spectrum unaffected = the fault is
+//   downstream of the FFT. All three fit.
+//
+// ★ modeMtx is RECURSIVE and none of these join a thread, so the deadlock trap that applies to
+//   stopDspThread() (which joins a thread that itself takes modeMtx) does not apply here.
+//
+// ★★ UNVERIFIED. The proof is changing settings repeatedly on air and the freeze no longer
+//    following. If it still happens, this was not it — do not assume it away.
+#define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
+
 void LocalSdrShim::setAhfAgc(bool on) {
     g_dsp.ahfAgc.store(on ? 1 : 0);
-    if (p && p->useAirspyHf()) p->ahf->setAgc(on);
+    if (!p || !p->useAirspyHf()) return;
+    VIBE_HW_LOCK(); p->ahf->setAgc(on);
 }
 void LocalSdrShim::setAhfAgcThreshold(bool high) {
     g_dsp.ahfAgcHigh.store(high ? 1 : 0);
-    if (p && p->useAirspyHf()) p->ahf->setAgcThreshold(high);
+    if (!p || !p->useAirspyHf()) return;
+    VIBE_HW_LOCK(); p->ahf->setAgcThreshold(high);
 }
 void LocalSdrShim::setAhfAttenuation(int steps) {
     g_dsp.ahfAtt.store(steps);
-    if (p && p->useAirspyHf()) p->ahf->setAttenuation(steps);
+    if (!p || !p->useAirspyHf()) return;
+    VIBE_HW_LOCK(); p->ahf->setAttenuation(steps);
 }
 void LocalSdrShim::setAhfLna(bool on) {
     g_dsp.ahfLna.store(on ? 1 : 0);
-    if (p && p->useAirspyHf()) p->ahf->setLna(on);
+    if (!p || !p->useAirspyHf()) return;
+    VIBE_HW_LOCK(); p->ahf->setLna(on);
 }
 void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
     g_dsp.ahfPpb.store(ppb);
-    if (p && p->useAirspyHf()) p->ahf->setCalibrationPpb(ppb);
+    if (!p || !p->useAirspyHf()) return;
+    VIBE_HW_LOCK(); p->ahf->setCalibrationPpb(ppb);
 }
 void LocalSdrShim::setLnaState(int v)       { g_dsp.rspLna.store(v);
-                                              if (p && p->useSdrplay()) p->sdrp->setLnaState(v); }
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setLnaState(v); }
 void LocalSdrShim::setIfGainReduction(int v){ g_dsp.rspIfGr.store(v);
-                                              if (p && p->useSdrplay()) p->sdrp->setIfGainReduction(v); }
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setIfGainReduction(v); }
 void LocalSdrShim::setIfAgc(bool v) {
     g_dsp.rspIfAgc.store(v ? 1 : 0);   // remembered even with no radio yet
     if (!p || !p->useSdrplay()) return;
+    VIBE_HW_LOCK();
     // ★★ RECORD THE PREFERENCE; DO NOT CANCEL THE KICK. Cancelling was wrong: the CLIENT
     // re-sends its saved settings the instant it connects, so an "ifagc on" arrived before
     // any samples were flowing — too early for the transition to take, exactly as it was
@@ -5265,15 +5296,21 @@ void LocalSdrShim::setIfAgc(bool v) {
     p->sdrp->setIfAgc(v);
 }
 void LocalSdrShim::setIfAgcSetPoint(int v)  { g_dsp.rspAgcSet.store(v);
-                                              if (p && p->useSdrplay()) p->sdrp->setIfAgcSetPoint(v); }
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setIfAgcSetPoint(v); }
 void LocalSdrShim::setIfAgcDynamics(int a, int d, int dd, int th) {
-    if (p && p->useSdrplay()) p->sdrp->setIfAgcDynamics(a, d, dd, th);
+    if (!p || !p->useSdrplay()) return;
+    VIBE_HW_LOCK(); p->sdrp->setIfAgcDynamics(a, d, dd, th);
 }
 void LocalSdrShim::setRfNotch(bool v)       { g_dsp.rspRfNotch.store(v ? 1 : 0);
-                                              if (p && p->useSdrplay()) p->sdrp->setRfNotch(v); }
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setRfNotch(v); }
 void LocalSdrShim::setDabNotch(bool v)      { g_dsp.rspDabNotch.store(v ? 1 : 0);
-                                              if (p && p->useSdrplay()) p->sdrp->setDabNotch(v); }
-void LocalSdrShim::setBiasT(bool v)         { if (p && p->useSdrplay()) p->sdrp->setBiasT(v); }
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setDabNotch(v); }
+void LocalSdrShim::setBiasT(bool v)         { if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setBiasT(v); }
+#undef VIBE_HW_LOCK
 
 bool LocalSdrShim::isRunning() const { return p != nullptr; }
 

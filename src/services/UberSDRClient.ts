@@ -154,6 +154,18 @@ export interface SDRCallbacks {
   onSessionEnded?: (cooldownSec: number) => void;
   /** Refused because we returned inside our cooldown. */
   onCooldown?: (secs: number) => void;
+  /** ★★ PARITY GAP CLOSED 2026-07-28. The web client and Jr have handled all three of these
+   *  since they were built; the phone handled NONE of them, so an evicted or refused listener
+   *  saw a silent dead link and a retry loop. Checked message by message against
+   *  web/client/src/spectrum.ts — the failure mode of a per-client protocol is SILENCE. */
+  /** Someone else holds the receiver. Terminal — do not retry into a busy server. */
+  onBusy?: () => void;
+  /** The owner took their radio back with the admin password. Terminal, and not a fault. */
+  onEvicted?: () => void;
+  /** Still connected — the server's own countdown, at T-120s and T-30s. NOT a refusal.
+   *  ★ This is the AUTHORITATIVE remaining time; our local clock is only an interpolation
+   *  between these, so re-base on it rather than trusting our own arithmetic. */
+  onSessionWarning?: (secs: number) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -1481,6 +1493,22 @@ export class UberSDRClient {
       this.callbacks.onCooldown?.(Number(msg.secs) || 0);
       return;
     }
+    if (msg.type === 'busy') {
+      this.refused = true;                    // a busy server must not be hammered
+      this.callbacks.onBusy?.();
+      return;
+    }
+    if (msg.type === 'evicted') {
+      this.refused = true;
+      this.callbacks.onEvicted?.();
+      return;
+    }
+    if (msg.type === 'session_warning') {
+      // ★ NOT terminal — we are still connected and still listening. Setting `refused` here
+      //   would tear down a perfectly good session two minutes early.
+      this.callbacks.onSessionWarning?.(Number(msg.secs) || 0);
+      return;
+    }
     if (msg.type === 'admin') {
       this.callbacks.onAdminState?.({
         set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true });
@@ -1522,6 +1550,14 @@ export class UberSDRClient {
       if (typeof msg.adminSet === 'boolean') {
         this.adminSet = msg.adminSet;
         this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
+      }
+      // ★★★ THE SESSION CLOCK RIDES HWINFO, NOT CONFIG — the exact trap that made Jr's whole
+      // session-limit feature silently never happen (jr_vibeserver_release_pass). The phone was
+      // deriving its countdown ONLY from route params filled in by the server-list probe, so
+      // connecting by direct IP — or to a server whose limit changed after the probe — showed no
+      // countdown at all. Take the server's own number whenever it speaks.
+      if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft > 0) {
+        this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);

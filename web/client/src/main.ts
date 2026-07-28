@@ -115,12 +115,66 @@ function initSplash() {
   }
   if (saved[hostEl.value]) pinEl.value = saved[hostEl.value];
 
+  // ★★ ADMIN AT THE GATE. Reveals the password field and turns CONNECT into an admin connect.
+  //    A second press hides it again, so it cannot be left armed by accident.
+  const adminRowEl = $('gateAdminRow');
+  const adminPwEl  = $<HTMLInputElement>('gateAdminPw');
+  /** Set once the operator has been told they would be displacing a listener. */
+  let adminConfirmed = false;
+  $('btnAdmin').addEventListener('click', () => {
+    const showing = !adminRowEl.hidden;
+    adminRowEl.hidden = showing;
+    $('btnAdmin').textContent = showing ? 'ADMIN' : 'CANCEL ADMIN';
+    adminConfirmed = false;
+    if (showing) adminPwEl.value = ''; else adminPwEl.focus();
+    msg.textContent = showing ? '' : 'Connecting as admin: no time limit, all controls unlocked.';
+    msg.className = showing ? '' : 'info';
+  });
+
   const go = async (remember: boolean) => {
     const host = hostEl.value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
     const pin = pinEl.value.trim();
     if (!host) { msg.textContent = 'Enter a server address'; return; }
     msg.className = 'info';
     msg.textContent = 'Connecting…';
+    // ★ Resolve the admin credentials BEFORE connect(), which picks them up from sessionStorage
+    //   and folds them into the auth query so they ride BOTH sockets — same path the IN USE
+    //   recovery uses, so there is one mechanism and one place for it to be wrong.
+    if (!adminRowEl.hidden && adminPwEl.value) {
+      // ★★★ AN ADMIN MUST NOT BOOT SOMEONE WITHOUT KNOWING IT (Stuart, 2026-07-28): "some admins
+      // may be kind and let a user keep a session for longer". Connecting as admin CLAIMS the
+      // slot, so on an occupied receiver it silently disconnects whoever is listening. Ask first,
+      // and say who is there and how long they have left — the operator can then choose to wait.
+      // ★ On a FREE receiver there is nobody to displace, so there is nothing to confirm and the
+      //   admin goes straight in. The prompt only exists where there is a cost.
+      if (!adminConfirmed) {
+        let busy = false, freeIn = -1;
+        try {
+          const r = await fetch(`http://${host}/vibeserver.json`, { cache: 'no-store' });
+          const j = await r.json();
+          busy = j.busy === true;
+          freeIn = typeof j.freeInSec === 'number' ? j.freeInSec : -1;
+        } catch { /* unreachable is reported by connect() below */ }
+        if (busy) {
+          adminConfirmed = true;
+          const mins = freeIn > 0 ? Math.max(1, Math.round(freeIn / 60)) : 0;
+          msg.className = '';
+          msg.innerHTML = 'Someone is listening on this receiver'
+            + (mins ? ` — they have about ${mins} minute${mins === 1 ? '' : 's'} left.` : '.')
+            + '<br><br>Connecting as admin will <b>disconnect them</b>.'
+            + ' Press CONNECT again to take over, or wait for them to finish.';
+          $<HTMLButtonElement>('btnConnect').disabled = false;
+          $<HTMLButtonElement>('btnSaveConnect').disabled = false;
+          return;
+        }
+      }
+      const q = await resolveAdminOverride(`http://${host}`, adminPwEl.value).catch(() => '');
+      if (!q) {
+        msg.className = ''; msg.textContent = 'This server cannot be given an admin password.';
+        return;
+      }
+      sessionStorage.setItem('vsAdminOverride', q);
+    }
     $<HTMLButtonElement>('btnConnect').disabled = true;
     $<HTMLButtonElement>('btnSaveConnect').disabled = true;
     try {
@@ -147,6 +201,13 @@ function initSplash() {
 
 /** No PIN on this server? Then there is nothing to ask — just START. */
 async function shapeSplash(host: string) {
+  // ★ The ADMIN button appears only where there is an admin password to enter. `admin` comes
+  //   from /vibeserver.json, which the picker already fetches for every server.
+  try {
+    const ri = await fetch(`http://${host}/vibeserver.json`, { cache: 'no-store' });
+    const ji = await ri.json();
+    if (ji.admin === true) $('btnAdmin').hidden = false;
+  } catch { /* not a VibeServer, or unreachable — leave the button hidden */ }
   try {
     const r = await fetch(`http://${host}/vibeserver/auth`, { cache: 'no-store' });
     const j = await r.json();
@@ -2910,6 +2971,16 @@ function renderRds() {
   const rdsPhase = rdsExt?.phase ?? -1;
   const coh = rdsExt?.phaseCoh ?? 0;
   const phEl = $('rxPhase');
+  // ★★★ THE SIZER IS SET FROM CODE, NOT FROM THE MARKUP. index.html held the reserve string by
+  // hand — "rotating — encoder not locked to pilot" — and when the DRIFT RATE was added to the
+  // live message it grew to "rotating 2°/s — …", one line longer than the box reserved for it.
+  // #rxPhase is absolutely positioned, so the overflow landed ON TOP OF RadioText (Stuart's
+  // screenshot, 2026-07-28). The old comment said "keep the sizer in step" — a rule a human has
+  // to remember is a rule that breaks, so the string now lives in ONE place and the sizer is
+  // corrected at render time. Widest digits, because 00 is wider than 2 in most faces.
+  const PHASE_RESERVE = 'rotating 00°/s — encoder not locked to pilot';
+  const szEl = phEl.parentElement?.querySelector('.sizer') as HTMLElement | null;
+  if (szEl && szEl.textContent !== PHASE_RESERVE) szEl.textContent = PHASE_RESERVE;
   // ★★ NEVER STATE A PHASE WE CANNOT STAND BEHIND. The estimate averages unit vectors at
   // twice the symbol angle; if our 57 kHz reference drifts at all, those vectors cancel and
   // the average collapses while STILL producing a plausible angle. Observed on air as

@@ -1035,9 +1035,24 @@ select.btn { padding: 6px 8px; }
       <label for="pin">PIN</label>
       <input id="pin" placeholder="······" inputmode="numeric" autofocus>
     </div>
+    <!-- ★★ ADMIN AT THE FRONT DOOR (Stuart, 2026-07-28). The owner's way in used to exist only
+         as a recovery from the IN USE screen — so an owner whose receiver was FREE had no way to
+         announce themselves, and had to connect as an ordinary listener with a time limit and
+         locked controls. Entering the password here claims the slot, unlocks the protected
+         settings and exempts the session from the limit, all of which the server already does
+         for an authenticated admin; there was simply no door.
+         ★ Hidden unless the server actually HAS an admin password — an override box on a server
+         with no password set is a puzzle with no answer, and inviting guesses is worse. -->
+    <div id="gateAdminRow" hidden>
+      <label for="gateAdminPw">ADMIN PASSWORD</label>
+      <input id="gateAdminPw" type="password" autocomplete="off" spellcheck="false">
+    </div>
     <div class="row">
       <button type="submit" id="btnConnect">CONNECT</button>
       <button type="button" id="btnSaveConnect">SAVE &amp; CONNECT</button>
+    </div>
+    <div class="row">
+      <button type="button" id="btnAdmin" hidden>ADMIN</button>
     </div>
   </form>
   <div id="splashMsg"></div>
