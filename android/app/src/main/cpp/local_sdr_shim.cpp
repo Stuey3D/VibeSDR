@@ -3609,16 +3609,36 @@ struct LocalSdrShim::Impl {
     // set `restarting` for the whole paused period so the capture watchdog treats the stopped stream as
     // deliberate (it `continue`s on `restarting`) and never false-alarms "dongle gone" or relaunches.
     std::atomic<bool> captureIdle{false};
+    /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
+    std::atomic<bool> idleDiscard{false};
     void pauseCaptureIdle() {
         if (captureIdle.exchange(true)) return;               // already paused
         // ★★ EVERY SOURCE NAMED EXPLICITLY. The final `else` used to mean "must be a dongle",
         // which was true with two sources and silently wrong with three — see resumeCaptureIdle
         // for what that cost.
-        if (useTcp()) { tcpRunning.store(false); }
+        if (useTcp()) { tcpRunning.store(false); if (rtlThread.joinable()) rtlThread.join(); }
         else if (useSdrplay()) { sdrp->setPaused(true); }
         else if (useAirspyHf()) { ahf->setPaused(true); }
-        else          { restarting.store(true); if (dev) rtlsdr_cancel_async(dev); }
-        if (rtlThread.joinable()) rtlThread.join();
+        else {
+            // ★★★ THE DONGLE IS NO LONGER STOPPED — IT IS IGNORED. Cancelling the async
+            // stream and restarting it is what crashed the server, and the "fix" below was
+            // a 120 ms SLEEP: rtlsdr_read_async returns while libusb still has cancelled
+            // transfers outstanding, and the next synchronous control transfer (the
+            // rtlsdr_reset_buffer on resume) runs libusb's event loop, which then completes
+            // a transfer that has been freed. A sleep cannot be made correct, only longer —
+            // and today it lost the race, with a full stack for the first time:
+            //   usbi_handle_transfer_completion → … → rtlsdr_reset_buffer →
+            //   resumeCaptureIdle → acceptWs   (SIGSEGV, 2026-07-28)
+            // So the idle path now issues NO USB traffic at all: the stream keeps running
+            // and asyncHandler drops the buffers. The DSP still parks on an empty queue,
+            // which was always where most of the cost was.
+            // ★ THE TRADE: the USB transfers themselves continue, so idle is no longer
+            // ~0% — it is the cost of moving IQ we throw away. A crash that takes down an
+            // unattended server is far worse than a little idle CPU. If that cost ever
+            // matters more than it does now, the deterministic fix is close/reopen the
+            // device, NOT a longer sleep.
+            idleDiscard.store(true);
+        }
         // ★★ LET LIBUSB FINISH REAPING THE CANCELLED TRANSFERS. rtlsdr_read_async can
         // return — and so the thread can join — while libusb still has cancelled transfers
         // outstanding. The next SYNCHRONOUS control transfer (rtlsdr_reset_buffer, on
@@ -3631,7 +3651,6 @@ struct LocalSdrShim::Impl {
         // unattended machine, and invisible to whoever is testing with a client already
         // connected. Same shape as the AVAudioPlayerNode crash: an uncatchable abort on a
         // resume path, so it has to be prevented rather than handled.
-        if (!useTcp() && !useSdrplay()) std::this_thread::sleep_for(std::chrono::milliseconds(120));
         { std::lock_guard<std::mutex> lk(iqMtx); iqQueue.clear(); iqQueuedSamples = 0; iqPrefilled = false; }
         LOGI("no listeners — dongle capture paused (idle)");
     }
@@ -3648,7 +3667,7 @@ struct LocalSdrShim::Impl {
         if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
         else if (useSdrplay()) { sdrp->setPaused(false); }
         else if (useAirspyHf()) { ahf->setPaused(false); }
-        else          { if (dev) rtlsdr_reset_buffer(dev); restarting.store(false); launchCapture(); }
+        else          { idleDiscard.store(false); }   // never stopped; just start wanting it again
         // ★★ AND RESET THE DSP. Restarting the capture alone leaves every recursive
         // state holding values from before the pause — filters, the pilot PLL, and the
         // RDS decoder's timing hypotheses, which is what actually broke: after an idle
@@ -3968,7 +3987,11 @@ struct LocalSdrShim::Impl {
 
     static void asyncHandler(unsigned char* buf, uint32_t len, void* ctx) {
         Impl* self = (Impl*)ctx;
+        // ★ Stamp FIRST, even while discarding: the watchdog measures "is IQ still
+        // arriving", and it is — we are simply choosing not to want it. Skipping the
+        // stamp would make an idle server look like a dead dongle.
         self->lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+        if (self->idleDiscard.load(std::memory_order_relaxed)) return;   // nobody listening
         self->enqueueIq(buf, (int)(len / 2));
     }
 
