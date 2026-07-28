@@ -131,6 +131,8 @@ func adsbTutorialTips() -> [TutorialTip] {
 @main
 struct WristSDRApp: App {
   @StateObject private var link = SpikeLink()
+  /// Admin password for the IN USE takeover. Cleared the moment it is used.
+  @State private var adminPass = ""
   @StateObject private var favs = FavStore()
   @StateObject private var bookmarks = BookmarkStore()
   /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
@@ -180,11 +182,50 @@ struct WristSDRApp: App {
       // FM-DX alike. A per-screen overlay would miss whichever one the listener happens
       // to be on when their slot runs out, which is precisely when they need telling.
       .overlay {
+        // ★ IN USE — the same shape as the web client's screen, because it is the same
+        // situation: a one-at-a-time receiver already has a listener. Retrying in a
+        // loop would hammer a server somebody else is using while showing our own user
+        // nothing but "reconnecting", so this stops and explains, and offers the
+        // owner's way in where one exists.
+        if link.serverBusy {
+          ScrollView {
+            VStack(spacing: 8) {
+              Text("IN USE").font(.system(size: 17, weight: .bold)).foregroundColor(.orange)
+              Text("This server is serving another listener. It handles one at a time.")
+                .font(.system(size: 11)).foregroundColor(.white.opacity(0.75))
+                .multilineTextAlignment(.center)
+              Button("Try again") { link.retryConnect() }
+                .font(.system(size: 13, weight: .semibold)).tint(.orange)
+              if link.takeoverPossible {
+                Divider().padding(.vertical, 2)
+                Text("OWNER OF THIS RECEIVER?")
+                  .font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+                SecureField("Admin password", text: $adminPass)
+                  .font(.system(size: 14, design: .rounded))
+                Button("Take over") {
+                  let p = adminPass.trimmingCharacters(in: .whitespaces)
+                  adminPass = ""
+                  link.takeOver(p)
+                }
+                .font(.system(size: 13, weight: .semibold)).tint(.red)
+                .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
+                Text("The current listener is disconnected and told why.")
+                  .font(.system(size: 9)).foregroundColor(.white.opacity(0.45))
+                  .multilineTextAlignment(.center)
+              }
+              Button("Back to servers") { link.leaveServer() }
+                .font(.system(size: 12)).tint(.gray)
+            }
+            .padding(14)
+          }
+          .background(.black.opacity(0.92))
+          .transition(.opacity)
+        }
         // ★ TAKEN OVER BY THE OWNER. Same treatment as the time limit and for the same
         // reason: the disconnection is legitimate, so EXPLAIN it. Without this the
         // watch simply went quiet and started reconnecting against a server that will
         // refuse it — indistinguishable from the app breaking.
-        if link.evicted {
+        else if link.evicted {
           VStack(spacing: 8) {
             Image(systemName: "person.badge.key.fill").font(.system(size: 24)).foregroundColor(.orange)
             Text("Receiver taken over").font(.system(size: 15, weight: .semibold))

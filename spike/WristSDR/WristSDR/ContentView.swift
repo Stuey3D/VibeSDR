@@ -742,6 +742,11 @@ struct ContentView: View {
 
       lastDetent = detent
       crownUsedAt = Date()          // in use — the idle timeout must not fire
+      // ★ TOUCHING THE CROWN MEANS YOU HAVE SEEN IT. The time-limit notice expires on
+      // its own, but a listener who is already reaching for the crown has read it and
+      // wants the screen back — waiting out a timer they did not know about is the
+      // annoyance (Stuart: "I didn't know you could tap to get rid of it").
+      if link.sessionNotice != nil { link.sessionNotice = nil }
 
       // THE CROWN KEEPS TUNING UNDERNEATH A PRESENTED SCREEN. Swallow it.
       //

@@ -154,6 +154,15 @@ final class SpikeLink: ObservableObject {
   @Published var showSessionPill = false
   private var sessionShownMarks = Set<Int>()
   private var sessionPillUntil: Double = 0
+  /// ★★ THE CLOCK HAS TO TICK LOCALLY. The server reports secsLeft only on hwinfo and
+  /// at its two warnings, so mirroring that value straight through left a countdown
+  /// that never counted: a frozen number that then disappeared when its ten-second
+  /// window lapsed, and never came back because nothing had changed. Hold a DEADLINE
+  /// and derive the remaining seconds every tick; re-base whenever the server speaks,
+  /// so its word always wins over our arithmetic.
+  private var sessionDeadline: Double? = nil
+  private var lastServerSecs = -1
+  private var sessionNoticeUntil: Double = 0
   /// The owner's limit, announced once per connection.
   @Published var sessionNotice: String? = nil
   private var sessionNoticeDone = false
@@ -165,6 +174,24 @@ final class SpikeLink: ObservableObject {
   /// ★ The owner took the receiver over. Like sessionEnded this is TERMINAL and
   /// explained — being dumped back to a list with no reason is the complaint.
   @Published var evicted = false
+  /// The server is serving somebody else. Mirrored so the root can offer the same
+  /// IN USE screen the web client has — try again, or take over as the owner.
+  @Published var serverBusy = false
+  @Published var takeoverPossible = false
+
+  /// Retry a busy server without re-entering anything.
+  func retryConnect() {
+    guard let c = lastConnect else { return }
+    serverBusy = false
+    start(url: c.url, host: c.host, type: c.type, name: c.name, pin: pinForRetry)
+  }
+  /// The PIN we last connected with, so a retry does not re-prompt.
+  private(set) var pinForRetry = ""
+  /// Take the receiver as its owner.
+  func takeOver(_ password: String) {
+    (client as? UberClient)?.takeOverWithAdmin(password)
+    serverBusy = false
+  }
 
   /// Leave the current server and go back to the picker (the picker is shown
   /// whenever `serverName` is empty — see WristSDRApp).
@@ -174,6 +201,7 @@ final class SpikeLink: ObservableObject {
     serverName = ""
     sessionEnded = false
     evicted = false
+    serverBusy = false
     showSessionPill = false
     sessionNotice = nil
   }
@@ -192,6 +220,7 @@ final class SpikeLink: ObservableObject {
       sessionNoticeDone = true
       if sessionLimitMin > 0 {
         sessionNotice = "The owner limits each listener to \(sessionLimitMin) minutes."
+        sessionNoticeUntil = now + 10   // ★ it goes on its own; a tap is a shortcut, not the only way
       }
       sessionPillUntil = now + 10     // hold it up while the notice is read
     }
@@ -200,6 +229,7 @@ final class SpikeLink: ObservableObject {
     for mark in [20, 10, 5] where left <= mark * 60 && left > mark * 60 - 15 {
       if sessionShownMarks.insert(mark).inserted { sessionPillUntil = now + 10 }
     }
+    if sessionNotice != nil, now >= sessionNoticeUntil { sessionNotice = nil }
     showSessionPill = left <= 120 || now < sessionPillUntil
     // Ran out. Hold 00:00 on screen with the reason, then hand back to the picker —
     // WristSDRApp does the waiting so the message survives the disconnect.
@@ -404,6 +434,7 @@ final class SpikeLink: ObservableObject {
     sessionSecsLeft = -1; sessionLimitMin = 0
     sessionShownMarks.removeAll(); sessionNoticeDone = false
     sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false
+    sessionDeadline = nil; lastServerSecs = -1; sessionNoticeUntil = 0
     evicted = false
     client?.goIdle()
     everGotRow = false
@@ -428,6 +459,7 @@ final class SpikeLink: ObservableObject {
       u.secure = url.hasPrefix("https") || url.hasPrefix("wss")
       u.host = host
       u.vibePin = pin
+      pinForRetry = pin
       c = u
     default:  // .ubersdr
       let u = UberClient(waterfall: waterfall)
@@ -475,8 +507,21 @@ final class SpikeLink: ObservableObject {
     if needsPin != wantsPin { needsPin = wantsPin }
     if let u = client as? UberClient {
       if evicted != u.evicted { evicted = u.evicted }
-      if sessionSecsLeft != u.sessionSecsLeft { sessionSecsLeft = u.sessionSecsLeft }
+      if serverBusy != u.serverBusy { serverBusy = u.serverBusy }
+      if takeoverPossible != u.takeoverPossible { takeoverPossible = u.takeoverPossible }
       if sessionLimitMin != u.sessionLimitMin { sessionLimitMin = u.sessionLimitMin }
+      // The SERVER's word re-bases the clock; between its messages we run the clock
+      // ourselves, which is what makes the pill actually count down.
+      if u.sessionSecsLeft != lastServerSecs {
+        lastServerSecs = u.sessionSecsLeft
+        sessionDeadline = u.sessionSecsLeft >= 0 ? now + Double(u.sessionSecsLeft) : nil
+      }
+      if let d = sessionDeadline {
+        let left = max(0, Int((d - now).rounded()))
+        if sessionSecsLeft != left { sessionSecsLeft = left }
+      } else if sessionSecsLeft != -1 {
+        sessionSecsLeft = -1
+      }
       updateSessionPill(now: now)
     }
     // ★ NEVER let a 0 blank the count. While we are CONNECTED, 0 is not a truthful listener

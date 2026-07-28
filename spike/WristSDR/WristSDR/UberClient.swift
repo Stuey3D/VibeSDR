@@ -46,6 +46,17 @@ final class UberClient: ObservableObject {
   /// way in at all. This flag is what the UI watches, whichever route was used.
   @Published var needsPin = false
   private var authSuffix = ""
+  /// ★ Admin OVERRIDE credentials, which must ride the CONNECT URL — the slot is
+  /// claimed before any socket message could arrive, so `admin_unlock` is too late
+  /// for a server that is already telling us "busy". Challenge-response, never the
+  /// password: HMAC(secret, nonce), same VsAuth as the PIN, so it inherits the
+  /// brute-force lockout too.
+  private var adminSuffix = ""
+  /// The server is serving somebody else. Terminal until the user retries or takes
+  /// over — NOT a reconnect loop, which would just hammer a busy receiver.
+  @Published var serverBusy = false
+  /// …and the owner has set an admin password, so a takeover is even possible.
+  @Published var takeoverPossible = false
   private var scheme: String { secure ? "wss" : "ws" }
   private var vibeAdopted = false      // adopted the server's tune on the first config yet?
   private var vibeRestored = false     // did we restore + assert a SAVED tune for this host?
@@ -244,6 +255,45 @@ final class UberClient: ObservableObject {
     ahfAgc = on
     if on { ahfSend(["agc": 1]) }
     else { ahfSend(["att": ahfAtt]); ahfSend(["agc": 0]) }
+  }
+
+  /// Is the server already serving somebody? Also records whether an admin password
+  /// exists, so the UI only offers a takeover where one could work.
+  private func vibeIsBusy() async -> Bool {
+    let httpScheme = secure ? "https" : "http"
+    guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver.json"),
+          let (data, _) = try? await httpSession.data(from: url),
+          let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return false      // ★ Can't tell ⇒ carry on. A failed probe must not block a connect.
+    }
+    takeoverPossible = (j["admin"] as? Bool) ?? false
+    return (j["busy"] as? Bool) ?? false
+  }
+
+  /// Take the receiver with the owner's admin password. The displaced listener is
+  /// told why (`evicted`), which is what makes this safe where plain takeover was not.
+  func takeOverWithAdmin(_ password: String) {
+    guard isVibe, !password.isEmpty else { return }
+    Task { [weak self] in
+      guard let self else { return }
+      let httpScheme = secure ? "https" : "http"
+      guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth"),
+            let (data, _) = try? await httpSession.data(from: url),
+            let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let nonce = j["nonce"] as? String, !nonce.isEmpty else {
+        await MainActor.run { self.status = "admin: can't reach server" }
+        return
+      }
+      let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8),
+                                                using: SymmetricKey(data: Data(password.utf8)))
+      let token = mac.map { String(format: "%02x", $0) }.joined()
+      await MainActor.run {
+        self.adminSuffix = "&vs_admin_nonce=\(nonce)&vs_admin_auth=\(token)"
+        self.serverBusy = false
+        self.status = "taking over"
+        self.openVibeSockets()
+      }
+    }
   }
 
   /// Re-assert every per-radio setting the moment the radio announces itself.
@@ -619,6 +669,15 @@ final class UberClient: ObservableObject {
         ok = await resolveVibeAuth()
       }
       if !ok { return }           // status carries the reason (PIN wrong / locked / offline)
+      // ★ ASK WHETHER THE SEAT IS FREE before taking it. A busy server refuses the
+      // socket, and a client that just retries hammers a receiver somebody else is
+      // using — while showing its own user nothing but "reconnecting". /vibeserver.json
+      // says both whether it is busy AND whether a takeover is even possible.
+      if adminSuffix.isEmpty, await vibeIsBusy() {
+        serverBusy = true
+        status = "in use"
+        return
+      }
       openVibeSockets()
       return
     }
@@ -749,7 +808,7 @@ final class UberClient: ObservableObject {
     // the wire cost is a flat ~128 bins/frame at every zoom. Cuts each SPEC frame ~32x. UberSDR
     // ignores the param (it sends its own count, which we downsample as before).
     let binsParam = isVibe ? "&bins=\(WaterfallBuffer.width)" : ""
-    let url = URL(string: "\(scheme)://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)")!
+    let url = URL(string: "\(scheme)://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminSuffix)")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -1317,7 +1376,8 @@ final class UberClient: ObservableObject {
       // on it: our spectrum socket carries `uuid`, so the audio socket MUST carry the SAME uuid or
       // the server sees two different clients and REFUSES the second as "busy" — which killed the
       // spectrum entirely (audio claimed the slot anonymously, spectrum was turned away). 2026-07-23.
-      let extra = authSuffix.isEmpty ? "" : "&" + authSuffix.dropFirst()
+      var extra = authSuffix.isEmpty ? "" : "&" + authSuffix.dropFirst()
+      if !adminSuffix.isEmpty { extra += adminSuffix }
       // ★ On a MONO output route (the watch speaker) ask for a fullband mono stream — the server folds
       // stereo before encoding so all 64k lands in one channel. On AirPods (stereo) omit it and keep
       // the stereo image. Re-requested on a route change via audio.onRouteChange (openVibeSockets).
