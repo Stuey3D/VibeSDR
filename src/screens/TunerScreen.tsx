@@ -253,7 +253,22 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => {
     AsyncStorage.getItem('lsv_vfo_keys').then((v: string | null) => { if (v === '1') setVfoKeys(true); }).catch(() => {});
     AsyncStorage.getItem('lsv_zoom_keys').then((v: string | null) => { if (v === '1') setZoomKeys(true); }).catch(() => {});
-  }, []);   // S — reuses StepPicker, so it is
+  }, []);
+  /** Drums ↔ keys, from the header — this screen has no MenuSheet (its menu slot
+   *  is Back), so without this the setting is readable here and not changeable.
+   *
+   *  ★ It moves BOTH controls together, where SDRScreen's menu keeps them
+   *  independent ("VFO keys + zoom drum" is a real combination). One header
+   *  button cannot express two settings, and on a screen whose "zoom" is just the
+   *  dial's span, moving them as a pair is what the button plainly says it does.
+   *  The mixed combination is still reachable from the SDR screen's menu. */
+  const toggleKeys = useCallback(() => {
+    const on = !vfoKeys;
+    setVfoKeys(on);
+    setZoomKeys(on);
+    AsyncStorage.setItem('lsv_vfo_keys',  on ? '1' : '0').catch(() => {});
+    AsyncStorage.setItem('lsv_zoom_keys', on ? '1' : '0').catch(() => {});
+  }, [vfoKeys]);   // S — reuses StepPicker, so it is
                                                      // navigable by keyboard for free
   const [isRecording, setIsRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
@@ -918,6 +933,17 @@ export default function TunerScreen({ route, navigation }: Props) {
             {isFavourite ? '♥' : '♡'}
           </Text>
         </TouchableOpacity>
+        {/* Drums ↔ keys. SDRScreen hides this in its menu; FM-DX has no menu (the
+            slot is Back), so it lives in the header where it is at least findable. */}
+        <TouchableOpacity
+          style={styles.ctrlModeBtn}
+          onPress={toggleKeys}
+          accessibilityLabel={vfoKeys ? 'Switch to drums' : 'Switch to keys'}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.ctrlModeTxt}>{vfoKeys ? 'KEYS' : 'DRUMS'}</Text>
+        </TouchableOpacity>
         {/* REC + recordings library moved into the AUDIO sheet (control island). */}
         {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
@@ -1231,6 +1257,8 @@ function makeStyles(t: ThemeTokens) {
     users: { color: t.snrColor, fontFamily: F, fontSize: 13 },
     favBtn: { padding: 4 },
     fav:   { color: t.sectionColor, fontSize: 20 },
+    ctrlModeBtn: { borderWidth: 1, borderColor: t.btnBorder, backgroundColor: t.btnBg, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+    ctrlModeTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 10, fontWeight: 'bold', letterSpacing: 1.5 },
     favOn: { color: '#e5484d' },
     err: { color: '#ff8a8a', fontFamily: F, fontSize: 13, textAlign: 'center' },
     pausedBanner: {
