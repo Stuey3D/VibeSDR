@@ -92,14 +92,31 @@ export interface AdvRdsPanelProps {
 
 /** One label/value row. `conf` drives the RAW-mode confirmation colouring: in RAW a label is
  *  red until the field has earned its confirmation, so the panel visibly resolves. */
-function Row({ label, value, colour, conf, raw }: {
+function Row({ label, value, colour, conf, raw, reserve }: {
   label: string; value: string; colour?: string; conf?: boolean; raw: boolean;
+  /** ★ The LONGEST string this row can ever show. Rendered invisibly underneath to
+   *  reserve the height, so the row cannot change size when the value does. */
+  reserve?: string;
 }) {
   const lblCol = raw && conf !== undefined ? (conf ? C.good : C.bad) : C.muted;
   return (
     <View style={s.row}>
       <Text style={[s.lbl, { color: lblCol }]} numberOfLines={1}>{label}</Text>
-      <Text style={[s.val, colour ? { color: colour } : null]}>{value}</Text>
+      {reserve ? (
+        // ★★ RDS↔PILOT ALTERNATES BETWEEN A SHORT AND A VERY LONG VALUE — "27° ·
+        // nominal · 98% steady" versus "rotating 2°/s — encoder not locked to pilot"
+        // — and it updates several times a second, so the panel jolted every time it
+        // flipped (Stuart). Truncating was the wrong fix: that message IS the
+        // diagnosis the field exists to deliver. So reserve the worst case and lay
+        // the live value over it — correct at any width, unlike a fixed height.
+        <View style={{ flex: 1 }}>
+          <Text style={[s.val, { opacity: 0 }]}>{reserve}</Text>
+          <Text style={[s.val, colour ? { color: colour } : null,
+                        { position: 'absolute', left: 0, right: 0, top: 0 }]}>{value}</Text>
+        </View>
+      ) : (
+        <Text style={[s.val, colour ? { color: colour } : null]}>{value}</Text>
+      )}
     </View>
   );
 }
@@ -516,7 +533,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="Errors"      value={ber >= 0 ? `${ber}%` : DASH} />
           <Row raw={raw} label="Pilot dev"   value={pilotTxt} colour={pilotCol} />
           <Row raw={raw} label="RDS dev"     value={rdsDevTxt} colour={rdsDevCol} />
-          <Row raw={raw} label="RDS↔pilot"   value={phaseTxt} colour={phaseCol} />
+          <Row raw={raw} label="RDS↔pilot"   value={phaseTxt} colour={phaseCol}
+               reserve="rotating 00°/s — encoder not locked to pilot" />
           <Row raw={raw} label="RadioText"   value={p.rt || DASH} />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
           <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />

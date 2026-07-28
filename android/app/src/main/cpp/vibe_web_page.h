@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (337.9 KB)
+// Source: web/client/  (338.8 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -610,12 +610,23 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    otherwise override anything set here.) */
 .rdsF { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 /* ★ A SINGLE-VALUE ROW MUST NOT CHANGE HEIGHT. These fields update several times a
-   second, and a value (or a label) that wraps to a second line pushes every row below
-   it — the whole panel jolts while you are reading it. Fixed height + no wrapping, so
-   the numbers change and nothing moves. RadioText and the like are exempt: they are
-   genuinely multi-line, and they are not on this class. */
+   second, and a value that wraps to a second line pushes every row below it — the
+   whole panel jolts while you are reading it. RadioText and friends are exempt: they
+   are genuinely multi-line and do not carry this class. */
 .rdsF.rdsFix { min-height: 17px; align-items: center; }
 .rdsF.rdsFix label, .rdsF.rdsFix span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ★★ RDS↔PILOT IS THE HARD ONE: it alternates between "27° · nominal · 98% steady"
+   and "rotating — encoder not locked to pilot", and that difference is FIVE LINES in
+   a narrow panel. Truncating it was my first attempt and it was wrong — that message
+   IS the diagnosis this field exists to deliver, so hiding it defeats the point.
+   ★ So RESERVE THE WORST CASE instead: an invisible sizer holds the longest string
+   and sets the height, the live value sits on top of it. Correct at every panel
+   width, where a fixed pixel height would not be. Keep the sizer text in step with
+   the longest string main.ts can produce. */
+.rdsPhaseWrap { position: relative; flex: 1 1 auto; min-width: 0; }
+.rdsPhaseWrap .sizer { visibility: hidden; pointer-events: none; display: block; }
+.rdsPhaseWrap #rxPhase { position: absolute; inset: 0; }
 .rdsF.rdsWide { grid-column: 1 / -1; }
 /* ★ AF entries are TAPPABLE — the tooltip has always said so; now they behave like it and,
    just as importantly, LOOK like it. A comfortable hit area matters on a phone, where these
@@ -1143,7 +1154,7 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label title="RDS injection. Typically 2–4 kHz; 7.5% (5.6 kHz) is the ceiling. Higher means the station is pushing its RDS hard, which helps reception. Inferred after filtering, so indicative rather than calibrated.">RDS dev</label><span id="rxRdsDev">—</span></div>
         <!-- ★★★ The measurement FM-DXers carry a Pira analyser to get. Near 0 or near 90 is
              correct; anything in between is a transmitter fault. -->
-        <div class="rdsF rdsFix"><label title="Phase between the station's RDS subcarrier and its own 19 kHz pilot. Correct is near 0°, or near 90° for quadrature encoding — anything between indicates a transmitter fault. Reported as an unsigned angle 0-90°, the same convention a broadcast analyser uses.">RDS↔pilot</label><span id="rxPhase">—</span></div>
+        <div class="rdsF"><label title="Phase between the station's RDS subcarrier and its own 19 kHz pilot. Correct is near 0°, or near 90° for quadrature encoding — anything between indicates a transmitter fault. Reported as an unsigned angle 0-90°, the same convention a broadcast analyser uses.">RDS↔pilot</label><span class="rdsPhaseWrap"><span class="sizer">rotating — encoder not locked to pilot</span><span id="rxPhase">—</span></span></div>
         <div class="rdsF rdsWide"><label>RadioText</label><span id="rxRt">—</span></div>
         <!-- ★ Asked for directly by the FM-DX community: RT+ carves artist and title out of
              RadioText using start/length pointers (ODA 4BD7, announced in group 3A), and Long
