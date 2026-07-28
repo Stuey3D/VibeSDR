@@ -105,11 +105,13 @@ connection?
 
 ★★ **Two real gaps found, before any testing:**
 
-1. **No WifiLock on the VibeServer path.** `VibeWifiLock` exists and documents the
-   exact failure ("WiFi enters power-save between beacons"), but it is acquired
-   only for the rtl_tcp client/server paths — `startVibeServer` takes none. While
-   streaming, constant traffic hides this. While IDLE — which is the whole
-   scenario — power-save is exactly when an inbound connection cannot reach us.
+1. ~~**No WifiLock on the VibeServer path.**~~ ★★ **WRONG — I checked the module
+   and not the service.** `RtlTcpServerService` DOES acquire one
+   (`VibeWifiLock(this, "VibeSDR:RtlTcpServer")`, acquired :101, released :209),
+   and `startVibeServerNow` starts that service. The declaration comment in
+   VibeLocalSdrModule even says so: "the server path holds its own in the FGS".
+   ★ Second time in one day I called something missing by looking at one file —
+   the multicast lock was the first. CHECK THE SERVICE, not just the module.
 2. **The foreground service is MEDIA-typed.** `VibeStreamService` uses
    `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`, which is honest while audio flows and
    questionable for a server with no listeners. If that service is not running,
