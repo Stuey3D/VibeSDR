@@ -2574,6 +2574,17 @@ struct LocalSdrShim::Impl {
         // 0 here = the server's default (20 fps), i.e. no owner-imposed cap.
         { double mr = g_serveOnLan.load() ? g_vsMaxFftRate.load() : 0.0;
           j += ",\"maxFftRate\":" + std::to_string((long long)(mr > 0 ? mr : 0)); }
+        // ★★ NR AND NOTCH ARE GLOBAL AND STICKY — the same reason lockedRate is here.
+        // They live on the Impl and survive a listener leaving, so the NEXT listener
+        // inherits whatever the last one set while their own UI renders its defaults.
+        // Stuart tuned to MW, heard something odd, and found NR shown OFF and actually
+        // ON — only "wiggle the control" resynced it (2026-07-28). A control that lies
+        // about the radio's state is worse than one that is missing: you cannot even
+        // tell something is wrong.
+        // ★ ADVERTISE STATE THE SERVER ENFORCES. Every silent disagreement we have hit
+        // — locked rate, fps ceiling, admin lock, and now these — is the same bug.
+        j += std::string(",\"nr\":")    + (nrOn.load()    ? "true" : "false");
+        j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // Owner requires the idle saver — the client locks its toggle on rather than offering a
         // switch we would silently ignore.
         j += ",\"forceIdleSaver\":";

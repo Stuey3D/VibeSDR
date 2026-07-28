@@ -126,6 +126,10 @@ export interface SpectrumCallbacks {
   onSummon?: () => void;
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
               forceIdleSaver?: boolean, radio?: RadioCaps | null) => void;
+  /** ★ Global server-side DSP state (NR, notch). These SURVIVE a listener leaving,
+   *  so the next listener inherits them — the client must render what the server
+   *  says rather than its own saved prefs, or the control lies about the radio. */
+  onDspState?: (nr: boolean, notch: boolean) => void;
   onRds?:    (meta: RdsMeta) => void;
   /** Advanced RDS payload — only sent while the RDS decoder is attached. */
   onRdsX?:   (x: RdsExt) => void;
@@ -338,6 +342,9 @@ export class SpectrumClient {
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null);
+        if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
+          this.cb.onDspState?.(msg.nr === true, msg.notch === true);
+        }
         // ★ Seconds left on a limited session, sent on connect so the clock starts THEN
         // rather than at the first warning. -1 = no limit / exempt.
         if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft >= 0) {

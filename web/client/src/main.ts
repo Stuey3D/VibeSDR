@@ -440,6 +440,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       refreshAdminRow();
       if (!ok) alert('That admin password was not accepted.');
     },
+    // ★★ THE SERVER'S WORD ON ITS OWN DSP. NR and notch are GLOBAL and sticky —
+    // whatever the last listener left is what the radio is doing — so rendering our
+    // saved prefs showed NR OFF while it was audibly ON, and only dragging the
+    // slider resynced it (Stuart, on MW, 2026-07-28). A control that misreports the
+    // radio is worse than a missing one: nothing tells you to look.
+    onDspState: (nr, notch) => {
+      const nrEl = document.getElementById('nr') as HTMLInputElement | null;
+      if (nrEl && (Number(nrEl.value) > 0) !== nr) {
+        // Keep the user's chosen STRENGTH when it is on; 0 is the honest "off".
+        nrEl.value = nr ? String(Math.max(1, Number(prefs()['nr']) || 50)) : '0';
+        nrEl.dispatchEvent(new Event('input'));
+      }
+      const nEl = document.getElementById('notch');
+      if (nEl && nEl.classList.contains('on') !== notch) {
+        nEl.classList.toggle('on', notch);
+        nEl.textContent = notch ? 'ON' : 'OFF';
+      }
+    },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       applyRadioCaps(radio ?? null);
@@ -4469,19 +4487,74 @@ function buildVfo() {
   if (typeof saved === 'number' && saved > 0) step = saved;
   attachHoldSweep($('tuneDown'), () => nudge(-step));
   attachHoldSweep($('tuneUp'),   () => nudge(step));
-  $('stepBtn').onclick  = cycleStep;
+  $('stepBtn').onclick  = openStepMenu;
   syncStep();
   renderFreq();
 }
 
-/** Click the step button to walk the ladder for the current band. */
+/** Walk the ladder — kept for the keyboard shortcut, where cycling is the right
+ *  gesture because there is nothing to point at. */
 function cycleStep() {
   if (!spec) return;
   const steps = stepsForFreq(spec.frequency);
   const i = steps.indexOf(step);
-  step = steps[(i + 1) % steps.length];
+  setStep(steps[(i + 1) % steps.length]);
+}
+
+function setStep(v: number) {
+  step = v;
   $('stepBtn').textContent = formatStep(step);
   savePref('step', step);
+}
+
+/** ★ A MENU, NOT A CYCLE. The ladder has grown to the point where reaching the
+ *  step you want means clicking through the ones you don't — and on the HF ladder
+ *  that is a lot of clicks to go the wrong way round. A list you point at is the
+ *  right control once the options stop being few (Stuart: "bothered me for ages").
+ *  ★ The keyboard [ and ] keep cycling: there is nothing to aim at from a key. */
+function openStepMenu() {
+  if (!spec) return;
+  document.getElementById('stepMenu')?.remove();
+  const steps = stepsForFreq(spec.frequency);
+  const btn = $('stepBtn');
+  const r = btn.getBoundingClientRect();
+
+  const m = document.createElement('div');
+  m.id = 'stepMenu';
+  m.style.cssText = 'position:fixed;z-index:9998;background:#0d0d0d;border:1px solid #ffa000;'
+    + 'border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;'
+    + 'font:12px/1.4 var(--mono,monospace);box-shadow:0 6px 24px rgba(0,0,0,.6);'
+    + 'max-height:60vh;overflow:auto';
+  for (const v of steps) {
+    const b = document.createElement('button');
+    b.textContent = formatStep(v);
+    b.style.cssText = 'background:none;border:0;color:' + (v === step ? '#ffe566' : '#ddd')
+      + ';padding:7px 14px;text-align:right;cursor:pointer;border-radius:5px;font:inherit';
+    b.onmouseenter = () => { b.style.background = 'rgba(255,160,0,.18)'; };
+    b.onmouseleave = () => { b.style.background = 'none'; };
+    b.onclick = () => { setStep(v); close(); };
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+
+  // Anchor ABOVE the button when there is no room below — the VFO sits at the
+  // bottom of the window, so "below" is usually off-screen.
+  const mh = m.offsetHeight;
+  const top = (r.top - mh - 6 > 0) ? r.top - mh - 6 : Math.min(r.bottom + 6, innerHeight - mh - 8);
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  m.style.top = `${Math.max(8, top)}px`;
+
+  const close = () => {
+    m.remove();
+    document.removeEventListener('mousedown', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onDoc = (e: MouseEvent) => { if (!m.contains(e.target as Node)) close(); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
 }
 
 /** Keep the step legal for the band we're in — the HF and VHF ladders differ,
