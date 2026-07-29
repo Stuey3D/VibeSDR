@@ -408,7 +408,10 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const showRate = !!m && q > 0 && everHadRate.current;
   const rateTxt  = showRate ? `${Math.round(m!.kbps ?? 0)}k/s · ${Math.round(m!.fps ?? 0)}fps` : '';
   return (
-    <View style={pm.linkRow}>
+    // ★ collapsable={false} so the tour can measure it — a plain View can be flattened
+    //   away by RN and then measureInWindow has nothing to report. Same as the other
+    //   tour targets.
+    <View ref={tourRef('linkMeter')} collapsable={false} style={pm.linkRow}>
       <PhoneGlyph color={dim} />
       <Text style={pm.linkArrows}>⇄</Text>
       <LinkBars q={q} />
