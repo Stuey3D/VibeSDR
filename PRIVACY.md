@@ -98,8 +98,8 @@ microphone.)
 
 ## Children
 
-The VibeSDR apps are not directed at children and does not knowingly collect any data from
-anyone.
+The VibeSDR apps are not directed at children and do not knowingly collect any data
+from anyone.
 
 ## Changes
 
