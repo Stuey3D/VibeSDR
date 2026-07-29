@@ -17,6 +17,11 @@
 	<!-- Stops the empty stub appearing or launching on iPhone. -->
 	<key>LSApplicationLaunchProhibited</key>
 	<true/>
+	<!-- Jr uses HTTPS and the system's own TLS only, so it is export-exempt. Without
+	     this, App Store Connect asks the export-compliance question on EVERY
+	     submission — the phone app sets the same key via app.json. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
