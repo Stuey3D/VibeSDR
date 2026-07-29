@@ -4882,6 +4882,44 @@ export default function SDRScreen({ route, navigation }: Props) {
     </View>
   );
 
+  // ★ The two control schemes and the keyboard reference both live INSIDE the
+  //   settings sheet, and the tour cannot spotlight into it — MenuSheet is a
+  //   <Modal>, and the coachmark is now an in-tree overlay that cannot draw above
+  //   one (see Coachmark.tsx). So they are illustrated, like the servers chip.
+  const rowMock = (label: string, a: string, b: string, aActive: boolean) => (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
+      <Text style={{ color: 'rgba(255,184,51,0.65)', fontFamily: 'Nixie One', fontSize: 11,
+                     letterSpacing: 0.6, width: 46 }}>{label}</Text>
+      {[a, b].map((t, i) => (
+        <View key={t} style={{
+          paddingVertical: 4, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1,
+          borderColor: (i === 0) === aActive ? 'rgba(255,160,0,0.9)' : 'rgba(255,160,0,0.28)',
+          backgroundColor: (i === 0) === aActive ? 'rgba(255,160,0,0.18)' : 'transparent' }}>
+          <Text style={{ color: (i === 0) === aActive ? '#ffb833' : 'rgba(255,184,51,0.5)',
+                         fontFamily: 'Nixie One', fontSize: 12 }}>{t}</Text>
+        </View>
+      ))}
+    </View>
+  );
+  const schemeMock = (
+    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
+                   backgroundColor: 'rgba(14,10,4,0.94)', padding: 10, minWidth: 200 }}>
+      <Text style={{ color: 'rgba(255,184,51,0.75)', fontFamily: 'Nixie One', fontSize: 11,
+                     letterSpacing: 1 }}>CONTROLS</Text>
+      {rowMock('TUNE', 'DRUM', 'KEYS', true)}
+      {rowMock('ZOOM', 'DRUM', 'KEYS', true)}
+    </View>
+  );
+  const keysMock = (
+    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
+                   backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 9, paddingHorizontal: 12,
+                   minWidth: 200 }}>
+      <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>
+        ⌨  KEYBOARD SHORTCUTS
+      </Text>
+    </View>
+  );
+
   const sdrTour = useCoachmarkTour([
     { id: 'freq', title: 'Set the frequency',
       body: 'Tap the frequency readout to type one in directly (kHz or MHz).',
@@ -4904,7 +4942,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Noise reduction, the auto notch, decoders, bookmarks, recordings and display settings all live behind the settings cog.',
       target: tourRef('menuBtn') },
-  ], { storageKey: 'lsv_tour_sdr_v4' });
+    // ★ DISCOVERY. Neither of these is findable without opening the menu and
+    //   reading every row, so the tour is where people meet them at all.
+    { id: 'schemes', title: 'Pick your control scheme',
+      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under CONTROLS in the settings cog.',
+      target: tourRef('menuBtn'), illustration: schemeMock },
+    { id: 'keys', title: 'A keyboard drives the whole thing',
+      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and nearly every control has a key behind it: tuning, zoom, mode, bookmarks, the menus. The full list is in the settings cog, and Esc always steps back out of whatever is open.',
+      target: tourRef('menuBtn'), illustration: keysMock },
+    // ★★ v5, not v4: the two steps above are new in V10 and describe things that
+    //    already shipped invisibly. Bumping the key re-runs the tour ONCE for
+    //    people who did v4 — the only way an existing user ever finds out.
+  ], { storageKey: 'lsv_tour_sdr_v5' });
   const onReplayTour = useCallback(() => {
     setMenuOpen(false);
     setTimeout(() => sdrTour.restart(), 320);
