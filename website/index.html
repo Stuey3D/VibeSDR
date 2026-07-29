@@ -268,11 +268,22 @@
   .shot-hint { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
   /* Advanced RDS — the photo carries this section, so it gets real width. */
   .rds-grid { display: grid; grid-template-columns: 1fr 1.05fr; gap: 46px; align-items: center; }
-  @media (max-width: 860px) { .rds-grid { grid-template-columns: 1fr; gap: 28px; } .rds-photo { order: -1; } }
-  .rds-photo img { width: 100%; border-radius: 16px; display: block;
+  .watch-grid .shack-photo { margin: 0; }
+  @media (max-width: 860px) { .rds-grid { grid-template-columns: 1fr; gap: 28px; } .shack-photo { order: -1; } }
+  .shack-photo img { width: 100%; border-radius: 16px; display: block;
     border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 14px 40px rgba(0,0,0,0.6); }
-  .rds-photo figcaption { font-family: var(--mono); font-size: 11px; color: var(--muted);
+  .shack-photo figcaption { font-family: var(--mono); font-size: 11px; color: var(--muted);
     letter-spacing: 0.03em; margin-top: 10px; line-height: 1.6; }
+  .wc-shot { margin: 30px 0 6px; }
+  .wc-shot img { width: 100%; border-radius: 12px; display: block;
+    border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 12px 34px rgba(0,0,0,0.55); }
+  .wc-shot figcaption { font-family: var(--mono); font-size: 11px; color: var(--muted);
+    letter-spacing: 0.03em; margin-top: 10px; }
+  .jr-showcase { display: grid; grid-template-columns: 0.8fr 1fr; gap: 40px; align-items: center;
+    margin: 34px 0 6px; }
+  @media (max-width: 820px) { .jr-showcase { grid-template-columns: 1fr; gap: 24px; } }
+  .jr-media video { width: 100%; max-width: 300px; display: block; margin: 0 auto; border-radius: 18px; }
+  .jr-copy h3 { font-size: 1.35em; margin: 6px 0 10px; }
   .family-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 22px; margin-top: 34px; }
   .fam { margin: 0; text-align: center; }
@@ -445,9 +456,10 @@
       <h2 style="font-size:1.15em;margin-top:22px">Bring a keyboard, get a control panel.</h2>
       <p class="sub">Pair a Bluetooth keyboard to a phone, tablet or Mac and the whole receiver comes under the keys — tuning, band and mode changes, memory recall. Hands stay put, eyes stay on the waterfall.</p>
     </div>
-    <div class="watch-media">
-      <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR live on an Apple Watch — spectrum waterfall, tuning the AM band with the Digital Crown"></video>
-    </div>
+    <figure class="shack-photo">
+      <img src="assets/shack-tv.jpg" loading="lazy" alt="VibeSDR on a television showing the full spectrum and waterfall at 648 kHz, with a phone beside it acting as the control surface" />
+      <figcaption>648&nbsp;kHz on the big screen — spectrum, waterfall and band plan at full size, with the phone alongside doing the tuning. The receiver is an MLA&#8209;30+ loop in the garden.</figcaption>
+    </figure>
   </div>
 </section>
 
@@ -469,7 +481,7 @@
 </section>
 
 <section class="band" id="rds">
-  <div class="wrap rds-grid">
+  <div class="wrap">
     <div>
       <p class="eyebrow">Advanced RDS</p>
       <h2>A broadcast analyser, <span class="glow">in your hand.</span></h2>
@@ -486,10 +498,6 @@
         Calibrated against a PIRA broadcast analyser by <a href="https://fmdx.org">Hans van&nbsp;Eijsden</a>, who measured our readings against professional equipment station by station until they agreed. Thank you, Hans.
       </p>
     </div>
-    <figure class="rds-photo">
-      <img src="assets/rds-garden.jpg" loading="lazy" alt="VibeSDR running Advanced RDS on an Android phone, held in a garden, with a receiving antenna visible behind" />
-      <figcaption>BBC&nbsp;R3 on 98.2, decoded in a back garden — deviation, constellation, MPX and symbol trace, live. The aerial doing the work is just behind the phone.</figcaption>
-    </figure>
   </div>
 </section>
 
@@ -503,6 +511,10 @@
     <p class="sub big">
       It serves its own web page too, so you're not tied to the app — point any browser at <i>vibesdr.local</i> and tune from your desktop. And because VibeDSP does the compression, you're sending a finished radio rather than a firehose of raw IQ: about 25× lighter than rtl_tcp, which is the difference between working over a hotspot and not.
     </p>
+    <figure class="wc-shot">
+      <img src="assets/web-client.jpg" loading="lazy" alt="VibeServer's built-in web client running in a desktop browser — full spectrum, waterfall and controls, with no software installed" />
+      <figcaption>No app required at the other end — VibeServer serves this itself.</figcaption>
+    </figure>
     <p class="trust">The same server now runs natively on Apple&nbsp;Silicon Macs as a menu&#8209;bar app.</p>
   </div>
 </section>
@@ -514,6 +526,20 @@
     <p class="sub big">
       Everything here runs on VibeDSP, so the waterfall you set up on one turns up looking the same on the rest.
     </p>
+
+    <!-- ★ The brief is explicit that BOTH existing animations stay: the phone one shows what it
+         looks like, this one lands hardest here, in context, next to the Jr description. -->
+    <div class="jr-showcase">
+      <div class="jr-media">
+        <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR Jr live on an Apple Watch — spectrum waterfall, tuning with the Digital Crown"></video>
+      </div>
+      <div class="jr-copy">
+        <p class="eyebrow">VibeSDR&nbsp;Jr</p>
+        <h3>A complete receiver on the Apple&nbsp;Watch.</h3>
+        <p class="sub">Its own connection, its own audio, no phone involved. Turn the Digital&nbsp;Crown to tune, press and hold for the menu, and leave the handset at home.</p>
+      </div>
+    </div>
+
     <div class="family-grid">
       <figure class="fam">
         <img src="assets/icon.png" alt="VibeSDR app icon" />
