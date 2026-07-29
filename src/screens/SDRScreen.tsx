@@ -5297,6 +5297,16 @@ export default function SDRScreen({ route, navigation }: Props) {
                 onPress={() => {
                   if (kbInUse) { noteTouchInteraction(); return; }   // first tap: back to touch
                   setCompatWarn(false);
+                  // ★★ RELEASE THE SEAT FIRST. Compatibility mode opens the receiver's OWN
+                  //    web page, and that page makes its own connection — so leaving ours open
+                  //    put TWO clients from one listener on a shared receiver. On a Kiwi, where
+                  //    slots are scarce and refusals are per-IP, that is us competing with
+                  //    ourselves; to the operator it looks like one person taking two seats.
+                  //    ★ Stuart committed to exactly this publicly for the FM-DX plugin view
+                  //      ("release the session in the background so a user isn't hogging
+                  //      multiple slots", FMDX.org Discord 2026-07-29) — the Kiwi path should
+                  //      not quietly do the opposite.
+                  client.current?.disconnectSocket?.();
                   let u = (baseUrl || '').trim().replace(/\/+$/, '')
                     .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
                   if (!/^https?:\/\//.test(u)) u = 'http://' + u;
