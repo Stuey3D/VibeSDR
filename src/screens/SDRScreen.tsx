@@ -4938,7 +4938,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "Tap the Servers chip (top-left) to return to the server list — this is your way out, because the phone's Back gesture is switched off over the tuning area so it can't fight the drum. You can also favourite the current server or set it as your default from here.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, or to favourite this server and set it as your default.",
       target: tourRef('serversChip'), illustration: chipMock },
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Noise reduction, the auto notch, decoders, bookmarks, recordings and display settings all live behind the settings cog.',
