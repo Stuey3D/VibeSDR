@@ -1576,6 +1576,15 @@ final class UberClient: ObservableObject {
   /// GET /vibeserver/auth → nonce → HMAC-SHA256(pin, nonce) → `authSuffix`. Reusable 1-hour credential.
   /// Returns false (with `status` carrying the human reason) on offline / wrong-PIN / locked-out.
   private func resolveVibeAuth() async -> Bool {
+    // ★ AN EMPTY HOST IS NOT A NETWORK PROBLEM, so it must not be reported as one. "http:///path"
+    //   passes `URL(string:)` happily, and the resulting timeout blamed the server, the Wi-Fi and
+    //   the watch for a fault entirely inside the app. Say what is actually wrong.
+    guard !host.isEmpty else {
+      Vitals.crumb("VIBE auth ABORT empty host")
+      status = "bad server URL"
+      vibeDiag = "no host in this favourite"
+      return false
+    }
     let httpScheme = secure ? "https" : "http"
     guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth") else { status = "bad server URL"; return false }
     // ★ WHAT DID WE ACTUALLY ASK FOR, AND WHAT CAME BACK. A Series 6 on watchOS 26 reaches

@@ -439,6 +439,19 @@ final class SpikeLink: ObservableObject {
   /// server's type (UberSDR or KiwiSDR), tearing down any previous one. One-time boot (battery +
   /// path monitor) runs on the first pick.
   func start(url: String, host: String, type: ServerType, name: String, pin: String = "") {
+    // ★★★ RECOVER AN EMPTY HOST FROM THE URL. `SDRServer.host` is the VibeServer host:port and it
+    //    DEFAULTS TO "" — the url is only a display key — so a VibeServer favourite that came from
+    //    anywhere without that field (the phone's model has no host concept; iCloud sync carries
+    //    what the phone stored) arrived here with nothing in it. `UberClient` then built
+    //    "http:///vibeserver/auth", which is a VALID URL with a nil host, so the `guard let url`
+    //    waved it through and we sat waiting on a request that had no address to go to.
+    //
+    //    ★★ That is the whole "VibeServer never works on the watch" hunt: -1001 (timed out, not
+    //    refused, not unresolvable) and ZERO packets at the server, because none were ever sent.
+    //    Network, subnet, mDNS, transport and Local Network permission were all innocent, which is
+    //    why eliminating them one by one got us nowhere. Found by putting the host next to the
+    //    error code on the wrist and seeing "-1001 @ " with nothing after the @.
+    let host = host.isEmpty ? hostPort(url) : host
     serverName = name
     lastConnect = (url, host, type, name)
     needsPin = false
