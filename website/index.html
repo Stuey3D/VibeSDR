@@ -254,6 +254,18 @@
   .mac-alpha p { color: var(--muted); font-size: 15px; line-height: 1.55; margin: 0 0 18px; }
   .mac-alpha .btn { display: inline-block; }
   /* The Vibe family grid */
+  /* Screenshot shelf — scrolls sideways rather than stacking, so eleven shots cost no page
+     height and the gesture is the same one people already use on a phone. */
+  .shots { margin-top: 30px; }
+  .shot-rail { display: flex; gap: 16px; overflow-x: auto; padding: 4px 0 18px;
+    scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+  .shot-rail::-webkit-scrollbar { height: 8px; }
+  .shot-rail::-webkit-scrollbar-thumb { background: rgba(53,224,138,0.28); border-radius: 4px; }
+  .shot-rail figure { margin: 0; flex: 0 0 auto; scroll-snap-align: center; }
+  .shot-rail img { width: 210px; border-radius: 18px; display: block;
+    border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 8px 26px rgba(0,0,0,0.55); }
+  @media (max-width: 640px) { .shot-rail img { width: 168px; } }
+  .shot-hint { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
   .family-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 22px; margin-top: 34px; }
   .fam { margin: 0; text-align: center; }
@@ -326,6 +338,7 @@
 <header>
   <div class="wordmark"><span class="dot"></span>VibeSDR</div>
   <nav>
+    <a href="#screens">Screenshots</a>
     <a href="#tunes">What it tunes</a>
     <a href="#dsp">VibeDSP</a>
     <a href="#family">Family</a>
@@ -338,10 +351,10 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <p class="eyebrow" style="margin-bottom:18px">Mobile&#8209;first SDR · iOS · Android · Apple&nbsp;Watch</p>
+      <p class="eyebrow" style="margin-bottom:18px">Mobile&#8209;first SDR · iOS · Android · Apple&nbsp;Watch · Mac</p>
       <h1>Two dials control everything. <span class="glow">Just like the radios you grew up with.</span></h1>
       <p class="lede">
-        A mobile&#8209;first SDR receiver built around two large weighted drums — spin them, flick them, let them coast, exactly like the analogue dials of days gone by. Live GPU waterfall, most major SDR networks, local RTL&#8209;SDR, and the spectrum drawn right on your Apple&nbsp;Watch.
+        An easy&#8209;to&#8209;use, mobile&#8209;first, fully scalable SDR client — built to bridge the gap between real, easy&#8209;to&#8209;use hardware and complex, highly technical SDR software. It works from a 1&Prime; watch screen all the way up to a giant TV, and everything in between.
       </p>
       <div class="cta-row">
         <a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">Get it on the App&nbsp;Store <span class="price">£2.99</span></a>
@@ -377,9 +390,11 @@
       <p class="eyebrow">Designed for your thumbs</p>
       <h2 class="sc-h">Tuned by hand, the way it should be.</h2>
       <p>Two large weighted drums with real inertia — spin them, flick them, let them coast to a stop. Watch the frequency roll and the waterfall track it live. It feels like tuning a radio, because that's exactly what it's modelled on.</p>
+      <p>Prefer buttons? Swap the drums for tuner keys and it becomes a 90s car stereo instead — press to step, hold to sweep. Two ways of tuning, both from radios you could carry, and you pick the one your hands want today.</p>
       <ul class="ticks">
-        <li>GPU-rendered waterfall, drawn in real time</li>
+        <li>Razor&#8209;sharp GPU waterfall, drawn in real time</li>
         <li>Full demod set — AM, FM, SSB, CW and more</li>
+        <li>Automatic Link Management — it adapts to whatever your connection will carry</li>
         <li>Background audio, band plan, live signal readout</li>
       </ul>
     </div>
@@ -389,13 +404,13 @@
 <section class="band watch" id="watch">
   <div class="wrap watch-grid">
     <div class="watch-copy">
-      <p class="eyebrow">New in v9 <span class="badge-free">Free beta</span></p>
+      <p class="eyebrow">New in v10 <span class="badge-free">Free beta</span></p>
       <h2>And the spectrum, on your wrist.</h2>
       <p class="sub">The live waterfall drawn on the Apple&nbsp;Watch itself — not a two-button remote. Tune real hardware with the Digital&nbsp;Crown while your iPhone stays locked in your pocket.</p>
       <div class="cta-row" style="margin-top:4px">
         <a class="btn btn-beta" href="https://testflight.apple.com/join/AnKTNhuZ">Join the free Watch beta →</a>
       </div>
-      <p class="trust">TestFlight · v9.0.1 · approved by Apple for external testing · needs an iPhone&nbsp;+ Apple&nbsp;Watch.</p>
+      <p class="trust">TestFlight · v10.0 Beta&nbsp;1 · approved by Apple for external testing · needs an iPhone&nbsp;+ Apple&nbsp;Watch.</p>
       <div class="soon-card">
         <p class="soon-k">Coming soon to TestFlight</p>
         <p class="soon-h">A full <span class="glow">standalone</span> Apple&nbsp;Watch client. No iPhone needed.</p>
@@ -405,10 +420,35 @@
     <div class="watch-shot">
       <figure class="wrist">
         <img src="assets/watch-wrist.jpg" alt="VibeSDR running on an Apple Watch worn on the wrist, tuned to an AM broadcast" />
-        <figcaption>The v9 beta, on the wrist — free on TestFlight today.</figcaption>
+        <figcaption>The v10 beta, on the wrist — free on TestFlight today.</figcaption>
       </figure>
       <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR live on an Apple Watch — spectrum waterfall, tuning the AM band with the Digital Crown"></video>
     </div>
+  </div>
+</section>
+
+<section class="band shots" id="screens">
+  <div class="wrap">
+    <p class="eyebrow">See it running</p>
+    <h2>Every band, <span class="glow">on the device in your pocket.</span></h2>
+    <p class="sub big">
+      Real screenshots, not mock&#8209;ups — the waterfall, the drums, Advanced&nbsp;RDS, the decoders
+      and VibeServer, all running on a phone.
+    </p>
+    <div class="shot-rail">
+        <figure><img src="assets/shots/shot01.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 1" /></figure>
+        <figure><img src="assets/shots/shot02.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 2" /></figure>
+        <figure><img src="assets/shots/shot03.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 3" /></figure>
+        <figure><img src="assets/shots/shot04.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 4" /></figure>
+        <figure><img src="assets/shots/shot05.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 5" /></figure>
+        <figure><img src="assets/shots/shot06.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 6" /></figure>
+        <figure><img src="assets/shots/shot07.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 7" /></figure>
+        <figure><img src="assets/shots/shot08.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 8" /></figure>
+        <figure><img src="assets/shots/shot09.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 9" /></figure>
+        <figure><img src="assets/shots/shot10.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 10" /></figure>
+        <figure><img src="assets/shots/shot11.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 11" /></figure>
+    </div>
+    <p class="shot-hint">Scroll sideways for more →</p>
   </div>
 </section>
 
@@ -506,6 +546,11 @@
     <p class="sub big">
       Everything shares one engine and one look. VibeSDR is the app; around it sit the pieces that
       carry the signal further — onto your wrist, into your pocket, and out to your own network.
+    </p>
+    <p class="sub big">
+      Most apps that call themselves scalable mean a layout that reflows. VibeSDR adapts to the
+      <b>input you have</b>: a Digital&nbsp;Crown on a 1&Prime; watch, thumbs on a phone, a keyboard on an
+      iPad, a mouse on a Mac. Same radio, same engine — a different control surface each time.
     </p>
     <div class="family-grid">
       <figure class="fam">
