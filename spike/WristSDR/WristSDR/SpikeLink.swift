@@ -472,6 +472,15 @@ final class SpikeLink: ObservableObject {
       c = u
     default:  // .ubersdr
       let u = UberClient(waterfall: waterfall)
+      // ★★ DERIVE THE SCHEME, as the .vibeserver branch above already does. `secure` defaults
+      //    to TRUE, so a LOCAL UberSDR served over plain HTTP was given https for the auth
+      //    call and wss:// for the sockets — it could never connect. Every public UberSDR is
+      //    https, which is why this survived: only a LAN instance exposes it.
+      //    ★ Half of this bug was postConnection's hardcoded "https://" (fixed separately);
+      //      this is the other half, and fixing only that one would still have failed at the
+      //      WebSocket. Found via Stuart's test: on a Series 6, OWRX connected by local
+      //      address and UberSDR did not.
+      u.secure = url.hasPrefix("https") || url.hasPrefix("wss")
       u.host = host
       c = u
     }
