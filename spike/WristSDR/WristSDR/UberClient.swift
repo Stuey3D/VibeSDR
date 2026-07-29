@@ -821,7 +821,18 @@ final class UberClient: ObservableObject {
   private var specOpened = false
 
   private func postConnection() async -> Bool {
-    var req = URLRequest(url: URL(string: "https://\(host)/connection")!)
+    // ★★★ HONOUR THE SCHEME. This was hardcoded `https://` while every other call site in
+    //   this file does `secure ? "https" : "http"` — so a LOCAL UberSDR served over plain
+    //   HTTP got a TLS handshake against a non-TLS port and could never connect. Public
+    //   UberSDR instances are all https, which is why it was invisible for so long.
+    //   ★ Found 2026-07-29 by a test of Stuart's: on a Series 6, OWRX connected by LAN
+    //     address and UberSDR did not — which isolated it to this client rather than to
+    //     the network, the watch or watchOS.
+    let httpScheme = secure ? "https" : "http"
+    guard let cu = URL(string: "\(httpScheme)://\(host)/connection") else {
+      status = "bad server URL"; return false
+    }
+    var req = URLRequest(url: cu)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     // The same headers the phone sends. It is not obvious that the server cares — but a
@@ -1553,8 +1564,17 @@ final class UberClient: ObservableObject {
   private func resolveVibeAuth() async -> Bool {
     let httpScheme = secure ? "https" : "http"
     guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth") else { status = "bad server URL"; return false }
+    // ★ WHAT DID WE ACTUALLY ASK FOR, AND WHAT CAME BACK. A Series 6 on watchOS 26 reaches
+    //   every internet backend but never reaches a LAN VibeServer — and the server sees ZERO
+    //   packets, on Wi-Fi and on the phone relay, same subnet, with the Mac able to ping the
+    //   watch. Server, network, subnet, mDNS, transport and Local Network permission are all
+    //   eliminated from outside, so the remaining candidates are invisible without this: the
+    //   URL not being what we think (a .local name cannot resolve on the watch), or URLSession
+    //   declining to send. One attempt with these crumbs settles it.
+    Vitals.crumb("VIBE auth GET \(url.absoluteString)")
     do {
       let (data, _) = try await httpSession.data(from: url)
+      Vitals.crumb("VIBE auth OK \(data.count)B")
       guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         status = "not a VibeServer?"; return false
       }
@@ -1586,7 +1606,20 @@ final class UberClient: ObservableObject {
       needsPin = false
       return true
     } catch {
-      status = "can't reach server"
+      // ★ The REASON, not just the verdict. "can't reach server" is what the user sees;
+      //   the crumb is what tells us whether it was a timeout, a refusal, a DNS failure or
+      //   no route at all — four different bugs that look identical on the wrist.
+      let ns = error as NSError
+      Vitals.crumb("VIBE auth FAIL \(ns.domain) \(ns.code): \(ns.localizedDescription)")
+      // ★ SHOW THE CODE ON THE WRIST. The crumb lands in jr-vitals.log, which we have no way
+      //   to get off a watch Xcode cannot see — so the number goes in the status line, where
+      //   it can simply be read. It is the whole diagnosis in one integer:
+      //     -1003 cannot find host      → the URL is a name that will not resolve
+      //     -1004 could not connect     → refused, or no route to that host
+      //     -1001 timed out             → reached the network, got no answer
+      //     -1009 offline               → no usable interface at all
+      //   Four different bugs that are indistinguishable behind "can't reach server".
+      status = "can't reach server (\(ns.code))"
       return false
     }
   }
