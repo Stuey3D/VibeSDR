@@ -266,6 +266,13 @@
     border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 8px 26px rgba(0,0,0,0.55); }
   @media (max-width: 640px) { .shot-rail img { width: 168px; } }
   .shot-hint { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+  /* Advanced RDS — the photo carries this section, so it gets real width. */
+  .rds-grid { display: grid; grid-template-columns: 1fr 1.05fr; gap: 46px; align-items: center; }
+  @media (max-width: 860px) { .rds-grid { grid-template-columns: 1fr; gap: 28px; } .rds-photo { order: -1; } }
+  .rds-photo img { width: 100%; border-radius: 16px; display: block;
+    border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 14px 40px rgba(0,0,0,0.6); }
+  .rds-photo figcaption { font-family: var(--mono); font-size: 11px; color: var(--muted);
+    letter-spacing: 0.03em; margin-top: 10px; line-height: 1.6; }
   .family-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 22px; margin-top: 34px; }
   .fam { margin: 0; text-align: center; }
@@ -338,9 +345,11 @@
 <header>
   <div class="wordmark"><span class="dot"></span>VibeSDR</div>
   <nav>
-    <a href="#screens">Screenshots</a>
-    <a href="#tunes">What it tunes</a>
-    <a href="#dsp">VibeDSP</a>
+    <a href="#screens">Controls</a>
+    <a href="#shack">Shack mode</a>
+    <a href="#rds">Advanced RDS</a>
+    <a href="#tunes">Works with</a>
+    <a href="#server">VibeServer</a>
     <a href="#family">Family</a>
     <a href="#made">How it's made</a>
     <a href="https://github.com/Stuey3D/VibeSDR">Source</a>
@@ -351,29 +360,16 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <p class="eyebrow" style="margin-bottom:18px">Mobile&#8209;first SDR · iOS · Android · Apple&nbsp;Watch · Mac</p>
-      <h1>Two dials control everything. <span class="glow">Just like the radios you grew up with.</span></h1>
+      <p class="eyebrow" style="margin-bottom:18px">Mobile&#8209;first · scalable · iOS · Android · Apple&nbsp;Watch · Mac</p>
+      <h1>Mobile&#8209;first. Scalable. <span class="glow">From a 1&Prime; watch to a 65&Prime; TV.</span></h1>
       <p class="lede">
-        An easy&#8209;to&#8209;use, mobile&#8209;first, fully scalable SDR client — built to bridge the gap between real, easy&#8209;to&#8209;use hardware and complex, highly technical SDR software. It works from a 1&Prime; watch screen all the way up to a giant TV, and everything in between.
+        One SDR client that fits every screen you own. VibeDSP is light enough to run on your wrist and powerful enough to fill a television — so the same radio, the same waterfall and the same controls follow you from one to the other.
       </p>
       <div class="cta-row">
         <a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">Get it on the App&nbsp;Store <span class="price">£2.99</span></a>
         <span class="btn btn-soon" aria-disabled="true">Play&nbsp;Store <span class="price">Coming&nbsp;soon</span></span>
         <a class="btn btn-beta" href="https://testflight.apple.com/join/AnKTNhuZ">Free Apple&nbsp;Watch beta →</a>
         <a class="btn btn-ghost" href="https://github.com/Stuey3D/VibeSDR">View source</a>
-      </div>
-      <div class="worksfor">
-        <p class="wf-lead">Works with</p>
-        <ul class="wf-list">
-          <li>UberSDR</li>
-          <li>OpenWebRX</li>
-          <li>KiwiSDR</li>
-          <li>FM&#8209;DX Webserver</li>
-          <li>SpyServer</li>
-          <li>RTL&#8209;TCP</li>
-          <li>RTL&#8209;SDR via USB</li>
-          <li>VibeServer</li>
-        </ul>
       </div>
       <p class="trust">£2.99 covers <b>Apple's fee, not a paywall</b> — VibeSDR is GPLv3 and the source is free forever.</p>
     </div>
@@ -387,243 +383,158 @@
       <video src="assets/phone-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR running on iPhone — tuning across the AM band with the drum dial, live waterfall scrolling"></video>
     </div>
     <div class="showcase-copy">
-      <p class="eyebrow">Designed for your thumbs</p>
-      <h2 class="sc-h">Tuned by hand, the way it should be.</h2>
-      <p>Two large weighted drums with real inertia — spin them, flick them, let them coast to a stop. Watch the frequency roll and the waterfall track it live. It feels like tuning a radio, because that's exactly what it's modelled on.</p>
-      <p>Prefer buttons? Swap the drums for tuner keys and it becomes a 90s car stereo instead — press to step, hold to sweep. Two ways of tuning, both from radios you could carry, and you pick the one your hands want today.</p>
-      <ul class="ticks">
-        <li>Razor&#8209;sharp GPU waterfall, drawn in real time</li>
-        <li>Full demod set — AM, FM, SSB, CW and more</li>
-        <li>Automatic Link Management — it adapts to whatever your connection will carry</li>
-        <li>Background audio, band plan, live signal readout</li>
-      </ul>
+      <p class="eyebrow">Scaling</p>
+      <h2 class="sc-h">It doesn't reflow. It just fits.</h2>
+      <p>Grab the window and drag it. The layout follows in real time — landscape controls become portrait ones as the shape changes, panels find new homes, and the waterfall carries on scrolling through all of it without a single redraw. No stutter, no reload, no moment where the app catches up with you.</p>
+      <p>The same behaviour is what lets one build run on a watch, a phone, a tablet and a television. It isn't three apps with three layouts. It's one that genuinely fits whatever it's given.</p>
+      <p class="trust">And, entirely by accident: because it's built properly for iPad, it runs on Apple&nbsp;Silicon Macs as a desktop app. We didn't plan that one. It just works.</p>
     </div>
   </div>
 </section>
 
-<section class="band watch" id="watch">
-  <div class="wrap watch-grid">
-    <div class="watch-copy">
-      <p class="eyebrow">New in v10 <span class="badge-free">Free beta</span></p>
-      <h2>And the spectrum, on your wrist.</h2>
-      <p class="sub">The live waterfall drawn on the Apple&nbsp;Watch itself — not a two-button remote. Tune real hardware with the Digital&nbsp;Crown while your iPhone stays locked in your pocket.</p>
-      <div class="cta-row" style="margin-top:4px">
-        <a class="btn btn-beta" href="https://testflight.apple.com/join/AnKTNhuZ">Join the free Watch beta →</a>
-      </div>
-      <p class="trust">TestFlight · v10.0 Beta&nbsp;1 · approved by Apple for external testing · needs an iPhone&nbsp;+ Apple&nbsp;Watch.</p>
-      <div class="soon-card">
-        <p class="soon-k">Coming soon to TestFlight</p>
-        <p class="soon-h">A full <span class="glow">standalone</span> Apple&nbsp;Watch client. No iPhone needed.</p>
-        <p class="soon-p">The watch does it all itself — its own connection, its own DSP, its own audio. Just your wrist and the airwaves.</p>
-      </div>
-    </div>
-    <div class="watch-shot">
-      <figure class="wrist">
-        <img src="assets/watch-wrist.jpg" alt="VibeSDR running on an Apple Watch worn on the wrist, tuned to an AM broadcast" />
-        <figcaption>The v10 beta, on the wrist — free on TestFlight today.</figcaption>
-      </figure>
-      <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR live on an Apple Watch — spectrum waterfall, tuning the AM band with the Digital Crown"></video>
-    </div>
+<section class="band" id="elegance">
+  <div class="wrap">
+    <p class="eyebrow">Simple elegance</p>
+    <h2>Somewhere between a HiFi tuner <span class="glow">and a lab bench.</span></h2>
+    <p class="sub big">
+      Real tuners were a pleasure to use and impossible to get wrong. SDR software is the opposite: enormously capable, and a wall of panels. VibeSDR sits in the gap — the reach of software&#8209;defined radio with the feel of a good tuner.
+    </p>
+    <p class="sub big">
+      The controls are built for fingers and thumbs, because that's what you're holding the thing with. As Steve Jobs put it when he launched the iPhone: the best pointing device in the world is one we're all born with ten of.
+    </p>
+    <p class="sub big">
+      This isn't desktop SDR software shrunk down to fit. It was built for mobile from the first line.
+    </p>
   </div>
 </section>
 
 <section class="band shots" id="screens">
   <div class="wrap">
-    <p class="eyebrow">See it running</p>
-    <h2>Every band, <span class="glow">on the device in your pocket.</span></h2>
+    <p class="eyebrow">Two control schemes</p>
+    <h2>Pick your <span class="glow">decade.</span></h2>
     <p class="sub big">
-      Real screenshots, not mock&#8209;ups — the waterfall, the drums, Advanced&nbsp;RDS, the decoders
-      and VibeServer, all running on a phone.
+      <b>The drum.</b> Eighties boombox, in acrylic and glow. Not a slider dressed up as a dial — a weighted drum with real inertia and haptics underneath it. Spin it and it runs on. Flick it and it coasts down. Catch it and it stops dead.
+    </p>
+    <p class="sub big">
+      <b>The buttons.</b> Or, if you'd rather, brushed metal in the style of a nineties car stereo. Tap to step the frequency with a click you can feel. Hold, and it sweeps the band, exactly as the real thing did.
     </p>
     <div class="shot-rail">
-        <figure><img src="assets/shots/shot01.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 1" /></figure>
-        <figure><img src="assets/shots/shot02.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 2" /></figure>
-        <figure><img src="assets/shots/shot03.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 3" /></figure>
-        <figure><img src="assets/shots/shot04.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 4" /></figure>
-        <figure><img src="assets/shots/shot05.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 5" /></figure>
-        <figure><img src="assets/shots/shot06.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 6" /></figure>
-        <figure><img src="assets/shots/shot07.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 7" /></figure>
-        <figure><img src="assets/shots/shot08.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 8" /></figure>
-        <figure><img src="assets/shots/shot09.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 9" /></figure>
-        <figure><img src="assets/shots/shot10.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 10" /></figure>
-        <figure><img src="assets/shots/shot11.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 11" /></figure>
+      <figure><img src="assets/shots/shot01.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 1" /></figure>
+      <figure><img src="assets/shots/shot02.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 2" /></figure>
+      <figure><img src="assets/shots/shot03.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 3" /></figure>
+      <figure><img src="assets/shots/shot04.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 4" /></figure>
+      <figure><img src="assets/shots/shot05.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 5" /></figure>
+      <figure><img src="assets/shots/shot06.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 6" /></figure>
+      <figure><img src="assets/shots/shot07.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 7" /></figure>
+      <figure><img src="assets/shots/shot08.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 8" /></figure>
+      <figure><img src="assets/shots/shot09.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 9" /></figure>
+      <figure><img src="assets/shots/shot10.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 10" /></figure>
+      <figure><img src="assets/shots/shot11.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 11" /></figure>
     </div>
     <p class="shot-hint">Scroll sideways for more →</p>
+  </div>
+</section>
+
+<section class="band watch" id="shack">
+  <div class="wrap watch-grid">
+    <div class="watch-copy">
+      <p class="eyebrow">Shack mode</p>
+      <h2>Dock the phone. <span class="glow">Take the whole wall.</span></h2>
+      <p class="sub">AirPlay the receiver to a television, or sit the phone in a dock, and VibeSDR splits itself in two. The waterfall and spectrum go up on the big screen at full size. The phone in your hand becomes the control surface — drums, band plan, and a new audio spectrum that only fits when it's not sharing space with everything else.</p>
+      <p class="sub">It's a proper shack setup, assembled from a phone and a telly.</p>
+      <h2 style="font-size:1.15em;margin-top:22px">Bring a keyboard, get a control panel.</h2>
+      <p class="sub">Pair a Bluetooth keyboard to a phone, tablet or Mac and the whole receiver comes under the keys — tuning, band and mode changes, memory recall. Hands stay put, eyes stay on the waterfall.</p>
+    </div>
+    <div class="watch-media">
+      <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR live on an Apple Watch — spectrum waterfall, tuning the AM band with the Digital Crown"></video>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="tunes">
+  <div class="wrap">
+    <p class="eyebrow">Works with</p>
+    <h2>Point it at <span class="glow">almost any receiver.</span></h2>
+    <p class="sub big">
+      Native adapters for the major SDR networks, for local USB hardware, and for your own server — all behind the same dial and the same waterfall. Change receiver and nothing about the app changes with it.
+    </p>
+    <ul class="ticks" style="margin-top:22px">
+      <li><b>UberSDR · OpenWebRX · KiwiSDR</b> — native clients for the big shared&#8209;receiver networks, with a directory to find one near you.</li>
+      <li><b>FM&#8209;DX Webserver</b> — the worldwide network of shared FM tuners. Station names, RadioText and distances, in stereo.</li>
+      <li><b>RTL&#8209;SDR over USB</b> — plug a dongle into an Android phone or reach a networked rtl_tcp. VibeSDR demodulates the raw IQ itself.</li>
+      <li><b>SpyServer · rtl_tcp</b> — the standard network protocols, spoken natively.</li>
+      <li><b>VibeServer</b> — your own receiver, on your own network.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="band" id="rds">
+  <div class="wrap rds-grid">
+    <div>
+      <p class="eyebrow">Advanced RDS</p>
+      <h2>A broadcast analyser, <span class="glow">in your hand.</span></h2>
+      <p class="sub big">
+        Not just the station name. The PI code and what it means, PTY, the traffic and music flags, RadioText and RadioText+, Long&nbsp;PS, the clock, the language, alternative frequencies and the other stations in the network.
+      </p>
+      <p class="sub big">
+        Then the measurements you'd normally buy hardware for. Pilot and RDS deviation. Block error rate. A live constellation with a scatter figure, the MPX spectrum, and the symbol trace that explains the error rate at a glance.
+      </p>
+      <p class="sub big">
+        And the RDS&#8209;to&#8209;pilot phase — the reason this panel exists. Near 0°, or near 90° for quadrature encoding, is correct; the middle ground means a transmitter fault. It will also tell you when a station's encoder isn't locked to its own pilot at all, which draws as a rotating ring rather than two lobes. That's a real fault, found on air, confirmed on two independent receivers.
+      </p>
+      <p class="trust">
+        Calibrated against a PIRA broadcast analyser by <a href="https://fmdx.org">Hans van&nbsp;Eijsden</a>, who measured our readings against professional equipment station by station until they agreed. Thank you, Hans.
+      </p>
+    </div>
+    <figure class="rds-photo">
+      <img src="assets/rds-garden.jpg" loading="lazy" alt="VibeSDR running Advanced RDS on an Android phone, held in a garden, with a receiving antenna visible behind" />
+      <figcaption>BBC&nbsp;R3 on 98.2, decoded in a back garden — deviation, constellation, MPX and symbol trace, live. The aerial doing the work is just behind the phone.</figcaption>
+    </figure>
   </div>
 </section>
 
 <section class="band ewaste" id="server">
   <div class="wrap">
     <p class="eyebrow">VibeServer · built in, free</p>
-    <h2>No more e&#8209;waste. <span class="glow">Turn an old phone into a receiver.</span></h2>
-
-    <!-- The equation: our engine + UberSDR's networking = VibeServer. Credits UberSDR right in the
-         maths, and links back to ubersdr.org (Nathan features VibeSDR on his site — reciprocal). -->
-    <figure class="vs-eq" aria-label="VibeDSP plus UberSDR equals VibeServer">
-      <span class="eq-term"><img src="assets/family-vibedsp.png" alt="VibeDSP" /><b>VibeDSP</b></span>
-      <span class="eq-op">+</span>
-      <a class="eq-term eq-link" href="https://ubersdr.org" target="_blank" rel="noopener">
-        <img src="assets/logo_ubersdr.png" alt="UberSDR" /><b>UberSDR</b></a>
-      <span class="eq-op">=</span>
-      <span class="eq-term"><img src="assets/family-vibeserver.png" alt="VibeServer" /><b>VibeServer</b></span>
-      <figcaption>The lightweight power of <b>VibeDSP</b> meets the powerful networking of
-        <a href="https://ubersdr.org" target="_blank" rel="noopener">UberSDR</a>.</figcaption>
-    </figure>
+    <h2>Your old phone is <span class="glow">a radio waiting to happen.</span></h2>
     <p class="sub big">
-      Got an Android phone gathering dust in a drawer? Give it a second life as your own personal SDR server. Plug in an RTL&#8209;SDR — <b>no drivers, no setup</b> — tap <b>Use as server</b>, and it's live. VibeServer even serves its own web page, so you're not tied to the app: point any browser on your desktop or laptop at it and tune from there too.
+      There's an Android phone in a drawer somewhere in your house. It has a fast ARM chip, a USB port and a Wi&#8209;Fi radio, and it is doing nothing. Plug an RTL&#8209;SDR into it, tap <b>Use as server</b>, and it's a receiver on your network. No drivers. No config files. No terminal.
     </p>
-    <div class="browser">
-      <div class="browser-bar"><span></span><span></span><span></span><em>vibesdr.local</em></div>
-      <img src="assets/web-client.jpg" alt="The VibeServer web client running in a desktop browser — waterfall, controls and audio, no app needed, with the station name, frequency and RDS station logo showing in the macOS Now Playing card" />
-    </div>
-    <ul class="ticks ticks-row">
-      <li>No drivers, no config — plug in and tap</li>
-      <li>Built&#8209;in web client — any browser, no app</li>
-      <li>~25× lighter than raw rtl_tcp — Wi&#8209;Fi or hotspot</li>
-    </ul>
-
-    <div class="mac-alpha">
-      <p class="soon-k">New · macOS alpha · v0.4 · SDRplay + Advanced RDS</p>
-      <h3>Now on the Mac too</h3>
-      <p>
-        The same server, native on macOS — a menu&#8209;bar app around the same DSP core. Plug in an
-        RTL&#8209;SDR, click <b>Open in Browser</b>, and tune. Notarised by Apple, so it opens
-        cleanly. This early build serves <b>one dongle at a time</b> and the advanced admin features
-        are still to come, so it's best on your home network — and if you open it to the internet,
-        <b>set a PIN</b>: a listener can change the dongle's hardware settings.
-      </p>
-      <p>
-        <b>v0.3</b> moves the waterfall onto the <b>GPU</b> — crisper at any screen size and much
-        lighter on the machine — and brings brighter weather&#8209;fax decodes, separate
-        <b>scroll&#8209;speed</b> and <b>data&#8209;rate</b> controls so a slow link stays smooth,
-        and save/compare for decoded images. Audio is <b>Opus</b> (around 4× lighter), which is what
-        lets <b>VibeSDR Jr</b> on the Apple Watch pull decent stereo and a live waterfall down Bluetooth.
-      </p>
-      <p>
-        <b>v0.4 adds SDRplay RSP receivers</b> alongside RTL&#8209;SDR dongles, with the controls an
-        RSP actually has rather than a dongle's: RF gain as an LNA state, a separate IF gain
-        reduction, IF AGC with an adjustable target, the FM and DAB notch filters, bias&#8209;T,
-        spans up to 8&nbsp;MHz, and the receiver's own overload warning. SDRplay's API is a separate
-        install from <a href="https://www.sdrplay.com/downloads/">sdrplay.com</a> — we don't bundle
-        it, and everything else works exactly as before without it.
-      </p>
-      <p>
-        <b>And an Advanced RDS decoder</b>, for anyone who chases FM. It reads essentially the whole
-        of RDS — the station name and its 32&#8209;character long form, RadioText and now&#8209;playing
-        tags, programme type, traffic flags, the clock, alternative frequencies you can tap to tune,
-        and <b>EON</b>: the other stations in the same network. Alongside it sits what your receiver
-        is making of the signal — block error rate, the pilot and RDS injection levels in kHz
-        deviation, a constellation, a symbol trace, the MPX spectrum, and the
-        <b>RDS&#8209;to&#8209;pilot phase</b>, a measurement that normally means carrying a broadcast
-        analyser. Every reading is labelled with what it means, not just what it is.
-      </p>
-      <p>
-        <b>v0.3.4</b> is about doing the same work for far less — and doing it right. Broadcast FM
-        in stereo costs around a third less CPU, and <b>RDS</b> — the station name and
-        now&#8209;playing text — is roughly <b>eight times cheaper</b>, which is the difference
-        between a Raspberry&nbsp;Pi managing a listener and not.
-      </p>
-      <p>
-        RDS also reads <b>far more stations</b>. The decoder only ever looked at one phase of the
-        57&nbsp;kHz data carrier, so a station whose signal happened to arrive rotated — which
-        depends on the transmitter, the receiver and the weather — went completely silent no matter
-        how strong it was. It now reads the carrier properly, and recovers blocks that arrive
-        damaged instead of discarding them.
-      </p>
-      <p>
-        Your Mac's own media controls work too: play, pause and skip from the keyboard, with the
-        station's name, frequency and <b>its own logo</b> in Now Playing.
-      </p>
-      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v0.4.0-alpha">Download the macOS alpha →</a>
-    </div>
+    <p class="sub big">
+      It serves its own web page too, so you're not tied to the app — point any browser at <i>vibesdr.local</i> and tune from your desktop. And because VibeDSP does the compression, you're sending a finished radio rather than a firehose of raw IQ: about 25× lighter than rtl_tcp, which is the difference between working over a hotspot and not.
+    </p>
+    <p class="trust">The same server now runs natively on Apple&nbsp;Silicon Macs as a menu&#8209;bar app.</p>
   </div>
 </section>
 
 <section class="band family-band" id="family">
   <div class="wrap">
     <p class="eyebrow">The Vibe family</p>
-    <h2>One radio, <span class="glow">many shapes.</span></h2>
+    <h2>Four shapes, <span class="glow">one engine.</span></h2>
     <p class="sub big">
-      Everything shares one engine and one look. VibeSDR is the app; around it sit the pieces that
-      carry the signal further — onto your wrist, into your pocket, and out to your own network.
-    </p>
-    <p class="sub big">
-      Most apps that call themselves scalable mean a layout that reflows. VibeSDR adapts to the
-      <b>input you have</b>: a Digital&nbsp;Crown on a 1&Prime; watch, thumbs on a phone, a keyboard on an
-      iPad, a mouse on a Mac. Same radio, same engine — a different control surface each time.
+      Everything here runs on VibeDSP, so the waterfall you set up on one turns up looking the same on the rest.
     </p>
     <div class="family-grid">
       <figure class="fam">
+        <img src="assets/icon.png" alt="VibeSDR app icon" />
+        <figcaption><b>VibeSDR</b><span>The receiver. iPhone, Android, iPad, and up to the big screen.</span></figcaption>
+      </figure>
+      <figure class="fam">
         <img src="assets/family-jr.png" alt="VibeSDR Jr app icon" />
-        <figcaption><b>VibeSDR&nbsp;Jr</b><span>A full receiver on the Apple&nbsp;Watch — standalone, no phone.</span></figcaption>
+        <figcaption><b>VibeSDR&nbsp;Jr</b><span>A complete receiver on the Apple&nbsp;Watch. Its own connection, its own audio, no phone involved.</span></figcaption>
       </figure>
       <figure class="fam">
         <img src="assets/family-buddy.png" alt="VibeSDR Buddy app icon" />
-        <figcaption><b>VibeSDR&nbsp;Buddy</b><span>The wrist remote for the phone app — drive VibeSDR from your Watch.</span></figcaption>
-      </figure>
-      <figure class="fam">
-        <img src="assets/family-vibedsp.png" alt="VibeDSP icon" />
-        <figcaption><b>VibeDSP</b><span>Our own ARM&#8209;NEON engine — demodulates and draws every pixel on your device.</span></figcaption>
+        <figcaption><b>VibeSDR&nbsp;Buddy</b><span>The wrist remote. Drives the phone app from your Watch when the phone's the one doing the listening.</span></figcaption>
       </figure>
       <figure class="fam">
         <img src="assets/family-vibeserver.png" alt="VibeServer icon" />
-        <figcaption><b>VibeServer</b><span>Share a dongle with your own devices — on Android, and now the Mac.</span></figcaption>
+        <figcaption><b>VibeServer</b><span>Turn an Android phone and a spare dongle into a private receiver for your own devices. Now on macOS too.</span></figcaption>
       </figure>
-    </div>
-  </div>
-</section>
-
-<section class="band" id="dsp">
-  <div class="wrap">
-    <p class="eyebrow">VibeDSP · our own engine</p>
-    <h2>One engine. <span class="glow">One waterfall, everywhere.</span></h2>
-    <p class="sub big">
-      Most SDR apps show you <em>the server's</em> waterfall. Connect somewhere else and the display changes character — different colours, different scaling, different controls — and whatever you'd set up starts again from scratch. VibeSDR doesn't work that way. <b>VibeDSP demodulates the signal and draws every pixel on your own device</b>, so the waterfall is the same one whether you're on UberSDR, OpenWebRX, a KiwiSDR, a dongle plugged into your phone, or your own VibeServer. <b>Set your colours, brightness, contrast and smoothing once — they follow you</b>, to every receiver and onto the Watch and the browser. Nothing to relearn, nothing to set up twice.
-    </p>
-    <ul class="ticks ticks-row">
-      <li>The same waterfall on iPhone, Android, Apple&nbsp;Watch and in the browser</li>
-      <li>Interpolated to a smooth scroll — even when a server sends just 5 frames a second</li>
-      <li>Own ARM&#8209;NEON engine — no third&#8209;party GPL DSP, and easy on the battery</li>
-    </ul>
-  </div>
-</section>
-
-<section class="band" id="tunes">
-  <div class="wrap">
-    <p class="eyebrow">One interface, every receiver</p>
-    <h2>Point it at almost any SDR.</h2>
-    <p class="sub">Native adapters for the major SDR servers, local USB hardware, and its own phone-hosted server — all behind one dial <em>and one waterfall</em>. Every receiver looks and works the same, on iOS, Android and the Watch.</p>
-    <div class="grid">
-      <div class="card">
-        <div class="k">Remote servers</div>
-        <h3>UberSDR · OpenWebRX · KiwiSDR</h3>
-        <p>Native clients for the big shared-receiver networks, with a directory chooser to find one near you.</p>
-      </div>
-      <div class="card">
-        <div class="k">FM broadcast DX</div>
-        <h3>FM-DX Webserver</h3>
-        <p>The worldwide network of shared FM tuners — station names, RadioText and distances, in stereo.</p>
-      </div>
-      <div class="card">
-        <div class="k">Local hardware</div>
-        <h3>RTL-SDR over USB</h3>
-        <p>Plug a dongle into an Android phone, or reach a networked rtl_tcp. VibeSDR demodulates the raw IQ itself.</p>
-      </div>
-      <div class="card accent">
-        <div class="k">Serve your own</div>
-        <h3>VibeServer</h3>
-        <p>Turn a phone with an RTL-SDR into a private receiver — you get the whole radio, compressed, ~25× lighter than raw rtl_tcp.</p>
-      </div>
-      <div class="card accent">
-        <div class="k">New</div>
-        <h3>Apple&nbsp;Watch</h3>
-        <p>Not a two-button remote — the live waterfall drawn on the watch, tuned by the Crown, iPhone in your pocket.</p>
-      </div>
-      <div class="card">
-        <div class="k">Own engine</div>
-        <h3>VibeDSP</h3>
-        <p>Our own from&#8209;scratch ARM&#8209;NEON demodulation engine — no bundled third&#8209;party GPL DSP. It's why the waterfall is the same everywhere, and why it's light on battery.</p>
-      </div>
+      <figure class="fam">
+        <img src="assets/family-vibedsp.png" alt="VibeDSP icon" />
+        <figcaption><b>VibeDSP</b><span>Our own ARM&#8209;NEON engine. It demodulates the signal and draws every pixel on your device, which is why the display never changes character when you change server.</span></figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -632,14 +543,13 @@
   <div class="wrap inner">
     <div>
       <p class="eyebrow">How it's made</p>
-      <p class="tagline">Vibe&#8209;Coded, <span class="glow">but not slop.</span></p>
-      <p class="pull">I'm not a licensed amateur and I don't transmit — I'm a <b>listener</b>, fascinated by radio and the dials that got me interested in the first place. VibeSDR is the receiver I'd have loved to own.</p>
-      <p>Every feature was designed and personally tested on real hardware across five devices — from an iPhone&nbsp;17 Pro&nbsp;Max down to a Moto&nbsp;G35 and an iPhone&nbsp;SE. If the GPU waterfall and the NEON DSP hold up on those, they hold up anywhere. I don't ship things I wouldn't use myself.</p>
-      <p>The code was written with AI assistance (Claude) — hence the name. I designed it, I broke it, I tested it, I filed the bugs and I signed off every release. The full source is public under GPL-3.0, dead ends included — because the honest thing is to say it on the tin and then let people check.</p>
+      <p class="tagline">Vibe&#8209;coded, <span class="glow">but not slop.</span></p>
+      <p class="pull">I'm not a licensed amateur and I don't transmit. I'm a <b>listener</b>.</p>
+      <p>It started on the east coast of England as a kid, pulling Dutch television in on an indoor aerial — but only when the weather was exactly right. I didn't know then that I was watching a Sporadic&#8209;E opening. I just knew that some evenings the sky decided to hand me another country, and that was enough to hook me for life. I still chase it: how far can I drag a signal in on an antenna that has no business receiving it?</p>
+      <p>VibeSDR came out of frustration. I was carrying around a phone more powerful than the computers that used to run this stuff, and every piece of SDR software I tried had clearly been designed for a desk and then squeezed onto a handset.</p>
+      <p>So I built the receiver I wanted. Designed it, tested it, broke it. Redesigned it, tested it, broke it again. Weeks of late nights and long weekends. Claude wrote the code — hence the name, and I'm not going to pretend otherwise — but every decision, every dead end and every release sign&#8209;off was mine. VibeSDR is human at heart. I don't ship things I wouldn't use myself.</p>
     </div>
     <div class="stat-stack" aria-hidden="false">
-      <div class="stat"><div class="n">631</div><div class="l">commits in six weeks</div></div>
-      <div class="stat"><div class="n">51</div><div class="l">public releases, and counting</div></div>
       <div class="stat"><div class="n">500+</div><div class="l">tests before I was happy with the dial</div></div>
       <div class="stat"><div class="n">5</div><div class="l">real devices, high-end to budget</div></div>
       <div class="stat"><div class="n">GPLv3</div><div class="l">full source, free forever</div></div>
