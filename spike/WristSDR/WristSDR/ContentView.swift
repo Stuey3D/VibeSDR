@@ -850,6 +850,10 @@ link.setAutoContrast(wfAutoContrast)
       // ★ Record the REAL scene state up front — this is the honest "is the wrist up" signal the
       // warning/glyph logic needs, independent of the lagging status string (see deliberatelyPaused).
       link.sceneActive = (phase == .active)
+      // ★ SUSPENDED OR KILLED? A log that ends on one of these lines was put to sleep; one that
+      //   stops mid-tick was terminated. That distinction is the whole point of the last-breath
+      //   file, and it costs one crumb per scene change.
+      Vitals.crumb("SCENE phase=\(phase)")
       // ★ Coming back to the wrist is a FRESH INTENT — drop the Display shortcut rather than
       //   have the menu button behave oddly for a tweak made before the screen slept.
       if phase != .active { displayTweakAt = nil }

@@ -36,8 +36,49 @@ final class Vitals: ObservableObject {
   var audioPerSec:  () -> Double = { 0 }
   var audioLive:    () -> Bool   = { false }
 
+  /// ★★★ THE PREVIOUS RUN'S DYING BREATH. Jr quits after minutes on UberSDR, at random, and
+  /// leaves NO crash report of any kind — and `start()` then deleted the one record that
+  /// existed, so every launch destroyed the evidence for the failure we were chasing. The tail
+  /// of the old log is now copied aside BEFORE the wipe, and shown in the menu, so the last
+  /// line before it died can simply be read off the wrist.
+  ///
+  /// ★ It also answers the question the log comment below says it cannot: a run that ended with
+  /// a SCENE crumb (`phase=background`) was suspended, and one that stops mid-tick was KILLED.
+  /// Those need opposite fixes, and until now we could not tell them apart.
+  @Published var lastBreath = ""
+
+  /// ★★★ NOTHING CALLS `start()`. The sampling timer has never run in this build — only the
+  /// static `crumb` path does — which is why the rollover has to be a static launch step and
+  /// not part of it. (It also means the log was never being wiped, so the crumbs from the run
+  /// that died are ALREADY on the watch; we simply had no way to read them.)
+  static private(set) var lastBreath = ""
+
+  /// Call once at launch, before anything crumbs. Copies the previous run's tail aside and
+  /// starts the live log clean, so "what happened just before it vanished" is one file and not
+  /// a guess about which lines belong to which run.
+  static func rollover() {
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let live  = docs.appendingPathComponent("jr-vitals.log")
+    let saved = docs.appendingPathComponent("jr-lastbreath.log")
+    if let old = try? Data(contentsOf: live), !old.isEmpty {
+      var tail = old.suffix(6 * 1024)
+      if let nl = tail.firstIndex(of: 0x0A) { tail = tail[tail.index(after: nl)...] }
+      try? Data(tail).write(to: saved, options: [.noFileProtection])
+    }
+    lastBreath = (try? String(contentsOf: saved, encoding: .utf8)) ?? ""
+    try? Data().write(to: live, options: [.noFileProtection])
+    crumb("LAUNCH")
+  }
+
+  private lazy var breathURL: URL = {
+    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("jr-lastbreath.log")
+  }()
+
   func start() {
     WKInterfaceDevice.current().isBatteryMonitoringEnabled = true
+
+    lastBreath = Vitals.lastBreath
 
     // Data protection OFF. iOS/watchOS default new files to complete protection, so the
     // instant the screen locks the app can no longer open its OWN log — every write fails

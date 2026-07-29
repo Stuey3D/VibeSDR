@@ -135,6 +135,12 @@ func adsbTutorialTips() -> [TutorialTip] {
 /// or its watch app on the device.
 @main
 struct WristSDRApp: App {
+  init() {
+    // ★★★ FIRST THING, BEFORE ANYTHING CRUMBS. Preserves the tail of the run that just ended so
+    //    a random silent quit leaves evidence — see Vitals.rollover().
+    Vitals.rollover()
+  }
+
   @StateObject private var link = SpikeLink()
   /// Admin password for the IN USE takeover. Cleared the moment it is used.
   @State private var adminPass = ""

@@ -469,6 +469,24 @@ struct ControlMenu: View {
         // drew a hard black band across the screen, which reads as a broken layout
         // rather than as "there is more below".
         .padding(.bottom, 18)
+
+        // ★★ LAST BREATH — the tail of the run that ended, on the wrist, because this watch
+        //    produces no crash report and Xcode cannot see it. Newest lines FIRST: the answer is
+        //    always the last thing that happened, and nobody scrolls to the bottom of a log on a
+        //    38mm screen. Gated with the CPU meter — both go before any public build.
+        if CpuMeter.enabled, !Vitals.lastBreath.isEmpty {
+          VStack(spacing: 3) {
+            Text("LAST RUN (NEWEST FIRST)")
+              .font(.system(size: 9, weight: .bold)).foregroundColor(.orange.opacity(0.7))
+            Text(Vitals.lastBreath
+                  .split(separator: "\n").reversed().prefix(24)
+                  .joined(separator: "\n"))
+              .font(.system(size: 8, design: .monospaced))
+              .foregroundColor(.white.opacity(0.65))
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }.padding(.top, 3).padding(.bottom, 18)
+        }
+
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
