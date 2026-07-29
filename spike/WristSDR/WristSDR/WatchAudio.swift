@@ -46,6 +46,22 @@ final class WatchAudio {
   /// Feeds the player node silence whenever the stream is late, so the audio hardware
   /// never idles — see startSilenceKeeper(). Idle hardware = suspended app = dead socket.
   private var keeper: DispatchSourceTimer?
+  /// One crumb per engine stop, not one per 100ms tick.
+  private var loggedEngineStop = false
+  /// ★★★ WAS THE SESSION STARTED IN THE FOREGROUND? Apple: "start the session while your app is
+  /// running in the foreground" — an activation taken outside the foreground yields a session that
+  /// PLAYS but carries no background grant, and the app is suspended a few seconds after the wrist
+  /// drops. We activate deliberately early (watchOS refuses the very first activate() before the
+  /// app is fully foreground, see activateAttempt), so the activation that finally succeeds is
+  /// often taken while INACTIVE — and `restartAudio` only ever restarts the ENGINE, never the
+  /// session, so nothing afterwards repaired it.
+  ///
+  /// ★★ Series 6, 2026-07-29: `activate ok=true` at 23:40:55 with the scene INACTIVE (it went
+  /// inactive at :53, active at :58), then death 5s after a later inactive — Apple's documented
+  /// "few seconds of background execution time" to the letter. Invisible on the Ultra.
+  private var activatedInForeground = false
+  /// Throttle for the "ran dry" crumb.
+  private var lastDryCrumb: Double = 0
   /// THE CUSHION. There was only ever a CEILING here — drop packets if the queue grows too
   /// deep — and no FLOOR. So the queue sat wherever the network left it, which on a flaky
   /// tunnel is sometimes empty, and an empty queue on watchOS is fatal (see
@@ -164,7 +180,19 @@ final class WatchAudio {
     NotificationCenter.default.addObserver(
       forName: WKApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { [weak self] _ in
-      guard let self, !self.live, let done = self.startDone else { return }
+      guard let self else { return }
+      // ★ RE-ACTIVATE IN THE FOREGROUND if the grant was taken outside it. Cheap, idempotent, and
+      //   the only way to convert a playing-but-unentitled session into one that survives a wrist
+      //   drop. We are demonstrably foreground here — this is didBecomeActive.
+      if self.live, !self.activatedInForeground {
+        self.activatedInForeground = true
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+        s.activate(options: []) { ok, err in
+          Vitals.crumb("AUDIO re-activate in FOREGROUND for the background grant: ok=\(ok) err=\(err?.localizedDescription ?? "-")")
+        }
+      }
+      guard !self.live, let done = self.startDone else { return }
       Vitals.crumb("AUDIO cold-start recovery: not live on didBecomeActive — retrying start()")
       self.start(done)
     }
@@ -178,6 +206,11 @@ final class WatchAudio {
     let maxAttempts = 6
     session.activate(options: []) { [weak self] ok, err in
       guard let self else { return }
+      if ok {
+        let fg = WKApplication.shared().applicationState == .active
+        self.activatedInForeground = fg
+        if !fg { Vitals.crumb("AUDIO activate succeeded but NOT foreground — no background grant yet") }
+      }
 
       // SAY EXACTLY WHAT WE GOT, because the difference between "audio is playing" and
       // "audio is playing WITH A BACKGROUND GRANT" is invisible until the wrist drops —
@@ -489,8 +522,26 @@ final class WatchAudio {
       // If the engine stopped (flick to the watch face / crown-home), LEAVE it stopped — letting the app
       // suspend saves battery, and didBecomeActive restarts audio on return. Wrist-down (screen off) keeps
       // the app frontmost so audio plays on; that's the case that matters. Chosen behaviour, not a bug.
-      guard let self, self.started, self.engine.isRunning else { return }
+      guard let self, self.started else { return }
+      // ★★★ SAY WHICH IT WAS. This guard covers TWO situations that look identical from here and
+      //    need opposite responses: the deliberate watch-face stop (fine, didBecomeActive brings
+      //    it back) and the engine dying under us while we still expect to be playing (fatal —
+      //    idle hardware means the app is suspended a few seconds later, which is Apple's
+      //    documented grace period and exactly the ~5s the Series 6 dies in). Neither was ever
+      //    written down, so the last-breath log went quiet at the one moment that mattered.
+      if !self.engine.isRunning {
+        if !self.loggedEngineStop { self.loggedEngineStop = true; Vitals.crumb("AUDIO keeper: engine STOPPED (queued=\(String(format: "%.2f", self.queuedSeconds))s)") }
+        return
+      }
+      self.loggedEngineStop = false
       guard self.queuedSeconds < self.floorQueued else { return }   // healthy — leave it alone
+      // ★ RAN DRY. The cushion is meant to make this essentially never fire, so every occurrence
+      //   is evidence — throttled to one a second so a sustained stall leaves a trail, not a flood.
+      let now = Date().timeIntervalSinceReferenceDate
+      if now - self.lastDryCrumb > 1 {
+        self.lastDryCrumb = now
+        Vitals.crumb("AUDIO keeper: ran dry, queued=\(String(format: "%.2f", self.queuedSeconds))s → topping up")
+      }
       // Running dry. Rebuild the whole cushion, not a token 50 ms: if the stream has stalled
       // we want to survive the WHOLE stall, and if it is merely late we want the head start
       // back so the next hiccup is absorbed too.
