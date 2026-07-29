@@ -79,7 +79,12 @@ export const BAND_PLAN: Band[] = [
   { lo: 222000000, hi: 225000000,  name: '1.25m Ham Band',             type: 'ham',  bandLabel: '1.25m', regions: [2], mode: 'nfm', step: 12500 },
   { lo: 420000000, hi: 450000000,  name: '70cm Ham Band',              type: 'ham',  bandLabel: '70cm', regions: [2], mode: 'nfm', step: 25000 },
   { lo: 430000000, hi: 440000000,  name: '70cm Ham Band',              type: 'ham',  bandLabel: '70cm', regions: [1, 3], mode: 'nfm', step: 25000 },
-  { lo: 446000000, hi: 446200000,  name: 'PMR446',                     type: 'utility', regions: [1], mode: 'nfm', step: 12500 },
+  // ★ PMR446 is TWO allocations with different rasters, and treating it as one
+  //   put digital users on the wrong grid. Analogue is 16 channels at 12.5 kHz
+  //   across the lower half; the upper half is digital (dPMR446 / DMR446) on the
+  //   6.25 kHz raster. Split so tuning in lands on the right step either side.
+  { lo: 446000000, hi: 446100000,  name: 'PMR446 (analogue)',           type: 'utility', regions: [1], mode: 'nfm', step: 12500 },
+  { lo: 446100000, hi: 446200000,  name: 'PMR446 (digital)',            type: 'utility', regions: [1], mode: 'nfm', step: 6250 },
   { lo: 462000000, hi: 468000000,  name: 'FRS / GMRS',                 type: 'utility', regions: [2], mode: 'nfm', step: 12500 },
   { lo: 1240000000, hi: 1300000000, name: '23cm Ham Band',            type: 'ham',  bandLabel: '23cm', mode: 'nfm', step: 25000 },
 ];
