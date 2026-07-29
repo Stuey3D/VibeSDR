@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Modal, View, Text, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
+  Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
   Switch, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from './PanelNav';
 import GainSlider from './GainSlider';
+import Slider from '@react-native-community/slider';
+import type { RadioCaps } from '../services/UberSDRClient';
 
 // VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
 // Gain (also mirrored in the demodulators popup), PPM, sample rate, bias-T,
@@ -66,21 +69,47 @@ export interface LocalHardwarePanelProps {
   onDeemph: (tau: number) => void;
   stereo: boolean;           // WFM stereo on (true) vs forced mono
   onStereo: (on: boolean) => void;
+  /** ★★ WHAT THE CONNECTED RADIO ACTUALLY IS, from the server. Null = unknown, in which case
+   *  we fall back to the dongle layout, which is what every VibeServer was before there were
+   *  other radios. ★ Never INFER the driver from what else is present: an Airspy HF+ was drawn
+   *  as a dongle for exactly that reason, and the controls it does have were nowhere. */
+  radio?: RadioCaps | null;
+  /** ★★ ADMIN LOCK. The server ENFORCES this already — bias-T, PPM, direct sampling and
+   *  calibration are all refused without it. What was missing was any sign of it here: the
+   *  controls drew as normal and the user found out only when one silently did nothing
+   *  (Stuart, 2026-07-27). A protection nobody can see is not obviously protecting anything. */
+  adminSet?: boolean;
+  adminOk?: boolean;
+  /** Password entered by the user. Resolving it to a nonce+HMAC is the screen's job. */
+  onAdminUnlock?: (password: string) => void;
+  /** Set when the server refused something, so the panel can say why rather than sit there. */
+  adminRefused?: boolean;
+  /** Airspy HF+ live state + setters (only used when radio.driver === 'airspyhf'). */
+  ahfAgc?: boolean;      onAhfAgc?: (on: boolean) => void;
+  ahfAgcHigh?: boolean;  onAhfAgcThreshold?: (high: boolean) => void;
+  ahfAtt?: number;       onAhfAtt?: (steps: number) => void;
+  ahfLna?: boolean;      onAhfLna?: (on: boolean) => void;
 }
 
 const DEEMPH_OPTS: { label: string; value: number }[] = [
   { label: 'Off', value: 0 }, { label: '50µs', value: 50e-6 }, { label: '75µs', value: 75e-6 },
 ];
 
-function Seg<T>({ options, value, onChange, fmt }: {
+function Seg<T>({ options, value, onChange, fmt, slot }: {
   options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
+  /** Claims a place in the panel's focus order — see the note in LocalHardwarePanel. */
+  slot?: (run: () => void) => boolean;
 }) {
   return (
     <View style={styles.segRow}>
       {options.map((o, i) => {
         const active = o === value;
+        const on = slot?.(() => onChange(o));
         return (
-          <TouchableOpacity key={i} style={[styles.seg, active && styles.segActive]} onPress={() => onChange(o)}>
+          <TouchableOpacity key={i}
+            style={[styles.seg, active && styles.segActive,
+                    on && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+            onPress={() => onChange(o)}>
             <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
           </TouchableOpacity>
         );
@@ -91,6 +120,43 @@ function Seg<T>({ options, value, onChange, fmt }: {
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
+  const [adminPw, setAdminPw] = useState('');
+  // ★ Decide from what the RADIO SAID, never from what else happens to be set.
+  const isAhf = p.radio?.driver === 'airspyhf';
+  // ★ Locked = the server has a password and this session has not cleared it.
+  const locked = !!p.adminSet && !p.adminOk;
+  const isRtl = !p.radio || p.radio.driver === 'rtl';
+
+  // ★ One flat focus order over everything on the panel, claimed during render in JSX order —
+  // the same pattern as the server picker, so the order is whatever is actually on screen.
+  // Arrows move, Enter or Space activates, and Esc is handled by SDRScreen along with every
+  // other overlay.
+  //
+  // ★ ANDROID ONLY, so this cannot be exercised on an iPhone: local USB hardware is an Android
+  // feature. Wired for completeness rather than because it could be tested here.
+  const slots = useRef<Array<() => void>>([]);
+  slots.current = [];
+  const [count, setCount] = useState(0);
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { if (slots.current.length !== count) setCount(slots.current.length); });
+  useEffect(() => { if (p.visible) setIdx(0); }, [p.visible]);
+
+  const kb = useRef({ idx });
+  kb.current = { idx };
+  useRepeatingKeys(p.visible, (k: string) => {
+    const n = slots.current.length;
+    if (!n) return;
+    const i = kb.current.idx;
+    if (k === 'ArrowUp' || k === 'ArrowLeft')    { setIdx(Math.max(0, i - 1)); return; }
+    if (k === 'ArrowDown' || k === 'ArrowRight') { setIdx(Math.min(n - 1, i + 1)); return; }
+    if (k === 'Enter' || k === 'Space') slots.current[i]?.();
+  }, NAV_REPEAT_KEYS);
+
+  const slot = (run: () => void) => {
+    const i = slots.current.length;
+    slots.current.push(run);
+    return idx === i;
+  };
   return (
     <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
@@ -102,13 +168,131 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
       }]}>
         <View style={styles.handleBar}>
-          <Text style={styles.title}>{p.isSpy ? 'SpyServer Controls' : 'RTL-SDR Controls'}</Text>
+          {/* ★ NAME THE ACTUAL RADIO. This said "RTL-SDR Controls" over a panel driving an
+              Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
+              app has misidentified their hardware. The server already reports a model string
+              taken from the USB descriptor, i.e. what is written on the box. */}
+          <Text style={styles.title}>
+            {p.isSpy ? 'SpyServer Controls'
+             : p.radio?.model ? `${p.radio.model} Controls`
+             : 'Local SDR Controls'}
+          </Text>
           <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
-          <Text style={styles.section}>GAIN</Text>
-          <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
-                      onAuto={p.onAuto} onGain={p.onGain} />
+          {/* ★ The lock notice goes FIRST, before any control — it explains the whole panel,
+              and finding it underneath the thing it applies to would be no use. */}
+          {p.adminSet && (
+            <View style={[styles.adminCard, p.adminOk && styles.adminCardOk]}>
+              <Text style={styles.adminTitle}>
+                {p.adminOk ? 'UNLOCKED' : 'PROTECTED BY THE OWNER'}
+              </Text>
+              <Text style={styles.note}>
+                {p.adminOk
+                  ? 'Full settings are unlocked for this session.'
+                  : 'Bias-T, frequency correction and direct sampling are locked on this '
+                    + 'receiver. Gain, sample rate and tuning stay open.'}
+              </Text>
+              {!p.adminOk && (
+                <View style={styles.adminRow}>
+                  <TextInput
+                    value={adminPw} onChangeText={setAdminPw}
+                    placeholder="Admin password" placeholderTextColor="rgba(200,210,225,0.45)"
+                    secureTextEntry autoCapitalize="none" autoCorrect={false}
+                    style={styles.adminInput} />
+                  <TouchableOpacity style={styles.adminBtn}
+                    onPress={() => { p.onAdminUnlock?.(adminPw); setAdminPw(''); }}>
+                    <Text style={styles.adminBtnTxt}>UNLOCK</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {p.adminRefused && !p.adminOk && (
+                <Text style={[styles.note, { color: '#ff8a7d' }]}>
+                  That control is locked. Enter the owner's password to use it.
+                </Text>
+              )}
+            </View>
+          )}
+          {/* ★★ GAIN IS NOT ONE CONTROL ACROSS RADIOS. A dongle has a tuner gain TABLE; an
+              HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
+              so the slider was drawing an empty/meaningless scale while the controls that do
+              work were missing entirely. */}
+          {isAhf ? (
+            <>
+              <Text style={styles.section}>GAIN — {p.radio?.model || 'Airspy HF+'}</Text>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Automatic gain (AGC)</Text>
+                <Switch value={!!p.ahfAgc} onValueChange={(v) => p.onAhfAgc?.(v)}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfAgc ? C.gold : '#ccc'} />
+              </View>
+              <Text style={styles.note}>
+                The radio's own AGC, and the right answer for most listening. Turn it off to set
+                the attenuator by hand.
+              </Text>
+
+              {p.radio?.agcThreshold && (
+                <>
+                  <Text style={styles.section}>AGC THRESHOLD</Text>
+                  <Seg slot={slot} options={[false, true]} value={!!p.ahfAgcHigh}
+                       onChange={(v) => p.onAhfAgcThreshold?.(v)}
+                       fmt={(v) => (v ? 'High' : 'Low')} />
+                  <Text style={styles.note}>
+                    The HF+'s only AGC adjustment. ★ Measured to have no audible effect above
+                    60 MHz — the API accepts it and the radio ignores it there.
+                  </Text>
+                </>
+              )}
+
+              {/* ATTENUATOR — a SLIDER, like every other gain control in the app. It is a
+                  continuous quantity you sweep while watching the noise floor, not something
+                  you step to a known number, and steppers make that a chore.
+                  ★ Ignored by the hardware while the AGC is on, so say so rather than let
+                  someone drag a control that is being overridden. */}
+              <Text style={styles.section}>ATTENUATOR</Text>
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider
+                  style={{ flex: 1, height: 40 }}
+                  minimumValue={0}
+                  maximumValue={(p.radio?.attSteps ?? 9) - 1}
+                  step={1}
+                  value={p.ahfAtt ?? 0}
+                  onValueChange={(v) => p.onAhfAtt?.(Math.round(v))}
+                  minimumTrackTintColor={C.abtn}
+                  maximumTrackTintColor="#444"
+                  thumbTintColor={C.gold}
+                />
+                <Text style={styles.sliderEnd}>
+                  {((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)}
+                </Text>
+              </View>
+              {/* ★ Never quote a dB figure the radio is not applying. While the AGC is on it owns
+                  the front end and libairspyhf offers no getter to read back what it chose, so the
+                  last manual value would sit here looking like it was in effect. */}
+              <Text style={styles.stepVal}>
+                {p.ahfAgc ? 'set by AGC' : `${(p.ahfAtt ?? 0) * (p.radio?.attStepDb ?? 6)} dB`}
+              </Text>
+              <Text style={styles.note}>
+                {p.ahfAgc
+                  ? 'The AGC is on, so the radio is setting this itself — turn AGC off to use it.'
+                  : `0–${((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)} dB in ${p.radio?.attStepDb ?? 6} dB steps. On an HF+ the useful range is attenuation, not gain.`}
+              </Text>
+
+              {p.radio?.hfLna && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>+6 dB preamp</Text>
+                  <Switch value={!!p.ahfLna} onValueChange={(v) => p.onAhfLna?.(v)}
+                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfLna ? C.gold : '#ccc'} />
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <Text style={styles.section}>GAIN</Text>
+              <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
+                          onAuto={p.onAuto} onGain={p.onGain} />
+            </>
+          )}
           {p.isSpy && <Text style={styles.note}>
             The SpyServer protocol sends a gain step, not a dB value — the labels are
             this receiver's nearest published gains. There is no auto-gain over the wire.
@@ -130,7 +314,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               networked rtl_tcp source like UberSDR only sends ~192 kHz). */}
           {/* VibeServer sends its own supported rates → use them verbatim; else
               RTL-TCP keeps the low rates and local USB filters to >=1 MHz. */}
-          <Seg options={p.serverRates && p.serverRates.length
+          <Seg slot={slot} options={p.serverRates && p.serverRates.length
                           ? [...p.serverRates].sort((a, b) => a - b)
                           : p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
                value={p.sampleRate} onChange={p.onSampleRate}
@@ -144,7 +328,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </Text>}
 
           <Text style={styles.section}>FM DE-EMPHASIS</Text>
-          <Seg options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
+          <Seg slot={slot} options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
                fmt={(v) => DEEMPH_OPTS.find(d => d.value === v)?.label ?? String(v)} />
           <Text style={styles.note}>50µs Europe/UK, 75µs Americas/Korea.</Text>
 
@@ -154,12 +338,16 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </View>
           <Text style={styles.note}>Off forces mono — cleaner on weak/noisy signals.</Text>
 
-          {!p.isSpy && <>
+          {/* ★ DONGLE-ONLY from here: PPM (the HF+ calibrates in parts per BILLION, and that
+              control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling
+              are all properties of an RTL dongle. Showing them for another radio is how the
+              panel became a hybrid of two receivers. */}
+          {!p.isSpy && isRtl && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
             <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
-            <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm + 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
           </View>
 
           <View style={styles.toggleRow}>
@@ -172,7 +360,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </View>
 
           <Text style={styles.section}>DIRECT SAMPLING</Text>
-          <Seg options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
+          <Seg slot={slot} options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
                fmt={(v) => DS_MODES.find(d => d.value === v)?.label ?? String(v)} />
           <Text style={styles.note}>Not needed on RTL-SDR Blog V4 (HF is covered directly).</Text>
           </>}
@@ -203,6 +391,18 @@ const styles = StyleSheet.create({
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
   stepBtnTxt: { fontSize: 20, color: C.gold },
+  adminCard: { borderWidth: 1, borderColor: 'rgba(255,140,60,0.55)', borderRadius: 8,
+               padding: 12, marginBottom: 14, backgroundColor: 'rgba(255,140,60,0.08)' },
+  adminCardOk: { borderColor: 'rgba(120,220,140,0.5)', backgroundColor: 'rgba(120,220,140,0.08)' },
+  adminTitle: { color: C.gold, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
+  adminRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  adminInput: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 6,
+                paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontSize: 14 },
+  adminBtn:  { borderWidth: 1, borderColor: C.abtn, borderRadius: 6,
+               paddingHorizontal: 14, paddingVertical: 9 },
+  adminBtnTxt: { color: C.gold, fontSize: 12, letterSpacing: 1 },
+  sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sliderEnd: { color: C.dim, fontSize: 12, minWidth: 26, textAlign: 'center' },
   stepVal: { fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
   toggleLabel: { fontSize: 14, color: C.muted },

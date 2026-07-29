@@ -6,6 +6,9 @@
 
 import { SDRInstance, fetchInstances } from './instancesApi';
 import { fetchFmdxServers } from './fmdxDirectory';
+import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry no country code
+import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
+import { isoForCallsign } from './callsignIso';       // final resort: map the callsign prefix
 
 export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -102,6 +105,7 @@ async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstanc
         url: String(url).replace(/\/+$/, ''),
         latitude: Number.isFinite(slat) ? slat : null,
         longitude: Number.isFinite(slon) ? slon : null,
+        countryCode: countryForCoord(slat, slon) || null,   // derived offline from coordinates
         distance: (lat != null && lon != null && Number.isFinite(slat) && Number.isFinite(slon))
           ? haversineKm(lat, lon, slat as number, slon as number) : null,
         version: ro?.version ?? null,
@@ -134,6 +138,7 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
         users: Number(r.users) || 0,
         maxUsers: Number(r.users_max) || 0,
         latitude: glat, longitude: glon,
+        countryCode: countryForCoord(glat, glon) || null,   // derived offline from GPS
         distance: (lat != null && lon != null && glat != null && glon != null)
           ? haversineKm(lat, lon, glat, glon) : null,
         bestSnr: snr.length ? Math.max(...snr) : null,
@@ -211,6 +216,25 @@ export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number
   else if (id === 'fmdx')    list = await fetchFmdx(lat, lon);
   else if (id === 'spyserver') list = await fetchSpyServers(lat, lon);
   else                       list = await fetchKiwiList(lat, lon);
+
+  // CENTRAL country enrichment — applies to EVERY directory (UberSDR incl., e.g. the popular
+  // Canaries server). Fill any missing countryCode from coordinates first, then from the
+  // name/location text (a tiny island the world map omits, or a server with wrong GPS).
+  list = list.map(i => {
+    if (i.countryCode) return i;
+    const text = `${i.name} ${i.location ?? ''}`;
+    let cc = countryForCoord(i.latitude, i.longitude);
+    if (!cc) {
+      // Coordinates embedded in the name (Kiwi/Receiverbook style "…/@-37.70,176.16") — some
+      // servers publish a wrong GPS field but a correct @lat,lon in their title.
+      const m = text.match(/@\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/);
+      if (m) cc = countryForCoord(parseFloat(m[1]), parseFloat(m[2]));
+    }
+    if (!cc) cc = countryFromText(text);   // an explicit country/territory word wins over…
+    if (!cc) cc = isoForCallsign(text);     // …the callsign prefix (CS8ACT→PT, EA8DJF→ES)
+    return cc ? { ...i, countryCode: cc } : i;
+  });
+
   // distance ascending when we have it, else leave source order
   if (lat != null && lon != null) {
     list = [...list].sort((a, b) => (a.distance ?? 1e9) - (b.distance ?? 1e9));

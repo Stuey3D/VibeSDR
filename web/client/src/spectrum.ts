@@ -46,6 +46,8 @@ export interface Config {
   binBandwidth: number;
   totalBandwidth: number;
   maxBandwidth: number;
+  /** The server's own demodulator, if it reported one — authoritative for a fresh client's mode. */
+  serverMode?: string;
 }
 
 export interface RdsMeta {
@@ -54,14 +56,99 @@ export interface RdsMeta {
   radiotext: string;
   pi: number;
   ecc: number;
+  /** Block error rate %, -1 = the decoder has not seen a full window yet. */
+  ber: number;
+  /** Recovered 57 kHz level relative to the pilot, dB (-99 = nothing). */
+  sig: number;
+}
+
+/** The fields the normal RDS path discards, plus the constellation. */
+export interface RdsExt {
+  pty: number; tp: number; ta: number; ms: number; di: number;
+  // ★ The same five UNCONFIRMED — what is arriving right now, whether or not it passed
+  // confirmation. Always sent; the RAW/CONFIRMED choice is entirely the client's.
+  ptyRaw: number; tpRaw: number; taRaw: number; msRaw: number; diRaw: number;
+  ct: number;            // minutes since UTC midnight, -1 = none
+  ctoff: number;         // local offset, half-hours
+  af: number[];          // kHz, CONFIRMED only
+  afseen: number;        // distinct frequencies glimpsed, confirmed or not
+  grp: number[];         // 32 counters, gtype*2+version
+  gtot: number;
+  rtpTitle: string;      // RT+ tagged title (ODA 4BD7)
+  rtpArtist: string;     // RT+ tagged artist
+  longPs: string;        // 32-character Long PS (group 15A)
+  ptyn: string;          // programme type NAME (10A) — the station's own words
+  lang: number;          // RDS language code (1A variant 3)
+  pinDay: number; pinHour: number; pinMin: number;
+  eon: { pi: string; ps: string; af: number; ta: number }[];
+  oda: { aid: string; grp: number }[];
+  phase: number;         // RDS-to-pilot phase, degrees (-1 = no lock)
+  phaseCoh: number;
+  /** deg/s the RDS-to-pilot phase is turning. >0 means the station's encoder is not locked
+   *  to its own pilot — a transmitter fault, not a reception one. */
+  phaseDrift: number;      // 0..1 — how steady that phase is; below ~0.35 it is meaningless
+  pilotDev: number;      // pilot injection, kHz deviation (spec 6.0–7.5)
+  rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6)
+  xy: number[];          // interleaved x,y as signed bytes (x100)
+  mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
+}
+
+/** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
+ *  different controls, and a client that assumes one will misrepresent the other. */
+export interface RadioCaps {
+  driver: 'rtl' | 'sdrplay' | 'airspyhf' | string;
+  model?: string;
+  lnaStates?: number;
+  ifGrMin?: number;
+  ifGrMax?: number;
+  rfNotch?: boolean;
+  dabNotch?: boolean;
+  biasT?: boolean;
+  // ── Airspy HF+ ────────────────────────────────────────────────────────────
+  attSteps?: number;      // count of attenuator positions (9 = 0..8)
+  attStepDb?: number;     // dB per step (6)
+  hfLna?: boolean;        // has the +6 dB preamp
+  hfAgc?: boolean;        // has its own AGC
+  agcThreshold?: boolean; // ...with a low/high threshold
+  calPpb?: boolean;       // calibration is in parts per BILLION, not ppm
+  rates?: number[];       // the rates THIS radio offers, ascending
+  /** ★ Tunable windows, Hz. An HF+ Discovery has a REAL GAP at 31-60 MHz — not a weak spot,
+   *  absent — so a client that does not know will let a user park on a dead frequency. */
+  ranges?: [number, number][];
 }
 
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
-  onHwInfo?: (gains: number[], rates: number[], lockedRate: number) => void;
+  /** The server's radio was unplugged (false) or came back (true). */
+  onDevice?: (present: boolean) => void;
+  /** The person at the server is looking for this window. */
+  onSummon?: () => void;
+  onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
+              forceIdleSaver?: boolean, radio?: RadioCaps | null) => void;
+  /** ★ Global server-side DSP state (NR, notch). These SURVIVE a listener leaving,
+   *  so the next listener inherits them — the client must render what the server
+   *  says rather than its own saved prefs, or the control lies about the radio. */
+  onDspState?: (nr: boolean, notch: boolean) => void;
   onRds?:    (meta: RdsMeta) => void;
+  /** Advanced RDS payload — only sent while the RDS decoder is attached. */
+  onRdsX?:   (x: RdsExt) => void;
+  /** Admin unlock result, or a refusal of a protected control. */
+  onAdmin?:  (ok: boolean, refused: boolean) => void;
+  /** Live RSP gain state — the AGC moves the IF reduction, so slider positions are not it. */
+  onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
+               settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
+  /** The server is already serving someone else — do not retry. */
+  onBusy?: () => void;
+  /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
+  onSessionWarning?: (secs: number) => void;
+  /** The limit expired; we have been disconnected. `cooldown` = seconds before we may return. */
+  onSessionEnded?: (cooldown: number) => void;
+  /** Refused because we are still inside our cooldown. */
+  onCooldown?: (secs: number) => void;
+  /** The owner took the radio back using the admin password. */
+  onEvicted?: () => void;
   onRtt?:    (ms: number) => void;
   /** Bytes received on the spectrum socket — the BIGGER half of the link. */
   onBytes?:  (n: number) => void;
@@ -99,6 +186,8 @@ export class SpectrumClient {
   private gainTimer: number | null = null;
   private lastGainAt = 0;
   private reconnectTimer: number | null = null;
+  /** Set when the server told us it is busy — suppresses the auto-reconnect. */
+  private refused = false;
 
   // Scratch buffers, resized on bin-count change.
   private bins: Float32Array | null = null;
@@ -143,7 +232,7 @@ export class SpectrumClient {
     ws.onclose = (e) => {
       this._stopTimers();
       this.cb.onStatus?.('closed', e.code === 1006 ? 'connection lost' : `closed (${e.code})`);
-      if (!this.closedByUs) {
+      if (!this.closedByUs && !this.refused) {
         this.reconnectTimer = window.setTimeout(() => this.connect(), 3000);
       }
     };
@@ -161,6 +250,10 @@ export class SpectrumClient {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     if (this.sendTimer) { clearTimeout(this.sendTimer); this.sendTimer = null; }
   }
+
+  /** Send an arbitrary control message. Used for radio-specific controls (RSP gain, notches)
+   *  that have no place in the shared tune/gain vocabulary. */
+  send(obj: Record<string, unknown>) { this._send(obj); }
 
   private _send(obj: Record<string, unknown>) {
     const ws = this.ws;
@@ -180,8 +273,21 @@ export class SpectrumClient {
           binBandwidth:   msg.binBandwidth ?? this.cfg.binBandwidth,
           totalBandwidth: msg.totalBandwidth ?? this.cfg.totalBandwidth,
           maxBandwidth:   msg.maxBandwidth ?? this.cfg.maxBandwidth,
+          serverMode:     typeof msg.mode === 'string' ? msg.mode : this.cfg.serverMode,
         };
         this.cfg = cfg;
+        // ★ Never let the view be WIDER than the capture. On a sample-rate DROP the device span
+        // shrinks, but our old (wider) view span would persist and over-spread the axis — signals
+        // bunch toward the VFO and the ticker reads a span the dongle can't actually see (Stuart
+        // 2026-07-24). Clamp the held span to the new maxBandwidth and re-request so the server's
+        // crop matches. Runs even mid-gesture, because an over-wide view is never valid.
+        if (cfg.maxBandwidth > 0 && cfg.binCount > 0) {
+          const widestBinBw = cfg.maxBandwidth / cfg.binCount;   // binBw for the full-capture span
+          if (this.view.binBandwidth > widestBinBw * 1.001) {
+            this.view.binBandwidth = widestBinBw;
+            if (this.view.centerHz) this.zoom(this.view.centerHz, this.view.binBandwidth);
+          }
+        }
         // Adopt the server's view once our own sends have settled. While a
         // gesture is in flight our predicted view wins, otherwise the config
         // echoes fight the drag.
@@ -192,14 +298,107 @@ export class SpectrumClient {
         this.cb.onConfig?.(cfg);
         break;
       }
+      case 'busy':
+        // Someone else has the radio. The server refuses one occupant at a time and closes us
+        // right after this frame — so DON'T reconnect (the default 3s retry would hammer a busy
+        // server forever, which is the OWRX-style bad-neighbour behaviour we avoid elsewhere).
+        this.refused = true;
+        this.cb.onBusy?.();
+        break;
+      // ★★★ ALL THREE OF THESE SET `refused`, and that is the whole safety of the feature.
+      // Every one is the server DELIBERATELY turning us away, and the default 3s retry would
+      // hammer it forever — the same reconnect war that made takeover the wrong default for
+      // ordinary clients. A deliberate refusal must be terminal until the user acts.
+      case 'session_expired':
+        // Our time was up. Say so plainly, with how long before we may try again.
+        this.refused = true;
+        this.cb.onSessionEnded?.(Number(msg.cooldown) || 0);
+        break;
+      case 'cooldown':
+        // We came back too soon after a timeout.
+        this.refused = true;
+        this.cb.onCooldown?.(Number(msg.secs) || 0);
+        break;
+      case 'evicted':
+        // The owner took their radio back with the admin password. Not a fault, and not
+        // something to retry into.
+        this.refused = true;
+        this.cb.onEvicted?.();
+        break;
+      case 'session_warning':
+        // Still connected — this is a countdown, not a refusal. Do NOT set refused.
+        this.cb.onSessionWarning?.(Number(msg.secs) || 0);
+        break;
+      case 'device':
+        // The server has lost (or regained) its radio. Without this the page just stops updating
+        // and looks broken — a black waterfall with working controls, which tells the user nothing.
+        this.cb.onDevice?.(msg.present !== false);
+        break;
+      case 'summon':
+        // The host machine is looking for this tab. Handled by main.ts (flash + focus attempt).
+        this.cb.onSummon?.();
+        break;
       case 'hwinfo':
-        this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0);
+        this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
+                           Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
+                           (msg.radio ?? null) as RadioCaps | null);
+        if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
+          this.cb.onDspState?.(msg.nr === true, msg.notch === true);
+        }
+        // ★ Seconds left on a limited session, sent on connect so the clock starts THEN
+        // rather than at the first warning. -1 = no limit / exempt.
+        if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft >= 0) {
+          this.cb.onSessionWarning?.(msg.sessionSecsLeft);
+        }
         break;
       case 'rds':
         this.cb.onRds?.({
           stereo: !!msg.stereo, ps: msg.ps ?? '', radiotext: msg.radiotext ?? '',
           pi: msg.pi ?? -1, ecc: msg.ecc ?? 0,
+          ber: typeof msg.ber === 'number' ? msg.ber : -1,
+          sig: typeof msg.sig === 'number' ? msg.sig : -99,
         });
+        break;
+      case 'admin':
+        // ok=true after a correct password; refused=true when a protected control was
+        // rejected, which is how a client learns it is locked without having asked.
+        this.cb.onAdmin?.(msg.ok === true, msg.refused === true);
+        break;
+      case 'rdsx':
+        this.cb.onRdsX?.({
+          pty: Number(msg.pty ?? -1), tp: Number(msg.tp ?? -1),
+          ta: Number(msg.ta ?? -1), ms: Number(msg.ms ?? -1),
+          di: Number(msg.di ?? -1),
+          ptyRaw: Number(msg.ptyRaw ?? -1), tpRaw: Number(msg.tpRaw ?? -1),
+          taRaw: Number(msg.taRaw ?? -1), msRaw: Number(msg.msRaw ?? -1),
+          diRaw: Number(msg.diRaw ?? -1),
+          ct: Number(msg.ct ?? -1), ctoff: Number(msg.ctoff ?? 0),
+          af: Array.isArray(msg.af) ? msg.af : [],
+          afseen: Number(msg.afseen ?? 0),
+          grp: Array.isArray(msg.grp) ? msg.grp : [],
+          gtot: Number(msg.gtot ?? 0),
+          rtpTitle: String(msg.rtpTitle ?? ''),
+          rtpArtist: String(msg.rtpArtist ?? ''),
+          longPs: String(msg.longPs ?? ''),
+          ptyn: String(msg.ptyn ?? ''),
+          lang: Number(msg.lang ?? 0),
+          pinDay: Number(msg.pinDay ?? 0),
+          pinHour: Number(msg.pinHour ?? -1),
+          pinMin: Number(msg.pinMin ?? 0),
+          eon: Array.isArray(msg.eon) ? msg.eon : [],
+          oda: Array.isArray(msg.oda) ? msg.oda : [],
+          phase: Number(msg.phase ?? -1),
+          phaseCoh: Number(msg.phaseCoh ?? 0),
+          phaseDrift: Number(msg.phaseDrift ?? 0),
+          pilotDev: Number(msg.pilotDev ?? 0),
+          rdsDev: Number(msg.rdsDev ?? 0),
+          xy: Array.isArray(msg.xy) ? msg.xy : [],
+          mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
+        });
+        break;
+      case 'rspstat':
+        this.cb.onRspStat?.(Number(msg.sysGain) || 0, Number(msg.lna) || 0, Number(msg.ifgr) || 0,
+                            Number(msg.overload) === 1, Number(msg.settling) === 1);
         break;
       case 'pong':
         if (this.lastPingAt) this.cb.onRtt?.(performance.now() - this.lastPingAt);
@@ -267,9 +466,21 @@ export class SpectrumClient {
     });
     if (this.followVfo || opts?.recenter) {
       const n = this.cfg.binCount || 4096;
-      const bb = opts?.retarget
-        ? this.defaultSpanHz(this.mode) / n
-        : (this.view.binBandwidth || this.cfg.binBandwidth);
+      let bb: number;
+      if (opts?.retarget) {
+        // A discrete jump. DON'T slam to the tight per-mode default — that lands a broadcast in a
+        // ~20 kHz window that looks blocky/low-res (Stuart 2026-07-24). Instead: keep your current
+        // zoom if it's already sensible, and only zoom PART way in from a wide view — to a
+        // comfortable "landing" span, never all the way to the tight default. Clamp the preserved
+        // zoom to [default, landing] so a jump across bands can't carry an absurdly tight window.
+        const cur = (this.view.binBandwidth || this.cfg.binBandwidth) * n;
+        const dflt = this.defaultSpanHz(this.mode);
+        const landing = Math.min(this.cfg.maxBandwidth || Infinity, Math.max(dflt * 8, 200_000));
+        const span = Math.max(dflt, Math.min(cur || landing, landing));
+        bb = span / n;
+      } else {
+        bb = this.view.binBandwidth || this.cfg.binBandwidth;
+      }
       if (bb) this.zoom(this.frequency, bb);
     }
   }

@@ -8,9 +8,12 @@
  */
 
 import StationLogo from './StationLogo';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected } from './PanelNav';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
+  Share,
   Dimensions,
   Image,
   Modal,
@@ -22,7 +25,9 @@ import {
   TouchableWithoutFeedback,
   View,
   useWindowDimensions,
-} from 'react-native';
+
+  NativeEventEmitter,
+  NativeModules,} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
@@ -33,11 +38,15 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
+import {
+  getSyncStatus, loadSyncEnabled, onSyncStatus, setSyncEnabled, resetCloudToThisDevice,
+  syncDiagnostic, type SyncStatus,
+} from '../services/cloudSync';
+import { linkDebug } from '../services/linkManager';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
-import { tourRef } from './Coachmark';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -82,7 +91,6 @@ export interface MenuSheetProps {
   spotsKind?:      'digi'|'cw'|null;
   onSpotsToggle?:  (k: 'digi'|'cw') => void;
   /** Server map overlays (skin lsv-hfdl / lsv-digmap / lsv-cwmap). */
-  onServerMap?:    (k: 'hfdl'|'digi'|'cw') => void;
   /** Local/Kiwi: open the on-device-decoder FT8 spots map. */
   onSpotsMap?:     () => void;
   rttySettings?:   RttySettings;
@@ -98,6 +106,10 @@ export interface MenuSheetProps {
   // SNR squelch — value ≤ -999 = off/open
   snrSquelch?:    number;
   onSnrSquelch?:  (v: number) => void;
+  /** Adaptive waterfall-rate policy. 'adaptive' follows the link, 'full' never throttles,
+   *  'lowData' pins the floor by choice (so it must never read as a poor link). */
+  linkMode?:      'full' | 'adaptive' | 'lowData';
+  onLinkMode?:    (m: 'full' | 'adaptive' | 'lowData') => void;
   // Local SDR power-based squelch (dBFS, -100 = off). Replaces the (dead) SNR
   // squelch slider on local instances.
   localSquelch?:   number;
@@ -152,12 +164,24 @@ export interface MenuSheetProps {
   onToggleVfoLock?: () => void;
   /** Hide the controls bar for a full-screen waterfall (chevron restores). */
   onHideControls?: () => void;
+  /** Opens the full keyboard reference — see KeyboardShortcuts.tsx. */
+  onKeyHelp?: () => void;
   onDispReset?:      () => void;
   onDispSaveServer?: () => void;
   onDispSaveGlobal?: () => void;
   hapticsEnabled?: boolean;
   onHaptics?:      (on: boolean) => void;
   hapticsHardware?: boolean;   // false → device has no haptic motor, hide toggle
+  /** Per-control drum-or-keys. Two independent settings — the drums are the
+   *  default, and either control can be swapped for the HiFi tuner keys. */
+  vfoKeys?:    boolean;
+  zoomKeys?:   boolean;
+  onVfoKeys?:  (on: boolean) => void;
+  onZoomKeys?: (on: boolean) => void;
+  /** The ONE pointing-device question: what the vertical scroll wheel does. The
+   *  opposite control falls to whatever orthogonal axis the hardware has. */
+  wheelAction?:   'zoom' | 'tune';
+  onWheelAction?: (m: 'zoom' | 'tune') => void;
 
   vtsName?:    string;
   vtsFreq?:    number;
@@ -190,7 +214,9 @@ export interface MenuSheetProps {
 
   onClose:          () => void;
   onBack?:          () => void;
-  /** V4 local hardware: opens the RTL-SDR controls submenu (Android only). */
+  /** The connected radio's model, from the server — names the controls button. */
+  radioModel?: string;
+  /** V4 local hardware: opens the radio's controls submenu (Android only). */
   onLocalHardware?: () => void;
   /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
   isTcp?:          boolean;
@@ -236,14 +262,16 @@ export interface MenuSheetProps {
   onSpecShow?:        (v: boolean) => void;
   specSmoothing?:     number;
   onSpecSmoothing?:   (v: number) => void;
+  avgFrames?:         number;
+  onAvgFrames?:       (v: number) => void;
   specFloor?:         number;
   onSpecFloor?:       (v: number) => void;
   specPeakScale?:     number;
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
   onPeakHold?:        (v: boolean) => void;
-  frameRate?:         'native' | '20fps' | '30fps';
-  onFrameRate?:       (v: 'native' | '20fps' | '30fps') => void;
+  frameRate?:         '10fps' | '20fps' | '30fps';
+  onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
@@ -270,6 +298,7 @@ const C = {
   divider:      'rgba(255,255,255,0.12)',  // a11y section rules
   gold:         '#ffe566',                 // active text
   goldDim:      'rgba(255,229,102,0.70)',  // active border
+  focus:        '#7CFF9B',                 // keyboard/D-pad focus — matches btnFocused
   muted:        'rgba(255,255,255,0.92)',  // base button/value text — white
   btnBg:        'rgba(20,18,14,0.85)',
   active:       'rgba(255,200,0,0.12)',
@@ -365,18 +394,44 @@ function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIco
   );
 }
 
+// ── Keyboard navigation (BRIEF-inputs §6, in-panel layer) ─────────────────────
+//
+// ★ The primitives learn about focus; the 1000-line sheet is not restructured.
+// Every Btn registers itself on mount, so the navigable grid is derived from the
+// JSX that already exists — mount order IS reading order — and new menu rows are
+// automatically navigable without anyone remembering to wire them up.
+//
+// Rows come from BtnRow via context, which gives the natural 2-D shape: up/down
+// moves between rows, left/right within one.
+// ★ The machinery itself now lives in PanelNav.tsx — it is shared with StepPicker,
+// AudioSheet and ModeSelector, and is what a game controller's D-pad will drive
+// (BRIEF-controls-keyboard-and-gamepad.md). MenuSheet keeps only the wiring.
 function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean }) {
-  return <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>;
+  return (
+    <NavRow>
+      <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>
+    </NavRow>
+  );
 }
 
-function Btn({ label, active, danger, onPress, full, style, icon }: {
+function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
   label: string; active?: boolean; danger?: boolean;
   onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
+  /** Keep OUT of the keyboard focus order — used for buttons that open the receiver's own
+   *  pages, where none of our shortcuts apply. See useNavButton. */
+  skipNav?: boolean;
 }) {
+  // ★ Scroll-into-view is now MEASURED against the ScrollView's content node
+  // (revealIn, inside useNavButton) rather than estimated as `row * 46`, which
+  // assumed a uniform row height and was wrong for anything nested or unevenly
+  // sized.
+  const { focused, viewRef } = useNavButton(onPress, skipNav);
   return (
     <TouchableOpacity
+      ref={viewRef as any}
       style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull,
-              icon && { flexDirection: 'row', gap: 7 }, style]}
+              icon && { flexDirection: 'row', gap: 7 }, style,
+              focused && styles.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
       {icon && <SectionIcon name={icon} size={15} color={active ? C.gold : C.muted} />}
@@ -384,6 +439,61 @@ function Btn({ label, active, danger, onPress, full, style, icon }: {
         {label}
       </Text>
     </TouchableOpacity>
+  );
+}
+
+function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
+  return (
+    <TouchableOpacity ref={viewRef as any} hitSlop={4}
+      style={[styles.swatch, { backgroundColor: hex },
+              active && styles.swatchActive,
+              // Focus outranks the active ring, or you cannot see where you are on the
+              // colour you already have selected.
+              focused && { borderColor: C.focus, borderWidth: 3 }]}
+      onPress={onPress}
+    />
+  );
+}
+
+function CmapHeaderBtn({ open, onPress, children }: {
+  open: boolean; onPress: () => void; children: React.ReactNode;
+}) {
+  const { focused, viewRef } = useNavButton(onPress);
+  return (
+    <View ref={viewRef} style={focused ? styles.dropHeaderFocused : undefined}>{children}</View>
+  );
+}
+
+// ── Keyboard-reachable slider ────────────────────────────────────────────────
+// ★ Sliders used to be SKIPPED by keyboard focus entirely — only Btn registered, so
+// the caret jumped straight past every slider and they were unreachable, not merely
+// awkward. NavSlider registers as a value control: focus lands on it, left/right
+// nudges it by one `step`, up/down leaves.
+//
+// ★ No wrapper View, deliberately. These sliders are laid out with `flex:1` inside
+// rows, and wrapping them would change the layout of all twelve. Focus is shown by
+// re-tinting the thumb and track instead, which is layout-free — and on a slider the
+// thumb IS where the eye already is.
+function NavSlider(props: React.ComponentProps<typeof Slider>) {
+  const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
+  // A slider with no explicit step still has to move by SOMETHING; a twentieth of
+  // the range is a sane nudge and matches how these read on screen.
+  const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
+  // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
+  // row-height ESTIMATE, which is why a slider landed barely in view at the foot of the sheet
+  // while every button centred correctly — the buttons attach theirs and the sliders did not.
+  const { focused, viewRef } = useNavRange((dir) => {
+    const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
+    if (next !== value) onValueChange?.(next);
+  });
+  return (
+    <Slider
+      ref={viewRef as any}
+      {...props}
+      minimumTrackTintColor={focused ? C.focus : props.minimumTrackTintColor}
+      thumbTintColor={focused ? C.focus : props.thumbTintColor}
+    />
   );
 }
 
@@ -405,6 +515,81 @@ function VfoLockBtn({ locked, disabled, onPress, full }: {
 
 function SubLabel({ label, small }: { label: string; small?: boolean }) {
   return <Text style={[styles.subLabel, small && styles.subLabelSmall]}>{label}</Text>;
+}
+
+/**
+ * iCloud sync: the on/off switch and, more importantly, whether it is WORKING.
+ *
+ * ★ A sync that has silently stopped is worse than one that never started —
+ * the user believes their favourites and bookmarks are covered. So this reports
+ * the last error rather than only the happy state, and says nothing at all on a
+ * platform where iCloud does not exist rather than showing a dead control.
+ */
+function ICloudRow() {
+  const [s, setS] = useState<SyncStatus>(getSyncStatus());
+  const [resetting, setResetting] = useState(false);
+  useEffect(() => {
+    void loadSyncEnabled();
+    return onSyncStatus(setS);
+  }, []);
+  // ★ Destructive and remote, so it CONFIRMS. Everything else in this menu is a
+  // toggle you can flip back; this reaches other devices and cannot be undone.
+  const onReset = useCallback(() => {
+    Alert.alert(
+      'Replace iCloud with this device?',
+      'iCloud is replaced by what is on this iPhone. Nothing here is deleted.\n\n'
+      + 'Anything NOT on this iPhone is deleted everywhere — including favourites or '
+      + 'bookmarks added on the watch that never reached this device. Your other devices '
+      + 'will remove them when they next sync.\n\n'
+      + 'Use this to clear entries left behind by an old build or a device you no longer have.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace', style: 'destructive', onPress: () => {
+          setResetting(true);
+          resetCloudToThisDevice().finally(() => setResetting(false));
+        } },
+      ],
+    );
+  }, []);
+  if (!s.supported) return null;
+  const when = s.lastSyncAt
+    ? new Date(s.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
+  return (<>
+    <SectionLabel label="iCLOUD SYNC" icon="instance" />
+    <BtnRow>
+      <Btn label="ON"  active={s.enabled}  onPress={() => { void setSyncEnabled(true); }} />
+      <Btn label="OFF" active={!s.enabled} onPress={() => { void setSyncEnabled(false); }} />
+    </BtnRow>
+    <SubLabel small label={
+      !s.enabled          ? 'Off — favourites and bookmarks stay on this device.'
+      : s.lastError       ? `⚠ ${s.lastError}`
+      : !s.available      ? 'Waiting for iCloud — sign in to iCloud in Settings.'
+      : when              ? `Synced ${when}.`
+      :                     'Syncing…'
+    } />
+    {/* Sync MERGES, so anything already in iCloud keeps coming back — including
+        entries from a build or a device that is long gone. This is the only way
+        to say "throw that away", and it needs a person to mean it. */}
+    {s.enabled && (<>
+      <BtnRow>
+        <Btn label={resetting ? 'REPLACING…' : 'REPLACE iCLOUD WITH THIS DEVICE'}
+             active={false} onPress={resetting ? () => {} : onReset} />
+      </BtnRow>
+      <SubLabel small label="Clears leftovers from an old build or a device you no longer have." />
+      {/* ★ Evidence, not inference. A resurrecting entry has several possible
+          causes that look identical from the outside; this shows which one it
+          is — every item on both sides with the key it resolves to and its
+          timestamp, plus the tombstones and the deletion snapshot. */}
+      <BtnRow>
+        <Btn label="SHARE SYNC DIAGNOSTIC" active={false} onPress={() => {
+          syncDiagnostic()
+            .then((text) => Share.share({ message: text }))
+            .catch((e) => Alert.alert('Diagnostic failed', String(e?.message ?? e)));
+        }} />
+      </BtnRow>
+    </>)}
+  </>);
 }
 
 function OptRow({ children }: { children: React.ReactNode }) {
@@ -468,6 +653,7 @@ export default function MenuSheet({
   filterLow, filterHigh, bwEdgeMax = 6000, onFilterLow, onFilterHigh, onFilterBoth,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
+  linkMode = 'adaptive', onLinkMode,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR, notchOn = false, onNotch, eibiEnabled = true, onEibiToggle, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
@@ -476,10 +662,12 @@ export default function MenuSheet({
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
-  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls,
+  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls, onKeyHelp,
   mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics, hapticsHardware = true,
+  vfoKeys = false, zoomKeys = false, onVfoKeys, onZoomKeys,
+  wheelAction = 'zoom', onWheelAction,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   profiles = [], activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, serverType = 'ubersdr',
@@ -487,12 +675,12 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
+  onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   isFavourite = false, onToggleFavourite,
   decMode = null, decOn = false, onDecToggle,
-  spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
+  spotsKind = null, onSpotsToggle, onSpotsMap,
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
   vfoNeedle = '#ffffff', onVfoNeedle,
@@ -507,6 +695,7 @@ export default function MenuSheet({
   wfSharpness = 5, onWfSharpness,
   specShow = true, onSpecShow,
   specSmoothing = 5, onSpecSmoothing,
+  avgFrames = 1, onAvgFrames,
   specFloor = 0, onSpecFloor,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
@@ -549,6 +738,24 @@ export default function MenuSheet({
   // server features). FT8/FT4 digital spots are decoded locally, so they stay.
   const isLocal = !!onLocalHardware;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
+
+  // ── Keyboard navigation of the sheet ────────────────────────────────────────
+  // Up/down between rows, left/right within a row, Enter to activate. The machinery
+  // is shared (PanelNav.tsx); attach `scrollRef` to the ScrollView and the buttons
+  // register themselves. Esc is NOT handled here — SDRScreen already closes panels
+  // on Esc, and one owner for that rule is what keeps the precedence honest.
+  // ★ BACKSPACE = ‹ BACK. The sub-panels (Display Settings, Bookmarks, the colour-map
+  // and profile dropdowns) each have a BACK row, but a keyboard-only user had no way to
+  // reach it — you could get INTO a sub-panel and not out. Read through a ref because the
+  // pane states are declared further down; the ref is refreshed every render, so the
+  // closure never sees a stale one.
+  const paneBack = useRef<() => void>(() => {});
+  const kbInUse = useKeyboardMode();
+  const fkaSuspected = useFullKeyboardAccessSuspected();
+  const { navCtx, scrollProps, scrollRef, scrollY: scrollYRef } = usePanelNav(visible, {
+    onBack: () => paneBack.current(),
+    onTimeout: onClose,
+  });
 
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
   // server order on purpose — they're SDR-type ordered and re-sorting risks the
@@ -611,6 +818,45 @@ export default function MenuSheet({
   const [bmName,         setBmName]         = useState('');
   const [bmAll,          setBmAll]          = useState(false);
   const [bmImportOpen,   setBmImportOpen]   = useState(false);
+
+  // ★ The colour-map dropdown gets its OWN list nav. Because PanelNav's owner stack is
+  // last-in-wins, opening the dropdown automatically takes the arrows away from the menu
+  // behind it and gives them back on close — no mode flag, no precedence rule to maintain.
+  // Reveal uses the y each row already records via onLayout, so it needs no measurement.
+  // ★ When the dropdown OPENS, scroll the menu so the list is actually visible. It expands
+  // downward, so opening one near the foot of the sheet left a single row showing with the
+  // rest below the fold — you were navigating a list you could not see. (Stuart.)
+  const cmapAnchor = useRef<View | null>(null);
+  useEffect(() => {
+    if (!cmapOpen) return;
+    const id = setTimeout(() => revealIn(scrollRef, cmapAnchor, -1, 40, scrollYRef), 80);
+    return () => clearTimeout(id);
+  }, [cmapOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cmapFocus = useListNav(
+    cmapOpen,
+    cmapSorted.length,
+    (i) => { const n = cmapSorted[i]; if (n) { onColormap(n); setCmapOpen(false); } },
+    (i) => {
+      const y = cmapY.current[cmapSorted[i]];
+      if (y != null) cmapScroll.current?.scrollTo({ y: Math.max(0, y - 40), animated: true });
+    },
+    undefined,
+    // Backspace leaves the list WITHOUT applying a colour; Enter picks and closes.
+    () => setCmapOpen(false),
+  );
+
+  // Deepest-first, so Backspace peels one layer at a time rather than jumping to the top.
+  paneBack.current = () => {
+    if (bmImportOpen)     { setBmImportOpen(false); return; }
+    if (cmapOpen)         { setCmapOpen(false); return; }
+    if (profileOpen)      { setProfileOpen(false); return; }
+    if (dabOpen)          { setDabOpen(false); return; }
+    if (bookmarksOpen)    { setBookmarksOpen(false); return; }
+    if (dispSettingsOpen) { setDispSettingsOpen(false); return; }
+    // Nothing nested open — leave the menu itself to Esc, which SDRScreen owns.
+  };
+
   const [bmImportText,   setBmImportText]   = useState('');
   const [bmImportMsg,    setBmImportMsg]    = useState('');
   useEffect(() => {
@@ -650,7 +896,7 @@ export default function MenuSheet({
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <View style={StyleSheet.absoluteFill}>
+      <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOp }]} />
         </TouchableWithoutFeedback>
@@ -661,7 +907,27 @@ export default function MenuSheet({
           <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,4,2,0.60)' }]} />
           <View style={styles.handle} />
 
-          <ScrollView style={styles.scroll}
+          <NavCtx.Provider value={navCtx}>
+            {/* ★★ Shown when iOS Full Keyboard Access appears to be on — it takes the arrows and
+                Tab before they reach us, so nothing here can be navigated. It has to sit at the
+                TOP and outside the focus order, because the one thing the user cannot do in this
+                state is move a highlight to find an explanation. (Tested on device 2026-07-26.) */}
+            {fkaSuspected && (
+              <View style={styles.fkaNote}>
+                <Text style={styles.fkaNoteTitle}>HOLD SHIFT WITH THE ARROW KEYS</Text>
+                <Text style={styles.fkaNoteBody}>
+                  iOS Full Keyboard Access looks to be switched on. It claims the plain arrow keys
+                  and Tab for its own navigation, so VibeSDR never sees them.{'\n'}
+                  Use <Text style={styles.fkaNoteKey}>{'<'}</Text> <Text style={styles.fkaNoteKey}>{'>'}</Text> to
+                  tune and <Text style={styles.fkaNoteKey}>-</Text> <Text style={styles.fkaNoteKey}>+</Text> to
+                  zoom — they are the arrow keys by another name and work in these menus too. In a
+                  text box, or for menus, hold <Text style={styles.fkaNoteKey}>Shift</Text> with an
+                  arrow — and <Text style={styles.fkaNoteKey}>Alt/Option (⌥)</Text> with Tab. You do not need
+                  to turn anything off.
+                </Text>
+              </View>
+            )}
+          <ScrollView {...scrollProps} style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
             keyboardShouldPersistTaps="handled"
@@ -676,7 +942,10 @@ export default function MenuSheet({
             {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
             {onLocalHardware && (<>
               <SectionLabel label="LOCAL HARDWARE" icon="hardware" first />
-              <Btn label="RTL-SDR Controls  ›" full onPress={onLocalHardware} />
+              {/* ★ The BUTTON has to name the radio too, not just the panel it opens. The
+                  header was fixed and this was not, so the menu still announced an RTL-SDR
+                  while the panel behind it said Airspy (Stuart, 2026-07-27). */}
+              <Btn label={`${radioModel || 'Local SDR'} Controls  \u203a`} full onPress={onLocalHardware} />
             </>)}
 
             {/* PROFILE moved to the FREQUENCY popup: on OWRX a profile IS a frequency
@@ -684,163 +953,12 @@ export default function MenuSheet({
                 frequency — and the menu sheet sitting over the decoder panel made a
                 decoding profile look like it produced nothing. See ProfilePicker. */}
 
-            {/* ── DAB PROGRAMME (OWRX — only when a DAB ensemble is tuned) ── */}
-            {dabProgrammes.length > 0 && (<>
-              <SectionLabel label="DAB PROGRAMME" icon="dab" />
-              <View style={styles.profileDrop}>
-                <TouchableOpacity style={styles.profileDropHead} onPress={() => setDabOpen((o) => !o)} activeOpacity={0.7}>
-                  <Text style={styles.profileDropHeadText} numberOfLines={1}>
-                    {dabProgrammes.find((p) => p.id === activeDabId)?.name ?? 'Select programme'}
-                  </Text>
-                  <Text style={styles.profileDropChevron}>{dabOpen ? '▴' : '▾'}</Text>
-                </TouchableOpacity>
-                {dabOpen && (
-                  <ScrollView ref={dabScroll} style={[styles.profileDropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
-                              keyboardShouldPersistTaps="handled">
-                    {dabProgrammes.map((p) => {
-                      const active = p.id === activeDabId;
-                      return (
-                        <TouchableOpacity
-                          key={p.id}
-                          style={styles.profileDropItem}
-                          onLayout={e => { dabY.current[String(p.id)] = e.nativeEvent.layout.y; }}
-                          onPress={() => { onSelectDab?.(p.id); setDabOpen(false); }}
-                          activeOpacity={0.7}>
-                          <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
-                            {active ? '✓ ' : ''}{p.name}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                )}
-              </View>
-              {/* DAB speed correction — works around the dablin/OWRX chipmunk
-                  (UK DAB+ stations whose sample rate is misread). Presets match
-                  the common rate misreads; the user picks what sounds right. */}
-              <Text style={styles.dabSpeedLabel}>Speed fix · remembered per station</Text>
-              <View style={styles.dabSpeedRow}>
-                {[
-                  { v: 1,       l: 'Off' },
-                  { v: 0.6667,  l: '×0.67' },
-                  { v: 0.5,     l: '×0.50' },
-                  { v: 0.3333,  l: '×0.33' },
-                  { v: 0.25,    l: '×0.25' },
-                ].map((o) => {
-                  const active = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
-                  return (
-                    <TouchableOpacity
-                      key={o.l}
-                      style={[styles.dabSpeedChip, active && styles.dabSpeedChipActive]}
-                      onPress={() => onDabSpeed?.(o.v)}
-                      activeOpacity={0.7}>
-                      <Text style={[styles.dabSpeedChipText, active && styles.profileChipTextActive]}>{o.l}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </>)}
+            {/* DAB PROGRAMME list + speed control relocated to the DECODER BOX (§4.5/§5.2) —
+               it's the "what's on this signal" output, like the other decoders. */}
 
-            {/* ── NEARBY STATION ─────────────────────────────────── */}
-            <SectionLabel label="NEARBY STATION" icon="station" first={profiles.length === 0 && dabProgrammes.length === 0} />
-            <View style={styles.vtsRow}>
-              <TouchableOpacity style={styles.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
-                <Text style={styles.vtsArrowText}>◂</Text>
-              </TouchableOpacity>
-              <View style={styles.vtsInfo}>
-                <Text style={styles.vtsName} numberOfLines={1}>{vtsName || '—'}</Text>
-                {vtsFreq != null && (
-                  <Text style={styles.vtsFreq}>{(vtsFreq / 1_000_000).toFixed(3)} MHz</Text>
-                )}
-              </View>
-              <TouchableOpacity style={styles.vtsArrow} onPress={onVtsNext} hitSlop={8}>
-                <Text style={styles.vtsArrowText}>▸</Text>
-              </TouchableOpacity>
-            </View>
+            {/* NEARBY STATION / VTS skip relocated to FreqModal (§4.1) — it belongs with
+               the frequency you're tuning, not in settings. */}
 
-            {/* Search bookmarks & band plan — tap a result to tune */}
-            <View style={styles.searchWrap}>
-              <TextInput
-                style={styles.searchInput}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder="🔍 Search bookmarks & band plan…"
-                placeholderTextColor="rgba(255,255,255,0.40)"
-                autoCorrect={false}
-                autoCapitalize="none"
-                spellCheck={false}
-                clearButtonMode="while-editing"
-              />
-              {searchQuery.trim().length > 0 && (
-                <View style={styles.searchDrop}>
-                  {searchResults.length === 0 ? (
-                    <Text style={styles.searchMsg}>No results for “{searchQuery.trim()}”</Text>
-                  ) : (<>
-                    <Text style={styles.searchHint}>
-                      {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune
-                    </Text>
-                    <ScrollView style={[styles.searchScroll, { maxHeight: dropMaxH }]} nestedScrollEnabled
-                      keyboardShouldPersistTaps="handled"
-                      showsVerticalScrollIndicator={true}>
-                    {searchResults.map((r: SearchResult, i: number) => (
-                      <TouchableOpacity
-                        key={i}
-                        style={styles.searchRow}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          setSearchQuery('');
-                          if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
-                          else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
-                        }}
-                      >
-                        <Text style={styles.searchFreq}>
-                          {r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}
-                        </Text>
-                        <Text style={styles.searchMode}>
-                          {r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}
-                        </Text>
-                        {/* Logo makes a long list scannable. EiBi rows carry their
-                            transmitter country, so those resolve with no guesswork. */}
-                        {!r.isBand && r.bm?.name
-                          ? <StationLogo name={r.bm.name} itu={r.bm.itu} />
-                          : null}
-                        <Text style={styles.searchName} numberOfLines={1}>
-                          {!r.isBand && r.bm?.repeater ? <Text style={styles.searchRpt}>📡 </Text> : null}
-                          {!r.isBand && r.bm?.flag ? r.bm.flag + ' ' : ''}
-                          {r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                    </ScrollView>
-                  </>)}
-                </View>
-              )}
-            </View>
-
-            {/* EiBi shortwave schedule — on-device fallback bookmark set (off for
-                anyone who finds it too busy). Hidden when a backend has no place
-                for it would be over-engineering; always offered. */}
-            {onEibiToggle && (
-              <View style={styles.bwRow}>
-                <Text style={[styles.bwLabel, { width: 150 }]}>EiBi SCHEDULE</Text>
-                <View style={{ flex: 1 }} />
-                <TouchableOpacity onPress={() => onEibiToggle?.(!eibiEnabled)} hitSlop={8}
-                  style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                           backgroundColor: eibiEnabled ? C.gold : 'transparent',
-                           borderWidth: 1, borderColor: eibiEnabled ? C.gold : C.muted }}>
-                  <Text style={{ color: eibiEnabled ? C.bg : C.muted,
-                                 fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
-                    {eibiEnabled ? 'ON' : 'OFF'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* User bookmarks pane opener */}
-            <BtnRow>
-              <Btn label={`★ BOOKMARKS (${userBookmarks.length})`} full
-                   onPress={() => setBookmarksOpen(true)} />
-            </BtnRow>
 
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
             <SectionLabel label="SPECTRUM / WATERFALL" icon="spectrum" />
@@ -861,117 +979,13 @@ export default function MenuSheet({
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
             <BtnRow>
+              <Btn label="⌨ KEYBOARD SHORTCUTS" full onPress={onKeyHelp} />
+            </BtnRow>
+            <BtnRow>
               <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />
             </BtnRow>
             </>)}
 
-            {/* ── BOOKMARKS pane — replaces the menu (display-settings
-                   pattern). Add current tune / list / delete / export-import
-                   in the desktop-UberSDR JSON format. ── */}
-            {bookmarksOpen && (
-              <View style={styles.subPanel}>
-                <TouchableOpacity style={styles.backRow}
-                  onPress={() => setBookmarksOpen(false)} activeOpacity={0.7}>
-                  <Text style={styles.backRowChevron}>‹  BACK</Text>
-                  <Text style={styles.backRowTitle}>BOOKMARKS</Text>
-                </TouchableOpacity>
-
-                {/* Add current tune */}
-                <SubLabel label={`Add: ${(currentFreq / 1_000_000).toFixed(4)} MHz ${currentMode.toUpperCase()}`} />
-                <TextInput
-                  style={styles.searchInput}
-                  value={bmName}
-                  onChangeText={setBmName}
-                  placeholder="Bookmark name…"
-                  placeholderTextColor="rgba(255,255,255,0.40)"
-                  autoCorrect={false}
-                  maxLength={60}
-                />
-                <OptRow>
-                  <SegBtn label="THIS INSTANCE" active={!bmAll} onPress={() => setBmAll(false)} />
-                  <SegBtn label="ALL INSTANCES" active={bmAll}  onPress={() => setBmAll(true)} />
-                </OptRow>
-                <BtnRow>
-                  <Btn label="★ SAVE BOOKMARK" full
-                       onPress={() => {
-                         if (!bmName.trim()) return;
-                         onAddBookmark?.(bmName, bmAll);
-                         setBmName('');
-                       }} />
-                </BtnRow>
-
-                {/* Saved list — tap to tune, ✕ deletes. Scope colour-coded:
-                    cyan = all instances, gold = this instance only. */}
-                <SubLabel label={`Saved (${userBookmarks.length})`} />
-                <View style={styles.bmKey}>
-                  <View style={[styles.bmKeyDot, { backgroundColor: BM_GLOBAL_C }]} />
-                  <Text style={styles.bmKeyTxt}>All instances</Text>
-                  <View style={[styles.bmKeyDot, { backgroundColor: BM_LOCAL_C }]} />
-                  <Text style={styles.bmKeyTxt}>This instance</Text>
-                </View>
-                {userBookmarks.length === 0 && (
-                  <Text style={styles.bmEmpty}>No bookmarks yet — tune somewhere good and save it.</Text>
-                )}
-                {userBookmarks.map((b: UserBookmark, i: number) => (
-                  <View key={`${b.name}|${b.frequency}|${i}`} style={styles.bmRow}>
-                    <View style={[styles.bmKeyDot, { backgroundColor: b.scope ? BM_LOCAL_C : BM_GLOBAL_C }]} />
-                    <TouchableOpacity style={styles.bmTune} activeOpacity={0.7}
-                      onPress={() => onSearchTune?.(b.frequency, b.mode)}>
-                      <Text style={[styles.bmName, { color: b.scope ? BM_LOCAL_C : BM_GLOBAL_C }]}
-                        numberOfLines={1}>
-                        {b.name}
-                      </Text>
-                      <Text style={styles.bmFreq}>
-                        {fmtFreq(b.frequency)}  {b.mode.toUpperCase()}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}>
-                      <Text style={styles.bmDel}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-
-                {/* Export / import — desktop-UberSDR-compatible JSON */}
-                <SubLabel label="Transfer" />
-                <BtnRow>
-                  <Btn label="⇧ EXPORT JSON" onPress={onExportBookmarks} />
-                  <Btn label="⇩ PASTE" active={bmImportOpen}
-                       onPress={() => { setBmImportOpen((p: boolean) => !p); setBmImportMsg(''); }} />
-                </BtnRow>
-                {onPickImportFile && (
-                  <BtnRow>
-                    <Btn label="📁 IMPORT FILE (JSON / YAML)" full
-                         onPress={async () => {
-                           const msg = await onPickImportFile(bmAll);
-                           if (msg) { setBmImportMsg(msg); setBmImportOpen(false); }
-                         }} />
-                  </BtnRow>
-                )}
-                {!bmImportOpen && !!bmImportMsg && <Text style={styles.bmImportMsg}>{bmImportMsg}</Text>}
-                {bmImportOpen && (<>
-                  <TextInput
-                    style={[styles.searchInput, styles.bmImportBox]}
-                    value={bmImportText}
-                    onChangeText={setBmImportText}
-                    placeholder="Paste UberSDR bookmarks (JSON or YAML) here…"
-                    placeholderTextColor="rgba(255,255,255,0.40)"
-                    autoCorrect={false}
-                    autoCapitalize="none"
-                    multiline
-                  />
-                  <BtnRow>
-                    <Btn label="CONFIRM IMPORT" full
-                         onPress={() => {
-                           const msg = onImportBookmarks?.(bmImportText, bmAll) ?? '';
-                           setBmImportMsg(msg);
-                           if (msg.startsWith('Imported')) setBmImportText('');
-                         }} />
-                  </BtnRow>
-                  {!!bmImportMsg && <Text style={styles.bmImportMsg}>{bmImportMsg}</Text>}
-                </>)}
-                <View style={{ height: 24 }} />
-              </View>
-            )}
 
             {dispSettingsOpen && (
               <View style={styles.subPanel}>
@@ -1001,6 +1015,11 @@ export default function MenuSheet({
                     pill strip hardcoded names like 'sonar'/'green' that never
                     existed in the tables → silent gqrx fallback.) */}
                 <SubLabel label="Colour Map" />
+                {/* ★ The OPENER must be registered too. It was a bare TouchableOpacity, so the
+                    arrows walked straight past it and there was no keyboard way to open the
+                    colour list at all — which read as "it skips the dropdown". */}
+                <View ref={cmapAnchor} collapsable={false}>
+                <NavRow><CmapHeaderBtn open={cmapOpen} onPress={() => setCmapOpen((o: boolean) => !o)}>
                 <TouchableOpacity style={styles.dropHeader}
                   onPress={() => setCmapOpen((o: boolean) => !o)} activeOpacity={0.7}>
                   <Text style={styles.dropHeaderText}>
@@ -1008,12 +1027,14 @@ export default function MenuSheet({
                   </Text>
                   <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
+                </CmapHeaderBtn></NavRow>
                 {cmapOpen && (
                   <ScrollView ref={cmapScroll} style={[styles.dropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
-                        style={[styles.dropItem, name === colormap && styles.dropItemActive]}
+                        style={[styles.dropItem, name === colormap && styles.dropItemActive,
+                                cmapFocus === cmapSorted.indexOf(name) && styles.dropItemFocused]}
                         onLayout={e => { cmapY.current[name] = e.nativeEvent.layout.y; }}
                         onPress={() => { onColormap(name); setCmapOpen(false); }}
                         activeOpacity={0.7}>
@@ -1024,29 +1045,29 @@ export default function MenuSheet({
                     ))}
                   </ScrollView>
                 )}
+                </View>
 
                 {/* VFO Needle Colour — colour swatches */}
                 <SubLabel label="VFO Needle Colour" />
-                <View style={styles.swatchRow}>
+                {/* ★ The swatches are a ROW of choices, so they register as one NavRow and
+                    left/right walks them — they were bare Touchables that focus skipped. */}
+                <NavRow><View style={styles.swatchRow}>
                   {([
                     {hex:'#ff2020',label:'Red'},    {hex:'#00ff44',label:'Green'},
                     {hex:'#4499ff',label:'Blue'},   {hex:'#ffdd00',label:'Yellow'},
                     {hex:'#00eeff',label:'Cyan'},   {hex:'#ff8800',label:'Orange'},
                     {hex:'#ffffff',label:'White'},  {hex:'#cc44ff',label:'Purple'},
                   ]).map(c => (
-                    <TouchableOpacity key={c.hex} hitSlop={4}
-                      style={[styles.swatch, { backgroundColor: c.hex },
-                        vfoNeedle === c.hex && styles.swatchActive]}
-                      onPress={() => onVfoNeedle?.(c.hex)}
-                    />
+                    <SwatchBtn key={c.hex} hex={c.hex} active={vfoNeedle === c.hex}
+                               onPress={() => onVfoNeedle?.(c.hex)} />
                   ))}
-                </View>
+                </View></NavRow>
 
                 {/* VFO Intensity — needle + glow brightness; bright palettes
                     can swallow the needle whatever colour it is */}
                 <View style={styles.bwRow}>
                   <Text style={styles.bwLabel}>VFO GLOW</Text>
-                  <Slider style={styles.bwSlider}
+                  <NavSlider style={styles.bwSlider}
                     minimumValue={1} maximumValue={10} step={1}
                     value={vfoIntensity}
                     onValueChange={(v: number) => onVfoIntensity?.(v)}
@@ -1059,7 +1080,7 @@ export default function MenuSheet({
                     so the needle keeps contrast on bright palettes */}
                 <View style={styles.bwRow}>
                   <Text style={styles.bwLabel}>VFO FROST</Text>
-                  <Slider style={styles.bwSlider}
+                  <NavSlider style={styles.bwSlider}
                     minimumValue={0} maximumValue={10} step={1}
                     value={vfoFrost}
                     onValueChange={(v: number) => onVfoFrost?.(v)}
@@ -1074,7 +1095,7 @@ export default function MenuSheet({
                 {hasBgImage && (
                   <View style={styles.bwRow}>
                     <Text style={styles.bwLabel}>BACKDROP</Text>
-                    <Slider style={styles.bwSlider}
+                    <NavSlider style={styles.bwSlider}
                       minimumValue={0} maximumValue={10} step={1}
                       value={bgOpacity}
                       onValueChange={(v: number) => onBgOpacity?.(v)}
@@ -1094,7 +1115,7 @@ export default function MenuSheet({
                 {wfCoarse === 'auto' && (
                   <View style={styles.sliderWrap}>
                     <Text style={styles.sliderLabel}>Auto Range</Text>
-                    <Slider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
+                    <NavSlider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
                       value={autoContrast} onValueChange={onAutoContrast ?? (() => {})}
                       minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                     <Text style={styles.sliderVal}>{autoContrast}</Text>
@@ -1105,7 +1126,7 @@ export default function MenuSheet({
                     {/* Manual dB window — floor/ceiling kept ≥5dB apart */}
                     <View style={styles.sliderWrap}>
                       <Text style={styles.sliderLabel}>Floor</Text>
-                      <Slider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
+                      <NavSlider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
                         value={Math.min(dbMin, dbMax - 5)}
                         onValueChange={(v: number) => onDbMin?.(Math.min(v, dbMax - 5))}
                         minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
@@ -1113,7 +1134,7 @@ export default function MenuSheet({
                     </View>
                     <View style={styles.sliderWrap}>
                       <Text style={styles.sliderLabel}>Ceiling</Text>
-                      <Slider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
+                      <NavSlider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
                         value={Math.max(dbMax, dbMin + 5)}
                         onValueChange={(v: number) => onDbMax?.(Math.max(v, dbMin + 5))}
                         minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
@@ -1126,21 +1147,21 @@ export default function MenuSheet({
                 <SubLabel label="Waterfall — Fine" />
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Brightness</Text>
-                  <Slider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={wfBrightness} onValueChange={onWfBrightness ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(wfBrightness > 0 ? '+' : '') + wfBrightness} dB</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Contrast</Text>
-                  <Slider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
                     value={wfContrast} onValueChange={onWfContrast ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(wfContrast > 0 ? '+' : '') + wfContrast}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Sharpness</Text>
-                  <Slider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
                     value={wfSharpness} onValueChange={onWfSharpness ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{wfSharpness}</Text>
@@ -1158,21 +1179,21 @@ export default function MenuSheet({
                 </BtnRow>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Smoothing</Text>
-                  <Slider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
                     value={specSmoothing} onValueChange={onSpecSmoothing ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{specSmoothing}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Floor</Text>
-                  <Slider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={specFloor} onValueChange={onSpecFloor ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Peak Scale</Text>
-                  <Slider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
+                  <NavSlider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
                     value={specPeakScale} onValueChange={onSpecPeakScale ?? (() => {})}
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(specPeakScale / 10).toFixed(1)}×</Text>
@@ -1181,16 +1202,20 @@ export default function MenuSheet({
                   <Btn label="PEAK HOLD" active={peakHold} onPress={() => onPeakHold?.(!peakHold)} />
                 </BtnRow>
 
-                {/* Frame Interpolation */}
-                <SubLabel label="Frame Interpolation" />
-                {/* NATIVE = data rate (~10 lines/s, discrete rows); 20/30 =
-                    temporally interpolated 2×/3× line rate. Smooth-tune boost
-                    overrides to panel-native refresh while touching. */}
+                {/* Scroll Smoothness — a TARGET (minimum) scroll rate. The waterfall interpolates the
+                    live data rate UP to this, so 10fps holds a smooth 10fps scroll even when the data
+                    is only 5fps (Low Data); 20/30 are progressively smoother. The extra lines are
+                    interpolated between real frames, not new detail. */}
+                <SubLabel label="Scroll Smoothness" />
                 <BtnRow>
-                  <Btn label="NATIVE" active={frameRate==='native'} onPress={() => onFrameRate?.('native')} />
-                  <Btn label="20fps"  active={frameRate==='20fps'}  onPress={() => onFrameRate?.('20fps')} />
-                  <Btn label="30fps"  active={frameRate==='30fps'}  onPress={() => onFrameRate?.('30fps')} />
+                  <Btn label="10 FPS" active={frameRate==='10fps'} onPress={() => onFrameRate?.('10fps')} />
+                  <Btn label="20 FPS" active={frameRate==='20fps'} onPress={() => onFrameRate?.('20fps')} />
+                  <Btn label="30 FPS" active={frameRate==='30fps'} onPress={() => onFrameRate?.('30fps')} />
                 </BtnRow>
+                <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
+                               fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>
+                  Higher = smoother scrolling; the extra lines are interpolated, not new detail.
+                </Text>
 
                 {/* Power saving — IDLE SAVER: ⅓ server frame rate after 30s
                     without touch. (Smooth tune is always on — the 120 Hz boost
@@ -1200,104 +1225,34 @@ export default function MenuSheet({
                   <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
                 </BtnRow>
 
+                {/* SIGNAL METER unit — SNR / S-units / dBFS. A DISPLAY choice (it only changes the
+                    frequency-pill readout), so it lives with the other display settings — moved here
+                    from CONTROLS. Link Management moved OUT to the SERVER section (it's a server control). */}
+                {onSignalMode && (<>
+                  <SubLabel label="Signal meter" />
+                  <BtnRow>
+                    {(['snr','smeter','dbfs'] as const).map(sm => (
+                      <Btn key={sm} label={sm==='smeter' ? 'S-METER' : sm.toUpperCase()}
+                        active={signalMode===sm} onPress={() => onSignalMode?.(sm)} />
+                    ))}
+                  </BtnRow>
+                </>)}
+
               </View>
             )}
 
             {!dispSettingsOpen && !bookmarksOpen && (<>
 
 
-            {/* ── SERVER MAPS — UberSDR's per-feed Leaflet overlays (skin parity).
-                   OWRX has its own combined map (opened from the OPENWEBRX section
-                   below), so these UberSDR-specific feeds are hidden for it. ── */}
-            {serverType !== 'owrx' && !isLocal && !isKiwi && (<>
-              <SectionLabel label="SERVER MAPS" icon="maps" />
-              <BtnRow>
-                <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
-                <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
-                <Btn label="⊟ CW"       onPress={() => onServerMap?.('cw')} />
-              </BtnRow>
-            </>)}
+            {/* SERVER MAPS relocated to ModeSelector (§4.4) — same "what's on this
+               signal" family as the decoders. */}
 
-            {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;
-                   settings for the selected mode appear underneath.
-                   Landscape: hidden — the decoder panel needs vertical space
-                   that landscape (esp. SE-class screens) doesn't have. Maps
-                   stay available; rotate to portrait for decoders.
-                   OWRX decodes server-side (results stream back), so the
-                   client-side decoders + UberSDR spot feeds are hidden for it —
-                   replaced by the OPENWEBRX map/files/admin below (Phase 1). ── */}
-            {(!isLandscape || isTablet) && serverType !== 'owrx' && (<>
-            <SectionLabel label="CLIENT DECODERS" icon="decoder" />
-            <BtnRow>
-              {(['rtty','navtex','wefax','sstv','morse'] as const).filter(k => !(isLocal && k === 'morse')).map(k => (
-                <Btn key={k} label={k.toUpperCase()}
-                  active={decMode === k && decOn}
-                  style={decMode === k && !decOn ? styles.btnSelected : undefined}
-                  onPress={() => onDecToggle?.(k)} />
-              ))}
-            </BtnRow>
-            {decMode === 'rtty' && rttySettings && onRttySettings && (
-              <View style={styles.subPanel}>
-                <RttySettingsRows s={rttySettings} onChange={onRttySettings} />
-              </View>
-            )}
-            {decMode === 'wefax' && (
-              <View style={styles.subPanel}>
-                <SubLabel label="LPM" />
-                <OptRow>{[60, 120, 240].map(v => (
-                  <SegBtn key={v} label={String(v)} active={wefaxLpm === v}
-                          onPress={() => onWefaxLpm?.(v)} />
-                ))}</OptRow>
-              </View>
-            )}
-            </>)}
-
-            {/* DECODED SPOTS / SERVER EXTENSIONS stays available in landscape (unlike
-                the client decoders above, which need portrait height) so the FT8 MAP
-                and Digital Spots are reachable in either orientation. */}
-            {serverType !== 'owrx' && (<>
-            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text. DIGITAL SPOTS is
-                   our ON-DEVICE FT8/FT4 decoder, so it works everywhere (local USB
-                   hardware AND Kiwi, which has no server feed). CW SPOTS (server CW
-                   skimmer) and STT (server speech-to-text) are real server features,
-                   so they're hidden for local hardware and Kiwi. ── */}
-            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} icon="spots" />
-            <BtnRow>
-              <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
-                   onPress={() => onSpotsToggle?.('digi')} />
-              {!isLocal && !isKiwi && (
-                <Btn label="CW SPOTS" active={spotsKind === 'cw'}
-                     onPress={() => onSpotsToggle?.('cw')} />
-              )}
-              {!isLocal && !isKiwi && (
-                <Btn label="STT" active={decMode === 'whisper' && decOn}
-                     style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
-                     onPress={() => onDecToggle?.('whisper')} />
-              )}
-              {/* On-device FT8 map (Local/Kiwi) — plots Digital Spots by their
-                  Maidenhead grid; distance/centre from the receiver position. */}
-              {(isLocal || isKiwi) && (
-                <Btn label="🗺 MAP" onPress={() => onSpotsMap?.()} />
-              )}
-            </BtnRow>
-            {spotsKind !== null && (
-              <View style={styles.subPanel}>
-                <SubLabel label="Filters in decoder panel header · tap a spot to tune" small />
-              </View>
-            )}
-            </>)}
+            {/* CLIENT DECODERS + SERVER EXTENSIONS / DECODED SPOTS relocated to ModeSelector
+               (§4.3) — a decoder rides on the demod, so it belongs in the demodulator menu. */}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
             <SectionLabel label="CONTROLS" icon="controls" />
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>SIGNAL</Text>
-              <BtnRow>
-                {(['snr','smeter','dbfs'] as const).map(m => (
-                  <Btn key={m} label={m==='smeter' ? 'S-METER' : m.toUpperCase()}
-                    active={signalMode===m} onPress={() => onSignalMode?.(m)} />
-                ))}
-              </BtnRow>
-            </View>
+            {/* SIGNAL METER unit moved to DISPLAY SETTINGS (it's a display choice). */}
             {/* DISPLAY STYLE row removed — accessibility skin (white/Atkinson)
                 is the single style now; amber/Nixie dropped for readability. */}
             <View style={styles.ctrlRow}>
@@ -1308,6 +1263,35 @@ export default function MenuSheet({
                 {hapticsHardware && (
                   <Btn label="✦ HAPTICS" active={hapticsEnabled}     onPress={() => onHaptics?.(!hapticsEnabled)} />
                 )}
+              </BtnRow>
+            </View>
+            {/* Drum or HiFi tuner keys, per control. Deliberately two rows rather
+                than one switch: mixing them (keys to tune, drum to zoom) is a
+                real preference, and it is also the accessibility route — a
+                labelled target for anyone who cannot make a drag gesture. */}
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>TUNE</Text>
+              <BtnRow>
+                <Btn label="DRUM" active={!vfoKeys} onPress={() => onVfoKeys?.(false)} />
+                <Btn label="KEYS" active={vfoKeys}  onPress={() => onVfoKeys?.(true)} />
+              </BtnRow>
+            </View>
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>ZOOM</Text>
+              <BtnRow>
+                <Btn label="DRUM" active={!zoomKeys} onPress={() => onZoomKeys?.(false)} />
+                <Btn label="KEYS" active={zoomKeys}  onPress={() => onZoomKeys?.(true)} />
+              </BtnRow>
+            </View>
+            {/* ★ ONE question for pointing devices, not a layout matrix. The vertical
+                wheel is the only input every device has, so it is the only thing worth
+                asking; the OTHER control lands automatically on whatever orthogonal
+                axis exists (horizontal wheel, tilt wheel, trackpad left/right). */}
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>WHEEL</Text>
+              <BtnRow>
+                <Btn label="ZOOM" active={wheelAction === 'zoom'} onPress={() => onWheelAction?.('zoom')} />
+                <Btn label="TUNE" active={wheelAction === 'tune'} onPress={() => onWheelAction?.('tune')} />
               </BtnRow>
             </View>
             {/* Lock-screen / car-stereo skip buttons: tune by step, or jump
@@ -1326,42 +1310,52 @@ export default function MenuSheet({
                    gallery (SSTV/WEFAX/Navtex images) + settings, so we link those
                    rather than UberSDR's noise/conditions/listeners pages. ──── */}
             {serverType === 'owrx' ? (<>
+              {/* MAP + FILES relocated to the demodulator menu (they're "what's on this
+                 signal" content, with the other maps). ADMIN stays — it's server settings. */}
               <SectionLabel label="OPENWEBRX" icon="server" />
+              {kbInUse && <Text style={styles.kbSkipNote}>Server pages are skipped on a keyboard — they are the receiver's own, and we cannot guarantee how a keyboard behaves there. Tap to open one.</Text>}
               <BtnRow>
-                <Btn label="🗺 MAP"   onPress={() => onAdminLink?.('/map', 'Map')} />
-                <Btn label="🖼 FILES" onPress={() => onAdminLink?.('/files', 'Files')} />
-              </BtnRow>
-              <BtnRow>
-                <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
+                <Btn label="⚙ ADMIN" full skipNav={kbInUse} onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
             </>) : isLocal || isKiwi ? null : (<>
-              <SectionLabel label="INSTANCE ADMIN" icon="admin" />
+              <SectionLabel label="SERVER ADMIN" icon="admin" />
+              {kbInUse && <Text style={styles.kbSkipNote}>Server pages are skipped on a keyboard — they are the receiver's own, and we cannot guarantee how a keyboard behaves there. Tap to open one.</Text>}
               <BtnRow>
-                <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
-                <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
+                <Btn label="ADMIN"      skipNav={kbInUse} onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
+                <Btn label="NOISE"      skipNav={kbInUse} onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
               </BtnRow>
               <BtnRow>
-                <Btn label="CONDITIONS" onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
-                <Btn label="LISTENERS"  onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
+                <Btn label="CONDITIONS" skipNav={kbInUse} onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
+                <Btn label="LISTENERS"  skipNav={kbInUse} onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
               </BtnRow>
             </>)}
 
+            {/* TEMPORARY link-controller diagnostic. */}
+            <SubLabel small label={`LINK: ${linkDebug.line}`} />
+
+            <ICloudRow />
+
             {/* ── INSTANCE ───────────────────────────────────────── */}
-            <SectionLabel label="INSTANCE" icon="instance" />
+            <SectionLabel label="SERVER" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
-            <BtnRow>
-              {onToggleFavourite && (
-                <Btn label={isFavourite ? '♥ FAVOURITED' : '♡ FAVOURITE'}
-                     active={isFavourite} onPress={onToggleFavourite} />
-              )}
-              <Btn label={isDefaultInstance ? '★ CLEAR DEFAULT' : '☆ SET DEFAULT'}
-                   active={isDefaultInstance} onPress={onSetDefault} />
-            </BtnRow>
-            <BtnRow>
-              <View ref={tourRef('backToList')} collapsable={false} style={{ flex: 1 }}>
-                <Btn label="← BACK TO INSTANCE LIST" full onPress={onBack ?? onClose} />
-              </View>
-            </BtnRow>
+            {/* AUTO LINK MANAGEMENT — a SERVER control (it changes what the server sends): asks for
+                fewer waterfall frames when the link can't carry them, climbs back when it recovers.
+                AUTO default; FULL never throttles (may stutter); LOW DATA pins the floor for metered
+                connections. The waterfall interpolates regardless, so a lower rate costs TIME
+                RESOLUTION, not smooth scrolling. Moved here from Display settings. */}
+            {onLinkMode && (<>
+              <SubLabel label="Link Management" />
+              <BtnRow>
+                <Btn label="AUTO"     active={linkMode==='adaptive'} onPress={() => onLinkMode('adaptive')} />
+                <Btn label="FULL"     active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
+                <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
+              </BtnRow>
+            </>)}
+            {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
+                (top-left of the spectrum) — they're the "which server am I on / how
+                do I leave" actions, and burying them here behind a settings-looking
+                glyph was exactly what users couldn't find. Reset stays here,
+                deliberately away from the quick exit. */}
             <BtnRow col>
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
             </BtnRow>
@@ -1415,6 +1409,7 @@ export default function MenuSheet({
             <View style={{ height: 24 }} />
             </>)}
           </ScrollView>
+          </NavCtx.Provider>
 
           <TouchableOpacity
             style={[styles.closeBtn, { marginBottom: sheetInsets.bottom + 12 }]}
@@ -1490,6 +1485,21 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   btnActive:     { backgroundColor: C.active, borderColor: C.goldDim },
+  // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
+  // setting is on"). Focus is where the keyboard is, not what is selected.
+  btnFocused:    { borderColor: C.focus, borderWidth: 2 },
+  // Amber rather than the focus green: this is an explanation of why the green is not moving.
+  fkaNote:      { borderWidth: 1, borderColor: C.goldDim, borderRadius: 6,
+                  backgroundColor: 'rgba(60,40,0,0.5)', padding: 10, marginBottom: 10 },
+  fkaNoteTitle: { color: C.gold, fontSize: 11, letterSpacing: 1, marginBottom: 5 },
+  fkaNoteBody:  { color: C.muted, fontSize: 11, lineHeight: 16 },
+  fkaNoteKey:   { color: C.gold, fontWeight: '700' },
+  // Dim and small: an explanation, not a warning — nothing has gone wrong.
+  kbSkipNote:    { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 },
+  dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },
+  // Dropdown rows are a dense list with only a divider, so focus is a background tint —
+  // a 2px border would shift every row as focus moved down it.
+  dropItemFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
   btnSelected:   { borderColor: C.goldDim }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },

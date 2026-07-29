@@ -73,10 +73,30 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// than reimplementing the colour maps here.)
   @Published var meter      = ""
   @Published var level      = 0.0
+  /// Squelch threshold as a 0..1 bar position (mirrored from the phone via the row), -1 = off.
+  /// Drives the red squelch line + the breathing "SQL" readout — see ContentView. Gate is CLOSED
+  /// (muting) when `level < sql`.
+  @Published var sql        = -1.0
   @Published var mode       = ""
   @Published var step       = 0.0
   @Published var reachable  = false
-  @Published var everGotRow = false
+  /// Servers screen requested from the menu. NAVIGATION only — the phone keeps playing while you
+  /// browse, so this must never tear the link down (see WatchLinkCompat.backToPicker).
+  @Published var showServers = false
+  /// When ANY message last arrived from the phone — the evidence that the watch↔phone hop is
+  /// alive. Rows are the strongest signal, but the phone legitimately goes quiet on rows (paused
+  /// for power, or a screen with no spectrum), while still sending state and favourites. So the
+  /// iPhone glyph keys off "anything at all", not rows alone.
+  @Published var lastAnyAt: Date? = nil
+  @Published var everGotRow = false {
+    didSet {
+      if everGotRow && !oldValue { liveSince = Date() }   // fresh session came up — start the settle window
+      else if !everGotRow { liveSince = nil }             // torn down for a new session
+    }
+  }
+  /// When the CURRENT session first showed rows. For the first few seconds the link meter reads low
+  /// while it's still coming up — the hint says "Initialising", not "Server link poor".
+  @Published private(set) var liveSince: Date? = nil
 
   /// When a row last arrived. The watch used to know only two states — "iPhone not
   /// reachable" or "fine" — but there is a THIRD: the phone is right there and
@@ -89,6 +109,21 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// iPhone" is a symptom, not a diagnosis — a paused socket, a stalled renderer and
   /// a dead link all look identical from here, and chasing that cost hours.
   @Published var why = "live"
+  /// The phone app has been CLOSED by the user (goodbye received, or a 'closed' status).
+  /// Drives the "Phone app closed" screen and gates the heartbeat off (anti-hijack).
+  @Published var phoneClosed = false
+  /// Wrist down = watch backgrounded. Set the instant scenePhase leaves .active (Buddy has no
+  /// background audio, so watchOS suspends us right after and the row feed stops); the ported
+  /// power-save branches read this to suppress the false 'reconnecting' glyph and to fast-resume.
+  @Published var isBackground = false
+  /// The phone was DELIBERATELY closed (a goodbye, or a headless-relaunch 'closed' status). Latches the
+  /// closed state so a stale in-flight row can't un-close us and restart the phone-relaunching heartbeat.
+  /// Cleared only by a user Reopen or a genuine live phone status. `private(set)` so the app router can
+  /// pick the Start screen (phone is here, deliberately closed) vs Connect-to-iPhone (phone out of reach).
+  @Published private(set) var deliberatelyClosed = false
+  /// Stamped on wrist-up so the silence watchdog restarts its grace instead of firing instantly on a
+  /// stale lastRowAt (a long wrist-down) — which was flashing the Start screen for a moment on the way back.
+  private(set) var resumedAt = Date.distantPast
   @Published var lastStateAt: Date? = nil
 
   /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
@@ -175,6 +210,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // the phone never has to tell us which screen to be, because what it SENDS
   // already says: rows mean a spectrum, an fmdx blob means a station.
   @Published var fmdx: FmdxState? = nil
+  /// Directory listings MIRRORED from the phone (keyed by directory id). Buddy keeps no server list of
+  /// its own — the phone fetches on `browse` and sends the rows; Buddy just displays and references them.
+  @Published var directories: [String: [SDRServer]] = [:]
+  private struct DirMsg: Codable {
+    let dir: String; let servers: [DirRow]
+    struct DirRow: Codable { let id: String; let name: String; let type: String
+                             let country: String?; let users: Int; let full: Bool; let dist: Double? }
+  }
   /// The DAB multiplex, when the phone is on a DAB profile. DAB is a LIST, not a
   /// continuum: the crown SELECTS a service, it does not tune. (The phone already
   /// refuses to tune in DAB — a nudge knocks you off the ensemble block, killing the
@@ -272,6 +315,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var rx = ""               // where the RECEIVER is — `dist` is measured from HERE
     var meter = ""            // the phone's meter text, mirrored
     var level: Double = 0     // 0..1 bar fill
+    // ── Server controls, relayed to/from the phone (thin-remote). ──
+    var eq = false            // cEQ filter
+    var ims = false           // iMS multipath suppression
+    var ant = 0               // selected antenna (0-based)
+    var antennas: [FmdxAntenna] = []   // advertised antennas; empty = no switch to show
   }
 
   /// Filter edges as Hz offsets from the carrier. NOT symmetric: LSB is entirely
@@ -321,21 +369,60 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     s.activate()
     session = s
 
-    // HEARTBEAT. The phone's WCSession.isReachable goes stale and it then refuses
-    // to send, while our crown messages still get through — the downlink dies
-    // silently and the watch sits on "Waiting for signal" forever. The phone treats
-    // any message from us as proof we're here, but that proof expires; without a
-    // heartbeat it would only hold while the user happened to be turning the crown.
-    // .common mode, NOT the default. A Timer scheduled in default mode STOPS FIRING
-    // while the run loop is in tracking mode — i.e. exactly while you are turning
-    // the crown or touching the screen. The heartbeat would stall, the phone's
-    // 10-second linkAlive window would expire, and it would stop sending rows: the
-    // watch dropped to "waiting for connection" mid-use, for no reason but this.
+    // ★ Drive the WaterfallBuffer like Jr: TELL it the feed rate so it doesn't slow-learn from the
+    // 10fps default, drain dry and stall (which read as a creeping waterfall + laggy spectrum). The
+    // phone always feeds Buddy at 5fps (MIN_ROW_MS 200 / forwarder 0.2s) — the right rate for BT.
+    waterfall.setExpectedRowRate(Self.rowFps)
+
+    // ★ NO AUTO COLD-BOOT (Stuart 2026-07-21). Buddy must NOT launch the phone app just by being
+    // opened — an accidental open used to boot VibeSDR on the phone. Only RESUME the heartbeat for a
+    // session that's already LIVE (wrist came back to a running, connected phone). A cold/accidental
+    // open, or a phone we've been told is closed, lands on the START screen — the user taps ▶ Start
+    // VibeSDR to launch/connect deliberately (that's the one place a ping is allowed to relaunch it).
+    if everGotRow && !phoneClosed {
+      startHeartbeat()   // resume a live session across a wrist-down/up
+    } else {
+      phoneClosed = true // show the Start screen; no ping, no boot
+    }
+  }
+
+  /// The fixed phone→watch row rate. 10fps over Bluetooth (Stuart's rule); the buffer + the jitter-
+  /// buffer slot interval are both driven off this, so it MUST match the phone forwarder's cadence
+  /// (WatchSpectrumForwarder 60ms / watchProvider MIN_ROW_MS 60).
+  static let rowFps = 10.0
+
+  private func startHeartbeat() {
     heartbeat?.invalidate()
     let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
     RunLoop.main.add(t, forMode: .common)
     heartbeat = t
   }
+
+  /// The phone told us it is CLOSED (goodbye, or a 'closed' status after an anti-hijack
+  /// relaunch). STOP the heartbeat: every ping is a `sendMessage` that would relaunch the
+  /// phone headless and pour SDR audio out its speaker mid-call. We go silent until the user
+  /// explicitly asks to Reopen. This is the whole anti-hijack on the watch side.
+  private func stopHeartbeat() { heartbeat?.invalidate(); heartbeat = nil }
+
+  /// True from "Reopen App" until the phone actually comes back. While set, the heartbeat sends
+  /// `reopen` instead of `ping` — a single reopen can be dropped while the relaunching phone's JS
+  /// is still mounting its listener, so we keep asking until rows/ready prove it landed.
+  private var reopenPending = false
+
+  /// User pressed "Reopen App" on the closed screen. Resume poking the phone (a sendMessage
+  /// relaunches it) and keep asking it to reopen until it does.
+  func reopen() {
+    phoneClosed = false
+    deliberatelyClosed = false   // the user explicitly wants it back — release the latch
+    reopenPending = true
+    startHeartbeat()
+    send(["cmd": "reopen"])
+  }
+
+  /// User pressed "Close Buddy". We cannot terminate a watchOS app from code, so go dormant:
+  /// heartbeat off (nothing relaunches the phone), and the closed screen stays up with no
+  /// Reopen pressure. The user can swipe Buddy away, or reopen the phone app to resume.
+  func closeBuddy() { stopHeartbeat() }
 
   // MARK: - Watch -> Phone
 
@@ -498,7 +585,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   private func scheduleFlush() {
     guard !flushScheduled else { return }
     flushScheduled = true
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+    // 100ms, matching the UberSDR tune debounce the main app + Jr already use (UberClient
+    // sendTuneThrottled — 100ms is UberSDR's supported rate). The phone can only feed the
+    // SERVER at 1/100ms, so coalescing tighter than that just floods the watch→phone WC leg
+    // with tune commands that compete with the rows for the one Bluetooth radio — the tuning
+    // equivalent of the row-rate saturation. The readout stays instant either way: predictTune
+    // moves it locally, the send rate only governs how often the phone hears about it.
+    // Deltas ACCUMULATE across the window (pendingTune sums), so a longer window loses nothing.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
       self?.flushCrown()
     }
   }
@@ -515,12 +609,62 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   /// Switch the PHONE to another instance. Handled outside the SDR screen on the
   /// phone, because the whole point is that it works when no SDR screen is up.
-  func selectInstance(_ url: String) { send(["cmd": "inst", "val": url]) }
+  /// Pick a server for the PHONE to connect to. Send the TYPE (and name) too — a directory server the
+  /// user hasn't favourited isn't in the phone's list, so without the type the phone can't tell an
+  /// OWRX/Kiwi from an UberSDR and the connect fails.
+  func selectInstance(_ url: String, type: String = "", name: String = "") {
+    var msg: [String: Any] = ["cmd": "inst", "val": url]
+    if !type.isEmpty { msg["type"] = type }
+    if !name.isEmpty { msg["name"] = name }
+    send(msg)
+  }
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
+
+  /// Ask the PHONE to browse a directory and send us its servers (we mirror; we never fetch our own).
+  func browse(_ dir: String) { send(["cmd": "browse", "dir": dir]) }
+
+  /// STOP — tell the phone to leave the SDR screen: that tears down the client (audio + sockets stop)
+  /// and returns the phone to its server list to WAIT, idle. Unlike pause (which stays on the stopped
+  /// waterfall), this disconnects AND goes back. Buddy follows to the picker via the phone's status.
+  func stopServer() { send(["cmd": "stopsrv"]) }
+
+  // ── Thin-remote server controls: the watch relays the tap; the phone runs the command. ──
+  /// SDR passband — send both edges (Hz offsets from carrier); the phone calls setBandwidth.
+  func setBandwidth(lo: Double, hi: Double) { send(["cmd": "bw", "lo": lo, "hi": hi]) }
+  /// SNR squelch relayed to the phone (it actions it). We track our own last-sent value to seed the
+  /// editor; the phone confirms by relaying the `sql` line position back on the row.
+  @Published var squelchSet = -999.0
+  func setSquelch(_ v: Double) { squelchSet = v; send(["cmd": "squelch", "val": v]) }
+  /// FM-DX server toggles + antenna select.
+  func setFmdxEq(_ on: Bool)  { send(["cmd": "fmdxEq",  "val": on]) }
+  func setFmdxIms(_ on: Bool) { send(["cmd": "fmdxIms", "val": on]) }
+  func setFmdxAntenna(_ id: Int) { send(["cmd": "fmdxAnt", "val": id]) }
   func ping() {
-    send(["cmd": "ping"])
+    // Anti-hijack: never poke a phone the user deliberately closed — a ping relaunches it.
+    guard !phoneClosed else { return }
+
+    // SILENCE WATCHDOG. If the phone has sent us NOTHING — no rows AND no state — for a good while
+    // while we had a live session, it has almost certainly been closed. The goodbye (transferUserInfo)
+    // is slow and unreliable, and the sendMessage goodbye needs isReachable, which is false at
+    // termination — so we can't count on being TOLD. Raise the Start screen ourselves and go silent
+    // (stop pinging a phone that's gone — that ping is what relaunches it, the hijack). NOT
+    // deliberatelyClosed: if the phone was merely blipping and pushes a row, handleRow un-closes us.
+    if everGotRow, !isBackground {
+      // Give a wrist-up (resumedAt) or a fresh row/state a few seconds to reconnect before concluding
+      // the phone is gone — the ContentView shows a "Reconnecting to VibeSDR" pill over the held
+      // waterfall meanwhile. Only past the grace do we raise the Start / Connect-to-iPhone screen.
+      let lastHeard = max(lastRowAt ?? .distantPast, lastStateAt ?? .distantPast, resumedAt)
+      if Date().timeIntervalSince(lastHeard) > 5 {
+        phoneClosed = true
+        stopHeartbeat()
+        return
+      }
+    }
+
+    // Mid-reopen: keep asking to reopen (a single reopen can be dropped during relaunch).
+    send(reopenPending ? ["cmd": "reopen"] : ["cmd": "ping"])
 
     // ONE-WAY LINK RECOVERY, from this end.
     //
@@ -576,11 +720,36 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     s.sendMessage(msg, replyHandler: nil, errorHandler: nil)
   }
 
+  /// Wrist dropped. Buddy has no socket of its own to suspend, but it MUST mark itself backgrounded
+  /// immediately: watchOS suspends us in a moment (no background audio), the row feed stops, and
+  /// without this the resulting gap reads as a rough link and shows the 'reconnecting' glyph. Also
+  /// tell the phone to stop forwarding the waterfall we can't see after the user's grace period —
+  /// battery on BOTH ends (the phone owns the grace timer; ours would freeze the instant we suspend).
+  func suspend(graceSeconds: Double = 0) {
+    isBackground = true
+    send(["cmd": "wrist", "down": true, "grace": graceSeconds])
+  }
+
+  /// Wrist back up: clear the background flag (the hint logic runs again) and tell the phone to resume
+  /// forwarding, then re-request anything we missed.
+  func resume() {
+    isBackground = false
+    resumedAt = Date()   // restart the silence grace — don't flash Start before rows can return
+    send(["cmd": "wrist", "down": false])
+    requestMissing()
+  }
+
   // MARK: - Phone -> Watch
 
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
     // Hop to main: we mutate @Published state and the pixel buffer.
     DispatchQueue.main.async { self.apply(message) }
+  }
+
+  /// The GOODBYE arrives here: the phone sends it via transferUserInfo on termination so it
+  /// survives the process death (a fire-and-forget sendMessage would be dropped mid-exit).
+  func session(_ s: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+    DispatchQueue.main.async { self.apply(userInfo) }
   }
 
   /// Rows arrive as a flat binary blob (see VibeWatchModule.sendRow) — dictionary
@@ -604,8 +773,50 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// VibeWatchModule.meterBytes, or the row is sliced at the wrong offset and every
   /// row is silently dropped for being the wrong length.
   private static let meterBytes = 12
-  /// One row's payload: 6 doubles + the meter field + the bins.
-  private static let blockSize = 8 * 6 + meterBytes + WaterfallBuffer.width
+  /// One row's payload: 7 doubles (freq, span, snr, level, lo, hi, SQL) + the meter field + the bins.
+  private static let blockSize = 8 * 7 + meterBytes + WaterfallBuffer.width
+
+  // ── Jitter buffer (Stuart, 2026-07-21: "Buddy feels super sluggish vs Jr") ──────────────────────
+  //
+  // Buddy USED to push rows straight into the waterfall the instant a WCSession message landed. But
+  // WCSession delivers over Bluetooth in CLUMPS — several rows at once, then a gap — so the buffer's
+  // scroll would fast-forward through a clump and then stall until the next one (the sluggish, lurchy
+  // feel), and worse, the buffer's own interval estimator learned the ~0.6s BATCH cadence instead of
+  // the true 5fps, scrolled too slow, backed up past its 4-row cap and DROPPED frames.
+  //
+  // Jr never had this because its clients drain a jitter queue every frame (drainSpectrum). Buddy now
+  // does the same: rows land HERE, and driverTick() releases them onto a smooth ~5fps cadence — so the
+  // waterfall gets fed evenly (its interval estimator settles on the real rate) and the trace/scroll
+  // interpolation has an even cadence to glide along, exactly as on Jr.
+  private var pendingRows: [(slot: Double, row: [UInt8])] = []
+  private var lastSlot = 0.0
+  /// A small cushion (like Jr's spectrumDelay) so there's always a little buffer to absorb WCSession
+  /// micro-jitter before a row is due — rebuilt after any gap.
+  private static let rowCushion = 0.12
+
+  /// Schedule a batch of just-arrived rows onto EVENLY-SPACED release slots. A Bluetooth clump lands
+  /// with the same timestamp, so instead of pushing them together we hand each the next slot one
+  /// `interval` after the last — spreading the clump across future frames at the true row rate. After
+  /// a gap the schedule snaps back to `now + cushion`, so a slow feed never accrues artificial latency.
+  private func enqueueRows(_ rows: [[UInt8]]) {
+    let now = ProcessInfo.processInfo.systemUptime
+    let interval = 1.0 / Self.rowFps
+    for r in rows {
+      lastSlot = max(now + Self.rowCushion, lastSlot + interval)
+      pendingRows.append((lastSlot, r))
+    }
+    if pendingRows.count > 12 { pendingRows.removeFirst(pendingRows.count - 12) }   // hard backstop
+  }
+
+  /// Called every render frame from ContentView. Release any rows whose scheduled slot has arrived —
+  /// a FIXED-cadence jitter buffer (Jr's model), NOT depth-adaptive: a second rate loop fighting
+  /// tickScroll's own depth adaptation is what left the trace jerky while the waterfall looked fine.
+  func driverTick(now: Double) {
+    while let first = pendingRows.first, first.slot <= now {
+      waterfall.push(row: first.row)
+      pendingRows.removeFirst()
+    }
+  }
 
   /// Rows arrive BATCHED — several in one message.
   ///
@@ -624,16 +835,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     var rows: [[UInt8]] = []
     var meterText = ""
-    var f = [Double](repeating: 0, count: 6)
+    var f = [Double](repeating: 0, count: 7)
 
     for b in 0..<count {
       let base = data.startIndex + 2 + b * Self.blockSize
-      for i in 0..<6 {
+      for i in 0..<7 {
         let lo = base + i * 8
         let bits = data[lo..<(lo + 8)].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
         f[i] = Double(bitPattern: UInt64(littleEndian: bits))
       }
-      let mStart = base + 8 * 6
+      let mStart = base + 8 * 7
       let mBytes = data[mStart..<(mStart + Self.meterBytes)].prefix { $0 != 0 }
       let t = String(decoding: mBytes, as: UTF8.self)
       if !t.isEmpty { meterText = t }
@@ -644,12 +855,26 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      for r in rows { self.waterfall.push(row: r) }
+      self.enqueueRows(rows)   // jitter buffer — driverTick releases them on evenly-spaced slots
       self.lastRowAt = Date()
+      // Rows streaming again means the phone is back (reopened) — drop the closed screen.
+      // ★ UNLESS the phone was DELIBERATELY closed (goodbye): a stale in-flight row that lands just
+      // after the goodbye must NOT un-close us and restart the heartbeat — that heartbeat is exactly
+      // what relaunches the phone headless (the hijack). Only a user Reopen or a real phone status
+      // clears the deliberate-close latch. (Stuart, 2026-07-21: "if I close the phone, Buddy reopens it.")
+      if !self.deliberatelyClosed {
+        self.reopenPending = false
+        if self.phoneClosed { self.phoneClosed = false; if self.heartbeat == nil { self.startHeartbeat() } }
+      }
       if !self.waterfall.hasLUT { self.requestMissing() }
       if !meterText.isEmpty { self.meter = meterText }
       if rows.first?.count == WaterfallBuffer.width { self.everGotRow = true }
-      self.isFmdx = false       // a row means a spectrum — see `screen`
+      // A spectrum row means we've left FM-DX/DAB — clear their state so an old RDS name (stationName
+      // = fmdx?.ps) or DAB ensemble can't bleed onto the SDR ticker (Stuart: "PRIDE on a shortwave
+      // session"). Guarded so it publishes on the TRANSITION only, not on every 10fps row.
+      if self.isFmdx { self.isFmdx = false }     // see `screen`
+      if self.fmdx != nil { self.fmdx = nil }
+      if self.dab != nil { self.dab = nil }
       // NOTE: the row's frequency is deliberately IGNORED — rows are lossy pixels and
       // can be queued; the readout comes from the throttled `state` echo and from our
       // own prediction while the crown moves.
@@ -658,14 +883,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       self.level     = latest[3]
       self.filtLo    = latest[4]
       self.filtHi    = latest[5]
+      self.sql       = latest[6]   // squelch threshold (0..1 bar position, -1 = off)
     }
   }
 
   private func apply(_ m: [String: Any]) {
+    lastAnyAt = Date()      // stamped before the switch, so every message kind counts
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
-        waterfall.push(row: [UInt8](d))
+        enqueueRows([[UInt8](d)])   // jitter buffer — driverTick releases it on an evenly-spaced slot
         if d.count == WaterfallBuffer.width { everGotRow = true }
       }
       // Rows never set the frequency — see handleRow.
@@ -734,6 +961,15 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         isFmdx = true
         lastRowAt = Date()        // "the phone is talking to us" — same staleness clock
         everGotRow = true
+        // ★ An FM-DX blob is proof the phone is ALIVE and running a session — exactly like a row.
+        // FM-DX sends NO rows, so without this the Start screen — set in activate() whenever
+        // everGotRow is false (every fresh open), or by a prior silence watchdog — would NEVER clear
+        // on an FM-DX server, and Buddy sat on "Start VibeSDR". Same anti-hijack guard as handleRow:
+        // a DELIBERATELY-closed phone stays closed until the user reopens.
+        if !deliberatelyClosed, phoneClosed {
+          phoneClosed = false
+          if heartbeat == nil { startHeartbeat() }
+        }
       }
 
     case "air":
@@ -749,14 +985,65 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         dab = st
       }
 
+    case "goodbye":
+      // The phone is gone (user swiped it closed). Show the closed screen and go silent.
+      phoneClosed = true
+      deliberatelyClosed = true
+      stopHeartbeat()
+
     case "phone":
-      if let st = m["st"] as? String { phoneStatus = st }
+      if let st = m["st"] as? String {
+        // 'starting' EDGE = a NEW session is beginning (connect / reopen / instance switch).
+        let newSession = st == "starting" && phoneStatus != "starting"
+        phoneStatus = st
+        if st == "closed" {
+          // A heartbeat relaunched the phone headless but it refused to auto-connect and told
+          // us so. Same destination as a goodbye — UNLESS we're mid-reopen, where a stale
+          // 'closed' from the launch race must not bounce us back off the reopen.
+          if !reopenPending { phoneClosed = true; deliberatelyClosed = true; stopHeartbeat() }
+        } else if deliberatelyClosed {
+          // ★ THE HIJACK GUARD. We were deliberately closed (goodbye). A stray heartbeat ping — sent
+          //   in the seconds after the swipe while isReachable was still stale-true — can relaunch the
+          //   phone headless; if it then auto-connects and sends 'starting'/'ready', that status must
+          //   NOT drag us back off the Start screen. Staying latched here (heartbeat already stopped)
+          //   means the watch sends nothing more, so there are no further pings to relaunch it either.
+          //   ONLY a user Reopen (reopen() clears the latch) brings us back. We still record the raw
+          //   status above for display, but take no action on it.
+          break
+        } else {
+          // Any other status means the phone is alive and doing something real (a fresh connect, or a
+          // reopen we asked for) — leave the closed screen and stop asking to reopen.
+          reopenPending = false
+          if phoneClosed { phoneClosed = false; if heartbeat == nil { startHeartbeat() } }
+          // TEAR DOWN the previous session (Stuart: "everything between sessions needs tearing
+          // down"). Otherwise an old FM-DX RDS name (fmdx.ps) / DAB ensemble / aircraft list /
+          // band bleeds into a different backend — e.g. "PRIDE" showing on a shortwave session.
+          if newSession {
+            fmdx = nil; isFmdx = false; dab = nil; aircraft = []
+            everGotRow = false; meter = ""
+            bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
+            waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
+            pendingRows.removeAll(); lastSlot = 0                          // and a fresh jitter queue
+          }
+        }
+      }
 
     case "favs":
       if let j = m[WK.json] as? String,
          let d = j.data(using: .utf8),
          let list = try? JSONDecoder().decode([Favourite].self, from: d) {
         favourites = list
+      }
+
+    case "dir":
+      // A directory listing the PHONE fetched (we asked via browse). Mirror it — no local fetching.
+      if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
+         let msg = try? JSONDecoder().decode(DirMsg.self, from: d) {
+        directories[msg.dir] = msg.servers.map { r in
+          SDRServer(name: r.name, url: r.id, host: URL(string: r.id)?.host ?? r.id,
+                    serverType: ServerType(rawValue: r.type) ?? .ubersdr,
+                    countryCode: r.country, distance: r.dist, users: r.users, full: r.full)
+        }
       }
 
     case "stations":

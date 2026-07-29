@@ -3,8 +3,19 @@
 <title>VibeSDR</title>
 <!-- A real URL, not a data: URI — Safari refuses data: favicons and falls back
      to its default arrow. The shim serves this from GET /favicon.png. -->
-<link rel="icon" type="image/png" href="/favicon.png">
-<link rel="apple-touch-icon" href="/favicon.png">
+<!-- ?v= is a CACHE KEY, not decoration. Safari keeps a separate, very sticky favicon cache and
+     remembers FAILURES as well as hits — one 404 from something else on this port (a stale mock
+     server, during development) leaves the tab showing a letter badge forever, however correct the
+     response becomes afterwards. Bump v when the icon changes. -->
+<link rel="icon" type="image/png" href="/favicon.png?v=2">
+<link rel="apple-touch-icon" href="/favicon.png?v=2">
+<!-- PWA: install the client as a real app — own window, own dock icon, no browser chrome. Only
+     offered in a secure context, so localhost yes, a plain-http LAN address no. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#080601">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 /* Design tokens — the same values as src/constants/theme.ts, which were
    themselves transcribed from the original CSS. Amber-on-black. */
@@ -94,6 +105,12 @@ html, body {
 }
 #rxName  { font-size: 0.95em; color: var(--amber); letter-spacing: 0.04em; }
 #rxWhere { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
+/* ★ The countdown earns attention only as it runs out — amber under two minutes, red under
+   thirty seconds. Steady grey the rest of the time, so a 30-minute session is not a clock
+   nagging you for 28 of them. */
+#rxTimeLeft { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
+#rxTimeLeft.warn { color: #ffd479; }
+#rxTimeLeft.crit { color: #ff8a7d; }
 
 /* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
 /* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,
@@ -140,6 +157,27 @@ html, body {
   display: grid; grid-template-columns: 1fr auto 1fr;
   align-items: center; gap: 1.1em; min-width: 0;
 }
+
+/* ★ NARROW WINDOWS: STACK, DON'T CLIP.
+   The three-track grid centres the middle block on the SCREEN, which is right whenever there is
+   room for it. Below ~1100px there isn't: the tracks reach their min-content width and the row
+   overflows, so the meter, the search box and the right-hand controls are simply cut off the edge
+   of the window (seen at ~1230px with DevTools docked).
+   Clipping is the worst possible answer — the controls are GONE, with nothing to say so and no way
+   to reach them. Stacking is merely less pretty. The bar sits at the bottom of a column layout and
+   the waterfall above it is the flexible one, so extra rows grow the bar UPWARDS and the waterfall
+   yields, which is the trade you want: a shorter waterfall over an unusable control bar.
+   NB the "never wrap" note above is about flex-wrap on the SAME row, which made the right-hand
+   column jump about as content grew by a few pixels. This is a deliberate switch of layout at a
+   threshold, not content-dependent reflow, so it cannot jitter. */
+@media (max-width: 1100px) {
+  .barRow {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    row-gap: 0.7em;
+  }
+  #midBlock { justify-self: center; flex-wrap: wrap; justify-content: center; }
+}
 #midBlock {
   display: flex; align-items: center; gap: 1.1em;
   min-width: 0; justify-self: center;
@@ -159,7 +197,9 @@ html, body {
    middle had nowhere left to go — the search box is the most elastic thing in the bar
    (it's a text field; it can simply be narrower) and it was the least willing to give.
    Now it yields: 34em preferred, down to 20em under pressure. */
-#rightCol { justify-self: end; width: 34em; min-width: 20em; max-width: 46em; }
+/* Wider by 3em so the status line ('… KB/s · fps · ms · IDLE') and the search placeholder
+   ('… frequencies') stop clipping off the right edge now the data-rate/fps counter is in the line. */
+#rightCol { justify-self: end; width: 37em; min-width: 20em; max-width: 48em; }
 #sigWrap { width: 100%; }
 #findRow { display: flex; gap: 0.6em; align-items: stretch; width: 100%; }
 #findRow #bookmarksBtn { flex: 0 0 auto; white-space: nowrap; }
@@ -176,9 +216,11 @@ html, body {
 
 /* Readouts under the meter: signal on the left, link + bitrate on the right. */
 #sigLine { display: flex; align-items: center; justify-content: space-between; margin-top: 0.35em; gap: 0.6em; }
-#sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+#sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.06em; white-space: pre;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
 #linkStats { display: flex; align-items: center; gap: 0.7em; }
-#status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+#status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap;
+  padding-right: 0.2em; }   /* clear the trailing letter-spacing so the last glyph never clips */
 
 /* Link-quality bars — same semantics as the app: 3 green solid, 2 amber jitter,
    1 red stalling, ✕ disconnected. Driven by SPEC frame timing, not just RTT:
@@ -193,6 +235,25 @@ html, body {
 #linkBars.q3 i { background: #33cc44; }
 #linkBars.q0::before { content: '✕'; color: #e04040; font-weight: 900; font-size: 11px; line-height: 11px; }
 #linkBars.q0 i { display: none; }
+/* SQL chip beside the link bars — steady dim when squelch is set, BREATHING RED while the gate is
+   actually muting (signal below the threshold), so an unexpected silence has a visible cause right
+   next to the connection quality rather than a text overlay that clipped inside the meter. */
+#sqlChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+           border-radius: 3px; border: 1px solid rgba(255,180,50,0.5); color: var(--amber);
+           line-height: 1.2; }
+#sqlChip.set { display: inline-block; }
+#initChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+            border-radius: 3px; border: 1px solid rgba(120,200,255,0.5); color: #7fc4ff;
+            line-height: 1.2; animation: sqlBreathe 1.5s ease-in-out infinite; }
+#initChip.set { display: inline-block; }
+/* Louder than SQL or SETTLING on purpose: those are states, this is a fault. */
+#ovlChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+           border-radius: 3px; border: 1px solid rgba(255,120,60,0.8); color: #ff8a3d;
+           line-height: 1.2; animation: sqlBreathe 1.2s ease-in-out infinite; }
+#ovlChip.set { display: inline-block; }
+#sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
+                  animation: sqlBreathe 1.5s ease-in-out infinite; }
+@keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 
 /* Search: bookmarks + band plan. */
 #searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -223,7 +284,9 @@ html, body {
 /* Everything from here is pushed to the right edge, so BOOKMARKS lands directly
    under the search box above it and the two rows line up. */
 .pushRight { margin-left: auto; }
-#sig { position: relative; height: 0.62em; border-radius: 0.31em; background: var(--meter-track); overflow: hidden; }
+/* Taller than the old 0.62em hairline — there is ample room in the bottom bar and the extra
+   height makes the SNR fill actually readable. */
+#sig { position: relative; height: 1.05em; border-radius: 0.5em; background: var(--meter-track); overflow: hidden; }
 /* A fault takes over the WHOLE meter: that's where you're already looking when
    you wonder why there's no sound, and a long message in the status line just ran
    off the edge of the screen. */
@@ -241,6 +304,50 @@ html, body {
 #sigFault.show { display: flex; }
 #sigFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
 #sigPeak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--peak-line); left: 0; }
+/* Squelch threshold needle — the same "point it just above the noise" control the watch and phone
+   use. Hidden entirely when squelch is off, so a meter with no gate stays uncluttered. */
+#sigSql { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; left: 0;
+          background: #3ddc84; box-shadow: 0 0 0 1px rgba(0,0,0,0.55); display: none; }
+#sig.sqlOn #sigSql { display: block; }
+/* Gate CLOSED (signal below the needle) — the fill dims and reddens, so silence is explained
+   rather than mysterious. This is the whole point of the indicator. */
+#sig.sqlClosed #sigFill { opacity: 0.55; filter: hue-rotate(-35deg) saturate(1.4); }
+#sig.fault #sigSql { display: none; }
+/* ── Squelch control: a live-signal bar with a draggable ball ─────────────────────────────────
+   The bar fill is the live signal; the green needle + ball is the threshold. White fill = passing,
+   red = the gate is muting. The needle PERSISTS across the full height so the ball is always in
+   reach, and it parks at the left when squelch is off. Field-proven design — see the phone. */
+.sqlBlock { padding: 7px 0; }
+.sqlBlock > label { color: var(--btn-text); font-size: 12px; display: block; margin-bottom: 6px; }
+/* ★ The BAR is a TALL, TRANSPARENT HIT AREA — 14px of clearance above a 22px visual track. The ball
+   sits in that top clearance, so it is INSIDE the clickable box: the cursor becomes a hand ON the
+   ball, and a drag can start on it. (Before, the hit area was just the 22px track, so the ball
+   above it was dead — the hand only appeared just below it.) The JS measures the bar's left/width
+   for the horizontal mapping, and the track fills the bar's full width, so nothing there changes. */
+.sqlBar { position: relative; height: 36px; margin-top: 2px; overflow: visible;
+          cursor: pointer; touch-action: none; }
+.sqlTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; border-radius: 5px;
+            overflow: hidden; background: rgba(255,255,255,0.06);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+.sqlFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: rgba(255,255,255,0.85);
+           transition: background-color 0.12s linear; }
+.sqlBar.closed .sqlFill { background: rgba(255,77,77,0.9); }
+/* The needle spans the whole bar; the ball sits on top where a thumb finds it. pointer-events off
+   so a drag that lands on the ball still measures against the BAR, never the ball (the phone's
+   "ghost needle" bug in DOM form). */
+/* ALWAYS visible — parked at the left when squelch is off, so the ball is on screen to grab. A
+   hidden handle is an undiscoverable control: without the ball, nobody knows the bar is draggable
+   (the note says "drag the ball up from the left", and there must be a ball there to obey it). */
+.sqlNeedle { position: absolute; top: 14px; bottom: 0; width: 2px; margin-left: -1px; left: 0;
+             background: #3ddc84; box-shadow: 0 0 4px rgba(61,220,132,0.7); pointer-events: none; }
+/* Dimmed while off — present and grabbable, but clearly not yet gating. */
+.sqlBar:not(.on) .sqlNeedle { opacity: 0.55; }
+.sqlBall { position: absolute; top: -14px; left: 50%; width: 18px; height: 18px; margin-left: -9px;
+           border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 4px rgba(0,0,0,0.7);
+           border: 1px solid rgba(0,0,0,0.25); }
+.sqlNote { color: var(--unit); font-size: 11px; margin-top: 6px; line-height: 1.35; }
+.rowNote { color: var(--text-dim); font-size: 11px; line-height: 1.35; margin: -2px 0 4px;
+           opacity: 0.85; }
 /* NO font-size / letter-spacing here — a leftover from the pre-scaling layout that
    silently overrode the em-based rule above and pinned this readout to a hard 10px.
    It was the ONLY thing in the bar that didn't shrink, so on a 1366 laptop it ran
@@ -324,6 +431,14 @@ button.btn {
 }
 button.btn:hover { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
 button.btn[hidden] { display: none; }
+/* Tap/hold keys: suppress the double-tap-zoom delay so a press registers at once,
+   and light the key while it is sweeping so the mode change is visible as well as
+   felt. Scoped to the four tap/hold keys, not all buttons. */
+#tuneDown, #tuneUp, #zoomIn, #zoomOut { touch-action: manipulation; user-select: none; }
+#tuneDown.sweeping, #tuneUp.sweeping, #zoomIn.sweeping, #zoomOut.sweeping {
+  background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx);
+  box-shadow: 0 0 10px rgba(80,255,120,0.35);
+}
 button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
 
 /* MUTE reads as a WARNING, not a mode: the amber "on" style looks like every
@@ -349,6 +464,13 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 .group { display: flex; gap: 0.35em; align-items: center; flex-wrap: nowrap; }
 .sep { width: 1px; height: 1.8em; background: var(--bar-border); flex: 0 0 1px; }
 .lbl { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+/* ★★ PROSE MUST WRAP. `.lbl` is nowrap because most uses are short labels sitting beside a
+   control, where wrapping would look broken — but the class is also used for explanatory
+   PARAGRAPHS, and there nowrap makes the text run off the panel, which then scrolls sideways
+   to chase it (Stuart, 2026-07-27). Same class, two jobs, opposite needs.
+   ★ Added as a modifier rather than by changing `.lbl`: dozens of short labels depend on the
+   nowrap, and flipping the default would move the bug rather than fix it. */
+.lbl.wrap { white-space: normal; line-height: 1.45; letter-spacing: 0.04em; }
 
 input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
@@ -403,6 +525,29 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
 
 /* ── Decoder output box (persistent, bottom-left) ─────────────────────────── */
+#tuneGapMsg {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+  z-index: 46; pointer-events: none;
+  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border); border-radius: 8px;
+  padding: 8px 14px; color: var(--btn-text); font-size: 12px; letter-spacing: 0.4px;
+  font-family: var(--mono, monospace); max-width: 70vw; text-align: center;
+  opacity: 0; transition: opacity .18s ease-out;
+}
+#tuneGapMsg.show { opacity: 1; }
+#rangeGap {
+  position: absolute; top: 0; bottom: 0; z-index: 20; pointer-events: none;
+  background: #000;
+  /* A hard edge, not a fade: the boundary is a real hardware fact and softening it would
+     suggest the signal merely tails off. */
+  border-left: 1px solid var(--btn-border); border-right: 1px solid var(--btn-border);
+  display: none; align-items: center; justify-content: center;
+}
+#rangeGap.show { display: flex; }
+#rangeGapNote {
+  color: var(--text-dim); font-size: 11px; letter-spacing: 0.5px; text-align: center;
+  padding: 0 10px; max-width: 260px; line-height: 1.4;
+  font-family: var(--mono, monospace);
+}
 #decBox {
   /* Absolute inside #wfWrap, NOT fixed to the viewport — fixed + bottom:0 put it
      underneath the control bar. This way it always floats above the bar, whatever
@@ -428,8 +573,232 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decBoxHead .dot.live { background: #33cc44; box-shadow: 0 0 6px #33cc44; }
 #decTitle { color: var(--amber); letter-spacing: 2px; }
 #decStatus { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; }
+/* ── Advanced RDS panel ─────────────────────────────────────────────────── */
+/* ★★ NOTHING HERE TRUNCATES. This is a DATA panel — an ellipsis in "Pop Music…" or an AF
+   list cut off at "89.5, 10…" hides the very thing the user opened it to read, and the
+   phone (a much narrower box) would truncate hardest of all. So: values WRAP, the grid
+   collapses to one column when it must, and the constellation drops below the fields
+   rather than squeezing them (Stuart, 2026-07-26). */
+/* ★★ NEVER WRAP, NEVER RESIZE SIDEWAYS. The plots column used to be allowed to wrap under the
+   field grid: as fields arrived the grid's minimum width grew, the column jumped to a new row,
+   and the graphs and logo stair-stepped out of alignment while you watched (Stuart,
+   2026-07-27). The box has a fixed width, so the only honest layout is a fixed plot column and
+   a field grid that absorbs whatever is left. Growth is UPWARD only — the box is anchored by
+   its bottom edge, so a taller panel rises rather than pushing the controls about. */
+#rdsPanel {
+  display: none; gap: 14px; padding: 10px 12px;
+  align-items: flex-start; flex-wrap: nowrap;
+  overflow-y: auto; overflow-x: hidden;
+}
+#rdsPanel.show { display: flex; }
+#rdsGrid {
+  /* minmax(0,1fr), not minmax(150px,1fr): a 150px floor gave the grid a minimum width the flex
+     row could not honour, which is what forced the wrap. Columns may now shrink and long
+     values wrap inside their own cell instead of shoving the layout. */
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 16px; flex: 1 1 auto; min-width: 0;
+}
+/* (The plots column's flex basis is pinned further down, where the later rule would
+   otherwise override anything set here.) */
+.rdsF { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+/* ★ A SINGLE-VALUE ROW MUST NOT CHANGE HEIGHT. These fields update several times a
+   second, and a value that wraps to a second line pushes every row below it — the
+   whole panel jolts while you are reading it. RadioText and friends are exempt: they
+   are genuinely multi-line and do not carry this class. */
+.rdsF.rdsFix { min-height: 17px; align-items: center; }
+.rdsF.rdsFix label, .rdsF.rdsFix span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ★★ RDS↔PILOT IS THE HARD ONE: it alternates between "27° · nominal · 98% steady"
+   and "rotating — encoder not locked to pilot", and that difference is FIVE LINES in
+   a narrow panel. Truncating it was my first attempt and it was wrong — that message
+   IS the diagnosis this field exists to deliver, so hiding it defeats the point.
+   ★ So RESERVE THE WORST CASE instead: an invisible sizer holds the longest string
+   and sets the height, the live value sits on top of it. Correct at every panel
+   width, where a fixed pixel height would not be. Keep the sizer text in step with
+   the longest string main.ts can produce. */
+.rdsPhaseWrap { position: relative; flex: 1 1 auto; min-width: 0; }
+.rdsPhaseWrap .sizer { visibility: hidden; pointer-events: none; display: block; }
+.rdsPhaseWrap #rxPhase { position: absolute; inset: 0; }
+.rdsF.rdsWide { grid-column: 1 / -1; }
+/* ★ AF entries are TAPPABLE — the tooltip has always said so; now they behave like it and,
+   just as importantly, LOOK like it. A comfortable hit area matters on a phone, where these
+   are two-character targets sitting side by side. */
+.afLink { color: var(--hi); text-decoration: none; border-bottom: 1px dotted rgba(255,229,102,0.5);
+          padding: 2px 3px; cursor: pointer; }
+.afLink:hover, .afLink:focus { background: rgba(255,160,0,0.18); border-radius: 3px; }
+.rdsF label {
+  color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
+  text-transform: uppercase; flex: 0 0 66px;
+}
+.rdsF span {
+  font-family: var(--mono, monospace); font-size: 12px;
+  min-width: 0; overflow-wrap: anywhere; white-space: normal;
+}
+/* One column once the box is genuinely narrow — a phone, or a small decoder box. */
+/* ★★ NARROW SCREENS SCROLL, they do not truncate or drop fields. The browser has room;
+   a phone does not, and the answer there is a scrollable panel — an FM-DXer wants every
+   field, and hiding some to fit is the one thing this panel must never do (Stuart). */
+/* ★★ A STABLE FOOTPRINT. RadioText, the DI list and the group histogram all change length
+   as they decode, and each change reflowed the grid — so the whole box grew and shrank
+   continuously, which is horrible to read and worse to click (Stuart, 2026-07-26).
+   Fixed height plus internal scroll: the panel never moves, only its contents do. */
+#rdsPanel {
+  /* ★★ SCALES WITH THE WINDOW, with a floor and a ceiling. Fixed pixel heights plus a
+     stack of media queries meant every new field needed the numbers revisiting, and a
+     resized window or a low-resolution screen could still end up with a box taller than
+     the page. clamp() states the actual intent in one line: never smaller than usable,
+     never taller than most of the viewport, and as tall as it likes in between.
+     ★ The upper bound matters as much as the lower one — a box that grows past the window
+     pushes its own scrollbar off screen, which is how "scrollable" becomes "unreachable"
+     (Stuart, 2026-07-26). */
+  /* ★★ CONTENT-DRIVEN, not a fixed height. A fixed box left a dead black gap whenever the
+     content was shorter than it, and clipped whenever it was longer. The height was pinned
+     in the first place because the AF list churned every second — and that is FIXED now, so
+     the reason for pinning it has gone. ★ A workaround should be removed when the thing it
+     worked around is repaired, or it becomes a permanent cost paid for a solved problem.
+     ★ AND DRAGGABLE. `resize: vertical` is the browser's own handle, so the operator sets
+     the height they want, on the screen they actually have — better than any guess of mine,
+     and it survives every future field we add (Stuart, 2026-07-26). */
+  height: auto;
+  min-height: 180px;
+  max-height: clamp(260px, 72vh, 760px);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+/* ★★ AN EXPLICIT GRIP, not CSS `resize`. The native handle is drawn in the element's own
+   bottom-right corner — and this panel is nested inside a box that is absolutely positioned
+   and anchored by its BOTTOM edge, so that corner sits under the constellation column where
+   it cannot be grabbed. Worse, a miss lands on the waterfall behind and TUNES the radio.
+   A grip bar of our own, with pointer capture, cannot be missed and cannot leak (Stuart:
+   "not resizing but the waterfall does stuff underneath", 2026-07-26). */
+/* ★★ TWO FIXED SIZES ON A BUTTON, not a drag. Dragging was the wrong mechanism here: the
+   handle sat inside a bottom-anchored box where it could not be grabbed, a miss tuned the
+   radio behind it, and touch has no pointer to drag with at all. A button cannot be missed,
+   works identically on a phone, and two sensible sizes are all anyone actually wanted —
+   read the numbers, or watch the constellation (Stuart, 2026-07-26). */
+#rdsSize { display: none; padding: 2px 5px; line-height: 0; }
+#rdsSize.show { display: inline-block; }
+#rdsSize svg { width: 11px; height: 13px; }
+#rdsSize svg rect { fill: none; stroke: currentColor; stroke-width: 1.2; }
+#rdsSize svg path { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; }
+/* Tall state: the box in the icon grows and the arrow flips to point down. */
+#rdsSize.tall svg rect { y: 3; height: 10; }
+#rdsSize.tall svg path { transform: rotate(180deg); transform-origin: 6px 3px; }
+/* ★★ ON A PHONE THE WATERFALL MUST STILL BE VISIBLE. This box sits over the display it is
+   describing, and tuning is the reason the user is here — a panel tall enough to hide the
+   spectrum makes them close it to tune and reopen it to read, which is the panel failing at
+   its own job. So a much harder cap on small screens, and the DATA scrolls instead: every
+   field stays reachable, nothing is dropped to fit, and roughly two thirds of the screen
+   stays radio (Stuart, 2026-07-26). */
+@media (max-width: 760px) {
+  /* The waterfall must stay visible for tuning, so on a phone the CAP binds and the data
+     scrolls — and the drag handle is pointless on touch, so it goes. */
+  #rdsPanel { max-height: clamp(170px, 34vh, 300px); resize: none; }
+  /* The constellation and trace go under the fields rather than beside them, so neither
+     ends up too narrow to read. */
+  #rdsConstWrap { margin: 0 auto; }
+  #rdsConst { width: 150px; height: 150px; }
+  #rdsEye   { width: 150px; height: 44px; }
+}
+/* A landscape phone has almost no height at all — there, the cap is the binding constraint. */
+@media (max-height: 480px) {
+  #rdsPanel { max-height: clamp(140px, 42vh, 220px); }
+}
+/* Each field reserves two lines, so a value wrapping onto a second line does not shove
+   everything below it down the panel. */
+/* (The RAW/CONFIRMED label colouring lived here; removed with the RAW view, 2026-07-28.) */
+.rdsF { min-height: 2.1em; align-items: flex-start; line-height: 1.25; }
+.rdsF label { padding-top: 1px; }
+@media (max-width: 560px) {
+  /* ★ Narrow screens STACK on purpose — beside each other, neither column would be readable.
+     Wrapping is re-enabled here deliberately, and the plots take the full width rather than a
+     fixed 180px, so the stack is a layout choice rather than the accident it was on desktop. */
+  #rdsPanel { flex-wrap: wrap; }
+  #rdsGrid { grid-template-columns: 1fr; }
+  #rdsConstWrap { flex: 1 1 100%; min-width: 0; margin: 0 auto; }
+}
+/* ★ PINNED to the canvases' own width. `flex: 0 0 auto` sized it from content, so it drifted
+   as the logo appeared and the verdict text changed length — and combined with wrapping, that
+   is what stair-stepped the graphs. A fixed basis cannot be squeezed or displaced. */
+#rdsConstWrap { flex: 0 0 180px; min-width: 180px; text-align: center; }
+#rdsConst {
+  width: 180px; height: 180px; background: #000;
+  border: 1px solid var(--btn-border); border-radius: 3px;
+}
+#rdsEye {
+  width: 180px; height: 54px; background: #000; display: block;
+  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
+}
+#decLogo {
+  display: none; height: 16px; width: auto; max-width: 60px;
+  object-fit: contain; border-radius: 2px;
+}
+#decLogo.show { display: inline-block; }
+#decFlag { font-size: 14px; }
+/* AF entries are buttons — the point of an alternative frequency is going to it. */
+.afBtn {
+  font-family: var(--mono, monospace); font-size: 12px;
+  background: transparent; color: inherit;
+  border: 1px solid var(--btn-border); border-radius: 3px;
+  padding: 1px 5px; margin: 0 4px 4px 0; cursor: pointer;
+}
+.afBtn:hover { border-color: var(--accent, #ffa500); }
+/* ★ The radio's OWN overload flag, not an inference from the spectrum. Loud on purpose:
+   tonight established that RF overload is what destroys RDS. */
+/* ★ While the AGC owns the IF reduction the slider is READ-ONLY but still LIVE — greyed so
+   it is plainly not yours to drag, and still moving so you can watch the AGC work. A frozen
+   control looks broken; a disabled one that animates explains itself (Stuart, 2026-07-26). */
+#rspIfGr.agc {
+  opacity: 0.55; pointer-events: none;
+}
+#rspIfGr.agc::-webkit-slider-thumb { background: var(--text-dim); }
+/* ★★ FIXED-WIDTH READOUTS. These values change length as they are dragged ("-30 dBfs" ->
+   "-10 dBfs · drives hard"), and in a flex row that RESIZES THE SLIDER MID-DRAG — so the
+   pointer suddenly maps to a different position and the value leaps (Stuart, 2026-07-26:
+   "jumping from -30 to -10 and the slider changes size").
+   ★ A readout added to make a control clearer must not be able to move the control. */
+#rspCtls .val {
+  flex: 0 0 130px; min-width: 130px; text-align: right; white-space: nowrap; overflow: hidden;
+}
+#rspCtls input[type=range] { flex: 1 1 auto; min-width: 0; }
+#rspOverload {
+  color: #1a0f00; background: #ff8a3d; font-size: 10px; letter-spacing: 1px;
+  padding: 1px 6px; border-radius: 3px; font-weight: 600;
+}
+#rdsMpx {
+  width: 180px; height: 76px; background: #000; display: block;
+  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
+}
+#rdsMpxCap {
+  color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
+  text-transform: uppercase; margin-top: 2px;
+}
+#rdsVerdict {
+  font-size: 11px; letter-spacing: 0.5px; margin-top: 4px;
+  font-family: var(--mono, monospace);
+}
+/* ★ Matches the plots' 180px column width so the whole right-hand stack lines up. Contained,
+   never cropped: station logos are all shapes, and a wordmark cut in half is worse than a
+   small one. `display:none` until a logo exists — see rdsLogoBig in main.ts. */
+#rdsLogoBig {
+  display: none; width: 180px; max-height: 96px; object-fit: contain;
+  margin-top: 10px; border-radius: 4px;
+}
+#rdsLogoBig.show { display: block; }
+#rdsVerdict.good { color: #7dff9a; }
+#rdsVerdict.ok   { color: #ffd479; }
+#rdsVerdict.bad  { color: #ff8a7d; }
+#rdsConstCap {
+  color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
+  text-transform: uppercase; margin-top: 3px;
+}
 #decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
+/* ★★ The 40vh cap here is what the ADV RDS "taller" button was fighting: the panel grew and
+   its PARENT clipped it, landing exactly on the spectrum/waterfall divide and looking like
+   the box was stuck (Stuart, 2026-07-26). The cap is right for the text and image decoders,
+   which scroll their own content — but ADV RDS sizes itself deliberately, so it opts out.
+   ★ A container limit and a child that manages its own height cannot both be in charge. */
 #decBody { max-height: 40vh; overflow-y: auto; padding: 8px 10px; }
+#decBox.rds #decBody { max-height: none; overflow-y: visible; }
 #decBox.min #decBody { display: none; }
 #decText {
   margin: 0; color: var(--btn-text); font-size: 12px;
@@ -497,6 +866,16 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #vtsSrc.show { display: inline; }
 #vtsFlag { font-size: 15px; }
+/* ★ PI stays on screen ALONGSIDE the name, not merely as a fallback for it. It is the
+   station's unambiguous identity — the key a database lookup, a learned station and the
+   FM-DX dial are all keyed on — and an FM-DXer reads it as readily as the name. Monospace
+   so the four hex digits line up between stations. */
+#vtsPi {
+  display: none; font-family: var(--mono, monospace); font-size: 11px;
+  letter-spacing: 0.5px; opacity: 0.75; border: 1px solid var(--btn-border);
+  border-radius: 3px; padding: 0 3px;
+}
+#vtsPi.show { display: inline; }
 /* RDS RadioText — the scrolling message the station sends. Ellipsised rather than
    marquee'd: a looping animation over a live waterfall is exactly the kind of
    thing that pegs a render thread for no benefit. */
@@ -588,9 +967,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 7px 0; font-size: 12px; flex-wrap: wrap;
 }
+/* `.mrow{display:flex}` overrode the UA `[hidden]{display:none}` (equal specificity, author wins), so
+   a hidden row — e.g. the pinned-rate row — still showed, giving a duplicate "SAMPLE RATE" label. */
+.mrow[hidden] { display: none; }
 .mrow label { color: var(--btn-text); flex: 0 0 auto; }
+/* The split is meaningless while the spectrum trace is hidden — show the control as inert. */
+.mrow.dim { opacity: .38; }
 .mrow .val { color: var(--unit); font-size: 11px; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
 .mrow input[type=range] { flex: 1 1 auto; width: auto; min-width: 90px; }
+/* Admin password entry — plain text input in a menu row, styled like the rest of the panel. */
+#adminPwInput { flex: 1 1 auto; min-width: 0; background: rgba(0,0,0,0.35);
+  border: 1px solid var(--bdr); border-radius: 5px; color: var(--hi);
+  padding: 4px 7px; font: inherit; }
 .mrow select { flex: 1 1 auto; }
 /* Segmented rows WRAP and never shrink. Flex items shrink below their content
    by default, so a 5-button row (RTTY shift) in a 520px panel squeezed the
@@ -606,6 +994,25 @@ select.btn { padding: 6px 8px; }
 #status .bad { color: var(--red); }
 #rds { font-size: 11px; color: var(--amber); letter-spacing: 1px; min-height: 14px; }
 #rds .rt { color: var(--text-dim); }
+
+/* "I'm over here" — the flash when the menu-bar app raises this tab (see #here in main.ts).
+   A brief edge glow, not a full-screen white flash: this is a dark UI someone may be watching in
+   a dark room, and being dazzled is a poor way to be told where your window is. Pointer-events
+   none so it can never eat a click, and it removes itself when the animation ends. */
+#hereFlash {
+  position: fixed; inset: 0; z-index: 9000; pointer-events: none;
+  box-shadow: inset 0 0 0 3px var(--amber), inset 0 0 90px rgba(255,184,51,0.35);
+  animation: hereFlash 900ms ease-out forwards;
+}
+@keyframes hereFlash {
+  0%   { opacity: 0; }
+  15%  { opacity: 1; }
+  60%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #hereFlash { animation: none; opacity: 0.9; }
+}
 </style>
 
 <!-- Lock-screen / Now Playing artwork, composited at runtime from the same two
@@ -628,9 +1035,24 @@ select.btn { padding: 6px 8px; }
       <label for="pin">PIN</label>
       <input id="pin" placeholder="······" inputmode="numeric" autofocus>
     </div>
+    <!-- ★★ ADMIN AT THE FRONT DOOR (Stuart, 2026-07-28). The owner's way in used to exist only
+         as a recovery from the IN USE screen — so an owner whose receiver was FREE had no way to
+         announce themselves, and had to connect as an ordinary listener with a time limit and
+         locked controls. Entering the password here claims the slot, unlocks the protected
+         settings and exempts the session from the limit, all of which the server already does
+         for an authenticated admin; there was simply no door.
+         ★ Hidden unless the server actually HAS an admin password — an override box on a server
+         with no password set is a puzzle with no answer, and inviting guesses is worse. -->
+    <div id="gateAdminRow" hidden>
+      <label for="gateAdminPw">ADMIN PASSWORD</label>
+      <input id="gateAdminPw" type="password" autocomplete="off" spellcheck="false">
+    </div>
     <div class="row">
       <button type="submit" id="btnConnect">CONNECT</button>
       <button type="button" id="btnSaveConnect">SAVE &amp; CONNECT</button>
+    </div>
+    <div class="row">
+      <button type="button" id="btnAdmin" hidden>ADMIN</button>
     </div>
   </form>
   <div id="splashMsg"></div>
@@ -640,12 +1062,28 @@ select.btn { padding: 6px 8px; }
   <canvas id="bands"></canvas>
   <canvas id="scale"></canvas>
   <div id="wfWrap"><canvas id="wf"></canvas>
+  <!-- ★★ HONEST DEAD SPACE. Near a band edge, half the window is frequencies the radio cannot
+       reach — an Airspy HF+ has nothing between 31 and 60 MHz. The FFT still produces SOMETHING
+       there (noise, and the mirror of what is below), and drawing it as spectrum would be a
+       lie: it looks like a quiet band rather than absent hardware. So it is blacked out and
+       labelled, and the label doubles as the instruction for getting across the gap
+       (Stuart's design, 2026-07-27). -->
+  <div id="rangeGap" hidden><span id="rangeGapNote"></span></div>
+  <!-- ★ The BOUNCE toast. The blacked-out region above explains the dead space permanently;
+       this confirms the ACTION — that your tune was caught by the edge and a second one in the
+       same direction will cross. Two messages because they answer two different questions:
+       "what is this black area" and "why did my dial stop". -->
+  <div id="tuneGapMsg"></div>
   <!-- Receiver identity, top-right of the spectrum (the shape UberSDR uses): the
        server's name, and under it where it actually is. Both come from the SERVER
        (GET /location) — the location half is absent unless the host opted in. -->
   <div id="rxBadge" hidden>
     <div id="rxName"></div>
     <div id="rxWhere"></div>
+    <!-- ★ Time remaining on a limited session, under the receiver's name and location because
+         that is where "whose radio is this" already lives. Hidden entirely when the server sets
+         no limit, which is every private receiver. -->
+    <div id="rxTimeLeft" hidden></div>
   </div>
 <!-- Decoder output box. Floats bottom-left above the control bar and PERSISTS
      until dismissed (OpenWebRX behaviour) — you keep listening and tuning while
@@ -658,6 +1096,7 @@ select.btn { padding: 6px 8px; }
   <span id="vtsSrc"></span>
   <img id="vtsLogo" alt="">
   <span id="vtsFlag"></span>
+  <span id="vtsPi"></span>
   <span id="vtsName">—</span>
   <span id="vtsRt"><span id="vtsRtInner"></span></span>
   <span id="vtsBand"></span>
@@ -667,6 +1106,9 @@ select.btn { padding: 6px 8px; }
   <div id="decBoxHead">
     <span class="dot" id="decDot"></span>
     <span id="decTitle">RTTY</span>
+    <!-- Station identity, mirroring the VTS bar that hides while ADV RDS is open. -->
+    <img id="decLogo" alt="">
+    <span id="decFlag"></span>
     <span id="decStatus"></span>
     <!-- Spot filters — cyclers, as in the app's decoder-panel header. -->
     <span id="spotFilters">
@@ -674,7 +1116,14 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="sfBand" title="Band filter">ALL</button>
       <button class="btn" id="sfAge" title="Age filter">AGE</button>
     </span>
+    <!-- Image decoders (WEFAX/SSTV): PREV switches to the last completed image while live decode
+         continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
+    <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>
+    <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
+    <!-- ★ Sits with minimise and close, where a window's size controls belong — the user
+         already knows to look there, and it needs no explaining (Stuart, 2026-07-26). -->
+    <button class="btn" id="rdsSize" title="Taller / shorter panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect id="rdsSizeBox" x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3" /></svg></button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
   </div>
@@ -682,6 +1131,77 @@ select.btn { padding: 6px 8px; }
     <pre id="decText"></pre>
     <canvas id="decImage"></canvas>
     <div id="spotList"></div>
+    <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
+         health. The VTS bar hides while this is open — no point showing the same data
+         twice, and this is the surface the user deliberately chose. -->
+    <div id="rdsPanel">
+      <div id="rdsGrid">
+        <div class="rdsF"><label>PI</label><span id="rxPi">—</span></div>
+        <div class="rdsF"><label>Station</label><span id="rxPs">—</span></div>
+        <div class="rdsF"><label>Type</label><span id="rxPty">—</span></div>
+        <div class="rdsF"><label>Flags</label><span id="rxFlags">—</span></div>
+        <div class="rdsF"><label title="Block error rate, before correction, last 12 groups">Errors</label><span id="rxBer">—</span></div>
+        <!-- ★ INJECTION LEVELS IN kHz DEVIATION — the units a broadcast analyser uses and an
+             FM-DXer reads fluently, and directly comparable against a Pira. Spec bands are in
+             the tooltips so the number interprets itself. -->
+        <div class="rdsF rdsFix"><label title="Pilot injection. Spec is 8–10% of 75 kHz, so 6.0–7.5 kHz.">Pilot dev</label><span id="rxPilotDev">—</span></div>
+        <div class="rdsF"><label title="RDS injection. Typically 2–4 kHz; 7.5% (5.6 kHz) is the ceiling. Higher means the station is pushing its RDS hard, which helps reception. Inferred after filtering, so indicative rather than calibrated.">RDS dev</label><span id="rxRdsDev">—</span></div>
+        <!-- ★★★ The measurement FM-DXers carry a Pira analyser to get. Near 0 or near 90 is
+             correct; anything in between is a transmitter fault. -->
+        <div class="rdsF"><label title="Phase between the station's RDS subcarrier and its own 19 kHz pilot. Correct is near 0°, or near 90° for quadrature encoding — anything between indicates a transmitter fault. Reported as an unsigned angle 0-90°, the same convention a broadcast analyser uses.">RDS↔pilot</label><span class="rdsPhaseWrap"><span class="sizer">rotating — encoder not locked to pilot</span><span id="rxPhase">—</span></span></div>
+        <div class="rdsF rdsWide"><label>RadioText</label><span id="rxRt">—</span></div>
+        <!-- ★ Asked for directly by the FM-DX community: RT+ carves artist and title out of
+             RadioText using start/length pointers (ODA 4BD7, announced in group 3A), and Long
+             PS is a 32-character station name where ordinary PS has only eight. Both come
+             off the 57 kHz subcarrier; neither needs any network access. -->
+        <div class="rdsF rdsWide"><label title="RT+ tagged now-playing, carved out of RadioText (ODA 4BD7)">Now playing</label><span id="rxRtp">—</span></div>
+        <div class="rdsF rdsWide"><label title="Long PS — 32 characters, group 15A, where ordinary PS has 8">Long PS</label><span id="rxLps">—</span></div>
+        <div class="rdsF"><label title="Programme type NAME (10A) — the station's own words for its PTY">PTYN</label><span id="rxPtyn">—</span></div>
+        <div class="rdsF"><label title="Broadcast language (1A, slow labelling variant 3)">Language</label><span id="rxLang">—</span></div>
+        <div class="rdsF"><label title="Programme Item Number (1A) — the scheduled start of the current programme">PIN</label><span id="rxPin">—</span></div>
+        <div class="rdsF"><label title="Open Data Applications this station announces in group 3A. RT+ is only one of many — a station may run eRT, TMC or something in-house instead.">ODA</label><span id="rxOda">—</span></div>
+        <div class="rdsF rdsWide"><label title="EON (14A) — other stations in the same network, and whether any has a traffic announcement running">Other networks</label><span id="rxEon">—</span></div>
+        <div class="rdsF"><label title="Decoder identification bits">DI</label><span id="rxDi">—</span></div>
+        <div class="rdsF"><label title="Clock time from group 4A — proves whole groups are arriving intact">Clock</label><span id="rxCt">—</span></div>
+        <div class="rdsF"><label title="Transmitter country, from the PI country code checked against the Extended Country Code">Country</label><span id="rxCountry">—</span></div>
+        <div class="rdsF"><label title="Coverage area and reference number, decoded from the PI">PI detail</label><span id="rxPiDetail">—</span></div>
+        <div class="rdsF"><label title="Groups decoded per second, and the total since tuning">Rate</label><span id="rxRate">—</span></div>
+        <div class="rdsF"><label title="Confirmed alternative frequencies against how many have been glimpsed — below 100% means entries are arriving damaged">AF score</label><span id="rxAfScore">—</span></div>
+        <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz — tap to tune">AF MHz</label><span id="rxAf">—</span></div>
+        <div class="rdsF rdsWide"><label title="What SHARE of the groups received were of each type — the transmitter's configuration, not a quality measure. The error rate is the Errors field above.">Group share</label><span id="rxGroups">—</span></div>
+      </div>
+      <!-- The constellation. Two tight clusters = healthy; a diffuse cloud = the subcarrier
+           is buried in noise. It says at a glance what a block-error percentage takes
+           experience to interpret. -->
+      <div id="rdsConstWrap">
+        <!-- ★ BEST OF BOTH. The constellation is the precise read — one point per decision
+             instant, so cluster tightness IS the bit margin. The trace beneath is the
+             instantly recognisable one, the shape SDR++ Brown shows: symbol value against
+             time, which draws two clean bands with a gap when locked and fills the gap in
+             when it is not. Same data, two questions: "how much margin" and "is it locked".
+             (Stuart, 2026-07-26) -->
+        <canvas id="rdsConst" width="180" height="180"></canvas>
+        <canvas id="rdsEye" width="180" height="54"></canvas>
+        <!-- ★ THE MPX SPECTRUM — what SDRconnect calls "MPX SP". L+R at the bottom, the
+             19 kHz pilot, the L-R sidebands at 38 kHz and RDS at 57 kHz, all in one picture.
+             Labelled, because an unlabelled spectrum of a signal most people have never seen
+             plotted is a puzzle rather than a diagnostic (Stuart, 2026-07-26). -->
+        <canvas id="rdsMpx" width="180" height="76"></canvas>
+        <div id="rdsMpxCap">MPX · 0–100 kHz</div>
+        <div id="rdsConstCap">constellation</div>
+        <!-- ★ A plain-English verdict, because the plot expects you to already know how to
+             read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the
+             panel should answer the question rather than pose it (Stuart, 2026-07-26). -->
+        <div id="rdsVerdict">—</div>
+        <!-- ★ The station's logo, large, in the space the column already leaves below the
+             verdict. The header keeps its small copy — that one is the identity badge you
+             glance at; this is the one you actually SEE. Hidden entirely when there is no
+             logo, so the column simply ends rather than reserving an empty box.
+             ★ Sized for what RDS2 will carry: stations transmit their own artwork over it,
+             and a thumbnail would waste the one genuinely new thing RDS2 offers. -->
+        <img id="rdsLogoBig" alt="">
+      </div>
+    </div>
   </div>
 </div>
   </div><!-- /#wfWrap -->
@@ -760,13 +1280,24 @@ select.btn { padding: 6px 8px; }
            purposes, and the signal meter spans exactly their combined width. -->
       <div class="stack" id="rightCol">
         <div id="sigWrap">
-          <div id="sig"><div id="sigFill"></div><div id="sigPeak"></div><span id="sigFault"></span></div>
+          <div id="sig"><div id="sigFill"></div><div id="sigSql"></div><div id="sigPeak"></div><span id="sigFault"></span></div>
           <div id="sigLine">
             <span id="sigLabel">—</span>
             <span id="linkStats">
               <span id="linkBars" title="Link quality">
                 <i></i><i></i><i></i>
               </span>
+              <span id="sqlChip" title="Squelch">SQL</span>
+              <!-- ★ Same chip language as SQL. The radio's gain control settles for a second
+                   after it starts, which bounces the waterfall — saying so turns a transient
+                   that looks like a fault into one that looks like a radio waking up. -->
+              <span id="initChip" title="The receiver's gain control is settling">SETTLING</span>
+              <!-- ★★ ON THE MAIN SCREEN, not only beside the gain controls. The gain panel is
+                   the right place to ACT on an overload, but it is behind the menu — and a
+                   warning nobody sees is not a warning. Overload is the one condition that
+                   silently ruins reception (it is what has been destroying RDS all evening),
+                   so it belongs where the user is already looking (Stuart, 2026-07-26). -->
+              <span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span>
               <span id="status">—</span>
             </span>
           </div>
@@ -815,10 +1346,29 @@ select.btn { padding: 6px 8px; }
     <span>AUDIO</span>
     <button class="btn" id="audioClose">CLOSE</button>
   </div>
-  <div class="mrow">
-    <label for="sql">SQUELCH</label>
-    <input type="range" id="sql" min="-100" max="-20" value="-100">
-    <span class="val" id="sqlVal">OFF</span>
+  <!-- SQUELCH is a LIVE meter you drag a ball on, not a slider over a number — the same control
+       the phone and watch use. You point the ball just above the noise while watching the real
+       signal move underneath it, so "just above the noise" is something you SEE rather than a
+       figure you guess. Drag fully left to switch squelch off. -->
+  <div class="sqlBlock">
+    <label>SQUELCH</label>
+    <div id="sqlBar" class="sqlBar" title="Drag the ball to set the squelch; drag fully left for OFF">
+      <div class="sqlTrack"><div id="sqlFill" class="sqlFill"></div></div>
+      <div id="sqlNeedle" class="sqlNeedle"><span class="sqlBall"></span></div>
+    </div>
+    <div class="sqlNote" id="sqlNote">Off — audio always passes.</div>
+  </div>
+  <!-- ★ Only shown when the operator has set "listener's choice" — on any other setting the
+       row is hidden entirely rather than disabled, because an inert control still reads as an
+       offer. Changing it reconnects the audio socket: the codec is fixed at connect time. -->
+  <div class="mrow" id="rawAudioRow" hidden>
+    <label>UNCOMPRESSED AUDIO</label>
+    <div class="seg"><button class="btn" id="rawAudio">OFF</button></div>
+  </div>
+  <div class="lbl wrap" id="rawAudioNote" hidden>
+    Off, audio is compressed to around 10 KB/s. On, you get the raw stream — about 187 KB/s,
+    roughly twenty times more, out of the operator's connection. Worth it on a fast link if
+    you can hear the difference; a courtesy to leave off if you can't.
   </div>
   <div class="mrow">
     <label for="nr">NOISE REDUCTION</label>
@@ -859,6 +1409,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
+    <button class="btn" data-dec="rds" title="Advanced RDS — the full data set plus signal diagnostics. Basic RDS (station name, RadioText, PI) is always on.">ADV RDS</button>
   </div>
 
   <!-- Settings for the selected mode appear underneath, as in the app. -->
@@ -917,7 +1468,7 @@ select.btn { padding: 6px 8px; }
 
   <h2>RECEIVER LOCATION</h2>
   <div class="lbl" id="rxLoc">Not published by this server</div>
-  <div class="lbl" style="margin-bottom:6px">
+  <div class="lbl wrap" style="margin-bottom:6px">
     Distances and the band plan are measured from the RECEIVER, not from you —
     the server may be in another town. Set a grid here only if the server hasn't
     published its own location.
@@ -974,6 +1525,13 @@ select.btn { padding: 6px 8px; }
   </div>
 
   <h2>RADIO</h2>
+  <!-- ★ Which receiver you are actually listening through. It was blank, which is a strange
+       thing for a radio application to be coy about — and it matters more now there is more
+       than one kind of radio behind it. -->
+  <div class="mrow">
+    <label>RECEIVER</label>
+    <span class="val" id="radioName" style="flex:1">—</span>
+  </div>
   <div class="mrow">
     <label for="gain">GAIN</label>
     <input type="range" id="gain" min="0" max="0" value="0">
@@ -982,6 +1540,105 @@ select.btn { padding: 6px 8px; }
   <div class="mrow">
     <label>AUTO GAIN</label>
     <div class="seg"><button class="btn" id="gainAuto">AUTO</button></div>
+  </div>
+  <!-- ★★ SDRplay RSP controls. An RSP is not a dongle: RF gain is an LNA STATE and IF gain is
+       a REDUCTION in dB, with separate AGC over the IF stage. Presenting one slider labelled
+       "gain" for all of that is not a simplification, it is a misrepresentation — and it hid
+       the fact that the LNA was wide open and flooding the front end.
+       ★ AND THE DIRECTION IS INVERTED, which is what catches people out: you set a gain
+       REDUCTION, so 20 dB is MAXIMUM gain and 59 dB is minimum. The labels say so. -->
+  <div id="rspCtls" hidden>
+    <!-- ★ The one number that makes two independent sliders readable: what you have
+         ACTUALLY got. SDRconnect shows it above its gain controls for the same reason. -->
+    <div class="mrow">
+      <label>SYSTEM GAIN</label>
+      <span class="val" id="rspSysGain" style="flex:1">—</span>
+      <span id="rspOverload" hidden>OVERLOAD</span>
+    </div>
+    <div class="mrow">
+      <label for="rspLna">RF GAIN (LNA)</label>
+      <!-- ★ RIGHT IS MORE GAIN, like every other slider anywhere. The underlying LNA STATE
+           runs the other way — state 0 is maximum gain — so the slider is inverted in the
+           handler rather than exposing the hardware's numbering to the user. A control that
+           runs backwards is a trap even when the label is honest (Stuart, 2026-07-26). -->
+      <input type="range" id="rspLna" min="0" max="9" value="5">
+      <span class="val" id="rspLnaVal">—</span>
+    </div>
+    <div class="mrow">
+      <label for="rspIfGr">IF GAIN RED.</label>
+      <input type="range" id="rspIfGr" min="20" max="59" value="40">
+      <span class="val" id="rspIfGrVal">—</span>
+    </div>
+    <div class="mrow">
+      <label>IF AGC</label>
+      <div class="seg"><button class="btn on" id="rspIfAgc">AUTO</button></div>
+    </div>
+    <!-- ★ The AGC's TARGET, as SDRconnect exposes it. It is a target, not a limit: a higher
+         (less negative) figure asks for a louder output and so applies MORE gain. The right
+         value depends on band and antenna, so it belongs to the user. -->
+    <div class="mrow" id="rowAgcSet">
+      <label for="rspAgcSet">AGC TARGET</label>
+      <input type="range" id="rspAgcSet" min="-72" max="-10" value="-30">
+      <span class="val" id="rspAgcSetVal">—</span>
+    </div>
+    <div class="mrow" id="rowRspNotch">
+      <label>FILTERS</label>
+      <div class="seg">
+        <button class="btn" id="rspRfNotch" title="Broadcast FM notch — wanted ON elsewhere in the spectrum, where a strong local FM transmitter is what overloads the front end, and OFF when FM is what you came to hear">FM NOTCH</button>
+        <button class="btn" id="rspDabNotch" title="DAB band notch, same reasoning as the FM notch">DAB NOTCH</button>
+        <button class="btn" id="rspBiasT" title="Bias-T — powers an active antenna or a mast-head amplifier">BIAS-T</button>
+      </div>
+    </div>
+  </div>
+  <!-- ★★ AIRSPY HF+ CONTROLS. An HF+ is neither a dongle nor an RSP: there is NO variable
+       gain stage at all. What it has is a fixed front end, a switchable +6 dB preamp and an
+       attenuator — so the useful adjustment is how far you back the front end OFF, which is
+       the opposite instinct to every other radio here. Presenting the generic "gain" slider
+       for that would describe the hardware wrongly, exactly as it did for the RSP.
+       ★ Its own AGC is genuinely good (unlike a dongle's), so AUTO is the right default and
+       the manual controls grey out under it rather than pretending to work. -->
+  <div id="ahfCtls" hidden>
+    <!-- ★ "AGC", not "HF AGC". libairspyhf names every control hf_* — set_hf_agc, set_hf_att,
+         set_hf_lna — but the "hf" is the PRODUCT (HF+), not the HF band: they act on the whole
+         device, in both tuning windows, so the AGC works on FM exactly as it does on 40 m
+         (Stuart noticed it working on FM and asked, 2026-07-27). Carrying the library's naming
+         into the UI would have told users it was band-limited when it is not. -->
+    <div class="mrow">
+      <label>AGC</label>
+      <div class="seg"><button class="btn on" id="ahfAgc">AUTO</button></div>
+    </div>
+    <!-- The HF+'s only AGC adjustment: a low or high threshold. HIGH lets the front end run
+         hotter before it backs off — better sensitivity on a quiet band, worse on a crowded one. -->
+    <div class="mrow" id="rowAhfThresh">
+      <label title="The signal level at which the AGC starts backing the front end off. HIGH tolerates a stronger signal before engaging, so more gain is kept — better on weak stations, less protection against overload. LOW engages earlier and stays conservative — better on a crowded band with strong locals.">AGC THRESHOLD</label>
+      <div class="seg" id="ahfThreshSeg">
+        <button class="btn on" data-th="0" title="Backs off earlier. Conservative — for a crowded band with strong local stations.">LOW</button>
+        <button class="btn" data-th="1" title="Backs off later, keeping more gain. Better for weak stations; more overload risk.">HIGH</button>
+      </div>
+    </div>
+    <!-- ★ ATTENUATION, labelled as attenuation. It would be easy to invert this into a "gain"
+         slider for consistency, but on HF the operator is deliberately reducing input to keep a
+         strong broadcast band out of the mixer — that intent should be visible, not hidden
+         behind a friendlier word. 0-48 dB in 6 dB steps is the hardware's own granularity. -->
+    <div class="mrow" id="rowAhfAtt">
+      <label for="ahfAtt">ATTENUATION</label>
+      <input type="range" id="ahfAtt" min="0" max="8" value="0">
+      <span class="val" id="ahfAttVal">0 dB</span>
+    </div>
+    <div class="mrow">
+      <label>PREAMP (+6 dB)</label>
+      <div class="seg"><button class="btn" id="ahfLna">OFF</button></div>
+    </div>
+    <!-- ★ PARTS PER BILLION, not ppm. An HF+ reference is good enough that a ppm control would
+         be far too coarse — one ppm step is 100 Hz at 100 MHz. -->
+    <div class="mrow">
+      <label for="ahfPpb">CALIBRATION</label>
+      <!-- ★ step 5, not 1: 10,001 positions across a few hundred pixels is finer than anyone
+           can aim, and finer than the radio's own stability justifies. Plus a centre detent
+           at 0 in the handler. -->
+      <input type="range" id="ahfPpb" min="-5000" max="5000" step="5" value="0">
+      <span class="val" id="ahfPpbVal">0 ppb</span>
+    </div>
   </div>
   <div class="mrow" id="rowRate">
     <label for="rate">SAMPLE RATE</label>
@@ -992,20 +1649,48 @@ select.btn { padding: 6px 8px; }
     <label>SAMPLE RATE</label>
     <span class="val"></span>
   </div>
-  <div class="mrow">
+  <!-- ★★ DONGLE-ONLY CONTROLS. Bias-T, the RTL2832U's digital AGC and direct sampling are
+       all librtlsdr calls that do nothing on an RSP — and an RSP has its OWN bias-T in the
+       panel above, so leaving these visible put TWO bias-T switches on one screen, one of
+       them inert. A control that does nothing is worse than a missing one: it invites the
+       user to conclude the hardware is broken (Stuart, 2026-07-26). -->
+  <!-- ★★ ADMIN UNLOCK. Shown only when the server actually HAS an admin password — an unlock
+       prompt on a server with nothing to unlock is a puzzle, not a feature. The controls below
+       it are the ones a visitor has no business touching on someone else's radio; they are
+       disabled rather than hidden, because a listener should be able to see that the operator
+       has protected them rather than wonder where the feature went. -->
+  <div class="mrow" id="adminRow" hidden>
+    <label>PROTECTED SETTINGS</label>
+    <div class="seg"><button class="btn" id="adminUnlock">UNLOCK</button></div>
+  </div>
+  <!-- ★ MASKED, INLINE. This was a window.prompt(), which renders the password in CLEAR TEXT
+       in a dialog — the exact thing the operator-side field was made secure about. An inline
+       type=password also lets Enter submit and keeps the whole exchange in the panel. -->
+  <div class="mrow" id="adminPwRow" hidden>
+    <label>PASSWORD</label>
+    <input type="password" id="adminPwInput" autocomplete="off" spellcheck="false"
+           placeholder="admin password">
+    <div class="seg"><button class="btn" id="adminPwGo">GO</button></div>
+  </div>
+  <div class="lbl wrap" id="adminNote" hidden>
+    Bias-T, direct sampling and calibration are locked by this receiver's operator. Bias-T puts
+    DC on the feedline, and the other two change the radio for everyone who listens after you.
+    Enter the admin password to unlock them.
+  </div>
+  <div class="mrow rtlOnly">
     <label for="ppm">PPM</label>
     <input type="range" id="ppm" min="-50" max="50" value="0">
     <span class="val" id="ppmVal">0</span>
   </div>
-  <div class="mrow">
+  <div class="mrow rtlOnly">
     <label>BIAS-T</label>
     <div class="seg"><button class="btn" id="biasT">OFF</button></div>
   </div>
-  <div class="mrow">
+  <div class="mrow rtlOnly">
     <label>DIGITAL AGC</label>
     <div class="seg"><button class="btn" id="agc">OFF</button></div>
   </div>
-  <div class="mrow">
+  <div class="mrow rtlOnly">
     <label>DIRECT SAMPLING</label>
     <div class="seg" id="dsSeg">
       <button class="btn on" data-ds="0">OFF</button>
@@ -1019,7 +1704,7 @@ select.btn { padding: 6px 8px; }
     <label for="palette">COLOUR MAP</label>
     <select id="palette" class="btn"></select>
   </div>
-  <div class="mrow">
+  <div class="mrow" id="specRatioRow">
     <label for="specRatio">SPECTRUM / WATERFALL</label>
     <input type="range" id="specRatio" min="0" max="60" value="25">
     <span class="val" id="specRatioVal">25%</span>
@@ -1030,6 +1715,51 @@ select.btn { padding: 6px 8px; }
   </div>
 
   <h2>WATERFALL</h2>
+  <!-- IDLE SAVER: after 30s without interaction, ask the server to drop its spectrum rate. Unlike a
+       client-side slowdown this saves the SERVER real work (and its radio), which is what matters
+       when the host is on battery, solar, or a metered connection. Some listeners want a waterfall
+       that keeps its full time resolution while they watch without touching anything — hence the
+       toggle. The owner may make it compulsory (hwinfo.forceIdleSaver), in which case it locks on. -->
+  <!-- WATERFALL RATE — the LISTENER's own choice, separate from the owner's ceiling and from the
+       idle saver. Some machines and some browsers simply cannot paint 20 fps of waterfall without
+       breaking a sweat; asking the server for fewer frames costs time resolution and nothing else,
+       because the waterfall interpolates onto the render clock either way. -->
+  <!-- WATERFALL SPEED — the on-screen scroll rate. The display interpolates rows onto its own clock,
+       so this is independent of the data rate; a high speed with a low data rate scrolls smoothly but
+       fills the gaps by interpolation (blurrier). Scroll rate is screen-relative (× dpr internally) so
+       Detail below never changes the speed. -->
+  <div class="mrow">
+    <label>WATERFALL SPEED</label>
+    <div class="seg" id="wfSpeedSeg">
+      <button class="btn" data-wfspeed="10">10</button>
+      <button class="btn on" data-wfspeed="20">20</button>
+      <button class="btn" data-wfspeed="30">30</button>
+    </div>
+  </div>
+  <div class="rowNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
+    a low data rate it fills the gaps by interpolation — smooth motion, less real detail.</div>
+  <!-- WATERFALL DATA RATE — real frames/sec from the SERVER. Auto = adaptive link management (brings in
+       as much as the link carries, up to the chosen Speed, capped at the server's 20). Speed options
+       above are filtered to >= this so you never ask for frames you'd only throw away. -->
+  <div class="mrow">
+    <label>WATERFALL DATA RATE</label>
+    <div class="seg" id="wfRateSeg">
+      <button class="btn on" data-wfrate="0">AUTO</button>
+      <button class="btn" data-wfrate="20">20</button>
+      <button class="btn" data-wfrate="10">10</button>
+      <button class="btn" data-wfrate="5">5</button>
+    </div>
+  </div>
+  <div class="rowNote">How many real frames per second the server sends. Lower cuts the data used but can
+    miss brief signals. Auto adapts to the link, up to your chosen speed.</div>
+  <div class="mrow">
+    <label>IDLE SAVER</label>
+    <div class="seg"><button class="btn on" id="idleSaver">ON</button></div>
+  </div>
+  <!-- No Detail/Resolution control: WebGL renders at full crispness for free on the GPU, and a device
+       too old for WebGL falls back to the light half-res 2D path automatically — it wouldn't want a
+       CPU-intensive sharp waterfall anyway. Crispness is decided by capability, not a toggle. -->
+
   <div class="mrow">
     <label>RANGE</label>
     <div class="seg" id="wfCoarse">

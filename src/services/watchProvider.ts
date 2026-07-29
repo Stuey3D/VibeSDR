@@ -31,7 +31,7 @@ const Native = NativeModules.VibeWatchModule as
   | {
       isReachable(): Promise<boolean>;
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
-              lo: number, hi: number, meter: string): void;
+              lo: number, hi: number, meter: string, sql: number): void;
       sendState(freq: number, mode: string, step: number, meter: string,
                 level: number, why: string, link: number,
                 band: string, bandCol: string,
@@ -42,7 +42,10 @@ const Native = NativeModules.VibeWatchModule as
       sendDab(json: string): void;
       sendAircraft(json: string): void;
       sendFavourites(json: string): void;
+      sendDirectory(json: string): void;
       sendPhone(status: string): void;
+      isClosedByUser(): Promise<boolean>;
+      clearClosedByUser(): void;
       sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number, peakHold: boolean): void;
@@ -56,7 +59,12 @@ const Native = NativeModules.VibeWatchModule as
  *  UPSCALED 1.6x before they even reached your eye — a self-inflicted blur that
  *  no amount of sharpening can undo. Above native width the image is downscaled
  *  instead, which is sharp. It costs 256 bytes a row (~1.3KB/s at 5fps). */
-const WATCH_BINS = 256;
+// 128, not 256: the row is the biggest thing on the WCSession link (16/sec), and halving
+// its width halves that traffic at zero CPU cost. The wrist is only ~205pt wide, so 128
+// upscales slightly rather than downscaling — the sharpness filter + the watch's own
+// brightness/contrast recover the look. MUST match WaterfallBuffer.width (watch) and
+// WatchSpectrumForwarder.watchBins (native forwarder) — the three define the wire width.
+const WATCH_BINS = 128;
 
 /** Row cadence — 10fps, and rows are BATCHED TWO TO A MESSAGE on the native side.
  *
@@ -106,6 +114,13 @@ const WATCH_BINS = 256;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
+// 10 rows/sec over Bluetooth (Stuart 2026-07-21: "10fps over bluetooth, 5fps on data-save/poor,
+// 20fps where available on wifi/cellular"). 60ms is the value the tuning notes above landed on for a
+// clean 10fps: it clears BOTH source intervals (passes every frame of the locked 100ms feed, halves
+// the awake 50ms feed) — where 90-100ms collides with the 100ms source and drops to a ragged ~8fps.
+// The earlier 200ms/5fps was an override for a "5fps on BT" theory; Jr proves the relay carries far
+// more (it runs the Kiwi waterfall at 13fps on the same phone), so 10fps is well within budget and
+// Buddy's rows are tiny (~316 bytes). Buddy tells its buffer this rate (rowFps=10) so it stays smooth.
 const MIN_ROW_MS = 60;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
@@ -190,12 +205,21 @@ export interface WatchCommandHandlers {
   onHello(): void;
   /** DAB: pick an audio service out of the multiplex. Not a tune — DAB is a list. */
   onDabSelect?(id: number): void;
+  /** Thin-remote server controls the watch relays. Optional: only the SDR screen has a passband,
+   *  only the FM-DX screen has cEQ/iMS/antenna. */
+  onBandwidth?(lo: number, hi: number): void;
+  onSquelch?(v: number): void;
+  onFmdxEq?(on: boolean): void;
+  onFmdxIms?(on: boolean): void;
+  onFmdxAntenna?(id: number): void;
 }
 
 class WatchProvider {
   private available = Platform.OS === 'ios' && !!Native;
   private reachable = false;
   private lastRowAt = 0;
+  /** Last tune/zoom crown command from the watch — rows back off while a spin is live. */
+  private lastGestureAt = 0;
   private lastStateAt = 0;
   private pendingState: { freq: number; mode: string; step: number } | null = null;
   /** Last state we were asked to send — so a meter update can reuse it rather than
@@ -208,8 +232,14 @@ class WatchProvider {
    *  "18db"). Mirrored verbatim — see setSignal. */
   private meter = '';
   private level = 0;
+  /** Squelch threshold as a 0..1 bar position (−1 = off). Rides the ROW like the meter. */
+  private sql = -1;
   private lastFmdxAt = 0;
   private pendingFmdx: string | null = null;
+  /// The last FM-DX blob actually sent, RETAINED so flushAll() can re-send it when the watch
+  /// reconnects/wakes. Without this, a Buddy that wakes while the phone is on FM-DX got no blob (FM-DX
+  /// has no rows either), never set isFmdx, and fell back to the "Open VibeSDR on iPhone" start screen.
+  private lastFmdx: string | null = null;
   private fmdxTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAir = '';
   private lastAirAt = 0;
@@ -224,20 +254,30 @@ class WatchProvider {
    *  'starting'  — cold-launched (by the watch) and connecting. Not a fault; a boot.
    *  'ready'     — a session is live.
    *  'pick'      — no default instance, but there ARE favourites: the wrist chooses.
-   *  'setup'     — no default AND no favourites. Nothing the watch can do; say so. */
+   *  'setup'     — no default AND no favourites. Nothing the watch can do; say so.
+   *  'closed'    — the user swiped us closed; a heartbeat relaunched us headless and we
+   *                REFUSED to auto-connect (anti-hijack). The wrist shows the closed screen. */
   private phoneStatus = 'ready';
   /** Set by SDRScreen when it pauses the spectrum socket for power saving. */
   private specPaused = false;
+  private powersave  = false;   // 30s idle saver has throttled the spectrum (rows still live)
   private lastFavs = '';
   private sentFavs = '\u0000';
   /** Handled OUTSIDE attach(), because it must work when NO SDR screen is mounted —
    *  which is the whole point: the watch launches the phone, the phone lands on the
    *  picker with no default instance, and the wrist is looking at nothing. */
-  private instanceHandler: ((url: string) => void) | null = null;
+  private instanceHandler: ((url: string, type?: string, name?: string) => void) | null = null;
+  private browseHandler: ((dirId: string) => void) | null = null;
+  private reopenHandler: (() => void) | null = null;
+  private stopHandler: (() => void) | null = null;
   private instanceSub: { remove(): void } | null = null;
   private lastLogo = '';   // what we WANT the watch to have
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
   private out = new Uint8Array(WATCH_BINS);
+  /** Does the watch actually want the waterfall? False while it is in Standalone mode, running its
+   *  own receiver. Defaults TRUE: a watch that has said nothing is a companion, which is what every
+   *  build before this one was. */
+  private rowsWanted = true;
   private emitter: NativeEventEmitter | null = null;
   /** LINK subs (reachability) — owned by the app, live for its whole life. */
   private subs: { remove(): void }[] = [];
@@ -376,13 +416,18 @@ class WatchProvider {
 
     this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.cmdSubs.push(
-      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean }) => {
+      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean; lo?: number; hi?: number }) => {
         switch (e.cmd) {
-          case 'tune': handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
+          case 'tune': this.lastGestureAt = Date.now(); handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
-          case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
+          // Zoom is a crown SPIN, same as tune: a burst of commands, each making the phone
+          // reconfigure the server's span. Rows keep the link busy exactly when it's needed
+          // for the gesture — and you can't read fine waterfall detail mid-zoom anyway. Stamp
+          // it so sendRow backs off to ~3fps until the spin settles. (Mirrors the native
+          // forwarder's lastRetuneAt throttle for the locked path.)
+          case 'zoom': this.lastGestureAt = Date.now(); handlers.onZoomDelta(Number(e.delta ?? 0)); break;
           case 'vol':  handlers.onVolumeDelta(Number(e.delta ?? 0)); break;
           case 'mute': handlers.onMute(e.val === true); break;
           case 'ping':
@@ -394,10 +439,43 @@ class WatchProvider {
             this.lastPingAt = Date.now();
             break;
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
+          // Thin-remote server controls — the watch relayed a tap, run the phone's command.
+          case 'bw':      handlers.onBandwidth?.(Number(e.lo ?? 0), Number(e.hi ?? 0)); break;
+          case 'squelch': handlers.onSquelch?.(Number(e.val ?? -999)); break;
+          case 'fmdxEq':  handlers.onFmdxEq?.(e.val === true); break;
+          case 'fmdxIms': handlers.onFmdxIms?.(e.val === true); break;
+          case 'fmdxAnt': handlers.onFmdxAntenna?.(Number(e.val ?? 0)); break;
+          // STOP from the wrist: leave the SDR screen — disconnect + return to the server list, idle.
+          case 'stopsrv': this.stopHandler?.(); break;
           // The watch is telling us it's missing something we only send ON CHANGE
           // (the palette LUT, the logo, the station memory). It knows; we don't.
           // Forget what we think it has.
-          case 'need': this.flushAll(); break;
+          // ★ The watch has gone STANDALONE — it is running its own receiver and is not reading our
+          //   waterfall. Reachability cannot tell us this: the watch app is still in the
+          //   foreground, so by every flag we had it looked like an attached companion. Without
+          //   being told, we stream a waterfall nobody reads — phone battery spent, and WCSession
+          //   traffic on the radio the watch needs for its OWN sockets.
+          //
+          //   Rows only. State, favourites and the rest are cheap, occasional, and still wanted:
+          //   the watch keeps showing the phone's link health, and its mode toggle only appears
+          //   while we are alive. Silence would look like a dead phone.
+          case 'stop': this.rowsWanted = false; break;
+          // 'need' is the watch saying "I have nothing" — which is exactly what entering Companion
+          // mode sends. That is the resume, and it is deliberately NOT 'ping': the watch pings
+          // while merely SHOWING the servers list, and that must not restart a stream it isn't
+          // going to draw.
+          //
+          // ★ onHello() FIRST — it is what wakes the spectrum. When the phone is locked and playing
+          //   in the background we close the spectrum socket for power, and only 'ping' used to
+          //   reopen it. So a watch entering Companion sent 'need', got nothing (there was nothing
+          //   flowing to send), and concluded the phone had no server — when it was sitting on a
+          //   live one with the screen off. "I have nothing, send me everything" has to include
+          //   waking the source, or it is a request that cannot be satisfied.
+          case 'need':
+            handlers.onHello();
+            this.rowsWanted = true;
+            this.flushAll();
+            break;
         }
       }),
     );
@@ -444,6 +522,7 @@ class WatchProvider {
     freq: number; ps: string; rt: string; pi: string; sig: number;
     users: number; stereo: boolean; tx: string; meter: string; level: number;
     pty: string; city: string; dist: number; flag: string; rx: string;
+    eq?: boolean; ims?: boolean; ant?: number; antennas?: { id: number; name: string }[];
   }) {
     if (!this.isActive || !this.owns('fmdx')) return;
     this.pendingFmdx = JSON.stringify(state);
@@ -458,6 +537,7 @@ class WatchProvider {
     const j = this.pendingFmdx;
     if (!j || !this.isActive) return;
     this.pendingFmdx = null;
+    this.lastFmdx = j;              // retain for a reconnect re-send (see flushAll)
     this.lastFmdxAt = Date.now();
     Native!.sendFmdx(j);
   }
@@ -554,6 +634,16 @@ class WatchProvider {
    *  go straight to the right screen with no detection round-trip. */
   setSpecPaused(p: boolean) { this.specPaused = p; }
 
+  /** The phone's 30s idle saver has THROTTLED the spectrum (rows still flow, just slower)
+   *  — distinct from `specPaused` (socket closed) or `idle` (rows stopped). Push a state
+   *  frame at once so Buddy's pill appears/clears immediately: during idle no tune is firing,
+   *  so we can't wait for the next freq echo to carry `why`. */
+  setPowersave(on: boolean) {
+    if (on === this.powersave) return;
+    this.powersave = on;
+    if (this.lastState) this.sendState(this.lastState.freq, this.lastState.mode, this.lastState.step);
+  }
+
   /** The phone is rebuilding its server link right now. A fact the watch cannot
    *  infer: from the wrist, a recovery in progress and a dead phone are the same
    *  black screen. Rides the existing throttled state echo as a `why` value. */
@@ -634,6 +724,9 @@ class WatchProvider {
       return 'idle';
     }
     this.idleSince = 0;
+    // Rows are LIVE but the 30s idle saver has slowed them for battery. Distinct from
+    // 'idle' (stopped): the wrist keeps drawing, the pill just explains the slower scroll.
+    if (this.powersave) return 'powersave';
     return 'live';
   }
 
@@ -660,21 +753,58 @@ class WatchProvider {
     Native!.sendFavourites(this.lastFavs);
   }
 
+  /** A directory's servers, for the watch to MIRROR (it keeps no server list of its own). Fetched by
+   *  the phone on a `browse` request; the watch displays these and connects by referencing them. */
+  sendDirectory(dirId: string, servers: {
+    id: string; name: string; type: string; country: string | null;
+    users: number; full: boolean; dist: number | null;
+  }[]) {
+    if (!this.available || !this.reachable) return;
+    Native?.sendDirectory?.(JSON.stringify({ dir: dirId, servers }));
+  }
+
+  /** Register the "browse this directory for the watch" handler (phone fetches + sends). Outside
+   *  attach() so it works from the picker where no SDR screen is mounted. */
+  setBrowseHandler(fn: (dirId: string) => void) { this.browseHandler = fn; }
+
   /** Register the "switch to this instance" handler. Lives OUTSIDE attach/detach so
    *  it survives screen changes — the command has to work from the picker, where no
    *  SDR screen exists to have attached anything. */
-  setInstanceHandler(fn: (url: string) => void) {
+  setInstanceHandler(fn: (url: string, type?: string, name?: string) => void) {
     if (!this.available) return;
     this.instanceHandler = fn;
     if (this.instanceSub) return;
     this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.instanceSub = this.emitter.addListener(
       'VibeWatchCommand',
-      (e: { cmd: string; val?: unknown }) => {
-        if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''));
+      (e: { cmd: string; val?: unknown; type?: unknown; name?: unknown; dir?: unknown }) => {
+        // Connect by URL — the phone resolves it against its OWN objects (favourites + browsed
+        // directory cache), so it always connects a server it actually holds (fixes OWRX etc.).
+        if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''),
+                                                     e.type ? String(e.type) : undefined,
+                                                     e.name ? String(e.name) : undefined);
+        else if (e.cmd === 'browse') this.browseHandler?.(String(e.dir ?? ''));
+        else if (e.cmd === 'reopen') this.reopenHandler?.();
       },
     );
   }
+
+  /** The wrist's "Reopen" after a deliberate close. Also OUTSIDE attach — it runs on a
+   *  headless relaunch where no screen is mounted. */
+  setReopenHandler(fn: () => void) { this.reopenHandler = fn; }
+
+  /** The wrist's "Stop" — disconnect the current server and return the phone to the picker to wait.
+   *  OUTSIDE attach() like reopen, because it must navigate regardless of which screen is mounted. */
+  setStopHandler(fn: () => void) { this.stopHandler = fn; }
+
+  /** Did the user swipe the phone app closed? Persisted natively so it survives the
+   *  process death and is readable on a headless relaunch. */
+  wasClosedByUser(): Promise<boolean> {
+    return Native?.isClosedByUser?.() ?? Promise.resolve(false);
+  }
+
+  /** No longer closed — the user foregrounded us, or pressed Reopen. */
+  clearClosedByUser() { Native?.clearClosedByUser?.(); }
 
   private flushAll() {
     this.lastPalette = '';    // forces the settings/LUT resend on the next row
@@ -687,6 +817,10 @@ class WatchProvider {
     this.flushStations();
     this.flushDab();
     this.flushFavs();
+    // ★ If the phone is on FM-DX, re-send the retained blob so a waking/reconnecting Buddy routes to
+    // the FM-DX screen instead of the "Open VibeSDR" start screen. Only when we OWN the fmdx screen —
+    // a stale blob must never leak onto an SDR session (isFmdx would wrongly hide the waterfall).
+    if (this.owns('fmdx') && this.lastFmdx && this.isActive) Native!.sendFmdx(this.lastFmdx);
   }
 
   private flushLogo() {
@@ -711,10 +845,11 @@ class WatchProvider {
    * (The uplink still worked, because a message from the watch always wakes the
    * phone: the wrist could tune but had gone deaf.) ONE channel, one throttle.
    */
-  setSignal(snr: number, level: number, meter: string) {
+  setSignal(snr: number, level: number, meter: string, sql = -1) {
     this.snr = snr;
     this.level = level;
     this.meter = meter;
+    this.sql = sql;
     // NO SEND HERE. The meter rides the ROW (see sendRow) — it must never get a
     // message of its own.
     //
@@ -882,11 +1017,16 @@ class WatchProvider {
   }
 
   private sendRow(row: Uint8Array, ctx: WatchFrameCtx) {
+    // The watch told us it is running its own receiver and isn't reading this (cmd:stop).
+    if (!this.rowsWanted) return;
     // A screen that no longer owns the watch must not talk to it. The outgoing SDR
     // screen stays mounted (and streaming) for a beat after the incoming one takes
     // over, and its rows would drag the wrist back to the waterfall.
     if (!this.owns('sdr')) return;
     const now = Date.now();
+    // Steady rate always — NO backing off during a tune/zoom spin. That gesture throttle
+    // STARVED the WaterfallBuffer (it ran dry and stalled), which read as "the waterfall stops
+    // moving while I tune". The tune-command 100ms debounce protects the WCSession queue instead.
     if (now - this.lastRowAt < MIN_ROW_MS) return; // coalesce: newest wins
     this.lastRowAt = now;
 
@@ -941,7 +1081,7 @@ class WatchProvider {
     // the carrier on AM/FM — LSB sits entirely below it, USB entirely above, CW
     // is offset — so a single bandwidth number would draw every mode as AM.
     Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr, this.level,
-                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0, this.meter);
+                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0, this.meter, this.sql);
   }
 }
 

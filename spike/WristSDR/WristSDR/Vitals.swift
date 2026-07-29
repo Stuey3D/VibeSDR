@@ -56,11 +56,58 @@ final class Vitals: ObservableObject {
   /// BREADCRUMBS. A Release build on a watch gives you no console and no crash log you can
   /// reach — so the app writes down where it got to, and the LAST LINE BEFORE IT DIED is
   /// the answer. Cheap, ugly, and it works when nothing else does.
+  /// SUSPENDED OR DEAD? The log cannot tell them apart, and they need opposite fixes.
+  ///
+  /// Both look identical from the outside: the ticks stop, and the audio fades as the
+  /// headphones drain a buffer nobody is filling. We have spent an evening fixing a
+  /// background-audio bug on the assumption watchOS was suspending us — but a suspended app
+  /// COMES BACK when the wrist comes up, and this one never does. That is not a suspension.
+  ///
+  /// So catch the death and write it down. If a crumb appears, we crashed and the whole
+  /// background-audio theory was chasing a ghost. If the log simply stops with no crumb, we
+  /// really were suspended.
+  ///
+  /// (Signal handlers should only call async-signal-safe functions. This one does not — but
+  /// a diagnostic that usually works beats a diagnosis we cannot make at all, and we are
+  /// dying anyway.)
+  /// (There was a home-made crash catcher here. It CRASHED — installing the signal handler
+  /// itself trapped — so the diagnostic became the bug, and the app would not launch at all.
+  /// It was never needed: the REAL crash reports are right there on the device and come
+  /// symbolicated, which beats anything we can write in-process:
+  ///
+  ///   xcrun devicectl device copy from --device <id> --domain-type systemCrashLogs \
+  ///     --source . --destination /tmp/wcrash
+  ///   xcrun atos -o build/.../WristSDR.app.dSYM/Contents/Resources/DWARF/WristSDR \
+  ///     -arch arm64 -l <base> <base+imageOffset>
+  ///
+  /// Use that. Do not re-invent this.
+
+  /// ★★ BOUNDED. This appends for the life of the install — every route change,
+  /// interruption and restart writes a line — and nothing ever truncated it, so a
+  /// heavy listener accumulated a file on a device with very little room and no way
+  /// to see or clear it. A diagnostic that grows without limit is a defect, however
+  /// small each write is.
+  ///
+  /// Keeps the TAIL, not the head: the interesting lines are the ones just before
+  /// whatever went wrong, so the newest are the ones worth having. Trimmed on a
+  /// line boundary so the file never starts mid-record.
+  private static let logCap = 64 * 1024
+  private static let logKeep = 32 * 1024
+
   nonisolated static func crumb(_ s: String) {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let u = docs.appendingPathComponent("jr-vitals.log")
     let line = "\(ISO8601DateFormatter().string(from: Date())) · \(s)\n"
     guard let d = line.data(using: .utf8) else { return }
+
+    let size = (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int) ?? 0
+    if (size ?? 0) > logCap, let all = try? Data(contentsOf: u) {
+      var tail = all.suffix(logKeep)
+      // Drop the partial first line so the file always starts at a record.
+      if let nl = tail.firstIndex(of: 0x0A) { tail = tail[tail.index(after: nl)...] }
+      try? (Data(tail) + d).write(to: u, options: [.noFileProtection])
+      return
+    }
     if let h = try? FileHandle(forWritingTo: u) {
       defer { try? h.close() }
       try? h.seekToEnd()

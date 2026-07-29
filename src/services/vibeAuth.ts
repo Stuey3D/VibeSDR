@@ -96,6 +96,29 @@ export async function vibeServerNeedsPin(baseUrl: string): Promise<boolean> {
   return !!j?.required;
 }
 
+/** ★★ ADMIN OVERRIDE CREDENTIALS for the connect URL — a nonce and an HMAC, never the
+ *  password. The override has to be decided BEFORE the slot is claimed, so it cannot use the
+ *  admin_unlock message (a busy server will not open the socket that carries it); but putting
+ *  the password in the URL would put it in the clear on plain HTTP and into every proxy and
+ *  server log on the way, which is exactly wrong for a receiver on the public internet.
+ *  ★ Same scheme as the PIN: the server issues a single-use nonce, we return
+ *  HMAC-SHA256(password, nonce), and the secret never crosses the link. The server applies the
+ *  same brute-force lockout it uses everywhere else.
+ *  Returns '' when the server issues no nonce (too old to support this). */
+export async function resolveVibeAdminAuth(baseUrl: string, password: string): Promise<string> {
+  if (!password) return '';
+  const base = baseUrl.replace(/\/+$/, '');
+  try {
+    const resp = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' });
+    const j = await resp.json() as { nonce?: string };
+    // ★ Note we do NOT check `required`: that flag is about the PIN. The configuration this
+    // exists for is a public receiver with NO PIN and an admin password.
+    if (!j?.nonce) return '';
+    const token = vibeAuthToken(password, j.nonce);
+    return `&vs_admin_nonce=${encodeURIComponent(j.nonce)}&vs_admin_auth=${token}`;
+  } catch { return ''; }
+}
+
 export async function resolveVibeAuth(baseUrl: string, pin: string): Promise<string> {
   const base = baseUrl.replace(/\/+$/, '');
   const resp = await fetch(`${base}/vibeserver/auth`);

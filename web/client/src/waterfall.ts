@@ -17,7 +17,35 @@
  */
 
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
+
+/** Fixed ring width — see the note at the GPU push. Must never depend on bin count. */
+const RING_W = 1024;
+
+/**
+ * Resample one row to RING_W.
+ * ★ PEAK-HOLD when downsampling, never a mean: a narrow carrier occupies one bin, and
+ * averaging it with its quiet neighbours is exactly how a weak signal disappears from the
+ * display it exists to reveal. Nearest-neighbour when upsampling — there is no detail to
+ * invent, and interpolating would only blur what the sharpening then tries to undo.
+ */
+function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
+  if (n === RING_W) return src;
+  const step = n / RING_W;
+  if (n > RING_W) {
+    for (let i = 0; i < RING_W; i++) {
+      const a = (i * step) | 0;
+      const b = Math.min(n, ((i + 1) * step) | 0) || a + 1;
+      let m = 0;
+      for (let k = a; k < b; k++) if (src[k] > m) m = src[k];
+      dst[i] = m;
+    }
+  } else {
+    for (let i = 0; i < RING_W; i++) dst[i] = src[(i * step) | 0];
+  }
+  return dst;
+}
 import { getColorLUT } from '../../../src/assets/colormapUtils';
+import { WaterfallGL } from './wfgl';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -37,11 +65,36 @@ function rgba(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+/**
+ * Canvas pixel ratio — the single biggest lever on render cost, because everything scales with the
+ * PIXEL COUNT and dpr 2 is four times the pixels of dpr 1.
+ *
+ * A waterfall is noisy data, not text, so it survives dpr 1 far better than a UI would — and on a
+ * machine that is struggling, four times less work is worth more than crisper noise. Default is
+ * capped at 2 (the old behaviour); `setRenderScale` lowers it.
+ */
+let RENDER_SCALE = 2;
+export function setRenderScale(max: number) { RENDER_SCALE = Math.max(1, Math.min(2, max)); }
+export function renderDpr(): number { return Math.min(RENDER_SCALE, window.devicePixelRatio || 1); }
+
+/** GPU ring height. Kept generously TALLER than any display so a window resize never reallocates it
+ *  (history preserved for free) — the display just shows more/fewer of its newest rows. Grows only if a
+ *  display is somehow taller than this. */
+const GL_RING_ROWS = 2560;
+
 export class Waterfall {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  /** Off-screen waterfall image; blitted to the visible canvas each frame. */
+  /** Off-screen waterfall image; blitted to the visible canvas each frame. Also carries the ring
+   *  DIMENSIONS (w × wfH) in GPU mode, where its pixels go unused. */
   private wf: HTMLCanvasElement;
+  /** GPU path: ring-texture renderer + its offscreen canvas. Null → CPU (2D) fallback. */
+  private gl: WaterfallGL | null = null;
+  private glCanvas: HTMLCanvasElement | null = null;
+  /** Ring width the GL texture is currently allocated at (= last frame's bin count). */
+  private glCols = 0;
+  /** Ring head: the row index holding the NEWEST line. Walks backwards; see addRow/draw. */
+  private head = 0;
   private wfCtx: CanvasRenderingContext2D;
 
   private proc = new SignalProcessor();
@@ -60,7 +113,20 @@ export class Waterfall {
   // saving free rather than a trade.
   //
   // At 20fps in = 20 rows/sec out, exactly one row per frame and this is a no-op.
-  private static readonly ROWS_PER_SEC = 20;
+  //
+  // ★ SCREEN-RELATIVE, NOT pixel-relative. `screenSpeed` is the user's Waterfall Speed in
+  // SCREEN rows/sec (10/20/30); `rowsPerSec` is the pixel-row emit rate = screenSpeed × dpr. Without
+  // the × dpr, Sharp (dpr 2) has twice the pixel rows for the same screen height, so a fixed pixel
+  // rate scrolled the SCREEN at half the speed — which is why "Sharp" felt slow and "Standard" fast
+  // (Stuart 2026-07-24, same class of bug as the iPhone portrait scroll). Recomputed on speed or dpr
+  // (Detail) change, so scroll speed is now independent of render resolution.
+  private screenSpeed = 20;
+  private rowsPerSec = 20;
+  setSpeed(screenRowsPerSec: number) {
+    this.screenSpeed = Math.max(1, screenRowsPerSec);
+    this.recomputeRate();
+  }
+  private recomputeRate() { this.rowsPerSec = this.screenSpeed * renderDpr(); }
   private prevRow: Uint8Array | null = null;   // last received row
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
@@ -102,7 +168,20 @@ export class Waterfall {
   wallHitSide: 'lo' | 'hi' | null = null;
 
   /** Spectrum trace visible? (The waterfall keeps the space either way.) */
-  showSpec = true;
+  // ★ Hiding the trace COLLAPSES the split — it does not merely skip the draw. Gating only the
+  // draw left the spectrum's slice of canvas reserved and painted flat black, so "trace off" gave
+  // a dead strip above the waterfall. Dragging the ratio slider to 0 already did the right thing,
+  // which made these two controls disagree about what "no spectrum" means. Now they are one
+  // mechanism: the user's chosen ratio is remembered and restored when the trace comes back.
+  private _showSpec = true;
+  get showSpec() { return this._showSpec; }
+  set showSpec(v: boolean) {
+    if (this._showSpec === v) return;
+    this._showSpec = v;
+    this.resize();
+  }
+  /** The split actually used for layout — zero while the trace is hidden. */
+  private effectiveRatio(): number { return this._showSpec ? this.specRatio : 0; }
   /** Fill opacity of the trace (the app's bgOpacity). */
   specAlpha = 0.85;
 
@@ -118,6 +197,8 @@ export class Waterfall {
    *  read as texture, but a live trace visibly jumps. */
   private spec: Float32Array | null = null;
   private peak: Float32Array | null = null;
+  /** Scratch for the ring resample — allocated once, never per frame. */
+  private ringBuf = new Uint8Array(RING_W);
   private prevSpec: Float32Array | null = null;
   private prevPeak: Float32Array | null = null;
   private drawSpec: Float32Array | null = null;
@@ -125,20 +206,33 @@ export class Waterfall {
 
   constructor(canvas: HTMLCanvasElement, opts: WaterfallOpts = {}) {
     this.canvas = canvas;
+    // NB `desynchronized: true` was tried here and REVERTED — it is a low-latency surface hint,
+    // it did not move Chromium's CPU or GPU figures at all, and it has a history of odd behaviour
+    // on macOS. Unproven changes do not earn a place in the render path.
     this.ctx = canvas.getContext('2d', { alpha: false })!;
     this.wf = document.createElement('canvas');
     this.wfCtx = this.wf.getContext('2d', { alpha: false })!;
+    this.head = 0;
     // Clamp here too: a bad value (e.g. a raw 0-60 slider position mistaken for a
     // fraction) would drive the waterfall height to zero and silently eat it.
     this.specRatio = clampRatio(opts.specRatio ?? 0.25);
     this.paletteName = opts.palette ?? 'gqrx';
     this.lut = getColorLUT(this.paletteName);
+    // Try the GPU path. If WebGL isn't available (ancient browser/device) we silently keep the 2D
+    // path, which is the right fallback anyway — those devices don't want a heavy sharp waterfall.
+    try {
+      this.glCanvas = document.createElement('canvas');
+      this.gl = new WaterfallGL(this.glCanvas);
+      this.gl.sharpness = this.proc.getSettings().wfSharpness;   // a saved pref must apply at start
+      this.gl.setLUT(this.lut);
+    } catch { this.gl = null; this.glCanvas = null; }
     this.resize();
   }
 
   setPalette(name: string) {
     this.paletteName = name;
     this.lut = getColorLUT(name);
+    this.gl?.setLUT(this.lut);
     this.specGrad = null;   // gradient is built from the LUT — rebuild it
   }
 
@@ -183,15 +277,22 @@ export class Waterfall {
 
   getSpecRatio(): number { return this.specRatio; }
 
-  applySettings(patch: Partial<SignalProcessorSettings>) { this.proc.applySettings(patch); }
+  applySettings(patch: Partial<SignalProcessorSettings>) {
+    this.proc.applySettings(patch);
+    // ★ THE SHARPNESS SLIDER USED TO GO NOWHERE. It was stored in the processor's
+    // settings and never read by this renderer, so the control moved and nothing
+    // happened — while the app, which sharpens in its SkSL shader, looked visibly
+    // crisper on the same signal (Stuart, 2026-07-28). The GPU path now takes it.
+    if (patch.wfSharpness !== undefined && this.gl) this.gl.sharpness = patch.wfSharpness;
+  }
   getSettings(): SignalProcessorSettings { return this.proc.getSettings(); }
   getRange() { return this.proc.getRange(); }
 
   resize() {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
-    const wfH = Math.max(1, Math.round(h * (1 - this.specRatio)));
+    const wfH = Math.max(1, Math.round(h * (1 - this.effectiveRatio())));
 
     // NB: do NOT early-out on canvas size alone. Changing the spectrum/waterfall
     // split leaves the canvas exactly the same size and only moves the boundary
@@ -201,6 +302,18 @@ export class Waterfall {
 
     this.canvas.width = w;
     this.canvas.height = h;
+    // GPU path: the ring texture (glCols × wfH) is the history; re-allocate it at the new height,
+    // which preserves the existing waterfall (WaterfallGL.ensureRing renders the old ring into the
+    // new). this.wf is only kept for its DIMENSIONS here — its 2D pixels go unused.
+    if (this.gl) {
+      // Only this.wf's DIMENSIONS matter here (w × wfH); the ring texture is taller and is NOT touched
+      // on resize, so the waterfall history survives a window drag. head is left alone. If the display
+      // grew taller than the ring, drawRow grows the ring on the next row.
+      this.wf.width = w;
+      this.wf.height = wfH;
+      this.rowImg = null;
+      return;
+    }
     // Preserve history across a resize where we can — a re-layout shouldn't
     // wipe the waterfall.
     const old = this.wf.width && this.wf.height
@@ -210,11 +323,21 @@ export class Waterfall {
     this.wfCtx.fillStyle = '#000';
     this.wfCtx.fillRect(0, 0, w, wfH);
     if (old) {
+      // Unwrap the ring as we copy, so the preserved history lands in reading order and the head
+      // can start again at 0. Keeping a wrapped buffer across a RESIZE would need the old head and
+      // the old height to stay consistent with the new ones — needless bookkeeping for a rare event.
       const tmp = document.createElement('canvas');
       tmp.width = old.width; tmp.height = old.height;
-      tmp.getContext('2d')!.putImageData(old, 0, 0);
-      this.wfCtx.drawImage(tmp, 0, 0, w, wfH);
+      const tc = tmp.getContext('2d')!;
+      tc.putImageData(old, 0, 0);
+      const oh = old.height;
+      const firstRows = oh - this.head;
+      if (firstRows > 0) this.wfCtx.drawImage(tmp, 0, this.head, old.width, firstRows,
+                                              0, 0, w, wfH * (firstRows / oh));
+      if (this.head > 0)  this.wfCtx.drawImage(tmp, 0, 0, old.width, this.head,
+                                              0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
     }
+    this.head = 0;
     // drawRow() bails without this, so the waterfall silently never draws.
     this.rowImg = this.ctx.createImageData(w, 1);
   }
@@ -232,8 +355,9 @@ export class Waterfall {
    */
   clearHistory() {
     if (!this.wf.width || !this.wf.height) return;
-    this.wfCtx.fillStyle = '#000';
-    this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height);
+    if (this.gl) this.gl.clear();
+    else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
+    this.head = 0;      // an all-black ring has no meaningful head
   }
 
   /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
@@ -278,12 +402,12 @@ export class Waterfall {
     // How many lines to synthesise before the next frame lands. Derived from the
     // OBSERVED arrival gap, so it adapts to whatever rate the server is running —
     // no need to be told, and it self-corrects across a throttle change.
-    const gap = this.lastArrival ? now - this.lastArrival : 1000 / Waterfall.ROWS_PER_SEC;
+    const gap = this.lastArrival ? now - this.lastArrival : 1000 / this.rowsPerSec;
     this.lastArrival = now;
 
     // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
     const clamped = Math.max(20, Math.min(1000, gap));
-    this.emitTotal = Math.max(1, Math.round(clamped / (1000 / Waterfall.ROWS_PER_SEC)));
+    this.emitTotal = Math.max(1, Math.round(clamped / (1000 / this.rowsPerSec)));
     this.emitInterval = clamped / this.emitTotal;
     this.emitStart = now;
     this.emitted = 0;
@@ -322,13 +446,11 @@ export class Waterfall {
 
   /** Scroll down one line and draw the row blended t of the way from prev to cur. */
   private drawRow(t: number) {
-    const W = this.wf.width;
-    const H = this.wf.height;
-    if (!W || !H || !this.rowImg) return;
-
-    const prev = this.prevRow!;
-    const cur = this.curRow!;
-    const blend = this.blendRow!;
+    const wfH = this.wf.height;
+    const prev = this.prevRow;
+    const cur = this.curRow;
+    const blend = this.blendRow;
+    if (!wfH || !prev || !cur || !blend) return;
     const n = cur.length;
 
     if (t >= 1) {
@@ -339,8 +461,43 @@ export class Waterfall {
       for (let i = 0; i < n; i++) blend[i] = (prev[i] * b + cur[i] * a) >> 8;
     }
 
-    this.wfCtx.drawImage(this.wf, 0, 1);   // scroll
+    // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
+    // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
+    // does NOT, and on a GPU-backed canvas it forces a full texture readback and copy per frame.
+    // MEASURED on an M4 with the same page: Edge 38.7% CPU and 89°C against Safari's 5.2% and
+    // 63°C. Instead the history is a RING: the newest row is written at a moving head and nothing
+    // else ever moves. Cost per frame drops from "copy the whole canvas" to "write one row".
 
+    // GPU path: upload the RAW n-wide row (dB indices) into the ring texture — palette and the
+    // peak-preserving bins→pixels downsample both happen on the GPU in the shader. No per-pixel JS.
+    // The ring is TALLER than the display (fixed/generous), so `head` walks its rows, not the display's
+    // — that's what lets a resize keep history (the ring is never touched).
+    if (this.gl) {
+      // ★★ THE RING IS A FIXED WIDTH, and rows are resampled into it — ported from the
+      // app (2026-07-26). It used to be allocated at the LIVE bin count, so any change in
+      // bin count reallocated the texture and threw the whole scroll-back away. Worse, it
+      // did so silently and only sometimes, which is what made the waterfall appear to
+      // "squish" on a zoom: the history was not being rescaled, it was being destroyed and
+      // refilled at a different width.
+      // 1024 ≈ one bin per pixel on a phone and comfortably more than a browser column
+      // count, so resampling into it costs nothing visible and history now survives
+      // ANY bin count the server sends.
+      const rowIn = resampleRow(blend, n, this.ringBuf);
+      if (this.glCols !== RING_W || this.gl.rows < wfH) {
+        this.gl.ensureRing(RING_W, Math.max(GL_RING_ROWS, wfH));
+        this.glCols = RING_W;
+      }
+      const rows = this.gl.rows;
+      this.head = (this.head - 1 + rows) % rows;
+      this.gl.pushRow(rowIn, this.head);
+      return;
+    }
+
+    // 2D fallback: peak-preserving downsample to canvas width + palette LUT + putImageData.
+    const H = wfH;
+    this.head = (this.head - 1 + H) % H;
+    const W = this.wf.width;
+    if (!this.rowImg) return;
     const img = this.rowImg.data;
     const lut = this.lut;
     for (let x = 0; x < W; x++) {
@@ -357,7 +514,7 @@ export class Waterfall {
       img[p + 2] = lut[o + 2];
       img[p + 3] = 255;
     }
-    this.wfCtx.putImageData(this.rowImg, 0, 0);
+    this.wfCtx.putImageData(this.rowImg, 0, this.head);
   }
 
   /** Composite waterfall + spectrum trace + markers to the visible canvas. */
@@ -380,9 +537,22 @@ export class Waterfall {
     // frequency-space buffer rescaled the whole waterfall every frame (the
     // "redraws itself on every movement" blur). The app doesn't compensate at
     // all — it sends the view change and lets the frames arrive.
-    ctx.drawImage(this.wf, 0, specH);
+    // The ring is unwrapped HERE, at present time, with two blits: head→bottom, then top→head.
+    // Two GPU-side draws of untouched texture, versus the old full-canvas self-copy every frame.
+    const wfH = this.wf.height;
+    if (this.gl && this.glCanvas && this.glCols > 0) {
+      // GPU path: the shader unwraps the ring from `head` and colours it on the GPU. One draw into
+      // the GL canvas, one blit onto the visible canvas — no per-row CPU work, dpr scaling is free.
+      this.gl.render(this.head, wfH, W, wfH);
+      ctx.drawImage(this.glCanvas, 0, 0, W, wfH, 0, specH, W, wfH);
+    } else {
+      // 2D fallback: unwrap the ring with two blits (head→bottom, then top→head).
+      const first = wfH - this.head;            // rows from head to the end of the buffer
+      if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
+      if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
+    }
 
-    if (specH > 4 && this.spec && this.showSpec) {
+    if (specH > 4 && this.spec && this._showSpec) {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
@@ -565,7 +735,7 @@ export class Waterfall {
 
       // Say what it is. With an RF-centre marker on screen too, an unlabelled
       // needle is ambiguous — which line is the one you're listening to?
-      const dpr2 = Math.min(2, window.devicePixelRatio || 1);
+      const dpr2 = renderDpr();
       this.markerLabel(ctx, nX, W, 28 * dpr2,
         `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, col);
     }
@@ -577,7 +747,7 @@ export class Waterfall {
    *  radio is actually receiving. Pan past it and the RF centre has to move. */
   private _drawCapture(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (this.captureLoHz == null || this.captureHiHz == null) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     const x0 = this.hzToX(this.captureLoHz, W);
     const x1 = this.hzToX(this.captureHiHz, W);
     if (x1 < 0 || x0 > W) return;
@@ -614,7 +784,7 @@ export class Waterfall {
     ctx: CanvasRenderingContext2D, x: number, W: number, y: number,
     text: string, colour: string,
   ) {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
     const tw = ctx.measureText(text).width;
     const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
@@ -638,7 +808,7 @@ export class Waterfall {
     if (this.wallLoHz == null && this.wallHiHz == null) return;
     ctx.save();
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
     const WALL = 'rgba(255,200,80,0.95)';
 
     if (this.wallLoHz != null) {
@@ -685,7 +855,7 @@ export class Waterfall {
     if (this.rfCenterHz == null) return;
     const x = this.hzToX(this.rfCenterHz, W);
     if (x < 0 || x > W) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = renderDpr();
 
     ctx.save();
     ctx.strokeStyle = 'rgba(120,200,255,0.75)';

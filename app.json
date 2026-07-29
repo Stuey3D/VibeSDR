@@ -2,7 +2,7 @@
   "expo": {
     "name": "VibeSDR",
     "slug": "VibeSDR",
-    "version": "9.0.2",
+    "version": "10.0.0",
     "scheme": ["vibesdr", "sdr"],
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -26,6 +26,9 @@
           "NSAllowsArbitraryLoads": true
         },
         "ITSAppUsesNonExemptEncryption": false
+      },
+      "entitlements": {
+        "com.apple.developer.ubiquity-kvstore-identifier": "$(TeamIdentifierPrefix)com.vibesdr.app"
       }
     },
     "android": {

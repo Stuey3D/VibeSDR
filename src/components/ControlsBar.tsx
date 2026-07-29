@@ -27,9 +27,10 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
-} from 'react-native';
+  View, ViewStyle,} from 'react-native';
+import { useRegionHandback, NAV_FOCUS } from './PanelNav';
 import { BlurView } from 'expo-blur';
+import SectionIcon from './SectionIcon';
 import {
   Canvas,
   Group,
@@ -40,6 +41,35 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
+import TunerKeys from './TunerKeys';
+
+/** Guard for the keys' handler — never expected to run. */
+const noStep = (_d: -1 | 1) => {};
+
+export type Rect = { x: number; y: number; w: number; h: number };
+
+/**
+ * Wraps a control slot and reports its SCREEN rect, so a pointer scroll landing on
+ * it can drive that control (BRIEF-inputs §3: "hover decides the target"). Measured
+ * in WINDOW coordinates because that is what the native scroll event reports; a
+ * layout-relative box would be wrong the moment anything above it moved.
+ */
+function ControlSlot({ report, style, children }: {
+  report?: (r: Rect) => void; style?: ViewStyle; children: React.ReactNode;
+}) {
+  const ref = useRef<View | null>(null);
+  const measure = useCallback(() => {
+    ref.current?.measureInWindow((x, y, w, h) => {
+      if (w > 0 && h > 0) report?.({ x, y, w, h });
+    });
+  }, [report]);
+
+  return (
+    <View ref={ref} style={style} onLayout={measure} collapsable={false}>
+      {children}
+    </View>
+  );
+}
 import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
@@ -96,6 +126,18 @@ export interface MeterValues {
   /** Peak power in the passband, dBFS — feeds the S-meter / dBFS readouts. */
   dbfs: number;
   active: boolean; link: 0|1|2|3;
+  /** Squelch threshold as a bar-normalised position (0..1), in the SAME scale the bar draws, so the
+   *  red squelch line sits on the shown meter. -1 = squelch off / not applicable (no line, no SQL). */
+  sql?: number;
+  /** Is the gate ACTUALLY closed (muting) right now? Computed from the same quantity the gate
+   *  itself compares — not from bar geometry. In S-meter/dBFS mode the bar is a smoothed dBFS fill
+   *  while the UberSDR gate compares raw SNR, so "fill < line" could redden while audio flowed (and
+   *  miss real mutes). undefined = this backend can't say; fall back to geometry. */
+  gate?: boolean;
+  /** Incoming SPECTRUM data rate (KB/s) and frame rate (fps) — the connection-meter readout. Audio
+   *  bytes are decoded natively on the phone, so this is the JS-visible (spectrum) rate. */
+  kbps?: number;
+  fps?:  number;
 }
 export interface MeterBus {
   value: MeterValues;
@@ -104,13 +146,13 @@ export interface MeterBus {
 }
 export function createMeterBus(): MeterBus {
   const bus: MeterBus = {
-    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0 },
+    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0, sql: -1, kbps: 0, fps: 0 },
     subs:  new Set(),
     emit(v: MeterValues) { bus.value = v; bus.subs.forEach(f => f(v)); },
   };
   return bus;
 }
-function useMeters(bus?: MeterBus): MeterValues | null {
+export function useMeters(bus?: MeterBus): MeterValues | null {
   const [v, setV] = useState<MeterValues | null>(bus ? bus.value : null);
   useEffect(() => {
     if (!bus) return;
@@ -194,6 +236,9 @@ export interface ControlsBarProps {
   signalMode?:   'snr' | 'smeter' | 'dbfs';
   /** WFM stereo pilot detected (local hardware) → "ST" badge on the mode pill. */
   fmStereo?:     boolean;
+  /** Active client decoder id (rtty/wefax/…) — composes the mode readout as
+   *  `<mode>: <decoder>` (e.g. USB: RTTY) so the running decoder is visible (§5.1). */
+  activeDecoder?: string | null;
   bottomInset:   number;
   onVfoDelta:    (px: number) => void;
   onBwDelta:     (px: number) => void;
@@ -238,6 +283,22 @@ export interface ControlsBarProps {
   readOnly?: boolean;
   /** Time-limited receiver countdown shown beside the clock. */
   sessionLeft?: { text: string; urgent: boolean } | null;
+  /** Control mode per control — the drums are the default and stay untouched;
+   *  these swap EITHER control independently for the HiFi tuner keys. Four
+   *  combinations, two settings, no global switch (BRIEF-inputs §2). */
+  vfoKeys?:  boolean;
+  zoomKeys?: boolean;
+  /** One step in `dir`, for the keys. Only needed when the keys are shown. */
+  onVfoStep?:  (dir: -1 | 1) => void;
+  onZoomStep?: (dir: -1 | 1) => void;
+  /** Per-tick zoom while sweeping — finer than a tap, see TunerKeys. */
+  onZoomSweep?: (dir: -1 | 1) => void;
+  /** Steps/sec ceiling for the VFO sweep — derived from step size + visible span
+   *  so signals cross the screen at a consistent rate. */
+  vfoSweepRate?: () => number;
+  /** Screen rects of the two control slots, so a pointer scroll can be
+   *  HOVER-SCOPED to whichever control it is over. */
+  onControlRects?: (r: { vfo?: Rect; zoom?: Rect }) => void;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -255,16 +316,30 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
   const peakX  = width * Math.min(1, Math.max(0, peak));
   const colors = signal > 0.001 ? sigGradColors(signal) : [];
   const pos    = signal > 0.001 ? sigGradPos(signal) : [];
+  // Squelch: red threshold line at its bar position; while the signal is BELOW it the gate is closed
+  // (muting) and the fill dims a touch — noticeable but still readable. Above it, full brightness.
+  const sql      = m ? (m.sql ?? -1) : -1;
+  const sqlOn    = sql >= 0;
+  const sqlX     = width * Math.min(1, Math.max(0, sql));
+  // Prefer the gate's OWN verdict; bar geometry is only a fallback (see MeterValues.gate).
+  const sqlClosed = sqlOn && (m?.gate ?? (signal < sql));
   return (
     <Canvas style={StyleSheet.absoluteFill}>
       <Rect x={0} y={0} width={width} height={height} color="rgba(105,98,82,0.30)" />
       {fillW > 1 && colors.length > 0 && (
-        <Rect x={0} y={0} width={fillW} height={height}>
+        <Rect x={0} y={0} width={fillW} height={height} opacity={sqlClosed ? 0.55 : 1}>
           <LinearGradient start={vec(0,0)} end={vec(fillW,0)} colors={colors} positions={pos} />
         </Rect>
       )}
       {peakX > 2 && (
         <Rect x={peakX - 1} y={0} width={2} height={height} color="rgba(255,245,200,0.92)" />
+      )}
+      {sqlOn && (
+        <>
+          {/* White halo so the red squelch line stays visible over any fill colour. */}
+          <Rect x={sqlX - 2} y={0} width={4} height={height} color="rgba(255,255,255,0.90)" />
+          <Rect x={sqlX - 1} y={0} width={2} height={height} color="rgba(255,50,50,1)" />
+        </>
       )}
     </Canvas>
   );
@@ -316,14 +391,32 @@ function ServerGlyph({ color }: { color: string }) {
 export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const m = useMeters(bus);
   const q = m ? m.link : 0;
+  // ★ LATCH, don't gate on the live value. Requiring fps > 0 to show the readout
+  // meant a single second with no counted frames BLANKED it — so on a backend
+  // whose frames arrive unevenly (Kiwi) it flashed on and off once a second.
+  // ★★ And hiding is the wrong response anyway: a stall is precisely when
+  // "0k/s · 0fps" is worth seeing. Blanking turns the most informative moment
+  // into no information at all. Show it once a rate has ever arrived, then keep
+  // showing it — zeros included.
+  const everHadRate = useRef(false);
+  if ((m?.fps ?? 0) > 0 || (m?.kbps ?? 0) > 0) everHadRate.current = true;
+  if (q === 0) everHadRate.current = false;      // disconnected — start clean again
   const dim = 'rgba(255,255,255,0.40)';
+  // Incoming rate readout — spectrum KB/s (the phone's audio is decoded natively, so JS can't see
+  // its bytes) + frame rate, the same "what's actually arriving" cue the web client shows. Only once
+  // a link exists, so a disconnected meter stays clean.
+  const showRate = !!m && q > 0 && everHadRate.current;
+  const rateTxt  = showRate ? `${Math.round(m!.kbps ?? 0)}k/s · ${Math.round(m!.fps ?? 0)}fps` : '';
   return (
     <View style={pm.linkRow}>
       <PhoneGlyph color={dim} />
       <Text style={pm.linkArrows}>⇄</Text>
       <LinkBars q={q} />
       <Text style={pm.linkArrows}>⇄</Text>
-      <ServerGlyph color={dim} />
+      {/* The network-NODE triangle — the same server mark used everywhere else (menu, watch), not
+          the old server-rack box. */}
+      <SectionIcon name="instance" size={13} color={dim} />
+      {showRate ? <Text style={pm.linkRate}>{rateTxt}</Text> : null}
     </View>
   );
 }
@@ -356,6 +449,20 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
   // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
   const liveSnrText = snrText ? snrText : (m ? meterText(meterMode ?? 'snr', m) : '');
   const liveActive  = m ? m.active : signalActive;
+  // Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
+  // readout flips to a breathing red "SQL" (no extra screen space), and the bar dims (SignalCanvas).
+  const sqlNorm   = m ? (m.sql ?? -1) : -1;
+  const sqlClosed = sqlNorm >= 0 && (m?.gate ?? ((m ? m.level : 0) < sqlNorm));
+  const breathe   = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!sqlClosed) { breathe.setValue(1); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(breathe, { toValue: 0.3, duration: 650, useNativeDriver: true }),
+      Animated.timing(breathe, { toValue: 1.0, duration: 650, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [sqlClosed, breathe]);
   return (
     // maxWidth cap: the pill must NEVER swallow the signal bar — on narrow
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
@@ -398,16 +505,27 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
               is back — shows the interlocking-rings symbol when stereo is active. */}
           {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={t.modeColor} />}
         </View>
-        <Text style={[pm.snr, {
-          color: t.snrColor, fontFamily: t.font, width: snrWidth,
-          fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
-          lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
-          includeFontPadding: false,
-          fontWeight: '700',
-          opacity: liveActive ? 1.0 : 0.65,
-        }]}>
-          {liveSnrText}
-        </Text>
+        {sqlClosed ? (
+          <Animated.Text style={[pm.snr, {
+            color: '#ff4040', fontFamily: t.font, width: snrWidth,
+            fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
+            lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
+            includeFontPadding: false, fontWeight: '800', opacity: breathe,
+          }]}>
+            SQL
+          </Animated.Text>
+        ) : (
+          <Text style={[pm.snr, {
+            color: t.snrColor, fontFamily: t.font, width: snrWidth,
+            fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
+            lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
+            includeFontPadding: false,
+            fontWeight: '700',
+            opacity: liveActive ? 1.0 : 0.65,
+          }]}>
+            {liveSnrText}
+          </Text>
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -419,6 +537,7 @@ const pm = StyleSheet.create({
   linkBar:  { width: 3, borderRadius: 1 },
   linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
   linkArrows: { color: 'rgba(255,255,255,0.40)', fontSize: 9, lineHeight: 11 },
+  linkRate:   { color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 11, marginLeft: 4, fontVariant: ['tabular-nums'] },
   phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
   phoneDot:   { width: 2.5, height: 1.5, borderRadius: 1 },
@@ -439,15 +558,24 @@ const pm = StyleSheet.create({
   snr:     { fontSize: 9, textAlign: 'center' },
 });
 
-// ── Hamburger icon ────────────────────────────────────────────────────────────
+// ── Cog icon ──────────────────────────────────────────────────────────────────
+// Replaces the hamburger on the menu button. Once the ServersChip owns "leaving",
+// this button is honestly just settings — and a cog says so, where the hamburger
+// read as "exit" and hid the way back to the instance list. Colour matches the
+// row's other glyphs (t.btnText), not a hard white, so both themes stay coherent.
+// Authored in a 24×24 space (Feather "settings"); scale to the canvas.
+const COG_GEAR   = Skia.Path.MakeFromSVGString('M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 3.6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H8a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H22a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z')!;
+const COG_CENTER = Skia.Path.MakeFromSVGString('M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z')!;
 
-function Hamburger({ color, lineW }: { color: string; lineW: number }) {
+function Cog({ size, color }: { size: number; color: string }) {
+  const k = size / 24;
   return (
-    <View style={{ gap: 3 }}>
-      <View style={{ width: lineW, height: 1.5, borderRadius: 1, backgroundColor: color }} />
-      <View style={{ width: lineW, height: 1.5, borderRadius: 1, backgroundColor: color }} />
-      <View style={{ width: lineW, height: 1.5, borderRadius: 1, backgroundColor: color }} />
-    </View>
+    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
+      <Group transform={[{ scale: k }]}>
+        <Path path={COG_GEAR}   color={color} strokeWidth={1.7 / k} style="stroke" strokeCap="round" strokeJoin="round" />
+        <Path path={COG_CENTER} color={color} strokeWidth={1.7 / k} style="stroke" strokeCap="round" strokeJoin="round" />
+      </Group>
+    </Canvas>
   );
 }
 
@@ -528,10 +656,31 @@ function useDrumSwipeGuard() {
   return { ref, onLayout };
 }
 
+/**
+ * The handback flash, shared by the portrait and landscape bars.
+ *
+ * ★ Stuart: when focus moves from the decoder box back to tune/zoom, the drums or keys should
+ * flash too. The decoder box's departure flash says "leaving"; without this nothing says
+ * "arriving here", and on a TV across the room the controls that just became live are exactly
+ * what you need to find.
+ */
+function useHandbackFlash() {
+  const handback = useRegionHandback();
+  const value = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!handback) return;                    // not on mount, only on a real handback
+    value.setValue(1);
+    Animated.timing(value, { toValue: 0, duration: 450, useNativeDriver: true }).start();
+  }, [handback, value]);
+  return value;
+}
+
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft }: any) {
+  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  onControlRects }: any) {
+  const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -578,7 +727,6 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const BAR_PAD_H  = s.r(12);
   const BTN_H      = s.r(44); // a11y minimum touch target (was 36 — misses)
   const ICON_SZ    = s.r(20);
-  const HBURG_W    = s.r(16);
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
   // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
@@ -662,7 +810,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         >
           {menuAsBack
             ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
-            : <Hamburger color={t.btnText} lineW={HBURG_W} />}
+            : <Cog size={ICON_SZ} color={t.btnText} />}
         </TouchableOpacity>
 
         {/* CHAT */}
@@ -686,8 +834,30 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
             pointerEvents={readOnly ? 'none' : 'auto'}
             style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
-        <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
-        {!singleDrum && <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
+        {/* ★ HANDBACK FLASH. When the decoder box gives the keyboard back, the controls that
+            just became live announce themselves — the same arrival/departure idea, applied to
+            the other end of the move. Drawn as a glow OVER the row rather than inside the two
+            controls, so it works for the drums and the keys without either knowing about it.
+            pointerEvents none: a signal, never a target. */}
+        <Animated.View pointerEvents="none"
+          style={{
+            position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
+            borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
+            backgroundColor: 'rgba(124,255,155,0.10)',
+            opacity: handbackFlash, zIndex: 3,
+          }} />
+        <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ vfo: r })}>
+          {vfoKeys
+            ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} />
+            : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
+        </ControlSlot>
+        {!singleDrum && (
+          <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
+            {zoomKeys
+              ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} />
+              : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} />}
+          </ControlSlot>
+        )}
       </View>
 
       {/* Row 4 — clock · link quality · rec */}
@@ -734,7 +904,9 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
+  const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -762,15 +934,26 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const MODE_PAD_V = s.r(4);
   const PILL_GAP  = s.r(4);
   const ICON_SZ   = s.r(18);
-  const HBURG_W   = s.r(14);
   const CLOCK_FONT = s.f(7);
 
   return (
     <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
 
+      {/* ★ Handback flash — see useHandbackFlash. The landscape bar has its own drum row, so
+          without this the announcement simply vanished on rotation. */}
+      <Animated.View pointerEvents="none"
+        style={{
+          position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
+          borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
+          backgroundColor: 'rgba(124,255,155,0.10)',
+          opacity: handbackFlash, zIndex: 3,
+        }} />
+
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
-        <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
+        {vfoKeys
+          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
+          : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
         </Text>
@@ -800,7 +983,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         >
           {menuAsBack
             ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }}>‹</Text>
-            : <Hamburger color={t.btnText} lineW={HBURG_W} />}
+            : <Cog size={ICON_SZ} color={t.btnText} />}
         </TouchableOpacity>
       </View>
 
@@ -843,7 +1026,9 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       {/* Zoom drum (omitted for FM-DX single-drum tuner) */}
       {!singleDrum && (
         <View style={{ flex: 1, minWidth: s.r(80) }}>
-          <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />
+          {zoomKeys
+            ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} style={{ flex: 1 }} />
+            : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
         </View>
       )}
 
@@ -866,7 +1051,7 @@ const lnd = StyleSheet.create({
 function ControlsBar({
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
-  fmStereo = false,
+  fmStereo = false, activeDecoder = null,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
@@ -881,7 +1066,23 @@ function ControlsBar({
   meterLabel,
   menuAsBack = false,
   freqFormat,
+  vfoKeys = false,
+  zoomKeys = false,
+  onVfoStep,
+  onZoomStep,
+  onZoomSweep,
+  vfoSweepRate,
+  onControlRects,
 }: ControlsBarProps) {
+  // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
+  const handback = useRegionHandback();
+  const handbackFlash = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!handback) return;                       // not on first mount, only on a real handback
+    handbackFlash.setValue(1);
+    Animated.timing(handbackFlash, { toValue: 0, duration: 450, useNativeDriver: true }).start();
+  }, [handback, handbackFlash]);
+
   const { theme: t } = useTheme();
   const s = useUiScale();
 
@@ -915,7 +1116,10 @@ function ControlsBar({
   const RADIUS  = s.r(18);
 
   const shared = {
-    freqStr, unit, modeLabel: modeDisplay(mode), snrText, fmStereo,
+    freqStr, unit,
+    // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
+    modeLabel: modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
+    snrText, fmStereo,
     connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
@@ -925,6 +1129,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onControlRects,
   };
 
   return (
@@ -937,8 +1142,13 @@ function ControlsBar({
         borderRadius: RADIUS,
       },
     ]}>
-      {/* High-intensity blur so waterfall colour bleeds through the pill */}
-      <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+      {/* ★★ THE TINT IS THE SAME ON BOTH PLATFORMS — only BlurView differs, so only BlurView is
+          adjusted. On iOS it is a real UIVisualEffect and at 80 it stacked with the tint into a
+          near-opaque slab; Android's is far weaker, which is why identical code showed the
+          waterfall through the island on the Moto and blanked it on the iPhone.
+          ★ ANDROID IS THE TARGET, NOT THE THING TO CHANGE (Stuart, 2026-07-28): "android cannot
+          get any clearer… iOS just needs to get to android level". Hence iOS-only. */}
+      <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
       {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
       <View style={[StyleSheet.absoluteFill, root.tint, { borderRadius: RADIUS }]}
             pointerEvents="none" />
@@ -965,7 +1175,7 @@ const root = StyleSheet.create({
   // Semi-transparent tint: waterfall colours show through but content is legible
   tint: {
     backgroundColor: 'rgba(8,6,2,0.55)',
-    inset: 1,              // keeps tint inside the border ring visually
+    inset: 1,              // keeps tint inside the border ring visually             // keeps tint inside the border ring visually
   },
   border: {
     ...StyleSheet.absoluteFill,

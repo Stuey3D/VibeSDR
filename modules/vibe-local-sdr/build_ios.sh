@@ -53,6 +53,14 @@ cc "$CPP/vibedsp/third_party/kissfft/kiss_fftr.c" "$KISSPFX"
 
 echo "== shim + net + decoders =="
 cxx "$CPP/local_sdr_shim.cpp"
+# ★★ THE RADIO SOURCES, EVEN THOUGH iOS HAS NEITHER RADIO. Both files are written as
+# "real implementation #ifdef <SDK> #else no-op stubs", and the shim REFERENCES their methods
+# unconditionally — a runtime branch like useSdrplay() still emits a link-time reference. So
+# omitting them does not save anything; it just fails at the link step with a wall of
+# undefined SdrplaySource:: symbols (2026-07-27, first iOS build since the RSP controls
+# landed). Compiling the stub side costs a few bytes and keeps the shim's one source of truth.
+cxx "$CPP/sdrplay_source.cpp"
+cxx "$CPP/airspyhf_source.cpp"
 cxx "$CPP/net_shim.cpp"
 cxx "$CPP/mdns_responder.cpp"   # hostname responder; iOS compiles it but never serves
 cxx "$CPP/spyserver/spyserver_messages.cpp"

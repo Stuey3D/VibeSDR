@@ -54,3 +54,22 @@ target_compile_options(vibedsp_adjacent_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_passband_tests test_passband.cpp ${DSP_SRC})
 target_include_directories(vibedsp_passband_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_passband_tests PRIVATE -O2 -Wall)
+
+# WFM stereo CPU bench. The MPX chain is the engine's most expensive path and it
+# runs on the phone (local hardware) and on VibeServer, so keep it measurable.
+add_executable(vibedsp_bench_wfm bench_wfm.cpp ${DSP_SRC})
+target_include_directories(vibedsp_bench_wfm PRIVATE ${DSP})
+target_compile_options(vibedsp_bench_wfm PRIVATE -O2 -Wall)
+
+# RDS weak-signal threshold. The other RDS tests use a clean signal and only prove the
+# chain works; this one finds where it STOPS working, which is what users actually hit.
+add_executable(vibedsp_rds_snr_probe rds_snr_probe.cpp ${DSP_SRC})
+target_include_directories(vibedsp_rds_snr_probe PRIVATE ${DSP})
+target_compile_options(vibedsp_rds_snr_probe PRIVATE -O2 -Wall)
+
+# Offline IQ probe. The app records decoded AUDIO, which cannot show anything about RDS
+# (57 kHz, discarded by the 15 kHz audio filter). This runs the real pipeline over an
+# rtl_sdr capture so a real station can be diagnosed repeatedly, off the air.
+add_executable(vibedsp_iq_probe iq_probe.cpp ${DSP_SRC})
+target_include_directories(vibedsp_iq_probe PRIVATE ${DSP})
+target_compile_options(vibedsp_iq_probe PRIVATE -O2 -Wall)

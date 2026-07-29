@@ -4,6 +4,83 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## Unreleased
+
+### Fixed — the RDS analyser, calibrated against a professional broadcast analyser
+
+With thanks again to **Hans van Eijsden (Zwolle, NL)** of [FMDX.org](https://fmdx.org), who
+put a **Pira FM broadcast analyser** next to VibeServer on six Dutch stations and
+photographed both panels together.
+
+That is a kind of help nothing inside the software can substitute for. A receiver checking
+its own measurements against itself will agree with itself while being wrong, and ours was
+— in two ways at once:
+
+**The RDS-to-pilot phase reported every station as its own reflection.** A transmitter 8°
+out of phase was shown as 172°; one 45° out as 131°. The measurement was right and the
+range was wrong. It survived because the two cases anyone tests against — a correctly
+phased station and a quadrature one — are exactly the two the fault cannot affect. Hans's
+"our phase matched perfectly on the quadrature station" was the clue, not the reassurance
+it appeared to be.
+
+**The RDS deviation used a constant that never applied to it**, a sinusoid's RMS-to-peak
+factor applied to a quantity that is neither an RMS nor a sinusoid. Replaced with the
+measured crest factor of a real biphase envelope through our own filter.
+
+Phase now agrees with the Pira to within a few degrees on every station he measured, and
+the deviations sit inside the ±5% his own readings fluctuate by.
+
+He also confirmed on air the RDS features UK broadcasters barely transmit — **Long PS,
+RT+, PTYN and ODA** — which no amount of testing in Britain could have exercised. Seeing
+`RT+ in 12A` only proves the announcement decoded; watching *"Je hoort 2Pac met Changes"*
+resolve to **2Pac — Changes** proves the tags were applied at the right offsets, and only
+his signal could show that.
+
+### Added — uncompressed audio, because he heard the codec
+
+Hans identified Opus **by ear** within moments of first listening, and then named the
+reason it matters more than it sounds: **Bluetooth headphones re-encode whatever you send
+them.** Opus into SBC or AAC is two generations of lossy compression stacked, and the
+artefacts compound. He reports "no more compression cascading effects on bluetooth
+headphones" with raw audio.
+
+Compression is now a three-way operator choice — off, listener's choice, or compatibility
+fallback — and anything on the host machine itself always gets raw audio, since the only
+argument for compressing is bandwidth and a browser on `localhost` uses none.
+
+### Fixed — several panel and control bugs he reported
+
+The receiver-location control failed three separate ways on his Mac (no permission prompt,
+an instant timeout, and a silent success he had to search the web to verify); RDS deviation
+could read a value that was physically impossible on a dead carrier; the decoder panel
+scrolled sideways chasing text that would not wrap. All fixed.
+
+### Fixed — the app tuned 1005 MHz when a Dutch keyboard asked for 100.5
+
+With thanks to **HansVanEijsden (Zwolle, NL)**, who spotted this in the
+[FMDX.org](https://fmdx.org) Discord and reported it precisely: *"In Dutch locale, `.`
+becomes `,` as default separator"* — keyboard, screenshot and locale, all in one message.
+That is a report you can act on immediately, and it turned out to matter more than it
+looked.
+
+The frequency box did not merely refuse the comma. It **deleted** it. Typing `100,5` left
+`1005`, so asking for 100.5 MHz tuned you to 1005 MHz — silently, and plausibly enough that
+you would blame the radio rather than the app. The web client did exactly the same.
+
+Both now accept whichever separator the keyboard offers and normalise it as you type, so
+the field reads `100.5` whatever your layout. Where both separators appear — `1,234.5`,
+typically pasted — the comma is treated as a thousands separator and dropped. Station search
+had a quieter version of the same fault, matching your typing against a formatted frequency
+it could never equal; that is fixed too, for the frequency only, since a station name is
+perfectly entitled to contain a comma.
+
+★ Worth recording why this survived so long: iOS chooses the decimal separator from the
+**Region** setting rather than the keyboard language, so it is invisible on a UK or US
+device no matter which keyboards are installed. It took someone actually living with a
+Dutch locale to see it.
+
+---
+
 ## v9.0.2 — the CONTINUE button that couldn't be pressed (2026-07-19)
 
 ### Fixed — VibeSDR was unusable on small screens

@@ -40,6 +40,81 @@ export function recordCrash(error: any, route?: string): CrashInfo {
   return info;
 }
 
+// ── Whose fault was it? ───────────────────────────────────────────────────────
+//
+// ★ This used to be assumed rather than decided: EVERY crash was reported as "the
+// SDR server stopped responding... this is a server issue, not a problem with
+// VibeSDR". That is wrong in both directions and the app must not do either.
+//
+//  - Blaming the server for OUR exception sends people off restarting a receiver
+//    that was perfectly healthy, and does it in OUR voice, on someone else's
+//    equipment. (Observed 2026-07-25: a TypeError in the menu produced exactly
+//    that message against a working UberSDR.)
+//  - Equally, taking the blame for a genuine server fault or policy — a restart, a
+//    dropped socket, an enforced session limit — is dishonest the other way and
+//    makes us look broken when we are not.
+//
+// So classify from evidence, and where the evidence is thin, say so plainly rather
+// than picking a culprit.
+export type FaultOwner = 'server' | 'app' | 'unknown';
+
+export function classifyFault(error: any): FaultOwner {
+  const name = String(error?.name ?? '');
+  const text = `${name} ${String(error?.message ?? error ?? '')}`.toLowerCase();
+
+  // Unmistakably our own code — a programming error, whatever the server did.
+  // Checked FIRST: a JS exception can easily mention a socket in passing.
+  if (/typeerror|referenceerror|rangeerror|syntaxerror/.test(text)
+      || /is not a function|is not an object|undefined is not|null is not/.test(text)
+      || /property '[^']*' doesn'?t exist|cannot read propert/.test(text)) return 'app';
+
+  // ★ React invariant violations are OURS, categorically — no server can cause one.
+  // "Rendered more hooks than during the previous render" shipped as 'unknown', so the
+  // dialog hedged about whether the receiver was at fault when the answer was never in
+  // doubt: a hook had been placed after an early return. Saying "likely us" when we know
+  // it is us is the same failure as blaming the server, just quieter. (2026-07-25.)
+  if (/rendered (more|fewer) hooks|rules of hooks|hooks can only be called/.test(text)
+      || /invalid hook call|maximum update depth|too many re-?renders/.test(text)
+      || /objects are not valid as a react child|element type is invalid/.test(text)) return 'app';
+
+  // Genuine transport or far-end failures.
+  if (/websocket|socket|network request failed|network error|timed ?out|timeout/.test(text)
+      || /econnreset|econnrefused|enotfound|etimedout|dns|tls|ssl|handshake/.test(text)
+      || /connection (closed|lost|refused|reset|failed)|disconnect/.test(text)
+      || /http [45]\d\d/.test(text)) return 'server';
+
+  return 'unknown';
+}
+
+/** Title + body for a recovered crash, attributed honestly. */
+export function faultMessage(error: any, detail: string): { title: string; body: string } {
+  const who = classifyFault(error);
+  const tail = `\n\n(detail: ${detail})`;
+  if (who === 'app') {
+    return {
+      title: 'VibeSDR hit a problem',
+      body: 'Something went wrong inside VibeSDR — this one is ours, not the '
+          + 'server\u2019s. You\u2019ve been returned to the server list. If it keeps '
+          + 'happening, the detail below is what to report.' + tail,
+    };
+  }
+  if (who === 'server') {
+    return {
+      title: 'Server connection lost',
+      body: 'The SDR server stopped responding — SDR servers (OpenWebRX especially) '
+          + 'restart from time to time, and some limit how long you may stay '
+          + 'connected. You\u2019ve been returned to the server list.' + tail,
+    };
+  }
+  return {
+    title: 'Connection ended',
+    body: 'VibeSDR lost the receiver and returned you to the server list. There '
+        + 'isn\u2019t enough detail to say whether that came from the server or from '
+        + 'VibeSDR — if it only happens on one receiver it is likely that server, and '
+        + 'if it happens everywhere it is likely us.' + tail,
+  };
+}
+
 export function installCrashGuard(navRef: NavigationContainerRef<RootStackParamList>): void {
   const EU = (globalThis as any).ErrorUtils;
   if (!EU?.setGlobalHandler) return;
@@ -62,13 +137,8 @@ export function installCrashGuard(navRef: NavigationContainerRef<RootStackParamL
       } catch {}
       setTimeout(() => {
         recovering = false;
-        Alert.alert(
-          'Server connection lost',
-          'The SDR server stopped responding — SDR servers (OpenWebRX especially) '
-          + 'restart from time to time. This is a server issue, not a problem with '
-          + 'VibeSDR. You’ve been returned to the server list.\n\n(detail: '
-          + info.message + ')',
-        );
+        const m = faultMessage(error, info.message);
+        Alert.alert(m.title, m.body);
       }, 350);
     }
 

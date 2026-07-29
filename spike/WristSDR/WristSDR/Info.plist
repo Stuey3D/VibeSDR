@@ -17,9 +17,9 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleDisplayName</key>
-	<string>WristSDR</string>
+	<string>VibeSDR Jr</string>
 	<key>CFBundleName</key>
-	<string>WristSDR</string>
+	<string>VibeSDR Jr</string>
 	<!-- WATCH-ONLY. There is no iPhone app to pair with, and watchOS demands you SAY so:
 	     without WKWatchOnly it insists on a WKCompanionAppBundleIdentifier and refuses the
 	     install outright. WKRunsIndependentlyOfCompanionApp is NOT the same thing — that
@@ -39,9 +39,46 @@
 
 	     This is exactly the kind of thing the spike exists to find: JR needs it, and no
 	     amount of reasoning about AVAudioSession would ever have surfaced it. -->
-	<key>WKBackgroundModes</key>
+	<!-- ★★★ THIS KEY WAS WRONG FOR MONTHS, AND IT LOOKED LIKE A watchOS LIMITATION.
+	     It said WKBackgroundModes=[audio]. That is NOT A VALID VALUE — Apple's list is
+	     workout-processing / self-care / mindfulness / physical-therapy / alarm /
+	     underwater-depth — and an invalid plist value is SILENTLY IGNORED. So the app
+	     never actually held the background-audio entitlement it thought it had.
+	
+	     ★★ WHAT THAT LOOKED LIKE: audio kept playing on the watchOS 26 SIMULATOR when
+	     the crown was pressed, and STOPPED on the real watchOS 27 device. We concluded
+	     watchOS 27 had tightened background audio. It had not — the simulator is just
+	     more permissive about a missing entitlement than the device is. A wrong theory
+	     that fits the evidence perfectly is the expensive kind.
+	
+	     Found only because App Store validation REJECTED the value on the first
+	     TestFlight upload (2026-07-28). Fixing it to the correct iOS-style key gave the
+	     real watch full background audio, crown press and all — Stuart, on hardware.
+	     ★ A single-target watchOS app (WKApplication) uses UIBackgroundModes. -->
+	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+	</array>
+	<!-- Cleartext HTTP/WS. KiwiSDR runs on plain ws://host:8073, the linkfanel Kiwi directory
+	     (rx.linkfanel.net) and the FM-DX directory (servers.fmdx.org) are plain http://, and
+	     OpenWebRX/rtl_tcp are often cleartext too. Without this, watchOS ATS silently blocks
+	     them all — the directory won't load and a connection hangs forever with no error.
+	     Matches the VibeSDR phone app (NSAllowsArbitraryLoads=true). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Your approximate location sorts the SDR server list by distance, nearest first. It stays on your watch.</string>
+	<!-- Local-network + Bonjour: discover VibeServers (your own phone serving its dongle) advertised on the
+	     LAN as _vibesdr._tcp. watchOS silently blocks NWBrowser for undeclared service types, and refuses
+	     LAN access without the usage string. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Finds VibeSDR servers running on your local network so you can connect without typing an address.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_vibesdr._tcp</string>
 	</array>
 </dict>
 </plist>

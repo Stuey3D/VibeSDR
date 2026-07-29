@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- ★★ Jr's bundle id is com.stuey3d.wristsdr, the PHONE's is com.vibesdr.app
+         — two different App IDs. The key-value store is identified by this
+         string, NOT by the bundle id, so both apps must name the SAME one or
+         they get two separate stores and neither ever sees the other's writes.
+         The phone's is the literal below; Jr borrows it deliberately.
+         Requires both App IDs to carry the iCloud capability in the portal. -->
+    <key>com.apple.developer.ubiquity-kvstore-identifier</key>
+    <string>$(TeamIdentifierPrefix)com.vibesdr.app</string>
+  </dict>
+</plist>

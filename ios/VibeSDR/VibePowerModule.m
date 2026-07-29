@@ -6,6 +6,8 @@ RCT_EXTERN_METHOD(startAudioEngine:(NSString *)baseUrl frequency:(NSInteger)freq
 RCT_EXTERN_METHOD(stopAudioEngine)
 RCT_EXTERN_METHOD(startExternalAudio:(nonnull NSNumber *)sampleRate pauseMode:(NSString *)pauseMode)
 RCT_EXTERN_METHOD(pushExternalPcm:(NSString *)base64 sampleRate:(nonnull NSNumber *)sampleRate channels:(nonnull NSNumber *)channels)
+// VibeServer compressed audio — one Opus packet per call. See pushExternalOpus.
+RCT_EXTERN_METHOD(pushExternalOpus:(NSString *)base64 sampleRate:(nonnull NSNumber *)sampleRate channels:(nonnull NSNumber *)channels)
 RCT_EXTERN_METHOD(stopExternalAudio)
 RCT_EXTERN_METHOD(startFmdxAudio:(NSString *)baseUrl)
 RCT_EXTERN_METHOD(stopFmdxAudio)

@@ -16,6 +16,7 @@ import type {
   SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, FmdxState,
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
+import { FMDX_TUNE_LO, FMDX_TUNE_HI } from '../constants/fmBand';
 
 const Vibe = NativeModules.VibePowerModule as {
   startFmdxAudio?: (baseUrl: string) => void;
@@ -26,7 +27,13 @@ const FMDX_CAPS: BackendCapabilities = {
   profiles:       false,
   serverSideZoom: false,   // no waterfall at all
   smeter:         'message',
-  freqRange:      [87_500_000, 108_000_000],   // FM broadcast band (refine from /static_data later)
+  // The receiver's full sweep, NOT the ITU-R1 band. An FM-DX server exposes its
+  // tuning range nowhere machine-readable (see constants/fmBand.ts — it is not in
+  // /static_data, /api or the /text payload), so the old 87.5 floor here was a
+  // guess that locked users out of OIRT, the Japanese band and any server parked
+  // below 87.5. Overshooting an owner's limit is safe: the server drops the
+  // command silently rather than retuning.
+  freqRange:      [FMDX_TUNE_LO, FMDX_TUNE_HI],
   chat:           true,    // /chat WS — vital on a shared tuner ("can I retune?")
   serverNR:       false,
   maxBandwidth:   { default: 100_000, wfm: 100_000 },

@@ -27,6 +27,9 @@ target 'VibeSDR' do
   # VibeSDR local-SDR shim (RTL-TCP) — SDR++ Brown core + shim as a local pod.
   pod 'VibeLocalSDR', :path => '../modules/vibe-local-sdr'
 
+  # iCloud key-value store bridge (favourites, bookmarks, colours, dials).
+  pod 'VibeICloudKVS', :path => '../modules/vibe-icloud-kvs'
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else

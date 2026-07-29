@@ -51,13 +51,36 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
             "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal",
             "VibeVoiceQuery", "VibeVoiceTune", "VibeMdnsFound", "VibeMdnsLost",
-            "VibeNetworkPathChanged", "VibeVolume"]
+            "VibeNetworkPathChanged", "VibeVolume",
+            // Hardware keyboard (see VibeKeyWindow in AppDelegate.swift). Key DOWN and UP
+            // are separate events on purpose: the arrows reuse the tuner keys' press/hold
+            // semantics, and a sweep needs to know when the key was released.
+            "VibeKeyDown", "VibeKeyUp", "VibeScroll"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
 
+  /// The live instance, so the key window (which is not part of the bridge) can emit.
+  /// Weak: the bridge owns the module's lifetime and may recreate it on reload.
+  static weak var shared: VibePowerModule?
+
+  /// Called from VibeKeyWindow. No-ops harmlessly before JS has subscribed.
+  /// ★ `plain` is false when the name was SYNTHESISED — an arrow that came from the `< > - +`
+  /// aliases, or one that only arrived because a modifier was held. The Full Keyboard Access
+  /// detector needs that distinction: those are precisely the WORKAROUNDS for FKA, so counting
+  /// them as evidence that the arrows work would make the feature hide its own diagnosis.
+  static func emitKey(_ name: String, _ key: String, _ plain: Bool = true) {
+    shared?.sendEvent(withName: name, body: ["key": key, "plain": plain])
+  }
+
+  /// Pointer scroll deltas (mouse wheel / trackpad), in points.
+  static func emitScroll(_ dx: Double, _ dy: Double, _ x: Double, _ y: Double) {
+    shared?.sendEvent(withName: "VibeScroll", body: ["dx": dx, "dy": dy, "x": x, "y": y])
+  }
+
   override init() {
     super.init()
+    VibePowerModule.shared = self
     startVoiceObserver()
   }
 
@@ -305,24 +328,89 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       inBuf.frameLength = AVAudioFrameCount(n)
       data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         let s16 = raw.bindMemory(to: Int16.self)
-        if ch2 {
-          let left  = inBuf.floatChannelData![0]
-          let right = inBuf.floatChannelData![1]
-          for i in 0..<n {
-            left[i]  = Float(Int16(littleEndian: s16[i*2]))   / 32768.0
-            right[i] = Float(Int16(littleEndian: s16[i*2+1])) / 32768.0
-          }
-        } else {
-          let ch = inBuf.floatChannelData![0]
-          for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
-        }
+        self.fillExternalBuffer(inBuf, from: s16.baseAddress!, frames: n, ch2: ch2)
       }
-      self.packetCount += 1
-      self.lastPacketAt = Date()
-      if let out = self.convertTo48k(inBuf) {
-        if self.recArmed { self.writeRecording(out) }   // OWRX/external audio recording
-        self.scheduleOut(out)
+      self.playExternalBuffer(inBuf)
+    }
+  }
+
+  /// Interleaved little-endian Int16 → the buffer's float channels. Shared by the
+  /// RAW and OPUS external paths so both handle stereo identically.
+  private func fillExternalBuffer(_ inBuf: AVAudioPCMBuffer,
+                                  from s16: UnsafePointer<Int16>, frames n: Int, ch2: Bool) {
+    if ch2 {
+      let left  = inBuf.floatChannelData![0]
+      let right = inBuf.floatChannelData![1]
+      for i in 0..<n {
+        left[i]  = Float(Int16(littleEndian: s16[i*2]))   / 32768.0
+        right[i] = Float(Int16(littleEndian: s16[i*2+1])) / 32768.0
       }
+    } else {
+      let ch = inBuf.floatChannelData![0]
+      for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
+    }
+  }
+
+  private func playExternalBuffer(_ inBuf: AVAudioPCMBuffer) {
+    packetCount += 1
+    lastPacketAt = Date()
+    if let out = convertTo48k(inBuf) {
+      if recArmed { writeRecording(out) }   // OWRX/external audio recording
+      scheduleOut(out)
+    }
+  }
+
+  // ── VibeServer COMPRESSED audio (Opus) on the external path ────────────────
+  //
+  // ★★ WHY THIS EXISTS. The phone opened /ws/audio with NO `codec` parameter, so
+  // VibeServer fell back to raw PCM — and 48 kHz × 2 ch × 2 bytes is 187 KB/s,
+  // measured on the wire as 186. The spectrum beside it was 8 KB/s. Worse, the
+  // shim sends both sockets under ONE blocking send mutex, so that torrent
+  // starved the spectrum emitter and the server delivered ~58% of its configured
+  // frame rate — which the phone's link controller then correctly read as a bad
+  // link and throttled itself over. An entire afternoon of "the rate controller
+  // is broken" was this.
+  //
+  // ★ The decoder was already here (the UberSDR path uses one), and the JS side
+  // already crosses the bridge once per audio frame with base64 PCM — so sending
+  // base64 OPUS instead is roughly 20x LESS bridge traffic, not more.
+  //
+  // Its own decoder instance, deliberately: the UberSDR path's decoder carries
+  // its own rate/channel state and that path stays exactly as-is.
+  private var extOpusDec:  OpaquePointer?
+  private var extOpusRate: Int32 = 0
+  private var extOpusCh:   Int32 = 0
+
+  @objc func pushExternalOpus(_ base64: String, sampleRate: NSNumber, channels: NSNumber) {
+    guard externalAudio, !isMuted,
+          let pkt = Data(base64Encoded: base64), pkt.count >= 3 else { return }
+    let sr = Int32(max(8000, sampleRate.intValue))
+    let ch = Int32(channels.intValue == 2 ? 2 : 1)
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      if self.extOpusDec == nil || self.extOpusRate != sr || self.extOpusCh != ch {
+        if let d = self.extOpusDec { opus_decoder_destroy(d) }
+        var err: Int32 = 0
+        self.extOpusDec = opus_decoder_create(sr, ch, &err)
+        self.extOpusRate = sr; self.extOpusCh = ch
+        NSLog("[VibePowerModule] ext opus decoder sr=%d ch=%d err=%d", sr, ch, err)
+      }
+      guard let dec = self.extOpusDec else { return }
+      var pcm16 = [Int16](repeating: 0, count: Int(self.FRAME_SIZE) * Int(ch))
+      let frames = pkt.withUnsafeBytes { raw -> Int32 in
+        opus_decode(dec, raw.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    Int32(pkt.count), &pcm16, self.FRAME_SIZE, 0)
+      }
+      guard frames > 0,
+            let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr),
+                                      channels: ch == 2 ? self.ENGINE_CH : 1, interleaved: false),
+            let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt,
+                                         frameCapacity: AVAudioFrameCount(frames)) else { return }
+      inBuf.frameLength = AVAudioFrameCount(frames)
+      pcm16.withUnsafeBufferPointer { bp in
+        self.fillExternalBuffer(inBuf, from: bp.baseAddress!, frames: Int(frames), ch2: ch == 2)
+      }
+      self.playExternalBuffer(inBuf)
     }
   }
 
@@ -1785,6 +1873,20 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // logo while playing, a muted-speaker glyph + minutes-to-disconnect while
   // muted, a disconnected glyph once the data saver has dropped the stream.
   private var lastArtworkKey = ""
+  /// Draw an image centred in `rect`, PRESERVING ITS ASPECT RATIO.
+  ///
+  /// ★ Drawing straight into a square `rect` stretched every non-square mark. The FM-DX
+  /// logo is 163x84 (~1.94:1), so its ring was squashed into an ellipse — and that same
+  /// stretch was most of the blur too, since it scaled 84px up to 162px vertically. OWRX
+  /// (601x512) was subtly squashed for the same reason. Fitting fixes the shape AND leaves
+  /// the scale near 1:1, so it costs nothing and there is no reason to draw any other way.
+  private func drawAspectFit(_ img: UIImage, in rect: CGRect) {
+    guard img.size.width > 0, img.size.height > 0 else { return }
+    let s = min(rect.width / img.size.width, rect.height / img.size.height)
+    let w = img.size.width * s, h = img.size.height * s
+    img.draw(in: CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+  }
+
   private func refreshArtwork() {
     guard let base = UIImage(named: "artwork_base") else { return }
     let key = reconnectFailed ? "fail"
@@ -1816,11 +1918,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         icon.withTintColor(amber, renderingMode: .alwaysOriginal).draw(in: rect)
       } else if npArtworkType == "fmdx", let icon = UIImage(named: "logo_fmdx") {
         // FM-DX brand mark (green, already coloured) centred on the album base.
-        let side = min(rect.width, rect.height) * 0.9
-        let box = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
-        icon.draw(in: box)
+        drawAspectFit(icon, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05))
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
-        overlay.draw(in: rect)
+        drawAspectFit(overlay, in: rect)
       }
       // FM-DX: inlay the resolved station logo bottom-LEFT (mirrors the FM-DX
       // mark bottom-right). Aspect-fit onto a rounded dark tile so any favicon reads.

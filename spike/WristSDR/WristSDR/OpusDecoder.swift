@@ -12,6 +12,32 @@ import Foundation
 ///   [13:17] float32 LE baseband power
 ///   [17:21] float32 LE noise density
 ///   [21:]   Opus payload
+#if targetEnvironment(simulator)
+/// SIMULATOR STUB — layout testing only.
+///
+/// `opus/libopus.a` is a watchOS DEVICE slice (arm64) with no simulator slice, and the opus source
+/// is not committed, so a simulator build cannot link the real decoder. Rather than carry a second
+/// prebuilt library just to check layouts, stand in a decoder that returns nothing.
+///
+/// ONLY OPUS IS LOST — which is less than it sounds. FM-DX ships MP3 (`FmdxMp3Decoder`) and Kiwi
+/// ships IMA-ADPCM (`ImaAdpcm`), both pure Swift, so those backends have working AUDIO in the
+/// simulator. It is UberSDR and VibeServer (Opus) that go quiet. Confirmed 2026-07-19: FM-DX audio
+/// plays in the simulator with this stub in place.
+///
+/// That makes the simulator a near-complete test environment, and worth having for the one thing an
+/// Ultra on the wrist cannot show: how the UI lays out on the SMALLEST supported watch. Small screens
+/// are this project's proven blind spot — see the v9.0.2 CONTINUE bug, and the two layout bugs plus
+/// the coach-crown bug this simulator found within an hour of existing.
+///
+/// If real audio in the simulator is ever wanted, build a watchsimulator slice with
+/// `tools/build_opus_watchos.sh` (adapted for the simulator SDK) and delete this.
+final class OpusDecoder {
+  private(set) var sampleRate: Int32 = 0
+  private(set) var channels: Int32 = 0
+  func decode(_ packet: Data) -> (pcm: [Int16], rate: Int32, channels: Int32)? { nil }
+  func decodeRaw(_ packet: Data, rate: Int32, ch: Int32) -> [Int16]? { nil }
+}
+#else
 final class OpusDecoder {
   private var dec: OpaquePointer?
   private(set) var sampleRate: Int32 = 0
@@ -65,4 +91,25 @@ final class OpusDecoder {
     let total = Int(n) * Int(channels)
     return (Array(pcm[0..<total]), sampleRate, channels)
   }
+
+  /// Decode a RAW Opus packet (no UberSDR 21-byte header) with an EXPLICIT rate + channels — for
+  /// the VibeServer /ws/audio format-3 path, whose framing ([0]=ch [1]=3 [2..5]=rate, then the
+  /// packet) differs from UberSDR's. Same decoder instance/state as decode(); a connection is
+  /// either VibeServer or real UberSDR, never both.
+  func decodeRaw(_ packet: Data, rate: Int32, ch: Int32) -> [Int16]? {
+    guard ch == 1 || ch == 2, !packet.isEmpty else { return nil }
+    ensure(rate: rate, ch: ch)
+    guard let d = dec else { return nil }
+    let maxPerChannel = Int32(pcm.count / Int(channels))
+    let n: Int32 = packet.withUnsafeBytes { raw -> Int32 in
+      guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return -1 }
+      return pcm.withUnsafeMutableBufferPointer { out -> Int32 in
+        guard let dst = out.baseAddress else { return -1 }
+        return opus_decode(d, base, Int32(packet.count), dst, maxPerChannel, 0)
+      }
+    }
+    guard n > 0 else { return nil }
+    return Array(pcm[0..<(Int(n) * Int(channels))])
+  }
 }
+#endif

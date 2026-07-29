@@ -10,6 +10,7 @@
  * needed), NOT where the flight departed: a Ryanair 737 is Irish wherever it took off
  * from. That's what makes it worth showing — it's how you spot the unusual visitor.
  */
+import type React from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useMemo } from 'react';
 import type { Aircraft } from '../services/SDRBackend';
@@ -39,7 +40,12 @@ function title(a: Aircraft): string {
   return a.flight?.trim() || a.reg?.trim() || a.icao.toUpperCase();
 }
 
-export default function AircraftPanel({ aircraft }: { aircraft: Aircraft[] }) {
+export default function AircraftPanel({ aircraft, scrollRef }: {
+  aircraft: Aircraft[];
+  /** ★ Exposed so the decoder box can scroll this list from the keyboard — the table is the
+   *  whole point of ADS-B, so it has to be reachable without a finger. */
+  scrollRef?: React.RefObject<ScrollView | null>;
+}) {
   const { theme } = useTheme();
   const s = useMemo(() => styles(theme), [theme]);
 
@@ -54,7 +60,7 @@ export default function AircraftPanel({ aircraft }: { aircraft: Aircraft[] }) {
 
   return (
     <View style={s.wrap}>
-      <ScrollView>
+      <ScrollView ref={scrollRef as any}>
         {rows.map((a) => {
           const climbing = a.vspeed != null && Math.abs(a.vspeed) >= 100;
           return (
@@ -84,7 +90,7 @@ export default function AircraftPanel({ aircraft }: { aircraft: Aircraft[] }) {
 
               <View style={s.distCol}>
                 <Text style={s.dist} numberOfLines={1}>
-                  {a.distKm != null ? `${a.distKm} km` : '—'}
+                  {a.distKm != null ? `${Math.round(a.distKm)} km` : '—'}
                 </Text>
                 <Text style={s.sub} numberOfLines={1}>
                   {a.bearing != null ? COMPASS[Math.round(a.bearing / 45) % 8] : ''}

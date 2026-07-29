@@ -1,5 +1,0 @@
----
-triple:          'arm64-apple-darwin'
-binary-path:     '/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Products/Release-watchos/WristSDR.app/WristSDR'
-relocations:     []
-...

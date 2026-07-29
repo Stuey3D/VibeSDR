@@ -8,8 +8,9 @@
 
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode } from './spectrum';
 import { AudioPlayer } from './audio';
-import { Waterfall } from './waterfall';
-import { resolveAuth, withAuth, type AuthState } from './auth';
+import { Waterfall, setRenderScale, renderDpr } from './waterfall';
+import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken,
+         type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 
@@ -41,6 +42,11 @@ import {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+// ★ NO FM-DX. It briefly sat next to WFM, widening the channel filter to recover RDS subcarrier
+// amplitude — and measured TEN dB worse for RDS signal-to-noise on a narrow-band radio, which
+// Stuart caught in one A/B on a strong local (scatter 16% -> 39%, block sync lost, 2026-07-27).
+// The useful half — the noise-corrected deviation readout — now switches itself on whenever the
+// Advanced RDS analyser is open, so there is nothing left for a mode to do.
 const MODES: SDRMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl'];
 const LS_SERVERS = 'vibesdr_web_servers_v1';   // { "host:port": pin }
 const LS_PREFS   = 'vibesdr_web_prefs_v1';
@@ -109,12 +115,66 @@ function initSplash() {
   }
   if (saved[hostEl.value]) pinEl.value = saved[hostEl.value];
 
+  // ★★ ADMIN AT THE GATE. Reveals the password field and turns CONNECT into an admin connect.
+  //    A second press hides it again, so it cannot be left armed by accident.
+  const adminRowEl = $('gateAdminRow');
+  const adminPwEl  = $<HTMLInputElement>('gateAdminPw');
+  /** Set once the operator has been told they would be displacing a listener. */
+  let adminConfirmed = false;
+  $('btnAdmin').addEventListener('click', () => {
+    const showing = !adminRowEl.hidden;
+    adminRowEl.hidden = showing;
+    $('btnAdmin').textContent = showing ? 'ADMIN' : 'CANCEL ADMIN';
+    adminConfirmed = false;
+    if (showing) adminPwEl.value = ''; else adminPwEl.focus();
+    msg.textContent = showing ? '' : 'Connecting as admin: no time limit, all controls unlocked.';
+    msg.className = showing ? '' : 'info';
+  });
+
   const go = async (remember: boolean) => {
     const host = hostEl.value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
     const pin = pinEl.value.trim();
     if (!host) { msg.textContent = 'Enter a server address'; return; }
     msg.className = 'info';
     msg.textContent = 'Connecting…';
+    // ★ Resolve the admin credentials BEFORE connect(), which picks them up from sessionStorage
+    //   and folds them into the auth query so they ride BOTH sockets — same path the IN USE
+    //   recovery uses, so there is one mechanism and one place for it to be wrong.
+    if (!adminRowEl.hidden && adminPwEl.value) {
+      // ★★★ AN ADMIN MUST NOT BOOT SOMEONE WITHOUT KNOWING IT (Stuart, 2026-07-28): "some admins
+      // may be kind and let a user keep a session for longer". Connecting as admin CLAIMS the
+      // slot, so on an occupied receiver it silently disconnects whoever is listening. Ask first,
+      // and say who is there and how long they have left — the operator can then choose to wait.
+      // ★ On a FREE receiver there is nobody to displace, so there is nothing to confirm and the
+      //   admin goes straight in. The prompt only exists where there is a cost.
+      if (!adminConfirmed) {
+        let busy = false, freeIn = -1;
+        try {
+          const r = await fetch(`http://${host}/vibeserver.json`, { cache: 'no-store' });
+          const j = await r.json();
+          busy = j.busy === true;
+          freeIn = typeof j.freeInSec === 'number' ? j.freeInSec : -1;
+        } catch { /* unreachable is reported by connect() below */ }
+        if (busy) {
+          adminConfirmed = true;
+          const mins = freeIn > 0 ? Math.max(1, Math.round(freeIn / 60)) : 0;
+          msg.className = '';
+          msg.innerHTML = 'Someone is listening on this receiver'
+            + (mins ? ` — they have about ${mins} minute${mins === 1 ? '' : 's'} left.` : '.')
+            + '<br><br>Connecting as admin will <b>disconnect them</b>.'
+            + ' Press CONNECT again to take over, or wait for them to finish.';
+          $<HTMLButtonElement>('btnConnect').disabled = false;
+          $<HTMLButtonElement>('btnSaveConnect').disabled = false;
+          return;
+        }
+      }
+      const q = await resolveAdminOverride(`http://${host}`, adminPwEl.value).catch(() => '');
+      if (!q) {
+        msg.className = ''; msg.textContent = 'This server cannot be given an admin password.';
+        return;
+      }
+      sessionStorage.setItem('vsAdminOverride', q);
+    }
     $<HTMLButtonElement>('btnConnect').disabled = true;
     $<HTMLButtonElement>('btnSaveConnect').disabled = true;
     try {
@@ -141,6 +201,13 @@ function initSplash() {
 
 /** No PIN on this server? Then there is nothing to ask — just START. */
 async function shapeSplash(host: string) {
+  // ★ The ADMIN button appears only where there is an admin password to enter. `admin` comes
+  //   from /vibeserver.json, which the picker already fetches for every server.
+  try {
+    const ri = await fetch(`http://${host}/vibeserver.json`, { cache: 'no-store' });
+    const ji = await ri.json();
+    if (ji.admin === true) $('btnAdmin').hidden = false;
+  } catch { /* not a VibeServer, or unreachable — leave the button hidden */ }
   try {
     const r = await fetch(`http://${host}/vibeserver/auth`, { cache: 'no-store' });
     const j = await r.json();
@@ -167,6 +234,121 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+// ── Audio codec policy ────────────────────────────────────────────────────────
+// The operator's setting and OUR OWN position relative to the server, both from
+// /vibeserver.json. Read once at connect, because the codec is a query parameter on the
+// audio socket's URL and so has to be decided before that socket exists.
+type UncompressedPolicy = 'off' | 'choice' | 'compat';
+let srvUncompressed: UncompressedPolicy = 'off';
+let srvLocal = false;
+// ★ Does this server have an admin password at all? Only then is there anything to unlock.
+let srvAdminProtected = false;
+let adminUnlocked = false;
+const RAW_AUDIO_KEY = 'vibesdr.rawAudio';
+
+function prefersRawAudio(): boolean {
+  try { return localStorage.getItem(RAW_AUDIO_KEY) === '1'; } catch { return false; }
+}
+function setPrefersRawAudio(on: boolean) {
+  try { localStorage.setItem(RAW_AUDIO_KEY, on ? '1' : '0'); } catch { /* private mode */ }
+}
+
+async function loadAudioPolicy(httpBase: string) {
+  // ★ Defaults stand if this fails. An older VibeServer has no such fields and a
+  // non-VibeServer has no such endpoint — both should leave us on Opus rather than
+  // guessing our way into 187 KB/s of someone else's uplink.
+  srvUncompressed = 'off';
+  srvLocal = false;
+  try {
+    const r = await fetch(`${httpBase}/vibeserver.json`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.uncompressed === 'choice' || j.uncompressed === 'compat' || j.uncompressed === 'off')
+      srvUncompressed = j.uncompressed;
+    srvLocal = j.local === true;
+    srvAdminProtected = j.admin === true;
+  } catch { /* leave the safe defaults */ }
+}
+
+/** ★ HIDDEN, not disabled, unless the operator opened it to listeners. An inert control still
+ *  reads as an offer, and this one costs someone else 187 KB/s. Also hidden on loopback, where
+ *  raw is unconditional and there is no choice left to present. */
+/** ★ Protected controls: visibly locked, not missing. A listener who cannot find bias-T
+ *  concludes the app lacks it; one who sees it greyed with a reason understands the operator
+ *  made a choice — and knows there is a way in if the receiver is theirs. */
+function refreshAdminRow() {
+  const show = srvAdminProtected;
+  const row = document.getElementById('adminRow');
+  const note = document.getElementById('adminNote');
+  if (row) row.hidden = !show;
+  if (note) note.hidden = !show || adminUnlocked;
+  const btn = document.getElementById('adminUnlock');
+  if (btn) {
+    btn.textContent = adminUnlocked ? 'UNLOCKED' : 'UNLOCK';
+    btn.classList.toggle('on', adminUnlocked);
+  }
+  // The protected controls themselves. Disabled while locked, and left alone entirely on a
+  // server with no admin password so nothing changes for the vast majority of hosts.
+  const locked = show && !adminUnlocked;
+  // ★ Buttons AND range inputs. bias-T is a .btn on the RSP panel and an <input> on the
+  // dongle one, so both shapes have to be handled or one radio's control stays live.
+  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb', 'rspBiasT']) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (!el) continue;
+    el.disabled = locked;
+    const rowEl = el.closest('.mrow') as HTMLElement | null;
+    if (rowEl) rowEl.style.opacity = locked ? '0.45' : '1';
+  }
+}
+
+/** ★★ WIRED UP AT LAST. `doAdminUnlock` existed and NOTHING EVER CALLED IT — the UNLOCK button
+ *  only ever had its label set, so pressing it did precisely nothing (Stuart, 2026-07-27).
+ *  ★ A control that is drawn, enabled and inert is worse than a missing one: the user concludes
+ *  the feature is broken rather than absent, and there is nothing on screen to contradict them. */
+function initAdminUnlock() {
+  const btn = document.getElementById('adminUnlock');
+  const row = document.getElementById('adminPwRow');
+  const inp = document.getElementById('adminPwInput') as HTMLInputElement | null;
+  btn?.addEventListener('click', () => {
+    if (adminUnlocked) return;
+    if (!row) return;
+    row.hidden = !row.hidden;          // second press hides it again
+    if (!row.hidden) inp?.focus();
+  });
+  const go = () => { const v = inp?.value ?? ''; if (v) void doAdminUnlock(v); };
+  document.getElementById('adminPwGo')?.addEventListener('click', go);
+  inp?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') go(); });
+}
+
+async function doAdminUnlock(pw: string) {
+  if (adminUnlocked || !pw) return;
+  try {
+    // ★ The same challenge-response the PIN uses, and the same nonce endpoint. The password
+    // never crosses the wire, and reusing the scheme means it inherits the server's existing
+    // brute-force lockout rather than needing its own.
+    const ch = await fetchAuthChallenge(`http://${currentHost}`);
+    const nonce = ch.nonce;
+    if (!nonce) { alert('This server did not offer a challenge.'); return; }
+    spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
+  } catch (e) {
+    alert(`Could not reach the server to unlock: ${(e as Error).message}`);
+  }
+}
+
+function refreshRawAudioRow() {
+  const show = srvUncompressed === 'choice' && !srvLocal;
+  const row = document.getElementById('rawAudioRow');
+  const note = document.getElementById('rawAudioNote');
+  const btn = document.getElementById('rawAudio');
+  if (row) row.hidden = !show;
+  if (note) note.hidden = !show;
+  if (btn) {
+    const on = prefersRawAudio();
+    btn.textContent = on ? 'ON' : 'OFF';
+    btn.classList.toggle('on', on);
+  }
+}
+
 async function connect(host: string, pin: string) {
   currentHost = host;
   const httpBase = `http://${host}`;
@@ -186,8 +368,57 @@ async function connect(host: string, pin: string) {
     throw e;
   }
 
-  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + uuid() + '&mode=binary8', auth)}`;
-  const audioUrl = `${wsBase}${withAuth('/ws/audio', auth)}`;
+  // ★★ ADMIN OVERRIDE, stashed by the IN USE screen before it reloaded. Folded into the auth
+  // query so it rides BOTH sockets, exactly like the PIN — the spectrum socket claims the slot
+  // and the audio socket must be recognised as the same occupant.
+  // ★ CONSUMED, not kept: removed the moment it is used, so it applies to this connect attempt
+  // and is not silently replayed on every future reload of the tab.
+  {
+    const ov = sessionStorage.getItem('vsAdminOverride');
+    if (ov) {
+      sessionStorage.removeItem('vsAdminOverride');
+      auth = { ...auth, query: auth.query ? `${auth.query}&${ov}` : ov };
+    }
+  }
+
+  // ★ ONE session id, on BOTH sockets. The server treats a session as a single occupant, and a
+  // browser opens two sockets (spectrum + audio) — without a shared id the audio socket looks like
+  // a different client and the occupancy check would reject a client's own audio. Two browsers or
+  // two devices get two ids, which is exactly what we want to keep apart.
+  const sid = uuid();
+  // ★ Bins = the waterfall's DISPLAY width, not its resolution. The server maps
+  // its fine 4096-point FFT onto whatever we ask for, scaled to the ZOOMED span
+  // (onSpectrum's `step`, peak-held) — so sharpness still improves as you zoom
+  // in, at constant bandwidth. 1024 matches UberSDR's native frame width, which
+  // every other VibeSDR surface already renders.
+  //
+  // ★ Safe for the fixed-ring waterfall: ensureRing() only reallocates when the
+  // COLUMN count changes, and that is fixed at connect — a window resize still
+  // just shows more/fewer rows, so history survives a drag exactly as before.
+  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024', auth)}`;
+  // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
+  // heavier, but it just works. The native apps always have Opus; this gate is purely for the
+  // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
+  // ★★ …unless we would rather have the RAW stream. Opus at 64 kbps is not transparent:
+  // HansVanEijsden (FMDX.org) named the codec by ear on first listen (2026-07-27), and for
+  // a DXer straining to pull a station out of the noise, compression artefacts are exactly
+  // the thing they are trying to listen past.
+  //   • On LOOPBACK we always take raw. The only argument for compressing is bandwidth, and
+  //     the host's own browser spends none — so there is nothing to trade against quality.
+  //   • Over a network it is the operator's call (see VsUncompressedAudio): "choice" puts a
+  //     switch in the audio menu, anything else leaves us on Opus.
+  // ★ `?opus` forces Opus even on loopback. Without it the Opus path would be untestable on
+  // the Mac dev loop, which is where it is developed — a default that hides a code path from
+  // the only machine that exercises it is how that path rots.
+  await loadAudioPolicy(httpBase);
+  const forceOpus = new URLSearchParams(location.search).has('opus');
+  const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
+  const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
+  const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  console.info(wantOpus ? '[audio] requesting Opus (WebCodecs supported)'
+                        : `[audio] requesting uncompressed (${srvLocal ? 'loopback' : 'listener choice'})`);
+  refreshRawAudioRow();   // the policy is only known now, and the panel may already be built
+  refreshAdminRow();
 
   // The shim only rejects a bad PIN at WS-upgrade time (401), so surface that
   // as a splash error rather than silently retrying forever.
@@ -223,6 +454,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       noteFrame();
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
+      updateRangeGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
       // Drop stale waterfall history when the new window shares no frequency with
@@ -241,12 +473,111 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         // before; otherwise park the VFO at the view centre.
         const last = lastTuned();
         spec!.frequency = last?.hz ?? cfg.centerFreq;
-        setMode(last?.mode ?? spec!.mode, !!last);
+        // Server's mode wins over the client's built-in default on a fresh visit — the owner can
+        // set the starting demodulator, and defaulting to nfm showed the wrong mode + a thin NFM
+        // passband until the user clicked. A remembered session still wins over both.
+        const initialMode = (last?.mode ?? cfg.serverMode ?? spec!.mode) as SDRMode;
+        setMode(initialMode, !!last);
         renderFreq();
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
       }
     },
-    onHwInfo: (gains, rates, locked) => { hwGains = gains; hwRates = rates; hwLockedRate = locked; populateHw(); },
+    onSummon: () => onSummoned(),
+    onBusy: () => showBusy(),
+    onEvicted: () => showEvicted(),
+    onSessionEnded: (cd) => showSessionEnded(cd),
+    onCooldown: (secs) => showCooldown(secs),
+    onSessionWarning: (secs) => setTimeLeft(secs),
+    onDevice: (present) => showDeviceBanner(present),
+    onAdmin: (ok, refused) => {
+      if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
+      adminUnlocked = ok;
+      // ★ Never leave the password sitting in the box, whichever way it went.
+      const pwIn = document.getElementById('adminPwInput') as HTMLInputElement | null;
+      if (pwIn) pwIn.value = '';
+      const pwRow = document.getElementById('adminPwRow');
+      if (pwRow) pwRow.hidden = ok;    // wrong password: leave it open to try again
+      if (!ok) setStatus('error', 'admin');
+      refreshAdminRow();
+      if (!ok) alert('That admin password was not accepted.');
+    },
+    // ★★ THE SERVER'S WORD ON ITS OWN DSP. NR and notch are GLOBAL and sticky —
+    // whatever the last listener left is what the radio is doing — so rendering our
+    // saved prefs showed NR OFF while it was audibly ON, and only dragging the
+    // slider resynced it (Stuart, on MW, 2026-07-28). A control that misreports the
+    // radio is worse than a missing one: nothing tells you to look.
+    onDspState: (nr, notch) => {
+      const nrEl = document.getElementById('nr') as HTMLInputElement | null;
+      if (nrEl && (Number(nrEl.value) > 0) !== nr) {
+        // Keep the user's chosen STRENGTH when it is on; 0 is the honest "off".
+        nrEl.value = nr ? String(Math.max(1, Number(prefs()['nr']) || 50)) : '0';
+        nrEl.dispatchEvent(new Event('input'));
+      }
+      const nEl = document.getElementById('notch');
+      if (nEl && nEl.classList.contains('on') !== notch) {
+        nEl.classList.toggle('on', notch);
+        nEl.textContent = notch ? 'ON' : 'OFF';
+      }
+    },
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio) => {
+      hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      applyRadioCaps(radio ?? null);
+      // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
+      // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
+      // a capped server from a failing link, and the difference matters.
+      serverMaxFps = maxFps > 0 ? maxFps : 0;
+      if (serverMaxFps > 0 && spec) spec.setFftRate(wantedFps());
+      // ★ The owner REQUIRES idle saving (a solar/cellular host, where power outranks a listener's
+      // preference). Force it on and lock the control, saying who set it — the same courtesy as a
+      // pinned sample rate. Never leave a switch on screen that we would silently ignore.
+      applyForcedIdle(forceIdle === true);
+      applyRateOptions();
+      populateHw();
+    },
+    onRspStat: (sys, lna, ifgr, overload, settling) => {
+      $('initChip').classList.toggle('set', settling);
+      // Same fact, two places: beside the gain controls where it can be ACTED on, and on the
+      // main screen where it will actually be seen.
+      $('ovlChip').classList.toggle('set', overload);
+      // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
+      // dongle where it has to be guessed from the spectrum.
+      $<HTMLElement>('rspOverload').hidden = !overload;
+      // ★ Show what the radio IS doing, not what the sliders were last set to — with AGC on,
+      // the IF reduction is the AGC's to move, and a stale slider reading would be a lie.
+      $('rspSysGain').textContent = sys > 0 ? `${sys.toFixed(1)} dB` : '—';
+      // ★ Under AGC the slider is the AGC's, so it is greyed and unclickable — but it keeps
+      // MOVING, because watching the loop work is how you tell it is doing its job. Tweened
+      // between updates so it glides rather than hopping.
+      const gr = $<HTMLInputElement>('rspIfGr');
+      const agcOn = $<HTMLButtonElement>('rspIfAgc').classList.contains('on');
+      gr.classList.toggle('agc', agcOn);
+      if (agcOn) {
+        tweenIfGr(ifgr);
+        $('rspIfGrVal').textContent = `${ifgr} dB · AGC`;
+      }
+      // Keep the RF slider honest too if something else moved the state — and RE-RENDER, or
+      // the thumb moves while the label beside it keeps the old number, which reads as the
+      // two disagreeing about the same thing.
+      const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+      const el = $<HTMLInputElement>('rspLna');
+      if (document.activeElement !== el) {
+        el.value = String(lnaMax - lna);
+        renderRspVals();
+      }
+    },
+    onRdsX: (x) => {
+      const now = Date.now();
+      if (grpPrev.at && x.gtot >= grpPrev.tot) {
+        const dt = (now - grpPrev.at) / 1000;
+        if (dt > 0.2) {
+          const inst = (x.gtot - grpPrev.tot) / dt;
+          grpRate = grpRate ? grpRate + 0.3 * (inst - grpRate) : inst;
+          grpPrev = { tot: x.gtot, at: now };
+        }
+      } else grpPrev = { tot: x.gtot, at: now };
+      rdsExt = x;
+      if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
+    },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
       // RDS is the station naming itself — it outranks any bookmark guess.
@@ -266,10 +597,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // country nibble CHECKED against the receiver's own country — a validation, not
       // an assumption. A Spanish station on sporadic-E has a nibble inconsistent with a
       // British receiver, so it resolves to nothing rather than to a wrong flag.
+      rdsPi = m.pi;
+      rdsBer = m.ber;
+      rdsSig = m.sig;
+      rdsEcc = m.ecc || 0;
       rdsIso = m.pi > 0
         ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
         : '';
       if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
+      rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
+      if (rdsPanelOpen()) renderRds();
       updateVts();
     },
     onStatus: (s, detail) => {
@@ -291,7 +628,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // The AudioContext is built after several awaits, so the browser no longer
   // credits it to the Connect click and may leave it suspended. Rather than rely
   // on that chain surviving, always arm a resume on the next real interaction.
-  audio.start().catch((e) => console.error('audio start failed', e));
+  if (NO_AUDIO) console.warn('[bisect] audio disabled by #noaudio');
+  else audio.start().catch((e) => console.error('audio start failed', e));
 
   // PERMANENT resume. Anything that steals focus — a native dialog, a tab switch,
   // the OS — can suspend the AudioContext, and an unsuspend handler that removes
@@ -303,10 +641,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
 
+  // Register the service worker — Chromium will not offer "install" without one. It caches
+  // nothing (see /sw.js); it exists purely to satisfy the installability rule.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* http:// LAN, or unsupported */ });
+  }
+
   buildControls();
   initMediaSession();
-  initDecoders(host, auth);
+  if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
+  else initDecoders(host, auth);
   initIdleThrottle();
+  initAdminUnlock();
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
   requestAnimationFrame(loop);
@@ -327,18 +673,146 @@ let hwLockedRate = 0;
 /** The resolved PIN credentials, kept so bookmark WRITES can carry them. */
 let authState: AuthState | null = null;
 
+/** View signature — the scale and band strip only need redrawing when this changes. */
+let lastViewKey = '';
+
+/**
+ * ★ THE RENDER LOOP IS NOT FREE, AND IT WAS NOT TIED TO ANYTHING.
+ *
+ * It ran at the display's rate — 60 fps — no matter how fast frames actually arrived, so asking
+ * the server for 5 fps saved the SERVER work and saved the client none at all. MEASURED on an M4:
+ * Edge sat at ~40% CPU whether the stream was 20 fps or 5. The cost was never the data; it was
+ * redrawing the canvas sixty times a second, which Chromium does far more expensively than Safari.
+ *
+ * So the render rate now follows the chosen waterfall rate. Three times the frame rate keeps the
+ * interpolated scroll smooth (rows are synthesised onto the render clock, which is what stops it
+ * stepping), floored at 20 so it never looks juddery and capped at 60 so it never exceeds the
+ * display. At 5 fps that is 15 renders a second instead of 60 — the lever the listener actually
+ * wanted when they turned the rate down because their machine was struggling.
+ */
+function renderHz(): number {
+  // The render clock must also keep up with the waterfall's EMIT rate (Speed × dpr pixel rows/sec),
+  // or a high speed on a Retina canvas would out-run the draw loop and the scroll would stall.
+  const emit = wfSpeed * renderDpr();
+  return Math.min(60, Math.max(20, Math.max(wantedFps() * 3, emit)));
+}
+
+let lastRenderAt = 0;
+
+/**
+ * ★ SELF-PROFILER — add #perf to the URL.
+ *
+ * DevTools needs a responsive browser to draw its own timeline, which is exactly what we do not
+ * have on Chromium here. So the page times itself: microseconds around each phase, averaged over a
+ * second, printed to the console and shown in the corner. It works when the profiler cannot, and it
+ * will work the same way on Windows and Android, where we have no debugger at all.
+ *
+ * Off unless asked for — the timing itself is cheap but not free.
+ */
+// Checked LIVE, not captured at load: the hash can be set after the script runs (and we rewrite it
+// ourselves when a summon lands), so a snapshot taken once was fragile. Also switchable by hand
+// from the console — `vibePerf(true)` — for when a URL cannot easily be edited.
+/**
+ * ★ BISECT SWITCHES, for the Chromium cost hunt (BUG-vibeserver-chromium-render.md).
+ *
+ * The self-profiler proved our JS drawing is ~0% of wall on Chromium while the process sits at 38%,
+ * so the cost is somewhere we cannot time from inside a frame. These turn whole subsystems OFF so
+ * the bill can be attributed by subtraction, which is the only tool left:
+ *
+ *   #noaudio  — never start the audio pipeline (WebSocket, worklet, decode)
+ *   #nowf     — never draw the waterfall or spectrum (data still arrives)
+ *   #nodec    — never start the decoder sidecar connection
+ *
+ * Combine freely, e.g. `#perf,noaudio`. Whichever one collapses the CPU names the culprit.
+ */
+const NO_AUDIO = location.hash.includes('noaudio');
+const NO_WF    = location.hash.includes('nowf');
+const NO_DEC   = location.hash.includes('nodec');
+
+let PERF_FORCE: boolean | null = null;
+function isPerf(): boolean {
+  if (PERF_FORCE !== null) return PERF_FORCE;
+  return location.hash.includes('perf') || location.search.includes('perf');
+}
+(window as unknown as { vibePerf: (on?: boolean) => string }).vibePerf = (on = true) => {
+  PERF_FORCE = on;
+  return on ? 'perf overlay ON' : 'perf overlay OFF';
+};
+const perf = { tick: 0, draw: 0, scale: 0, frames: 0, renders: 0 };
+let perfEl: HTMLDivElement | null = null;
+
+function perfReport(secs: number) {
+  if (!isPerf()) return;
+  const n = Math.max(1, perf.renders);
+  // ★ JS HEAP (Chromium only). This is the number that says WHOSE leak it is: if the heap climbs,
+  // it is our objects; if the heap is flat while the process still grows, the growth is in GPU or
+  // canvas memory and no amount of staring at our JS will find it.
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  const heap = mem ? ` · heap ${(mem.usedJSHeapSize / 1048576).toFixed(0)}MB` : '';
+  const line =
+    `renders ${(perf.renders / secs).toFixed(0)}/s · ` +
+    `tick ${(perf.tick / n).toFixed(2)}ms · ` +
+    `draw ${(perf.draw / n).toFixed(2)}ms · ` +
+    `scale ${(perf.scale / n).toFixed(2)}ms · ` +
+    `total ${((perf.tick + perf.draw + perf.scale) / n).toFixed(2)}ms/render · ` +
+    `${(((perf.tick + perf.draw + perf.scale) / (secs * 1000)) * 100).toFixed(0)}% of wall` + heap;
+  console.log('[perf]', line);
+  if (!perfEl) {
+    perfEl = document.createElement('div');
+    perfEl.style.cssText =
+      'position:fixed;left:8px;top:8px;z-index:9999;background:rgba(0,0,0,0.8);color:#ffb833;' +
+      'font:11px ui-monospace,monospace;padding:6px 8px;border:1px solid rgba(255,160,0,0.4);' +
+      'border-radius:6px;pointer-events:none;white-space:pre';
+    document.body.appendChild(perfEl);
+  }
+  perfEl.textContent = line.replace(/ · /g, '\n');
+  perf.tick = perf.draw = perf.scale = perf.renders = 0;
+}
+
 function loop() {
   if (!wf || !spec) return;
+  const nowMs = performance.now();
+  const minGap = 1000 / renderHz() - 1;      // -1ms: never miss a slot to rounding
+  if (nowMs - lastRenderAt < minGap) { requestAnimationFrame(loop); return; }
+  lastRenderAt = nowMs;
+
   wf.vfoHz = spec.frequency;
   updateViewOverlays();
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
   wf.filterLow = spec.bandwidthLow;
   wf.filterHigh = spec.bandwidthHigh;
-  wf.tick();      // synthesise any waterfall lines now due (see Waterfall.tick)
-  wf.draw();
-  drawScale();
-  drawBands();
+  const measuring = isPerf();
+  const t0 = measuring ? performance.now() : 0;
+  if (!NO_WF) wf.tick();   // synthesise any waterfall lines now due (see Waterfall.tick)
+  const t1 = measuring ? performance.now() : 0;
+  if (!NO_WF) wf.draw();
+  const t2 = measuring ? performance.now() : 0;
+
+  // ★ THE SCALE AND BAND STRIP ARE NOT PER-FRAME WORK. Both redraw TEXT — frequency labels, band
+  // names — and both only change when the view does: a tune, a zoom, or a resize. Redrawing them
+  // 60 times a second was pure waste, and expensive waste: text and path rasterisation are the
+  // slowest things a 2D canvas does, and markedly slower on Chromium than on Safari's Core
+  // Graphics. MEASURED on an M4 serving the same page: Edge 38.7% CPU / 89°C against Safari's
+  // 4.9% / 59°C, with Edge driving both the CPU and GPU clocks higher as well.
+  //
+  // So: redraw them only when the view key actually changes. The waterfall itself still draws
+  // every frame — it interpolates rows onto the render clock, which is what makes it scroll
+  // smoothly rather than stepping.
+  // Key on the SAME span/centre drawScale/drawBands actually render from (wf.*), not spec.spanHz():
+  // the two diverge across a sample-rate change, so keying on spec's value left the axis showing a
+  // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
+  // VFO/rf-centre terms so tuning still forces a redraw.
+  const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
+  if (key !== lastViewKey) {
+    lastViewKey = key;
+    drawScale();
+    drawBands();
+  }
+  if (measuring) {
+    const t3 = performance.now();
+    perf.tick += t1 - t0; perf.draw += t2 - t1; perf.scale += t3 - t2; perf.renders++;
+  }
 
   const now = performance.now();
   if (now - lastBytesAt > 1000) {
@@ -347,7 +821,10 @@ function loop() {
     specKbps  = (specBytes / 1024) / secs;
     audioBytes = 0;
     specBytes = 0;
+    framesPerSec = frameCount / secs;
+    frameCount = 0;
     lastBytesAt = now;
+    perfReport(secs);
     updateStatus();
     updateRecTime();
     checkIdle();
@@ -380,7 +857,7 @@ function fmtTick(hz: number, step: number): string {
 
 function drawScale() {
   const c = $<HTMLCanvasElement>('scale');
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = renderDpr();
   const w = Math.round(c.clientWidth * dpr);
   const h = Math.round(c.clientHeight * dpr);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -456,7 +933,7 @@ function ituRegion(): number {
 
 function drawBands() {
   const c = $<HTMLCanvasElement>('bands');
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = renderDpr();
   const w = Math.round(c.clientWidth * dpr);
   const h = Math.round(c.clientHeight * dpr);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -525,6 +1002,37 @@ let rdsName = '';
 let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
+// ★ The frequency the RDS data above belongs to. RDS identifies ONE carrier, so the
+// moment you tune away it is stale — but it used to be cleared only on a MODE change,
+// never on a frequency change, so the name and logo followed you up the band. That was
+// invisible while the OS media card was only refreshed at the instant of tuning; now
+// that the card tracks the station live, a stale name sits there in plain sight.
+let rdsFreq = -1;
+// ★★ PI, kept SEPARATELY from the name — because it survives conditions the name does
+// not. PS is 8 characters assembled across 4 groups, so losing any one of them leaves
+// the name blank; PI is 16 error-protected bits repeated ~11 times a second and
+// confirmed by repetition. On a weak station the PI is very often the ONLY thing that
+// gets through, and it is a complete identification: it is what a database lookup, a
+// learned station and the FM-DX dial are all keyed on. Storing it inside the name meant
+// throwing away a confirmed identity for want of a label (Stuart, 2026-07-26).
+let rdsPi = -1;
+let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
+let rdsSig = -99;   // 57 kHz level vs pilot, dB
+let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
+
+/** Drop RDS state if the dial has moved off the station it came from. */
+function expireRdsIfRetuned() {
+  if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
+  rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+  rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
+  grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
+  rdsFreq = -1;
+}
+
+/** PI as the four hex digits every FM-DXer reads it as, e.g. C06F. */
+function piHex(pi: number): string {
+  return pi > 0 ? pi.toString(16).toUpperCase().padStart(4, '0') : '';
+}
 
 /**
  * Logos for the bookmark LIST, resolved lazily and remembered.
@@ -540,7 +1048,13 @@ const bmLogos = new Map<string, string | null>();
 let logoQuery = '';     // guards against a stale async logo landing late
 
 function updateVts() {
+  expireRdsIfRetuned();
   if (!spec) return;
+  // ★★ The Advanced RDS decoder OWNS the RDS display while it is open — the bar would be
+  // the same data, smaller and less complete. Hidden, not emptied: the media card reads
+  // the name from here, and clearing it would strip the OS Now Playing title (the same
+  // trap as the stale-textContent bug). Only the DRAWING stops.
+  if (rdsPanelOpen()) { $('vts').classList.remove('show', 'on'); return; }
   const hz = spec.frequency;
   // Region-aware, ham before broadcast before utility — the app's VTS ordering.
   const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
@@ -573,10 +1087,32 @@ function updateVts() {
     }
   }
 
-  // Nothing known here — hide it rather than show an empty bar.
+  // ★★ PI ALONE IS AN IDENTIFICATION. Falling back to it before giving up is the whole
+  // point of decoding it separately: on a weak station the name frequently never
+  // assembles while the PI arrives cleanly, and "C06F" tells an FM-DXer exactly which
+  // transmitter they have caught. Showing nothing in that case discards a confirmed
+  // result — which is what made our RDS look far worse than it was, on a signal that
+  // was telling us who it was all along (2026-07-26).
+  if (!name && rdsPi > 0) {
+    name = 'PI ' + piHex(rdsPi);
+    flag = isoToFlag(rdsIso);
+  }
+
+  // Nothing known here — hide it rather than show an empty bar. ★ A confirmed PI counts as
+  // known (see the fallback above); a block-error figure does NOT. Diagnostics belong in the
+  // Advanced RDS decoder, not on the bar an ordinary listener reads (Stuart, 2026-07-26).
   if (!name) {
     vts.classList.remove('show', 'on');
+    // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
+    // element when there is no RDS name, so a stale value left in the DOM came back as
+    // the OS Now Playing title — the old station's name sitting on the card long after
+    // tuning away. Hiding an element does not empty it.
+    $('vtsName').textContent = '';
     setDecBoxOffset();
+    // ...and still republish. This early return used to skip the card update entirely,
+    // so the one case that most needed correcting — tuned onto nothing — was the one
+    // case that never refreshed.
+    updateMediaSession();
     return;
   }
 
@@ -599,13 +1135,46 @@ function updateVts() {
   vts.classList.toggle('rt', showRt);
   if (showRt) requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
 
-  // RDS mark only when the data really IS RDS — not for a bookmark guess.
-  $('vtsRds').classList.toggle('show', !!rdsName);
+  // RDS mark only when the data really IS RDS — not for a bookmark guess. A confirmed
+  // PI counts: it came off the subcarrier exactly as a name does.
+  const haveRds = !!rdsName || rdsPi > 0;
+  const rdsEl = $('vtsRds');
+  rdsEl.classList.toggle('show', haveRds);
+  // ★ Block error rate on the badge, so RDS quality is a NUMBER rather than an opinion.
+  // Errors are counted BEFORE correction, over the last 12 groups (as redsea defines
+  // it), so it describes the link and not how hard the decoder worked — which is the
+  // figure that tells a DXer whether a missing name means a marginal signal or a
+  // decoder that has given up. -1 = not enough data yet, so say nothing.
+  // vtsRds is an IMAGE (the RDS logo), so the error rate goes in its tooltip, not its
+  // text — and on the PI chip, which is where a DXer is already looking.
+  rdsEl.title = rdsBer >= 0
+    ? `Live RDS — block error rate ${rdsBer}% (before correction, last 12 groups)`
+    : 'Live RDS data';
+  // ★ PI ALONGSIDE the name, always, once confirmed — and the BER chip shows even when
+  // NOTHING has decoded, which is the case that most needs explaining. "RDS 42%" says the
+  // decoder is synced and the blocks are damaged; nothing at all says it never synced.
+  // Without that, a blank box means both and neither.
+  const piEl = $('vtsPi');
+  const piTxt = piHex(rdsPi);
+  // ★★ THE CHIP IS THE PI CODE, AND ONLY THE PI CODE. Block error rate and subcarrier level
+  // were shown here while they were being used to diagnose the decoder, and they do not
+  // belong: an FM-DXer wants them, an ordinary listener reads them as clutter beside a
+  // station name. They live in the Advanced RDS decoder, where someone is deliberately
+  // examining signal quality (Stuart, 2026-07-26).
+  // ★ Kept in the TOOLTIP, so the measurement is never further away than a hover — it cost a
+  // whole evening to be able to see these at all.
+  piEl.textContent = piTxt;
+  const diag = [
+    rdsBer >= 0  ? `block error rate ${rdsBer}% (before correction, last 12 groups)` : '',
+    rdsSig > -90 ? `subcarrier ${rdsSig.toFixed(0)} dB vs pilot` : '',
+  ].filter(Boolean).join(' · ');
+  piEl.title = `PI ${piTxt}${diag ? ' — ' + diag : ''}`;
+  piEl.classList.toggle('show', !!piTxt);
   const srcEl = $('vtsSrc');
   // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
   // textContent would print the markup as literal text.
   srcEl.innerHTML = src;
-  srcEl.classList.toggle('show', !!src && !rdsName);
+  srcEl.classList.toggle('show', !!src && !haveRds);
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
   if (logo) {
@@ -618,6 +1187,9 @@ function updateVts() {
   vts.classList.add('show');
   vts.classList.add('on');   // if it's showing at all, we're on the station
   setDecBoxOffset();
+  // The OS card shows the same station identity as this bar, so republish from the same place.
+  // Cheap: updateMediaSession() early-returns unless the station/frequency/mode/art changed.
+  updateMediaSession();
 }
 
 /**
@@ -636,6 +1208,7 @@ async function resolveRdsLogo(name: string, iso: string) {
     if (logoQuery !== key) return;
     rdsLogoUrl = url || '';
     updateVts();
+    updateMediaSession();      // the logo arrives late; the card has to be told
   } catch {
     /* no logo — the monogram-less bar is fine */
   }
@@ -673,7 +1246,7 @@ function drawDbAxis(ctx: CanvasRenderingContext2D, W: number, H: number) {
   const { dbMin, dbMax } = wf.getRange();
   if (!isFinite(dbMin) || !isFinite(dbMax) || dbMax <= dbMin) return;
 
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = renderDpr();
   ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
@@ -738,9 +1311,106 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
 
   $('sigFill').style.width = `${(sigSmooth * 100).toFixed(1)}%`;
   $('sigPeak').style.left = `${(sigPeak * 100).toFixed(1)}%`;
-  $('sigLabel').textContent =
-    `${sigDb.toFixed(0)} dBFS · ${toSUnit(sigDb)} · SNR ${snrSmooth.toFixed(0)} dB`;
+
+  // Feed the squelch control the same live scale and signal the main meter is drawing, so the ball
+  // sits on exactly the level the fill is showing.
+  sqlScaleMin = dbMin; sqlScaleMax = dbMax; sqlSigNorm = sigSmooth;
+  drawSquelchBar(sigDb);
+
+  // SQUELCH NEEDLE. The gate is a dBFS threshold and `sigDb` is dBFS, so the needle maps onto the
+  // bar through exactly the same normalisation as the fill — it lands where the signal would have
+  // to reach to open the gate, which is the only position that means anything.
+  const sqlOn = squelchDb > -100;
+  const sig = $('sig');
+  sig.classList.toggle('sqlOn', sqlOn);
+  if (sqlOn) {
+    const sqlNorm = Math.max(0, Math.min(1, (squelchDb - dbMin) / Math.max(1, dbMax - dbMin)));
+    $('sigSql').style.left = `${(sqlNorm * 100).toFixed(1)}%`;
+    // Compare against the RAW reading, not the smoothed fill: the smoothing has a slow decay, so a
+    // gate that has just closed would keep reading "passing" for most of a second.
+    sig.classList.toggle('sqlClosed', sigDb < squelchDb);
+  } else {
+    sig.classList.remove('sqlClosed');
+  }
+
+  // FIXED-WIDTH fields so the row never shifts as values change length. The S-unit is the worst
+  // offender (S9+18 → S6 is 5→2 chars) and the row is centred, so any length change re-centres the
+  // whole line (Stuart 2026-07-24). Pad each field to its max width and reserve the SQL slot; with
+  // #sigLabel monospace + white-space:pre the line is now constant width.
+  const dbfsStr = `${sigDb.toFixed(0).padStart(4)} dBFS`;   // "-120 dBFS" .. "  -30 dBFS"
+  const suStr   = toSUnit(sigDb).padEnd(5);                 // "S9+60" .. "S6   "
+  const snrStr  = `SNR ${snrSmooth.toFixed(0).padStart(2)} dB`;
+  const sqlStr  = sqlOn && sigDb < squelchDb ? ' · SQL' : '      ';   // reserve the slot either way
+  $('sigLabel').textContent = `${dbfsStr} · ${suStr} · ${snrStr}${sqlStr}`;
 }
+
+/** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
+let squelchDb = -100;
+
+/** Push the current threshold everywhere it is applied. Squelch is a SERVER-side gate, so without
+ *  the spec call the client could not tell a closed gate from a muted tab. */
+function applySquelch(db: number, persist = true) {
+  squelchDb = db;
+  spec?.setSquelch(db);
+  if (audio) audio.squelchDb = db;
+  // The plain slider used to persist under 'squelch'; the restore path still reads that key, so the
+  // bar must keep writing it or a reload loses the setting AND resurrects the false muted-tab
+  // warning. Restore itself passes persist=false — no point rewriting what we just read.
+  if (persist) savePref('squelch', db);
+}
+
+/** Draw the live bar + threshold ball. Called every meter frame with the raw (unsmoothed) signal
+ *  so the red "gated" state is honest — the smoothed fill decays too slowly to judge the gate by. */
+function drawSquelchBar(sigDbRaw: number) {
+  const bar = document.getElementById('sqlBar');
+  if (!bar) return;
+  const on = squelchDb > SQL_OFF;
+  bar.classList.toggle('on', on);
+  const fill = document.getElementById('sqlFill') as HTMLElement | null;
+  if (fill) fill.style.width = `${(Math.max(0, Math.min(1, sqlSigNorm)) * 100).toFixed(1)}%`;
+  const n = document.getElementById('sqlNeedle') as HTMLElement | null;
+  if (on) {
+    const span = Math.max(1, sqlScaleMax - sqlScaleMin);
+    const frac = Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / span));
+    if (n) n.style.left = `${(frac * 100).toFixed(1)}%`;
+    bar.classList.toggle('closed', sigDbRaw < squelchDb);
+  } else {
+    // Park the ball at the left when off — visible and grabbable, so the control is discoverable.
+    if (n) n.style.left = '0%';
+    bar.classList.remove('closed');
+  }
+  const note = document.getElementById('sqlNote');
+  if (note) note.textContent = on
+    ? 'Audio passes only above the ball. The level you set is where it stays — the bar underneath moves with the signal, the threshold does not.'
+    : 'Off — audio always passes. Drag the ball up from the left to set a threshold.';
+}
+
+/** Pointer handling for the squelch bar. Drag anywhere on the bar; drag off the LEFT edge to turn
+ *  squelch off — the same gesture as "no threshold at all", not a separate control to find. */
+function setupSquelchBar() {
+  const bar = document.getElementById('sqlBar');
+  if (!bar) return;
+  const applyFromX = (clientX: number) => {
+    const r = bar.getBoundingClientRect();
+    const frac = (clientX - r.left) / Math.max(1, r.width);
+    if (frac < -0.04) { applySquelch(SQL_OFF); return; }   // off the left edge = OFF
+    const f = Math.max(0, Math.min(1, frac));
+    applySquelch(Math.round(sqlScaleMin + f * (sqlScaleMax - sqlScaleMin)));
+  };
+  let dragging = false;
+  const down = (e: PointerEvent) => { dragging = true; bar.setPointerCapture(e.pointerId); applyFromX(e.clientX); e.preventDefault(); };
+  const move = (e: PointerEvent) => { if (dragging) { applyFromX(e.clientX); e.preventDefault(); } };
+  const up   = (e: PointerEvent) => { dragging = false; try { bar.releasePointerCapture(e.pointerId); } catch {} };
+  bar.addEventListener('pointerdown', down);
+  bar.addEventListener('pointermove', move);
+  bar.addEventListener('pointerup', up);
+  bar.addEventListener('pointercancel', up);
+}
+/** The live meter scale, updated each frame — the squelch bar drag maps pointer x through it. */
+let sqlScaleMin = -100, sqlScaleMax = -20;
+/** The last smoothed signal fraction (0..1), so the bar can colour the fill red when gated. */
+let sqlSigNorm = 0;
+const SQL_OFF = -100;
 
 /** dBFS -> S-unit, 6 dB per unit (lifted from the skin's _toSUnit ladder). */
 function toSUnit(dbfs: number): string {
@@ -778,9 +1448,14 @@ function setStatus(s: string, detail?: string) {
 let lastFrameAt = 0;
 let linkQ: 0 | 1 | 2 | 3 = 0;
 
+/** Spectrum frames counted in the current 1s window, and the last completed count. */
+let frameCount = 0;
+let framesPerSec = 0;
+
 function noteFrame() {
+  frameCount++;
   const now = performance.now();
-  const expected = 1000 / (throttled ? IDLE_FPS : ACTIVE_FPS);
+  const expected = 1000 / Math.max(1, wantedFps());   // judge against what we ASKED for
   if (lastFrameAt) {
     const gap = now - lastFrameAt;
     if (gap > expected * 3) linkQ = 1;
@@ -794,7 +1469,7 @@ function updateLink() {
   // No frame for a long time = stalled, regardless of what the last gap said.
   if (!spec || !lastFrameAt) linkQ = 0;
   else {
-    const expected = 1000 / (throttled ? IDLE_FPS : ACTIVE_FPS);
+    const expected = 1000 / Math.max(1, wantedFps());
     const since = performance.now() - lastFrameAt;
     if (since > expected * 8) linkQ = 1;
     if (since > 5000) linkQ = 0;
@@ -809,10 +1484,18 @@ function updateStatus() {
   // The SPECTRUM is the bigger half of the link (~74 KB/s vs ~47 for audio), so
   // reporting only the audio understated the real traffic by more than half.
   const total = audioKbps + specKbps;
-  const idle = throttled ? ` · IDLE ${IDLE_FPS}fps` : '';
+  // Just "IDLE" — the fps counter to its left already shows the throttled rate, so "IDLE 5fps"
+  // duplicated it AND ran the row off the right edge (the E of IDLE clipped, Stuart 2026-07-24).
+  const idle = throttled ? ' · IDLE' : '';
   const el = $('status');
-  el.textContent = `${total.toFixed(0)} KB/s · ${rtt.toFixed(0)} ms${idle}`;
-  el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`;
+  // ★ The MEASURED arrival rate, not the rate we asked for. Ask the server for 5 fps and there was
+  // previously nothing to confirm it had happened — nor to show a link failing to deliver what it
+  // promised. Shown to one decimal below 10, because the difference between 4.6 and 5 matters at
+  // the bottom of the ladder and is invisible when rounded.
+  const fps = framesPerSec >= 10 ? framesPerSec.toFixed(0) : framesPerSec.toFixed(1);
+  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${idle}`;
+  el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
+    + ` · asking for ${wantedFps()} fps`;
 
   // Faults go on the METER, not into the status text: a long message there ran
   // off the edge of the screen, and the meter is where you're already looking
@@ -823,16 +1506,23 @@ function updateStatus() {
     case 'suspended': fault = 'AUDIO PAUSED — CLICK THE PAGE'; break;
     case 'no-stream': fault = 'AUDIO DISCONNECTED'; break;
     case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
-    case 'squelched': info  = 'NO AUDIO — SQUELCH ENABLED'; break;
+    // Squelch is NOT a fault and no longer takes an overlay — the message clipped inside the
+    // meter and hid the very bar you watch while waiting for a signal. It shows as the breathing
+    // SQL chip beside the link bars instead (below).
   }
   // A fault replaces the meter and pulses, to grab attention. Squelch does neither:
   // it is expected behaviour, and the meter is exactly what you want to watch while
   // waiting for a signal to break the threshold.
   $('sig').classList.toggle('fault', !!fault);
-  $('sig').classList.toggle('squelched', !fault && !!info);
-  $('sigFault').textContent = fault || info;
-  $('sigFault').classList.toggle('show', !!fault || !!info);
-  $('sigFault').classList.toggle('info', !fault && !!info);
+  $('sigFault').textContent = fault;
+  $('sigFault').classList.toggle('show', !!fault);
+  $('sigFault').classList.remove('info');
+
+  // SQL chip: shown whenever squelch is armed, BREATHING RED only while it is actually muting.
+  const chip = $('sqlChip');
+  const sqlArmed = squelchDb > -100;
+  chip.classList.toggle('set', sqlArmed);
+  chip.classList.toggle('muting', audio?.health === 'squelched');
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────
@@ -854,8 +1544,12 @@ function buildControls() {
 
   // No anchor = zoom about the LISTEN VFO: the station you're on stays put and the
   // span closes in around it.
-  $('zoomIn').onclick    = () => { spec!.zoomBy(2); updateViewOverlays(); };
-  $('zoomOut').onclick   = () => { spec!.zoomBy(0.5); updateViewOverlays(); };
+  // A click keeps its familiar octave; a sweep uses a quarter of one, or holding
+  // the key would cross the entire zoom range before you could let go.
+  const zoomStep = (f: number) => () => { spec!.zoomBy(f); updateViewOverlays(); };
+  const OCT = Math.pow(2, 0.25);
+  attachHoldSweep($('zoomIn'),  zoomStep(2),   zoomStep(OCT));
+  attachHoldSweep($('zoomOut'), zoomStep(0.5), zoomStep(1 / OCT));
   $('zoomReset').onclick = () => spec!.resetView();
 
   const lock = $<HTMLButtonElement>('lockBtn');
@@ -995,59 +1689,24 @@ function updateViewOverlays() {
 // and the media keys say something useful.
 
 /**
- * Now Playing artwork — composited exactly as the PHONE does it
- * (VibeStreamService.refreshArtwork): the artwork base, with the RTL-TCP logo
- * inset bottom-right at 30% of the width, 4.5% padding, amber-tinted (#ffb833)
- * on a dark rounded inset. Same two source images, same numbers, so the lock
- * screen looks identical whether you're listening on the phone or in the browser.
+ * Now Playing artwork — the VibeServer mark.
+ *
+ * It used to composite the phone's lock-screen recipe (an artwork base with the RTL-TCP logo
+ * inset, amber-tinted, bottom-right). That is unnecessary here: the VibeServer icon already
+ * carries the family radio glyph AND the triangle-node inset, so there is nothing to add — and
+ * one image cannot half-load the way two could, which is what left Now Playing showing a blank
+ * square. An RDS station logo still overrides this whenever one is known.
  */
 let artworkUrl = '';
 
 function buildArtwork() {
   const base = $<HTMLImageElement>('artBase');
-  const inset = $<HTMLImageElement>('artInset');
-  const make = () => {
+  const use = () => {
     if (!base.naturalWidth) return;
-    const S = 512;
-    const c = document.createElement('canvas');
-    c.width = c.height = S;
-    const ctx = c.getContext('2d')!;
-    ctx.drawImage(base, 0, 0, S, S);
-
-    if (inset.naturalWidth) {
-      const size = S * 0.30;
-      const pad = S * 0.045;
-      const x = S - size - pad;
-      const y = S - size - pad;
-
-      // Dark rounded inset behind the logo, as the app draws it.
-      ctx.fillStyle = 'rgba(12,10,6,0.92)';
-      const r = size * 0.18;
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + size, y, x + size, y + size, r);
-      ctx.arcTo(x + size, y + size, x, y + size, r);
-      ctx.arcTo(x, y + size, x, y, r);
-      ctx.arcTo(x, y, x + size, y, r);
-      ctx.closePath();
-      ctx.fill();
-
-      // The logo is black line art — tint it amber, as the app does.
-      const t = document.createElement('canvas');
-      t.width = t.height = Math.round(size);
-      const tc = t.getContext('2d')!;
-      const p = size * 0.14;
-      tc.drawImage(inset, p, p, size - 2 * p, size - 2 * p);
-      tc.globalCompositeOperation = 'source-in';
-      tc.fillStyle = '#ffb833';
-      tc.fillRect(0, 0, t.width, t.height);
-      ctx.drawImage(t, x, y);
-    }
-    artworkUrl = c.toDataURL('image/png');
+    artworkUrl = base.src;      // already a data: URI, baked in at build time
     updateMediaSession();
   };
-  if (base.complete) make(); else base.onload = make;
-  inset.onload = make;
+  if (base.complete) use(); else base.onload = use;
 }
 
 function initMediaSession() {
@@ -1074,22 +1733,37 @@ function initMediaSession() {
   updateMediaSession();
 }
 
+/** Last metadata actually published, so this is safe to call on every RDS frame. */
+let lastMediaKey = '';
+
 function updateMediaSession() {
   if (!('mediaSession' in navigator) || !spec) return;
+  navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
   const freq = `${(spec.frequency / 1e6).toFixed(3)} MHz`;
   const station = rdsName || $('vtsName').textContent || '';
   // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
   // you're listening on the phone or in the browser. If the station has an RDS
   // logo, prefer that — it's a picture of what you're actually hearing.
   const artSrc = rdsLogoUrl || artworkUrl;
-  if (!artSrc) return;
+  // ★ Publish only on a real change, so this can be called from updateVts() — i.e. on every RDS
+  // frame — without rebuilding MediaMetadata constantly. It USED to be called only when tuning,
+  // which had the effect exactly backwards: the station name and logo arrive SECONDS after the
+  // tune, so the card never showed them, and the next tune published the logo of the station you
+  // were LEAVING. That is the Heart logo flashing into the artwork for a split second on the way
+  // past. (Stuart, 2026-07-25.)
+  const key = `${station}|${freq}|${spec.mode}|${artSrc}`;
+  if (key === lastMediaKey) return;
+  lastMediaKey = key;
+  // Artwork is a BONUS, never a precondition. This used to `return` when artSrc was empty,
+  // which threw away the title and artist too — so a browser that hadn't decoded the baked-in
+  // image yet (or at all) got a blank card rather than a text-only one. Station and frequency
+  // are the parts worth having; publish them either way.
   navigator.mediaSession.metadata = new MediaMetadata({
     title: station && station !== '—' ? station : freq,
     artist: station && station !== '—' ? `${freq} · ${spec.mode.toUpperCase()}` : spec.mode.toUpperCase(),
     album: 'VibeSDR',
-    artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }],
+    ...(artSrc ? { artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }] } : {}),
   });
-  navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
 }
 
 // ── Idle power saving ────────────────────────────────────────────────────────
@@ -1104,26 +1778,278 @@ function updateMediaSession() {
 // you leave it listening and walk away; it's the WATERFALL nobody is watching.
 
 const IDLE_AFTER_MS = 30_000;
-const ACTIVE_FPS = 20;
+/** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps().
+ *  DERIVED from the Speed + Data Rate controls (computeActiveFps); not set directly by the UI. */
+let activeFps = 20;
 const IDLE_FPS = 5;
+
+// ── Waterfall Speed (on-screen scroll) + Data Rate (server frames) ──────────────
+// Two separate axes. SPEED is the interpolated scroll rate (screen rows/sec); DATA RATE is how many
+// real frames/sec the server sends. AUTO data = bring in as much as we'll display, capped at server.
+let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
+let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
+
+/** The server's fps ceiling (its advertised max, else the built-in 20). */
+function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
+
+/** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
+ *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
+function computeActiveFps(): number {
+  return wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate;
+}
+
+/** Apply both controls: recompute the data rate, set the scroll speed, request the rate, refresh UI. */
+function applyWaterfallRates() {
+  activeFps = computeActiveFps();
+  wf?.setSpeed(wfSpeed);
+  spec?.setFftRate(wantedFps());
+  refreshSpeedSeg();
+  refreshDataRateSeg();
+  updateStatus();
+}
+
+/** Speed buttons are filtered to >= the chosen Data Rate (Data 20 hides Speed 10). AUTO shows all. */
+function refreshSpeedSeg() {
+  const seg = document.getElementById('wfSpeedSeg'); if (!seg) return;
+  const minSpeed = wfDataRate > 0 ? wfDataRate : 0;
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
+    const v = Number((b as HTMLButtonElement).dataset.wfspeed);
+    (b as HTMLButtonElement).hidden = v < minSpeed;
+    b.classList.toggle('on', v === wfSpeed);
+  }
+}
+
+/** Data-rate buttons above the server's ceiling are hidden; AUTO (0) is always available. */
+function refreshDataRateSeg() {
+  const seg = document.getElementById('wfRateSeg'); if (!seg) return;
+  const cap = serverFpsCap();
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
+    const v = Number((b as HTMLButtonElement).dataset.wfrate);
+    (b as HTMLButtonElement).hidden = v > cap;   // 0 (AUTO) is never > cap
+    b.classList.toggle('on', v === wfDataRate);
+  }
+}
+/** The owner's cap, from hwinfo. 0 = uncapped. */
+let serverMaxFps = 0;
+/** What we should be asking for right now: our own choice, clamped to the server's ceiling. */
+function wantedFps(): number {
+  const want = throttled ? Math.min(IDLE_FPS, activeFps) : activeFps;
+  return serverMaxFps > 0 ? Math.min(want, serverMaxFps) : want;
+}
+
+// ── "I'm over here" ──────────────────────────────────────────────────────────
+// The menu-bar app raises this tab by setting the URL fragment to #here. Changing only the
+// fragment fires hashchange WITHOUT reloading, so the waterfall, the audio and the tuned frequency
+// all survive being summoned — which is the whole point of finding this tab instead of opening a
+// new one.
+function flashHere() {
+  document.getElementById('hereFlash')?.remove();
+  const el = document.createElement('div');
+  el.id = 'hereFlash';
+  el.addEventListener('animationend', () => el.remove());
+  document.body.appendChild(el);
+  // Leave the URL clean, so a refresh or a bookmark does not carry the summons with it.
+  history.replaceState(null, '', location.pathname + location.search);
+}
+window.addEventListener('hashchange', () => {
+  if (location.hash === '#here') flashHere();
+});
+
+/**
+ * The server has no radio — the dongle was unplugged, or it failed.
+ *
+ * Say so, prominently. The alternative is what actually happened: the page kept serving, the
+ * waterfall went black, the controls still worked, and nothing anywhere explained why. The server
+ * watches for the dongle coming back and resumes on its own, so the message promises exactly that
+ * rather than telling anyone to restart something.
+ */
+function showDeviceBanner(present: boolean) {
+  const id = 'deviceBanner';
+  document.getElementById(id)?.remove();
+  if (present) return;
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText =
+    'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:9500;' +
+    'background:rgba(40,10,0,0.94);color:#ffb833;border:1px solid rgba(255,120,0,0.6);' +
+    'border-radius:8px;padding:10px 16px;font:13px ui-monospace,monospace;text-align:center;' +
+    'box-shadow:0 4px 18px rgba(0,0,0,0.6)';
+  // Promise ONLY what we can deliver. Automatic resume was tried and withdrawn — reopening the
+  // device from the watchdog thread crashed the server (see local_sdr_shim.cpp) — so the message
+  // says what is actually true today rather than what we wish it did.
+  el.innerHTML = 'No radio connected to this server<br>' +
+    '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
+    'Reconnect it and restart VibeServer to resume.</span>';
+  document.body.appendChild(el);
+}
+
+/** The server is already serving another listener. One radio, one occupant, until multi-client
+ *  lands — so say so plainly and STOP (the client already suppressed its auto-reconnect). A full
+ *  overlay, not a toast: nothing else on the page will work, and a dismissable banner would just
+ *  invite the user to sit staring at a dead waterfall. */
+function showBusy() {
+  showRefusal('IN USE',
+    'This server is serving another listener. It handles one at a time.<br><br>' +
+    'Try again in a little while.',
+    // ★ The override box is offered ONLY on the IN USE screen, and only when the server says
+    // it HAS an admin password. Offering it everywhere would invite listeners to try guessing
+    // it, and offering it on a server with no password set is a puzzle with no answer.
+    srvAdminProtected);
+}
+
+/** ★★ TAKE THE RADIO BACK. The owner's escape hatch: their own receiver is busy and they need
+ *  it. Sends a nonce + HMAC on the connect URL, never the password — see resolveAdminOverride.
+ *  ★ A reload is the honest retry: it re-runs the preflight and re-opens both sockets cleanly,
+ *  carrying the override credentials this time. */
+async function doAdminOverride(password: string, status: HTMLElement) {
+  status.textContent = 'checking…';
+  const q = await resolveAdminOverride(location.origin, password);
+  if (!q) { status.textContent = 'this server cannot be overridden'; return; }
+  // Stash for the reload to pick up. sessionStorage, not localStorage: an override is for THIS
+  // visit, and a credential that outlives the tab is a credential left lying around.
+  sessionStorage.setItem('vsAdminOverride', q);
+  location.reload();
+}
+
+/** ★ The owner has taken their radio back. Not a fault, and worth saying so — being dropped
+ *  with no explanation is what makes people assume the software broke. */
+function showEvicted() { showRefusal('TAKEN OVER',
+  'The owner of this receiver has taken control using the admin password.<br><br>' +
+  'You can try again shortly.'); }
+
+/** ★★ The session limit. Say WHY it ended and WHEN they may return — a bare disconnect on a
+ *  public receiver reads as a crash, and the listener blames us rather than understanding they
+ *  had a share of a shared radio. */
+function showSessionEnded(cooldownSec: number) {
+  const m = Math.max(1, Math.round(cooldownSec / 60));
+  showRefusal('TIME UP',
+    'Your session on this shared receiver has ended, so someone else can have a turn.' +
+    `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`);
+}
+
+/** Refused because we came back before our cooldown finished. */
+function showCooldown(secs: number) {
+  const m = Math.max(1, Math.round(secs / 60));
+  showRefusal('PLEASE WAIT',
+    'You have just had a turn on this shared receiver.' +
+    `<br><br>Try again in about ${m} minute${m === 1 ? '' : 's'}.`);
+}
+
+function showRefusal(title: string, bodyHtml: string, offerOverride = false) {
+  const id = 'busyOverlay';
+  if (document.getElementById(id)) return;
+  // ★★★ STOP THE AUDIO SOCKET TOO. It reconnects every 3s on its own (audio.ts:430,
+  // guarded only by `closedByUs`), and the spectrum's `refused` flag does not reach
+  // it — so after a session ended, the audio path kept knocking and got back IN the
+  // moment the cooldown lapsed. The listener sat looking at "TIME UP" while the
+  // station started playing again a few minutes later (Stuart, 2026-07-28).
+  // ★ Every refusal here is TERMINAL, so every socket must be told, not just the one
+  // that received the message.
+  try { audio?.close(); } catch {}
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText =
+    'position:fixed;inset:0;z-index:9800;background:rgba(8,6,1,0.92);' +
+    'display:flex;align-items:center;justify-content:center;text-align:center;' +
+    'font:15px ui-monospace,monospace;color:#ffb833';
+  el.innerHTML =
+    '<div style="max-width:340px;padding:24px"><div style="font-size:20px;letter-spacing:4px;' +
+    `margin-bottom:12px">${title}</div>` +
+    `<div style="opacity:0.8;line-height:1.5">${bodyHtml}</div>` +
+    '<button id="busyRetry" style="margin-top:18px;background:none;border:1px solid rgba(255,180,50,0.5);' +
+    'color:#ffb833;border-radius:6px;padding:8px 18px;font:13px ui-monospace,monospace;cursor:pointer">' +
+    'Try again</button></div>';
+  document.body.appendChild(el);
+  // A reload is the honest retry: it re-runs the /connection preflight and re-opens the sockets
+  // from scratch, so a slot freed in the meantime is picked up cleanly.
+  document.getElementById('busyRetry')?.addEventListener('click', () => location.reload());
+
+  if (offerOverride) {
+    const box = document.createElement('div');
+    box.style.cssText = 'margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,180,50,0.25)';
+    box.innerHTML =
+      '<div style="font-size:11px;opacity:0.65;letter-spacing:1px;margin-bottom:8px">' +
+      'OWNER OF THIS RECEIVER?</div>' +
+      '<input id="ovPw" type="password" placeholder="Admin password" ' +
+      'style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,180,50,0.4);color:#ffb833;' +
+      'border-radius:6px;padding:7px 10px;font:13px ui-monospace,monospace;width:190px">' +
+      '<button id="ovGo" style="margin-left:8px;background:none;border:1px solid rgba(255,180,50,0.5);' +
+      'color:#ffb833;border-radius:6px;padding:7px 14px;font:13px ui-monospace,monospace;cursor:pointer">' +
+      'Take over</button>' +
+      '<div id="ovStatus" style="font-size:11px;opacity:0.7;margin-top:8px;min-height:14px"></div>' +
+      '<div style="font-size:10px;opacity:0.5;margin-top:6px;line-height:1.4">' +
+      'The current listener is disconnected and told why.</div>';
+    el.querySelector('div')?.appendChild(box);
+    const pw = document.getElementById('ovPw') as HTMLInputElement | null;
+    const st = document.getElementById('ovStatus') as HTMLElement;
+    const go = () => { if (pw?.value) void doAdminOverride(pw.value, st); };
+    document.getElementById('ovGo')?.addEventListener('click', go);
+    pw?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') go(); });
+  }
+}
+
+/** The server says the person at the host machine is looking for this tab. */
+function onSummoned() {
+  flashHere();
+  // Best effort — browsers rightly refuse to steal focus without a user gesture, and the menu-bar
+  // click happened in another app. The flash is what actually does the work; if focus lands too,
+  // so much the better.
+  try { window.focus(); } catch { /* not permitted — the flash still shows */ }
+}
 
 let lastInteraction = Date.now();
 let throttled = false;
+/** Listener's choice. Off = never ask the server to slow down, however long nobody touches it. */
+let idleSaver = true;
+/** The owner has made idle saving mandatory (hwinfo.forceIdleSaver). */
+let idleForced = false;
+
+/**
+ * Offer only the rates the owner actually permits.
+ *
+ * A ceiling of 10 fps means 20 is not on the menu; a ceiling of 5 leaves no choice at all, so the
+ * whole row goes — a control with one option is just a label pretending to be a control. Same rule
+ * as the pinned sample rate and the enforced idle saver: never show a switch we would ignore.
+ */
+function applyRateOptions() {
+  // The server ceiling changed (hwinfo). A manual data rate above it falls back to AUTO (which caps
+  // itself to the ceiling), then the segments re-filter and the request re-clamps.
+  const cap = serverFpsCap();
+  if (wfDataRate > cap) wfDataRate = 0;   // AUTO adapts to the new, lower ceiling
+  applyWaterfallRates();
+}
+
+function applyForcedIdle(forced: boolean) {
+  idleForced = forced;
+  const btn = document.getElementById('idleSaver') as HTMLButtonElement | null;
+  if (!btn) return;
+  if (forced) {
+    idleSaver = true;
+    btn.classList.add('on');
+    btn.textContent = 'ON · SERVER';
+    btn.disabled = true;
+    btn.title = 'The owner of this server requires idle power saving — it may be on battery, solar, or a metered connection.';
+  } else {
+    btn.disabled = false;
+    btn.title = '';
+    btn.textContent = idleSaver ? 'ON' : 'OFF';
+  }
+}
 
 function markActive() {
   lastInteraction = Date.now();
   if (throttled) {
     throttled = false;
-    spec?.setFftRate(ACTIVE_FPS);
+    spec?.setFftRate(wantedFps());
     updateStatus();
   }
 }
 
 function checkIdle() {
-  if (!spec || throttled) return;
+  if (!spec || throttled || !idleSaver) return;
   if (Date.now() - lastInteraction < IDLE_AFTER_MS) return;
   throttled = true;
-  spec.setFftRate(IDLE_FPS);
+  spec.setFftRate(wantedFps());
   updateStatus();
 }
 
@@ -1487,8 +2413,17 @@ function initPanels() {
 // draws — no WASM, no DSP here. See decoders.ts for the wire formats.
 
 let decoders: DecoderClient | null = null;
-let decCtx: CanvasRenderingContext2D | null = null;
 let decImgWidth = 0;
+// Decoder image buffers (WEFAX/SSTV), mirroring the app's live/prev model. Lines always draw into the
+// OFFSCREEN live canvas; the visible #decImage shows either live or the last completed image (prev), so
+// a new transmission starting doesn't wipe an image you haven't saved — PREV switches to it while the
+// live decode keeps running underneath, and SAVE downloads whichever is shown.
+let decLiveCv: HTMLCanvasElement | null = null;   // offscreen: the live image being decoded
+let decLiveCtx: CanvasRenderingContext2D | null = null;
+let decPrevCv: HTMLCanvasElement | null = null;   // offscreen: the last completed image
+let decViewingPrev = false;
+let decLiveComplete = false;                       // the live image has hit onImageDone
+let decIsRgb = false;                              // for the save filename (sstv vs wefax handled by title)
 const spots: Spot[] = [];
 
 /** Skin BAND_COLOUR — markers coloured by band (verbatim from the app's map). */
@@ -1566,6 +2501,52 @@ function locLine(): string {
   return grid && !isGrid ? `${where} ${grid}` : where;
 }
 
+// ── Session countdown ────────────────────────────────────────────────────────
+// ★ The server sends a warning at two minutes and again at thirty seconds; the display ticks
+// LOCALLY in between. Sending a countdown frame every second would be a message per second per
+// listener for a number the client can work out for itself.
+// ★ It also means the clock keeps running if a warning frame is lost — the deadline is what we
+// hold, not the remaining seconds.
+let sessionDeadline = 0;      // epoch ms, 0 = no limit
+let sessionTicker: ReturnType<typeof setInterval> | null = null;
+
+function setTimeLeft(secs: number) {
+  sessionDeadline = Date.now() + secs * 1000;
+  if (!sessionTicker) sessionTicker = setInterval(paintTimeLeft, 1000);
+  paintTimeLeft();
+}
+
+function paintTimeLeft() {
+  const el = document.getElementById('rxTimeLeft');
+  if (!el) return;
+  if (!sessionDeadline) { el.hidden = true; return; }
+  const left = Math.max(0, Math.round((sessionDeadline - Date.now()) / 1000));
+  const mm = Math.floor(left / 60), ss = left % 60;
+  // ★ RAN OUT. Unlike Jr there is no server list to return to, so the page simply
+  // says what happened and stays there — a browser tab that goes quiet with no
+  // explanation reads as the receiver having broken. Shown once; the ticker stops
+  // so nothing overwrites it, and it remains until the tab is closed.
+  if (left === 0) {
+    el.textContent = 'Your turn ends in 0:00';
+    el.className = 'crit';
+    el.hidden = false;
+    if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
+    // ★ NO CARD HERE. The app already shows one — showRefusal('TIME UP', …) fires
+    // when the server closes the session, and it says MORE than a card of ours
+    // could: it names the cooldown ("you can reconnect in about 2 minutes") and
+    // offers Try again. Adding a second overlay for the same moment would just be
+    // two things racing to explain one event. All this needs to do is stop the
+    // clock at 0:00 and leave it there.
+    return;
+  }
+  // ★ Say what the clock IS. A bare "1:47" over a waterfall is a mystery; people assume it is
+  // a recording timer or the station's clock.
+  el.textContent = `Your turn ends in ${mm}:${String(ss).padStart(2, '0')}`;
+  el.className = left <= 30 ? 'crit' : left <= 120 ? 'warn' : '';
+  el.hidden = false;
+  $('rxBadge').hidden = false;   // the badge may be empty if the owner set no name
+}
+
 async function loadServerLocation(host: string) {
   try {
     const r = await fetch(`http://${host}/location`, { cache: 'no-store' });
@@ -1590,6 +2571,14 @@ async function loadServerLocation(host: string) {
   }
 }
 
+// ★ RAW vs CONFIRMED was REMOVED 2026-07-28 (Stuart: "it doesn't actually do
+// anything extra"). It was a client-side view that showed the unconfirmed value for
+// the five block-B fields (PTY/TP/TA/MS/DI) and coloured their labels by confirmation
+// state — and on any decent signal the two values are identical, so the button looked
+// inert. A control that appears to do nothing is worse than no control.
+// ★ The server still sends both, so this is a UI removal only and can be reinstated
+// if the raw view ever earns its place (it would need to cover more than five fields).
+
 /** Distance to a spot, km — null when either end is unknown. */
 function spotDistanceKm(grid?: string): number | null {
   const me = myPos();
@@ -1609,7 +2598,20 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.ham };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | null = null;
+
+/** RDS programme types, RDS (Europe) table — index 0..31. */
+const PTY_EU = [
+  'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
+  'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening',
+  'Light Classical', 'Serious Classical', 'Other Music', 'Weather', 'Finance',
+  "Children's", 'Social Affairs', 'Religion', 'Phone In', 'Travel', 'Leisure',
+  'Jazz Music', 'Country Music', 'National Music', 'Oldies Music', 'Folk Music',
+  'Documentary', 'Alarm Test', 'Alarm',
+];
+let rdsExt: import('./spectrum').RdsExt | null = null;
+let grpRate = 0;        // groups/sec, smoothed from successive totals
+let grpPrev = { tot: 0, at: 0 };
 
 /** Params for the current mode — the shim's startDecoder reads these. */
 function decParams(mode: string): Record<string, unknown> {
@@ -1639,7 +2641,7 @@ function initDecoders(host: string, auth: AuthState) {
     },
     onImageStart: (w, h) => startDecImage(w, h),
     onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); setDecLive(true); },
-    onImageDone: () => { $('decStatus').textContent = 'image complete'; },
+    onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpot: (sp) => {
@@ -1651,6 +2653,9 @@ function initDecoders(host: string, auth: AuthState) {
   });
   decoders.connect();
 
+  initRdsResize();
+  initRspControls();
+  initAhfControls();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
 
@@ -1658,7 +2663,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decoders!.attach(mode, decParams(mode));
@@ -1699,6 +2704,8 @@ function initDecoders(host: string, auth: AuthState) {
   // Output box chrome.
   initSpotFilters();
   $('decClr').onclick = () => { $('decText').textContent = ''; };
+  $('decPrev').onclick = () => toggleDecPrev();
+  $('decSave').onclick = () => saveDecImage();
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
     $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
@@ -1757,18 +2764,617 @@ function syncDecButtons() {
 function showDecBox(what: string) {
   const image = what === 'wefax' || what === 'sstv';
   const isSpots = what === 'spots';
+  const isRds = what === 'rds';
   $('decBox').classList.add('open');
   $('decBox').classList.remove('min');
-  $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS' : what.toUpperCase();
+  // ★ "ADV RDS", never plain "RDS". Basic RDS — station name, RadioText, PI — is ALWAYS on
+  // and needs no decoder; a button labelled "RDS" would read as "switch this on to get RDS"
+  // and imply the app had none until you did (Stuart, 2026-07-26).
+  $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS'
+                            : what === 'rds'   ? 'ADV RDS'
+                            : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
   $('decText').classList.toggle('off', image || isSpots);
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
+  // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
+  // bar is a compressed version of the same data; showing both would be saying everything
+  // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
+  $('rdsPanel').classList.toggle('show', isRds);
+  $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
+  $('rdsSize').classList.toggle('show', isRds);
+  // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
+  if (isRds) applyRdsSize();
+  $('decText').classList.toggle('off', image || isSpots || isRds);
+  if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
+  updateVts();
+  // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
+  // PREV/SAVE buttons entirely for text/spot decoders.
+  if (image) resetDecImages();
+  else {
+    $<HTMLButtonElement>('decPrev').style.display = 'none';
+    $<HTMLButtonElement>('decSave').style.display = 'none';
+  }
   setDecLive(false);
 }
 
-function hideDecBox() { $('decBox').classList.remove('open'); }
+function hideDecBox() {
+  $('decBox').classList.remove('open');
+  $('rdsPanel').classList.remove('show');
+  $('decBox').classList.remove('rds');
+  $('rdsSize').classList.remove('show');
+  updateVts();      // the bar comes back when Advanced RDS closes
+}
+
+/** ★ TWO FIXED SIZES, on a button. Short enough to leave the waterfall usable while tuning,
+ *  or tall enough to read every field at once — which are the only two things anyone wanted.
+ *  ★ Not a drag: the handle had to live inside a bottom-anchored box where it could not be
+ *  grabbed, a miss went through to the waterfall and TUNED THE RADIO, and touch has no
+ *  pointer to drag with. A button has none of those failure modes and works everywhere.
+ */
+let rdsTall = localStorage.getItem('rdsPanelTall') === '1';
+
+function applyRdsSize() {
+  const panel = $('rdsPanel');
+  const btn = $('rdsSize');
+  // Phones get a smaller pair: the waterfall behind still has to be usable for tuning.
+  const phone = window.innerWidth <= 760;
+  if (rdsTall) {
+    // ★★ TALL FITS THE CONTENT, it does not reach for a number. A fixed tall height left a
+    // large black void whenever the station sent less than the maximum — and RDS fields
+    // arrive over MINUTES (RT+ waits on a 3A announcement, CT comes once a minute), so the
+    // content genuinely grows while you watch. Fitting means "show me everything there is
+    // now", which is what pressing it means; the cap only binds when there is more than the
+    // window can hold (Stuart, 2026-07-26).
+    panel.style.height = 'auto';
+    panel.style.maxHeight = phone ? 'min(56vh, 420px)' : 'min(78vh, 780px)';
+  } else {
+    // Compact is a deliberate FIXED height: it is the "leave me room to tune" state, and it
+    // must not drift as fields arrive.
+    panel.style.height = phone ? 'min(30vh, 240px)' : 'min(40vh, 330px)';
+    panel.style.maxHeight = 'none';
+  }
+  btn.classList.toggle('tall', rdsTall);
+  btn.title = rdsTall ? 'Shorter panel' : 'Taller panel';
+}
+
+function initRdsResize() {
+  applyRdsSize();
+  $('rdsSize').onclick = (e) => {
+    e.stopPropagation();
+    rdsTall = !rdsTall;
+    localStorage.setItem('rdsPanelTall', rdsTall ? '1' : '0');
+    applyRdsSize();
+  };
+  // A rotated phone changes which pair of sizes is right.
+  window.addEventListener('resize', () => { if (rdsPanelOpen()) applyRdsSize(); });
+}
+
+/** True while the Advanced RDS decoder owns the RDS display. */
+function rdsPanelOpen(): boolean {
+  return activeDec === 'rds' && $('decBox').classList.contains('open');
+}
+
+/** Fill the Advanced RDS fields. Everything here is data we already received. */
+function renderRds() {
+  const dash = '—';
+  // ★ The flag and logo move into the header while the bar is hidden, so the station keeps
+  // the same visual identity it had on the VTS rather than becoming a table of numbers
+  // (Stuart, 2026-07-26).
+  $('decFlag').textContent = rdsName || rdsPi > 0 ? isoToFlag(rdsIso) : '';
+  // ★ TWO COPIES, ON PURPOSE. The header badge is the identity you glance at while the panel
+  // is minimised; the big one under the MPX fills space the column already leaves empty and is
+  // the one you actually look at. Both are driven from the same URL so they cannot disagree.
+  for (const id of ['decLogo', 'rdsLogoBig']) {
+    const el = document.getElementById(id) as HTMLImageElement | null;
+    if (!el) continue;
+    if (rdsLogoUrl) { if (el.src !== rdsLogoUrl) el.src = rdsLogoUrl; el.classList.add('show'); }
+    else el.classList.remove('show');
+  }
+  // ★ HEX AND DECIMAL. Hex is how the standard defines PI, and how it decomposes into
+  // country / coverage / reference — but plenty of databases, loggers and older receivers
+  // quote it in DECIMAL, so DXers comparing catches see both forms. Showing both saves
+  // anyone doing hex arithmetic to match a log entry (Stuart, 2026-07-27).
+  $('rxPi').textContent  = rdsPi > 0 ? `${piHex(rdsPi)} · ${rdsPi}` : dash;
+  $('rxPs').textContent  = rdsName || dash;
+  $('rxRt').textContent  = rdsText || dash;
+  // ★ RT+ — the tags point INTO RadioText, so they can only appear once group 3A has
+  // announced which group carries them. That announcement is infrequent, which is why this
+  // often fills in well after the RadioText itself.
+  const rtpA = rdsExt?.rtpArtist ?? '', rtpT = rdsExt?.rtpTitle ?? '';
+  $('rxRtp').textContent = (rtpA || rtpT)
+    ? (rtpA && rtpT ? `${rtpA} — ${rtpT}` : (rtpT || rtpA))
+    : dash;
+  $('rxLps').textContent = rdsExt?.longPs?.trim() || dash;
+  $('rxPtyn').textContent = rdsExt?.ptyn?.trim() || dash;
+  // RDS language codes (IEC 62106). Only the ones a European DXer will actually meet.
+  const LANGS: Record<number, string> = {
+    1:'Albanian',2:'Breton',3:'Catalan',4:'Croatian',5:'Welsh',6:'Czech',7:'Danish',
+    8:'German',9:'English',10:'Spanish',11:'Esperanto',12:'Estonian',13:'Basque',
+    14:'Faroese',15:'French',16:'Frisian',17:'Irish',18:'Gaelic',19:'Galician',
+    20:'Icelandic',21:'Italian',22:'Lappish',23:'Latin',24:'Latvian',25:'Luxembourgish',
+    26:'Lithuanian',27:'Hungarian',28:'Maltese',29:'Dutch',30:'Norwegian',31:'Occitan',
+    32:'Polish',33:'Portuguese',34:'Romanian',35:'Romansh',36:'Serbian',37:'Slovak',
+    38:'Slovene',39:'Finnish',40:'Swedish',41:'Turkish',42:'Flemish',43:'Walloon',
+  };
+  const lang = rdsExt?.lang ?? 0;
+  $('rxLang').textContent = lang ? (LANGS[lang] ?? `code ${lang}`) : dash;
+  const ph = rdsExt?.pinHour ?? -1;
+  $('rxPin').textContent = ph >= 0
+    ? `day ${rdsExt!.pinDay} ${String(ph).padStart(2,'0')}:${String(rdsExt!.pinMin).padStart(2,'0')}`
+    : dash;
+  // ★ ODA — which Open Data Applications the station runs. This is what tells you whether an
+  // empty "Now playing" means the station sends no RT+, or that we failed to decode it.
+  const ODA_NAMES: Record<string, string> = {
+    '4BD7': 'RT+', '6552': 'eRT', 'CD46': 'TMC', 'CD47': 'TMC', '0093': 'DAB x-ref',
+    '4BD8': 'RT+ (group B)', 'C563': 'ID Logic', '6365': 'RDS2 station logo',
+  };
+  const odas = rdsExt?.oda ?? [];
+  $('rxOda').textContent = odas.length
+    ? odas.map(o => `${ODA_NAMES[o.aid] ?? o.aid} in ${o.grp >> 1}${(o.grp & 1) ? 'B' : 'A'}`).join(', ')
+    : dash;
+  // ★ EON — the sister stations. TA on one of them is why a car radio switches over.
+  const eons = rdsExt?.eon ?? [];
+  $('rxEon').textContent = eons.length
+    ? eons.map(e => {
+        const ps = e.ps.trim();
+        const f = e.af ? ` ${(e.af / 1000).toFixed(1)}` : '';
+        return `${ps || e.pi}${f}${e.ta === 1 ? ' [TA]' : ''}`;
+      }).join('  ')
+    : dash;
+  // ★ In RAW, read the UNCONFIRMED value and mark the label; otherwise the confirmed one.
+  // A field is "confirmed" when the confirmed value has actually arrived (>= 0) — that is the
+  // same test the panel already uses for "known", so red simply means "seen but not yet
+  // trusted" and green means "this is what CONFIRMED mode would show".
+  const pty = rdsExt?.pty ?? -1;
+  $('rxPty').textContent = pty >= 0 ? `${PTY_EU[pty] ?? '?'} (${pty})` : dash;
+  // TP/TA/MS are one-bit flags; show the ones that are SET rather than a row of noes.
+  const tpV = rdsExt?.tp ?? -1;
+  const taV = rdsExt?.ta ?? -1;
+  const msV = rdsExt?.ms ?? -1;
+  const f: string[] = [];
+  if (tpV === 1) f.push('TP');
+  if (taV === 1) f.push('TA');
+  if (msV === 1) f.push('Music'); else if (msV === 0) f.push('Speech');
+  $('rxFlags').textContent = f.length ? f.join(' · ') : dash;
+  // All three share block B, so they confirm together — one label for the row is honest.
+  $('rxBer').textContent = rdsBer >= 0 ? `${rdsBer}%` : dash;
+  // ★ Say what the level is RELATIVE TO. On its own "-10 dB" invites the reading that the
+  // signal is weak, when it is the normal injection ratio for a healthy station.
+  // ★ Deviations in kHz, each said against its own spec band so the number explains itself
+  // — "6.8 kHz" means nothing without knowing 6.0–7.5 is nominal (Stuart: "make it clear").
+  const pdev = rdsExt?.pilotDev ?? 0;
+  const rdev = rdsExt?.rdsDev ?? 0;
+  const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');
+  if (pdev > 0.2) {
+    const ok = pdev >= 6.0 && pdev <= 7.5;
+    pEl.textContent = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}`;
+    pEl.style.color = ok ? '#7dff9a' : '#ffd479';
+  } else { pEl.textContent = dash; pEl.style.color = ''; }
+  if (rdev > 0.2) {
+    // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the spec
+    // maximum, and the old wording ran open-ended: anything above 4 kHz was called "generous",
+    // so a reading of 12.9 kHz — physically impossible — was presented as a station doing well
+    // (Stuart, 2026-07-27). A number past the ceiling is evidence of a MEASUREMENT problem, not
+    // of a strong subcarrier, and must never be dressed up as good news.
+    // ★ The server now returns -1 with no block sync, which was the cause in that case; this is
+    // the second line of defence, for anything else that could put the estimate out of range.
+    const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
+    rEl.textContent = `${rdev.toFixed(1)} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
+    rEl.style.color = impossible ? '#ff8a7d' : low ? '#ffd479' : '#7dff9a';
+  } else { rEl.textContent = dash; rEl.style.color = ''; }
+  // ★★★ RDS-to-pilot phase. Correct is near 0 or near 90 (quadrature encoding); the middle
+  // ground is a transmitter fault, so say which it is rather than leaving a bare number to
+  // be interpreted — the whole reason this field exists is that reading it takes equipment
+  // most people do not have (HansVanEijsden, FMDX.org, 2026-07-26).
+  const rdsPhase = rdsExt?.phase ?? -1;
+  const coh = rdsExt?.phaseCoh ?? 0;
+  const phEl = $('rxPhase');
+  // ★★★ THE SIZER IS SET FROM CODE, NOT FROM THE MARKUP. index.html held the reserve string by
+  // hand — "rotating — encoder not locked to pilot" — and when the DRIFT RATE was added to the
+  // live message it grew to "rotating 2°/s — …", one line longer than the box reserved for it.
+  // #rxPhase is absolutely positioned, so the overflow landed ON TOP OF RadioText (Stuart's
+  // screenshot, 2026-07-28). The old comment said "keep the sizer in step" — a rule a human has
+  // to remember is a rule that breaks, so the string now lives in ONE place and the sizer is
+  // corrected at render time. Widest digits, because 00 is wider than 2 in most faces.
+  const PHASE_RESERVE = 'rotating 00°/s — encoder not locked to pilot';
+  const szEl = phEl.parentElement?.querySelector('.sizer') as HTMLElement | null;
+  if (szEl && szEl.textContent !== PHASE_RESERVE) szEl.textContent = PHASE_RESERVE;
+  // ★★ NEVER STATE A PHASE WE CANNOT STAND BEHIND. The estimate averages unit vectors at
+  // twice the symbol angle; if our 57 kHz reference drifts at all, those vectors cancel and
+  // the average collapses while STILL producing a plausible angle. Observed on air as
+  // Classic FM cycling red/amber/green rapidly, and Heart reading 45 then 27 degrees.
+  // ★ A confident wrong number here is worse than none: this field would be telling
+  // broadcasters their transmitters are faulty (Stuart, 2026-07-26).
+  if (rdsPhase < 0 || coh < 0.35) {
+    // ★★ A ROTATING CONSTELLATION IS A DIAGNOSIS, NOT A FAILURE. Low coherence with a LOW
+    // block error rate is a distinctive combination: the symbols are being decoded perfectly
+    // (differential detection does not care about a steady rotation), but the phase is
+    // sweeping — which means the station's encoder is not locked to its pilot at all. It
+    // draws as a clean RING rather than two lobes, and calling that "noisy" is exactly wrong.
+    // ★ Confirmed on Classic FM by two INDEPENDENT receivers, an RTL-SDR and an SDRplay
+    // RSP1B, which agreed (2026-07-26). That is a finding a DXer would buy an analyser for.
+    const rotating = rdsPhase >= 0 && coh < 0.35 && rdsBer >= 0 && rdsBer < 20;
+    phEl.textContent = rdsPhase < 0 ? dash
+                     : rotating     ? 'rotating — encoder not locked to pilot'
+                                    : 'unstable — not measurable';
+    phEl.style.color = rotating ? '#ffd479' : 'var(--text-dim)';
+  } else {
+    const d0 = Math.min(rdsPhase, 180 - rdsPhase);   // distance from 0/180
+    const d90 = Math.abs(rdsPhase - 90);             // distance from quadrature
+    const near = Math.min(d0, d90);
+    // ★ Only claim a FAULT when the estimate is genuinely solid — asserting a transmitter
+    // defect is serious, so the bar for saying it is higher than for the other states.
+    // ★ WIDER BANDS, because the measurement is steadier than the labels were. Heart read
+    // 27/25/24 degrees across two receivers and two antennas — three degrees of spread — yet
+    // flipped between "off nominal" and "FAULT" because the boundary sat at 25. A verdict
+    // that changes on a one-degree drift makes a stable measurement look unstable, which is
+    // the opposite of what a diagnostic should do (Stuart, 2026-07-26).
+    // ★ FAULT is now reserved for genuinely far out (>40 degrees from BOTH nominals) and
+    // still requires a solid estimate — calling a broadcaster's transmitter defective
+    // deserves the higher bar.
+    // ★★ SLOW ROTATION LOOKS PERFECTLY STEADY. Coherence collapses only when the phase turns
+    // FAST relative to the averaging window — Classic FM does, draws a circle, and is caught by
+    // the branch above. A station whose encoder is only slightly off its pilot keeps coherence
+    // high (67%) while the angle walks the whole range, so it slipped through and displayed a
+    // number that swept 0->90 and back (Stuart, on Harborough FM, 2026-07-27).
+    // ★ The rate is the honest test, and it does not depend on coherence at all. Our 57 kHz
+    // reference IS the station's own pilot tripled, so a locked encoder sits still however weak
+    // the signal — a steady march means the subcarrier genuinely is not 3x the pilot.
+    // ★ 2 deg/s: comfortably above the wander of a noisy estimate, and it takes 45 s to cross
+    // the range at that rate, so nothing that drifts this steadily is doing it by accident.
+    // ★ NO EARLY RETURN — this runs inside renderRds(), and everything below (the PI
+    // decomposition and the rest of the panel) still has to happen.
+    const drift = rdsExt?.phaseDrift ?? 0;
+    if (drift >= 2) {
+      phEl.textContent = `rotating ${drift.toFixed(0)}°/s — encoder not locked to pilot`;
+      phEl.style.color = '#ffd479';
+    } else {
+      const verdict = near <= 12 ? (d0 <= d90 ? 'in phase' : 'quadrature')
+                    : near <= 40 ? 'off nominal'
+                    : coh > 0.7  ? 'FAULT'
+                    : 'off nominal';
+      phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
+      phEl.style.color = near <= 12 ? '#7dff9a' : near <= 40 ? '#ffd479' : '#ff8a7d';
+    }
+  }
+
+  // ── PI decomposition — free, it is arithmetic on a number we already have ──────
+  // Country code (top nibble), coverage area, and the programme reference number, as the
+  // FM-DX Webserver breaks it out. Coverage is the interesting one to a DXer: it says
+  // whether a catch is a local filler or a national network.
+  const COV = ['Local', 'International', 'National', 'Supra-regional',
+               'Regional 1', 'Regional 2', 'Regional 3', 'Regional 4',
+               'Regional 5', 'Regional 6', 'Regional 7', 'Regional 8',
+               'Regional 9', 'Regional 10', 'Regional 11', 'Regional 12'];
+  $('rxPiDetail').textContent = rdsPi > 0
+    ? `${COV[(rdsPi >> 8) & 0xF]} · ref ${rdsPi & 0xFF} · cc ${(rdsPi >> 12) & 0xF}`
+    : dash;
+  // ★ SAY WHY IT IS BLANK. The flag logic refuses to guess a country: it uses the ECC
+  // (group 1A) when present, otherwise it validates the PI's country nibble against the
+  // RECEIVER's own country — so a server that does not know where it is resolves to
+  // nothing. Correct for the station bar, but in an expert panel an empty field reads as
+  // broken rather than as "not established yet" (Stuart, 2026-07-26).
+  // ECC is also infrequent — group 1A — so this often fills in later, like the clock.
+  $('rxCountry').textContent = rdsIso
+    ? `${rdsIso.toUpperCase()}${rdsEcc ? ` · ECC ${rdsEcc.toString(16).toUpperCase()}` : ' · from PI'}`
+    : rdsEcc
+      ? `ECC ${rdsEcc.toString(16).toUpperCase()} · unmatched`
+      : (rdsExt?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : dash;
+
+  // DI — four flags, assembled across the four name segments.
+  // ★★ THE FIELD THIS WHOLE RAW/CONFIRMED SPLIT CAME FROM. Each flag is ONE BIT in one group,
+  // so a single mis-corrected block used to set one permanently. In RAW you can now watch them
+  // flicker: a genuine flag sits steady across hundreds of groups, corruption does not — which
+  // is the only way to tell "this station really is compressed" from "one bad block said so".
+  const di = rdsExt?.di ?? -1;
+  if (di < 0) $('rxDi').textContent = dash;
+  else {
+    const d: string[] = [];
+    if (di & 1) d.push('Stereo'); else d.push('Mono');
+    if (di & 2) d.push('Artificial head');
+    if (di & 4) d.push('Compressed');
+    if (di & 8) d.push('Dynamic PTY');
+    $('rxDi').textContent = d.join(' · ');
+  }
+
+  // ★ CT — transmitted once a minute, so RECEIVING one at all proves whole groups are
+  // arriving intact, and its offset identifies the network's timezone.
+  // ★ CT is transmitted ONCE A MINUTE (group 4A), against ~11 groups a second — about one
+  // group in 660. So a dash means "not caught yet" far more often than "not transmitted",
+  // and it needs BOTH blocks C and D intact with no repetition to fall back on. Saying
+  // "waiting" instead of "—" is the honest reading, and it stops the user concluding the
+  // station does not send it (Stuart: car stereos set their clocks from this, 2026-07-26).
+  const ct = rdsExt?.ct ?? -1;
+  const g4a = rdsExt?.grp?.[8] ?? 0;      // group 4A = index 4*2+0
+  if (ct < 0) {
+    $('rxCt').textContent = (rdsExt?.gtot ?? 0) > 0
+      ? (g4a > 0 ? 'seen, damaged' : 'waiting… (1/min)')
+      : dash;
+  } else {
+    const hh = String(Math.floor(ct / 60)).padStart(2, '0');
+    const mm = String(ct % 60).padStart(2, '0');
+    const off = rdsExt!.ctoff;
+    const os = off === 0 ? 'UTC' : `UTC${off > 0 ? '+' : '−'}${Math.abs(off) / 2}`;
+    $('rxCt').textContent = `${hh}:${mm} ${os}`;
+  }
+
+  // ★ Group-type histogram — identifies a transmitter's configuration, and shows whether a
+  // weak signal is delivering a representative mix or only the easy groups.
+  const grp = rdsExt?.grp ?? [];
+  const tot = rdsExt?.gtot ?? 0;
+  if (!tot) { $('rxGroups').textContent = dash; $('rxRate').textContent = dash; }
+  else {
+    const parts: string[] = [];
+    for (let i = 0; i < grp.length; i++) {
+      if (!grp[i]) continue;
+      const name = `${i >> 1}${(i & 1) ? 'B' : 'A'}`;
+      parts.push(`${name} ${Math.round((grp[i] / tot) * 100)}%`);
+    }
+    parts.sort((a, b) => parseInt(b.split(' ')[1]) - parseInt(a.split(' ')[1]));
+    // ★ SAY WHAT THE PERCENTAGES ARE OF. There are two percentage figures on this panel —
+    // this one and the block ERROR RATE — and a bare "0A 40%" gives no clue which kind it is.
+    // Stating the denominator makes the row explain itself: 40% OF 504 GROUPS were type 0A
+    // (Stuart, 2026-07-27).
+    $('rxGroups').textContent = parts.length
+      ? `of ${tot} groups: ${parts.join('  ')}`
+      : dash;
+    // ★ Rate from SUCCESSIVE DELTAS, not total-over-elapsed. gtot accumulates from when the
+    // DECODER started; the panel opens later, so dividing one by the other reported 113/s
+    // against a theoretical maximum of 11.4 (Stuart, 2026-07-26). ★ Two clocks with
+    // different origins is not a rate.
+    $('rxRate').textContent = grpRate > 0
+      ? `${grpRate.toFixed(1)}/s of 11.4 · ${tot} total`
+      : `${tot} total`;
+  }
+
+  // ── ALTERNATIVE FREQUENCIES ──────────────────────────────────────────────────
+  // ★★ THESE TWO FIELDS WERE DEAD. The markup, the labels and the tooltips have been here
+  // all along and NOTHING EVER WROTE TO THEM, so they showed a permanent dash — including
+  // the tooltip's promise that you can tap one to tune (Stuart: "i did wonder why i didnt
+  // see them populating", 2026-07-27). The data was on the wire the whole time.
+  // ★ A field that is always empty is indistinguishable from a station that never sends the
+  // thing. That is the real cost: it quietly libels the transmitter.
+  const af = rdsExt?.af ?? [];
+  const afSeen = rdsExt?.afseen ?? 0;
+  // ★ CONFIRMED against GLIMPSED. AF lists arrive spread over many group 0As and are only
+  // accepted after repetition, so a score below 100% means entries are arriving damaged —
+  // which is a useful signal-quality reading in its own right, not bookkeeping.
+  $('rxAfScore').textContent = afSeen > 0
+    ? `${af.length}/${afSeen} · ${Math.round((af.length / afSeen) * 100)}%`
+    : (rdsExt?.gtot ?? 0) > 0 ? 'none announced' : dash;
+
+  const afEl = $('rxAf');
+  if (!af.length) {
+    afEl.textContent = (rdsExt?.gtot ?? 0) > 0 ? 'none announced' : dash;
+  } else {
+    // Ascending, and de-duplicated: the same AF is re-announced constantly.
+    const list = [...new Set(af)].sort((a, b) => a - b);
+    afEl.innerHTML = list
+      .map(khz => `<a href="#" class="afLink" data-khz="${khz}">${(khz / 1000).toFixed(1)}</a>`)
+      .join('  ');
+    for (const a of Array.from(afEl.querySelectorAll<HTMLAnchorElement>('.afLink'))) {
+      a.onclick = (e) => {
+        e.preventDefault();
+        const khz = Number(a.dataset.khz);
+        if (!spec || !khz) return;
+        // Same tune path as a bookmark, and WFM explicitly: every AF is a broadcast FM
+        // frequency by definition, so inheriting the current mode would be wrong.
+        spec.tune(clampTune(khz * 1000), 'wfm' as SDRMode, { recenter: true, retarget: true });
+        setMode('wfm' as SDRMode, false);
+        renderFreq();
+      };
+    }
+  }
+}
+
+/** Pixels per unit, chosen so the mean lobe distance lands at a comfortable fraction of the
+ *  box. Falls back to a sane constant when there is nothing to measure. */
+function constellationScale(xy: number[], box: number): number {
+  let n = 0, sum = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const r = Math.hypot(xy[i], xy[i + 1]);
+    if (r < 1) continue;
+    n++; sum += r;
+  }
+  if (!n) return (box / 2) / 110;
+  const mean = sum / n;
+  return (box * 0.30) / Math.max(1, mean);
+}
+
+/** Rotation that lays the two BPSK lobes on the horizontal. BPSK has 180-degree ambiguity,
+ *  so angles are DOUBLED (folding both lobes onto one), magnitude-weighted so the strong
+ *  symbols that define the lobes dominate, averaged, then halved. */
+function constellationAngle(xy: number[]): number {
+  let sx = 0, sy = 0;
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const x = xy[i], y = xy[i + 1];
+    const r2 = x * x + y * y;
+    if (r2 < 1) continue;
+    const a2 = 2 * Math.atan2(y, x);
+    sx += r2 * Math.cos(a2);
+    sy += r2 * Math.sin(a2);
+  }
+  return (sx || sy) ? -0.5 * Math.atan2(sy, sx) : 0;
+}
+
+/** ★ A PLAIN-ENGLISH VERDICT from the constellation, because the plot assumes you already
+ *  know how to read it. Measures how tightly the points cluster around the two lobes
+ *  against how far they scatter — error vector magnitude, in effect. The lobes lie on the
+ *  horizontal after de-rotation, so |x| is the wanted signal and y is pure error. */
+function constellationVerdict(xy: number[]): { text: string; cls: string } {
+  // ★★ DE-ROTATE FIRST. The verdict was computed on the RAW points while only the DRAWING
+  // was de-rotated, so the maths saw the diagonal lobes and counted the entire carrier
+  // phase offset as error — a visibly clean constellation reported "299% EVM" (Stuart,
+  // 2026-07-26). ★ Two consumers of one transform is exactly where this kind of bug lives:
+  // share the transform, do not repeat it.
+  const rot = constellationAngle(xy);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  let n = 0, sumAbsX = 0, sumY2 = 0, sumXErr2 = 0;
+  const rx: number[] = [], ry: number[] = [];
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const r2 = xy[i] * xy[i] + xy[i + 1] * xy[i + 1];
+    if (r2 < 1) continue;
+    const x = xy[i] * cr - xy[i + 1] * sr;
+    const y = xy[i] * sr + xy[i + 1] * cr;
+    rx.push(x); ry.push(y);
+    n++; sumAbsX += Math.abs(x); sumY2 += y * y;
+  }
+  if (n < 8) return { text: 'no lock', cls: 'bad' };
+  const meanAbsX = sumAbsX / n;
+  for (let i = 0; i < rx.length; i++) {
+    const dx = Math.abs(rx[i]) - meanAbsX;
+    sumXErr2 += dx * dx;
+  }
+  // Error energy is the scatter off the two ideal points; signal energy is the lobe offset.
+  const err = Math.sqrt((sumY2 + sumXErr2) / n);
+  if (meanAbsX < 1) return { text: 'no lock', cls: 'bad' };
+  const evm = (err / meanAbsX) * 100;
+  // ★ EVM assumes two lobes after de-rotation. A ROTATING constellation defeats that — the
+  // points are ordered, not scattered — so it reports a huge figure for a signal that is
+  // decoding flawlessly. Say what it actually is instead of libelling it as noise.
+  if (rdsExt && (rdsExt.phaseCoh ?? 0) < 0.35 && rdsBer >= 0 && rdsBer < 20)
+    return { text: 'rotating — unlocked encoder', cls: 'ok' };
+  // ★ "SCATTER", not "EVM". Error Vector Magnitude is the correct term and what an engineer
+  // expects — but it means nothing to someone new to this, and the whole panel is written to
+  // explain itself rather than assume. The proper name lives in the tooltip, so a DXer
+  // comparing against other equipment can still find it (Stuart, 2026-07-27).
+  if (evm < 45)  return { text: `clean · ${evm.toFixed(0)}% scatter`, cls: 'good' };
+  if (evm < 80)  return { text: `usable · ${evm.toFixed(0)}% scatter`, cls: 'ok' };
+  return { text: `noisy · ${evm.toFixed(0)}% scatter`, cls: 'bad' };
+}
+
+/** ★ The symbol trace — the "two lines" read. Symbol value against time: two clean bands
+ *  with a clear gap means every bit is being decided with margin; a filled gap means bits
+ *  are landing near the threshold and the block errors follow. */
+function drawEye() {
+  const c = $<HTMLCanvasElement>('rdsEye');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height, mid = H / 2;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  // The decision threshold — the line a symbol must not stray across.
+  g.strokeStyle = 'rgba(255,160,60,0.35)';
+  g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+  const xy = rdsExt?.xy ?? [];
+  if (!xy.length) return;
+  const rot = constellationAngle(xy);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const n = xy.length / 2;
+  const k = constellationScale(xy, H) * 0.9;   // same scale, a touch of headroom
+  g.fillStyle = 'rgba(120,255,140,0.85)';
+  for (let i = 0; i < n; i++) {
+    const x = xy[i * 2] * cr - xy[i * 2 + 1] * sr;   // the wanted component
+    const px = (i / (n - 1)) * (W - 2) + 1;
+    const py = mid - x * k;
+    g.fillRect(px, py, 1.5, 1.5);
+  }
+}
+
+/** ★ The MPX spectrum — the whole of what the FM demodulator produces, DC to 100 kHz.
+ *  Labelled at the three landmarks, because a spectrum of a signal most listeners have never
+ *  seen plotted is a puzzle otherwise: L+R audio at the bottom, the 19 kHz PILOT, the L-R
+ *  stereo sidebands around 38 kHz, and RDS at 57 kHz. Everything the stereo and RDS decoders
+ *  work from, in one picture. */
+function drawMpx() {
+  const c = $<HTMLCanvasElement>('rdsMpx');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  const mpx = rdsExt?.mpx ?? [];
+
+  // Landmarks first, so the trace draws over them rather than under.
+  const SPAN = 100000;
+  const marks: Array<[number, string]> = [[19000, 'PILOT'], [38000, 'L−R'], [57000, 'RDS']];
+  g.font = '7px ui-monospace, monospace';
+  for (const [hz, label] of marks) {
+    const x = (hz / SPAN) * W;
+    g.strokeStyle = 'rgba(255,170,60,0.30)';
+    g.beginPath(); g.moveTo(x, 10); g.lineTo(x, H); g.stroke();
+    g.fillStyle = 'rgba(255,190,110,0.85)';
+    g.fillText(label, Math.min(W - 26, x + 2), 8);
+  }
+  // L+R occupies DC..15 kHz — a band rather than a line, so shade it.
+  g.fillStyle = 'rgba(255,170,60,0.07)';
+  g.fillRect(0, 10, (15000 / SPAN) * W, H - 10);
+  g.fillStyle = 'rgba(255,190,110,0.85)';
+  g.fillText('L+R', 2, 8);
+
+  if (!mpx.length) return;
+  // Auto-range on what is present: injection levels vary and a fixed scale would either
+  // clip a loud station or flatten a quiet one.
+  let lo = 999, hi = -999;
+  for (const v of mpx) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (hi - lo < 12) { hi = lo + 12; }
+  g.strokeStyle = '#7dff9a';
+  g.lineWidth = 1;
+  g.beginPath();
+  for (let i = 0; i < mpx.length; i++) {
+    const x = (i / (mpx.length - 1)) * W;
+    const y = H - ((mpx[i] - lo) / (hi - lo)) * (H - 12);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+}
+
+/** The constellation. Two tight clusters = healthy; a diffuse cloud = buried in noise. */
+function drawConstellation() {
+  const c = $<HTMLCanvasElement>('rdsConst');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height, cx = W / 2, cy = H / 2;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  // Axes, so the two lobes are read against a centre rather than floating.
+  g.strokeStyle = 'rgba(120,200,120,0.22)';
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(cx, 0); g.lineTo(cx, H); g.moveTo(0, cy); g.lineTo(W, cy);
+  g.stroke();
+  const xy = rdsExt?.xy ?? [];
+  const vEl = $('rdsVerdict');
+  const v = constellationVerdict(xy);
+  vEl.textContent = v.text;
+  vEl.className = v.cls;
+  vEl.title = 'How far the received symbols land from where they should — lower is tighter. '
+            + 'Known technically as EVM (error vector magnitude).';
+  if (!xy.length) return;
+  // Points arrive as signed bytes scaled x100; the DSP already normalised by the running
+  // RMS, so the SCALE is stable and only the SHAPE changes — which is the part that means
+  // something.
+  // ★★ DE-ROTATE ONTO THE HORIZONTAL, as every other receiver plots it. Our detector is
+  // DIFFERENTIAL — it cancels carrier phase in the arithmetic rather than physically
+  // de-rotating the signal — so the constellation arrives tilted by however far our
+  // pilot-derived 57 kHz reference sits from the station's actual subcarrier. That tilt is
+  // real information (it is the phase error the complex I/Q detection exists to tolerate),
+  // but it makes the plot incomparable with SDR++ or a hardware receiver, where a Costas
+  // loop has already rotated it flat.
+  // BPSK has 180-degree ambiguity, so the angle is estimated by DOUBLING each point's angle
+  // — which maps both lobes onto one — averaging, and halving. Magnitude-weighted, so the
+  // strong symbols that define the lobes count for more than the noise near the origin.
+  const rot = constellationAngle(xy);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  // ★★ SCALE TO THE DATA, never to a constant. A constellation carries its meaning in SHAPE
+  // — how tight the lobes are and how far they sit from the centre line — so absolute
+  // magnitude is not information, and pinning the scale meant a strong station's points flew
+  // clean out of the box and a weak one's huddled invisibly at the origin. Fitting the mean
+  // lobe distance to a fixed fraction of the box makes the plot readable at every signal
+  // level, which is the whole point of it (Stuart, 2026-07-26).
+  const k = constellationScale(xy, W);
+  for (let i = 0; i + 1 < xy.length; i += 2) {
+    const age = i / xy.length;                    // oldest dimmest
+    g.fillStyle = `rgba(120,255,140,${0.25 + 0.6 * age})`;
+    const px = cx + (xy[i] * cr - xy[i + 1] * sr) * k;
+    const py = cy - (xy[i] * sr + xy[i + 1] * cr) * k;
+    // 1px dots at this density: 2px squares merge into blobs and hide the shape.
+    g.fillRect(px, py, 1.5, 1.5);
+  }
+}
 
 let decLiveTimer = 0;
 function setDecLive(on: boolean) {
@@ -1781,30 +3387,61 @@ function setDecLive(on: boolean) {
   }
 }
 
-function startDecImage(w: number, h: number) {
+/** Copy the live canvas onto the visible one (used when viewing live, and on return-to-live). */
+function blitToVisible(src: HTMLCanvasElement | null) {
   const c = $<HTMLCanvasElement>('decImage');
-  // WEFAX declares no height — the image grows until the transmission stops.
-  c.width = w || decImgWidth || 800;
-  c.height = h || 600;
-  decImgWidth = c.width;
-  decCtx = c.getContext('2d');
-  decCtx?.clearRect(0, 0, c.width, c.height);
+  if (!src) return;
+  if (c.width !== src.width || c.height !== src.height) { c.width = src.width; c.height = src.height; }
+  const ctx = c.getContext('2d');
+  ctx?.clearRect(0, 0, c.width, c.height);
+  ctx?.drawImage(src, 0, 0);
+}
+
+function updateDecImageButtons() {
+  const prevBtn = $<HTMLButtonElement>('decPrev');
+  const hasPrev = !!decPrevCv;
+  // PREV is only meaningful once a completed image has been banked. It flips to LIVE while viewing it.
+  prevBtn.style.display = hasPrev ? '' : 'none';
+  prevBtn.textContent = decViewingPrev ? 'LIVE' : 'PREV';
+  // SAVE is available whenever there is something to save (live has any content, or a prev exists).
+  $<HTMLButtonElement>('decSave').style.display = (decLiveCv || decPrevCv) ? '' : 'none';
+}
+
+function startDecImage(w: number, h: number) {
+  // A new transmission is starting. If the live image was COMPLETED, bank it as PREV so it isn't lost
+  // before the user saves it. An incomplete live image (partial, we retuned) is just replaced.
+  if (decLiveComplete && decLiveCv) {
+    decPrevCv = decLiveCv;
+    decLiveCv = null; decLiveCtx = null;
+  }
+  const cv = document.createElement('canvas');
+  cv.width = w || decImgWidth || 800;
+  cv.height = h || 600;
+  decImgWidth = cv.width;
+  decLiveCv = cv;
+  decLiveCtx = cv.getContext('2d');
+  decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
+  decLiveComplete = false;
+  if (!decViewingPrev) blitToVisible(decLiveCv);
+  updateDecImageButtons();
 }
 
 function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
-  const c = $<HTMLCanvasElement>('decImage');
-  if (!decCtx || c.width !== w) startDecImage(w, 0);
-  if (!decCtx) return;
+  decIsRgb = rgb;
+  if (!decLiveCtx || !decLiveCv || decLiveCv.width !== w) startDecImage(w, 0);
+  if (!decLiveCtx || !decLiveCv) return;
+  const cv = decLiveCv;
 
-  if (y >= c.height) {                     // grow downward rather than clip
-    const keep = decCtx.getImageData(0, 0, c.width, c.height);
-    c.height = y + 200;
-    decCtx = c.getContext('2d');
-    decCtx?.putImageData(keep, 0, 0);
-    if (!decCtx) return;
+  if (y >= cv.height) {                     // grow downward rather than clip
+    const keep = decLiveCtx.getImageData(0, 0, cv.width, cv.height);
+    cv.height = y + 200;
+    decLiveCtx = cv.getContext('2d');
+    decLiveCtx?.putImageData(keep, 0, 0);
+    if (!decLiveCtx) return;
+    if (!decViewingPrev) blitToVisible(cv);
   }
 
-  const img = decCtx.createImageData(w, 1);
+  const img = decLiveCtx.createImageData(w, 1);
   for (let x = 0; x < w; x++) {
     const o = x << 2;
     if (rgb) {
@@ -1817,7 +3454,57 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     }
     img.data[o + 3] = 255;
   }
-  decCtx.putImageData(img, 0, y);
+  decLiveCtx.putImageData(img, 0, y);
+  // Mirror the just-drawn line to the visible canvas when we're watching live.
+  if (!decViewingPrev) {
+    const vis = $<HTMLCanvasElement>('decImage');
+    if (vis.width !== cv.width || vis.height !== cv.height) blitToVisible(cv);
+    else vis.getContext('2d')?.putImageData(img, 0, y);
+  }
+}
+
+/** Bank the live image as saveable once it finishes; enable PREV on the next image start. */
+function markDecImageComplete() {
+  decLiveComplete = true;
+  updateDecImageButtons();
+}
+
+/** Toggle between the live image and the last completed (previous) image. */
+function toggleDecPrev() {
+  if (!decPrevCv && !decViewingPrev) return;
+  decViewingPrev = !decViewingPrev;
+  blitToVisible(decViewingPrev ? decPrevCv : decLiveCv);
+  updateDecImageButtons();
+}
+
+/** Save the currently-shown image to a PNG download (share sheet where available). */
+function saveDecImage() {
+  const src = decViewingPrev ? decPrevCv : decLiveCv;
+  if (!src) return;
+  const name = ($('decTitle').textContent || 'image').toLowerCase().replace(/[^a-z0-9]+/g, '') +
+    '_' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.png';
+  src.toBlob((blob) => {
+    if (!blob) return;
+    const file = new File([blob], name, { type: 'image/png' });
+    const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
+    if (nav.canShare?.({ files: [file] })) {
+      nav.share?.({ files: [file] }).catch(() => {});
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
+}
+
+/** Reset the image buffers — on decoder box open/switch. */
+function resetDecImages() {
+  decLiveCv = null; decLiveCtx = null; decPrevCv = null;
+  decViewingPrev = false; decLiveComplete = false;
+  const c = $<HTMLCanvasElement>('decImage');
+  c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+  updateDecImageButtons();
 }
 
 function renderSpots() {
@@ -1890,11 +3577,25 @@ function initSpotFilters() {
  * Opens even with no spots — a button that does nothing reads as broken.
  */
 function openSpotsMap() {
-  const rows = filteredSpots().filter(s => s.grid && s.grid.length >= 4);
   const me = myPos();
 
-  const pts = rows.map(s => {
-    const p = gridToLatLon(s.grid)!;
+  // ★★★ PARSE, THEN FILTER — never filter by LENGTH and then assert the parse. `gridToLatLon`
+  // is strict (^[A-R]{2}[0-9]{2}([A-X]{2})?$), so plenty of strings pass "length >= 4" and
+  // still return null: a 5-character grid, a 7-character one, or junk like "AB1X" out of a
+  // corrupt FT8 decode. The old code asserted the result non-null with `!` and then read
+  // `p.lat`, so ONE malformed grid anywhere in the list threw a TypeError inside the click
+  // handler — and the MAP BUTTON THEN DID NOTHING, silently, for as long as that spot stayed
+  // in the list. Closing the map and finding it would not reopen is exactly this
+  // (Stuart, 2026-07-27). A bad decode must cost us that one spot, not the whole feature.
+  const rows: { s: Spot; p: { lat: number; lon: number } }[] = [];
+  let dropped = 0;
+  for (const s of filteredSpots()) {
+    const p = gridToLatLon(s.grid);
+    if (p) rows.push({ s, p }); else if (s.grid) dropped++;
+  }
+  if (dropped) console.warn(`[map] ${dropped} spot(s) had an unparseable grid`);
+
+  const pts = rows.map(({ s, p }) => {
     return {
       callsign: s.callsign, grid: s.grid, mode: s.mode, band: s.band, snr: s.snr,
       frequency: s.frequency, timestamp: s.timestamp,
@@ -2352,6 +4053,40 @@ function buildMenu() {
     spec!.setHwPpm(v);
     savePref('ppm', v);
   };
+  // Persisted like the other preferences. Turning it back ON does not wait for the next idle
+  // period to matter; turning it OFF must un-throttle immediately, or the user sits at 5 fps
+  // wondering whether the switch did anything.
+  // Waterfall SPEED — on-screen scroll rate (10/20/30). Screen-relative (× dpr inside the waterfall),
+  // so render resolution no longer changes the speed.
+  for (const b of Array.from($('wfSpeedSeg').children) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      wfSpeed = Number(b.dataset.wfspeed);
+      savePref('wfSpeed', wfSpeed);
+      applyWaterfallRates();
+    };
+  }
+  // Waterfall DATA RATE — server frames/sec (AUTO/20/10/5). Applied immediately. Picking a data rate
+  // above the current Speed bumps the Speed up (you can't display slower than you receive).
+  for (const b of Array.from($('wfRateSeg').children) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      wfDataRate = Number(b.dataset.wfrate);
+      if (wfDataRate > 0 && wfSpeed < wfDataRate) { wfSpeed = wfDataRate; savePref('wfSpeed', wfSpeed); }
+      savePref('wfDataRate', wfDataRate);
+      applyWaterfallRates();
+    };
+  }
+  // Restore saved choices, then apply once.
+  { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
+  { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
+  if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
+  applyWaterfallRates();
+
+  toggle('idleSaver', (on) => {
+    if (idleForced) return;         // owner-enforced: the control is locked, not merely ignored
+    idleSaver = on;
+    if (!on && throttled) { throttled = false; spec?.setFftRate(wantedFps()); updateStatus(); }
+  }, 'idleSaver', true);
+
   toggle('biasT', (on) => spec!.setHwBiasT(on), 'biasT');
   toggle('agc',   (on) => spec!.setHwAgc(on),   'agc');
   segment('dsSeg', 'ds', (v) => spec!.setHwDirectSampling(v as 0 | 1 | 2), 'directSampling');
@@ -2366,12 +4101,7 @@ function buildMenu() {
   };
 
   // ── Audio (server-side DSP in the shim) ──────────────────────────────────
-  slider('sql', 'sqlVal',
-    (v) => (v <= -100 ? 'OFF' : `${v} dB`),
-    // Mirror the setting into the audio engine: squelch is applied SERVER-side, so
-    // without this the client cannot tell a closed squelch from a muted tab.
-    (v) => { spec!.setSquelch(v); if (audio) audio.squelchDb = v; },
-    'squelch');
+  setupSquelchBar();
 
   slider('nr', 'nrVal',
     (v) => (v === 0 ? 'OFF' : `${v}%`),
@@ -2384,6 +4114,16 @@ function buildMenu() {
     spec!.setStereo(on);
   }, 'stereo', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
+
+  // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
+  // other row talks to the shim's DSP over the open socket; the codec is a query parameter
+  // on the audio socket's URL, so it is fixed for that socket's lifetime and changing it
+  // means reconnecting. Hence the reload rather than a setter call.
+  $('rawAudio').onclick = () => {
+    setPrefersRawAudio(!prefersRawAudio());
+    location.reload();   // last tune and every other setting are restored on connect
+  };
+  refreshRawAudioRow();
 
   // ── Display / Waterfall / Spectrum ───────────────────────────────────────
   // The full set the app exposes, split into the sections it uses. All of it
@@ -2445,6 +4185,10 @@ function buildMenu() {
     wf!.showSpec = specOn;
     showBtn.classList.toggle('on', specOn);
     showBtn.textContent = specOn ? 'SHOW' : 'HIDE';
+    // The split slider does nothing while the trace is hidden, so say so rather than letting it
+    // drag with no visible effect.
+    const rs = document.getElementById('specRatio') as HTMLInputElement | null;
+    if (rs) { rs.disabled = !specOn; rs.closest('.mrow')?.classList.toggle('dim', !specOn); }
   };
   showBtn.onclick = () => { specOn = !specOn; applyShow(); savePref('specShow', specOn); };
   applyShow();
@@ -2505,7 +4249,7 @@ function pushSettingsToServer() {
   // restores the squelch but not the engine's knowledge of it — and the false
   // "IS THE TAB MUTED?" warning comes straight back.
   const sql = num('squelch');
-  if (sql !== undefined) { spec.setSquelch(sql); if (audio) audio.squelchDb = sql; }
+  if (sql !== undefined) applySquelch(sql, false);
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nr / 100);
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
@@ -2517,7 +4261,7 @@ function pushSettingsToServer() {
 
   // Re-assert the frame rate: the shim keeps whatever it was last set to, so a
   // reconnect could otherwise land in a stuck 5 fps with no way back.
-  spec.setFftRate(throttled ? IDLE_FPS : ACTIVE_FPS);
+  spec.setFftRate(wantedFps());
 
   // Gain and sample rate wait for hwinfo — we can't validate them until the
   // server has told us what this dongle actually supports.
@@ -2548,37 +4292,36 @@ function populateHw() {
     // isn't using.
     if (typeof savedIdx === 'number') spec!.setHwGain(hwGains[Number(g.value)] ?? 0, false);
   }
-  // The SERVER pinned the capture rate: hide the picker and say who set it.
-  // Offering a control whose every use is silently dropped is worse than offering
-  // none — the shim ignores a client's sampleRate outright when locked.
-  const pinned = hwLockedRate > 0;
+  // The server's capture-rate limit is an UP-TO CEILING, not a lock: keep the picker VISIBLE but
+  // offer only rates AT OR BELOW the cap. A listener can still pick lower (narrower span); the shim
+  // clamps anything above the cap. (Was: hide the picker entirely — wrong for an up-to cap.)
+  const cap = hwLockedRate > 0 ? hwLockedRate : Infinity;
   const rateRow = document.getElementById('rowRate');
   const rateLock = document.getElementById('rateLocked');
-  if (rateRow)  rateRow.hidden = pinned;
-  if (rateLock) {
-    rateLock.hidden = !pinned;
-    const val = rateLock.querySelector('.val');
-    if (pinned && val) {
-      const mhz = (hwLockedRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
-      val.textContent = `${mhz} MS/s · set by server`;
-    }
-  }
+  if (rateRow)  rateRow.hidden = false;
+  if (rateLock) rateLock.hidden = true;
 
-  if (hwRates.length && !pinned) {
+  if (hwRates.length) {
     const r = $<HTMLSelectElement>('rate');
     r.innerHTML = '';
     // ASCENDING. The server advertises 3.2 first, and an unsorted list made the highest
     // rate the one the <select> showed by default — see the default below for why that
     // was not merely untidy.
     for (const rate of [...hwRates].sort((a, b) => a - b)) {
+      if (rate > cap) continue;   // up-to cap: never offer a rate above the server's ceiling
       const o = document.createElement('option');
       o.value = String(rate);
       const mhz = `${(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s`;
-      // An RTL-SDR cannot sustain more than 2.4 MS/s over USB — above it the dongle
-      // drops samples, which shows up as glitches in the audio and gaps in the
-      // waterfall. It is offered because some dongles cope and some users want the
-      // span, but it must never be chosen FOR them, and never without saying so.
-      o.textContent = rate > RTL_SAFE_RATE ? `${mhz} (may drop samples)` : mhz;
+      // ★★ THE WARNING IS THE DONGLE'S, NOT THE RADIO'S. An RTL-SDR cannot sustain more
+      // than 2.4 MS/s over USB — above it the dongle drops samples silently, which is what
+      // makes it a trap rather than a trade-off, so those rates are labelled. An RSP is a
+      // different radio: it runs 8 MS/s happily, and carrying the dongle's caveat across
+      // would warn about the very capability the hardware was bought for (Stuart,
+      // 2026-07-26). The server already omits what a given radio cannot sustain — 10 MS/s
+      // is absent for an RSP for the same measured reason 3.2 is absent for a dongle — so
+      // anything still on offer here is safe on THIS receiver.
+      const risky = radioCaps?.driver !== 'sdrplay' && rate > RTL_SAFE_RATE;
+      o.textContent = risky ? `${mhz} (may drop samples)` : mhz;
       r.appendChild(o);
     }
     r.onchange = () => {
@@ -2726,24 +4469,140 @@ function formatStep(hz: number): string {
   return `${hz}Hz`;
 }
 
+// ── Tap = one step, hold = accelerating sweep ────────────────────────────────
+//
+// The same control law as the app's HiFi tuner keys, with the same constants, so
+// a button behaves identically whichever surface you are on (BRIEF-inputs §2).
+//
+// ★ TAP fires IMMEDIATELY on press, not on release, and ten fast taps are ten
+//   steps — no debounce, no accumulation.
+// ★ HOLD is the only special case: after HOLD_MS of UNBROKEN contact it begins
+//   auto-repeating and accelerates smoothly to a ceiling. Release stops it dead.
+//
+// ★★ Fast clicks can never be mistaken for a hold, and the guarantee is
+// STRUCTURAL rather than a heuristic: the timer is armed on press and cancelled
+// on EVERY release, so only one unbroken 350 ms can reach it. Nothing watches
+// click frequency and nothing looks across clicks. Do NOT add cross-click
+// debouncing — that is precisely what would break "rapid taps = rapid steps".
+const HOLD_MS = 350;
+const SWEEP_LO = 3;          // steps/sec when the sweep starts
+const SWEEP_HI = 22;         // steps/sec ceiling
+const SWEEP_RAMP_MS = 2500;  // LO -> HI, a continuous ramp rather than gears
+
+/**
+ * @param tap   what one press does — the decisive, familiar amount.
+ * @param sweep what each auto-repeat tick does. Usually the same as `tap`, but
+ *              zoom deliberately differs: a click wants a decisive octave, while
+ *              a sweep wants fine travel, or holding it would cross the whole
+ *              range in a blink.
+ */
+function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = tap) {
+  let holdT: number | null = null;
+  let tickT: number | null = null;
+  const stop = () => {
+    if (holdT !== null) { clearTimeout(holdT); holdT = null; }
+    if (tickT !== null) { clearTimeout(tickT); tickT = null; }
+    el.classList.remove('sweeping');
+  };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;            // ignore right/middle click
+    e.preventDefault();                    // no text selection, no double-tap zoom
+    stop();
+    tap();
+    holdT = window.setTimeout(() => {
+      holdT = null;
+      el.classList.add('sweeping');
+      const started = Date.now();
+      const tick = () => {
+        sweep();
+        // Rate recomputed per tick, so the acceleration is smooth.
+        const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
+        tickT = window.setTimeout(tick, 1000 / (SWEEP_LO + (SWEEP_HI - SWEEP_LO) * t));
+      };
+      tickT = window.setTimeout(tick, 1000 / SWEEP_LO);
+    }, HOLD_MS);
+  });
+  el.addEventListener('pointercancel', stop);
+  el.addEventListener('pointerleave', stop);
+  // ★ Release ANYWHERE ends it. Listening only on the element would leave a
+  // sweep running forever if the pointer drifted off the button before lifting,
+  // which is exactly what happens when you press hard and slide.
+  window.addEventListener('pointerup', stop);
+}
+
 function buildVfo() {
   const saved = prefs().step;
   if (typeof saved === 'number' && saved > 0) step = saved;
-  $('tuneDown').onclick = () => nudge(-step);
-  $('tuneUp').onclick   = () => nudge(step);
-  $('stepBtn').onclick  = cycleStep;
+  attachHoldSweep($('tuneDown'), () => nudge(-step));
+  attachHoldSweep($('tuneUp'),   () => nudge(step));
+  $('stepBtn').onclick  = openStepMenu;
   syncStep();
   renderFreq();
 }
 
-/** Click the step button to walk the ladder for the current band. */
+/** Walk the ladder — kept for the keyboard shortcut, where cycling is the right
+ *  gesture because there is nothing to point at. */
 function cycleStep() {
   if (!spec) return;
   const steps = stepsForFreq(spec.frequency);
   const i = steps.indexOf(step);
-  step = steps[(i + 1) % steps.length];
+  setStep(steps[(i + 1) % steps.length]);
+}
+
+function setStep(v: number) {
+  step = v;
   $('stepBtn').textContent = formatStep(step);
   savePref('step', step);
+}
+
+/** ★ A MENU, NOT A CYCLE. The ladder has grown to the point where reaching the
+ *  step you want means clicking through the ones you don't — and on the HF ladder
+ *  that is a lot of clicks to go the wrong way round. A list you point at is the
+ *  right control once the options stop being few (Stuart: "bothered me for ages").
+ *  ★ The keyboard [ and ] keep cycling: there is nothing to aim at from a key. */
+function openStepMenu() {
+  if (!spec) return;
+  document.getElementById('stepMenu')?.remove();
+  const steps = stepsForFreq(spec.frequency);
+  const btn = $('stepBtn');
+  const r = btn.getBoundingClientRect();
+
+  const m = document.createElement('div');
+  m.id = 'stepMenu';
+  m.style.cssText = 'position:fixed;z-index:9998;background:#0d0d0d;border:1px solid #ffa000;'
+    + 'border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;'
+    + 'font:12px/1.4 var(--mono,monospace);box-shadow:0 6px 24px rgba(0,0,0,.6);'
+    + 'max-height:60vh;overflow:auto';
+  for (const v of steps) {
+    const b = document.createElement('button');
+    b.textContent = formatStep(v);
+    b.style.cssText = 'background:none;border:0;color:' + (v === step ? '#ffe566' : '#ddd')
+      + ';padding:7px 14px;text-align:right;cursor:pointer;border-radius:5px;font:inherit';
+    b.onmouseenter = () => { b.style.background = 'rgba(255,160,0,.18)'; };
+    b.onmouseleave = () => { b.style.background = 'none'; };
+    b.onclick = () => { setStep(v); close(); };
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+
+  // Anchor ABOVE the button when there is no room below — the VFO sits at the
+  // bottom of the window, so "below" is usually off-screen.
+  const mh = m.offsetHeight;
+  const top = (r.top - mh - 6 > 0) ? r.top - mh - 6 : Math.min(r.bottom + 6, innerHeight - mh - 8);
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  m.style.top = `${Math.max(8, top)}px`;
+
+  const close = () => {
+    m.remove();
+    document.removeEventListener('mousedown', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onDoc = (e: MouseEvent) => { if (!m.contains(e.target as Node)) close(); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
 }
 
 /** Keep the step legal for the band we're in — the HF and VHF ladders differ,
@@ -2768,8 +4627,106 @@ function syncStep() {
 const MIN_TUNE_HZ = 10_000;
 const MAX_TUNE_HZ = 1_800_000_000;
 
+// ★★ A DETENT AT A HARDWARE GAP, not a silent clamp and not a hard wall. An Airspy HF+ tunes
+// 0.5 kHz-31 MHz and 60-260 MHz with NOTHING in between — the gap is absent hardware, not a
+// weak spot. Three ways to handle it and only one is honest:
+//   • allow it — the dial sits on a dead frequency and the radio looks broken;
+//   • clamp silently — the dial stops moving with no reason given, which reads as a bug;
+//   • BOUNCE, and say why. Tuning into the gap parks you on the edge with a message; tune
+//     again in the same direction and you jump to the far side (Stuart's design, 2026-07-27).
+// It teaches the shape of the radio instead of hiding it.
+let gapNudgeDir = 0;        // which way the last bounce was heading, 0 = not bounced
+
+/** Where the running radio can actually tune, or null when it has no gaps (a dongle). */
+function tuneRanges(): [number, number][] | null {
+  const r = radioCaps?.ranges;
+  return r && r.length > 1 ? r : null;
+}
+
 function clampTune(hz: number): number {
-  return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, Math.round(hz)));
+  const want = Math.round(hz);
+  const ranges = tuneRanges();
+  if (!ranges) { gapNudgeDir = 0; return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want)); }
+
+  // Inside a real window: nothing to do, and any pending bounce is cancelled.
+  for (const [lo, hi] of ranges) if (want >= lo && want <= hi) { gapNudgeDir = 0; return want; }
+
+  // In a gap. Work out which way we were travelling and which edges bracket us.
+  const cur = spec?.frequency ?? want;
+  const dir = want >= cur ? 1 : -1;
+  let below = -Infinity, above = Infinity;
+  for (const [lo, hi] of ranges) {
+    if (hi < want && hi > below) below = hi;
+    if (lo > want && lo < above) above = lo;
+  }
+  // ★ Second nudge the SAME way = jump the gap. The first parks on the edge and explains; only
+  // a deliberate repeat crosses, so a fast scroll cannot fling you into another band by
+  // accident.
+  if (gapNudgeDir === dir) {
+    gapNudgeDir = 0;
+    const target = dir > 0 ? above : below;
+    if (Number.isFinite(target)) {
+      showTuneGapMsg(`Jumped to ${(target / 1e6).toFixed(3)} MHz`);
+      return target;
+    }
+  }
+  gapNudgeDir = dir;
+  const edge = dir > 0 ? below : above;
+  if (!Number.isFinite(edge)) return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want));
+  const other = dir > 0 ? above : below;
+  showTuneGapMsg(Number.isFinite(other)
+    ? `${(edge / 1e6).toFixed(3)} MHz is the edge of this radio's range — tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
+    : `${(edge / 1e6).toFixed(3)} MHz is the edge of this radio's range`);
+  return edge;
+}
+
+/** ★ Black out the part of the window the radio cannot tune, and say what it is.
+ *  Only ever ONE region: the visible span is far narrower than any real gap, so a window can
+ *  overlap at most one edge. Handling several would be code for a case that cannot occur. */
+function updateRangeGap(centerHz: number, bwHz: number) {
+  const el = document.getElementById('rangeGap');
+  const note = document.getElementById('rangeGapNote');
+  const ranges = tuneRanges();
+  if (!el || !note || !ranges || bwHz <= 0) { el?.classList.remove('show'); return; }
+
+  const lo = centerHz - bwHz / 2, hi = centerHz + bwHz / 2;
+  // The window's own edges, and the range that contains the middle of it.
+  const inRange = ranges.find(([a, b]) => centerHz >= a && centerHz <= b);
+  if (!inRange) { el.classList.remove('show'); return; }
+  const [rLo, rHi] = inRange;
+
+  let x0 = 0, x1 = 0, msg = '';
+  if (hi > rHi) {                       // dead space on the RIGHT
+    x0 = (rHi - lo) / bwHz; x1 = 1;
+    const next = ranges.filter(([a]) => a > rHi).sort((p, q) => p[0] - q[0])[0];
+    msg = next
+      ? `${(rHi / 1e6).toFixed(3)} MHz is the top of this range.\nTune up again to jump to ${(next[0] / 1e6).toFixed(3)} MHz.`
+      : `${(rHi / 1e6).toFixed(3)} MHz is the top of this radio's range.`;
+  } else if (lo < rLo) {                // dead space on the LEFT
+    x0 = 0; x1 = (rLo - lo) / bwHz;
+    const prev = ranges.filter(([, b]) => b < rLo).sort((p, q) => q[1] - p[1])[0];
+    msg = prev
+      ? `${(rLo / 1e6).toFixed(3)} MHz is the bottom of this range.\nTune down again to jump to ${(prev[1] / 1e6).toFixed(3)} MHz.`
+      : `${(rLo / 1e6).toFixed(3)} MHz is the bottom of this radio's range.`;
+  } else { el.classList.remove('show'); return; }
+
+  x0 = Math.max(0, Math.min(1, x0)); x1 = Math.max(0, Math.min(1, x1));
+  if (x1 - x0 <= 0.005) { el.classList.remove('show'); return; }   // a sliver is just noise
+  el.style.left  = `${x0 * 100}%`;
+  el.style.width = `${(x1 - x0) * 100}%`;
+  note.textContent = msg;
+  el.classList.add('show');
+  el.hidden = false;
+}
+
+let gapMsgTimer: number | null = null;
+function showTuneGapMsg(text: string) {
+  const el = document.getElementById('tuneGapMsg');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add('show');
+  if (gapMsgTimer) clearTimeout(gapMsgTimer);
+  gapMsgTimer = window.setTimeout(() => el.classList.remove('show'), 4000);
 }
 
 function nudge(hz: number) {
@@ -2839,8 +4796,20 @@ function initFreqEntry() {
     };
   }
 
+  // ★ Accept whatever decimal separator the keyboard gives. A Dutch (and most European)
+  // layout puts a COMMA on `inputmode="decimal"`, and stripping it turned 100,5 into 1005
+  // — so the listener was tuned to 1005 MHz having asked for 100.5. Silently wrong, and
+  // invisible to anyone testing on a UK/US layout. Both separators present means the comma
+  // is a thousands separator (1,234.5) and is dropped instead.
+  const normaliseDecimal = (t: string) => {
+    const hasComma = t.includes(','), hasDot = t.includes('.');
+    if (hasComma && hasDot) return t.replace(/,/g, '');
+    if (hasComma) return t.replace(/,/g, '.');
+    return t;
+  };
   const go = () => {
-    const v = parseFloat($<HTMLInputElement>('freqInput').value.replace(/[^\d.]/g, ''));
+    const raw = normaliseDecimal($<HTMLInputElement>('freqInput').value);
+    const v = parseFloat(raw.replace(/[^\d.]/g, ''));
     if (!isFinite(v) || v <= 0) { $('freqMsg').textContent = 'Enter a frequency'; return; }
     spec!.tune(clampTune(v * UNIT_DIV[freqUnit]), undefined, { recenter: true, retarget: true });
     renderFreq();
@@ -2850,6 +4819,16 @@ function initFreqEntry() {
   $('freqGo').onclick = go;
   $<HTMLInputElement>('freqInput').onkeydown = (e) => {
     if (e.key === 'Enter') { go(); e.preventDefault(); }
+  };
+  // Normalise in the field too, so the user SEES a `.` whatever their layout offers.
+  $<HTMLInputElement>('freqInput').oninput = (e) => {
+    const el = e.target as HTMLInputElement;
+    const v = normaliseDecimal(el.value);
+    if (v !== el.value) {
+      const at = el.selectionStart;
+      el.value = v;
+      if (at != null) el.setSelectionRange(at, at);   // 1:1 substitution, so the caret holds
+    }
   };
 
   $('freqShare').onclick = shareFrequency;
@@ -2910,6 +4889,315 @@ function applyShareParams() {
 }
 
 // ── Waterfall input: click-to-tune, drag-to-pan, wheel-to-zoom ───────────────
+
+/** ★★ Render the controls the RUNNING radio actually has.
+ *
+ *  A dongle has one gain slider. An RSP has an LNA state, a separate IF gain REDUCTION, AGC
+ *  over the IF stage, and switchable notches — and showing a dongle's single slider for all
+ *  of that is not a simplification but a misrepresentation. It also hid a real fault: the LNA
+ *  sat wide open whatever the slider did, flooding the front end (Stuart, 2026-07-26).
+ *
+ *  ★ THE DIRECTION IS INVERTED, and it is what catches developers out: SDRplay gains are
+ *  REDUCTIONS. 20 dB of IF reduction is MAXIMUM gain; 59 dB is minimum. Both the label and
+ *  the readout say so, because a slider that silently means the opposite of every other
+ *  slider in the app is a trap.
+ */
+/** SDRplay's own AGC working point. The API defaults to -60, which is a different thing —
+ *  see the setpoint note in sdrplay_source.h. */
+const AGC_DEFAULT = -30;
+
+let radioCaps: import('./spectrum').RadioCaps | null = null;
+
+// ── Airspy HF+ ───────────────────────────────────────────────────────────────
+const AHF_PREFS = { ahfAtt: 'ahf_att', ahfPpb: 'ahf_ppb' } as const;
+
+function ahfSend(msg: Record<string, unknown>) { spec?.send({ type: 'ahf_control', ...msg }); }
+
+/** Push every current HF+ setting. Called when the radio announces itself, so a reconnect or a
+ *  server restart restores what the user chose — the same contract pushAllRspSettings has, and
+ *  for the same reason: the server rebuilds its state and would otherwise open on defaults
+ *  while the panel still showed the operator's choices. */
+function pushAllAhfSettings() {
+  if (radioCaps?.driver !== 'airspyhf') return;
+  ahfSend({
+    att:    Number($<HTMLInputElement>('ahfAtt').value),
+    lna:    $('ahfLna').classList.contains('on') ? 1 : 0,
+    thresh: $('ahfThreshSeg').querySelector('.on')?.getAttribute('data-th') === '1' ? 1 : 0,
+    ppb:    Number($<HTMLInputElement>('ahfPpb').value),
+  });
+  // ★ AGC LAST. It owns the gain path, so sending it first would let it immediately override
+  // the manual attenuation we just set — the same ordering trap the RSP's IFGR has.
+  ahfSend({ agc: $('ahfAgc').classList.contains('on') ? 1 : 0 });
+}
+
+/** Manual gain controls are meaningless while the radio's own AGC owns the front end. Disable
+ *  rather than hide: they are still the right controls, just not yours to set at that moment,
+ *  and hiding them would make AUTO look like it removed features. */
+function renderAhfEnabled() {
+  const auto = $('ahfAgc').classList.contains('on');
+  $<HTMLElement>('rowAhfAtt').style.opacity = auto ? '0.45' : '1';
+  $<HTMLInputElement>('ahfAtt').disabled = auto;
+  $<HTMLElement>('rowAhfThresh').style.opacity = auto ? '1' : '0.45';
+  for (const b of Array.from($('ahfThreshSeg').children) as HTMLButtonElement[]) b.disabled = !auto;
+  renderAhfVals();
+}
+
+function renderAhfVals() {
+  const att = Number($<HTMLInputElement>('ahfAtt').value);
+  const stepDb = radioCaps?.attStepDb ?? 6;
+  // ★ Under AGC the slider's number is NOT what the radio is doing — the AGC owns the front end
+  //   and libairspyhf has no getter to ask it what it chose. Showing the last MANUAL figure made
+  //   a greyed "48 dB" read as 48 dB of applied attenuation when the AGC was actually running
+  //   wide open. Say who is in charge instead of quoting a number that is not in effect.
+  $('ahfAttVal').textContent = $('ahfAgc').classList.contains('on')
+    ? 'set by AGC'
+    : `${att * stepDb} dB${att === 0 ? ' · none' : ''}`;
+  const ppb = Number($<HTMLInputElement>('ahfPpb').value);
+  $('ahfPpbVal').textContent = `${ppb} ppb`;
+}
+
+function applyAhfCaps(caps: import('./spectrum').RadioCaps | null) {
+  const steps = (caps?.attSteps ?? 9) - 1;
+  $<HTMLInputElement>('ahfAtt').max = String(Math.max(0, steps));
+  renderAhfVals();
+  renderAhfEnabled();
+  // The radio has just told us what it is — the moment to tell it what the user last chose.
+  pushAllAhfSettings();
+}
+
+function initAhfControls() {
+  const p = prefs();
+  for (const [id, key] of Object.entries(AHF_PREFS)) {
+    const v = p[key];
+    if (typeof v === 'number') $<HTMLInputElement>(id).value = String(v);
+  }
+  // ★★ SET THE LABEL AS WELL AS THE CLASS. The class is what pushAllAhfSettings reads and what
+  // gets sent to the radio; the TEXT is all the user sees. Restoring one without the other made
+  // the button lie — the preamp came back ON, was correctly pushed as ON, and the label still
+  // read OFF (Stuart, on reconnect, 2026-07-27). The radio was right and the button was wrong,
+  // which is the worse way round: you cannot tell by looking.
+  const setToggle = (id: string, on: boolean, onText: string, offText: string) => {
+    const el = $(id);
+    el.classList.toggle('on', on);
+    el.textContent = on ? onText : offText;
+  };
+  if (typeof p['ahf_agc'] === 'boolean') setToggle('ahfAgc', p['ahf_agc'], 'AUTO', 'MANUAL');
+  if (typeof p['ahf_lna'] === 'boolean') setToggle('ahfLna', p['ahf_lna'], 'ON', 'OFF');
+
+  $('ahfAgc').onclick = () => {
+    const on = !$('ahfAgc').classList.contains('on');
+    $('ahfAgc').classList.toggle('on', on);
+    $('ahfAgc').textContent = on ? 'AUTO' : 'MANUAL';
+    savePref('ahf_agc', on);
+    renderAhfEnabled();
+    ahfSend({ agc: on ? 1 : 0 });
+    // ★ Re-assert the attenuation on the way OUT of auto: the radio has been moving it, so the
+    // slider and the hardware have drifted apart and the slider is the user's intent.
+    if (!on) ahfSend({ att: Number($<HTMLInputElement>('ahfAtt').value) });
+  };
+  $('ahfLna').onclick = () => {
+    const on = !$('ahfLna').classList.contains('on');
+    $('ahfLna').classList.toggle('on', on);
+    $('ahfLna').textContent = on ? 'ON' : 'OFF';
+    savePref('ahf_lna', on);
+    ahfSend({ lna: on ? 1 : 0 });
+  };
+  $<HTMLInputElement>('ahfAtt').oninput = () => {
+    renderAhfVals();
+    const v = Number($<HTMLInputElement>('ahfAtt').value);
+    ahfSend({ att: v }); savePref('ahf_att', v);
+  };
+  $<HTMLInputElement>('ahfPpb').oninput = () => {
+    const el = $<HTMLInputElement>('ahfPpb');
+    let v = Number(el.value);
+    // ★★ A CENTRE DETENT AT ZERO, the same idea as the RSP's AGC target snapping to -30.
+    // ±5000 ppb across a few hundred pixels means nudging this control is easy and getting
+    // back to exactly 0 is not — Stuart knocked it off centre and could not return
+    // (2026-07-27). Zero is the value everyone starts from and the one to come back to when
+    // an experiment did not help, so it has to be a gesture rather than a pixel hunt.
+    // ★ ±20 ppb is deliberately NARROW. An HF+'s own error runs to hundreds of ppb, so a
+    // generous detent would swallow legitimate corrections — this catches a slip, not a
+    // deliberate setting. (20 ppb is 2 Hz at 100 MHz.)
+    if (Math.abs(v) <= 20) { v = 0; el.value = '0'; }
+    renderAhfVals();
+    ahfSend({ ppb: v }); savePref('ahf_ppb', v);
+  };
+  segment('ahfThreshSeg', 'th', (th) => ahfSend({ thresh: th }), 'ahf_thresh');
+}
+
+
+function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
+  radioCaps = caps;
+  const isRsp = caps?.driver === 'sdrplay';
+  const isAhf = caps?.driver === 'airspyhf';
+  $<HTMLElement>('rspCtls').hidden = !isRsp;
+  $<HTMLElement>('ahfCtls').hidden = !isAhf;
+  // Dongle-only controls: hidden on anything that is not a dongle, so no inert switches.
+  // ★ PPM lives in here, and an HF+ must not show it — it has its own calibration in PARTS
+  // PER BILLION, and two frequency-correction controls disagreeing about units is exactly the
+  // "which one is real?" confusion the RSP bias-T duplication caused.
+  for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
+    el.hidden = isRsp || isAhf;
+  $('radioName').textContent = caps?.model
+    ? (isRsp ? `SDRplay ${caps.model}` : caps.model)
+    : (caps?.driver === 'rtl' ? 'RTL-SDR' : '—');
+  // The dongle's single gain slider is meaningless on an RSP, and on an HF+ there is no
+  // variable gain stage at all — hide it rather than leave a control whose label lies.
+  const gainRow = $('gain').closest('.mrow') as HTMLElement | null;
+  if (gainRow) gainRow.hidden = isRsp || isAhf;
+  const autoRow = $('gainAuto').closest('.mrow') as HTMLElement | null;
+  if (autoRow) autoRow.hidden = isRsp || isAhf;
+  // ★ THE PROTECTED CONTROLS ARE BUILT HERE, so the lock has to be re-applied here. The
+  // Airspy and RSP panels only exist once the radio has announced itself, which happens AFTER
+  // the admin state is first resolved — so applying it only at connect left the per-radio
+  // controls (calibration especially) enabled on a protected server (Stuart, 2026-07-27).
+  refreshAdminRow();
+  if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); return; }
+  if (!isRsp) return;
+
+  const n = caps?.lnaStates ?? 10;
+  const lna = $<HTMLInputElement>('rspLna');
+  lna.max = String(n - 1);
+  if (typeof prefs()['rsp_lna'] !== 'number')
+    lna.value = String(Math.floor((n - 1) / 2));    // mid gain by default, never wide open
+  const gr = $<HTMLInputElement>('rspIfGr');
+  gr.min = String(caps?.ifGrMin ?? 20);
+  gr.max = String(caps?.ifGrMax ?? 59);
+  $<HTMLButtonElement>('rspRfNotch').hidden  = !caps?.rfNotch;
+  $<HTMLButtonElement>('rspDabNotch').hidden = !caps?.dabNotch;
+  $<HTMLButtonElement>('rspBiasT').hidden    = !caps?.biasT;
+  renderRspVals();
+  // ★ The radio has just told us what it is — which is also the moment to tell it what the
+  // user last chose. Covers a server restart, a reconnect, and a fresh page load alike.
+  pushAllRspSettings();
+}
+
+function rspSend(msg: Record<string, unknown>) {
+  spec?.send({ type: 'rsp_control', ...msg });
+}
+
+function renderRspVals() {
+  const n = radioCaps?.lnaStates ?? 10;
+  // Slider position is GAIN; the hardware wants a STATE, which counts the other way.
+  const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  const pos = Number($<HTMLInputElement>('rspLna').value);
+  const lna = lnaMax - pos;
+  const gr  = Number($<HTMLInputElement>('rspIfGr').value);
+  // ★ Say which END is more gain, every time. "LNA 3" means nothing on its own.
+  // Show the state too — an FM-DXer comparing against SDRuno or SDRconnect wants the actual
+  // LNA state, not a slider position we invented.
+  $('rspLnaVal').textContent =
+    `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`;
+  $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
+  const sp = Number($<HTMLInputElement>('rspAgcSet').value);
+  // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
+  // ★ Name the default where it sits. -30 dBFS is SDRplay's OWN working point (the API's
+  // default is -60, which is a different and much gentler thing), so it is the value a user
+  // will want to come back to after experimenting — and a number means nothing without
+  // knowing where home is (Stuart, 2026-07-26).
+  $('rspAgcSetVal').textContent =
+    `${sp} dBfs${sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
+}
+
+/** Glide the IF thumb to a new AGC value. Status arrives at 5 Hz; a slider that teleports
+ *  between readings looks like a glitch rather than a loop settling. */
+let ifGrTween = 0;
+function tweenIfGr(target: number) {
+  const gr = $<HTMLInputElement>('rspIfGr');
+  const from = Number(gr.value);
+  if (Math.abs(target - from) < 0.5) { gr.value = String(target); return; }
+  cancelAnimationFrame(ifGrTween);
+  const t0 = performance.now();
+  const step = (t: number) => {
+    const k = Math.min(1, (t - t0) / 180);
+    gr.value = String(from + (target - from) * k);
+    if (k < 1) ifGrTween = requestAnimationFrame(step);
+  };
+  ifGrTween = requestAnimationFrame(step);
+}
+
+/** ★★ RSP settings are REMEMBERED and RE-SENT on connect.
+ *
+ *  They were UI-only, so a server restart brought the radio back on its defaults while the
+ *  panel still showed the positions you had chosen — the controls and the hardware quietly
+ *  disagreeing, which is worse than losing them outright because nothing looks wrong
+ *  (Stuart, 2026-07-26: "all the gains revert", "resets back to -60 whilst showing -30").
+ *  ★ And the UI defaults now MATCH what the server opens with. A control whose resting
+ *  position differs from the radio's is lying before anyone has touched it.
+ */
+const RSP_PREFS = {
+  lna: 'rspLna', ifgr: 'rspIfGr', agcset: 'rspAgcSet',
+} as const;
+const RSP_TOGGLES = {
+  ifagc: 'rspIfAgc', rfnotch: 'rspRfNotch', dabnotch: 'rspDabNotch', biast: 'rspBiasT',
+} as const;
+
+/** Push every current RSP setting to the server. Called whenever a radio announces itself,
+ *  so a reconnect or a server restart restores what the user chose. */
+function pushAllRspSettings() {
+  if (radioCaps?.driver !== 'sdrplay') return;
+  const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  rspSend({
+    lna:      lnaMax - Number($<HTMLInputElement>('rspLna').value),
+    agcset:   Number($<HTMLInputElement>('rspAgcSet').value),
+    rfnotch:  $('rspRfNotch').classList.contains('on') ? 1 : 0,
+    dabnotch: $('rspDabNotch').classList.contains('on') ? 1 : 0,
+    biast:    $('rspBiasT').classList.contains('on') ? 1 : 0,
+  });
+  // ★ AGC last, and the IF reduction only when it is OFF — the server refuses a manual
+  // IFGR while the AGC owns the register, so sending them the other way round would drop
+  // the value silently.
+  const agcOn = $('rspIfAgc').classList.contains('on');
+  rspSend({ ifagc: agcOn ? 1 : 0 });
+  if (!agcOn) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+}
+
+function initRspControls() {
+  const p = prefs();
+  // Restore before wiring, so nothing fires a send with a stale value.
+  for (const [key, id] of Object.entries(RSP_PREFS)) {
+    const v = p[`rsp_${key}`];
+    if (typeof v === 'number') $<HTMLInputElement>(id).value = String(v);
+  }
+  for (const [key, id] of Object.entries(RSP_TOGGLES)) {
+    const v = p[`rsp_${key}`];
+    const on = typeof v === 'boolean' ? v : key === 'ifagc';   // AGC defaults on
+    $(id).classList.toggle('on', on);
+  }
+
+  const lna = $<HTMLInputElement>('rspLna');
+  const gr  = $<HTMLInputElement>('rspIfGr');
+  lna.oninput = () => {
+    renderRspVals();
+    const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+    rspSend({ lna: lnaMax - Number(lna.value) });   // slider is gain, hardware wants state
+    savePref('rsp_lna', Number(lna.value));
+  };
+  gr.oninput  = () => {
+    renderRspVals(); rspSend({ ifgr: Number(gr.value) }); savePref('rsp_ifgr', Number(gr.value));
+  };
+  const sp = $<HTMLInputElement>('rspAgcSet');
+  sp.oninput = () => {
+    // ★ A SOFT DETENT AT THE DEFAULT. Dragging near -30 snaps to it, so getting back to
+    // SDRplay's working point is a gesture rather than a pixel-hunt. Narrow enough (±2 dB)
+    // that it never fights someone deliberately choosing -28 or -32.
+    let v = Number(sp.value);
+    if (Math.abs(v - AGC_DEFAULT) <= 2) { v = AGC_DEFAULT; sp.value = String(v); }
+    renderRspVals(); rspSend({ agcset: v }); savePref('rsp_agcset', v);
+  };
+  const toggle = (id: string, key: string) => {
+    const b = $<HTMLButtonElement>(id);
+    b.onclick = () => {
+      const on = !b.classList.contains('on');
+      b.classList.toggle('on', on);
+      rspSend({ [key]: on ? 1 : 0 });
+      savePref(`rsp_${key}`, on);
+      // Turning AGC OFF hands the IF reduction back, so send the slider's value with it.
+      if (key === 'ifagc' && !on) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+    };
+  };
+  for (const [key, id] of Object.entries(RSP_TOGGLES)) toggle(id, key);
+}
 
 function initWaterfallInput() {
   const c = $<HTMLCanvasElement>('wf');
@@ -2995,6 +5283,12 @@ function initKeyboard() {
       case 'ArrowUp':    spec.zoomBy(1.25); updateViewOverlays(); e.preventDefault(); break;
       case 'ArrowDown':  spec.zoomBy(0.8);  updateViewOverlays(); e.preventDefault(); break;
       case 'm': audio!.muted = !audio!.muted; $('muteBtn').classList.toggle('on', audio!.muted); break;
+      // ★ T = taller/shorter, but ONLY while the panel that it resizes is open. A shortcut
+      // that does nothing visible is worse than no shortcut: the user cannot tell whether
+      // they pressed the wrong key or the app is broken (Stuart, 2026-07-26).
+      case 't': case 'T':
+        if (rdsPanelOpen()) { $('rdsSize').click(); e.preventDefault(); }
+        break;
       default: {
         // Mode letter keys: first mode whose name starts with the key.
         const m = MODES.find(x => x[0] === e.key.toLowerCase());

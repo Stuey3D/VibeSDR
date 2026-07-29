@@ -34,12 +34,19 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
+	<!-- ★★ FROM THE PROJECT SETTING, not a literal. It was hardcoded, so bumping
+	     CURRENT_PROJECT_VERSION changed the project and NOT the bundle — and an install with an
+	     unchanged build number can silently leave the old app in place, so you test yesterday's
+	     code believing it is today's. Two sources of truth for one number, and the one that
+	     mattered was the one nobody edited (2026-07-27). -->
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -78,14 +85,12 @@
 			</array>
 		</dict>
 	</dict>
-	<key>UIFileSharingEnabled</key>
-	<true/>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>SplashScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

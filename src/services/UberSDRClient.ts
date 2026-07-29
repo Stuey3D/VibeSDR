@@ -19,6 +19,10 @@ import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { resolveStationIso, receiverIso } from './rdsCountry';
+import { LinkManager, LADDERS, type LinkMode } from './linkManager';
+
+/** Powersave target, in frames/sec — an absolute floor, not a divisor. */
+const POWERSAVE_FPS = 5;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -41,8 +45,69 @@ export interface SDRStatus {
   bandwidthHigh: number; // Hz, positive = above carrier
   binCount: number;
   binBandwidth: number;  // Hz per bin
-  centerHz: number;      // center of spectrum display
+  centerHz: number;      // center of spectrum display (may be PREDICTED during a gesture)
   bwHz: number;          // total spectrum bandwidth
+  /** The ACTUAL centre of the bins in THIS frame (from the frame header), never the
+   *  predicted display centre. Consumers that INDEX INTO the bins (the watch crop) must use
+   *  this — using the predicted centerHz points at the wrong bin and draws the signal offset
+   *  from the VFO (the "signal next to the VFO" bug). The full-spectrum display can keep using
+   *  centerHz for gesture continuity. */
+  trueCenterHz?: number;
+}
+
+/** ★ ONE FRAME OF THE ADVANCED RDS ANALYSER, exactly as VibeServer computes it.
+ *  ★★ NOTHING HERE IS DERIVED ON THE CLIENT — not the constellation, not the MPX curve, not
+ *  the confirmations. The analyser runs beside the decoder on the server, where the baseband
+ *  actually is; every client just draws this. That is why the phone can show the same panel
+ *  as the browser without a line of DSP, and why a fix to the decoder reaches all of them.
+ *  ★ Every gated field appears TWICE: the plain name is CONFIRMED BY REPETITION, the `*Raw`
+ *  one is what arrived this instant. The server always sends both and never picks — a viewer
+ *  switching to RAW must not change what another listener on the same receiver sees. */
+export interface RdsExt {
+  pty: number; tp: number; ta: number; ms: number; di: number;
+  ptyRaw: number; tpRaw: number; taRaw: number; msRaw: number; diRaw: number;
+  ct: number;            // minutes since midnight UTC, -1 = none
+  ctoff: number;         // local offset in HALF-hours (India is +11)
+  gtot: number;          // total groups decoded — 0 means no block sync at all
+  afseen: number;
+  rtpTitle: string; rtpArtist: string; longPs: string; ptyn: string;
+  lang: number; pinDay: number; pinHour: number; pinMin: number;
+  phase: number;         // RDS-to-pilot phase, degrees, folded to [0,90]
+  phaseDrift: number; phaseCoh: number;
+  pilotDev: number; rdsDev: number;   // kHz; rdsDev < 0 = not measurable
+  ber: number;           // block error rate %, -1 = unknown
+  grp: number[];         // per-group-type counts, 32 entries (0A,0B,1A...)
+  af: number[];          // alternative frequencies, kHz
+  eon: { pi: string; ps: string; af: number; ta: number }[];
+  oda: { aid: string; grp: number }[];
+  xy: number[];          // constellation, interleaved i/q, x100, clipped +/-127
+  mpx: number[];         // MPX spectrum, dB, integers in [-128, 0]
+}
+
+/** ★ WHAT THE CONNECTED RADIO ACTUALLY HAS, straight from the server (hwinfo.radio).
+ *  ★★ THE CLIENT MUST NOT GUESS. An Airspy HF+ has no tuner gain table, no LNA STATE ladder
+ *  and no IF gain reduction — it has an AGC, an 8-step attenuator and a preamp. Drawing a
+ *  dongle's gain slider for it is not a cosmetic error: the control does nothing useful and
+ *  the ones that would work are absent. Show only what the driver reports. */
+export interface RadioCaps {
+  driver: 'rtl' | 'sdrplay' | 'airspyhf' | string;
+  model: string;
+  // ── Airspy HF+ ──
+  attSteps?: number;        // 9 => 0..8
+  attStepDb?: number;       // 6 dB per step
+  hfLna?: boolean;          // +6 dB preamp
+  hfAgc?: boolean;
+  agcThreshold?: boolean;   // low/high
+  calPpb?: boolean;
+  /** ★ Tunable windows, Hz. The HF+ has a REAL HOLE at 31–60 MHz — not a weak spot, absent.
+   *  A client that does not know cannot stop someone parking on a dead frequency. */
+  ranges?: [number, number][];
+  rates?: number[];
+  // ── SDRplay RSP ──
+  lnaStates?: number;
+  ifGrMin?: number; ifGrMax?: number;
+  agcSetPoint?: boolean;
+  rfNotch?: boolean; dabNotch?: boolean; biasT?: boolean;
 }
 
 export interface SDRCallbacks {
@@ -54,6 +119,9 @@ export interface SDRCallbacks {
   /** Link quality: 0=down, 1=poor(red), 2=fluctuating(yellow), 3=good(green).
    *  Derived from frame inter-arrival jitter, stalls, ping RTT, reconnects. */
   onLink?:      (q: 0 | 1 | 2 | 3) => void;
+  /** Adaptive link state: how far the controller has throttled (1 = full) and whether it is still
+   *  working the link out. Lets the UI show a throttled-but-fine link honestly instead of red. */
+  onLinkRate?:  (adaptiveRung: number, settling: boolean, fps: number, kbps: number) => void;
   /** True from the moment a recovery starts (socket torn down) until the first
    *  frame arrives on the fresh one. The watch cannot infer this — from the wrist
    *  a recovery-in-progress and a dead phone look identical — so the phone, which
@@ -69,6 +137,35 @@ export interface SDRCallbacks {
   onHwRates?:   (rates: number[]) => void;
   /** >0 = the serving host PINNED the capture rate; the client hides its picker. */
   onHwLockedRate?: (rate: number) => void;
+  /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
+  onRdsExt?:    (x: RdsExt) => void;
+  /** What the serving radio is and what it can do (hwinfo.radio). */
+  onRadioCaps?: (caps: RadioCaps) => void;
+  /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
+   *  `refused` fires when a protected control was rejected — the honest moment to say why. */
+  onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean }) => void;
+  /** ★★ THE SERVER DELIBERATELY TURNING US AWAY. Each of these is TERMINAL: the
+   *  reconnect that serves a dropped link would here hammer a receiver that is
+   *  busy saying "not you, not now", while showing our own user nothing but
+   *  "reconnecting". The web client has always treated them as final; the phone
+   *  ignored both messages entirely, so a listener whose time ran out just
+   *  dropped and started retrying (2026-07-28).
+   *  `cooldownSec` is the server's own number — when they may come back. */
+  onSessionEnded?: (cooldownSec: number) => void;
+  /** Refused because we returned inside our cooldown. */
+  onCooldown?: (secs: number) => void;
+  /** ★★ PARITY GAP CLOSED 2026-07-28. The web client and Jr have handled all three of these
+   *  since they were built; the phone handled NONE of them, so an evicted or refused listener
+   *  saw a silent dead link and a retry loop. Checked message by message against
+   *  web/client/src/spectrum.ts — the failure mode of a per-client protocol is SILENCE. */
+  /** Someone else holds the receiver. Terminal — do not retry into a busy server. */
+  onBusy?: () => void;
+  /** The owner took their radio back with the admin password. Terminal, and not a fault. */
+  onEvicted?: () => void;
+  /** Still connected — the server's own countdown, at T-120s and T-30s. NOT a refusal.
+   *  ★ This is the AUTHORITATIVE remaining time; our local clock is only an interpolation
+   *  between these, so re-base on it rather than trusting our own arithmetic. */
+  onSessionWarning?: (secs: number) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -181,7 +278,32 @@ export class UberSDRClient {
   private followVfo = true;
   // Local hardware only — set by the adapter from the device config. Drives the
   // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
-  isLocal = false;
+  /**
+   * The on-device shim OR a LAN VibeServer — both are the same shim binary, and
+   * both speak `fftRate` rather than UberSDR's `set_rate` divisor.
+   *
+   * ★★ SETTING THIS ALSO SETS isVibeServer, and that is the whole fix. The
+   * backend-specific policy (which ladder, which rate lever, whether to ask for
+   * fewer bins) was being decided from `isVibeServer`, which only became true
+   * when `hwinfo` ARRIVED — a message, so necessarily after the socket opened and
+   * after the controller had already acted. Measured on the wire 2026-07-26:
+   *
+   *   WS UPGRADE /ws/user-spectrum?...&mode=binary8     ← no bins=, flag still false
+   *   DIAG set_rate divisor=2 RECEIVED                  ← UberSDR lever, on a VibeServer
+   *   fft rate: 5.0 (engine 20.0)  →  emit 2.5 fps      ← server halving, obediently
+   *
+   * The controller started on UberSDR's ladder at rung 2, sent divisor 2, and the
+   * server dropped every other frame FOREVER — nothing resets that divisor. Then
+   * hwinfo arrived, the ladder was rebuilt and fftRate started being used
+   * correctly, so everything downstream looked right while the output stayed
+   * halved. Days of "the link controller is broken" traced to one flag set late.
+   *
+   * ★ `isLocal` has been known since construction all along. Decide from what you
+   * already know, never from what is still in flight.
+   */
+  set isLocal(v: boolean) { this._isLocal = v; if (v) this.isVibeServer = true; }
+  get isLocal(): boolean { return this._isLocal; }
+  private _isLocal = false;
   localSampleRate = 2_400_000;
   // VibeServer PIN: a pre-computed "&vs_nonce=&vs_auth=" suffix appended to the
   // spectrum WS URL so a PIN-protected server accepts the upgrade. Empty otherwise.
@@ -203,14 +325,59 @@ export class UberSDRClient {
   /** Bypass password (rate-limit/ban bypass) — appended to every WS URL,
    *  exactly like the skin's window.bypassPassword. */
   private password: string | null = null;
+  /** `&bins=` for VibeServer only. UberSDR ignores it and sends its own count. */
+  private _binsSuffix(): string { return this.isVibeServer ? `&bins=${UberSDRClient.VIBE_BINS}` : ''; }
+
   private _pwSuffix(): string {
     return this.password ? `&password=${encodeURIComponent(this.password)}` : '';
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  async connect(frequency = 14_074_000, mode: SDRMode = 'usb') {
+  /** Where this receiver's OWNER wants you to start. Every UberSDR publishes it at
+   *  `/api/description` as `default_frequency` (Hz) + `default_mode`, and they differ per site —
+   *  648 kHz AM on one, 7.1 MHz LSB on another, 14.1 MHz CWU on a third.
+   *
+   *  ★ This is the ONLY source. Two things look like it and are not:
+   *    - the spectrum `config.centerFreq` is the WINDOW CENTRE (15 MHz on a 0-30 MHz span);
+   *    - the instances directory has no such field and its `public_url` is bare.
+   *    The web client's `?freq=…&mode=…` URL is written by its own JS from this same endpoint —
+   *    a symptom, not the source.
+   *
+   *  Best-effort: a slow, silent or incomplete answer just leaves the caller's tune standing. */
+  private async _serverDefault(): Promise<{ frequency?: number; mode?: SDRMode }> {
+    // Local hardware and the VibeServer shim publish no such endpoint, and their tune is per-device
+    // rather than operator-chosen. Skip rather than spend the timeout on a request that cannot
+    // succeed. (The watch guards the same case as `!isVibe`.)
+    if (this.isLocal) return {};
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 5000);
+      const r = await fetch(`${this.baseUrl}/api/description`, { signal: ctl.signal });
+      clearTimeout(t);
+      if (!r.ok) return {};
+      const j = await r.json() as { default_frequency?: unknown; default_mode?: unknown };
+      const out: { frequency?: number; mode?: SDRMode } = {};
+      if (typeof j.default_frequency === 'number' && j.default_frequency > 0) {
+        out.frequency = Math.round(j.default_frequency);
+      }
+      if (typeof j.default_mode === 'string' && j.default_mode.toLowerCase() in MODE_BANDWIDTHS) {
+        out.mode = j.default_mode.toLowerCase() as SDRMode;
+      }
+      return out;
+    } catch { return {}; }
+  }
+
+  async connect(frequency = 14_074_000, mode: SDRMode = 'usb', opts?: { allowServerDefault?: boolean }) {
     this.destroyed = false;
+    // No remembered tune for this instance, so ask the receiver where it wants us. Only ever on a
+    // first visit — a saved tune always wins and the screen does not set this flag then.
+    if (opts?.allowServerDefault) {
+      const d = await this._serverDefault();
+      if (this.destroyed) return;
+      if (d.frequency) frequency = d.frequency;
+      if (d.mode) mode = d.mode;
+    }
     this.status.frequency = frequency;
     this.status.mode = mode;
     // Mirror the server's per-mode bandwidth defaults for the CONNECT mode
@@ -219,6 +386,10 @@ export class UberSDRClient {
     // overwrote the screen's correct values (AM showing only one sideband).
     const cbw = MODE_BANDWIDTHS[mode];
     if (cbw) { this.status.bandwidthLow = cbw[0]; this.status.bandwidthHigh = cbw[1]; }
+    // The screen already set its own state from the tune it passed in, so if the receiver sent us
+    // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
+    // plays another.
+    if (opts?.allowServerDefault) this.callbacks.onStatus({ ...this.status });
 
     try {
       await this._checkConnection();
@@ -379,6 +550,59 @@ export class UberSDRClient {
     }
   }
 
+  /** ★ Turn the Advanced RDS analyser on or off. Costs the server real CPU and ~5 frames a
+   *  second of extra traffic, so it is switched by the panel being OPEN — there is no setting
+   *  for a user to find, forget, and leave running. Remembered across reconnects, because the
+   *  server forgets on a new socket and the panel would otherwise go quietly blank. */
+  setAdvRds(on: boolean) {
+    this.advRds = on;
+    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+      this.spectrumWs.send(JSON.stringify({ type: 'rdsx', on: on ? 1 : 0 }));
+    }
+  }
+  private advRds = false;
+  private adminSet = false;
+  /** ★★ The server has DELIBERATELY turned us away (time up, cooldown). Terminal:
+   *  the 3-second reconnect below is right for a dropped link and utterly wrong
+   *  here — it would hammer a receiver that is telling us not to come back yet,
+   *  which is exactly the reconnect war the shim's own comments warn about. Only
+   *  a fresh user-initiated connect clears it. */
+  private refused = false;
+
+  /** ★ Unlock the protected controls. Challenge-response: the caller has already turned the
+   *  password into an HMAC over a server-issued nonce, so the password never crosses the link
+   *  — the same scheme as the PIN, and it inherits the same brute-force lockout. */
+  adminUnlock(nonce: string, token: string) {
+    this._sendCtl({ type: 'admin_unlock', nonce, token });
+  }
+
+  /** Airspy HF+ controls. Keys are optional — send only what changed.
+   *  ★ AGC LAST, matching the server's own apply order: it owns the gain path, so applying it
+   *  before a manual attenuation would immediately override it. */
+  ahfControl(o: { att?: number; lna?: boolean; thresh?: boolean; ppb?: number; agc?: boolean }) {
+    const m: Record<string, unknown> = { type: 'ahf_control' };
+    if (o.att    !== undefined) m.att    = o.att;
+    if (o.lna    !== undefined) m.lna    = o.lna ? 1 : 0;
+    if (o.thresh !== undefined) m.thresh = o.thresh ? 1 : 0;
+    if (o.ppb    !== undefined) m.ppb    = o.ppb;
+    if (o.agc    !== undefined) m.agc    = o.agc ? 1 : 0;
+    this._sendCtl(m);
+  }
+
+  /** SDRplay RSP controls. Same shape — only the keys present are applied. */
+  rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
+                  rfNotch?: boolean; dabNotch?: boolean }) {
+    const m: Record<string, unknown> = { type: 'rsp_control' };
+    if (o.lna      !== undefined) m.lna      = o.lna;
+    if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
+    if (o.ifagc    !== undefined) m.ifagc    = o.ifagc ? 1 : 0;
+    if (o.agcset   !== undefined) m.agcset   = o.agcset;
+    if (o.rfNotch  !== undefined) m.rfNotch  = o.rfNotch ? 1 : 0;
+    if (o.dabNotch !== undefined) m.dabNotch = o.dabNotch ? 1 : 0;
+    this._sendCtl(m);
+  }
+
+
   private _flushView() {
     const p = this.pendingView;
     if (!p) return;
@@ -390,6 +614,7 @@ export class UberSDRClient {
     const msg: Record<string, unknown> = { type: 'zoom', frequency: p.frequency };
     if (p.binBandwidth > 0) msg.binBandwidth = p.binBandwidth;
     this.spectrumWs.send(JSON.stringify(msg));
+    this.lastResubAt = Date.now();   // frames pause across this — not a bad link
     this._armSettle();
   }
 
@@ -425,13 +650,75 @@ export class UberSDRClient {
    * config reports a binBandwidth change and on reconnect (skin app.js
    * onConfig parity).
    */
+  /** Called when the view changes — frames pause across the re-subscription, and the controller
+   *  must not read that as starvation. */
+  noteResubscribe() { this.lastResubAt = Date.now(); }
+
   setRate(divisor: number) {
     this.rateDivisor = Math.max(1, Math.min(8, Math.round(divisor)));
     this.gapHist.length = 0; // legit frame-rate change — don't read as stalls
-    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-      this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
-    }
+    if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+
+    // ★★ ONE LEVER PER SERVER, NEVER TWO. The shim honours BOTH `set_rate`
+    // (a frame-dropping divisor) and `fftRate` (the real rate) — so sending a
+    // divisor to a VibeServer MULTIPLIES with whatever rate LinkManager has
+    // already asked for, and nothing reconciles them:
+    //
+    //     rung 5 fps ÷ idle divisor 3 = 1.7 fps      (seen as "2 fps")
+    //     Full 20 fps ÷ 3             = 6.7 fps      ("Full did nothing")
+    //
+    // On UberSDR the divisor IS the only lever, so the two agreed and this
+    // stayed invisible for as long as VibeServer has existed. Express the
+    // divisor as an fftRate instead, so a VibeServer only ever hears one.
+    // ★★ ON VIBESERVER, setRate() DOES NOTHING. The rate has exactly ONE owner
+    // here — LinkManager (and setPowersaveRate for idle) — and every attempt to
+    // give it a second one has produced the same bug in a new place:
+    //
+    //   • the shim honours BOTH set_rate and fftRate, so the raw divisor
+    //     multiplied the controller's rate           (fixed 276)
+    //   • apply() divided the rung by rateDivisor, so the controller measured
+    //     its own reduction as starvation             (fixed 277)
+    //   • ws.onopen re-asserted a stale divisor       (fixed 284)
+    //   • and HERE: dividing the ladder rate by a leftover rateDivisor sent
+    //     HALF the rung — rung 2 → 5, rung 3 → 2.5 — so Auto crawled while Full
+    //     (which goes through apply(), undivided) reached 20 on the SAME server
+    //     seconds later. Stuart: "starting rung 2 but divided."
+    //
+    // ★ Keep the divisor recorded for UberSDR, but never let it reach a
+    // VibeServer. One owner, no exceptions.
+    if (this.isVibeServer) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
   }
+  /**
+   * Powersave: drop to an ABSOLUTE frame rate, never a divisor.
+   *
+   * ★★ The idle saver used setRate(3) — a DIVISOR, which compounds with whatever
+   * rung the controller had already chosen. ÷3 of 20 fps is a sensible 6.7; ÷3 of
+   * the 5 fps floor is 1.7, and ÷3 of UberSDR's 3.3 emergency rung is 1. So the
+   * worse the link already was, the harder powersave hit it — precisely backwards,
+   * and how the waterfall ended up at 1 fps.
+   *
+   * ★ 5 fps is the established floor for a rate anyone CHOOSES (Stuart, on Low
+   * Data: "the interpolation can hide 5; 3.3 is reserved for connection issues
+   * only"). Powersave is chosen behaviour, so it gets the same floor — and it can
+   * never make things worse than the rung it replaces.
+   */
+  setPowersaveRate() {
+    const target = Math.min(POWERSAVE_FPS, this.ladderFps > 0 ? this.ladderFps : POWERSAVE_FPS);
+    if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+    if (this.isVibeServer) {
+      this.rateDivisor = 1;   // one lever only — see setRate()
+      this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: target }));
+      return;
+    }
+    // UberSDR speaks divisors off its own full rate; 10 ⇒ divisor 2 for 5 fps.
+    const full = LADDERS.ubersdr[0];
+    this.setRate(Math.max(1, Math.min(8, Math.round(full / target))));
+  }
+
+  /** The fps of the rung LinkManager currently holds — the base an idle-saver
+   *  divisor is applied to. Without it a divisor would have nothing to divide. */
+  private ladderFps = 0;
   private rateDivisor   = 1;
   private lastRateBinBw = 0;
 
@@ -491,6 +778,7 @@ export class UberSDRClient {
 
   destroy() {
     this.destroyed = true;
+    this.stopLinkManager();
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
     if (this.settleTimer)    { clearTimeout(this.settleTimer);    this.settleTimer = null; }
@@ -510,7 +798,15 @@ export class UberSDRClient {
 
   private async _checkConnection() {
     this.dbg('POST /connection uuid=' + this.uuid.slice(0, 8));
-    const resp = await fetch(`${this.baseUrl}/connection`, {
+    // ★★ THE ID GOES IN THE QUERY STRING TOO, not just the body. VibeServer's
+    // /connection preflight only ever sees the REQUEST LINE, so an id sent only
+    // in the body is invisible to it — and its occupancy check then could not
+    // tell the caller apart from anyone else. Result: once this client's own
+    // AUDIO socket had claimed the occupant slot, its own preflight answered
+    // "in-use" and the spectrum never opened. Audio playing while the app says
+    // the server is busy is the signature. The body is kept for older servers.
+    const resp = await fetch(
+      `${this.baseUrl}/connection?user_session_id=${encodeURIComponent(this.uuid)}`, {
       method: 'POST',
       headers: {
         'Content-Type':   'application/json',
@@ -538,10 +834,17 @@ export class UberSDRClient {
     return `${url}${path}`;
   }
 
+  /** The full spectrum WS URL (incl. PIN/password suffix) so NATIVE can open its own
+   *  socket when the phone locks — same URL this client uses in _openSpectrumWs. Handed to
+   *  VibeWatchModule.startWatchSpectrum so the native forwarder never re-implements auth. */
+  watchSpectrumUrl(): string {
+    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}`);
+  }
+
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}${this.authSuffix}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}`);
     const ws  = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;
@@ -566,10 +869,27 @@ export class UberSDRClient {
         frequency:    Math.round(this.view.centerHz || this.status.centerHz || this.status.frequency),
         binBandwidth: this.view.binBandwidth || this.status.binBandwidth || 100,
       }));
-      // Fresh server session — re-assert the poll divisor if one is active.
-      if (this.rateDivisor > 1) {
-        ws.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
-      }
+      // ★★ NO RAW DIVISOR RE-ASSERT HERE. This used to send `set_rate` directly on
+      // every socket open, which was wrong twice over:
+      //
+      //   1. It BYPASSED setRate(), the one place that knows a VibeServer speaks
+      //      `fftRate`, so an UberSDR divisor was stacked on the VibeServer rate:
+      //      rung 2 (10 fps) ÷ a stale divisor 2 = 5, the controller then read 5
+      //      against an expected 10, degraded, and rung 3 ÷ 2 gave ~3 fps.
+      //   2. It could not be fixed by testing `isVibeServer` HERE, because hwinfo
+      //      is a message and has not arrived yet at onopen — the same race that
+      //      put the controller on the wrong ladder.
+      //
+      // It is also redundant: LinkManager.reassert() below re-applies the rung
+      // through the backend-correct lever. ★ One owner for the rate, always.
+      // Adaptive rate control. On a RECONNECT the server is back at its default, so re-assert
+      // whatever rung we had settled on rather than silently jumping back to full rate.
+      this.startLinkManager();
+      this.link?.reassert();
+      // ★ The server forgets the analyser on a new socket. If the panel is open, say so again
+      // — otherwise a reconnect the user never noticed leaves it frozen on its last frame,
+      // which reads as "the decoder died" rather than "the link blipped".
+      if (this.advRds) ws.send(JSON.stringify({ type: 'rdsx', on: 1 }));
     };
 
     ws.onmessage = (e) => {
@@ -578,6 +898,7 @@ export class UberSDRClient {
         this.dbg(`SpecMsg#${specMsgCount} binary=${e.data instanceof ArrayBuffer} len=${e.data instanceof ArrayBuffer ? e.data.byteLength : (e.data as string).length}`);
       }
       if (e.data instanceof ArrayBuffer) {
+        this.specBytes += e.data.byteLength;   // for the connection-meter data-rate readout
         this._parseBinaryFrame(e.data);
       } else if (typeof e.data === 'string') {
         try {
@@ -723,6 +1044,129 @@ export class UberSDRClient {
 
   // ── Link quality state ──────────────────────────────────────────────────
   private gapHist: number[] = [];   // recent frame inter-arrival gaps (ms)
+
+  // ── Adaptive link management (ported policy — see services/linkManager.ts) ──────────────────
+  /** Only the VibeServer shim sends `hwinfo`, so its arrival is an honest signal of which rate
+   *  lever this server speaks: VibeServer takes `fftRate` in fps, UberSDR takes a `set_rate`
+   *  divisor. Everything else about the controller is identical. */
+  private isVibeServer = false;
+
+  /**
+   * Bins to ask a VibeServer for — the FFT/BIN lever, as Jr has always used.
+   *
+   * ★★ MEASURED 2026-07-26. The phone asked for NOTHING and so got the server's
+   * full 4096 bins (4118 B/frame). `sendWs()` on the server is a BLOCKING send,
+   * so the server can only emit as fast as the client drains — and at the same
+   * configured 5 fps it sent 20.1 KB/s to a loopback probe but only 12 KB/s to
+   * the phone. The server was not under-delivering; THE PHONE WAS THE BOTTLENECK,
+   * and every "the rate controller is broken" symptom followed from it.
+   *
+   * ★ 4096 bins is detail no phone screen can show: it costs a 4096-iteration JS
+   * loop per frame plus a Skia image, for a display about 1200 px wide. 1024 is
+   * still roughly one bin per pixel, cuts the bytes 4x and the per-frame work
+   * with it. Jr has done exactly this since it shipped (`bins=` its waterfall
+   * width); the phone simply never did.
+   */
+  private static readonly VIBE_BINS = 1024;
+
+  /**
+   * Tell the client it is talking to a VibeServer BEFORE the socket opens.
+   *
+   * ★★ THE LADDER RACE, KILLED AT SOURCE. `isVibeServer` used to be set only when
+   * `hwinfo` ARRIVED — but hwinfo is a MESSAGE, so it cannot land before
+   * ws.onopen, where startLinkManager() picks the ladder. The controller was
+   * therefore ALWAYS built on LADDERS.ubersdr [10, 5, 3.3] and asked a 20 fps
+   * VibeServer for 5 then 3.3 — "connects at 5, drops to 3", with no 3 anywhere
+   * on VibeServer's own [20/10/5]. Rebuilding the controller when hwinfo landed
+   * was a patch over the race and did not always fire.
+   *
+   * ★ The app KNOWS which backend it dialled before it dials it. Deciding a
+   * backend-specific policy from state that arrives later is the bug; taking it
+   * from the caller, who has known all along, is the fix.
+   */
+  markVibeServer() { this.isVibeServer = true; }
+  /** ★ Read-only: is the far end a VibeServer? Clients use it to decide whether to OFFER a
+   *  VibeServer-only control at all. ★ Advertised is not the same as supported — a button
+   *  that does nothing on an UberSDR reads as "this feature is broken", which is worse than
+   *  not showing it (the lesson from the keyboard hints). */
+  get isVibe(): boolean { return this.isVibeServer; }
+  private link: LinkManager | null = null;
+  private specFrames = 0;              // frames counted in the current 1s window
+  private specBytes  = 0;              // spectrum bytes in the current 1s window (audio is native)
+  private linkTimer: ReturnType<typeof setInterval> | null = null;
+  private serverMaxFps = 0;            // the owner's ceiling, once hwinfo tells us
+
+  /** Which ladder the live controller was built for, so a late `hwinfo` can
+   *  rebuild it against the right one. */
+  private linkBuiltForVibe = false;
+
+  private startLinkManager() {
+    if (this.linkTimer) return;
+    this.linkBuiltForVibe = this.isVibeServer;
+    const mode = (this.linkMode ?? 'adaptive') as LinkMode;
+    this.link = new LinkManager({
+      ladder: this.isVibeServer ? LADDERS.vibeserver : LADDERS.ubersdr,
+      // 5 fps is the deepest a USER may pin — below that is adaptive-only, because the
+      // interpolation can hide 5 but not 3.3.
+      lowDataRung: 2,
+      mode,
+      apply: (rung, fps) => {
+        if (this.isVibeServer) {
+          this.ladderFps = fps;
+          if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+            // ★★ SEND THE RUNG'S RATE, UNDIVIDED. Dividing by the idle-saver's
+            // rateDivisor here made the controller FIGHT ITSELF: it asks for 20,
+            // deliberately sends 6.7, then measures 6.7 against an expectation of
+            // 20, reads 33% as starvation and degrades — over and over, so the
+            // link glyph flapped red/green and the rate collapsed to the floor.
+            //
+            // The controller must only ever ask for what it expects to receive.
+            // The idle saver PAUSES it before applying a divisor (setLinkPaused),
+            // so the two can never be active at once and apply() needs no
+            // knowledge of powersave at all.
+            this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: fps }));
+          }
+        } else {
+          this.setRate(rung);          // UberSDR: rung IS the poll divisor
+        }
+      },
+    });
+    if (this.serverMaxFps > 0) this.link.applyServerCeiling(this.serverMaxFps);
+    this.linkTimer = setInterval(() => {
+      const fps = this.specFrames;
+      this.specFrames = 0;
+      const kbps = this.specBytes / 1024;   // spectrum only — the phone's audio bytes are native
+      this.specBytes = 0;
+      const live = this.spectrumWs?.readyState === WebSocket.OPEN;
+      // `settled` guards a tune/zoom re-subscription, where frames legitimately pause — reading
+      // that as a bad link would throttle every time the user moved the dial.
+      // PAUSED during idle powersave: the idle saver owns the rate then (setRate(IDLE_DIVISOR)), and a
+      // running controller would re-assert its own rung every second and win the fight — powersave pill
+      // showing while the wire held 10fps (Stuart 2026-07-24). Skip the tick's rate control while
+      // paused; still emit the meter so the readout tracks the real idle rate.
+      if (!this.linkPaused) this.link?.tick(fps, !!live, Date.now() - this.lastResubAt > 1500);
+      if (this.link) this.callbacks.onLinkRate?.(this.link.adaptiveRung, this.link.settling, fps, kbps);
+    }, 1000);
+  }
+
+  private stopLinkManager() {
+    if (this.linkTimer) { clearInterval(this.linkTimer); this.linkTimer = null; }
+    this.link = null;
+  }
+
+  /** Idle powersave freezes the adaptive/pinned controller so it stops fighting the idle saver's
+   *  directly-set rate. The saver calls setRate() itself; this just stops the controller re-asserting. */
+  private linkPaused = false;
+  setLinkPaused(p: boolean) { this.linkPaused = p; }
+
+  /** When the view last changed — frames pause across a re-subscription. */
+  private lastResubAt = 0;
+  /** User preference, set by the app (Auto / Full rate / Low data). A setter so changing it LIVE also
+   *  reconfigures the running controller — otherwise the LinkManager's own `mode` stays frozen at
+   *  whatever it was constructed with and the toggle is ignored (Low Data held 10fps, 2026-07-24). */
+  private _linkMode: LinkMode = 'adaptive';
+  get linkMode(): LinkMode { return this._linkMode; }
+  set linkMode(m: LinkMode) { this._linkMode = m; this.link?.setMode(m); }
   private lastFrameAt    = 0;
   private lastReconnectAt = 0;
   private pingSentAt     = 0;
@@ -971,6 +1415,9 @@ export class UberSDRClient {
     // own (intermediate) geometry replays the whole transition as the echoes
     // arrive — that was the band-plan flash / view-reset glitch.
     const emit = { ...s };
+    // The REAL centre of these bins — never overridden below. The watch crop indexes bins by
+    // this; using the predicted emit.centerHz draws the signal offset from the VFO.
+    emit.trueCenterHz = frequency;
     const v = this.view;
     if (this._inFlight() && v.binBandwidth > 0) {
       emit.centerHz     = v.centerHz;
@@ -987,6 +1434,7 @@ export class UberSDRClient {
       emit.bwHz         = v.binBandwidth * s.binCount;
       this._armSettle();
     }
+    this.specFrames++;            // per-second count for the adaptive controller
     this.callbacks.onSpectrum(out, emit);
   }
 
@@ -1019,7 +1467,9 @@ export class UberSDRClient {
       (this.callbacks as any).onMetadata?.({
         stationName: ps || undefined,
         text: rt || undefined,
-        badge: ps ? 'RDS' : undefined,
+        // ★ Badge on ANY decoded RDS, not just a name — a text-only frame is still RDS, and
+        // without the badge it would show up unlabelled, indistinguishable from a bookmark.
+        badge: (ps || rt) ? 'RDS' : undefined,
         stereo,
         pi,
         // ECC + PI when the station sends an ECC; otherwise the PI's country nibble
@@ -1033,14 +1483,122 @@ export class UberSDRClient {
       });
       return;
     }
+    if (msg.type === 'session_expired') {
+      this.refused = true;                    // never auto-retry a deliberate refusal
+      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0);
+      return;
+    }
+    if (msg.type === 'cooldown') {
+      this.refused = true;
+      this.callbacks.onCooldown?.(Number(msg.secs) || 0);
+      return;
+    }
+    if (msg.type === 'busy') {
+      this.refused = true;                    // a busy server must not be hammered
+      this.callbacks.onBusy?.();
+      return;
+    }
+    if (msg.type === 'evicted') {
+      this.refused = true;
+      this.callbacks.onEvicted?.();
+      return;
+    }
+    if (msg.type === 'session_warning') {
+      // ★ NOT terminal — we are still connected and still listening. Setting `refused` here
+      //   would tear down a perfectly good session two minutes early.
+      this.callbacks.onSessionWarning?.(Number(msg.secs) || 0);
+      return;
+    }
+    if (msg.type === 'admin') {
+      this.callbacks.onAdminState?.({
+        set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true });
+      return;
+    }
+    if (msg.type === 'rdsx') {
+      // ★ Trust the shape, not the sender: this arrives on the same socket as everything
+      // else and a field the server has not sent yet must not crash the panel. Numbers
+      // default to -1 (the "unknown" the renderers already understand), arrays to empty.
+      const num = (x: any, d = -1) => (typeof x === 'number' && isFinite(x) ? x : d);
+      const str = (x: any) => (typeof x === 'string' ? x : '');
+      const arr = (x: any): number[] => (Array.isArray(x) ? x.filter((n) => typeof n === 'number') : []);
+      this.callbacks.onRdsExt?.({
+        pty: num(msg.pty), tp: num(msg.tp), ta: num(msg.ta), ms: num(msg.ms), di: num(msg.di),
+        ptyRaw: num(msg.ptyRaw), tpRaw: num(msg.tpRaw), taRaw: num(msg.taRaw),
+        msRaw: num(msg.msRaw), diRaw: num(msg.diRaw),
+        ct: num(msg.ct), ctoff: num(msg.ctoff, 0), gtot: num(msg.gtot, 0), afseen: num(msg.afseen, 0),
+        rtpTitle: str(msg.rtpTitle), rtpArtist: str(msg.rtpArtist),
+        longPs: str(msg.longPs), ptyn: str(msg.ptyn),
+        lang: num(msg.lang), pinDay: num(msg.pinDay), pinHour: num(msg.pinHour), pinMin: num(msg.pinMin),
+        phase: num(msg.phase), phaseDrift: num(msg.phaseDrift), phaseCoh: num(msg.phaseCoh, 0),
+        pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev), ber: num(msg.ber),
+        grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
+        eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
+          pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
+        oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({
+          aid: str(o?.aid), grp: num(o?.grp, 0) })) : [],
+      });
+      return;
+    }
     if (msg.type === 'hwinfo') {
       // VibeServer sent the serving device's tuner gains + offered sample rates.
+      // ★ The radio describes ITSELF. Everything the hardware panel offers is decided from
+      // this — see RadioCaps. Forwarded verbatim rather than normalised: a driver we do not
+      // know yet must still be able to say what it is.
+      if (msg.radio && typeof msg.radio === 'object') {
+        this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
+      }
+      if (typeof msg.adminSet === 'boolean') {
+        this.adminSet = msg.adminSet;
+        this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
+      }
+      // ★★★ THE SESSION CLOCK RIDES HWINFO, NOT CONFIG — the exact trap that made Jr's whole
+      // session-limit feature silently never happen (jr_vibeserver_release_pass). The phone was
+      // deriving its countdown ONLY from route params filled in by the server-list probe, so
+      // connecting by direct IP — or to a server whose limit changed after the probe — showed no
+      // countdown at all. Take the server's own number whenever it speaks.
+      if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft > 0) {
+        this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
+      }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate
       // messages outright, so the client hides the picker rather than offer a
       // control that silently does nothing.
       this.callbacks.onHwLockedRate?.(Number(msg.lockedRate) || 0);
+      // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
+      // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
+      // permitted one, and read the difference as a failing link — stepping down forever chasing a
+      // limit that can never be reached. (The server's own comment makes the same point.)
+      this.isVibeServer = true;
+      // ★★ REBUILD THE CONTROLLER ON THE RIGHT LADDER.
+      //
+      // startLinkManager() runs in ws.onopen, but `hwinfo` is a MESSAGE — it can
+      // only arrive afterwards. So the controller was ALWAYS constructed with
+      // isVibeServer false and took LADDERS.ubersdr [10, 5, 3.3], and it early-
+      // returns if the timer already exists, so it never got a second chance.
+      //
+      // Once hwinfo landed, apply() switched to the VibeServer lever (fftRate)
+      // but kept UberSDR's RUNGS — so the phone asked a 20 fps VibeServer for
+      // 10 / 5 / 3.3 and could never request full rate. The browser, which just
+      // asks for min(displayRate, serverCap), sat at 83 KB/s on the same server
+      // while the phone crawled. (Stuart spotted this: "is auto link management
+      // set to UberSDR standards?")
+      //
+      // ★ Deciding a backend-specific policy from state that arrives LATER than
+      // the decision is the bug; rebuilding when the truth lands is the fix.
+      if (!this.linkBuiltForVibe && this.linkTimer) {
+        clearInterval(this.linkTimer);
+        this.linkTimer = null;
+        this.link = null;
+        this.startLinkManager();
+        // ★ ASK for the new ladder's rung. Without this the server stays on the
+        // OLD controller's rate and the new one measures a deficit it created.
+        // Cast: TS narrows `this.link` to never after the null assignment above —
+        // it cannot see that startLinkManager() reassigns it.
+        (this.link as LinkManager | null)?.forceApply();
+      }
+      this.serverMaxFps = Number(msg.maxFftRate) || 0;
+      if (this.serverMaxFps > 0) this.link?.applyServerCeiling(this.serverMaxFps);
       return;
     }
     if (msg.type === 'config') {
@@ -1116,6 +1674,7 @@ export class UberSDRClient {
    *  black screen. */
   private _scheduleReconnect() {
     if (this.destroyed || this.pausedByApp) return;
+    if (this.refused) return;        // a refusal is final until the user acts
     this._setReconnecting(true);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

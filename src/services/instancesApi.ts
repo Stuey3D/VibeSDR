@@ -61,7 +61,7 @@ export async function getUserLocation(): Promise<{ lat: number; lon: number } | 
         PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
         {
           title: 'Location for nearest servers',
-          message: 'VibeSDR uses your approximate location to sort the instance list by distance and to align the map for local SDR decodes. It is coarsened and only used on-device for sorting.',
+          message: 'VibeSDR uses your approximate location to sort the server list by distance and to align the map for local SDR decodes. It is coarsened and only used on-device for sorting.',
           buttonPositive: 'OK',
         },
       );

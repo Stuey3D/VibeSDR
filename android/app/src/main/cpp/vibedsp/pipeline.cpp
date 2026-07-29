@@ -1,5 +1,6 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
 #include "vibedsp.h"
+#include "simd_internal.h"   // stereoMatrixBlend / interleave2 (NEON)
 #include <cmath>
 #include <algorithm>
 
@@ -65,6 +66,9 @@ void RxPipeline::rebuildAudio() {
     double targetCh = std::max(bwHz_ * 3.0, 12000.0);
     // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
     // real channel regardless of the RF bandwidth the user picked.
+    // ★★★ FM-DX NO LONGER WIDENS THE CHANNEL — the premise was wrong, and measurement killed
+    // it. See the chHalf note below: widening recovers subcarrier AMPLITUDE and destroys
+    // subcarrier SNR, which is the thing that actually decodes.
     if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
@@ -98,6 +102,30 @@ void RxPipeline::rebuildAudio() {
     // an UberSDR recording of the same signal, we were 37 dB down over 2.0-2.7 kHz.
     const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB ||
                           mode_ == Mode::CW);
+    // ★★★ bw/2, AND THE ATTEMPT TO WIDEN IT IS RECORDED HERE SO IT IS NOT REPEATED.
+    //
+    // The observation that started it is real: at bw/2 the recovered RDS subcarrier is 1.86 dB
+    // down while the pilot is untouched, because the filter clips the outer FM sidebands and
+    // that takes the TOP of the MPX. It is why our RDS deviation reads low against a Pira
+    // analyser (HansVanEijsden's six stations, 2026-07-27).
+    //
+    // ★★ THE FIX WAS WRONG BECAUSE THE MEASUREMENT WAS OF THE WRONG QUANTITY. Widening was
+    // justified by RDS AMPLITUDE recovered. What decides whether RDS decodes is subcarrier
+    // SNR, and FM's noise triangle puts noise power up as the SQUARE of baseband frequency —
+    // so a wider IF dumps disproportionately more noise at exactly 57 kHz. Numerator measured,
+    // denominator ignored.
+    //
+    // Measured properly (tools/wfm_mpx_loss.cpp, RDS SNR column):
+    //                        2.4 MSPS        768 kHz (Airspy HF+)
+    //     bw/2               +32.9 dB        +36.5 dB
+    //     0.60 (was FM-DX)   +33.1 dB        +26.5 dB   <-- TEN dB worse
+    //
+    // ★ It looked harmless on a dongle, which is why simulation passed it. On a narrow-band
+    // radio it is a catastrophe, and Stuart found it in one A/B on a strong local: constellation
+    // scatter 16% -> 39%, block sync lost entirely, on a station WFM decodes instantly.
+    // ★★ SO THE CHANNEL FILTER COSTS US READOUT ACCURACY, NOT DECODE MARGIN. An earlier version
+    // of this comment claimed we were "RECEIVING RDS weak and losing decode margin" — that was
+    // inferred from the amplitude figure and is not true. Do not re-derive it.
     const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
     // The absolute transition width the old single-stage design worked out to. Keep it
     // identical so the audible filter shape does not change.
@@ -161,6 +189,9 @@ void RxPipeline::rebuildAudio() {
     // unit-ish audio level at the channel rate.
     am_.reset(); fm_.reset(); ssb_.reset(); audioLpf_.reset(); lmrLpf_.reset();
     useDeemph_ = false; stereo_ = false; useAgc_ = false;
+    // Only WFM decimates inside its audio filters; every other mode's post-chain
+    // runs at the channel rate, which is already as low as that mode needs.
+    audioDecim_ = 1; audFs_ = chFs_;
     switch (mode_) {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>();
                                                 useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
@@ -179,16 +210,47 @@ void RxPipeline::rebuildAudio() {
             // de-emphasis. Stereo path adds a 19 kHz pilot PLL, 38 kHz coherent
             // L-R recovery, a second 15 kHz LPF, and per-channel de-emphasis.
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * 75000.0)));
+            // ── DECIMATE INSIDE THE 15 kHz FILTERS ────────────────────────────
+            // These two FIRs were the single most expensive thing in WFM: ~176
+            // taps each, computed for every one of the ~320k channel samples a
+            // second, to produce audio that is only 15 kHz wide. A FIR that
+            // decimates only evaluates the outputs it keeps, so dropping to an
+            // ~80 kHz audio rate here costs a quarter of the MACs for exactly the
+            // same filter shape — and de-emphasis, the stereo matrix and the
+            // resampler all then run at a quarter of the rate too.
+            //
+            // The catch is folding: after decimation everything above audFs/2
+            // aliases in, and the MPX above 15 kHz is FULL of things we must not
+            // hear (19 kHz pilot, the 23-53 kHz L-R subcarrier, RDS at 57 kHz).
+            // So (a) keep the audio rate high enough that the pilot never folds,
+            // and (b) give these filters the DEEP (Blackman, ~74 dB) stopband —
+            // whatever leaks through folds into the audio permanently. The
+            // pilot-rejection and stereo-separation cases in test_pipeline guard
+            // both; check them before changing the 64 kHz floor.
+            // Take the LARGEST decimation that keeps the audio rate above 64 kHz —
+            // comfortably above twice the 15 kHz audio, and high enough that the
+            // 19 kHz pilot can never fold back down into it. Prefer a factor that
+            // divides the channel rate exactly: a non-integer audio rate leaves the
+            // resampler with a coprime L/M and a polyphase tap table megabytes wide,
+            // which costs more in cache misses than the decimation saves. Where no
+            // exact factor exists, the largest one still wins — it shrinks M, and
+            // therefore that table, by the same factor.
+            const int maxDec = std::max(1, (int)std::floor(chFs_ / 64000.0));
+            const long long chI = std::llround(chFs_);
+            audioDecim_ = maxDec;
+            for (int d = maxDec; d >= 2; --d) if (chI % d == 0) { audioDecim_ = d; break; }
+            audFs_ = chFs_ / audioDecim_;
+
             const double tau = deempTau_.load();   // 0=off / 50us EU/UK / 75us US
             useDeemph_ = (tau > 0.0);
-            if (useDeemph_) { deemph_.configure(tau, chFs_); deemph_.reset();
-                              deemphR_.configure(tau, chFs_); deemphR_.reset(); }
+            if (useDeemph_) { deemph_.configure(tau, audFs_); deemph_.reset();
+                              deemphR_.configure(tau, audFs_); deemphR_.reset(); }
             const double cut = 15000.0 / chFs_;
-            audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
-            lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
+            audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
+            lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
             pll_.configure(19000.0, chFs_); pll_.reset();
             stereoBlend_ = 0.0f;               // new tune starts mono, blends up
-            const int rch = (int)std::llround(chFs_);
+            const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
             stereo_ = true; lastStereo_ = false;
 
@@ -206,17 +268,33 @@ void RxPipeline::rebuildAudio() {
                 auto* self = (RxPipeline*)c;
                 if (self->cb_.rdsEcc) self->cb_.rdsEcc(self->cb_.ctx, ecc);
             };
+            rcb.pi = [](void* c, uint16_t pi) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsPi) self->cb_.rdsPi(self->cb_.ctx, pi);
+            };
             rdsDemod_.configure(chFs_, rcb);
+            rdsDemod_.setNoiseCorrection(rdsNoiseCorr_.load());
             break;
         }
     }
-    resamp_ = std::make_unique<RationalResampler>((int)std::llround(chFs_), outRate_);
+    resamp_ = std::make_unique<RationalResampler>((int)std::llround(audFs_), outRate_);
 
     baseBuf_.clear(); chBuf_.clear(); demodBuf_.clear(); audioBuf_.clear();
     dirty_ = false;
 }
 
 void RxPipeline::feed(const cf32* iq, int n) {
+    // ★★ A GAP IN THE STREAM INVALIDATES EVERY RECURSIVE STATE. Honoured HERE because
+    // this is the thread that owns them (see requestReset). The RDS decoder is the one
+    // that mattered in the field: its timing hypotheses kept their scores across an
+    // idle pause, so a stale one could out-score the correctly-aligned one for good.
+    if (resetReq_.exchange(false, std::memory_order_relaxed)) {
+        rdsDemod_.reset();
+        pll_.configure(19000.0, chFs_);      // re-seed the pilot loop from scratch
+        deemph_.reset();
+        deemphR_.reset();
+        dirty_ = true;                       // and rebuild the audio chain around them
+    }
     if (dirty_) rebuildAudio();
 
     // ── Spectrum ───────────────────────────────────────────────────────────
@@ -269,18 +347,111 @@ void RxPipeline::feed(const cf32* iq, int n) {
         if (stereo_) {
             // ── WFM stereo MPX decode ────────────────────────────────────────
             // demodBuf_ is the MPX. L+R = LPF(mpx); L-R = LPF(mpx * 38kHz_ref).
-            lprBuf_.resize(nc); lmrBuf_.resize(nc);
-            ref57Buf_.resize(nc); bitClkBuf_.resize(nc);
-            for (int i = 0; i < nc; ++i) {
-                float r38 = 0.0f, r57 = 0.0f, bclk = 0.0f;
-                pll_.step(demodBuf_[i], &r38, &r57, &bclk);
-                lprBuf_[i] = demodBuf_[i];
-                lmrBuf_[i] = demodBuf_[i] * r38 * 2.0f;   // coherent gain comp
-                ref57Buf_[i] = r57; bitClkBuf_[i] = bclk;
-            }
+            // Only generate the 57 kHz reference and bit clock when something is
+            // actually listening for RDS — that is a third of the PLL's per-sample
+            // work, and with no subscriber it was being computed and thrown away.
+            const bool wantRds = (cb_.rdsPs || cb_.rdsText || cb_.rdsPi || cb_.rdsSig || cb_.rdsExt);
+            lprBuf_.assign(demodBuf_.begin(), demodBuf_.begin() + nc);   // L+R = MPX
+            lmrBuf_.resize(nc);
+            if (wantRds) { ref57Buf_.resize(nc); ref57qBuf_.resize(nc); bitClkBuf_.resize(nc); }
+            pll_.processBlock(demodBuf_.data(), nc, lmrBuf_.data(),
+                              wantRds ? ref57Buf_.data()  : nullptr,
+                              wantRds ? ref57qBuf_.data() : nullptr,
+                              wantRds ? bitClkBuf_.data() : nullptr);
             // RDS (only meaningful once the pilot is locked).
-            if ((cb_.rdsPs || cb_.rdsText) && pll_.locked())
-                rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), bitClkBuf_.data(), nc);
+            rdsDemod_.setPilotRef(pll_.lockAmp());
+            if (wantRds && cb_.rdsBer)
+                cb_.rdsBer(cb_.ctx, pll_.trackable() ? rdsDemod_.blockErrorPercent() : -1);
+            if (wantRds && cb_.rdsSig)
+                cb_.rdsSig(cb_.ctx, rdsDemod_.subcarrierRelDb());
+            // ★ The MPX spectrum, computed only when the Advanced RDS panel is watching.
+            // demodBuf_ IS the MPX — the same buffer the stereo and RDS decoders read — so
+            // this costs one FFT and no new signal path.
+            if (wantRds && cb_.rdsExt) {
+                if (!mpxFft_) {
+                    mpxFft_ = std::make_unique<RealFFT>(kMpxFft);
+                    mpxWin_.resize(kMpxFft);
+                    nuttallWindow(mpxWin_.data(), kMpxFft);
+                    mpxIn_.resize(kMpxFft);
+                    mpxDb_.resize(kMpxFft / 2 + 1);
+                    mpxOut_.assign(kMpxBins, -120.0f);
+                    mpxAcc_.assign(kMpxFft, 0.0f);
+                    mpxAccN_ = 0;
+                }
+                // ★ ACCUMULATE ACROSS BLOCKS. The first version required a single block of at
+                // least kMpxFft samples — and the DSP block is smaller than that, so the FFT
+                // never ran and the panel drew an empty box with labels on it (Stuart,
+                // 2026-07-26). ★ Never gate work on a block size you do not control.
+                for (int i = 0; i < nc && mpxAccN_ < kMpxFft; ++i)
+                    mpxAcc_[mpxAccN_++] = demodBuf_[i];
+                if (mpxAccN_ >= kMpxFft) {
+                mpxAccN_ = 0;
+                for (int i = 0; i < kMpxFft; ++i) mpxIn_[i] = mpxAcc_[i] * mpxWin_[i];
+                mpxFft_->powerDb(mpxIn_.data(), mpxDb_.data(), 2.0f / kMpxFft);
+                // Map DC..kMpxSpanHz onto kMpxBins, taking the PEAK of each group: the pilot
+                // and RDS are narrow, and averaging would flatten the very features this
+                // display exists to show.
+                const double binHz = chFs_ / kMpxFft;
+                const int hi = (int)std::min<double>(kMpxFft / 2.0, kMpxSpanHz / binHz);
+                for (int i = 0; i < kMpxBins; ++i) {
+                    const int a = (int)((double)i / kMpxBins * hi);
+                    const int b = std::max(a + 1, (int)((double)(i + 1) / kMpxBins * hi));
+                    float m = -200.0f;
+                    for (int k = a; k < b && k < (int)mpxDb_.size(); ++k)
+                        if (mpxDb_[k] > m) m = mpxDb_[k];
+                    mpxOut_[i] = m;
+                }
+                }
+            }
+            if (wantRds && cb_.rdsExt) {
+                const RdsDecoder* d = rdsDemod_.best();
+                float xy[RdsDemod::kConstPts * 2];
+                const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);
+                int af[RdsDecoder::kMaxAf]; int afSeen = 0;
+                // ★ mergedAf() also refreshes the sticky aggregate, so it must run first.
+                const int nAf = rdsDemod_.mergedAf(af, RdsDecoder::kMaxAf, &afSeen);
+                static RdsDecoder::Eon eons[RdsDecoder::kMaxEon];
+                static RdsDecoder::Oda odas[RdsDecoder::kMaxOda];
+                const int nEon = rdsDemod_.mergedEon(eons, RdsDecoder::kMaxEon);
+                const int nOda = rdsDemod_.mergedOda(odas, RdsDecoder::kMaxOda);
+                // ★★ EVERYTHING BELOW COMES FROM THE STICKY AGGREGATE, never straight from
+                // the winning hypothesis — otherwise every field blinks out whenever
+                // arbitration changes its mind, which is precisely the fault that made the
+                // AF list appear and disappear (Stuart, 2026-07-26).
+                const RdsDemod::Agg& a = rdsDemod_.aggregate();
+                Callbacks::RdsExt x{};
+                x.pty = a.pty; x.tp = a.tp; x.ta = a.ta; x.ms = a.ms; x.di = a.di;
+                // ★ RAW comes straight from the WINNING hypothesis, deliberately bypassing the
+                // sticky aggregate: "what is arriving right now", not "what we have ever known".
+                // No winner yet = nothing is arriving, which -1 says honestly.
+                if (const RdsDecoder* w = rdsDemod_.best()) {
+                    x.ptyRaw = w->ptyRaw(); x.tpRaw = w->tpRaw();
+                    x.taRaw  = w->taRaw();  x.msRaw = w->msRaw(); x.diRaw = w->diRaw();
+                } else {
+                    x.ptyRaw = x.tpRaw = x.taRaw = x.msRaw = x.diRaw = -1;
+                }
+                x.ctMinutes = a.ctMinutes;
+                x.ctOffsetHalfHours = a.ctOffsetHalfHours;
+                x.afKhz = af; x.nAf = nAf; x.afSeen = afSeen;
+                x.groupCounts = a.groupCounts; x.groupTotal = a.groupTotal;
+                x.rtpTitle = a.rtpTitle; x.rtpArtist = a.rtpArtist; x.longPs = a.longPs;
+                x.ptyn = a.ptyn; x.language = a.language;
+                x.pinDay = a.pinDay; x.pinHour = a.pinHour; x.pinMinute = a.pinMinute;
+                x.eon = eons; x.nEon = nEon;
+                x.oda = odas; x.nOda = nOda;
+                x.constXY = xy; x.nPts = np;
+                x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
+                x.pilotPhaseCoherence = rdsDemod_.pilotPhaseCoherence();
+                x.pilotPhaseDriftDegPerSec = rdsDemod_.pilotPhaseDriftDegPerSec();
+                x.pilotDevKHz = pll_.pilotDeviationKHz();
+                x.mpx = mpxOut_.empty() ? nullptr : mpxOut_.data();
+                x.nMpx = (int)mpxOut_.size();
+                x.rdsDevKHz   = rdsDemod_.rdsDeviationKHz();
+                cb_.rdsExt(cb_.ctx, x);
+            }
+            if (wantRds && pll_.trackable())
+                rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), ref57qBuf_.data(),
+                                  bitClkBuf_.data(), nc);
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R
@@ -295,14 +466,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // so it won't chatter on an edge signal), else mono. The ramp does the
             // smoothing so the transition fades instead of screeching.
             const float target = (wantStereo && pll_.locked()) ? 1.0f : 0.0f;
-            const float ramp = (float)(1.0 / (chFs_ * 0.04));   // ~40 ms blend time constant
-            for (int i = 0; i < nm; ++i) {
-                stereoBlend_ += ramp * (target - stereoBlend_);
-                const float lpr = leftBuf_[i];
-                const float lmr = rightBuf_[i] * stereoBlend_;   // blended L-R
-                lprBuf_[i] = 0.5f * (lpr + lmr);                 // L
-                lmrBuf_[i] = 0.5f * (lpr - lmr);                 // R
-            }
+            const float ramp = (float)(1.0 / (audFs_ * 0.04));   // ~40 ms blend time constant
+            stereoBlend_ = stereoMatrixBlend(leftBuf_.data(), rightBuf_.data(),
+                                             lprBuf_.data(), lmrBuf_.data(),
+                                             nm, stereoBlend_, ramp, target);
             const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
             if (useDeemph_) {                  // off -> skip (tau=0)
                 deemph_.process(lprBuf_.data(), nm);
@@ -315,7 +482,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const int no = std::min(na, nb);
             if (no > 0) {
                 ilvBuf_.resize(no * 2);
-                for (int i = 0; i < no; ++i) { ilvBuf_[2*i] = audioBuf_[i]; ilvBuf_[2*i+1] = rOutBuf_[i]; }
+                interleave2(audioBuf_.data(), rOutBuf_.data(), ilvBuf_.data(), no);
                 cb_.audio(cb_.ctx, ilvBuf_.data(), no, 2, outRate_);
             }
             if (cb_.stereo && lk != lastStereo_) { lastStereo_ = lk; cb_.stereo(cb_.ctx, lk); }

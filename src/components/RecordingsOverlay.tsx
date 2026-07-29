@@ -11,11 +11,12 @@
  * onActiveChange) so the two don't fight over the audio session — the parent
  * mutes/pauses on open and resumes on close.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import {
   ActivityIndicator, Alert, FlatList, Modal, NativeModules, Platform,
   Pressable, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
+import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode } from './PanelNav';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
@@ -145,14 +146,52 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
     ]);
   }, [sel, player, load]);
 
-  const renderItem = useCallback(({ item }: { item: Rec }) => {
+  // ── Keyboard ────────────────────────────────────────────────────────────────
+  //
+  // ★ Its own handler rather than the shared list navigation, because the key map here is
+  // deliberately different: SPACE plays, and BACKSPACE deletes. ★ Enter plays too, because
+  // iOS Full Keyboard Access swallows the space bar — see the note in DecoderPanel. Originally —
+  // it opens the frequency box everywhere else in the app, and a list where Enter meant
+  // "play" would be the same context-dependent key that has caused most of the trouble.
+  //
+  // ★ Delete is accepted alongside Backspace: a Mac keyboard has no forward-delete key, so
+  // offering only one of the two is unusable on half the hardware.
+  //
+  // ★ SHARE is deliberately absent. It hands off to the system share sheet, which is not ours
+  // to drive — the same reason share is left off the keyboard path in the frequency card.
+  const kbInUse = useKeyboardMode();
+  const [navIdx, setNavIdx] = useState(0);
+  const listRef = useRef<FlatList<Rec> | null>(null);
+  const kb = useRef({ recs, navIdx, togglePlay: (_r: Rec) => {}, remove: (_r: Rec) => {}, onClose });
+  kb.current = { recs, navIdx, togglePlay, remove, onClose };
+
+  useEffect(() => { if (visible) setNavIdx(0); }, [visible]);
+
+  useRepeatingKeys(visible, (k: string) => {
+    const { recs: all, navIdx: i } = kb.current;
+    const rs = all ?? [];
+    if (k === 'Escape') { kb.current.onClose(); return; }
+    if (!rs.length) return;
+    if (k === 'ArrowUp' || k === 'ArrowDown') {
+      const next = Math.max(0, Math.min(rs.length - 1, i + (k === 'ArrowDown' ? 1 : -1)));
+      setNavIdx(next);
+      try { listRef.current?.scrollToIndex({ index: next, viewPosition: 0.5, animated: true }); } catch {}
+      return;
+    }
+    if (k === 'Space' || k === 'Enter') { const r = rs[i]; if (r) kb.current.togglePlay(r); return; }
+    if (k === 'Backspace' || k === 'Delete') { const r = rs[i]; if (r) kb.current.remove(r); }
+  }, NAV_REPEAT_KEYS);
+
+  const renderItem = useCallback(({ item, index }: { item: Rec; index: number }) => {
+    const navOn = index === navIdx;
     const isSel = sel === item.uri;
     const playing = isSel && status.playing;
     const dur = isSel ? status.duration : 0;
     const cur = isSel ? status.currentTime : 0;
     const frac = isSel && dur > 0 ? Math.min(1, cur / dur) : 0;
     return (
-      <View style={[styles.row, isSel && styles.rowSel]}>
+      <View style={[styles.row, isSel && styles.rowSel,
+                    navOn && { borderColor: '#7CFF9B', borderWidth: 2 }]}>
         <View style={styles.rowTop}>
           <TouchableOpacity style={styles.playBtn} onPress={() => togglePlay(item)} hitSlop={8}>
             <Text style={styles.playIcon}>{playing ? '❚❚' : '▶'}</Text>
@@ -198,6 +237,14 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
           <Text style={styles.title}>RECORDINGS</Text>
           <TouchableOpacity onPress={onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
         </View>
+        {/* ★ Keyboard hint in the header, only while a keyboard is in use — the same shape as
+            the server list's subtitle. Share is absent because it hands off to the system
+            sheet, which is not ours to drive. */}
+        {kbInUse && (
+          <Text style={styles.kbHint}>
+            ↑↓ select · space play/pause · ⌫ delete · esc close
+          </Text>
+        )}
         {recs == null ? (
           <View style={styles.center}><ActivityIndicator color="#3ddc84" /></View>
         ) : recs.length === 0 ? (
@@ -207,7 +254,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
           </View>
         ) : (
           <FlatList
+            ref={listRef}
             data={recs}
+            extraData={navIdx}
             keyExtractor={(r) => r.uri}
             renderItem={renderItem}
             contentContainerStyle={{ paddingVertical: 8 }}
@@ -230,6 +279,8 @@ const styles = StyleSheet.create({
   close: { color: '#ddd', fontSize: 20, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   empty: { color: '#ccc', fontSize: 16, fontWeight: '700' },
+  kbHint: { color: '#8fa', fontSize: 10, letterSpacing: 0.5, opacity: 0.85,
+            paddingHorizontal: 16, paddingBottom: 8 },
   emptySub: { color: '#888', fontSize: 13, marginTop: 8, textAlign: 'center' },
   row: {
     marginHorizontal: 12, marginVertical: 4, padding: 10,

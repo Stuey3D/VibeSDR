@@ -27,7 +27,18 @@ import SwiftUI
 final class WaterfallBuffer {
   /// MUST MATCH WATCH_BINS in watchProvider.ts — rows of any other length are
   /// dropped, so a mismatch shows as a blank waterfall.
-  static let width  = 256
+  /// ★ 128, NOT 256 — and this was settled empirically once already.
+  ///
+  /// The V9 companion went 128 -> 256 (`03dbd82d`) and straight back to 128 (`ee6c09dc`):
+  /// *"128-bin watch rows (was 256) — halves row bytes; visually unchanged."* Tried on the wrist,
+  /// judged indistinguishable, halved. The spike never got that memo — it was born at 256 and kept
+  /// it — so the merge silently reinstated a resolution that had already been rejected, and cost
+  /// real work for pixels nobody can see on a 41-49mm screen.
+  ///
+  /// It also restores the invariant the phone link depends on: the phone sends 128-bin rows
+  /// (`WATCH_BINS`), so buffer width and wire width agree again, which is exactly what they must
+  /// do (see WatchLink.phoneRowWidth for what happened when they didn't).
+  static let width  = 128
   /// One row of headroom beyond what's shown: the newest row lives just ABOVE the
   /// visible edge and slides down into view, which is what makes the scroll a
   /// glide rather than a step.
@@ -42,11 +53,14 @@ final class WaterfallBuffer {
 
   /// Synthesised rows per received row. 2 x 10fps = ~20 rows/sec of scroll.
   ///
-  /// Fewer than before, deliberately: the feed went back to 10fps of REAL data,
-  /// so there is less to invent. Synthesised rows smooth the scroll but carry no
-  /// information — the fewer of them between real samples, the more of what you
-  /// see is something the receiver actually heard.
-  private let subRows = 2
+  /// 1 = no synthesised rows: the waterfall REBUILDS only on real rows (~10/sec) instead of
+  /// twice that, which is the CPU win — the CGImage rebuild is the render hotspot. The scroll
+  /// still GLIDES smoothly via the sub-pixel `progress` offset (drawn on the 20fps render
+  /// clock); only the content steps at 10/sec, which is invisible next to the spectrum TRACE,
+  /// which stays at the full render rate on its own clock (tickTrace, unaffected). Stuart's
+  /// call (2026-07-17): keep the spectrum smooth, drop the waterfall to 10. Bonus: every row
+  /// you see is now something the receiver actually heard, not an invented in-between.
+  private let subRows = 1
 
   /// 0..1 extra temporal blend from the phone's settings, on top of the
   /// interpolation. 0 = rely on interpolation alone.
@@ -111,6 +125,24 @@ final class WaterfallBuffer {
   /// expected 10fps so the first few frames don't glide against a wrong guess.
   private var interval: CFTimeInterval = 0.1
   private var arrivals = 0
+
+  /// TELL THE BUFFER WHAT WE JUST ASKED FOR, instead of making it rediscover it.
+  ///
+  /// `interval` is normally *learned* from arrivals, which is right when the rate is out of our
+  /// hands. But when Link Management changes the rung we KNOW the new rate exactly — and letting
+  /// the estimator crawl there is visibly bad: the EMA settles to alpha 0.1, so 10fps → 5fps takes
+  /// ~20 rows ≈ 4 SECONDS. Throughout, the drain runs at the old faster pace, empties the queue,
+  /// hits the dry path in tickScroll (rate = 0, re-prefill) and stalls — repeatedly. That is the
+  /// judder you see for a few seconds after switching to Low Data.
+  ///
+  /// Seeding costs nothing and removes the whole transient. `arrivals` is reset so the fast
+  /// alpha (0.5) applies around the new value, letting it converge on the TRUE rate — which may
+  /// differ from the nominal one if the server clamps us.
+  func setExpectedRowRate(_ fps: Double) {
+    guard fps > 0 else { return }
+    interval = 1.0 / fps
+    arrivals = 0
+  }
 
   /// How many rows to bank before drawing — i.e. how much LATENCY we deliberately
   /// accept to insure against a late row.
@@ -301,6 +333,7 @@ final class WaterfallBuffer {
     subStep = 0
     accum = 0
     lastTick = 0
+    scrollLastTick = 0
     lastArrivalAt = 0
     arrivals = 0
     prefilling = true
@@ -332,7 +365,13 @@ final class WaterfallBuffer {
     // The averaging still has to exist — a line redrawn from raw bins is unreadable
     // noise — but it is now advanced every FRAME rather than every row, so a short time
     // constant no longer makes it jittery.
-    let tc = 0.10                                    // seconds to close ~63% of the gap
+    // TIME CONSTANT SCALES WITH THE ROW RATE. 0.10 was tuned for Jr's ~10fps feed, where liveRow
+    // steps every ~0.10s so the trace is ALWAYS chasing and never catches up between rows — smooth.
+    // At Buddy's 5fps (interval ~0.20s) a 0.10 constant catches up in half the gap and then HOLDS
+    // until the next step: "ease, hold, ease, hold" — the stutter Stuart sees. Tying tc to the actual
+    // interval keeps the trace still-moving when the next row lands at ANY rate, so it glides at 5fps
+    // exactly as it does at 10/20fps (where interval ≤ 0.10 and the 0.10 floor keeps it responsive).
+    let tc = max(0.10, interval)                     // seconds to close ~63% of the gap
     let a = min(1, max(0, dt / tc))
     for i in 0..<specRow.count {
       specRow[i] += (Double(liveRow[i]) - specRow[i]) * a
@@ -346,12 +385,28 @@ final class WaterfallBuffer {
     }
   }
 
-  func tick(at now: CFTimeInterval) {
+  /// Advance the TRACE only. Called EVERY render frame so the spectrum trace stays smooth —
+  /// it's cheap (an EMA + a Path). The expensive part (the waterfall image rebuild) is split
+  /// out into tickScroll so it can run slower.
+  func tickTrace(at now: CFTimeInterval) {
     defer { lastTick = now }
-    guard lastTick > 0, interval > 0 else { return }
+    guard lastTick > 0 else { return }
     let dt = min(0.25, now - lastTick)   // a long gap (app resumed) must not fling
     if dt > 0 { renderFps += 0.1 * (1.0 / dt - renderFps) }
     advanceTrace(dt: dt)
+  }
+
+  private var scrollLastTick: CFTimeInterval = 0
+
+  /// Advance the WATERFALL scroll (emit synthesised sub-rows → invalidate the image cache =
+  /// the CGImage REBUILD, the render hotspot). Called at a REDUCED rate: it uses its OWN clock
+  /// so the scroll keeps pace in slightly bigger steps, which is invisible next to the smooth
+  /// trace but halves the image rebuilds. (Waterfall smoothness matters far less than the
+  /// trace's — the spectrum needs to stay smooth, the scroll does not.)
+  func tickScroll(at now: CFTimeInterval) {
+    defer { scrollLastTick = now }
+    guard scrollLastTick > 0, interval > 0 else { return }
+    let dt = min(0.25, now - scrollLastTick)
 
     // Hold still until the buffer has banked enough to drain smoothly.
     if prefilling {
@@ -360,7 +415,7 @@ final class WaterfallBuffer {
     }
 
     // Drain rate tracks queue pressure: run slightly fast when backing up, slow
-    // when running dry. Keeps the scroll smooth across a feed whose true rate
+    // when running dry. Keeps the scroll pacing across a feed whose true rate
     // drifts (foreground vs locked) without ever stalling or visibly fast-forwarding.
     let depth = Double(queue.count) + (target != nil ? 1 : 0)
     let rate: Double

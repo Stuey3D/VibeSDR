@@ -68,3 +68,13 @@ android/app/src/main/cpp/vibedsp/test/build/
 # vibedsp host harness binary + cmake build dir
 android/app/src/main/cpp/vibedsp/test/fm_probe
 android/app/src/main/cpp/vibedsp/test/build/
+
+# Spike (WristSDR) watch build output + logs — dev machine only
+spike/WristSDR/build/
+spike/WristSDR/build-*.log
+/build/
+vibeserver/mac/AppIcon.icns
+vibeserver/mac/Resources/
+
+# Notarised VibeServer release artefacts (attached to GitHub releases, not tracked)
+VibeServer-*.zip

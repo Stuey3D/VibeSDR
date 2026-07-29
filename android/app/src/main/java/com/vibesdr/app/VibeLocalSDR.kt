@@ -68,6 +68,14 @@ object VibeLocalSDR {
         nativeStopSpectrum()
     }
 
+    /** Stop and WAIT for the radio to be closed. The caller owns the USB connection and must
+     *  not close it until this returns — see the note on nativeStopSpectrumSync. */
+    fun stopSpectrumSync() {
+        if (!loaded) return
+        nativeStopSpectrumSync()
+    }
+    private external fun nativeStopSpectrumSync()
+
     // Hardware controls (no-ops if no session running). gainTenthDb < 0 = auto.
     fun setGain(gainTenthDb: Int) { if (loaded) nativeSetGain(gainTenthDb) }
     fun setPpm(ppm: Int) { if (loaded) nativeSetPpm(ppm) }
@@ -115,6 +123,14 @@ object VibeLocalSDR {
         host: String, port: Int, centerFreq: Double, sampleRate: Double,
         gainTenthDb: Int, fftSize: Int, fftRate: Double, mode: String): Int
 
+    /** Decode ONE Opus packet to interleaved int16. Null on any failure — the caller must
+     *  DROP the frame rather than fall back to playing the bytes raw, which is the bug this
+     *  exists to fix. The decoder is stateful and lives in native code across calls. */
+    fun opusDecode(packet: ByteArray, rate: Int, channels: Int): ShortArray? {
+        ensureLoaded(); return nativeOpusDecode(packet, rate, channels)
+    }
+    private external fun nativeOpusDecode(packet: ByteArray, rate: Int, channels: Int): ShortArray?
+
     /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
      *  Call before startSpectrum(). */
     fun setServeOnLan(on: Boolean) { ensureLoaded(); nativeSetServeOnLan(on) }
@@ -122,6 +138,13 @@ object VibeLocalSDR {
     // VibeServer PIN (empty = open access) + compatibility limits + audio codec.
     fun setVibeServerAuth(secret: String) { ensureLoaded(); nativeSetVibeServerAuth(secret) }
     fun setVibeServerLimits(maxBwHz: Double, maxFftRate: Double) { ensureLoaded(); nativeSetVibeServerLimits(maxBwHz, maxFftRate) }
+    /** Admin password — gates CONTROL (bias-T, direct sampling, calibration), not access.
+     *  Empty = nothing protected. Independent of the listening PIN. */
+    fun setVibeServerAdminSecret(secret: String) { ensureLoaded(); nativeSetVibeServerAdminSecret(secret) }
+    /** 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt. */
+    fun setVibeServerUncompressedAudio(mode: Int) { ensureLoaded(); nativeSetVibeServerUncompressedAudio(mode) }
+    /** Per-listener time limit, minutes. 0 = unlimited. Loopback + admin sessions exempt. */
+    fun setVibeServerSessionLimit(minutes: Int) { ensureLoaded(); nativeSetVibeServerSessionLimit(minutes) }
     fun setVibeServerCompressAudio(on: Boolean) { ensureLoaded(); nativeSetVibeServerCompressAudio(on) }
     /** Serve the browser client at GET /. Off = app-only: a browser gets 403. */
     fun setVibeServerWebEnabled(on: Boolean) { ensureLoaded(); nativeSetVibeServerWebEnabled(on) }
@@ -158,6 +181,9 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerAuth(secret: String)
     private external fun nativeSetVibeServerLimits(maxBwHz: Double, maxFftRate: Double)
     private external fun nativeSetVibeServerCompressAudio(on: Boolean)
+    private external fun nativeSetVibeServerAdminSecret(secret: String)
+    private external fun nativeSetVibeServerUncompressedAudio(mode: Int)
+    private external fun nativeSetVibeServerSessionLimit(minutes: Int)
     private external fun nativeSetStationsJson(json: String)
     private external fun nativeSetLocationJson(json: String)
 

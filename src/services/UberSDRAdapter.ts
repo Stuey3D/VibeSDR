@@ -53,6 +53,13 @@ export class UberSDRAdapter implements SDRBackend {
 
   get uuid(): string { return this.client.uuid; }
 
+  /** Link-management mode (Auto / Full / Low Data). FORWARD to the inner client — the app sets this on
+   *  the adapter, and without this getter/setter the toggle vanished (the adapter had no linkMode and no
+   *  `.inner`, so Low Data never reached the controller and held 10fps; Auto only "worked" as the
+   *  default). The client's own setter reconfigures the running LinkManager live. */
+  get linkMode(): UberSDRClient['linkMode'] { return this.client.linkMode; }
+  set linkMode(m: UberSDRClient['linkMode']) { this.client.linkMode = m; }
+
   /** Local hardware: thread the live device sample rate for panSpan()'s Fs window. */
   setLocalSampleRate(hz: number) { this.client.localSampleRate = hz; }
   // VibeServer PIN: the pre-computed "&vs_nonce=&vs_auth=" WS URL suffix.
@@ -76,7 +83,7 @@ export class UberSDRAdapter implements SDRBackend {
     } catch {}
   }
 
-  connect(frequency?: number, mode?: SDRMode) { this.fetchReceiverLon(); return this.client.connect(frequency, mode); }
+  connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }) { this.fetchReceiverLon(); return this.client.connect(frequency, mode, opts); }
   destroy()                                   { this.client.destroy(); }
 
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) { this.client.tune(frequency, mode, opts); }
@@ -93,6 +100,23 @@ export class UberSDRAdapter implements SDRBackend {
   resetView()                                   { this.client.resetView(); }
 
   setRate(divisor: number) { this.client.setRate(divisor); }
+
+  /** ★★ FORWARD, or the feature is unreachable. Same trap as `linkMode` above: SDRScreen holds
+   *  the ADAPTER, not the client, so a method that exists only on UberSDRClient is simply
+   *  absent — and both of these are read with `?.`, so the failure is SILENT. `isVibe` gates
+   *  whether the ADV RDS button is offered at all and `setAdvRds` is the switch, so missing
+   *  them meant the analyser could never be shown and never be turned on, with nothing
+   *  anywhere to say why (Stuart: "it was in WFM and indicating stereo", 2026-07-27).
+   *  ★ Anything added to UberSDRClient that the screen calls needs a line here. */
+  get isVibe(): boolean { return this.client.isVibe; }
+  setAdvRds(on: boolean) { this.client.setAdvRds(on); }
+  /** Radio-specific hardware controls. Forwarded for the same reason as above — the screen
+   *  holds the adapter, and an absent method on an `any`-cast call fails silently. */
+  ahfControl(o: Parameters<UberSDRClient['ahfControl']>[0]) { this.client.ahfControl(o); }
+  rspControl(o: Parameters<UberSDRClient['rspControl']>[0]) { this.client.rspControl(o); }
+  adminUnlock(nonce: string, token: string) { this.client.adminUnlock(nonce, token); }
+  /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
+  setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }
   resumeSpectrum()         { this.client.resumeSpectrum(); }
   forceResubscribe(reason: string) { this.client.forceResubscribe(reason); }

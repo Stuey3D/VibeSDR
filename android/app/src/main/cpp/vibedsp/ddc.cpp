@@ -105,11 +105,33 @@ void FmDemod::process(const cf32* in, float* out, int n) {
     // and thus the L-R stereo difference, so it must stay clean — the earlier crude
     // approximation (~3.8e-3) audibly corrupted stereo. This minimax version is
     // inaudible and far cheaper than std::atan2 at the channel rate.
-    for (int i = 0; i < n; ++i) {
-        const cf32 d = in[i] * std::conj(prev_);
-        out[i] = gain_ * fastAtan2(d.imag(), d.real());
-        prev_ = in[i];
+    //
+    // NEON: four discriminator outputs at a time. The product z[i]*conj(z[i-1])
+    // only reaches back one sample, so after the first output every operand is
+    // already in the input block — no serial dependency at all, unlike the PLL
+    // downstream. Sample 0 is done scalar against the previous block's tail.
+    if (n <= 0) return;
+    {
+        const cf32 d = in[0] * std::conj(prev_);
+        out[0] = gain_ * fastAtan2(d.imag(), d.real());
     }
+    int i = 1;
+#if VIBE_NEON
+    const float* z = reinterpret_cast<const float*>(in);
+    for (; i + 4 <= n; i += 4) {
+        const float32x4x2_t a = vld2q_f32(z + 2 * i);          // z[i..i+3]
+        const float32x4x2_t b = vld2q_f32(z + 2 * (i - 1));    // z[i-1..i+2]
+        // d = a * conj(b)
+        const float32x4_t dr = vmlaq_f32(vmulq_f32(a.val[0], b.val[0]), a.val[1], b.val[1]);
+        const float32x4_t di = vmlsq_f32(vmulq_f32(a.val[1], b.val[0]), a.val[0], b.val[1]);
+        vst1q_f32(out + i, vmulq_n_f32(fastAtan2q(di, dr), gain_));
+    }
+#endif
+    for (; i < n; ++i) {
+        const cf32 d = in[i] * std::conj(in[i - 1]);
+        out[i] = gain_ * fastAtan2(d.imag(), d.real());
+    }
+    prev_ = in[n - 1];
 }
 
 // ── SSB / CW demod (Weaver / third method) ───────────────────────────────--

@@ -82,6 +82,24 @@ export interface SpotRow {
   distKm?: number;
   grid?:   string;    // TX Maidenhead locator (on-device FT8 spots) → distance/map
   country: string;
+  /** The full decoded message — "CQ DX JA8KSF QN03". The primary payload of a spot: it is what
+   *  distinguishes a CQ from a signal report from a completed QSO. UberSDR has always sent this
+   *  and we discarded it. */
+  msg?:     string;
+  /** Degrees from the receiver. Server-supplied on UberSDR; derived from `grid` on-device. */
+  bearing?: number;
+}
+
+/** Trimmed string, or undefined — so an empty field never renders as a blank line. */
+function spotStr(v: unknown): string | undefined {
+  const s = typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
+  return s ? s : undefined;
+}
+/** A finite number, or undefined. Accepts the numeric-string form some servers send. */
+function spotNum(v: unknown): number | undefined {
+  if (typeof v === 'number') return isFinite(v) ? v : undefined;
+  if (typeof v === 'string' && v.trim()) { const n = parseFloat(v); return isFinite(n) ? n : undefined; }
+  return undefined;
 }
 
 /** Skin _freqToHz: values < 1000 are MHz, otherwise already Hz. */
@@ -354,6 +372,12 @@ export class DecoderClient {
               distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
               grid: d.grid ? String(d.grid) : undefined,
               country: String(d.country ?? ''),
+              // ★ The wire key is NOT confirmed — the UberSDR web UI's column headings ("Message",
+              // "Bearing") are not necessarily the field names. Accept the plausible spellings
+              // rather than betting on one and silently showing nothing; the cost of the extra
+              // `??`s is nil and the cost of guessing wrong is a feature that looks broken.
+              msg: spotStr(d.message ?? d.msg ?? d.text),
+              bearing: spotNum(d.bearing ?? d.bearing_deg ?? d.azimuth),
             });
           } else if (m.type === 'cw_spot' && m.data) {
             const d = m.data;

@@ -210,6 +210,27 @@ void WefaxDecoder::decodeFaxLine() {
     }
 }
 
+// Running contrast stretch: accumulate this line into a lifetime histogram, then rebuild a LUT that
+// maps the 2nd…98th percentile to full [0,255]. Cheap (one 256-bin pass per line) and it converges
+// after a few lines, so the live image is bright from the top instead of relying on a final pass.
+void WefaxDecoder::updateAutoLevel(const uint8_t* line, int w) {
+    for (int i = 0; i < w; i++) levelHist[line[i]]++;
+    levelCount += (uint64_t)w;
+    const uint64_t loCount = levelCount * 2 / 100;    // 2nd percentile from the bottom
+    const uint64_t topCount = levelCount * 2 / 100;   // 2% from the top → 98th percentile
+    uint64_t acc = 0; int lo = 0, hi = 255;
+    for (int v = 0; v < 256; v++)   { acc += levelHist[v]; if (acc >= loCount)  { lo = v; break; } }
+    acc = 0;
+    for (int v = 255; v >= 0; v--)  { acc += levelHist[v]; if (acc >= topCount) { hi = v; break; } }
+    if (hi <= lo) hi = lo + 1;
+    const double scale = 255.0 / (double)(hi - lo);
+    for (int v = 0; v < 256; v++) {
+        double x = (v - lo) * scale;
+        levelLut[v] = x < 0 ? 0 : (x > 255 ? 255 : (uint8_t)(x + 0.5));
+    }
+    levelLutReady = true;
+}
+
 void WefaxDecoder::decodeImageLine() {
     // Resample one demod line to imageWidth pixels.
     for (int i = 0; i < imageWidth; i++) {
@@ -245,7 +266,13 @@ void WefaxDecoder::decodeImageLine() {
     }
     lineIncrAcc += lineIncrFrac;
 
-    if (emit && onLine) onLine((uint32_t)imageLine, (uint32_t)imageWidth, outImage.data());
+    if (emit) {
+        // Live contrast stretch so the emitted line is bright for EVERY client (web/phone/watch),
+        // not just the phone's finished-image post-process. Accumulate raw values first, then map.
+        updateAutoLevel(outImage.data(), imageWidth);
+        for (int i = 0; i < imageWidth; i++) outImage[i] = levelLut[outImage[i]];
+        if (onLine) onLine((uint32_t)imageLine, (uint32_t)imageWidth, outImage.data());
+    }
 }
 
 } // namespace vibe

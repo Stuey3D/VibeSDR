@@ -35,7 +35,7 @@
 
 import { withAuth, type AuthState } from './auth';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | null;
 
 export interface Spot {
   mode: 'FT8' | 'FT4';
@@ -87,6 +87,10 @@ export interface DecoderParams {
 /** The shim's extension names. */
 const EXT: Record<Exclude<DecoderMode, null>, string> = {
   rtty: 'fsk',
+  // ★ Not an audio decoder — attaching 'rds' turns on the extended RDS stream. It goes
+  // through the decoder path deliberately: selecting it IS the toggle, so the cost is paid
+  // only while it is open (see BRIEF-rds-receiver.md).
+  rds: 'rds',
   navtex: 'navtex',
   wefax: 'wefax',
   sstv: 'sstv',

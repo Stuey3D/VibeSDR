@@ -102,7 +102,110 @@ export interface AudioCallbacks {
   onLevel?: (peak: number) => void;
 }
 
+/**
+ * One second of silence, 8 kHz mono WAV. Only ever used as the Chromium media-session anchor.
+ *
+ * ★★ SERVED AS A BLOB, NOT A data: URI. As a data: URI, looping this leaked ~700 MB/SECOND in
+ * Chromium — see `_needsAnchor`. A blob URL is decoded from a real resource and is the shape
+ * Chromium's media pipeline expects; whether that alone cures it is UNVERIFIED, which is why the
+ * anchor stays opt-in.
+ */
+const SILENT_WAV_B64 = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+function silentLoopUrl(): string {
+  const bin = atob(SILENT_WAV_B64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+}
+
 export class AudioPlayer {
+  /**
+   * ★★ OFF BY DEFAULT — THIS LEAKED ~700 MB/SECOND IN CHROMIUM.
+   *
+   * The anchor is a silent, looping <audio> element added so Chromium would attach its Global
+   * Media Controls (it refuses to attach them to a MediaStream `srcObject`). It worked — Now
+   * Playing appeared in Edge — and it also made Edge consume 13 GB of RAM, peg a performance core
+   * at ~38%, run at 89°C, hang on opening a tab, and stall the whole browser. Chromium appears to
+   * re-decode the clip on every loop and never release it: 3,600 loops an hour.
+   *
+   * MEASURED, same machine and page: with the anchor Edge sat at 38% CPU and climbing memory;
+   * without it, 6.8% and flat — lower than Safari. Nothing else moved that number, and several
+   * plausible-looking render fixes were tried first and did not.
+   *
+   * ★★ THE BLOB URL WAS TESTED TOO, AND LEAKS IDENTICALLY — straight back to 38%. So it is not the
+   * URI scheme: Chromium leaks on a LOOPING MEDIA ELEMENT itself. The controls do come back, so the
+   * mechanism works perfectly; it is simply unaffordable. DO NOT retry this with another URL form,
+   * another container, or a longer clip — a longer clip only makes the leak slower, and a slow leak
+   * is worse than a fast one because it hides.
+   *
+   * Now Playing on Chromium is therefore ABANDONED until Chromium changes or a fundamentally
+   * different mechanism appears (something that is not a looping element — a real streamed
+   * response, or whatever Chromium eventually accepts for Web Audio). The cost of the feature is a
+   * browser that eats 13 GB and stops responding; the cost of not having it is a missing widget.
+   * That is not a close call.
+   *
+   * `#anchor` still exists purely so the experiment can be repeated cheaply if the landscape
+   * changes. Watch MEMORY for minutes, not CPU for seconds.
+   */
+  /**
+   * `#nomediastream` — skip the MediaStream element and connect straight to ctx.destination
+   * (what the client did before Now Playing was added, afe54bd9).
+   *
+   * ★ IT DOES NOT GET YOU AIRPODS SPATIAL AUDIO. That was the reason it was written and the
+   * reason failed: tested 2026-07-25 on macOS + AirPods Max, "Spatialise Stereo" stayed
+   * Not Available with the MediaStream gone, while YouTube in the same Safari offered it. So the
+   * blocker is NOT the MediaStream/call-like classification (which is real, and is why Chromium
+   * won't attach its widget to `srcObject` — but it is not what gates spatialisation).
+   *
+   * ★ What it DOES do, found by accident: on CHROMIUM the media keys start working. With no
+   * element, Chromium registers the page's Media Session action handlers, so play/pause and
+   * next/prev reach us and the skip buttons genuinely tune. The card carries no artwork and no
+   * metadata, but the CONTROLS work — which is more than the default path gives Chromium, and it
+   * costs nothing (no anchor element, so none of the 13 GB leak above).
+   *
+   * On Safari it is a pure loss: the default path already gives a full card with metadata and
+   * artwork, and this throws that away for nothing. Hence a flag, not a default — until the
+   * Chromium half is confirmed against a no-flag baseline.
+   */
+  private static _isChromium(): boolean {
+    const ua = navigator.userAgent;
+    return /Chrome|Chromium|Edg\//.test(ua) && !/^((?!Chrome|Chromium).)*Safari/.test(ua);
+  }
+
+  /**
+   * Whether to route through the MediaStream element at all. THE TWO ENGINES WANT OPPOSITE
+   * THINGS, so this is decided per browser rather than picked once:
+   *
+   *   Safari   — YES. The element is what gives the full Now Playing card: title, frequency,
+   *              station name and artwork. Works today, keep it.
+   *   Chromium — NO. It has never attached its Global Media Controls to a `srcObject` element
+   *              (it treats MediaStream as call-like), so the element buys Chromium nothing —
+   *              and while it is present the media keys don't reach us either. Drop it and
+   *              Chromium registers the page's Media Session action handlers instead: the
+   *              transport buttons work and the skip keys genuinely tune. Metadata and artwork
+   *              still don't attach, but working controls beat a widget we never got.
+   *
+   * Overrides for A/B: `#mediastream` forces it on, `#nomediastream` forces it off.
+   */
+  private static _useMediaStream(): boolean {
+    if (location.hash.includes('nomediastream')) return false;
+    if (location.hash.includes('mediastream')) return true;
+    return !AudioPlayer._isChromium();
+  }
+
+  private static _needsAnchor(): boolean {
+    if (!location.hash.includes('anchor') || location.hash.includes('noanchor')) return false;
+    // `#anchor` alone is the Chromium Now Playing experiment (UA-gated, see above).
+    // `#anchor2` forces it on ANY browser — a DIAGNOSTIC for the Spatial Audio question:
+    // it puts a real <audio src=blob:> media element in the page while our radio audio goes
+    // out through ctx.destination. If macOS then offers Spatialise Stereo, the rule is
+    // "Safari spatialises media elements, not Web Audio", and the only real route is a muxed
+    // Opus/WebM stream into <audio src>. If it still doesn't, the browser cannot do it at all.
+    // NOTE the anchor is what leaked 13 GB on Chromium — keep it to Safari and to testing.
+    if (location.hash.includes('anchor2')) return true;
+    return AudioPlayer._isChromium();
+  }
+
   private ws: WebSocket | null = null;
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
@@ -125,7 +228,23 @@ export class AudioPlayer {
    */
   private mediaEl: HTMLAudioElement | null = null;
   private streamDest: MediaStreamAudioDestinationNode | null = null;
+  /**
+   * ★ CHROMIUM ANCHOR. The MediaStream element above is enough for Safari, but Chromium does NOT
+   * attach its Global Media Controls to an element fed by `srcObject` — MediaStream playback is
+   * treated as call-like audio and deliberately kept out of the media widget. So on Chrome/Edge
+   * (and therefore on Windows too) Now Playing stayed empty while the audio played perfectly.
+   *
+   * The fix the web has settled on: a second element playing a real `src` — a silent, looping
+   * clip — purely to give Chromium something it is willing to attach the session to. It makes no
+   * sound and carries no audio of ours; the actual radio still comes out of the Web Audio graph.
+   */
+  private anchorEl: HTMLAudioElement | null = null;
   private ring: [Float32Array, Float32Array] | null = null;
+  // WebCodecs Opus decoder (VibeServer compressed audio). Lazily configured; reconfigured if the
+  // channel count changes (WFM stereo <-> mono). Decoded PCM lands in _onOpusData -> _playPcm.
+  private opusDec: AudioDecoder | null = null;
+  private opusCh = 0;
+  private opusTs = 0;
   private cap = 48000 * 2;
   private wPos = 0;
   private rPos = 0;
@@ -134,6 +253,18 @@ export class AudioPlayer {
   private url: string;
   private cb: AudioCallbacks;
   private closedByUs = false;
+
+  /** Tear down the Chromium anchor alongside the real output. */
+  private _stopAnchor() {
+    if (!this.anchorEl) return;
+    try {
+      const src = this.anchorEl.src;
+      this.anchorEl.pause();
+      this.anchorEl.src = '';
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+    } catch { /* already gone */ }
+    this.anchorEl = null;
+  }
   private _volume = 1;
   private _muted = false;
   /** Server-side squelch threshold, dB. <= -100 means OFF (matches the app's convention). */
@@ -153,21 +284,48 @@ export class AudioPlayer {
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this._muted ? 0 : this._volume;
 
-      // Play OUT through a media element, so the OS sees real playback and gives
-      // us Now Playing / lock-screen / media-key control. Falls back to the plain
-      // destination if the browser won't take a MediaStream.
-      try {
-        this.streamDest = this.ctx.createMediaStreamDestination();
-        this.mediaEl = new Audio();
-        this.mediaEl.srcObject = this.streamDest.stream;
-        this.mediaEl.autoplay = true;
-        // The GainNode already carries volume/mute; keep the element wide open or
-        // the two would fight.
-        this.mediaEl.volume = 1;
-        void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
-      } catch {
+      // ── How the OS media widget gets attached: ONE mechanism per engine ──────────────────
+      //
+      // ★ CHROMIUM: the silent anchor, and audio goes STRAIGHT to the destination.
+      //   Routing playback through a MediaStream element on Chromium drags it into the WebRTC
+      //   playout path, which applies ADAPTIVE RESAMPLING to manage latency — and that is audible
+      //   as the pitch drifting up and down for the first few seconds while it converges (reported
+      //   on Edge, and previously against the Android server on a work laptop; Safari never did
+      //   it). Chromium will not attach Global Media Controls to a srcObject element anyway, so
+      //   the MediaStream bought us nothing there and cost us the wobble.
+      //
+      // ★ SAFARI: the MediaStream element, because it is the only thing Safari attaches Now
+      //   Playing to, and Safari's playout of it is clean.
+      // #noanchor disables the Chromium media-session anchor — it is the ONLY Chromium-only code
+      // we have, which makes it the first suspect for a Chromium-only leak.
+      if (!AudioPlayer._useMediaStream() && !AudioPlayer._needsAnchor()) {
+        // No element at all — audio goes straight to ctx.destination (_connectOutput).
+        // On Chromium this is what lets the Media Session action handlers register.
         this.streamDest = null;
         this.mediaEl = null;
+      } else if (AudioPlayer._needsAnchor()) {
+        try {
+          this.anchorEl = new Audio(silentLoopUrl());
+          this.anchorEl.loop = true;
+          // Not zero: Chromium can treat a muted element as inaudible and skip the widget
+          // entirely. The clip is silent by CONTENT, so this is still completely inaudible.
+          this.anchorEl.volume = 1;
+          void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
+        } catch { this.anchorEl = null; }
+      } else {
+        try {
+          this.streamDest = this.ctx.createMediaStreamDestination();
+          this.mediaEl = new Audio();
+          this.mediaEl.srcObject = this.streamDest.stream;
+          this.mediaEl.autoplay = true;
+          // The GainNode already carries volume/mute; keep the element wide open or
+          // the two would fight.
+          this.mediaEl.volume = 1;
+          void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
+        } catch {
+          this.streamDest = null;
+          this.mediaEl = null;
+        }
       }
 
       // AudioWorklet is [SecureContext]-only. A VibeServer is plain http:// on a
@@ -284,17 +442,79 @@ export class AudioPlayer {
     const channels = dv.getUint8(0);
     const format = dv.getUint8(1);
 
+    // format 3 = Opus (VibeServer compressed audio). Decoded ASYNCHRONOUSLY via WebCodecs — the
+    // decoded PCM lands in _onOpusData → _playPcm, same tail as the sync paths below.
+    if (format === 3) { this._decodeOpus(buf, channels); return; }
+
     let pcm: Int16Array;
     let ch: number;
     if (format === 0) {
       ch = channels;
       pcm = new Int16Array(buf, 6, (buf.byteLength - 6) >> 1);
     } else {
+      // formats 1/2 = legacy IMA-ADPCM (retired server-side; kept for any old stream).
       const d = decodeVibeAdpcmFrame(buf);
       ch = d.channels;
       pcm = d.pcm;
     }
+    this._playPcm(pcm, ch);
+  }
 
+  /** Does this browser decode Opus via WebCodecs? Awaited before we ask the server for Opus, so a
+   *  browser that can't (Safari <=16.3, Firefox <130, ancient WebViews) transparently gets PCM. */
+  static async supportsOpus(): Promise<boolean> {
+    try {
+      if (typeof AudioDecoder === 'undefined') return false;
+      const s = await AudioDecoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
+      return !!s.supported;
+    } catch { return false; }
+  }
+
+  private _ensureOpus(ch: number) {
+    if (this.opusDec && this.opusCh === ch) return;
+    if (this.opusDec) { try { this.opusDec.close(); } catch {} }
+    this.opusDec = new AudioDecoder({
+      output: (d) => this._onOpusData(d),
+      // A decode error must not kill audio silently — log it; the stream self-heals on the next
+      // key packet (every Opus packet is independently decodable).
+      error: (e) => console.warn('[audio] opus decode error', e),
+    });
+    this.opusDec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: ch });
+    this.opusCh = ch;
+    this.opusTs = 0;
+  }
+
+  private _decodeOpus(buf: ArrayBuffer, channels: number) {
+    this._ensureOpus(channels || 1);
+    // Copy the packet out of the frame (offset 6). Each Opus packet is a self-contained 20 ms frame.
+    const data = buf.slice(6);
+    try {
+      this.opusDec!.decode(new EncodedAudioChunk({
+        type: 'key', timestamp: this.opusTs, duration: 20000, data,
+      }));
+    } catch (e) { console.warn('[audio] opus enqueue failed', e); }
+    this.opusTs += 20000;   // 20 ms in microseconds
+  }
+
+  private _onOpusData(ad: AudioData) {
+    const ch = ad.numberOfChannels, frames = ad.numberOfFrames;
+    const pcm = new Int16Array(frames * ch);
+    const plane = new Float32Array(frames);
+    for (let c = 0; c < ch; c++) {
+      ad.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
+      for (let i = 0; i < frames; i++) {
+        let sm = Math.round(plane[i] * 32767);
+        sm = sm < -32768 ? -32768 : sm > 32767 ? 32767 : sm;
+        pcm[i * ch + c] = sm;   // interleaved for stereo, sequential for mono (ch===1)
+      }
+    }
+    ad.close();
+    this._playPcm(pcm, ch);
+  }
+
+  /** Common tail: record tap + int16 → float L/R + push to the worklet. Fed by PCM/ADPCM (sync)
+   *  and by the Opus decoder (async). `pcm` is interleaved for stereo, sequential for mono. */
+  private _playPcm(pcm: Int16Array, ch: number) {
     const frames = Math.floor(pcm.length / Math.max(1, ch));
     if (frames <= 0) return;
 
@@ -421,6 +641,7 @@ export class AudioPlayer {
     this.ws?.close();
     this.ws = null;
     if (this.mediaEl) { this.mediaEl.pause(); this.mediaEl.srcObject = null; this.mediaEl = null; }
+    this._stopAnchor();
     this.streamDest = null;
     if (this.sp) { this.sp.onaudioprocess = null; this.sp.disconnect(); this.sp = null; }
     this.ctx?.close();

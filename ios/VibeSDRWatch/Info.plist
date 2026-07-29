@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>VibeSDR</string>
+	<string>VibeSDR Buddy</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -19,7 +19,15 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>170</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- The FM-DX (servers.fmdx.org) and KiwiSDR (rx.linkfanel.net) directory APIs are http-only,
+		     which watchOS ATS blocks by default — so those directories wouldn't load. The phone app
+		     already allows this; the watch needs the same. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>WKApplication</key>
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>

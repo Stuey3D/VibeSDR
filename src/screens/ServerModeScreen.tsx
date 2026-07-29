@@ -10,7 +10,8 @@ import { RootStackParamList } from '../../App';
 import { themeFor } from '../constants/theme';
 import { getServerName, saveServerName } from '../services/rtlTcpServer';
 import {
-  startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio,
+  startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
+  setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
@@ -36,17 +37,31 @@ type PinMode = 'random' | 'custom' | 'off';
 // RTL-TCP server's overrideRate). Anything else PINS the rate — the client's picker
 // is then hidden and told the server set it, because a rate it can't change is a
 // rate it shouldn't offer.
-const RATE_OPTIONS = [
+// ★★ PER RADIO. These were a dongle's rates offered to whatever was plugged in, so an Airspy
+// HF+ — which tops out near 912 kHz — was shown 2.4 MHz, 1.2 MHz and 960 kHz: every option
+// impossible (Stuart, 2026-07-27). The shim would snap a pinned rate to the nearest real one,
+// so the menu was lying rather than breaking, which is worse.
+// ★ FIFTH time today the same shape has bitten: a list written when there was one radio.
+const RATE_OPTIONS_RTL = [
   { label: 'Client-controlled', value: 0 },
   { label: 'Full · 2.4 MHz',  value: 2_400_000 },
   { label: '1.2 MHz',         value: 1_200_000 },
   { label: '960 kHz (light)', value: 960_000 },
+];
+// Airspy HF+ Discovery / Dual Port. ★ The radio's own list still wins once it is running —
+// this is which menu to draw, not a claim about the hardware.
+const RATE_OPTIONS_AHF = [
+  { label: 'Client-controlled', value: 0 },
+  { label: 'Full · 912 kHz',  value: 912_000 },
+  { label: '768 kHz',         value: 768_000 },
+  { label: '384 kHz (light)', value: 384_000 },
 ];
 
 const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
   webServer: 'vs_webserver', autoRestore: 'vs_autorestore',
+  adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
 };
 
 export default function ServerModeScreen({ navigation, route }: Props) {
@@ -60,6 +75,21 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [rate, setRate]           = useState(0);          // 0 = client-controlled
   const [fps, setFps]             = useState<FpsTier>('full');
   const [compress, setCompress]   = useState(true);
+  // ★ Admin password — protects the CONTROLS (bias-T, direct sampling, calibration), not
+  // access. Deliberately separate from the listening PIN: Hans's server is open to everyone
+  // and still must not let a visitor put DC on the feedline.
+  const [adminPw, setAdminPw]     = useState('');
+  const [showAdminPw, setShowAdminPw] = useState(false);
+  // 0 = off, 1 = listener's choice, 2 = compatibility only.
+  const [uncomp, setUncomp]       = useState<0 | 1 | 2>(0);
+  // ★ Per-listener time limit, minutes. 0 = unlimited — right for a private receiver.
+  const [limitMin, setLimitMin]   = useState(0);
+  // ★ Which radio is attached, so the menus match it. VID/PID only — see getConnectedRadio.
+  const [radio, setRadio] = useState<{ driver: string; model: string } | null>(null);
+  useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
+  const rateOptions = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF : RATE_OPTIONS_RTL;
+  // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
+  const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz' : '2.4 MHz';
   const [webServer, setWebServer] = useState(true);
   const [autoRestore, setAutoRestore] = useState(true);
   const [bmCount, setBmCount] = useState<number | null>(null);
@@ -83,17 +113,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
-        const [p, a, pm, sp, r, fp, cp, ws, ar] = await Promise.all([
+        const [p, a, pm, sp, r, fp, cp, ws, ar, apw, unc, lim] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
           AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
           AsyncStorage.getItem(K.autoRestore),
+          AsyncStorage.getItem(K.adminPw), AsyncStorage.getItem(K.uncomp),
+          AsyncStorage.getItem(K.limitMin),
         ]);
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (ws != null) setWebServer(ws !== '0');
         if (ar != null) setAutoRestore(ar !== '0');
+        if (apw != null) setAdminPw(apw);
+        if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
+        if (lim != null) setLimitMin(Number(lim) || 0);
         setLocMode(await getServerLocationMode());
         setLocCity((await getManualServerLocation())?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
@@ -232,6 +267,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.fps, fps], [K.compress, compress ? '1' : '0'],
       [K.webServer, webServer ? '1' : '0'],
       [K.autoRestore, autoRestore ? '1' : '0'],
+      [K.adminPw, adminPw], [K.uncomp, String(uncomp)], [K.limitMin, String(limitMin)],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -264,6 +300,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         pin: effectivePin,
         maxFftRate: fpsForTier(fps),
         compressAudio: compress,
+        adminPassword: adminPw,
+        uncompressedAudio: uncomp,
+        sessionLimitMin: limitMin,
         webServer,
         advertise,
         autoRestore,
@@ -274,10 +313,20 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       if (advertise) advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
     } catch (e: any) {
       setStarting(false);
-      setError(e?.message ?? 'Could not start VibeServer. Is an RTL-SDR plugged in via USB OTG?');
+      setError(e?.message ?? 'Could not start VibeServer. Is a supported SDR plugged in via USB OTG?');
     }
+  // ★★★ EVERY PIECE OF STATE THIS READS MUST BE LISTED. adminPw, uncomp and limitMin were
+  // missing, so `start` was frozen with their INITIAL values — '' and 0 — and no amount of
+  // typing changed what it sent. The server dutifully applied an empty password and no limit,
+  // and reported exactly that.
+  // ★★ IT ALSO ATE THE SETTINGS. This callback persists what it is about to send, so every
+  // Start wrote the STALE '' over the real password in storage — which is why the field came
+  // back BLANK next time and made it look like a save bug. One stale closure, two symptoms,
+  // and an evening of looking at the server for a fault that was three lines above it
+  // (Stuart, 2026-07-27).
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
-      webServer, autoRestore, locMode, locCity, checkBackgroundAllowed]);
+      webServer, autoRestore, locMode, locCity, checkBackgroundAllowed,
+      adminPw, uncomp, limitMin]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -323,7 +372,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
           <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>VibeServer</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-            Serving this phone's RTL-SDR with server-side DSP. Leaving this screen
+            {`Serving this phone's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
             stops the server and frees the dongle.
           </Text>
 
@@ -351,6 +400,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Row C={C} F={F} k="FRAME RATE"
               v={status?.fftRate ? `${Math.round(status.fftRate)} fps` : '—'}
               vc={client ? C.amber : C.goldDim} />
+            {/* CPU — a phone serving on a shelf for hours invites "what is this costing me",
+                and the honest answer beats guessing from how warm it feels. Percent of ONE
+                core, so it stays comparable with the DSP benchmark figures; the core count is
+                shown alongside so 120% reads as "1.2 of 8" rather than as an error. */}
+            <Row C={C} F={F} k="CPU"
+              v={status?.cpu ? `${status.cpu.toFixed(0)}% of 1 core${status?.cores ? ` (of ${status.cores})` : ''}` : '—'}
+              vc={client ? C.amber : C.goldDim} />
           </View>
 
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
@@ -373,7 +429,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </View>
 
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red }]} onPress={stopAndBack}>
-            <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to instances</Text>
+            <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to servers</Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
@@ -386,7 +442,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
         <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>Server mode</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          Share this phone's RTL-SDR over your network.
+          {`Share this phone's ${radio?.model ?? 'SDR'} over your network.`}
         </Text>
 
         {/* Protocol picker */}
@@ -423,8 +479,32 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
         {proto === 'vibeserver' ? (
           <>
+            {/* ★★ SECURITY — the PIN and the admin password TOGETHER, because they are two
+                secrets with two different jobs and having them in separate parts of the screen
+                invited the reading that one replaces the other (Stuart, 2026-07-27).
+                The distinction in one line each: the PIN is the DOOR, the password is the
+                CONTROLS INSIDE. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>SECURITY</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, fontSize: 14 }]}>
+                Two separate protections
+              </Text>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                <Text style={{ color: C.gold }}>PIN — protects the CONNECTION.</Text>{'\n'}
+                Decides who may connect and listen at all. Without it, anyone who can reach this
+                server can use the radio.{'\n\n'}
+                <Text style={{ color: C.gold }}>Password — protects the SERVER and HARDWARE.</Text>{'\n'}
+                Anyone already listening can still tune and set the gain — that is what a
+                receiver is for. The password guards the few settings that can damage equipment
+                or leave the radio broken for the next person: bias-T, direct sampling and
+                calibration.{'\n\n'}
+                They are independent on purpose. A public receiver has NO PIN so everyone can
+                listen, and a password so no visitor can put DC on the feedline.
+              </Text>
+            </View>
+
             {/* PIN */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PIN</Text>
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PIN — WHO MAY CONNECT</Text>
             <View style={styles.pillRow}>
               {(['random', 'custom', 'off'] as PinMode[]).map(m => (
                 <Pill key={m} C={C} F={F} active={pinMode === m}
@@ -525,10 +605,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BANDWIDTH</Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
               {rate === 0
-                ? 'Clients choose their own span, up to the full 2.4 MHz.'
+                ? `Clients choose their own span, up to the full ${topRateLabel}.`
                 : 'Pinned — clients cannot change the span. Lower it to save processing power on a low-end phone.'}
             </Text>
-            {RATE_OPTIONS.map(o => (
+            {rateOptions.map(o => (
               <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
             ))}
 
@@ -567,7 +647,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <OptRow key={t.key} C={C} F={F} active={fps === t.key} label={t.label} onPress={() => setFps(t.key)} />
             ))}
 
-            {/* Compressed audio */}
+            {/* Compressed audio. ★ The codec is OPUS now — this said IMA-ADPCM long after
+                Opus replaced it, which is worse than saying nothing: it names the wrong
+                format to anyone deciding whether their client can cope. */}
             <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -577,9 +659,74 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                IMA-ADPCM (~4x lighter). Turn off for maximum compatibility.
+                Opus — about 20x lighter than raw audio. Turn off only if a listener's
+                client cannot decode it.
               </Text>
             </View>
+
+            {/* ★★ UNCOMPRESSED AUDIO — the owner's UPLINK policy, three-way.
+                Raw is 48 kHz stereo int16: ~187 KB/s per listener, which is why this is not
+                a plain switch. Hans asked for it after hearing Opus on a good system. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>UNCOMPRESSED AUDIO</Text>
+            {([
+              [0, 'Off', 'Never send raw audio. Listeners who cannot decode Opus are turned away with a reason.'],
+              [1, "Listener's choice", 'An UNCOMPRESSED button appears in each listener\u2019s audio menu. Defaults to Opus.'],
+              [2, 'Compatibility only', 'Raw only as a fallback for a client that cannot decode Opus — no user-facing switch.'],
+            ] as const).map(([v, label, hint]) => (
+              <OptRow key={v} C={C} F={F} active={uncomp === v} label={label} hint={hint}
+                onPress={() => { setUncomp(v as 0 | 1 | 2); AsyncStorage.setItem(K.uncomp, String(v));
+                                 if (runningRef.current) setVibeServerUncompressedAudio(v as 0 | 1 | 2); }} />
+            ))}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              This phone always gets uncompressed audio from its own server — the setting rations
+              your UPLINK, and listening on the same device never touches it.
+            </Text>
+
+            {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>
+            {([[0, 'Unlimited'], [15, '15 minutes'], [30, '30 minutes'],
+               [60, '1 hour'], [120, '2 hours']] as const).map(([v, label]) => (
+              <OptRow key={v} C={C} F={F} active={limitMin === v} label={label}
+                onPress={() => { setLimitMin(v); AsyncStorage.setItem(K.limitMin, String(v));
+                                 if (runningRef.current) setVibeServerSessionLimit(v); }} />
+            ))}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              For a receiver you have put on the internet. This server serves ONE listener at a
+              time, so without a limit the first person to connect can hold it all evening and
+              everyone else just sees IN USE.{'\n\n'}
+              A listener is warned at two minutes and again at thirty seconds, then disconnected
+              with an explanation. Their address is then held off for two minutes — otherwise
+              their client would simply reconnect and carry on, and the limit would achieve
+              nothing.{'\n\n'}
+              You are not affected: listening on this phone is exempt, and so is any session
+              unlocked with the admin password. Leave it Unlimited for a private receiver.
+            </Text>
+
+            {/* ★★ ADMIN PASSWORD — control, not access. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PASSWORD — WHO MAY CHANGE THINGS</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TextInput value={adminPw}
+                onChangeText={(v) => { setAdminPw(v); AsyncStorage.setItem(K.adminPw, v);
+                                       if (runningRef.current) setVibeServerAdminSecret(v); }}
+                placeholder="none — controls are open" placeholderTextColor={C.goldDim}
+                autoCapitalize="none" autoCorrect={false}
+                // ★ Dots by default: this gets typed at a rally or a club night with people
+                // stood behind you (Stuart, 2026-07-27).
+                secureTextEntry={!showAdminPw}
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
+              <TouchableOpacity onPress={() => setShowAdminPw(v => !v)}
+                style={[styles.card, { borderColor: C.border, paddingVertical: 10, paddingHorizontal: 12 }]}>
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>
+                  {showAdminPw ? 'HIDE' : 'SHOW'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Protects the settings that can damage hardware or spoil the band for everyone —
+              bias-T, direct sampling, frequency calibration. Separate from the listening PIN:
+              a receiver can be open to every listener and still refuse a visitor putting DC on
+              the feedline. Leave empty and nothing is protected.
+            </Text>
 
             {error && (
               <View style={[styles.card, { borderColor: C.red, marginTop: 14 }]}>
@@ -587,6 +734,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </View>
             )}
 
+            {/* ★ SAY THERE IS NO SAVE BUTTON. Every setting here persists the moment it is
+                changed and START applies them — but a settings screen with no Save invites the
+                reasonable worry that nothing was kept (Stuart: "there is no save button but I
+                assumed pressing start server was the save button", 2026-07-27). He was right,
+                and having to assume is the problem. */}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 16, textAlign: 'center' }]}>
+              Settings are saved as you change them. Starting the server applies them.
+            </Text>
             <TouchableOpacity style={[styles.startBtn, { borderColor: C.green, backgroundColor: C.green + '18' }]}
               onPress={start} disabled={starting}>
               {starting
@@ -640,10 +795,20 @@ function Pill({ C, F, active, label, onPress }: any) {
   );
 }
 
-function OptRow({ C, F, active, label, onPress }: any) {
+function OptRow({ C, F, active, label, hint, onPress }: any) {
   return (
     <TouchableOpacity style={[styles.optRow, { borderColor: active ? C.amber : C.border }]} onPress={onPress}>
-      <Text style={{ color: active ? C.amber : C.gold, fontFamily: F, fontSize: 15 }}>{label}</Text>
+      {/* ★ The label column must FLEX and the tick stay fixed — a three-way policy choice
+          needs a sentence to be choosable at all, and without the flex a long hint pushes
+          the tick off the row. */}
+      <View style={{ flex: 1, paddingRight: 10 }}>
+        <Text style={{ color: active ? C.amber : C.gold, fontFamily: F, fontSize: 15 }}>{label}</Text>
+        {!!hint && (
+          <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 3, lineHeight: 15 }}>
+            {hint}
+          </Text>
+        )}
+      </View>
       {active && <Text style={{ color: C.amber, fontFamily: F }}>✓</Text>}
     </TouchableOpacity>
   );

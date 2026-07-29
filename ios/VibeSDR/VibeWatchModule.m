@@ -15,7 +15,21 @@ RCT_EXTERN_METHOD(sendRow
                   : (nonnull NSNumber *)level lo
                   : (nonnull NSNumber *)lo hi
                   : (nonnull NSNumber *)hi meter
-                  : (NSString *)meter)
+                  : (NSString *)meter sql
+                  : (nonnull NSNumber *)sql)
+
+RCT_EXTERN_METHOD(startWatchSpectrum
+                  : (NSString *)url binBandwidth
+                  : (nonnull NSNumber *)binBandwidth tuneHz
+                  : (nonnull NSNumber *)tuneHz filterLow
+                  : (nonnull NSNumber *)filterLow filterHigh
+                  : (nonnull NSNumber *)filterHigh brightness
+                  : (nonnull NSNumber *)brightness contrast
+                  : (nonnull NSNumber *)contrast)
+
+RCT_EXTERN_METHOD(retuneWatchSpectrum : (nonnull NSNumber *)tuneHz)
+
+RCT_EXTERN_METHOD(stopWatchSpectrum)
 
 RCT_EXTERN_METHOD(sendFmdx : (NSString *)json)
 
@@ -27,7 +41,15 @@ RCT_EXTERN_METHOD(sendDab : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendFavourites : (NSString *)json)
 
+RCT_EXTERN_METHOD(sendDirectory : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
+
+RCT_EXTERN_METHOD(isClosedByUser
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(clearClosedByUser)
 
 RCT_EXTERN_METHOD(sendVolume : (nonnull NSNumber *)vol muted : (BOOL)muted)
 

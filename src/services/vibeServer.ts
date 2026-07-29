@@ -39,7 +39,18 @@ export type VibeServerConfig = {
   pin: string;              // '' = open access (no PIN)
   maxBandwidthHz?: number;  // 0 = no cap
   maxFftRate?: number;      // 0 = server default (20 fps)
-  compressAudio?: boolean;  // default true
+  compressAudio?: boolean;
+  /** ★ Admin password — gates CONTROL (bias-T, direct sampling, calibration), NOT access.
+   *  Separate from the listening PIN: a public receiver can welcome every listener and still
+   *  refuse a visitor putting DC on the feedline. Empty = nothing protected. */
+  adminPassword?: string;
+  /** 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
+   *  ★ Loopback is OUTSIDE this setting entirely — it rations the owner's uplink. */
+  uncompressedAudio?: 0 | 1 | 2;
+  /** ★ Per-listener time limit, MINUTES. 0 = unlimited (default, and right for a private
+   *  receiver). Loopback and admin sessions are exempt; an expired listener is held on a short
+   *  cooldown, without which their client would simply reconnect and carry on. */
+  sessionLimitMin?: number;  // default true
   /** Serve the browser client at GET /. Off = only the VibeSDR app can connect,
    *  so a stranger can't stumble in from a URL. Default true. */
   webServer?: boolean;
@@ -69,6 +80,11 @@ export type VibeServerStatus = {
   sampleRate: number;
   port: number;
   ip: string;
+  /** Percent of ONE core used by the whole app (so >100 is possible and meaningful on a
+   *  multi-core phone) — the same convention the DSP benchmarks use, so a reading here is
+   *  directly comparable with the Pi figures. 0 = not measured. */
+  cpu: number;
+  cores: number;
 };
 
 export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {
@@ -81,6 +97,9 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     maxBandwidthHz: cfg.maxBandwidthHz ?? 0,
     maxFftRate: cfg.maxFftRate ?? 0,
     compressAudio: cfg.compressAudio ?? true,
+    adminPassword: cfg.adminPassword ?? '',
+    uncompressedAudio: cfg.uncompressedAudio ?? 0,
+    sessionLimitMin: cfg.sessionLimitMin ?? 0,
     webServer: cfg.webServer ?? true,
     lockedRate: cfg.lockedRate ?? 0,
     advertise: cfg.advertise ?? true,
@@ -438,6 +457,24 @@ export function setVibeServerCompressAudio(on: boolean): void {
   try { Local?.setVibeServerCompressAudio?.(on); } catch {}
 }
 
+// Live, no restart — the same two levers the Mac exposes while serving.
+export function setVibeServerAdminSecret(secret: string): void {
+  try { Local?.setVibeServerAdminSecret?.(secret); } catch {}
+}
+export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
+  try { Local?.setVibeServerUncompressedAudio?.(mode); } catch {}
+}
+/** ★ The radio currently plugged in, from its USB descriptor — no device open, no permission
+ *  prompt. Null when nothing supported is attached. Used to draw the right menus BEFORE the
+ *  server exists; the radio's definitive capabilities still come from hwinfo once running. */
+export async function getConnectedRadio(): Promise<{ driver: string; model: string } | null> {
+  try { return (await Local?.getConnectedRadio?.()) ?? null; } catch { return null; }
+}
+
+export function setVibeServerSessionLimit(minutes: number): void {
+  try { Local?.setVibeServerSessionLimit?.(minutes); } catch {}
+}
+
 // A fresh random 6-digit default PIN. The user can keep it, set their own, or
 // disable auth entirely on the sharing screen.
 export function randomPin(seed: number): string {
@@ -454,3 +491,59 @@ export function fmtRate(bytesPerSec: number): string {
   return kb >= 1000 ? `${(kb / 1024).toFixed(1)} MB/s` : `${kb.toFixed(0)} KB/s`;
 }
 
+
+// ── Finding a VibeServer on a typed host ─────────────────────────────────────
+
+/** The range the server itself picks from: `--port` defaults to "the first free
+ *  port in 48000-48049", and the multi-radio design puts the hub on 48000 with
+ *  one radio per port above it. So the port a user needs is frequently NOT the
+ *  48000 that DEFAULT_PORT fills in for a bare hostname. */
+const VS_PORT_LO = 48000;
+const VS_PORT_HI = 48100;
+
+/**
+ * Probe a SINGLE, USER-SUPPLIED host for a VibeServer, so typing just the IP is
+ * enough.
+ *
+ * ★ This is NOT a subnet scan, and the distinction is deliberate: discovery
+ * remains advertise-only (`_vibesdr._tcp`, see services/mdns.ts — "the
+ * App-Store-clean path... no subnet scanning"). This only ever touches the one
+ * address the user typed in, which they could equally have typed a port onto.
+ *
+ * ★ Identifies via `/vibeserver.json`, which answers definitively and is served
+ * even when the host has turned the web client off. A VibeServer older than
+ * that endpoint will not be found — it must be reached by typing its port.
+ *
+ * Returns the LOWEST matching port (the hub, in a multi-radio setup), or null.
+ */
+export async function findVibeServerPort(host: string): Promise<number | null> {
+  const scheme = 'http://';
+  const probe = async (port: number): Promise<number | null> => {
+    const ctrl = new AbortController();
+    // Short: these are LAN hosts, and 101 of them. A port with nothing on it
+    // refuses immediately; only a firewalled one burns the whole timeout.
+    const timer = setTimeout(() => ctrl.abort(), 1200);
+    try {
+      const r = await fetch(`${scheme}${host}:${port}/vibeserver.json`, { signal: ctrl.signal });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d && d.server === 'vibeserver' ? port : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Batched rather than all-at-once: 101 simultaneous sockets is enough to upset
+  // a phone's networking stack and some home routers. Ordered batches also mean
+  // we can stop at the first hit instead of always paying for the full range.
+  const BATCH = 20;
+  for (let lo = VS_PORT_LO; lo <= VS_PORT_HI; lo += BATCH) {
+    const ports: number[] = [];
+    for (let p = lo; p < Math.min(lo + BATCH, VS_PORT_HI + 1); p++) ports.push(p);
+    const hits = (await Promise.all(ports.map(probe))).filter((p): p is number => p != null);
+    if (hits.length) return Math.min(...hits);
+  }
+  return null;
+}

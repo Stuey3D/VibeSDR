@@ -1,12 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
+import { meterText, useMeters, type MeterBus } from './ControlsBar';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -20,6 +22,150 @@ const C = {
   divider:     'rgba(255,255,255,0.12)',
   sectionC:    'rgba(180,190,210,0.80)',
 };
+
+/**
+ * The squelch control: the LIVE SIGNAL METER IS the control. Signal fills the bar, a needle with a
+ * grabbable ball marks the threshold, and the fill reddens while the gate is muting you.
+ *
+ * There used to be a slider and a number above this. Both are gone deliberately:
+ *  - the slider was a second, static bar with its own ball, sitting directly above a live one — two
+ *    bars, two balls, and only one of them meant anything;
+ *  - the number ("≥27") was unreadable in the sense that matters: 27 of what, relative to a noise
+ *    floor you can't see? You set squelch by pointing at noise, not by naming a figure.
+ * What is left is the one gesture that was always the real interaction: drag the ball to just above
+ * the noise. Drag it off the left end to turn squelch off.
+ *
+ * THE NEEDLE IS ALWAYS DRAWN, including when squelch is OFF — parked at the left end and dimmed.
+ * A handle that only appears once the thing is already on is a handle you can never use to turn it
+ * on, which is exactly how v2 shipped: with squelch off there was simply nothing to grab.
+ *
+ * `level` and `pos` are the meter bus's own 0..1 bar scale — the same numbers the main signal meter
+ * draws, so this needle sits exactly where that red line sits. `pos` < 0 = squelch off.
+ * `onDrag` receives a 0..1 position, or -1 for off; SDRScreen converts to the backend's native unit.
+ */
+// ── Keyboard-reachable slider (see PanelNav; same shape as MenuSheet's) ──────
+function NavSlider(props: React.ComponentProps<typeof Slider>) {
+  const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
+  const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
+  // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
+  // row-height ESTIMATE, which is why a slider landed barely in view at the foot of the sheet
+  // while every button centred correctly — the buttons attach theirs and the sliders did not.
+  const { focused, viewRef } = useNavRange((dir) => {
+    const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
+    if (next !== value) onValueChange?.(next);
+  });
+  return (
+    <Slider ref={viewRef as any} {...props}
+      minimumTrackTintColor={focused ? NAV_FOCUS : props.minimumTrackTintColor}
+      thumbTintColor={focused ? NAV_FOCUS : props.thumbTintColor} />
+  );
+}
+
+function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
+  level: number; pos: number; gate?: boolean;
+  /** ★ A NORMALISED value: 0..1 along the bar, or -1 for off. NOT a coordinate — the
+   *  parameter was called `x` and that misreading cost a real bug (see the nav note below). */
+  onDrag?: (v: number) => void;
+  onDragEnd?: () => void;
+}) {
+  // The bar's position in WINDOW coordinates, measured on layout.
+  //
+  // ★ Do NOT use the touch's locationX. It is relative to whichever view actually received the
+  // touch, and once the ball slides under your finger that view becomes the BALL — so locationX
+  // collapses to 0..22 and the needle lurches back towards the left. That is what "not latching to
+  // my finger" and the "ghost of a 2nd needle" both were: one value fighting another every frame.
+  // pageX minus a measured origin is target-independent and cannot do that.
+  const bar = useRef<View>(null);
+  const geo = useRef({ x: 0, w: 1 });
+  const measure = useCallback(() => {
+    bar.current?.measureInWindow((x, _y, width) => { geo.current = { x, w: Math.max(1, width) }; });
+  }, []);
+
+  // `held` is the value THIS control owns while the user is interacting. It stays put after release
+  // instead of reverting to `pos`: the gate value goes out to the backend and comes back through the
+  // meter bus, and until that round-trip completes (or if it never confirms, as on a backend whose
+  // line position we can't derive) reverting means the ball visibly snaps back out from under the
+  // finger that just placed it. Cleared only once `pos` agrees, so external changes still win.
+  const [held, setHeld] = useState<number | null>(null);
+  useEffect(() => {
+    if (held === null) return;
+    if (Math.abs(pos - held) < 0.02 || (held < 0 && pos < 0)) setHeld(null);
+  }, [pos, held]);
+
+  const shown = held ?? pos;
+  const off = shown < 0;
+  // Red = the gate is REALLY muting. Prefer its own verdict over bar geometry; while dragging,
+  // geometry is all we have (the new threshold hasn't round-tripped yet).
+  const closed = !off && (held !== null ? level < shown : (gate ?? (level < shown)));
+  // Parked at the left end when off — the handle stays on screen and in reach.
+  const handleX = `${Math.max(0, Math.min(1, off ? 0 : shown)) * 100}%` as const;
+
+  const apply = useCallback((pageX: number) => {
+    const { x, w } = geo.current;
+    const raw = (pageX - x) / w;
+    // Dragging off the LEFT edge is how you turn it off — the same gesture as "no threshold at
+    // all", rather than a separate control to hunt for.
+    const v = raw < -0.04 ? -1 : Math.max(0, Math.min(1, raw));
+    setHeld(v); onDrag?.(v);
+  }, [onDrag]);
+
+  // ★★ Keyboard / D-pad adjustment, in VALUES — not coordinates.
+  //
+  // The first attempt synthesised a fake pageX and pushed it through onDrag. That was
+  // wrong twice over: `onDrag` is TYPED `(x: number)` but `apply` actually hands it the
+  // NORMALISED value, so once the bar had been measured it received something like 182
+  // where 0..1 was expected — clamped to maximum, squelching everything, with every later
+  // press recomputing from that. Stuart: "it jumped to the right edge, squelched everything
+  // and then I couldn't get back out." A misleading parameter name, believed rather than
+  // checked against the one line that calls it.
+  //
+  // ★ LEFT AT ZERO TURNS IT OFF, mirroring the drag gesture (drag off the left edge = off).
+  // Without it there is no keyboard way back out of a squelch you have just applied.
+  const { focused: navFocused, viewRef: navViewRef } = useNavRange((dir) => {
+    const cur = held ?? pos;
+    if (dir < 0 && cur >= 0 && cur <= 0.001) { setHeld(-1); onDrag?.(-1); onDragEnd?.(); return; }
+    const base = cur < 0 ? 0 : cur;
+    const next = Math.max(0, Math.min(1, base + dir * 0.04));
+    setHeld(next); onDrag?.(next); onDragEnd?.();
+  });
+
+  const pan = useMemo(() => PanResponder.create({
+    // CAPTURE phase, not bubble. The sheet is inside a ScrollView, and a ScrollView claims a touch
+    // the moment it moves more than a few pixels — so a drag that starts with any vertical
+    // component gets stolen before the bubble-phase handlers are ever asked. Capturing is the
+    // difference between "very difficult to get it latching" and grabbing it first time.
+    onStartShouldSetPanResponderCapture: () => !!onDrag,
+    onMoveShouldSetPanResponderCapture: () => !!onDrag,
+    // And once claimed, never give it back mid-drag.
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
+    onPanResponderGrant: (e) => { measure(); apply(e.nativeEvent.pageX); },
+    onPanResponderMove: (e) => apply(e.nativeEvent.pageX),
+    // Tell the owner the gesture is over so it can unfreeze the noise floor (see onSquelchDrag).
+    onPanResponderRelease: () => onDragEnd?.(),
+    onPanResponderTerminate: () => onDragEnd?.(),
+  }), [onDrag, onDragEnd, apply, measure]);
+
+  return (
+    <View ref={(r: any) => { (bar as any).current = r; (navViewRef as any).current = r; }}
+          style={[st.sqlBarWrap, navFocused && st.sqlBarFocused]}
+          {...(onDrag ? pan.panHandlers : {})}
+          hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
+          onLayout={measure}>
+      <View style={st.sqlBarTrack}>
+        <View style={[st.sqlBarFill, {
+          width: `${Math.max(0, Math.min(1, level)) * 100}%`,
+          backgroundColor: closed ? 'rgba(255,77,77,0.9)' : 'rgba(255,255,255,0.9)',
+        }]} />
+      </View>
+      {/* pointerEvents none: the handles must never become the touch target — see the note above. */}
+      <View pointerEvents="none" style={[st.sqlNeedle, { left: handleX },
+                    off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
+      <View pointerEvents="none" style={[st.sqlBall,   { left: handleX },
+                    off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
+    </View>
+  );
+}
 
 // ── Helpers (local copies) ────────────────────────────────────────────────────
 function fmtRecTime(s: number) {
@@ -50,14 +196,17 @@ function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }
   );
 }
 function BtnRow({ children }: { children: React.ReactNode }) {
-  return <View style={st.btnRow}>{children}</View>;
+  return <NavRow><View style={st.btnRow}>{children}</View></NavRow>;
 }
 function Btn({ label, active, onPress, full, style }: {
   label: string; active?: boolean; onPress?: () => void; full?: boolean; style?: object;
 }) {
+  const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity
-      style={[st.btn, active && st.btnActive, full && st.btnFull, style]}
+      ref={viewRef as any}
+      style={[st.btn, active && st.btnActive, full && st.btnFull, style,
+              focused && st.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
@@ -68,8 +217,11 @@ function SubLabel({ label }: { label: string }) {
   return <Text style={st.subLabel}>{label}</Text>;
 }
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
   return (
-    <TouchableOpacity style={[st.btn, active && st.btnActive]} onPress={onPress} hitSlop={4} activeOpacity={0.7}>
+    <TouchableOpacity ref={viewRef as any}
+      style={[st.btn, active && st.btnActive, focused && st.btnFocused]}
+      onPress={onPress} hitSlop={4} activeOpacity={0.7}>
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -83,6 +235,12 @@ export interface AudioSheetProps {
    *  the native share VC presents over this Modal and wedges touch handling). */
   onDismiss?: () => void;
   serverType?: string;         // 'ubersdr' | 'owrx' | 'kiwi'
+  /** Meter display mode — squelch readouts follow it (S-units when 'smeter'), while the value SENT
+   *  to the backend stays in its native unit. */
+  signalMode?: 'snr' | 'smeter' | 'dbfs';
+  /** Live meter bus — so the squelch controls can show the CURRENT signal (this sheet covers the
+   *  signal bar, so you'd otherwise be setting the gate blind). */
+  meterBus?: MeterBus;
   isLocal?:  boolean;          // V4 local hardware
   /** FM-DX: only REC + Recordings apply (no client DSP / squelch / notch). */
   recordingOnly?: boolean;
@@ -104,6 +262,12 @@ export interface AudioSheetProps {
   localSquelch?: number;  onLocalSquelch?: (db: number) => void;
   localNR?:      number;  onLocalNR?:      (level: number) => void;
   kiwiSquelch?:  number;  onKiwiSquelch?:  (v: number) => void;
+  /** Squelch dragged to a 0..1 position on the meter (-1 = dragged off / Off). SDRScreen owns the
+   *  position→native-unit conversion, since it owns the forward mapping the red line is drawn from. */
+  /** Normalised 0..1 along the meter, or -1 for off. Not a coordinate. */
+  onSquelchDrag?: (v: number) => void;
+  /** The drag gesture ended — releases the frozen noise floor. */
+  onSquelchDragEnd?: () => void;
   fmSquelch?:    number;  onFmSquelch?:    (v: number) => void;
   isFmMode?:     boolean;
 
@@ -128,13 +292,13 @@ export interface AudioSheetProps {
 }
 
 export default function AudioSheet({
-  visible, onClose, onDismiss, serverType = 'ubersdr', isLocal = false, recordingOnly = false,
+  visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb,
   recording = false, onRec, recSeconds = 0, onRecordings,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
-  kiwiSquelch = 0, onKiwiSquelch,
+  kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
@@ -146,6 +310,21 @@ export default function AudioSheet({
   const isOwrx = serverType === 'owrx';
   const isKiwi = serverType === 'kiwi';
   const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi;
+
+  // Live signal reading — this sheet covers the signal bar, so show the CURRENT level next to the
+  // squelch control (set the gate just above where speech sits / just below where noise shows).
+  const liveM = useMeters(meterBus);
+  const liveSig = liveM ? meterText(signalMode, liveM) : '';
+
+  // Squelch readout in the DISPLAYED meter unit (S-units when the meter shows S-meter), while the
+  // slider's value stays in the backend's NATIVE unit for the wire. dBm/dBFS → S (S9 = −73, 6 dB/S).
+  const sqlDisp = (v: number) => {
+    if (signalMode === 'smeter') {
+      if (v >= -73) { const o = Math.round(v + 73); return o > 0 ? `S9+${o}` : 'S9'; }
+      return `S${Math.max(1, 9 - Math.ceil((-73 - v) / 6))}`;
+    }
+    return `${Math.round(v)}dB`;
+  };
 
   // OWRX squelch/NR sliders — seeded from the server/profile preset (keyed on
   // seq so a profile switch re-syncs even when the new preset equals the old).
@@ -174,11 +353,15 @@ export default function AudioSheet({
     else if (nrMode === 'serv') setNrMode('off');
   }, [serverDspEnabled]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keyboard / D-pad navigation — shared machinery (PanelNav). Buttons, sliders and
+  // the squelch bar all register themselves; the game controller drives this unchanged.
+  const { navCtx, scrollProps } = usePanelNav(visible, { onTimeout: onClose });
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            onDismiss={onDismiss}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <Pressable style={st.backdrop} onPress={onClose} />
+      <Pressable style={st.backdrop} onPress={onClose} onTouchStart={noteTouchInteraction} />
       <View style={[st.sheet, {
         borderTopColor: t.barBorder,
         // Landscape: keep clear of the Dynamic Island and don't sprawl the full
@@ -194,7 +377,8 @@ export default function AudioSheet({
           </Text>
         </View>
 
-        <ScrollView style={st.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView {...scrollProps} style={st.scroll} keyboardShouldPersistTaps="handled">
+        <NavCtx.Provider value={navCtx}>
 
           {/* NR / NB (UberSDR client-side DSP) + REC — REC stays for all backends */}
           <BtnRow>
@@ -221,22 +405,31 @@ export default function AudioSheet({
             </BtnRow>
           )}
 
+          {/* Live signal — set the gate against what you can SEE (this sheet hides the meter bar). */}
+          {!recordingOnly && liveSig ? (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SIGNAL</Text>
+              <View style={{ flex: 1 }} />
+              <Text style={[st.bwVal, { color: C.gold, fontWeight: '700' }]}>{liveSig}</Text>
+            </View>
+          ) : null}
+
           {/* OWRX server-side squelch (dB) + NR (threshold dB). Squelch left =
               Off (open); NR left = Off, slides up for more reduction. */}
           {isOwrx && (<>
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
-              <Slider style={st.bwSlider}
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
+              <NavSlider style={st.bwSlider}
                 minimumValue={-130} maximumValue={-20} step={1}
                 value={owrxSql <= -130 ? -130 : owrxSql}
                 onValueChange={(v: number) => { const db = v <= -130 ? -150 : v; setOwrxSql(db); onOwrxSquelch?.(db); }}
                 minimumTrackTintColor={owrxSql > -130 ? C.gold : C.muted}
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : `${owrxSql}dB`}</Text>
+              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql)}</Text>
             </View>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={30} step={1}
                 value={owrxNr}
                 onValueChange={(v: number) => { setOwrxNr(v); onOwrxNr?.(v); }}
@@ -249,14 +442,16 @@ export default function AudioSheet({
           {/* Local SDR: power-based squelch (dBFS). */}
           {onLocalSquelch ? (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
-              <Slider style={st.bwSlider}
-                minimumValue={-100} maximumValue={-20} step={1}
-                value={localSquelch}
-                onValueChange={(v: number) => onLocalSquelch?.(v <= -100 ? -100 : v)}
-                minimumTrackTintColor={localSquelch > -100 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{localSquelch <= -100 ? 'Off' : `${localSquelch.toFixed(0)}dB`}</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
+              <View style={{ flex: 1 }}>
+                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
+                <Text style={st.sqlHint}>
+                  Your squelch stays at the signal level you set. The needle drifts a little here
+                  and on the live meter as the noise floor moves — that's normal, not the setting
+                  changing.
+                </Text>
+              </View>
             </View>
           ) : null}
 
@@ -264,7 +459,7 @@ export default function AudioSheet({
           {onLocalNR && (
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={20} step={1}
                 value={localNR}
                 onValueChange={(v: number) => onLocalNR?.(v)}
@@ -294,28 +489,32 @@ export default function AudioSheet({
           {/* Kiwi squelch — client-side dBFS gate (dBm threshold, −130 = Off). */}
           {onKiwiSquelch && (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SQUELCH</Text>
-              <Slider style={st.bwSlider}
-                minimumValue={-130} maximumValue={-20} step={1}
-                value={kiwiSquelch <= -130 ? -130 : kiwiSquelch}
-                onValueChange={(v: number) => onKiwiSquelch?.(v <= -130 ? -130 : v)}
-                minimumTrackTintColor={kiwiSquelch > -130 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{kiwiSquelch <= -130 ? 'Off' : `${kiwiSquelch}dBm`}</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
+              <View style={{ flex: 1 }}>
+                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
+                <Text style={st.sqlHint}>
+                  Your squelch stays at the signal level you set. The needle drifts a little here
+                  and on the live meter as the noise floor moves — that's normal, not the setting
+                  changing.
+                </Text>
+              </View>
             </View>
           )}
 
           {/* SNR Squelch — UberSDR audio gate (0–50 dB in our meter's units). */}
           {!recordingOnly && !onLocalSquelch && !onKiwiSquelch && !isOwrx && (
             <View style={st.bwRow}>
-              <Text style={st.bwLabel}>SNR SQL</Text>
-              <Slider style={st.bwSlider}
-                minimumValue={0} maximumValue={50} step={0.5}
-                value={Math.max(0, snrSquelch === -999 ? 0 : snrSquelch)}
-                onValueChange={(v: number) => onSnrSquelch?.(v <= 0.1 ? -999 : v)}
-                minimumTrackTintColor={snrSquelch > 0 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{snrSquelch <= -999 ? 'Off' : `≥${snrSquelch.toFixed(0)}`}</Text>
+              <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
+              <View style={{ flex: 1 }}>
+                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
+                <Text style={st.sqlHint}>
+                  Your squelch stays at the signal level you set. The needle drifts a little here
+                  and on the live meter as the noise floor moves — that's normal, not the setting
+                  changing.
+                </Text>
+              </View>
             </View>
           )}
 
@@ -323,7 +522,7 @@ export default function AudioSheet({
           {!isOwrx && isFmMode && (
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>FM SQL</Text>
-              <Slider style={st.bwSlider}
+              <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={100} step={1}
                 value={fmSquelch <= -999 ? 0 : Math.round((fmSquelch + 48) * 99 / 68 + 1)}
                 onValueChange={(v: number) => {
@@ -379,7 +578,7 @@ export default function AudioSheet({
                     return (
                       <View key={p.name} style={st.bwRow}>
                         <Text style={st.bwLabel} numberOfLines={1}>{fmtParamName(p.name)}</Text>
-                        <Slider style={st.bwSlider}
+                        <NavSlider style={st.bwSlider}
                           minimumValue={min} maximumValue={max} step={step}
                           value={Math.max(min, Math.min(max, num))}
                           onValueChange={(v: number) => onServerDspParam?.(p.name, fmtDspVal(v, step))}
@@ -393,6 +592,7 @@ export default function AudioSheet({
             )}
           </>)}
 
+                </NavCtx.Provider>
         </ScrollView>
 
         <TouchableOpacity style={[st.closeBtn, { borderColor: t.btnBorder }]} onPress={onClose}>
@@ -424,6 +624,11 @@ const st = StyleSheet.create({
     fontWeight: 'bold', letterSpacing: 2,
   },
 
+  btnFocused:    { borderColor: NAV_FOCUS, borderWidth: 2 },
+  // The bar has no border of its own, so focus is a ring drawn around it rather than a
+  // thickened edge — and it must be visible, since without it you cannot tell the arrows
+  // are about to move the squelch rather than the focus.
+  sqlBarFocused: { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 6, margin: -2 },
   btnRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   btn: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
@@ -439,6 +644,28 @@ const st = StyleSheet.create({
   bwLabel:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
   bwVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  // The squelch meter IS the control, so it gets a slider's worth of height and touch target —
+  // it replaced the slider rather than sitting under it.
+  // 40 tall: a 22px ball on top, its needle dropping through the 14px bar parked at the bottom.
+  // The ball has to sit ABOVE the bar or your finger covers the very signal you're aiming at.
+  // marginTop buys the ball its own air: it overhangs the top of the bar, and without this it
+  // collides with whatever row sits above (AUTO NOTCH).
+  sqlBarWrap:  { height: 40, marginTop: 8, position: 'relative', justifyContent: 'flex-end' },
+  // "SQUELCH" needs more than the 32pt the short labels use, or it wraps to "SQUE / LCH".
+  sqlLabel:    { width: 62 },
+  // Sets the expectation that a gate sitting ON the noise will chatter a little — otherwise that
+  // reads as a bug rather than as physics.
+  sqlHint:     { color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+                 fontSize: 10, lineHeight: 13, paddingTop: 4, paddingBottom: 2 },
+  sqlBarTrack: { height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.15)',
+                 overflow: 'hidden' },
+  sqlBarFill:  { position: 'absolute', left: 0, top: 0, bottom: 0 },
+  // Needle + ball live OUTSIDE the track: the track clips its fill, and both must overhang it.
+  sqlNeedle:   { position: 'absolute', top: 11, bottom: 0, width: 2, marginLeft: -1,
+                 backgroundColor: '#3ddc84' },
+  sqlBall:     { position: 'absolute', top: 0, width: 22, height: 22, borderRadius: 11,
+                 marginLeft: -11, backgroundColor: '#3ddc84',
+                 borderWidth: 2, borderColor: 'rgba(0,0,0,0.55)' },
 
   subPanel: {
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 6,

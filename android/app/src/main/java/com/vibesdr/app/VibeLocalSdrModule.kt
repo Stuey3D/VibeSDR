@@ -45,6 +45,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         return RTL_SDR_VIDPIDS.contains(key)
     }
 
+    /** ★ An Airspy HF+ (Discovery / Dual Port). One VID/PID for the whole family — the models
+     *  are told apart by serial, not by USB id. Kept beside isRtlSdr so the two allowlists that
+     *  decide "is this a radio we can drive" stay visibly together; device_filter.xml is the
+     *  third copy and must agree, or the app is offered for a device it then refuses. */
+    private fun isAirspyHf(dev: UsbDevice): Boolean =
+        dev.vendorId == AIRSPYHF_VID && dev.productId == AIRSPYHF_PID
+
+    /** Any radio we can open directly over USB. */
+    private fun isSupportedRadio(dev: UsbDevice): Boolean = isRtlSdr(dev) || isAirspyHf(dev)
+
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
         m.putString("deviceName", dev.deviceName)
@@ -66,7 +76,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val out: WritableArray = Arguments.createArray()
         for ((_, dev) in mgr.deviceList) {
-            if (!isRtlSdr(dev)) continue
+            if (!isSupportedRadio(dev)) continue
             out.pushMap(describe(dev, mgr.hasPermission(dev)))
         }
         promise.resolve(out)
@@ -82,7 +92,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openAndProbe(promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
 
         if (mgr.hasPermission(dev)) {
@@ -169,7 +179,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startSpectrum(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             // Reuse the permission flow, then retry once granted.
@@ -275,7 +285,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startVibeServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startVibeServerNow(mgr, dev, opts, promise) }
@@ -310,6 +320,12 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val compress   = if (opts.hasKey("compressAudio")) opts.getBoolean("compressAudio") else true
         // Web client on/off, and a pinned capture rate (0 = client-controlled).
         val webSrv     = if (opts.hasKey("webServer")) opts.getBoolean("webServer") else true
+        // ★ Admin password gates CONTROL (bias-T, direct sampling, calibration), not access —
+        // separate from the listening PIN on purpose. Empty = nothing protected.
+        val adminPw    = if (opts.hasKey("adminPassword")) opts.getString("adminPassword") ?: "" else ""
+        // 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt.
+        val uncomp     = if (opts.hasKey("uncompressedAudio")) opts.getInt("uncompressedAudio") else 0
+        val limitMin   = if (opts.hasKey("sessionLimitMin")) opts.getInt("sessionLimitMin") else 0
         val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
         // Only needed so a CRASH-restored server re-advertises as the app would have.
         val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
@@ -324,6 +340,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
         VibeLocalSDR.setVibeServerCompressAudio(compress)
+        // ★ Diagnostic: the password itself is NEVER logged — only whether one arrived, and how
+        // long it is. Enough to tell "the setting did not reach the shim" from "the shim ignored
+        // it", which is exactly the question that cost an evening.
+        Log.i(TAG, "VibeServer cfg: adminPw=${adminPw.length} chars, limitMin=$limitMin, uncomp=$uncomp")
+        VibeLocalSDR.setVibeServerAdminSecret(adminPw)
+        VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
+        VibeLocalSDR.setVibeServerSessionLimit(limitMin)
         VibeLocalSDR.setVibeServerWebEnabled(webSrv)
         VibeLocalSDR.setVibeServerLockedRate(lockedRate)
         VibeLocalSDR.setServeOnLan(true)
@@ -349,7 +372,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // dies under it (START_STICKY brings the service back, but not the radio).
         if (autoRestore) {
             VibeServerRestore.arm(reactContext, name, pin, sampleRate, lockedRate, maxFps,
-                                  compress, webSrv, advertiseOnStart)
+                                  compress, webSrv, advertiseOnStart,
+                                  adminPw, uncomp, limitMin)
         } else {
             VibeServerRestore.disarm(reactContext)
         }
@@ -378,6 +402,38 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     /** Live toggle: switch compressed audio on/off without restarting the server. */
     @ReactMethod
     fun setVibeServerCompressAudio(on: Boolean) { VibeLocalSDR.setVibeServerCompressAudio(on) }
+
+    /** Live, no restart — the operator can lock the controls on a running server. */
+    @ReactMethod
+    fun setVibeServerAdminSecret(secret: String) { VibeLocalSDR.setVibeServerAdminSecret(secret) }
+
+    @ReactMethod
+    fun setVibeServerUncompressedAudio(mode: Double) {
+        VibeLocalSDR.setVibeServerUncompressedAudio(mode.toInt())
+    }
+
+    /** ★★ WHICH RADIO IS PLUGGED IN, before anything is opened. The server settings screen
+     *  runs BEFORE the shim exists, so it cannot ask radioCapsJson() — and without this it
+     *  offered a dongle's 2.4 MHz to an Airspy HF+, which tops out near 912 kHz, so every rate
+     *  on the menu was impossible (Stuart, 2026-07-27).
+     *  ★ VID/PID only: no USB open, no permission prompt, and nothing for the user to approve
+     *  just to draw a menu. The radio's exact rate list still comes from the radio once it is
+     *  running — this decides which menu to show, not what the hardware will accept. */
+    @ReactMethod
+    fun getConnectedRadio(promise: Promise) {
+        val mgr = usbManager ?: run { promise.resolve(null); return }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+            ?: run { promise.resolve(null); return }
+        val res = Arguments.createMap()
+        res.putString("driver", if (isAirspyHf(dev)) "airspyhf" else "rtl")
+        res.putString("model", dev.productName ?: (if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"))
+        promise.resolve(res)
+    }
+
+    @ReactMethod
+    fun setVibeServerSessionLimit(minutes: Double) {
+        VibeLocalSDR.setVibeServerSessionLimit(minutes.toInt())
+    }
 
     /** Hand the web client's search its station list (JSON array), served at
      *  GET /stations. The app owns the EiBi download + cache; the browser can't
@@ -421,6 +477,44 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    // ── Process CPU, for the server screen ────────────────────────────────────
+    //
+    // A phone acting as a receiver is a device you leave running on a shelf for hours, so
+    // "what is this costing me" is a fair question to be able to answer on the screen rather
+    // than by guessing from how warm it feels. Read from /proc/self/stat, which needs no
+    // permission and no NDK call.
+    //
+    // Reported as a percentage of ONE core (so >100% is possible and meaningful on a
+    // multi-core phone) — the same convention the DSP benchmarks use, which keeps it
+    // comparable with the Pi figures.
+    // SELF-TIMED AND CACHED, so any number of callers is safe. A naive per-call delta breaks
+    // the moment a second poller appears: the two interleave and each measures the other's
+    // gap. This recomputes at most every 500ms and hands everyone the same current reading.
+    private var lastCpuTicks = 0L
+    private var lastCpuAt = 0L
+    private var cpuValue = 0.0
+    private val clkTck: Long by lazy {
+        try { android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK) } catch (_: Throwable) { 100L }
+    }
+    @Synchronized
+    private fun processCpuPercent(): Double = try {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastCpuAt > 0L && now - lastCpuAt < 500L) cpuValue      // too soon — reuse
+        else {
+            val stat = java.io.File("/proc/self/stat").readText()
+            // Fields 1-2 are pid and (comm); comm can itself contain spaces and brackets, so
+            // split AFTER the last ')' or a process named "foo bar" shifts every index.
+            val f = stat.substring(stat.lastIndexOf(')') + 2).split(" ")
+            val ticks = f[11].toLong() + f[12].toLong()             // utime + stime (fields 14, 15)
+            if (lastCpuAt > 0L) {
+                cpuValue = (((ticks - lastCpuTicks).toDouble() / clkTck) / ((now - lastCpuAt) / 1000.0) * 100.0)
+                    .coerceIn(0.0, 100.0 * Runtime.getRuntime().availableProcessors())
+            }
+            lastCpuTicks = ticks; lastCpuAt = now
+            cpuValue                                                // first call has no delta yet: 0
+        }
+    } catch (_: Throwable) { 0.0 }                                  // never break a status for a stat read
+
     fun getVibeServerStatus(promise: Promise) {
         try {
             val o = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
@@ -440,6 +534,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
+            m.putDouble("cpu", processCpuPercent())
+            m.putInt("cores", Runtime.getRuntime().availableProcessors())
             promise.resolve(m)
         } catch (e: Throwable) {
             promise.reject("status_failed", e.message)
@@ -448,8 +544,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopSpectrum(promise: Promise) {
-        stopSpectrumInternal()
-        promise.resolve(null)
+        // ★ Off the bridge thread: the teardown is synchronous now (it must be — see
+        // stopSpectrumInternal) and can take a moment on a USB cancel plus thread joins.
+        // Leaving a local session must never freeze the UI.
+        Thread {
+            stopSpectrumInternal()
+            promise.resolve(null)
+        }.start()
     }
 
     // ── RTL-TCP SERVER (share this device's USB dongle over the network) ──────
@@ -466,7 +567,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
@@ -538,6 +639,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             // rather than start a second one on the same dongle).
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
+            m.putDouble("cpu", processCpuPercent())
+            m.putInt("cores", Runtime.getRuntime().availableProcessors())
             promise.resolve(m)
         } catch (e: Throwable) {
             promise.reject("status_failed", e.message)
@@ -667,7 +770,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     }
 
     private fun stopSpectrumInternal() {
-        try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
+        // ★★★ SYNCHRONOUS, AND THAT IS THE POINT. This used to fire the native teardown at a
+        // DETACHED THREAD and return immediately — then closed the UsbDeviceConnection on the
+        // next line, pulling the file descriptor out from under libusb while it was still
+        // closing the radio.
+        // ★ Fatal on the Airspy, whose handle is a WRAPPED fd: libusb_close aborted with
+        // "pthread_mutex_lock called on a destroyed mutex" every time the user backed out of
+        // VibeServer (Stuart, 2026-07-27). The dongle had the same race and was getting away
+        // with it, which is why this survived so long.
+        // ★ It also fixes a second race nobody had noticed: startVibeServerNow() calls this and
+        // then immediately REOPENS the device, so an async stop put the old close and the new
+        // open in a straight race.
+        // ★ The cost is that teardown now blocks its caller. The user-facing @ReactMethod hands
+        // this to a background thread so the bridge never stalls; the internal callers WANT to
+        // wait, because every one of them is about to touch the device again.
+        try { VibeLocalSDR.stopSpectrumSync() } catch (_: Throwable) {}
         tcpWifiLock.release()
         sessionConn?.let { try { it.close() } catch (_: Exception) {} }
         sessionConn = null
@@ -748,5 +865,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             0x1d19 to 0x1104, 0x1f4d to 0xa803, 0x1f4d to 0xb803, 0x1f4d to 0xc803,
             0x1f4d to 0xd286, 0x1f4d to 0xd803
         ).map { (vid, pid) -> (vid shl 16) or pid }.toSet()
+
+        /** Airspy HF+ — see isAirspyHf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
+        internal const val AIRSPYHF_VID = 0x03eb
+        internal const val AIRSPYHF_PID = 0x800c
     }
 }

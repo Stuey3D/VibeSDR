@@ -1,0 +1,199 @@
+# VibeServer — standalone daemon (macOS now, Linux/Raspberry Pi next).
+#
+# Builds the SAME C++ core Android ships, with no JNI and no USB:
+#   vibedsp          — clean-room DSP (kissfft), portable C++17
+#   net_shim         — clean-room POSIX sockets, portable as-is
+#   local_sdr_shim   — the UberSDR-compatible HTTP/WebSocket server + pipeline
+#
+# The sources deliberately live in the Android tree and are referenced, NOT copied. One core, two
+# front-ends: a bug fixed while iterating here is fixed on the phone too. Copying them would create
+# the drift this whole exercise exists to avoid.
+#
+# librtlsdr is NOT linked. `rtl_sdr_stub.h` supplies no-op declarations so the USB code paths
+# compile but are never entered — exactly how iOS already builds this shim. IQ arrives over
+# rtl_tcp. Adding real USB later (BRIEF-vibeserver-macos.md §2, vendored libusb) is additive.
+#
+#   cmake -S vibeserver -B vibeserver/build -DCMAKE_BUILD_TYPE=Release
+#   cmake --build vibeserver/build -j
+#   ./vibeserver/build/vibeserver --tcp 127.0.0.1:1234
+
+cmake_minimum_required(VERSION 3.20)
+project(vibeserver CXX C)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+set(CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/main/cpp")
+if(NOT EXISTS "${CPP_DIR}/local_sdr_shim.cpp")
+  message(FATAL_ERROR "Shared C++ core not found at ${CPP_DIR} — run cmake from the repo checkout.")
+endif()
+
+# ── vibedsp: the clean-room DSP engine ────────────────────────────────────────
+add_library(vibedsp STATIC
+    "${CPP_DIR}/vibedsp/fft.cpp"        "${CPP_DIR}/vibedsp/ddc.cpp"
+    "${CPP_DIR}/vibedsp/resampler.cpp"  "${CPP_DIR}/vibedsp/stereo.cpp"
+    "${CPP_DIR}/vibedsp/rds.cpp"        "${CPP_DIR}/vibedsp/pipeline.cpp"
+    "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
+    "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fftr.c")
+target_include_directories(vibedsp PUBLIC "${CPP_DIR}/vibedsp")
+target_compile_options(vibedsp PRIVATE -O3 -ffp-contract=fast)
+
+# ── decoders + ft8_lib ────────────────────────────────────────────────────────
+# The shim references the decoder suite directly, so a server build needs them even though a
+# headless server is not the place anyone decodes FT8 from. Mirrors the Android target's list.
+file(GLOB FT8_SRC
+    "${CPP_DIR}/ft8_lib/ft8/*.c"
+    "${CPP_DIR}/ft8_lib/fft/kiss_fft.c"
+    "${CPP_DIR}/ft8_lib/fft/kiss_fftr.c"
+    "${CPP_DIR}/ft8_lib/common/monitor.c")
+
+# ── the core, as a STATIC LIB shared by the CLI and the .app ──────────────────
+# The menu-bar app and the command-line harness must be the same server, not two servers that
+# drift. Both link this.
+add_library(vibeserver_core STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_api.cpp"
+    "${CPP_DIR}/local_sdr_shim.cpp"
+    "${CPP_DIR}/net_shim.cpp"
+    "${CPP_DIR}/mdns_responder.cpp"
+    "${CPP_DIR}/sdrplay_source.cpp"
+    "${CPP_DIR}/airspyhf_source.cpp"
+    "${CPP_DIR}/spyserver/spyserver_client.cpp"
+    "${CPP_DIR}/spyserver/spyserver_messages.cpp"
+    "${CPP_DIR}/decoders/fsk_decoder.cpp"
+    "${CPP_DIR}/decoders/wefax_decoder.cpp"
+    "${CPP_DIR}/decoders/ft8_decoder.cpp"
+    "${CPP_DIR}/decoders/sstv_decoder.cpp"
+    "${CPP_DIR}/decoders/audio_nr.cpp"
+    "${CPP_DIR}/decoders/auto_notch.cpp"
+    ${FT8_SRC})
+target_include_directories(vibeserver_core PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")
+target_link_libraries(vibeserver_core PUBLIC vibedsp)
+
+# ── the CLI harness ───────────────────────────────────────────────────────────
+add_executable(vibeserver
+    "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
+# ── librtlsdr + libusb: the dongle, driven DIRECTLY ───────────────────────────
+# STATIC on purpose. A user drags one .app out of a DMG and it works — no Homebrew, no dylib
+# hunting, nothing to install. Prefer the static archives; fall back to whatever is found so a
+# dev machine still configures.
+# ★ STATIC ONLY. Restrict find_library to .a archives so it CANNOT pick a Homebrew dylib — a notarised
+# hardened-runtime app that links one crashes on launch for everyone (absent without Homebrew; rejected
+# for a Team-ID mismatch even on the dev box). The old NAMES-based find preferred the .dylib and the
+# swap-to-.a fallback was fragile; this is bulletproof.
+set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+find_library(RTLSDR_LIB NAMES rtlsdr HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_library(USB_LIB    NAMES usb-1.0 HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+set(CMAKE_FIND_LIBRARY_SUFFIXES ${_saved_suffixes})
+find_path(RTLSDR_INC rtl-sdr.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+if(NOT RTLSDR_LIB OR NOT USB_LIB OR NOT RTLSDR_INC)
+  message(FATAL_ERROR "static librtlsdr/libusb not found. On macOS: brew install librtlsdr libusb")
+endif()
+message(STATUS "librtlsdr: ${RTLSDR_LIB}")
+message(STATUS "libusb:    ${USB_LIB}")
+
+target_include_directories(vibeserver_core PUBLIC "${RTLSDR_INC}")
+# Use the REAL rtl-sdr.h, not the iOS no-op stub the shim falls back to.
+target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
+target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
+
+# ── SDRplay (RSP): HEADERS ONLY, deliberately never linked ────────────────────
+# ★★ The API is a separate install living in /usr/local/lib, and it ships as a DYLIB with no
+# static archive. Linking it would repeat exactly the failure the librtlsdr block above warns
+# about: a notarised hardened-runtime app that hard-links a dylib from /usr/local CRASHES ON
+# LAUNCH for everyone who does not have that dylib — which is almost every user, since almost
+# nobody owns an RSP. Breaking the app for the majority to serve the minority is the wrong
+# trade, and it is avoidable: sdrplay_source.cpp dlopen()s the library on first use.
+# So we take the HEADERS (for the structs and typedefs) and link NOTHING. A machine without
+# the API simply reports zero SDRplay devices.
+find_path(SDRPLAY_INC sdrplay_api.h HINTS /usr/local/include /Library/SDRplayAPI/3.15.1/include)
+if(SDRPLAY_INC)
+  message(STATUS "SDRplay headers: ${SDRPLAY_INC} (runtime dlopen, not linked)")
+  target_include_directories(vibeserver_core PUBLIC "${SDRPLAY_INC}")
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_SDRPLAY)
+else()
+  message(STATUS "SDRplay headers not found — building without RSP support")
+endif()
+
+# ── libairspyhf: Airspy HF+ Discovery / Dual Port ─────────────────────────────
+# ★★ STATIC, AND THAT IS THE WHOLE POINT — the opposite of the SDRplay block above. libairspyhf
+# is BSD-3-Clause and ships a real .a, so it links straight in: the radio is plug-and-play with
+# nothing for the user to install, and there is no dylib to be missing at launch. The RSP needs
+# dlopen only because its API is closed-source and separately installed; that objection simply
+# does not apply here.
+# ★ NOT libairspy. An Airspy R2 or Mini speaks a different API entirely (see airspyhf_source.h),
+# which is also GPL-2.0 and deprecated upstream after a relicence. Different decision, not a
+# flag on this one.
+# ★★★ BUILD OUR VENDORED COPY, NOT HOMEBREW'S. Both platforms must carry the same libairspyhf
+# or a fix lands on one and not the other — which is exactly what happened: upstream 1.6.8's
+# airspyhf_close() frees USB transfers AFTER destroying the context that owns them, a
+# use-after-free that is fatal and reproducible on Android and merely lucky on a desktop. The
+# Android build was patched and the Mac kept linking the unpatched Homebrew archive
+# (Stuart, 2026-07-27: "all these fixes if needed need to be in the mac version").
+# ★ Same source, same patches, one place to fix anything found next. Homebrew's remains the
+# fallback so a checkout without the vendored tree still builds.
+set(AHF_VENDOR "${CPP_DIR}/libairspyhf")
+if(EXISTS "${AHF_VENDOR}/airspyhf.c")
+  message(STATUS "libairspyhf: vendored (patched) at ${AHF_VENDOR}")
+  target_sources(vibeserver_core PRIVATE
+    "${AHF_VENDOR}/airspyhf.c" "${AHF_VENDOR}/iqbalancer.c")
+  target_include_directories(vibeserver_core PUBLIC "${AHF_VENDOR}")
+  # ★ libairspyhf.c includes <libusb.h> unqualified; Homebrew puts it in libusb-1.0/.
+  find_path(LIBUSB_INC libusb.h PATH_SUFFIXES libusb-1.0
+            HINTS /opt/homebrew/include /usr/local/include /usr/include)
+  if(LIBUSB_INC)
+    target_include_directories(vibeserver_core PRIVATE "${LIBUSB_INC}")
+  endif()
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPYHF VIBE_AIRSPYHF_HAS_FD)
+  set(AIRSPYHF_VENDORED TRUE)
+endif()
+
+find_library(AIRSPYHF_LIB NAMES airspyhf libairspyhf.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_path(AIRSPYHF_INC libairspyhf/airspyhf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+if(AIRSPYHF_VENDORED)
+  # already handled above
+elseif(AIRSPYHF_LIB AND AIRSPYHF_INC)
+  # Prefer the static archive next to whatever find_library cached, exactly as the librtlsdr and
+  # libopus blocks do — a cached dylib path is how a notarised build ships broken.
+  get_filename_component(_ahf_dir "${AIRSPYHF_LIB}" DIRECTORY)
+  if(EXISTS "${_ahf_dir}/libairspyhf.a")
+    set(AIRSPYHF_LIB "${_ahf_dir}/libairspyhf.a")
+  endif()
+  message(STATUS "libairspyhf: ${AIRSPYHF_LIB}")
+  target_include_directories(vibeserver_core PUBLIC "${AIRSPYHF_INC}")
+  target_link_libraries(vibeserver_core PUBLIC "${AIRSPYHF_LIB}")
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPYHF)
+else()
+  message(STATUS "libairspyhf not found — building without Airspy HF+ support")
+endif()
+
+# ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
+# STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code
+# path in the shim; where it is undefined (the Android build has no libopus yet — UberSDR decode
+# there is ExoPlayer, not libopus) the shim falls back to raw PCM.
+find_library(OPUS_LIB NAMES opus libopus.a opus.a HINTS /opt/homebrew/lib /opt/homebrew/opt/opus/lib /usr/local/lib /usr/lib)
+find_path(OPUS_INC opus/opus.h HINTS /opt/homebrew/include /opt/homebrew/opt/opus/include /usr/local/include /usr/include)
+if(NOT OPUS_LIB OR NOT OPUS_INC)
+  message(FATAL_ERROR "libopus not found. On macOS: brew install opus")
+endif()
+get_filename_component(_opus_dir "${OPUS_LIB}" DIRECTORY)
+if(EXISTS "${_opus_dir}/libopus.a")
+  set(OPUS_LIB "${_opus_dir}/libopus.a")
+endif()
+message(STATUS "libopus:   ${OPUS_LIB}")
+target_include_directories(vibeserver_core PUBLIC "${OPUS_INC}")
+target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_OPUS)
+target_link_libraries(vibeserver_core PUBLIC "${OPUS_LIB}")
+target_link_libraries(vibeserver PRIVATE vibeserver_core)
+if(APPLE)
+  # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
+  target_link_libraries(vibeserver_core PUBLIC
+      "-framework IOKit" "-framework CoreFoundation" "-framework Security" objc)
+endif()
+find_package(Threads REQUIRED)
+target_link_libraries(vibeserver_core PUBLIC Threads::Threads)

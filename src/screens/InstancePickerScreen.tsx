@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import { useListNav, NAV_FOCUS, noteTouchInteraction } from '../components/PanelNav';
 import {
   ActivityIndicator,
   Alert,
@@ -13,11 +15,13 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
+  NativeEventEmitter,
   NativeModules,
 } from 'react-native';
 // safe-area-context SafeAreaView — RN's own is iOS-only, which put the
 // header under the status bar on Android (G35: cog untappable)
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { splashBridge } from '../../App';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -32,7 +36,8 @@ import {
   isVersionOld,
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
-import { checkConnection, detectServerType, probeServer, DEFAULT_PORT,
+import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
+         fetchOccupancy, type ServerOccupancy,
          type BackendType, type ServerType } from '../services/sdrTypes';
 import { vibeServerNeedsPin } from '../services/vibeAuth';
 
@@ -58,6 +63,10 @@ const PROTO_CHOICES: Array<[BackendType | 'auto', string]> = [
   ['ubersdr', 'UberSDR'], ['fmdx', 'FM-DX'],
 ];
 
+/** ★ HOST+PORT ONLY — for VibeServer, which is always `host:port` with no path and no TLS.
+ *  ★★ DO NOT reach for this for anything else: it DELETES the scheme and the path, which is
+ *  exactly the bug that stopped `https://host/OpenWebRX/` connecting at all. Use
+ *  parseServerAddress() from sdrTypes for any address a user typed. */
 function parseHostPort(raw: string, hint?: BackendType): { host: string; port: number } | null {
   let s = raw.trim()
     .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
@@ -81,12 +90,18 @@ import {
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { watchTargetPending } from '../services/watchBoot';
+import { watchProvider } from '../services/watchProvider';
+import { findVibeServerPort } from '../services/vibeServer';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
-         repairVibeserverFavourites,
+         repairVibeserverFavourites, saveFavourites, registerFavouriteVisit,
+         updateFavourite, favIsCustom,
+         FavSort, getFavSort, setFavSort,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
+import IdentModal from '../components/IdentModal';
+import { getKiwiIdent, setKiwiIdent } from '../services/kiwiIdent';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
@@ -112,19 +127,121 @@ function flagEmoji(code: string | null): string {
   return String.fromCodePoint(127397 + cc.charCodeAt(0), 127397 + cc.charCodeAt(1));
 }
 
-type SortMode = 'nearest' | 'snr';
+/** The user's country (ISO alpha-2) from the DEVICE LOCALE — no Location permission needed.
+ *  Same Intl-locale approach SDRScreen uses for the receiver region. '' if unknown. */
+function deviceCountry(): string {
+  try {
+    const loc = Intl.DateTimeFormat().resolvedOptions().locale || '';
+    const region = loc.split('-').find(p => /^[A-Z]{2}$/.test(p)) || loc.split('-')[1] || '';
+    return /^[A-Za-z]{2}$/.test(region) ? region.toUpperCase() : '';
+  } catch { return ''; }
+}
+
+/** A displayable country name from an ISO code (Intl.DisplayNames where available, else the
+ *  code). No new dependency. */
+function countryName(code: string | null): string {
+  if (!code) return 'Unknown';
+  try {
+    // @ts-ignore — DisplayNames may be absent on some Hermes builds; caught below.
+    const dn = new Intl.DisplayNames(undefined, { type: 'region' });
+    return dn.of(code.toUpperCase()) || code.toUpperCase();
+  } catch { return code.toUpperCase(); }
+}
+
+// 'country' = collapsible groups by country; 'nearest' = distance bands; 'snr' = signal tiers.
+type SortMode = 'nearest' | 'snr' | 'country';
+
+// Great-circle km between two lat/lon points (favourites' Nearest sort).
+function haversineKm(la1: number, lo1: number, la2: number, lo2: number): number {
+  const R = 6371, toR = Math.PI / 180;
+  const dLa = (la2 - la1) * toR, dLo = (lo2 - lo1) * toR;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * toR) * Math.cos(la2 * toR) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+// Sort favourites for display. 'manual' keeps the stored array order (the drag order); the rest
+// derive from the tally / name / snapshot. Missing SNR or location sinks to the bottom.
+// Loose URL key for matching a favourite against a directory entry — favourites may have been saved
+// with a trailing slash, a different scheme (http/https/ws/wss), or a leading www. that the directory
+// listing lacks (or vice-versa). Normalise all of that away so the snapshot actually lands.
+function normUrl(u: string): string {
+  return (u || '').trim().toLowerCase()
+    .replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '')
+    .replace(/^www\./, '').replace(/\/+$/, '');
+}
+
+// Live per-favourite metrics, keyed by normUrl, harvested from the directories (server-provided
+// distance works even with no device-location permission; snr = best band condition).
+type FavMeta = Record<string, { dist: number | null; snr: number | null }>;
+function favDist(f: Favourite, meta: FavMeta, loc: { lat: number; lon: number } | null): number {
+  const m = meta[normUrl(f.url)];
+  if (m?.dist != null) return m.dist;                                   // server-computed, preferred
+  if (f.latitude != null && f.longitude != null && loc) return haversineKm(loc.lat, loc.lon, f.latitude, f.longitude);
+  return Infinity;
+}
+function favSnr(f: Favourite, meta: FavMeta): number | null {
+  return meta[normUrl(f.url)]?.snr ?? f.bestSnr ?? null;
+}
+// Grouping order + display names for the by-type sort.
+const TYPE_ORDER: Record<string, number> = { ubersdr: 0, kiwi: 1, owrx: 2, fmdx: 3, vibeserver: 4, spyserver: 5, rtltcp: 6 };
+const TYPE_NAME: Record<string, string> = {
+  ubersdr: 'UberSDR', kiwi: 'KiwiSDR', owrx: 'OpenWebRX', fmdx: 'FM-DX', vibeserver: 'VibeServer',
+  spyserver: 'SpyServer', rtltcp: 'RTL-TCP',
+};
+const favType = (f: Favourite) => (f.serverType ?? 'ubersdr') as string;
+function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null, meta: FavMeta): Favourite[] {
+  const arr = [...list];
+  if (mode === 'used')         arr.sort((a, b) => (b.visits ?? 0) - (a.visits ?? 0));
+  else if (mode === 'alpha')   arr.sort((a, b) => a.name.localeCompare(b.name));
+  else if (mode === 'nearest') arr.sort((a, b) => favDist(a, meta, loc) - favDist(b, meta, loc));
+  else if (mode === 'snr')     arr.sort((a, b) => (favSnr(b, meta) ?? -Infinity) - (favSnr(a, meta) ?? -Infinity));
+  else if (mode === 'type')    arr.sort((a, b) =>
+    ((TYPE_ORDER[favType(a)] ?? 99) - (TYPE_ORDER[favType(b)] ?? 99)) || a.name.localeCompare(b.name));
+  return arr;   // 'manual' → unchanged
+}
+const FAV_SORT_CYCLE: FavSort[] = ['used', 'alpha', 'nearest', 'snr', 'type', 'manual'];
+const FAV_SORT_LABEL: Record<FavSort, string> = {
+  used: '★ MOST USED', alpha: 'A–Z', nearest: 'NEAREST', snr: 'SNR', type: 'TYPE', manual: 'MANUAL',
+};
+
+// Collapsible band a server falls into for NEAR mode. Closest band opens by default; unknowns last.
+function distanceBand(km: number | null | undefined): { key: string; label: string; order: number } {
+  if (km == null || !Number.isFinite(km)) return { key: 'd:none', label: 'Distance unknown', order: 99 };
+  if (km < 50)   return { key: 'd:0', label: 'Within 50 km',   order: 0 };
+  if (km < 150)  return { key: 'd:1', label: '50–150 km',      order: 1 };
+  if (km < 400)  return { key: 'd:2', label: '150–400 km',     order: 2 };
+  if (km < 1000) return { key: 'd:3', label: '400–1000 km',    order: 3 };
+  if (km < 3000) return { key: 'd:4', label: '1000–3000 km',   order: 4 };
+  return { key: 'd:5', label: 'Over 3000 km', order: 5 };
+}
+
+// Collapsible tier a server falls into for SNR mode. Excellent opens by default; no-data last.
+function snrTier(snr: number | null | undefined): { key: string; label: string; order: number } {
+  if (snr == null || !Number.isFinite(snr)) return { key: 's:none', label: 'No signal data', order: 99 };
+  if (snr >= 30) return { key: 's:0', label: '▲ Excellent conditions', order: 0 };
+  if (snr >= 20) return { key: 's:1', label: '▲ Good conditions',      order: 1 };
+  if (snr >= 6)  return { key: 's:2', label: '△ Fair conditions',      order: 2 };
+  return { key: 's:3', label: '▽ Poor conditions', order: 3 };
+}
 type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
 
-// A unified list item — either a real SDRInstance or a favourited custom URL
+// A unified list item — a real SDRInstance, a favourited custom URL, or a collapsible
+// SECTION HEADER (country/band/tier group) whose rows are hidden when collapsed.
 type ListItem =
   | { kind: 'instance'; data: SDRInstance }
-  | { kind: 'custom';   fav: Favourite };
+  | { kind: 'custom';   fav: Favourite }
+  | { kind: 'header';   groupKey: string; label: string; count: number; collapsible: boolean; collapsed: boolean };
 
 export default function InstancePickerScreen({ navigation, route }: Props) {
+  // Bottom safe-area inset, so the lists can clear the home indicator. A flat paddingBottom:40 left
+  // the KiwiSDR-warning footer (and the FM-DX directory toggle) clipped under it on both the 17PM and
+  // the SE — see the list contentContainerStyles below.
+  const insets = useSafeAreaInsets();
   const [instances,   setInstances]     = useState<SDRInstance[]>([]);
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
   const [customUrl,   setCustomUrl]     = useState('');
+  const customInputRef = useRef<TextInput | null>(null);
   const [connecting,  setConnecting]    = useState(false);
   const [filter,      setFilter]        = useState('');
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
@@ -134,11 +251,57 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [viewMode,    setViewModeState] = useState<ViewMode>('default');
   const [modeReady,   setModeReady]     = useState(false);
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');
+  // Whether we have a usable location (GPS permission granted, or a manual city/grid entered).
+  // Gates the 'nearest' sort — no location means no distances to sort by.
+  const [hasLocation, setHasLocation]   = useState(false);
+  // How the FAVOURITES list is ordered (default Most Used). Persisted; cycled from the fav header.
+  const [favSort, setFavSortState] = useState<FavSort>('used');
+  useEffect(() => { getFavSort().then(setFavSortState).catch(() => {}); }, []);
+  const cycleFavSort = useCallback(() => {
+    setFavSortState(prev => {
+      const next = FAV_SORT_CYCLE[(FAV_SORT_CYCLE.indexOf(prev) + 1) % FAV_SORT_CYCLE.length];
+      setFavSort(next).catch(() => {});
+      return next;
+    });
+  }, []);
+  // The user's country (device locale, no permission) — group heading + default-open group.
+  const userCountry = useMemo(() => deviceCountry(), []);
+  // Which collapsible groups are currently OPEN. Seeded with the user's country so their
+  // group is expanded on first paint; every other group starts collapsed (anti-overload).
+  // Which collapsible groups are OPEN. Seeded per mode by the defaultOpenKey effect below
+  // (user's country / closest distance band / best SNR tier); the user's toggles persist within
+  // a mode, and switching mode re-seeds.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set<string>());
+  const toggleGroup = useCallback((key: string) => {
+    setOpenGroups(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
+  // Remember the user's last sort choice across launches.
+  useEffect(() => {
+    AsyncStorage.getItem('vibe.picker.sort').then(v => {
+      if (v === 'nearest' || v === 'snr' || v === 'country') setSortMode(v);
+    }).catch(() => {});
+  }, []);
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
+  // KiwiSDR name/callsign identity. `identModal` open = the entry box is up; its optional
+  // `connect` holds a pending connection to resume after saving (from a connect), or is absent
+  // (editing via the prefill box). `kiwiIdentValue` is the saved value shown in the box.
+  const [identModal,  setIdentModal]    = useState<null | { connect?: { url: string; name: string; password?: string; lon?: number | null; type?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' } }>(null);
+  const [identPrefill, setIdentPrefill] = useState('');
+  const [kiwiIdentValue, setKiwiIdentValue] = useState('');
+  useEffect(() => { getKiwiIdent().then(setKiwiIdentValue).catch(() => {}); }, []);
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
   const [tcpFavs,     setTcpFavs]       = useState<TcpFav[]>([]);
   const [tcpModal,    setTcpModal]      = useState(false);
+  // Editing a custom server (pencil on a custom favourite row): the favourite being edited + its
+  // draft name/url. url is the key, so editing it updates in place via updateFavourite(oldUrl,...).
+  const [editFav,     setEditFav]       = useState<Favourite | null>(null);
+  const [editName,    setEditName]      = useState('');
+  const [editUrl,     setEditUrl]       = useState('');
   // Auto-discovered RTL-TCP servers (mDNS/Bonjour) — live while the picker is focused.
   const [discovered,  setDiscovered]    = useState<DiscoveredServer[]>([]);
   const [tcpName,     setTcpName]       = useState('');
@@ -218,7 +381,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // Learn the user's location for distance sorting (used when a directory is
       // opened), but DON'T fetch any directory here — the landing view is the
       // chooser (favourites + directory cards). Directories load on tap.
-      try { const loc = await getUserLocation(); if (!cancelled) userLocRef.current = loc; } catch {}
+      try { const loc = await getUserLocation(); if (!cancelled && loc) { userLocRef.current = loc; setHasLocation(true); } } catch {}
       if (!cancelled) { setLoading(false); }
 
       // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
@@ -242,6 +405,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // watch's target so BACK works, but we must not take over.)
     if (watchTargetPending.claimed || route.params?.noAutoConnect) return;
     if (!cancelled && dEarly && !isDeepLinkActive()) {
+        // ★ ANTI-HIJACK. The user deliberately closed the app; a watch heartbeat can relaunch us
+        //   headless (a stray ping fired while isReachable was still stale-true). Auto-connecting to
+        //   the default here is the hijack — SDR audio pours out mid-call. This is a SECOND path
+        //   besides App.tsx's background-boot check (that one can lose the race / misread AppState),
+        //   so gate it here too, synchronously before the navigate. Sit on the picker and tell the
+        //   wrist we're closed; only an explicit Reopen (or genuine foreground) revives us.
+        if (await watchProvider.wasClosedByUser()) {
+          watchProvider.setPhoneStatus('closed');
+          return;
+        }
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }
@@ -302,14 +475,109 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setFavourites(next);
   }, [favourites]);
 
+  // Favourite a custom-URL server: DETECT the backend before saving so an OWRX/Kiwi
+  // URL pasted into the box isn't stored (and iconed) as UberSDR — the default that
+  // toggleFavourite falls back to. Detection returns null only when the host can't be
+  // reached; then keep the old default. connectFav re-detects on connect regardless.
+  const favouriteCustomUrl = useCallback(async (url: string, name: string) => {
+    const detected = await detectServerType(url).catch(() => null);
+    const next = await toggleFavourite({ name, url, serverType: detected ?? 'ubersdr', custom: true }, favourites);
+    setFavourites(next);
+  }, [favourites]);
+
+  // Edit a custom server (pencil): open the sheet seeded from the favourite, and save the edits in
+  // place. If the address changed, drop the stored serverType so connectFav re-detects it fresh.
+  const openEditFav = useCallback((fav: Favourite) => {
+    setEditFav(fav);
+    setEditName(fav.name);
+    setEditUrl(fav.url);
+  }, []);
+  const saveEditFav = useCallback(async () => {
+    if (!editFav) return;
+    const url = editUrl.trim();
+    const name = editName.trim() || url;
+    if (!url) { setEditFav(null); return; }
+    const patch: Partial<Favourite> = { name, url, custom: true };
+    if (url !== editFav.url) patch.serverType = undefined;   // re-detect on next connect
+    const next = await updateFavourite(editFav.url, patch);
+    setFavourites(next);
+    setEditFav(null);
+  }, [editFav, editUrl, editName]);
+
+  // Manual-mode drag reorder: the dragged list mixes headers/directories, but only favourite rows
+  // can be picked up, so we persist just the new favourite order (by url) and let listData rebuild
+  // the rest into their canonical spots.
+  const handleFavDragEnd = useCallback((data: ListItem[]) => {
+    const order = data.filter((i): i is Extract<ListItem, { kind: 'custom' }> => i.kind === 'custom').map(i => i.fav.url);
+    if (!order.length) return;
+    const rank = new Map(order.map((u, i) => [u, i]));
+    setFavourites(prev => {
+      const next = [...prev].sort((a, b) => (rank.get(a.url) ?? 1e9) - (rank.get(b.url) ?? 1e9));
+      saveFavourites(next).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  // Live directory metrics for favourites (normUrl → {dist, snr}). Held in STATE, not written onto
+  // the stored favourite — the focus effect reloads favourites from storage on every focus, which
+  // used to clobber any snapshot we wrote. Distance here is the server-computed value (works with no
+  // location permission — that's why the directory shows km but a client haversine can't).
+  const [favMeta, setFavMeta] = useState<FavMeta>({});
+  const mergeMeta = useCallback((list: SDRInstance[]) => {
+    if (!list.length) return;
+    setFavMeta(prev => {
+      const next = { ...prev };
+      for (const i of list) {
+        const k = normUrl(i.url);
+        const snr = i.bestSnr;
+        const dist = i.distance ?? (i.latitude != null && i.longitude != null && userLocRef.current
+          ? haversineKm(userLocRef.current.lat, userLocRef.current.lon, i.latitude, i.longitude) : null);
+        const cur = next[k];
+        next[k] = { dist: dist ?? cur?.dist ?? null, snr: snr ?? cur?.snr ?? null };
+      }
+      return next;
+    });
+  }, []);
+
+  // Merge whatever directory the user opens.
+  useEffect(() => { mergeMeta(instances); }, [instances, mergeMeta]);
+
+  // Eagerly harvest ALL directories once on mount so Nearest/SNR have data the moment the user taps
+  // the chip — the chooser itself never opens a directory, so favourites would otherwise be blank.
+  const enrichedRef = useRef(false);
+  useEffect(() => {
+    if (enrichedRef.current) return;
+    enrichedRef.current = true;
+    (async () => {
+      await Promise.all(DIRECTORIES.map(async d => {
+        try { mergeMeta(await fetchDirectory(d.id, userLocRef.current?.lat, userLocRef.current?.lon)); }
+        catch { /* one directory failing must not abort the rest */ }
+      }));
+    })();
+  }, [mergeMeta]);
+
   const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx') => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
+    // Most-Used tally: connecting to a favourite (server or custom URL) bumps its visit count so
+    // it floats to the top under the default sort. No-op if this isn't a favourite.
+    registerFavouriteVisit(cleaned).then(setFavourites).catch(() => {});
     // FM-DX Webserver: distinct tuner screen, and checkConnection (UberSDR-shaped)
     // doesn't apply — the adapter opens the /text WS itself.
     if (serverType === 'fmdx') {
       navigation.navigate('Tuner', { baseUrl: cleaned, instanceName: name, viewMode });
       return;
+    }
+    // KiwiSDR: capture a name/callsign once (saved like the VibeServer PIN). Many Kiwis refuse
+    // anonymous or require an ident — so ensure one exists before connecting. Prompt only when
+    // it's empty; thereafter the adapter loads and sends it silently.
+    if (serverType === 'kiwi') {
+      const id = await getKiwiIdent();
+      if (!id) {
+        setIdentPrefill('');
+        setIdentModal({ connect: { url: cleaned, name, password, lon: serverLongitude, type: serverType } });
+        return;
+      }
     }
     setConnecting(true);
     try {
@@ -504,7 +772,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    * once, route here, and a single typed address can reach anything we support.
    */
   const connectDetected = useCallback(async (
-    type: BackendType, host: string, port: number, name: string,
+    type: BackendType, host: string, port: number, name: string, baseUrl?: string,
   ) => {
     const label = name || `${host}:${port}`;
     switch (type) {
@@ -525,7 +793,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       default: {
         // The HTTP receivers (ubersdr / kiwi / owrx / fmdx) all go through connect(),
         // which routes fmdx to the tuner screen and the rest to the waterfall.
-        const url = `http://${host}:${port}`;
+        // ★★ USE THE URL WE WERE GIVEN. Rebuilding it from host+port hardcoded `http://` and
+        // dropped any subfolder, so an https receiver — or one living at /OpenWebRX/ — was
+        // handed an address it does not answer on. That is why Fabian's FM-DX server was
+        // detected correctly and then died on the WebSocket (2026-07-27).
+        const url = baseUrl || `http://${host}:${port}`;
         connect(url, label, undefined, null, type);
       }
     }
@@ -550,7 +822,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // to the SpyServer proto — Airspy's map hands out copy-text, so paste must work
   // where tapping can't). Returns the detected proto so the connect routing below
   // doesn't depend on the async setTcpProto having landed yet.
-  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto' } | null => {
+  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto'; url: string } | null => {
     let h = tcpHost.trim();
     let proto: BackendType | 'auto' = tcpProto;
     const schemeM = /^(sdr|spyserver):\/\//i.exec(h);
@@ -562,11 +834,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // The port field is a fallback — a port typed into the HOST field wins, since
     // that's the natural way to paste "host:8073".
     let p = parseInt(tcpPort.trim(), 10);
-    const u = parseHostPort(h, proto === 'auto' ? undefined : proto);
+    // ★ Same parser as the paste box: a named server may equally live behind TLS or in a
+    // subfolder, and the two entry points must not disagree about what an address IS.
+    const u = parseServerAddress(h, proto === 'auto' ? undefined : DEFAULT_PORT[proto]);
     if (!u) return null;
     h = u.host;
     if (/:\d+$/.test(tcpHost.trim()) || !Number.isFinite(p) || p <= 0 || p > 65535) p = u.port;
-    return { host: h, port: p, proto };
+    return { host: h, port: p, proto, url: u.url };
   }, [tcpHost, tcpPort, tcpProto]);
 
   const tcpModalConnect = useCallback(async (save: boolean) => {
@@ -579,7 +853,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let type: BackendType | null = parsed.proto === 'auto' ? null : parsed.proto;
     if (!type) {
       setConnecting(true);
-      type = await probeServer(parsed.host, parsed.port, null);
+      type = await probeServer(parsed.host, parsed.port, null, parsed.url);
       setConnecting(false);
       if (!type) {
         Alert.alert('Custom server',
@@ -593,7 +867,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
     setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('');
-    connectDetected(type, parsed.host, parsed.port, name);
+    connectDetected(type, parsed.host, parsed.port, name, parsed.url);
   }, [parseTcpEntry, tcpName, tcpFavs, connectDetected]);
 
   const removeTcpFav = useCallback((fav: TcpFav) => {
@@ -655,7 +929,31 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // self-heals a wrong stored type (e.g. an UberSDR-with-kiwi-emulation that a
     // previous build mis-saved as kiwi). Detection returns null only when the
     // host can't be reached — then keep the stored type rather than guessing.
-    const detected = await detectServerType(fav.url);
+    let detected = await detectServerType(fav.url);
+
+    // ★★ A SAVED VibeServer PORT GOES STALE ON ITS OWN. The server takes "the
+    // first free port" from 48000 up, so if something else holds 48000 at launch
+    // it lands on 48001 — and when that clash clears it moves back. The saved
+    // favourite still points at the old port and simply stops working, with
+    // nothing on screen to explain why. (Hit for real, 2026-07-26: the Mac moved
+    // 48000→48001→48000 and the watch's favourite was stranded.)
+    //
+    // So: if a favourite we believe is a VibeServer no longer answers, look for
+    // it on the rest of the range and REWRITE the favourite. One typed host,
+    // not a subnet scan — see findVibeServerPort.
+    if (!detected && fav.serverType === 'vibeserver') {
+      const u = parseHostPort(fav.url, 'vibeserver');
+      if (u) {
+        const port = await findVibeServerPort(u.host).catch(() => null);
+        if (port && port !== u.port) {
+          const url = `http://${u.host}:${port}`;
+          await updateFavourite(fav.url, { url }).catch(() => {});
+          setFavourites(await getFavourites());
+          connectDetected('vibeserver', u.host, port, fav.name);
+          return;
+        }
+      }
+    }
     const type = detected ?? fav.serverType ?? 'ubersdr';
     if (type !== fav.serverType) setFavouriteServerType(fav.url, type).catch(() => {});
     // A favourite can now detect as a VibeServer (it serves a web page, so it IS
@@ -666,7 +964,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (u) { connectDetected('vibeserver', u.host, u.port, fav.name); return; }
     }
     connect(fav.url, fav.name, undefined, null, type as ServerType | 'fmdx');
-  }, [connect, connectDetected]);
+  }, [connect, connectDetected, setFavourites]);
 
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
@@ -677,21 +975,30 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const spy = parseSdrUrl(raw.replace(/^spyserver:\/\//i, 'sdr://'));
     if (spy) { setCustomUrl(''); connectSpy(spy.host, spy.port, `${spy.host}:${spy.port}`); return; }
 
-    const u = parseHostPort(raw);
+    const u = parseServerAddress(raw);
     if (!u) { Alert.alert('Custom server', `Couldn't read an address from "${raw}".`); return; }
 
     // Probe, then route. Plain HTTP to public-internet servers IS allowed
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them.
     setConnecting(true);
-    const type = await probeServer(u.host, u.port, null);
+    const type = await probeServer(u.host, u.port, null, u.url);
     setConnecting(false);
     if (!type) {
+      // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
+      // never where a VibeServer lives. Sweep its range before giving up, so
+      // "just type the IP" works however the server numbered itself today.
+      if (!/:\d+\s*$/.test(raw.replace(/^\w+:\/\//, ''))) {
+        setConnecting(true);
+        const port = await findVibeServerPort(u.host).catch(() => null);
+        setConnecting(false);
+        if (port) { connectDetected('vibeserver', u.host, port, raw); return; }
+      }
       Alert.alert('Custom server',
         `Nothing answered at ${u.host}:${u.port}.\n\nIf this is an rtl_tcp or SpyServer on a non-standard port, add it with the + button and pick the type — raw TCP servers can't be auto-detected.`);
       return;
     }
-    connectDetected(type, u.host, u.port, raw);
+    connectDetected(type, u.host, u.port, raw, u.url);
   }, [customUrl, connectSpy, connectDetected]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {
@@ -741,59 +1048,426 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     );
   }, [navigation]);
 
-  // Build list: favourites section (pinned top) then filtered instances
+  // Which sort modes are actually usable right now. 'nearest' needs a location; 'snr' needs a
+  // directory that reports SNR (Receiverbook doesn't); 'country' always works (we derive it).
+  const hasSnr = useMemo(() => instances.some(i => Number.isFinite(i.bestSnr as number)), [instances]);
+  const availModes = useMemo<SortMode[]>(() => {
+    const m: SortMode[] = [];
+    if (hasLocation) m.push('nearest');
+    if (hasSnr)      m.push('snr');
+    m.push('country');
+    return m;
+  }, [hasLocation, hasSnr]);
+  // The user's saved preference may be unavailable in the current context — fall back to the
+  // first available mode for display WITHOUT overwriting their preference (so it returns when
+  // they open an SNR-capable directory or grant location).
+  const effectiveSort: SortMode = availModes.includes(sortMode) ? sortMode : availModes[0];
+
+  // The group that should open by default for the current mode: the user's country (COUNTRY),
+  // the closest distance band (NEAR), or the best SNR tier (SNR).
+  const defaultOpenKey = useMemo(() => {
+    if (effectiveSort === 'country') return userCountry ?? '';
+    if (!instances.length) return '';
+    if (effectiveSort === 'nearest') {
+      const closest = instances.reduce((m, i) => (i.distance != null && i.distance < m ? i.distance : m), Infinity);
+      return distanceBand(Number.isFinite(closest) ? closest : null).key;
+    }
+    const best = instances.reduce((m, i) => (Number.isFinite(i.bestSnr as number) && (i.bestSnr as number) > m ? (i.bestSnr as number) : m), -Infinity);
+    return snrTier(best === -Infinity ? null : best).key;
+  }, [effectiveSort, instances, userCountry]);
+
+  // Re-seed the open group when the mode or directory changes (or once data resolves the default).
+  // Anti-overload: only the best band is open; the user's own toggles then persist within the mode.
+  useEffect(() => {
+    setOpenGroups(new Set(defaultOpenKey ? [defaultOpenKey] : []));
+  }, [effectiveSort, selectedDir, defaultOpenKey]);
+
+  // Build the list as explicit sections with collapsible HEADER items. Favourites first
+  // (never collapsible), then the directory grouped by the current sort mode. In 'country'
+  // mode each country is its own collapsible group (user's country open, rest collapsed);
+  // 'nearest'/'snr' remain a single flat "OTHER SERVERS" section for now.
   const listData = useMemo((): ListItem[] => {
     const q = filter.toLowerCase().trim();
+    const mFav  = (f: Favourite) => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q);
+    const mInst = (i: SDRInstance) => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q);
 
-    // Favourited custom URLs (not in the instances list)
+    // Favourites live ONLY on the first screen (the directory chooser). Inside a directory
+    // they just get in the way of that directory's actual server list (Stuart 2026-07-17).
+    const showFavs = selectedDir === null;
     const instanceUrls = new Set(instances.map(i => i.url));
-    const customFavs: ListItem[] = favourites
-      .filter(f => !instanceUrls.has(f.url))
-      .filter(f => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q))
-      .map(f => ({ kind: 'custom', fav: f }));
+    // Split favourites into CUSTOM SERVERS (typed by the user) and FAVOURITES (saved from a
+    // directory), each under its own subheading so the two are distinguishable. Directory-listing
+    // instances that happen to be favourited always belong with the directory group.
+    const sortedStored = showFavs
+      ? sortFavs(favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav), favSort, userLocRef.current, favMeta)
+      : [];
+    const customFavItems: ListItem[] = sortedStored.filter(favIsCustom)
+      .map(f => ({ kind: 'custom' as const, fav: f }));
+    const dirFavItems: ListItem[] = showFavs ? [
+      ...sortedStored.filter(f => !favIsCustom(f)).map(f => ({ kind: 'custom' as const, fav: f })),
+      ...instances.filter(i => isFav(i.url)).filter(mInst).map(i => ({ kind: 'instance' as const, data: i })),
+    ] : [];
+    // In a directory, a favourited server still shows in its OWN group (don't vanish it) —
+    // we only pull favourites out of `rest` when they're shown separately (on the chooser).
+    let rest = instances.filter(i => showFavs ? !isFav(i.url) : true).filter(mInst);
 
-    // Favourited instances (pinned to top)
-    const favInstances: ListItem[] = instances
-      .filter(i => isFav(i.url))
-      .filter(i => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q))
-      .map(i => ({ kind: 'instance', data: i }));
-
-    // Remaining instances (not favourited)
-    let rest = instances
-      .filter(i => !isFav(i.url))
-      .filter(i => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q));
-
-    if (sortMode === 'snr') {
-      rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
+    const out: ListItem[] = [];
+    if (customFavItems.length) {
+      out.push({ kind: 'header', groupKey: '__custom', label: 'CUSTOM SERVERS', count: customFavItems.length, collapsible: false, collapsed: false });
+      out.push(...customFavItems);
+    }
+    if (dirFavItems.length) {
+      out.push({ kind: 'header', groupKey: '__fav', label: 'FAVOURITES', count: dirFavItems.length, collapsible: false, collapsed: false });
+      out.push(...dirFavItems);
     }
 
-    return [
-      ...customFavs,
-      ...favInstances,
-      ...rest.map(i => ({ kind: 'instance' as const, data: i })),
-    ];
-  }, [instances, favourites, filter, sortMode, isFav]);
+    if (effectiveSort === 'country') {
+      const groups = new Map<string, SDRInstance[]>();
+      for (const i of rest) {
+        const key = (i.countryCode || '').toUpperCase() || 'ZZ';   // unknown → sorts last
+        (groups.get(key) ?? groups.set(key, []).get(key)!).push(i);
+      }
+      const keys = [...groups.keys()].sort((a, b) => {
+        if (a === userCountry) return -1; if (b === userCountry) return 1;   // your country first
+        if (a === 'ZZ') return 1; if (b === 'ZZ') return -1;                 // unknown last
+        return countryName(a).localeCompare(countryName(b));                 // rest alphabetical
+      });
+      for (const key of keys) {
+        const rows = groups.get(key)!;
+        const open = openGroups.has(key);
+        const label = key === 'ZZ' ? 'Unknown location' : `${flagEmoji(key)} ${countryName(key)}`.trim();
+        out.push({ kind: 'header', groupKey: key, label, count: rows.length, collapsible: true, collapsed: !open });
+        if (open) out.push(...rows.map(i => ({ kind: 'instance' as const, data: i })));
+      }
+    } else {
+      // NEAR = distance bands; SNR = signal tiers. Collapsible groups; the closest/best band is
+      // seeded open (see defaultOpenKey effect), the rest collapsed to avoid overload.
+      const bandOf = effectiveSort === 'snr'
+        ? (i: SDRInstance) => snrTier(i.bestSnr as number | null)
+        : (i: SDRInstance) => distanceBand(i.distance);
+      const groups = new Map<string, { label: string; order: number; rows: SDRInstance[] }>();
+      for (const i of rest) {
+        const b = bandOf(i);
+        (groups.get(b.key) ?? groups.set(b.key, { label: b.label, order: b.order, rows: [] }).get(b.key)!).rows.push(i);
+      }
+      const bands = [...groups.entries()].sort((a, b) => a[1].order - b[1].order);
+      bands.forEach(([, g]) => g.rows.sort((a, b) => effectiveSort === 'snr'
+        ? (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity)
+        : (a.distance ?? Infinity) - (b.distance ?? Infinity)));
+      for (const [key, g] of bands) {
+        const open = openGroups.has(key);
+        out.push({ kind: 'header', groupKey: key, label: g.label, count: g.rows.length, collapsible: true, collapsed: !open });
+        if (open) out.push(...g.rows.map(i => ({ kind: 'instance' as const, data: i })));
+      }
+    }
+    return out;
+  }, [instances, favourites, filter, effectiveSort, isFav, userCountry, openGroups, selectedDir, favSort, favMeta]);
 
+  // Expand/Collapse-ALL — the escape hatch for a user who wants the whole flat list.
+  const collapsibleKeys = useMemo(
+    () => listData.flatMap(d => (d.kind === 'header' && d.collapsible ? [d.groupKey] : [])),
+    [listData],
+  );
+  const allGroupsOpen = collapsibleKeys.length > 0 && collapsibleKeys.every(k => openGroups.has(k));
+  const toggleAllGroups = useCallback(() => {
+    setOpenGroups(allGroupsOpen ? new Set() : new Set(collapsibleKeys));
+  }, [allGroupsOpen, collapsibleKeys]);
+
+
+  // ★★ HOOKS MUST SIT ABOVE THE EARLY RETURN BELOW. These were originally added just
+  // before renderItem — i.e. AFTER `if (!modeReady) return` — so on the first render
+  // they did not run and on the next they did: "Rendered more hooks than during the
+  // previous render", which took the whole screen down. An early return part-way down a
+  // long component is exactly where this is easy to miss.
+  // ★ The hint appears WHEN A KEY IS PRESSED and goes away on touch (Stuart). It is a
+  // subtitle in style — quiet prose under the title — but not a permanent one: a touch user
+  // never needs it, and showing it to them would be teaching a lesson nobody asked for.
+  const [kbHint, setKbHint] = useState(false);
+
+  // ★★ OCCUPANCY OF SAVED VibeSERVERS. One client per radio means a public receiver is a
+  // queue of one, so a busy server MUST say so before it is tapped — otherwise "in use" is
+  // indistinguishable from "broken", and the conclusion people reach is that our software
+  // does not work (Stuart, 2026-07-27).
+  // ★ Absent from the map = UNKNOWN (old server, or unreachable). Never rendered as "free":
+  // claiming a server is available and then failing to connect is worse than saying nothing.
+  const [occupancy, setOccupancy] = useState<Record<string, ServerOccupancy>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      const targets = favourites.filter(f => (f.serverType ?? '') === 'vibeserver');
+      if (!targets.length) return;
+      // Sequential, not parallel: this is a courtesy poll of somebody else's receiver, and
+      // firing a burst at every saved server each cycle is the kind of thing that gets a
+      // client blocked. The list is short.
+      for (const f of targets) {
+        if (cancelled) return;
+        const occ = await fetchOccupancy(f.url).catch(() => null);
+        if (cancelled) return;
+        setOccupancy(prev => {
+          if (!occ) { const { [f.url]: _drop, ...rest } = prev; return rest; }
+          return { ...prev, [f.url]: occ };
+        });
+      }
+    };
+    void poll();
+    // 20s: fast enough that a freed radio is noticed while you are still looking at the
+    // list, slow enough not to be a nuisance to a server that is already busy serving.
+    const t = setInterval(poll, 20_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [favourites]);
+
+  useEffect(() => {
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
+    return () => sub.remove();
+  }, []);
+
+  // ── Keyboard / D-pad navigation of the server list ──────────────────────────
+  //
+  // ★ This is the screen that has to work with NO TOUCH AT ALL: mirrored to a TV over
+  // AirPlay with the phone face-down, this is where you choose a receiver, so a list you
+  // cannot reach by keyboard makes the whole shack-mode idea moot.
+  //
+  // Scrolling uses the FlatList's own scrollToIndex, which sidesteps the measurement
+  // problem the panels hit entirely — the list already knows where its rows are.
+  const listRef = useRef<FlatList<ListItem> | null>(null);
+  // ★★ The DEFAULT screen is the DraggableFlatList, with the whole chooser (custom URL,
+  // discovered, directories) as its ListHeaderComponent — so `listData` is the server rows
+  // BELOW that header. reveal() only ever had the plain FlatList's ref, so on the screen the
+  // user actually sees, scrollToIndex did nothing and the highlight moved off-screen below
+  // the fold. Focus was working the whole time; it simply could not be seen.
+  const dragRef = useRef<any>(null);
+  const listScrollY = useRef(0);
+  const onListScroll = useCallback((e: any) => {
+    listScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0;
+  }, []);
+  // Each footer row's own view, so reveal can measure it rather than guessing.
+  const ftrViews = useRef<Array<any>>([]);
+  // ★★★ GATED ON SCREEN FOCUS, and this is not optional. A stack navigator keeps this
+  // screen MOUNTED behind SDRScreen, so without the gate its key listener stayed live: an
+  // Enter meant for the frequency box ALSO activated whichever row this list still had
+  // focused, and the app silently connected to a stranger's receiver. Stuart hit exactly
+  // that — "went to enter a frequency and suddenly found myself connected to M9PSY".
+  //
+  // ★ Any screen-level key listener needs this. Mounted is not the same as on screen, which
+  // is the second time that distinction has bitten in this work.
+  const screenFocused = useIsFocused();
+  const listNavActive = screenFocused && !tcpModal && !editFav && !connecting;
+
+  // ★★ ONE index space for the WHOLE screen. The chooser (custom URL, discovered,
+  // DIRECTORIES) is the list's ListHeaderComponent, so it was never in `listData` and none
+  // of it was reachable — Stuart could only get to favourites and custom servers. Two
+  // separate navigations would mean two focus rings and a rule for moving between them; a
+  // single space means Down simply walks off the header into the list, which is what a
+  // reader expects because that is how the screen is laid out.
+  //
+  // The header rows append their action DURING RENDER, in JSX order, exactly as PanelNav's
+  // rows do — so the order cannot drift from what is on screen the way a parallel array can.
+  // ★ THREE zones, because the screen has three: the header chooser, the server list, then
+  // the footer (call sign + DIRECTORIES). The footer renders AFTER the items, so a single
+  // counter would have handed footer rows the same indices as list rows. Header rows are
+  // numbered first, the list keeps the middle, and the footer is offset past both.
+  const hdrActions = useRef<Array<() => void>>([]);
+  const ftrActions = useRef<Array<() => void>>([]);
+  hdrActions.current = [];
+  ftrActions.current = [];
+
+  // ★★ The LENGTH has to come from state, not from the refs. The banks are cleared at the
+  // top of this render and only filled while the CHILDREN render — so reading their length
+  // here always gave zero, the nav's range was just the list, and focus stuck at its last
+  // index. Stuart saw exactly that: focus=12 of rows=13, unable to reach Manchester or the
+  // directories below it. The counts are published after each render and settle in one pass.
+  const [zoneCounts, setZoneCounts] = useState({ h: 0, f: 0 });
+  useEffect(() => {
+    const h = hdrActions.current.length, f = ftrActions.current.length;
+    if (h !== zoneCounts.h || f !== zoneCounts.f) setZoneCounts({ h, f });
+  });
+
+  const navFocus = useListNav(
+    listNavActive,
+    zoneCounts.h + listData.length + zoneCounts.f,
+    (i) => {
+      // Header, then the list, then the footer — the order they appear on screen.
+      const hdr = hdrActions.current, ftr = ftrActions.current;
+      if (i < hdr.length) { hdr[i]?.(); return; }
+      if (i >= hdr.length + listData.length) { ftr[i - hdr.length - listData.length]?.(); return; }
+      const it = listData[i - hdr.length];
+      if (!it) return;
+      if (it.kind === 'header') { if (it.collapsible) toggleGroup(it.groupKey); return; }
+      if (it.kind === 'custom') { connectFav(it.fav); return; }
+      // `connect` covers the directory backends; a SpyServer row reaches the app by a
+      // different path, so it is left to touch rather than mistyping the call.
+      const st = it.data.serverType;
+      if (st === 'spyserver') return;
+      connect(it.data.url, it.data.name, undefined, it.data.longitude, st);
+    },
+    (i) => {
+      // viewPosition 0.5 keeps focus mid-screen, which reads far better from across a
+      // room than nudging it just inside the edge. Whichever list is actually mounted.
+      const hdrLen = hdrActions.current.length;
+      const target: any = selectedDir !== null ? listRef.current : dragRef.current;
+      // Header and footer rows sit outside the data, so scroll to the ends instead.
+      if (i < hdrLen) { try { target?.scrollToOffset?.({ offset: 0, animated: true }); } catch {} return; }
+      if (i >= hdrLen + listData.length) {
+        // ★ NOT scrollToEnd. That jumps to the very bottom, so the FIRST footer rows — the
+        // call sign and the UberSDR directory — end up scrolled off the top and look skipped
+        // even though focus is on them. Stuart: "it's reachable but as the list scrolls it's
+        // just out of view." Measure the row and put it where it can be read instead.
+        const v = ftrViews.current[i - hdrLen - listData.length];
+        v?.measureInWindow?.((_x: number, y: number, _w: number, h: number) => {
+          const screenH = Dimensions.get('window').height;
+          if (y >= 100 && y + h <= screenH - 60) return;      // already readable
+          const want = Math.max(120, screenH / 2 - h / 2);
+          try { target?.scrollToOffset?.({ offset: Math.max(0, listScrollY.current + (y - want)), animated: true }); } catch {}
+        });
+        return;
+      }
+      try { target?.scrollToIndex?.({ index: i - hdrLen, viewPosition: 0.5, animated: true }); }
+      catch { /* index briefly out of range while the list rebuilds — harmless */ }
+    },
+  );
+
+  // ★ Row shortcuts (Stuart): F favourites the focused server, D sets/clears it as the
+  // default, S cycles the sort. Letters are safe here because the native side withholds
+  // them whenever a text field has focus, so the custom-server box still types normally.
+  const navFocusRef = useRef(navFocus); navFocusRef.current = navFocus;
+  useEffect(() => {
+    if (!listNavActive) return;
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
+      const k = e?.key;
+      if (k === 'S') { cycleFavSort(); return; }
+      if (k === 'Backspace') {
+        // ★ Deepest first: inside a DIRECTORY, Backspace leaves it and returns to the
+        // chooser — the same "step out one level" meaning it has everywhere else. Without
+        // this a directory could be entered by keyboard and only left by touch.
+        if (selectedDir !== null) {
+          setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false);
+          return;
+        }
+        // Otherwise step out = collapse the group the focus is standing in. Walks BACK to
+        // the nearest header, so it works from any row inside the group, not just its top.
+        for (let j = Math.min(navFocusRef.current, listData.length - 1); j >= 0; j--) {
+          const h = listData[j];
+          if (h?.kind === 'header') { if (h.collapsible && !h.collapsed) toggleGroup(h.groupKey); return; }
+        }
+        return;
+      }
+      const it = listData[navFocusRef.current];
+      if (!it || it.kind === 'header') return;
+      const fav: Favourite = it.kind === 'custom'
+        ? it.fav
+        : { name: it.data.name, url: it.data.url, serverType: it.data.serverType };
+      if (k === 'F') { void handleToggleFav(fav); return; }
+      // ★ E edits a CUSTOM server. Directory rows are not ours to edit — their address
+      // comes from the directory — so E is deliberately inert on them rather than
+      // opening a sheet whose changes could not be saved.
+      if (k === 'E') { if (it.kind === 'custom') openEditFav(it.fav); return; }
+      if (k === 'D') {
+        const isDef = defaultInst?.url === fav.url;
+        if (isDef) handleClearDefault(); else handleSetDefault({ name: fav.name, url: fav.url });
+      }
+    });
+    return () => sub.remove();
+  }, [listNavActive, listData, selectedDir, toggleGroup, cycleFavSort, handleToggleFav, handleSetDefault, handleClearDefault, defaultInst, openEditFav]);
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  const renderItem = ({ item, index }: { item: ListItem; index: number }) => {
-    // Section header before first non-favourite instance
-    const favCount = listData.filter(d =>
-      d.kind === 'custom' || (d.kind === 'instance' && isFav(d.data.url))
-    ).length;
-    const showFavHeader   = index === 0 && favCount > 0;
-    const showOtherHeader = index === favCount && favCount > 0 && listData.length > favCount;
+  /**
+   * Claim a place in the focus order for something that ISN'T a row — the custom URL field
+   * and its CONNECT button. Called during render, in JSX order, exactly like ChooserRow.
+   *
+   * ★ The URL box is the one control on this screen you MOST want a keyboard for — it is
+   * where an IP address gets typed — and it was the one thing focus walked straight past,
+   * because it is a TextInput rather than a Touchable. Enter on it focuses the field.
+   */
+  const chooserSlot = (onPress: () => void, zone?: 'footer') => {
+    const foot = zone === 'footer';
+    const bank = foot ? ftrActions.current : hdrActions.current;
+    const i = bank.length;
+    bank.push(onPress);
+    const globalIndex = foot ? hdrActions.current.length + listData.length + i : i;
+    return navFocus === globalIndex;
+  };
+
+  /** A chooser row that takes part in the screen's single focus order. */
+  const ChooserRow = ({ style, onPress, zone, children, ...rest }: any) => {
+    const foot = zone === 'footer';
+    const bank = foot ? ftrActions.current : hdrActions.current;
+    const myIndex = bank.length;
+    bank.push(onPress ?? (() => {}));
+    // The footer is numbered past the header AND the whole list — by the time it renders,
+    // the header count is final, because React renders the header first.
+    const globalIndex = foot ? hdrActions.current.length + listData.length + myIndex : myIndex;
+    const on = navFocus === globalIndex;
+    return (
+      <TouchableOpacity onPress={onPress}
+        ref={foot ? ((r: any) => { ftrViews.current[myIndex] = r; }) : undefined}
+        style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
+        {children}
+      </TouchableOpacity>
+    );
+  };
+
+  const renderItem = ({ item, index, getIndex, drag, isActive }: {
+    item: ListItem; index?: number; getIndex?: () => number | undefined;
+    drag?: () => void; isActive?: boolean;
+  }) => {
+    // ★★ DraggableFlatList hands renderItem `getIndex()`, NOT `index` — so on the DEFAULT
+    // screen (which is the draggable list) `index` was always undefined and the highlight
+    // could never render, however correct the focus was. The plain FlatList passes `index`.
+    // Two list components, two contracts, one renderItem shared between them.
+    const idx = index ?? getIndex?.();
+    const navOn = idx != null && (idx + hdrActions.current.length) === navFocus;
+    // Explicit collapsible section headers (favourites / country groups / OTHER).
+    if (item.kind === 'header') {
+      // ★ Headers are navigable (Enter collapses them) but had NO focus styling, so the
+      // caret walked through them invisibly and the keys looked dead until it happened to
+      // land on a server row. A header is often the FIRST row, so that was the usual case.
+      const hdrFocus = navOn ? { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 4 } : null;
+      // The FAVOURITES header carries a tappable sort chip (Most Used / A–Z / Nearest / SNR / Manual).
+      if (item.groupKey === '__fav') {
+        return (
+          <View style={hdrFocus}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 6 }}>
+              <View style={{ flex: 1 }}>
+                <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
+              </View>
+              <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }]} activeOpacity={0.7}>
+                <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
+              </TouchableOpacity>
+            </View>
+            {favSort === 'manual' && (
+              <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 0.5, paddingHorizontal: 2, marginTop: 2, marginBottom: 4 }}>
+                ≡ Tap and hold a server to drag it into order
+              </Text>
+            )}
+          </View>
+        );
+      }
+      return (
+        <View style={hdrFocus}><SectionHeader
+          label={item.count > 0 ? `${item.label}  (${item.count})` : item.label}
+          fs={fs} F={F} C={C}
+          collapsible={item.collapsible}
+          collapsed={item.collapsed}
+          onToggle={item.collapsible ? () => toggleGroup(item.groupKey) : undefined}
+        /></View>
+      );
+    }
 
     if (item.kind === 'custom') {
       const fav = item.fav;
       const isDefault = defaultInst?.url === fav.url;
-      return (
-        <>
-          {showFavHeader && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
+      const canDrag = favSort === 'manual' && !!drag;
+      const body = (
           <TouchableOpacity
-            style={[styles.row, { borderColor: C.borderBright, backgroundColor: 'rgba(255,100,100,0.06)' }]}
+            style={[styles.row, { borderColor: navOn ? NAV_FOCUS : C.borderBright,
+                                  borderWidth: navOn ? 2 : 1,
+                                  backgroundColor: isActive ? 'rgba(255,160,0,0.22)' : 'rgba(255,100,100,0.06)' }]}
             onPress={() => connectFav(fav)}
+            onLongPress={canDrag ? drag : undefined}
+            delayLongPress={180}
             disabled={connecting}
           >
             <View style={styles.rowMain}>
@@ -808,8 +1482,48 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </Text>
               </View>
               <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }} numberOfLines={1}>{fav.url}</Text>
+              {(() => {
+                // ★ IN USE, with a time when we can give one. "in use" alone leaves someone
+                // refreshing forever; "free in 4 min" tells them whether to wait or move on.
+                // ★ No badge at all when occupancy is UNKNOWN — silence is honest, a green
+                // "free" that then fails to connect is not.
+                const occ = occupancy[fav.url];
+                if (!occ || !occ.busy) return null;
+                const left = occ.freeInSec;
+                const txt = left > 60 ? `IN USE · free in ~${Math.ceil(left / 60)} min`
+                          : left >= 0 ? 'IN USE · free shortly'
+                          : 'IN USE';
+                return (
+                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: '#ffd479',
+                                 letterSpacing: 0.5, marginTop: 2 }}>
+                    {txt}{occ.admin ? '  ·  admin can override' : ''}
+                  </Text>
+                );
+              })()}
+              {(() => {
+                const bits: string[] = [];
+                if (favSort === 'nearest') {
+                  const d = favDist(fav, favMeta, userLocRef.current);
+                  bits.push(Number.isFinite(d) ? `◍ ${Math.round(d).toLocaleString()} km` : '◍ distance unknown');
+                } else if (favSort === 'snr') {
+                  const s = favSnr(fav, favMeta);
+                  bits.push(s != null ? `▲ SNR ${Math.round(s)} dB` : '▽ no SNR data');
+                } else if (favSort === 'type') {
+                  bits.push(`▣ ${TYPE_NAME[favType(fav)] ?? 'Custom'}`);
+                }
+                if (favSort !== 'snr' && favSort !== 'nearest' && (fav.visits ?? 0) > 0)
+                  bits.push(`★ ${fav.visits} visit${fav.visits === 1 ? '' : 's'}`);
+                return bits.length ? (
+                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.goldDim, letterSpacing: 0.5 }}>{bits.join('   ')}</Text>
+                ) : null;
+              })()}
             </View>
             <View style={styles.rowRight}>
+              {favIsCustom(fav) && (
+                <TouchableOpacity style={{ padding: 4 }} onPress={() => openEditFav(fav)}>
+                  <Text style={{ fontSize: fs(16), color: C.goldDim }}>✎</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={{ padding: 4 }}
                 onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: fav.name, url: fav.url })}>
                 <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
@@ -817,10 +1531,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <TouchableOpacity style={{ padding: 4 }} onPress={() => handleToggleFav(fav)}>
                 <Text style={{ fontSize: fs(18), color: C.red }}>♥</Text>
               </TouchableOpacity>
+              {canDrag && (
+                <TouchableOpacity style={{ paddingLeft: 6, paddingVertical: 4 }} onPressIn={drag} delayLongPress={0}>
+                  <Text style={{ fontSize: fs(20), color: C.goldDim }}>≡</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </TouchableOpacity>
-        </>
       );
+      return canDrag ? <ScaleDecorator>{body}</ScaleDecorator> : body;
     }
 
     const inst = item.data;
@@ -836,9 +1555,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       : inst.users >= inst.maxUsers); // kiwi: all in use = full
 
     return (
-      <>
-        {showFavHeader  && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
-        {showOtherHeader && <SectionHeader label="ALL INSTANCES" fs={fs} F={F} C={C} />}
         <TouchableOpacity
           style={[
             styles.row,
@@ -846,6 +1562,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
             isFull && { opacity: 0.4 },
+            // Focus LAST so it wins over default/favourite colouring — the caret must never
+            // be hidden by the very rows you are most likely to be standing on.
+            navOn && { borderColor: NAV_FOCUS, borderWidth: 2 },
           ]}
           onPress={() => {
             // SpyServer isn't a web backend: its "url" is spyserver://host:port and
@@ -912,17 +1631,31 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={{ padding: 4 }}
-              onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType })}>
+              onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType,
+                latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined,
+                custom: false })}>
               <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.textDim }}>{favoured ? '♥' : '♡'}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
-      </>
     );
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}
+                    onTouchStart={() => { setKbHint(false); noteTouchInteraction(); }}>
+      <IdentModal
+        visible={!!identModal}
+        initial={identPrefill}
+        onSubmit={async (id) => {
+          const m = identModal; setIdentModal(null);
+          await setKiwiIdent(id);
+          setKiwiIdentValue(id);
+          const c = m?.connect;
+          if (c) connect(c.url, c.name, c.password, c.lon, c.type);
+        }}
+        onCancel={() => setIdentModal(null)}
+      />
       <PasswordModal
         visible={!!pwModal}
         serverUrl={pwModal?.url ?? ''}
@@ -985,6 +1718,30 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           </View>
         </View>
       </Modal>
+
+      {/* Edit a saved custom server (pencil): change its name / address in place. Type re-detects on
+          the next connect if the address changed, so no type picker is needed here. */}
+      <Modal visible={!!editFav} transparent animationType="fade" onRequestClose={() => setEditFav(null)}>
+        <View style={styles.tcpBackdrop}>
+          <View style={[styles.tcpCard, { borderColor: C.amber }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>EDIT SERVER</Text>
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Name" placeholderTextColor={C.textDim}
+              value={editName} onChangeText={setEditName} autoCorrect={false} />
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
+              value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
+              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setEditFav(null)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.textDim }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.amber }]} onPress={saveEditFav}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save changes</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
         {/* Header */}
@@ -995,12 +1752,25 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               VibeSDR
             </Text>
             <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v{APP_VERSION}</Text>
+            {/* ★ Keyboard hint as a SUBTITLE (Stuart) — prose under the title rather than a
+                bordered strip of glyphs. It reads as part of the page instead of an alert,
+                and it costs no list rows. Scoped to THIS screen's actions; the full
+                scrollable shortcut reference lives in the main menu. */}
           </View>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
             <Text style={{ fontSize: fs(22), color: C.textDim }}>⚙</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ★ Full width, BELOW the title row — inside headerLeft it competed with the cog
+            for space and was clipped underneath it in portrait. (Stuart, 2026-07-25.) */}
+        {kbHint && (
+          <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
+            To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
+            F favourite · D default · E edit · S sort
+          </Text>
+        )}
 
         {/* Default banner */}
         {defaultInst && (
@@ -1027,10 +1797,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         )}
 
         {/* Custom URL — chooser only */}
-        {selectedDir === null && (
+        {selectedDir === null && (() => {
+        const urlFocused = chooserSlot(() => customInputRef.current?.focus());
+        return (
         <View ref={tourRef('customUrl')} collapsable={false} style={styles.customRow}>
           <TextInput
-            style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: C.border }]}
+            ref={customInputRef}
+            style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: urlFocused ? NAV_FOCUS : C.border },
+                    urlFocused && { borderWidth: 2 }]}
             placeholder="Custom URL  e.g. sdr.example.com"
             placeholderTextColor={C.textDim}
             value={customUrl}
@@ -1071,13 +1845,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Save', onPress: (text?: string) =>
-                            handleToggleFav({ name: (text && text.trim()) || fallback, url }) },
+                            favouriteCustomUrl(url, (text && text.trim()) || fallback) },
                       ],
                       'plain-text',
                       fallback,
                     );
                   } else {
-                    handleToggleFav({ name: fallback, url });
+                    favouriteCustomUrl(url, fallback);
                   }
                 }}
               >
@@ -1121,7 +1895,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
-        )}
+        ); })()}
 
         {/* Filter + Sort toggle — directory view only */}
         {selectedDir !== null && (
@@ -1136,13 +1910,28 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             autoCorrect={false}
           />
           <TouchableOpacity
-            style={[styles.sortBtn, { borderColor: sortMode === 'snr' ? C.borderBright : C.border }]}
-            onPress={() => setSortMode(m => m === 'nearest' ? 'snr' : 'nearest')}
+            style={[styles.sortBtn, { borderColor: effectiveSort !== 'nearest' ? C.borderBright : C.border },
+                    availModes.length < 2 && { opacity: 0.5 }]}
+            disabled={availModes.length < 2}
+            onPress={() => {
+              // Cycle only through the modes usable right now (skips SNR on Receiverbook, NEAR
+              // with no location). Persist so it sticks when the mode becomes available again.
+              const next = availModes[(availModes.indexOf(effectiveSort) + 1) % availModes.length];
+              setSortMode(next);
+              AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});
+            }}
           >
-            <Text style={{ fontFamily: F, fontSize: fs(9), color: sortMode === 'snr' ? C.amber : C.textDim, letterSpacing: 1 }}>
-              {sortMode === 'snr' ? '📶 SNR' : '📍 NEAR'}
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: effectiveSort !== 'nearest' ? C.amber : C.textDim, letterSpacing: 1 }}>
+              {effectiveSort === 'snr' ? '📶 SNR' : effectiveSort === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
             </Text>
           </TouchableOpacity>
+          {collapsibleKeys.length > 0 && (
+            <TouchableOpacity style={[styles.sortBtn, { borderColor: C.border }]} onPress={toggleAllGroups}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>
+                {allGroupsOpen ? '▾ ALL' : '▸ ALL'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         )}
 
@@ -1161,10 +1950,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </View>
           ) : (
             <FlatList
+              ref={listRef}
+              onScroll={onListScroll}
+              scrollEventThrottle={16}
               data={listData}
-              keyExtractor={item => item.kind === 'custom' ? 'custom:' + item.fav.url : item.data.url}
+              // ★★ WITHOUT THIS THE SELECTION BOX NEVER APPEARS. FlatList only re-renders
+              // rows when `data` or `extraData` changes, and the focused index is external
+              // state — so focus was moving correctly and invisibly, which is exactly what
+              // Stuart saw, and why an Enter could connect to a server he could not see.
+              extraData={navFocus}
+              style={{ flex: 1 }}
+              keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
-              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
               ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
               ListEmptyComponent={
                 <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textAlign: 'center', marginTop: 40 }}>
@@ -1174,11 +1972,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             />
           )
         ) : (
-          <FlatList
+          <DraggableFlatList
+            ref={dragRef}
+            onScrollOffsetChange={(y: number) => { listScrollY.current = y; }}
+            extraData={navFocus}   // same reason as the FlatList above
             data={listData}
-            keyExtractor={item => item.kind === 'custom' ? 'custom:' + item.fav.url : item.data.url}
-            renderItem={renderItem}
-            contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+            containerStyle={{ flex: 1 }}
+            onDragEnd={({ data }) => handleFavDragEnd(data)}
+            activationDistance={12}
+            keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
+            renderItem={renderItem as any}
+            contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
               <View style={{ marginBottom: 4 }}>
@@ -1188,7 +1992,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     Android only: iOS has no USB host SDR. */}
                 {Platform.OS === 'android' && (<>
                   <SectionHeader label="RTL-SDR" fs={fs} F={F} C={C} />
-                  <TouchableOpacity
+                  <ChooserRow
                     style={[styles.row, { borderColor: C.amber }]}
                     onPress={() => connectLocal()}
                   >
@@ -1200,9 +2004,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     </View>
                     <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
                     <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
-                  </TouchableOpacity>
+                  </ChooserRow>
                   {rtlTcpServerSupported && (
-                    <TouchableOpacity
+                    <ChooserRow
                       style={[styles.row, { borderColor: C.amber }]}
                       onPress={() => navigation.navigate('ServerMode', {})}
                     >
@@ -1213,7 +2017,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         </Text>
                       </View>
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
-                    </TouchableOpacity>
+                    </ChooserRow>
                   )}
                 </>)}
 
@@ -1223,7 +2027,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 <View style={{ marginTop: Platform.OS === 'android' ? 10 : 0 }}>
                   <SectionHeader label="CUSTOM SERVER" fs={fs} F={F} C={C} />
                   {tcpFavs.map((f) => (
-                    <TouchableOpacity key={`${f.host}:${f.port}`}
+                    <ChooserRow key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.amber }]}
                       onPress={() => connectDetected(
                         (f.proto ?? 'rtltcp') as BackendType, f.host, f.port, f.name)}
@@ -1247,9 +2051,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         ])}>
                         <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim, paddingHorizontal: 8 }}>✕</Text>
                       </TouchableOpacity>
-                    </TouchableOpacity>
+                    </ChooserRow>
                   ))}
-                  <TouchableOpacity
+                  <ChooserRow
                     style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
                     onPress={() => setTcpModal(true)}
                   >
@@ -1259,7 +2063,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         name + address of any SDR server — we work out the type
                       </Text>
                     </View>
-                  </TouchableOpacity>
+                  </ChooserRow>
                 </View>
 
                 {/* DISCOVERED — RTL-TCP servers found automatically on the local
@@ -1268,7 +2072,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   <View style={{ marginTop: 10 }}>
                     <SectionHeader label="DISCOVERED" fs={fs} F={F} C={C} />
                     {discoveredNew.map((s) => (
-                      <TouchableOpacity key={`disc-${s.host}:${s.port}`}
+                      <ChooserRow key={`disc-${s.host}:${s.port}`}
                         style={[styles.row, { borderColor: C.amber }]}
                         onPress={() => s.proto === 'vibeserver'
                           ? openVibeServer(s.host, s.port, s.name, s.pin)
@@ -1288,7 +2092,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                           onPress={() => saveDiscovered(s)}>
                           <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, paddingHorizontal: 8 }}>☆</Text>
                         </TouchableOpacity>
-                      </TouchableOpacity>
+                      </ChooserRow>
                     ))}
                   </View>
                 )}
@@ -1296,9 +2100,25 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             }
             ListFooterComponent={
               <View style={{ marginTop: 14 }}>
+                {/* KiwiSDR call sign — saved once, sent automatically on every Kiwi connect.
+                    Sits above the directories because that's where Kiwi lives; tap to add/edit. */}
+                <ChooserRow zone="footer"
+                  style={[styles.row, { borderColor: C.border, marginBottom: 12 }]}
+                  onPress={() => { setIdentPrefill(kiwiIdentValue); setIdentModal({}); }}
+                >
+                  <View style={styles.rowMain}>
+                    <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 1 }} numberOfLines={1}>PREFILL KIWISDR CALL SIGN</Text>
+                    <Text style={{ fontFamily: F, fontSize: fs(16), color: kiwiIdentValue ? C.amber : C.textDim, marginTop: 3 }} numberOfLines={1}>
+                      {kiwiIdentValue || 'Not set — tap to add'}
+                    </Text>
+                  </View>
+                  <View style={styles.rowRight}>
+                    <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim }}>✎</Text>
+                  </View>
+                </ChooserRow>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
                 {DIRECTORIES.map(d => (
-                  <TouchableOpacity
+                  <ChooserRow zone="footer"
                     key={d.id}
                     style={[styles.row, { borderColor: C.border, marginBottom: 6 }]}
                     onPress={() => openDirectory(d.id)}
@@ -1317,7 +2137,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       ))}
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
                     </View>
-                  </TouchableOpacity>
+                  </ChooserRow>
                 ))}
                 <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, lineHeight: fs(15),
                                paddingHorizontal: 6, paddingTop: 10, paddingBottom: 4 }}>
@@ -1339,10 +2159,27 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   );
 }
 
-function SectionHeader({ label, fs, F, C }: { label: string; fs: (n: number) => number; F: string; C: any }) {
+function SectionHeader({ label, fs, F, C, collapsible, collapsed, onToggle }: {
+  label: string; fs: (n: number) => number; F: string; C: any;
+  collapsible?: boolean; collapsed?: boolean; onToggle?: () => void;
+}) {
+  // Collapsible group header: tappable, chevron, and BIGGER + CREAM text — the SDR audience
+  // skews older with failing eyesight, so these navigation headers lead on legibility.
+  if (collapsible) {
+    return (
+      <TouchableOpacity onPress={onToggle} activeOpacity={0.6}
+        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 11,
+                 borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border }}>
+        <Text style={{ fontFamily: F, fontSize: fs(15), color: '#ECE3D0', width: fs(20) }}>{collapsed ? '▸' : '▾'}</Text>
+        <Text style={{ fontFamily: F, fontSize: fs(15), color: '#ECE3D0', flex: 1, letterSpacing: 0.5 }} numberOfLines={2}>
+          {label}
+        </Text>
+      </TouchableOpacity>
+    );
+  }
   return (
     <View style={{ paddingHorizontal: 4, paddingTop: 10, paddingBottom: 4 }}>
-      <Text style={{ fontFamily: F, fontSize: fs(9), color: C.textDim, letterSpacing: 2 }}>{label}</Text>
+      <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 2 }}>{label}</Text>
     </View>
   );
 }
@@ -1361,6 +2198,10 @@ function snrColor(snr: number, C: any): string {
 }
 
 const styles = StyleSheet.create({
+  // A subtitle, not a callout: no border and no fill, so it sits quietly under the title
+  // and never competes with the server list for attention.
+  kbHint: { fontSize: 10, letterSpacing: 0.5, opacity: 0.85,
+            paddingHorizontal: 12, paddingTop: 4, paddingBottom: 2 },
   safe:          { flex: 1 },
   flex:          { flex: 1 },
   header:        { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 8, borderBottomWidth: 1 },

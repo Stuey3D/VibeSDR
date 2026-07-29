@@ -285,13 +285,18 @@ export function searchStations(
 ): SearchResult[] {
   const q = query.trim();
   if (!q) return [];
+  // ★ A Dutch (and most European) keyboard types a COMMA for the decimal point, so
+  // "100,5" would never match the "100.5" we format. Used ONLY for the frequency
+  // comparison below — names can legitimately contain a comma ("Radio 1, Hilversum"),
+  // so the query itself is never rewritten.
+  const qFreq = q.includes(',') && !q.includes('.') ? q.replace(/,/g, '.') : q;
   const isGenBand = BAND_GENERIC_RE.test(q);
 
   const scoredBms: Array<{ bm: ServerBookmark; s: number }> = [];
   if (!isGenBand) {
     for (const bm of bms) {
       let s = scoreBm(bm.name || '', q);
-      if (!s && fmtFreq(bm.frequency).toLowerCase().indexOf(q.toLowerCase()) !== -1) s = 1;
+      if (!s && fmtFreq(bm.frequency).toLowerCase().indexOf(qFreq.toLowerCase()) !== -1) s = 1;
       if (s > 0) scoredBms.push({ bm, s });
     }
     scoredBms.sort((a, b) => b.s - a.s || (a.bm.frequency || 0) - (b.bm.frequency || 0));

@@ -39,15 +39,46 @@ public:
     // must pass an HMAC-SHA256(secret, nonce) challenge-response before the
     // spectrum/audio WebSockets upgrade — the secret itself never crosses the
     // wire. Empty secret (default) = open access (no PIN). Set BEFORE start().
+    /** Listen on THIS port. 0 (default) = scan 48000..48049 and take the first free one. An
+     *  explicit port is used or the start FAILS — never silently moved, or a port-forward or a
+     *  saved client bookmark would break with no visible cause. Set BEFORE start(). */
+    static void setVibeServerPort(int port);
     static void setVibeServerAuth(const std::string& secret);
     // Server-side compatibility limits, for low-end hosts / slow networks. A
     // maxBandwidthHz <= 0 means "no cap"; maxFftRate <= 0 means "server default".
     // The client still interpolates the waterfall, so a throttled fps stays
     // smooth. Set BEFORE start() (honoured on the serving path only).
     static void setVibeServerLimits(double maxBandwidthHz, double maxFftRate);
+    /** Require listeners to keep their idle power-saving on (they normally choose). For a host on
+     *  solar/cellular where saving power outranks a listener's preference. Set BEFORE start(). */
+    static void setVibeServerForceIdleSaver(bool on);
+    /** Tell the connected client the host is looking for it — the browser tab flashes and tries to
+     *  focus itself. Uses the socket we already have, so no browser automation and no permission
+     *  prompt. No-op when nobody is listening. */
+    void summonClient();
     // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
     // that hits a decode issue can ask the server to fall back to raw int16 PCM.
     static void setVibeServerCompressAudio(bool on);
+    /// Owner policy: may a client that cannot decode Opus be served RAW audio
+    /// (~187 KB/s of the owner's uplink each)? Default OFF.
+    /** VsUncompressedAudio: 0 = off, 1 = listener's choice, 2 = compatibility fallback only.
+     *  Loopback clients are outside this setting entirely and always get raw PCM. */
+    static void setVibeServerUncompressedAudio(int mode);
+    /** ★ ADMIN PASSWORD — a second secret, gating CONTROL rather than ACCESS. The PIN decides
+     *  who may listen; this decides who may touch bias-T, direct sampling and calibration.
+     *  Independent of the PIN on purpose: a public receiver may be open to all listeners and
+     *  still refuse a visitor putting DC on the feedline. Empty = nothing is protected. */
+    static void setVibeServerAdminSecret(const std::string& secret);
+    /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). For a PUBLIC receiver,
+     *  where one client per radio makes the server a queue of one. Loopback and admin sessions
+     *  are exempt. On expiry the listener is told, disconnected, and their address held on a
+     *  short cooldown — without that they would simply reconnect and carry on. */
+    static void setVibeServerSessionLimit(int minutes);
+    /** Is a listener currently holding the radio? Used by the identity endpoint. */
+    bool isBusy() const;
+    /** Seconds until the current listener's limit expires; -1 when there is no limit,
+     *  nobody is listening, or the listener is exempt (loopback / admin). */
+    int  occupantSecsLeft() const;
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
@@ -74,6 +105,43 @@ public:
      *  It's the SERVER's position — distances, map centring and the ITU region are
      *  properties of the antenna, not of whoever happens to be listening. */
     static void setLocationJson(const std::string& json);
+    /** Is the running source an SDRplay? The client's controls differ materially. */
+    bool isSdrplay() const;
+    /** `,"radio":{…}` describing the running receiver's real controls, for hwinfo. */
+    std::string radioCapsJson() const;
+    /** RSP-only controls. No-ops on any other source. */
+    void setLnaState(int state);
+    void setIfGainReduction(int gRdB);
+    void setIfAgc(bool on);
+    void setIfAgcSetPoint(int dBfs);
+    void setIfAgcDynamics(int attackMs, int decayMs, int delayMs, int threshDb);
+    void setRfNotch(bool on);
+    void setDabNotch(bool on);
+    void setBiasT(bool on);
+    /** Start on an Airspy HF+ (Discovery / Dual Port). Returns the port, or -1 with err set.
+     *  ★ The requested sample rate is a HINT — the radio's own list wins, so read back
+     *  getVibeServerStatus().sampleRate rather than assuming what you asked for. */
+    int startAirspyHf(int index, double centerFreq, double sampleRate, int gainTenthDb,
+                      int fftSize, double fftRate, const std::string& mode, std::string& err);
+    /** ★ Start an Airspy HF+ from a USB file descriptor — Android's only route in. Reached
+     *  from start() by VID/PID, so callers do not need to know which driver a device wants. */
+    int startAirspyHfFd(int fd, double centerFreq, double sampleRate, int gainTenthDb,
+                        int fftSize, double fftRate, const std::string& mode, std::string& err);
+private:
+    int startAirspyHfCommon(int index, int fd, double centerFreq, double sampleRate,
+                            int gainTenthDb, int fftSize, double fftRate,
+                            const std::string& mode, std::string& err);
+public:
+    /** Airspy HF+ only controls. No-ops on any other source. */
+    void setAhfAgc(bool on);
+    void setAhfAgcThreshold(bool high);
+    void setAhfAttenuation(int steps);
+    void setAhfLna(bool on);
+    void setAhfCalibrationPpb(int ppb);
+
+    /** Start on an SDRplay RSP (14-bit). Returns the port, or -1 with err set. */
+    int startSdrplay(int index, double centerFreq, double sampleRate, int gainTenthDb,
+                     int fftSize, double fftRate, const std::string& mode, std::string& err);
 
     // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
     // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like
@@ -156,6 +224,9 @@ public:
          *  live). Surfaced on the sharing screen so the host can see the server
          *  responding to the client. */
         double   sampleRate       = 0.0;
+        /** The radio has stopped delivering IQ — unplugged or failed. The server is still up and
+         *  still serving; it simply has nothing to serve. */
+        bool     deviceLost       = false;
     };
     VibeServerStatus getVibeServerStatus();
 
@@ -163,6 +234,11 @@ private:
     LocalSdrShim() = default;
     void stopLocked();      // teardown; caller must hold g_lifecycle
     struct Impl;
+    /** ★ Replay the listener's DSP choices (de-emphasis, squelch, NR, notch, stereo) onto a
+     *  freshly built Impl. Every start path replaces `p` with a `new Impl`, which would
+     *  otherwise revert those choices to constructor defaults while the client's UI carried on
+     *  showing what the user had picked. Call at EVERY `p = impl` site. */
+    static void applyDesiredDsp(Impl* impl);
     Impl* p = nullptr;
 };
 

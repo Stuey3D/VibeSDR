@@ -35,15 +35,36 @@ final class AudioSocket {
   /// an event, not a guessed sleep.
   var onReady: (() -> Void)?
 
-  func open(url: URL) {
+  /// `headers` = extra WebSocket handshake request headers. KiwiSDR needs a browser User-Agent or
+  /// it classifies us as an `ext_api` client and DROPS the connection after a few seconds.
+  func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false, autoReplyPing: Bool = true, avoidRelay: Bool = false) {
     gen &+= 1
     let g = gen
     cancel()
 
     let secure = (url.scheme == "wss")
     let params: NWParameters = secure ? .tls : .tcp
+    // avoidRelay: refuse the iPhone Bluetooth relay (it presents as the `.other` interface) so a
+    // bandwidth-heavy feed goes over the watch's OWN wifi/cellular instead. watchOS often powers the
+    // watch's wifi down while the phone is near, so a caller MUST have a fallback: if no data arrives,
+    // reopen with avoidRelay=false or the connection just waits forever.
+    if avoidRelay {
+      params.prohibitedInterfaceTypes = [.other]
+    }
+    // Force IPv4 when asked: a dynamic-DNS host (freemyip etc.) can hand back an AAAA the watch
+    // can't route home ("no route to host") while IPv4 works fine — pin to v4 to dodge it.
+    if forceIPv4, let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+      ip.version = .v4
+    }
     let ws = NWProtocolWebSocket.Options()
-    ws.autoReplyPing = true                       // answer the server's pings natively
+    // autoReplyPing=false surfaces .ping to receive() so we PONG manually — belt-and-braces where the
+    // native auto-reply seems not to fire (OWRX stalls the stream after a few seconds otherwise).
+    ws.autoReplyPing = autoReplyPing
+    // Default max WS message is 64 KB. An OWRX ADS-B `secondary_demod` frame (a full aircraft table —
+    // 100+ planes) blows past that, and NWConnection silently DROPS the oversized message → no aircraft
+    // ever reach the client (sd=0) even though the demod is correct. Raise the ceiling.
+    ws.maximumMessageSize = 16 * 1024 * 1024
+    if !headers.isEmpty { ws.setAdditionalHeaders(headers) }
     params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
 
     let c = NWConnection(to: .url(url), using: params)
@@ -52,7 +73,8 @@ final class AudioSocket {
       guard let self, self.gen == g else { return }
       switch state {
       case .ready:
-        self.onState?("\(name) ws ready")
+        // Tag the interface actually in use so the UI can show wifi vs the phone relay (.other).
+        self.onState?("\(name) ws ready [\(Self.pathName(c.currentPath))]")
         self.receive(c, g)
       case .waiting(let e):
         // Path not satisfiable YET. NWConnection retries toward .ready on its own — do not
@@ -78,7 +100,14 @@ final class AudioSocket {
       }
       let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                 as? NWProtocolWebSocket.Metadata)?.opcode
-      if let data, !data.isEmpty {
+      if op == .ping {
+        // MANUAL PONG. `autoReplyPing` is set, but if it silently doesn't fire on watchOS the
+        // server (KiwiSDR) sees a missed pong and RSTs us after a few seconds (recv ENOTCONN).
+        // Answer every ping ourselves — harmless if the framework already did.
+        let meta = NWProtocolWebSocket.Metadata(opcode: .pong)
+        let ctx = NWConnection.ContentContext(identifier: "pong", metadata: [meta])
+        c.send(content: data ?? Data(), contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+      } else if let data, !data.isEmpty {
         if op == .text {
           if let t = String(data: data, encoding: .utf8) { self.onText?(t) }
         } else if op == .binary {
@@ -87,6 +116,24 @@ final class AudioSocket {
       }
       self.receive(c, g)
     }
+  }
+
+  /// Send a WebSocket PING. Browsers/RN send these periodically to keep the connection alive; a raw
+  /// NWConnection does not, so an OWRX stream with no outbound traffic gets reaped by NAT/idle timeout
+  /// after a few minutes. A periodic client ping keeps the mapping (and the server session) alive.
+  func sendPing() {
+    guard let c = conn else { return }
+    let meta = NWProtocolWebSocket.Metadata(opcode: .ping)
+    let ctx = NWConnection.ContentContext(identifier: "ping", metadata: [meta])
+    c.send(content: Data(), contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+  }
+
+  /// Text control frame — KiwiSDR's `SET …` command plane (UberSDR uses JSON below).
+  func send(text: String) {
+    guard let c = conn, let d = text.data(using: .utf8) else { return }
+    let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+    let ctx = NWConnection.ContentContext(identifier: "text", metadata: [meta])
+    c.send(content: d, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
   }
 
   /// JSON control (the tune). Text frame, same as the phone.

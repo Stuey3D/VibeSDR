@@ -135,6 +135,37 @@ std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
     if (cfd < 0) return nullptr;
     int one = 1;
     ::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+    // ★ AGGRESSIVE TCP KEEPALIVE — so a client that VANISHES is noticed in ~10s, not the OS
+    // default of ~2 HOURS. The audio socket is server→client only: the client never sends on it,
+    // so our recv loop blocks there, and TCP happily buffers our outbound audio to a silently-dead
+    // peer (no clean FIN over a flaky watch link) — so `send()` doesn't error either. The server
+    // then sat on a phantom "1 connection" long after the listener had gone (Stuart, 2026-07-23).
+    // Keepalive probes make the OS surface ECONNRESET on both recv and send, flipping the socket
+    // closed and freeing the single-occupant slot promptly. Idle 5s + 2s×2 probes ≈ 9s to detect.
+    ::setsockopt(cfd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+    int idle = 5, intvl = 2, cnt = 2;
+#if defined(TCP_KEEPIDLE)          // Linux / Android
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof(idle));
+#elif defined(TCP_KEEPALIVE)       // macOS/BSD: seconds of idle before the first probe
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_KEEPALIVE, &idle,  sizeof(idle));
+#endif
+#if defined(TCP_KEEPINTVL)
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+#endif
+#if defined(TCP_KEEPCNT)
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof(cnt));
+#endif
+    // Keepalive only probes an IDLE connection — but the audio socket is CONTINUOUSLY SENDING to
+    // the client, so when that client dies the OS retransmits our unacked audio instead, and the
+    // default retransmit budget is minutes. Bound it so a dead active peer is dropped in ~10s too.
+#if defined(TCP_USER_TIMEOUT)      // Linux / Android: ms of unacked data before forced close
+    int uto = 10000;
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_USER_TIMEOUT, &uto, sizeof(uto));
+#elif defined(TCP_RXT_CONNDROPTIME) // macOS/BSD: seconds of retransmit before dropping
+    int rxt = 10;
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_RXT_CONNDROPTIME, &rxt, sizeof(rxt));
+#endif
     return std::make_shared<Socket>(cfd);
 }
 

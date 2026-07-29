@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-  <dict/>
+  <dict>
+    <!-- iCloud key-value store, shared with VibeSDR Jr on the watch.
+         Written out EXPLICITLY rather than left as the default
+         $(TeamIdentifierPrefix)$(CFBundleIdentifier): the watch app's bundle id
+         is com.vibesdr.app.watchkitapp, so the default would give the two apps
+         two SEPARATE stores that silently never see each other's writes.
+         Both targets must carry this identical literal value. -->
+    <key>com.apple.developer.ubiquity-kvstore-identifier</key>
+    <string>$(TeamIdentifierPrefix)com.vibesdr.app</string>
+  </dict>
 </plist>

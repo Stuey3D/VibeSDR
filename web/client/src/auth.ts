@@ -66,6 +66,24 @@ export async function resolveAuth(base: string, pin: string): Promise<AuthState>
   return { query: `vs_nonce=${nonce}&vs_auth=${token}`, required: true, lockedFor: 0 };
 }
 
+/** ★★ ADMIN OVERRIDE credentials for the connect URL — a nonce and an HMAC, NEVER the
+ *  password itself. Taking over an occupied radio has to be decided before the slot is
+ *  claimed, so it cannot wait for the admin_unlock message: a busy server never opens the
+ *  socket that would carry it. But a password in a URL travels in the clear on plain HTTP and
+ *  lands in every proxy and server log on the way — unacceptable for a receiver on the public
+ *  internet (Stuart, 2026-07-27).
+ *  ★ The server issues a nonce even when NO PIN is set, which is precisely the public-receiver
+ *  case: open to every listener, closed to anyone touching the hardware. */
+export async function resolveAdminOverride(base: string, password: string): Promise<string> {
+  if (!password) return '';
+  try {
+    const { nonce } = await fetchAuthChallenge(base);
+    if (!nonce) return '';        // server too old to issue one
+    const token = vibeAuthToken(password, nonce);
+    return `vs_admin_nonce=${encodeURIComponent(nonce)}&vs_admin_auth=${token}`;
+  } catch { return ''; }
+}
+
 /** Append the auth suffix to a WS path, picking '?' or '&' correctly. */
 export function withAuth(path: string, auth: AuthState): string {
   if (!auth.query) return path;

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ★★ REQUIRED FOR SDRPLAY. The hardened runtime enforces LIBRARY VALIDATION: a signed app
+       may only load libraries signed by the same Team ID (or Apple). SDRplay's API is a
+       separate install signed by SDRPLAY LIMITED, so without this entitlement dlopen() is
+       refused and RSPs simply never appear — on a NOTARISED build only. It works perfectly in
+       an unsigned dev build, which is exactly what makes it a trap: the failure appears only
+       in the artefact you ship (2026-07-27).
+       ★ The narrow alternative (disable-library-validation's cousin, allow-dyld-environment-
+       variables) does not help here; library validation is the specific check that bites. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

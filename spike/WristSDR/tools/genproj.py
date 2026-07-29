@@ -7,17 +7,32 @@ prebuild` is documented to wipe exactly those. A throwaway measurement rig must 
 to damage the shipping app, so it lives somewhere it cannot reach.
 """
 import os, hashlib
+from pathlib import Path
 
 ROOT = "/Users/stuey3d/VibeSDR/spike/WristSDR"
 NAME = "WristSDR"
 BUNDLE = "com.stuey3d.wristsdr"
 TEAM = "6PV2X6THHM"
+# ★ The build number lives HERE, not in the generated project: genproj rewrites
+# project.pbxproj wholesale, so a number bumped by hand in the .pbxproj is lost
+# the next time anyone regenerates. Bump this before every device install —
+# watchOS ignores an install whose build number has not changed.
+BUILDNO = 42
 
-SOURCES = [
-    "WristSDRApp.swift", "ContentView.swift", "UberClient.swift",
-    "SignalProcessor.swift", "WaterfallBuffer.swift", "OpusDecoder.swift",
-    "WatchAudio.swift", "AudioSocket.swift", "Vitals.swift", "Viridis.swift", "Gzip.swift",
-]
+# ★ DISCOVERED FROM DISK, NOT LISTED.
+#
+# This was a hand-maintained list of 17 files. The spike grew to 32 and the list was never
+# updated — so running this script REPLACED a working project with one missing half the sources,
+# and the spike stopped building. Found on 2026-07-19 while verifying the spike could still be
+# rebuilt before deleting it from the watch: the verification itself broke it, and the project
+# file had to be restored from git.
+#
+# A generator whose input drifts from reality is worse than no generator, because it looks
+# authoritative. Same lesson as tools/inject_watch_target.py, which discovers its sources too.
+SOURCES = sorted(p.name for p in Path(ROOT, NAME).glob("*.swift"))
+if not SOURCES:
+    raise SystemExit(f"error: no Swift sources found in {Path(ROOT, NAME)} — refusing to write "
+                     f"an empty project over a working one")
 
 def uid(s):
     """Stable 24-hex ids — a regenerated project should be byte-identical, not churn."""
@@ -44,6 +59,10 @@ BRIDGE_REF   = uid("bridgeref")
 OPUS_GROUP   = uid("opusgroup")
 OPUS_LIB_REF = uid("opuslibref")
 OPUS_LIB_BLD = uid("opuslibbld")
+# The app icon lives in an asset catalog; without it in the Resources phase the build succeeds and
+# ships a DEFAULT icon, which is the kind of miss nobody spots until it is on the Store page.
+ASSETS_REF   = uid("assetsref")
+ASSETS_BLD   = uid("assetsbld")
 
 file_refs, build_files, src_children = [], [], []
 for s in SOURCES:
@@ -65,6 +84,7 @@ pbx = f'''// !$*UTF8*$!
 /* Begin PBXBuildFile section */
 {chr(10).join(build_files)}
 		{OPUS_LIB_BLD} /* libopus.a in Frameworks */ = {{isa = PBXBuildFile; fileRef = {OPUS_LIB_REF} /* libopus.a */; }};
+		{ASSETS_BLD} /* Assets.xcassets in Resources */ = {{isa = PBXBuildFile; fileRef = {ASSETS_REF} /* Assets.xcassets */; }};
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -72,6 +92,7 @@ pbx = f'''// !$*UTF8*$!
 		{PLIST_REF} /* Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};
 		{BRIDGE_REF} /* {NAME}-Bridging-Header.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "{NAME}-Bridging-Header.h"; sourceTree = "<group>"; }};
 		{OPUS_LIB_REF} /* libopus.a */ = {{isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; }};
+		{ASSETS_REF} /* Assets.xcassets */ = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; }};
 		{PRODUCT_REF} /* {NAME}.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "{NAME}.app"; sourceTree = BUILT_PRODUCTS_DIR; }};
 /* End PBXFileReference section */
 
@@ -99,6 +120,7 @@ pbx = f'''// !$*UTF8*$!
 			isa = PBXGroup;
 			children = (
 {chr(10).join(src_children)}
+				{ASSETS_REF} /* Assets.xcassets */,
 				{BRIDGE_REF} /* {NAME}-Bridging-Header.h */,
 				{PLIST_REF} /* Info.plist */,
 				{OPUS_GROUP} /* opus */,
@@ -174,7 +196,9 @@ pbx = f'''// !$*UTF8*$!
 		{PHASE_RES} /* Resources */ = {{
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (
+				{ASSETS_BLD} /* Assets.xcassets in Resources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		}};
 /* End PBXResourcesBuildPhase section */
@@ -243,14 +267,15 @@ pbx = f'''// !$*UTF8*$!
 			buildSettings = {{
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = {BUILDNO};
 				DEVELOPMENT_TEAM = {TEAM};
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "{NAME}/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "{NAME}";
+				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
 				MARKETING_VERSION = 1.0;
+				CODE_SIGN_ENTITLEMENTS = "{NAME}.entitlements";
 				PRODUCT_BUNDLE_IDENTIFIER = "{BUNDLE}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = NO;
@@ -267,14 +292,15 @@ pbx = f'''// !$*UTF8*$!
 			buildSettings = {{
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = {BUILDNO};
 				DEVELOPMENT_TEAM = {TEAM};
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "{NAME}/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "{NAME}";
+				INFOPLIST_KEY_CFBundleDisplayName = "VibeSDR Jr";
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
 				MARKETING_VERSION = 1.0;
+				CODE_SIGN_ENTITLEMENTS = "{NAME}.entitlements";
 				PRODUCT_BUNDLE_IDENTIFIER = "{BUNDLE}";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = NO;

@@ -40,6 +40,18 @@ object VibeServerRestore {
     private const val K_WEB       = "webServer"
     private const val K_ADVERTISE = "advertise"
     private const val K_LOCJSON   = "locationJson"
+    // ★★★ EVERY SETTING THE SERVER RUNS WITH BELONGS HERE. This snapshot is a HAND-MAINTAINED
+    // SUBSET, and anything left out is silently DROPPED on the next restore — the server comes
+    // back looking healthy with that protection quietly switched off.
+    // ★ It bit exactly that way: the admin password and the session limit were added to the
+    // start path and not to this one, so a process restart brought the server back with
+    // admin:false and limitMin:0 while the PIN survived (because the PIN was on the list).
+    // Stuart set both, saw neither take, and was right (2026-07-27).
+    // ★ ADDING A SERVER SETTING? ADD IT HERE TOO. A security setting that fails OPEN across a
+    // restart is worse than one that was never offered.
+    private const val K_ADMINPW   = "adminPassword"
+    private const val K_UNCOMP    = "uncompressedAudio"
+    private const val K_LIMITMIN  = "sessionLimitMin"
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -48,6 +60,7 @@ object VibeServerRestore {
         ctx: Context, name: String, pin: String,
         sampleRate: Double, lockedRate: Double, maxFftRate: Double,
         compressAudio: Boolean, webServer: Boolean, advertise: Boolean,
+        adminPassword: String, uncompressedAudio: Int, sessionLimitMin: Int,
     ) {
         prefs(ctx).edit()
             .putBoolean(K_ARMED, true)
@@ -59,6 +72,9 @@ object VibeServerRestore {
             .putBoolean(K_COMPRESS, compressAudio)
             .putBoolean(K_WEB, webServer)
             .putBoolean(K_ADVERTISE, advertise)
+            .putString(K_ADMINPW, adminPassword)
+            .putInt(K_UNCOMP, uncompressedAudio)
+            .putInt(K_LIMITMIN, sessionLimitMin)
             .apply()
     }
 
@@ -109,6 +125,14 @@ object VibeServerRestore {
         VibeLocalSDR.setVibeServerLimits(0.0, fftRate)
         VibeLocalSDR.setVibeServerCompressAudio(p.getBoolean(K_COMPRESS, true))
         VibeLocalSDR.setVibeServerWebEnabled(p.getBoolean(K_WEB, true))
+        // ★ Restore the protections too — see the note by the keys. Defaults here are the SAFE
+        // ones only because they match the product defaults; the point is that the stored value
+        // is used, not that the fallback is harmless.
+        Log.i(TAG, "restore cfg: adminPw=${(p.getString(K_ADMINPW, "") ?: "").length} chars, " +
+                   "limitMin=${p.getInt(K_LIMITMIN, 0)}")
+        VibeLocalSDR.setVibeServerAdminSecret(p.getString(K_ADMINPW, "") ?: "")
+        VibeLocalSDR.setVibeServerUncompressedAudio(p.getInt(K_UNCOMP, 0))
+        VibeLocalSDR.setVibeServerSessionLimit(p.getInt(K_LIMITMIN, 0))
         VibeLocalSDR.setVibeServerLockedRate(locked)
         VibeLocalSDR.setServeOnLan(true)
 

@@ -23,6 +23,7 @@ import type {
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
 import { ImaAdpcmDecoder, decodeKiwiWaterfallFrame } from './imaAdpcm';
+import { getKiwiIdent, sanitizeIdent } from './kiwiIdent';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -43,7 +44,10 @@ const VibeLocal = NativeModules.VibeLocalSDR as {
 const KIWI_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 
 const KIWI_FULL_BW = 30_000_000;   // zoom 0 span (Hz) — Kiwi's nominal 0–30 MHz
-const KIWI_MAX_ZOOM = 14;
+// 12, not the server's 14. 30 MHz / 2^12 = 7.3 kHz min span; 2^14 = 1.8 kHz is NARROWER
+// than an SSB channel, so one contact overran the screen and auto-contrast flooded it with
+// white. Matches UberSDRClient's device-confirmed 6 kHz max-zoom floor. Drives Buddy too.
+const KIWI_MAX_ZOOM = 12;
 const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -102,6 +106,15 @@ export class KiwiAdapter implements SDRBackend {
   private sndWs: WebSocket | null = null;
   private wfWs: WebSocket | null = null;
   private keepalive: ReturnType<typeof setInterval> | null = null;
+  // ── Incoming-rate readout ───────────────────────────────────────────────────
+  // ★ Kiwi reported neither KB/s nor fps — the readout was simply blank, exactly
+  // as it was on OWRX. Counts BOTH sockets: Kiwi decodes its audio in JS (IMA
+  // ADPCM on SND), so unlike the natively-decoded backends we can report the true
+  // total the link is carrying, which is the number that decides whether a server
+  // is viable over the phone relay.
+  private rateTimer: ReturnType<typeof setInterval> | null = null;
+  private wfFrames = 0;
+  private rxBytes  = 0;
 
   // RX / tuning state
   private rxBw = KIWI_FULL_BW;           // MSG bandwidth (usually 30 MHz)
@@ -115,6 +128,10 @@ export class KiwiAdapter implements SDRBackend {
   private viewCenter = KIWI_FULL_BW / 2;
   private viewBw = KIWI_FULL_BW;
   private viewInit = false;
+  /** Caller had no remembered tune, so the receiver's own `init.freq`/`init.mode` may be adopted. */
+  private allowServerDefault = false;
+  /** `cfg` can arrive more than once; the landing spot is a first-connect decision only. */
+  private adoptedDefaults = false;
   private followVfo = true;               // VFO lock (true = view follows VFO)
 
   private audioStarted = false;
@@ -131,11 +148,18 @@ export class KiwiAdapter implements SDRBackend {
   private connectedAt = 0;
   private lastLink = -1;
 
+  /** Name/callsign sent as `SET ident_user=`. Loaded from the saved global identity; falls back
+   *  to a non-blank default so we never connect anonymously (a common blacklist trigger). The
+   *  load is local and fast, and the ident isn't sent until the SND socket's auth (a network
+   *  round-trip later), so it's always ready in time. */
+  private ident = 'VibeSDR';
+
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string) {
     this.uuid = uuid;
     this.cb = callbacks;
     this.password = password ?? '';
     this.wsBase = KiwiAdapter.toWsBase(baseUrl);
+    getKiwiIdent().then((v) => { const s = sanitizeIdent(v); if (s) this.ident = s; }).catch(() => {});
   }
 
   /** http(s)/ws(s)://host:port[/…] → ws(s)://host:port (no trailing path). */
@@ -145,6 +169,22 @@ export class KiwiAdapter implements SDRBackend {
     else if (u.startsWith('http://'))  u = 'ws://'  + u.slice(7);
     else if (!/^wss?:\/\//.test(u))    u = 'ws://'  + u;
     return u.replace(/\/ws(\/.*)?$/, '');
+  }
+
+  /** 1 Hz readout. Rung 1 / never settling: the adaptive ladder for Kiwi lives in
+   *  Jr, not here — the phone runs Kiwi unthrottled — so it must not clamp the
+   *  link bars, which take the WORST of gap quality and rung. */
+  private startRateMeter(): void {
+    if (this.rateTimer) return;
+    this.rateTimer = setInterval(() => {
+      const fps = this.wfFrames, kbps = this.rxBytes / 1024;
+      this.wfFrames = 0; this.rxBytes = 0;
+      this.cb.onLinkRate?.(1, false, fps, kbps);
+    }, 1000);
+  }
+  private stopRateMeter(): void {
+    if (this.rateTimer) { clearInterval(this.rateTimer); this.rateTimer = null; }
+    this.wfFrames = 0; this.rxBytes = 0;
   }
 
   private url(stream: 'SND' | 'W/F'): string {
@@ -169,8 +209,11 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   // ── connect ────────────────────────────────────────────────────────────────
-  connect(frequency?: number, mode?: SDRMode): Promise<void> {
+  connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }): Promise<void> {
     this.fetchReceiverLon();
+    // Only ever true on a first visit — a remembered tune wins, so the screen leaves it unset then.
+    this.allowServerDefault = opts?.allowServerDefault === true;
+    this.adoptedDefaults = false;
     if (frequency) this.freq = frequency;
     if (mode) { this.mode = mode; const p = KIWI_MODE[mode]; this.bwLow = p.lo; this.bwHigh = p.hi; }
     this.started = true;
@@ -179,6 +222,7 @@ export class KiwiAdapter implements SDRBackend {
     this.connectedAt = Date.now();
     this.gapHist = []; this.lastFrameAt = 0; this.lastLink = -1;
     this.verMaj = null; this.verMin = null; this.serverInfoSent = false;
+    this.everConnected = false; this.errorShown = false;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -197,6 +241,10 @@ export class KiwiAdapter implements SDRBackend {
       this.sndWs.onopen = () => {
         this.dbg('SND open');
         this.sndSend(`SET auth t=kiwi p=${this.password}`);
+        // Ident goes EARLY, right after auth — a "require name/callsign" server checks it at
+        // connect time, so sending it late (buried in the RX params) means the refusal has
+        // already happened. See kiwiIdent / IdentModal.
+        this.sndSend(`SET ident_user=${this.ident}`);
         this.sndSend('SERVER DE CLIENT openwebrx.js SND');
         // RX params (which START the audio stream) — a short tick lets the
         // server process auth first; also re-asserted on the audio_rate MSG.
@@ -205,12 +253,17 @@ export class KiwiAdapter implements SDRBackend {
       this.sndWs.onmessage = (e) => {
         try {
           if (typeof e.data === 'string') this.onText(e.data, 'SND');
-          else this.onBinaryFrame(new Uint8Array(e.data as ArrayBuffer), 'SND');
+          else {
+            const u8 = new Uint8Array(e.data as ArrayBuffer);
+            this.rxBytes += u8.length;
+            this.startRateMeter();
+            this.onBinaryFrame(u8, 'SND');
+          }
           this.openWf();
         } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
       };
       this.sndWs.onerror = () => { this.dbg('SND error'); fail(new Error('KiwiSDR SND socket error')); };
-      this.sndWs.onclose = (ev: any) => { this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); fail(new Error('KiwiSDR SND closed')); };
+      this.sndWs.onclose = (ev: any) => { this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(ev?.reason ?? ''); fail(new Error('KiwiSDR SND closed')); };
 
       // Open W/F right away too (both share this.ts). The first-SND-MSG gate
       // (openWf in onmessage) is kept as a no-op fallback via the wfOpened guard.
@@ -228,6 +281,11 @@ export class KiwiAdapter implements SDRBackend {
       this._onConnected = () => { clearTimeout(t); this.cb.onConnect(); done(); };
     });
   }
+
+  /** When audio actually started flowing this session — for the short-session test in
+   *  onSocketDrop (admitted, streamed, cut in seconds = a receiver limit, not a lost link). */
+  private streamStartedAt = 0;
+  private streamedFor(): number { return this.streamStartedAt ? Date.now() - this.streamStartedAt : 0; }
 
   private _onConnected: (() => void) | null = null;
   private wfOpened = false;
@@ -253,11 +311,16 @@ export class KiwiAdapter implements SDRBackend {
     this.wfWs.onmessage = (e) => {
       try {
         if (typeof e.data === 'string') this.onText(e.data, 'W/F');
-        else this.onBinaryFrame(new Uint8Array(e.data as ArrayBuffer), 'W/F');
+        else {
+          const u8 = new Uint8Array(e.data as ArrayBuffer);
+          this.rxBytes += u8.length; this.wfFrames++;   // fps = WATERFALL rows
+          this.startRateMeter();
+          this.onBinaryFrame(u8, 'W/F');
+        }
       } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
-    this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); };
+    this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(ev?.reason ?? ''); };
   }
 
   // ── binary frame dispatch ───────────────────────────────────────────────
@@ -307,6 +370,41 @@ export class KiwiAdapter implements SDRBackend {
         if (Number.isFinite(f) && f > 1000) this.trueAudioRate = f;
         break;
       }
+      // Where this KiwiSDR's owner wants you to start. Kiwi ships its whole public config to the
+      // browser as `cfg=<url-encoded JSON>`, and its OWN client reads the landing spot from it
+      // (kiwi_get_init_settings(), web/openwebrx/openwebrx.js):
+      //
+      //     init_f    = ext_get_cfg_param('init.freq', init_f)     // kHz, Kiwi's fallback 7020
+      //     init_mode = ext_get_cfg_param('init.mode', 'lsb')
+      //
+      // ★ init.freq IS IN kHz, not Hz — the Kiwi client works in kHz throughout. Reading it as Hz
+      //   lands every connection near DC and reads as a tuning bug rather than a units bug.
+      case 'cfg': {
+        if (!this.allowServerDefault || this.adoptedDefaults) break;
+        this.adoptedDefaults = true;
+        let ini: { freq?: unknown; mode?: unknown } | undefined;
+        try {
+          ini = (JSON.parse(decodeURIComponent(val)) as { init?: typeof ini }).init;
+        } catch { break; }
+        if (!ini) break;
+        let changed = false;
+        if (typeof ini.freq === 'number' && ini.freq > 0) {
+          const hz = Math.round(ini.freq * 1000);
+          if (!this.rxBw || hz <= this.rxBw) { this.freq = hz; this.viewCenter = hz; changed = true; }
+        }
+        // Kiwi's bare "cw" carries no sideband and its UI treats it as CW-upper. Anything we don't
+        // recognise is left alone rather than guessed at.
+        if (typeof ini.mode === 'string') {
+          const m = (ini.mode.toLowerCase() === 'cw' ? 'cwu' : ini.mode.toLowerCase()) as SDRMode;
+          if (m in KIWI_MODE) {
+            this.mode = m; this.bwLow = KIWI_MODE[m].lo; this.bwHigh = KIWI_MODE[m].hi; changed = true;
+          }
+        }
+        // We already asserted the caller's tune at handshake, so the server must be told again —
+        // and the screen, or the readout shows one frequency while the audio plays another.
+        if (changed) { this.sendDemod(); this.cb.onStatus(this.getStatus()); }
+        break;
+      }
       case 'bandwidth': {
         const bw = parseFloat(val);
         if (Number.isFinite(bw) && bw > 1000) {
@@ -336,10 +434,45 @@ export class KiwiAdapter implements SDRBackend {
           this.cb.onServerBusy?.();
         }
         break;
+      case 'ip_limit':
+        // ★ THE DAILY PER-IP TIME LIMIT — the real cause of "it lets us in, then kicks us after a
+        // few seconds". Owners set `ip_limit_mins` (verified on a live receiver: 25 minutes a day);
+        // once your IP has spent it, the server still ACCEPTS you and then ends the session almost
+        // immediately. On the wire that is indistinguishable from a flaky connection, so without
+        // this we reconnected forever and blamed the link. It's a rule, not a fault.
+        this.started = false;
+        if (!this.errorShown) {
+          this.errorShown = true;
+          this.cb.onError('You’ve used this KiwiSDR’s daily time allowance for your connection — the owner limits how long each listener gets per day. It’ll let you back in tomorrow. Try another KiwiSDR in the meantime.');
+        }
+        break;
       case 'badp':
-        // 0 = auth OK. Non-zero = the owner restricts access (apps/non-web users
-        // blocked, slot/IP limit, or password) — an owner choice, not an app fault.
-        if (val !== '0') this.cb.onError("This KiwiSDR's owner has blocked the connection — many only allow their own web page, or limit who can connect. Try another KiwiSDR, or use UberSDR/OpenWebRX.");
+        // 0 = sign-in OK. Non-zero = the server rejected the sign-in itself. It can't tell us
+        // WHY on the wire, but it's always one of: the owner set a private listen PASSWORD we
+        // don't have; the owner only allows their own WEB PAGE and blocks apps; or a slot/IP
+        // limit. All are owner settings, not an app fault — say so in plain English (and NOT via
+        // the UberSDR bypass-password box, which can't touch any of these; see SDRScreen.onError).
+        // Guard on errorShown: badp arrives on BOTH the SND and W/F sockets, so without this it
+        // fired onError (a native Alert) twice — two stacked alerts, the second lost when the
+        // first navigates back. One refusal, one message.
+        // ★★ DO NOT NAME ONE CAUSE. The comment above lists THREE things badp can
+        // mean and admits the wire cannot tell them apart — yet the old copy
+        // asserted "password-protected" as fact. Disproved directly: the same
+        // receiver was serving Stuart's Mac in Safari, with no password, at the
+        // moment the app was told this (2026-07-26). The likeliest cause there was
+        // a SECOND CONNECTION FROM THE SAME ADDRESS — his Mac already had the
+        // session — which the old wording could never have led anyone to.
+        //
+        // ★ Naming the wrong cause is worse than naming none: it sends the user
+        // hunting for a password that does not exist. List what it can be, put
+        // the checkable one first, and let them rule them out.
+        // (Guard on errorShown: badp arrives on BOTH sockets, and a socket close
+        // may also fire — one refusal, one message.)
+        if (val !== '0' && !this.errorShown) {
+          this.errorShown = true;
+          this.dbg('badp=' + val);
+          this.cb.onError('This KiwiSDR refused the sign-in, without saying why. Usually one of: another device on your network is already using it (KiwiSDRs often allow one listener per address); the owner has set a listen password; or they only allow their own web page. Check you are not connected elsewhere, then try another KiwiSDR.');
+        }
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;
@@ -360,7 +493,16 @@ export class KiwiAdapter implements SDRBackend {
     this.cb.onServerInfo?.({ name: 'KiwiSDR', version: `${this.verMaj}.${this.verMin}` });
   }
 
+  /** True once we've received a real frame — i.e. the connection actually opened. Lets a socket
+   *  close be read as a REFUSAL (never connected) vs a mid-session DROP (was streaming). */
+  private everConnected = false;
+  /** Set once we've already surfaced a refusal reason (e.g. badp), so a following socket close
+   *  doesn't show a second, duplicate message. */
+  private errorShown = false;
+
   private maybeConnected(): void {
+    this.everConnected = true;
+    if (!this.streamStartedAt) this.streamStartedAt = Date.now();
     if (this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
   }
 
@@ -403,7 +545,7 @@ export class KiwiAdapter implements SDRBackend {
     this.sendDemod();
     this.sndSend('SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50');
     this.sndSend('SET compression=1');
-    this.sndSend('SET ident_user=VibeSDR');
+    // (ident_user is now sent EARLY, right after auth in the SND onopen — see there.)
     this.cb.onStatus(this.getStatus());
   }
 
@@ -716,7 +858,7 @@ export class KiwiAdapter implements SDRBackend {
     if (q !== this.lastLink) { this.lastLink = q; this.cb.onLink?.(q); }
   }
 
-  private onSocketDrop(): void {
+  private onSocketDrop(closeReason: string = ''): void {
     if (!this.started) return;        // our own close() / already torn down
     this.started = false;
     // Fully tear down: a half-open connection (one socket wobbled closed on flaky
@@ -728,7 +870,48 @@ export class KiwiAdapter implements SDRBackend {
     if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
     this.cb.onLink?.(0);
     this.cb.onDisconnect();
-    this.cb.onServerLost?.();
+    if (!this.everConnected) {
+      // Closed BEFORE we ever received a frame = a REFUSAL, not a mid-session drop. Blocked Kiwis
+      // usually just hang up with no `badp` MSG — so the ONLY thing we can report is the WebSocket
+      // close reason, IF the server bothered to send one (most don't). Be honest either way, and
+      // skip if badp already explained it.
+      if (!this.errorShown) {
+        this.errorShown = true;
+        const reason = String(closeReason ?? '').trim();
+        // A WebSocket-HANDSHAKE failure (invalid accept, redirect, 30x/401/403) means the server
+        // didn't open a data socket at all — it bounced us to its own web page. That's the
+        // "only allows its own web interface" block, and compatibility mode is exactly the fix,
+        // so say so in plain English rather than dumping the raw protocol string on the user.
+        const handshakeBlock = /sec-websocket|websocket|handshake|redirect|30[12]|\b40[13]\b|forbidden|moved/i.test(reason);
+        this.cb.onError(
+          handshakeBlock
+            ? 'This KiwiSDR wouldn’t open a data connection for the app — it sent us to its own web page instead. Many owners only allow their own web interface. Use “Open in compatibility mode” below to listen via the receiver’s web page, or try another KiwiSDR.'
+          : reason
+            ? `This KiwiSDR closed the connection: “${reason}”. Try another KiwiSDR, or use UberSDR or OpenWebRX.`
+            : 'This KiwiSDR closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another KiwiSDR, or use UberSDR or OpenWebRX.');
+      }
+    } else if (this.streamedFor() < 20000 && !this.errorShown) {
+      // ★ ADMITTED, STREAMED, THEN CUT IN SECONDS — a receiver enforcing a limit, not a lost link.
+      // MEASURED 2026-07-22 against both of one owner's KiwiSDRs: audio flowed normally, then a
+      // silent close at ~10s every time, with NO badp, NO too_busy, NO close reason. Byte-identical
+      // handshakes succeeded for 2 minutes earlier the same morning, so it is not what we send —
+      // it is server-side state about our IP (both boxes run ip_limit_mins=25).
+      //
+      // Reported as a genuine mid-session loss it reads as "VibeSDR is broken"; it isn't, and no
+      // amount of reconnecting will help. Say what it is and send them elsewhere.
+      this.errorShown = true;
+      // ★ DO NOT ASSERT A CAUSE WE CANNOT SEE. This branch fires when the server
+      // closes with NO reason given, so "you have used your daily allowance" is a
+      // GUESS — and a wrong one when the user has not touched a KiwiSDR in days
+      // and several receivers do it at once (Stuart, 2026-07-26). Naming the
+      // wrong cause sends people off to fix something that was never the problem.
+      // Say what we observed, offer the possibilities, and be clear it is the
+      // receiver's decision rather than their connection.
+      this.cb.onError('This KiwiSDR accepted us and then closed the session after a few seconds, without saying why. That is the receiver’s decision, not a problem with your connection — owners variously cap daily listening time per address, allow only their own web page, or reserve slots. Try another KiwiSDR; this one may let you back in later.');
+    } else {
+      // Was streaming for a while, then dropped — a genuine mid-session loss.
+      this.cb.onServerLost?.();
+    }
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────
