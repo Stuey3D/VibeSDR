@@ -270,7 +270,11 @@ final class WatchAudio {
     c.changePlaybackPositionCommand.isEnabled = false
 
     c.playCommand.addTarget { [weak self] _ in
-      self?.q.async { self?.player.play() }
+      // ★★★ Through the GUARDED path. `player.play()` on a non-running engine raises an
+      // UNCATCHABLE Obj-C exception — see restartAudio. These remote-command handlers were
+      // the two call sites that bypassed the guard, and the system can deliver a play
+      // command exactly when the engine is down (wrist-down/up, route change, interruption).
+      self?.restartAudio("remote play")
       return .success
     }
     c.pauseCommand.addTarget { [weak self] _ in
@@ -278,10 +282,11 @@ final class WatchAudio {
       return .success
     }
     c.togglePlayPauseCommand.addTarget { [weak self] _ in
-      self?.q.async {
-        guard let self else { return }
-        self.player.isPlaying ? self.player.pause() : self.player.play()
-      }
+      guard let self else { return .success }
+      // ★ Pause is safe unguarded; PLAY is not — same uncatchable exception, so it goes
+      //   through restartAudio, which starts the engine first and skips play if it cannot.
+      if self.player.isPlaying { self.q.async { self.player.pause() } }
+      else                     { self.restartAudio("remote toggle") }
       return .success
     }
 
