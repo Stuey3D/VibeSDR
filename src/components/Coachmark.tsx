@@ -16,7 +16,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Animated, Dimensions, Easing, Modal, Pressable, StyleSheet, Text, View,
+  Animated, Dimensions, Easing, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -180,7 +180,20 @@ function CoachmarkOverlay({
   const haloScale   = breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.04] });
 
   return (
-    <Modal visible transparent animationType="fade" supportedOrientations={['portrait', 'landscape']} onRequestClose={onSkip}>
+    // ★★★ NOT a <Modal>. It was, and that made the hole a LIE: a Modal is a
+    // full-screen view that swallows every touch inside it, including the gap the
+    // four dim bands leave. So the control the tour spotlighted, breathed a gold
+    // ring around and told you to press could not be pressed — only Next/Skip
+    // worked. On first run that reads as "the new buttons don't work", which is
+    // exactly how it was reported (Stuart, 2026-07-29, on the Mac).
+    // ★★ It is the v9.0.2 splash bug again (98261a3): an overlay that LOOKS
+    // transparent is not. Same lesson, second visit — so it is written down here.
+    // An in-tree absolute overlay lets the hole be a real hole: taps land on the
+    // control underneath, while the dim bands still block everything else so the
+    // tour keeps its focus. ★ Safe only because no step uses onEnter to open a
+    // Modal — a step pointing INSIDE a menu would need the old behaviour back.
+    <View style={[StyleSheet.absoluteFill, { zIndex: 9999, elevation: 9999 }]}
+          pointerEvents="box-none">
       {/* Dim everything; if there's a target, leave a hole via 4 surrounding bands. */}
       {rect ? (
         <>
@@ -216,7 +229,7 @@ function CoachmarkOverlay({
           </View>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
 
