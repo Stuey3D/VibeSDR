@@ -231,10 +231,24 @@ final class LinkManager {
   /// Re-assert the current rung — call after a reconnect, where the server starts at its default.
   func reassert() { if rung != 1 { apply(rung, ladder[rung - 1]) } }
 
+  /// ★★★ HAS THE SERVER ACTUALLY BEEN TOLD? `init` picks the opening rung by assigning `rung`
+  /// DIRECTLY — it cannot call `apply` from there — so the first `set()` for that same rung hit
+  /// the "no change" guard and returned, and the request was never sent. The server therefore
+  /// ran at ITS default while we believed we had pinned a rate.
+  ///
+  /// ★★ Measured 2026-07-29, Series 6 on UberSDR: 118 KB/s against the Mac's 47 for the same
+  /// spectrum, and a visibly "hyper fast" waterfall — divisor 1 (10fps), twice the 5fps Low Data
+  /// asks for. It was invisible while adaptive was the default because adaptation moves rungs and
+  /// the second one lands; pinning a mode is precisely the case that never changes rung. It also
+  /// means the waterfall's expected row rate was never set, so the interpolator was working from
+  /// the wrong number too. Kiwi has the same shape (lowDataRung 3, never applied → full 23fps).
+  private var applied = false
+
   private func set(_ r: Int, adaptive: Bool) {
     let clamped = min(max(1, r), ladder.count)
     adaptiveRung = adaptive ? clamped : 1
-    guard clamped != rung else { return }
+    guard clamped != rung || !applied else { return }
+    applied = true
     rung = clamped
     starvedSecs = 0; healthySecs = 0
     recent.removeAll()          // the old rung's counts say nothing about the new one
