@@ -4933,11 +4933,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'step', title: 'Step rate',
       body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
       target: tourRef('stepBtn') },
-    { id: 'back', title: 'No back-swipe here',
-      body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum.",
-      target: tourRef('vfoDrum') },
+    // ★ The 'back' step ("no back-swipe here") was FOLDED INTO the servers-chip step
+    //   in V10 rather than kept: on its own it explained an ABSENCE, which is a whole
+    //   card spent on something not being there. Said alongside the way OUT it becomes
+    //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: 'Tap the Servers chip (top-left) to return to the server list — since the Back gesture is off, this is your way out. You can also favourite the current server or set it as your default from here.',
+      body: "Tap the Servers chip (top-left) to return to the server list — this is your way out, because the phone's Back gesture is switched off over the tuning area so it can't fight the drum. You can also favourite the current server or set it as your default from here.",
       target: tourRef('serversChip'), illustration: chipMock },
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Noise reduction, the auto notch, decoders, bookmarks, recordings and display settings all live behind the settings cog.',
