@@ -322,14 +322,6 @@ struct ControlMenu: View {
   @State private var showSquelch = false
   @State private var showBookmarks = false
   @State private var showDisplay = false
-  @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
-  private var linkModeBlurb: String {
-    switch LinkManager.Mode(rawValue: linkMode) ?? .adaptive {
-    case .full:     return "Always asks for the full frame rate — may stutter on a poor link."
-    case .adaptive: return "Adjusts the frame rate requested from the server to suit the connection. Results in slower waterfall draws."
-    case .lowData:  return "Holds the lowest frame rate to save data. Waterfall draws slowly; audio is unaffected."
-    }
-  }
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
@@ -463,29 +455,13 @@ struct ControlMenu: View {
           // just brightness/contrast, so it belongs beside them.)
         }
 
-        // LINK MANAGEMENT — three states, not a switch. "Slow because I chose to" and "slow
-        // because the link is bad" are different situations and must not share a control.
-        VStack(spacing: 3) {
-          Text("LINK MANAGEMENT").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
-          HStack(spacing: 6) {
-            ForEach([(LinkManager.Mode.full, "Full"),
-                     (LinkManager.Mode.adaptive, "Auto"),
-                     (LinkManager.Mode.lowData, "Low data")], id: \.0.rawValue) { m, label in
-              let active = linkMode == m.rawValue
-              Button { linkMode = m.rawValue } label: {
-                Text(label)
-                  .font(.system(size: 11, weight: .semibold))
-                  .frame(maxWidth: .infinity).padding(.vertical, 6)
-                  .foregroundColor(active ? .black : .white)
-                  .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(active ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
-              }.buttonStyle(.plain)
-            }
-          }
-          Text(linkModeBlurb)
-            .font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
-            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-        }.padding(.top, 3)
+        // ★★ NO LINK MANAGEMENT ON THE WRIST. Jr is pinned to LOW DATA and offers no
+        //    choice. Measured on a Series 6, 2026-07-29: under Full or Auto the spectrum
+        //    repeatedly stuck on "reconnecting", while pinned Low Data ran for minutes on
+        //    end and the row interpolation covered the 5 fps convincingly. Stuart: "low
+        //    data is good enough for the wrist… on the bigger screen its needed but the
+        //    watch not so much." The ladder still runs on the PHONE, where a bad link is
+        //    worth hunting; on a watch the hunting IS the fault. See LinkManager.mode.
 
         // Room to scroll the LAST row clear of the rounded corner — as content,
         // not as a bar. Control Centre lets its tiles run off the bottom edge and

@@ -39,9 +39,19 @@ final class LinkManager {
   /// ★ It is also the polite default on somebody else's receiver — fewer frames, less
   /// bandwidth, no churn — and it costs less battery. `full` and `adaptive` remain one
   /// tap away for anyone who wants them.
+  /// ★★★ ON THE WATCH THIS IS A CONSTANT. Jr is always Low Data and there is no control to
+  /// change it — see the note where the menu section used to be in ControlMenu.swift. The
+  /// full/adaptive machinery below is LEFT INTACT deliberately: it is the same file shape as
+  /// the phone's ladder, the rung logic is still what Low Data pins to, and gutting it would
+  /// make the two implementations diverge. If a future watch earns adaptive back, restoring
+  /// the stored preference is a one-line change here plus the menu block.
+  ///
+  /// Reading UserDefaults is deliberately NOT done: a watch that already ran Full or Auto
+  /// has "full"/"adaptive" persisted, and honouring it would leave early testers stuck on
+  /// the very mode this removes, with no UI left to escape it.
   static var mode: Mode {
-    get { Mode(rawValue: UserDefaults.standard.string(forKey: "vibeLinkMode") ?? "") ?? .lowData }
-    set { UserDefaults.standard.set(newValue.rawValue, forKey: "vibeLinkMode") }
+    get { .lowData }
+    set { _ = newValue }
   }
 
   /// Expected fps at each rung, rung 1 (full rate) first. The LAST rung is the adaptive floor.

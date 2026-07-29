@@ -1519,8 +1519,14 @@ final class UberClient: ObservableObject {
       }
     } else {
       // UberSDR: `/ws`, tune rides the query string. Taken verbatim from VibePowerModule.audioWsURL.
+      // ★★ HONOUR THE SCHEME. Hardcoded "wss://" — the THIRD place in this client that
+      //    assumed a public UberSDR: a LOCAL instance on plain ws got a TLS handshake
+      //    against a non-TLS port, so it connected partway and then had no audio socket.
+      //    Symptom on a Series 6, 2026-07-29: "local UberSDR partially connected, no
+      //    spectrum". (The other two were postConnection's https and SpikeLink never
+      //    deriving `secure` at all.)
       url = URL(string:
-        "wss://\(host)/ws?user_session_id=\(uuid)" +
+        "\(scheme)://\(host)/ws?user_session_id=\(uuid)" +
         "&frequency=\(Int(frequency))&mode=\(mode)&format=opus&version=2")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
