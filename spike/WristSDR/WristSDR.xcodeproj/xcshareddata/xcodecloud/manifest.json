@@ -1,0 +1,9 @@
+{
+  "id" : "18af95ce-53df-447e-9653-85d38f4c8d3c",
+  "targets" : [
+    {
+      "id" : "6c0a3738-b671-4236-a028-ad86adb023ae",
+      "name" : "WristSDRStub"
+    }
+  ]
+}
