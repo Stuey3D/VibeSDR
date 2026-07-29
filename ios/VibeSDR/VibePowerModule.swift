@@ -1226,6 +1226,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         sheet.selectedDetentIdentifier = .medium
         sheet.prefersGrabberVisible = true
       }
+      // ★★★ ANCHOR IT, OR IT CRASHES ON iPad. A UIActivityViewController is ALWAYS
+      // UIModalPresentationPopover on a regular-width device, and presenting a popover
+      // with no sourceView/sourceRect and no barButtonItem raises an uncatchable
+      // ObjC exception inside -[UIPopoverPresentationController
+      // presentationTransitionWillBegin]. The sheetPresentationController block above
+      // only ever applies on iPhone, so iPad had NOTHING set.
+      // ★ Real crash, TestFlight 9.0.1 (8) on an iPad17,1 running iOS 26.5.2, reported
+      //   as "crashed after stopping a 30 second recording" — which is exactly when the
+      //   share sheet is offered. Present from the centre with no arrow: we are called
+      //   from JS and have no sensible source rect to point at.
+      if let pop = avc.popoverPresentationController {
+        pop.sourceView = top.view
+        pop.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 1, height: 1)
+        pop.permittedArrowDirections = []
+      }
       top.present(avc, animated: true)
     }
   }
