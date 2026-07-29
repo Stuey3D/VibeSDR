@@ -22,6 +22,9 @@ const SERVER_LOGOS: Record<string, any> = {
   ubersdr: require('../../assets/logo_ubersdr.png'),
   owrx:    require('../../assets/logo_owrx.png'),
   kiwi:    require('../../assets/logo_kiwi.png'),
+  // ★ VibeServer had no logo, so our OWN server fell back to a generic radio glyph
+  //   in the very list where every other backend is branded (Stuart, 2026-07-29).
+  vibeserver: require('../../assets/logo_vibeserver.png'),
 };
 
 export interface VtsNotifData {
