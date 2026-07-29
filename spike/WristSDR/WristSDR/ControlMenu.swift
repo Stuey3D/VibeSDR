@@ -787,16 +787,33 @@ struct HardwareSheet: View {
             .buttonStyle(.plain)
         }
         }
-        // Row 2 — DIGITAL AGC (a client-side control, always yours)
-        HStack(spacing: 7) {
-          Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
+        // Row 2 — DIGITAL AGC. ★★ RTL-SDR ONLY, despite the old comment here calling it "a
+        // client-side control, always yours". It is not: `setAgc` reaches
+        // `rtlsdr_set_agc_mode(p->dev, …)` on the server, and on an Airspy or an RSP `p->dev` is
+        // null so the call returns having done NOTHING (Stuart, 2026-07-29 — "digital AGC is an
+        // RTL item"). A control that silently does nothing is the exact fault this menu has been
+        // cleaned of twice already.
+        // ★ Tested on the DRIVER NAME, not on "not an RSP and not an HF+" — that "else means
+        //   dongle" shape has produced a bug every single time a third radio appeared
+        //   ([[else_means_dongle_trap]]).
+        if radio.radioDriver == "rtl" {
+          HStack(spacing: 7) {
+            Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
+          }
         }
         // Row 3 — SPAN (picker) · PPM (inline ±)
-        HStack(spacing: 7) {
-          Button { if radio.lockedRate == 0 { showSpan = true } } label: {
-            cell(title: "SPAN", value: radio.sampleRate > 0 ? String(format: "%.1f MHz", Double(radio.sampleRate) / 1_000_000) : "—",
-                 lit: false, dim: radio.lockedRate != 0)
-          }.buttonStyle(.plain).disabled(radio.lockedRate != 0)
+        // ★★ HIDDEN WHEN THERE IS NOTHING TO CHOOSE. The server sends each radio's OWN rate
+        // list, and an Airspy HF+ Discovery offers a single rate — so the picker opened on a
+        // list of one, which is a control in name only. Decided from the LIST rather than from
+        // the driver, so an HF+ that does offer several keeps a working control and any future
+        // radio needs no special case.
+        if radio.offeredRates.count > 1 {
+          HStack(spacing: 7) {
+            Button { if radio.lockedRate == 0 { showSpan = true } } label: {
+              cell(title: "SPAN", value: radio.sampleRate > 0 ? String(format: "%.1f MHz", Double(radio.sampleRate) / 1_000_000) : "—",
+                   lit: false, dim: radio.lockedRate != 0)
+            }.buttonStyle(.plain).disabled(radio.lockedRate != 0)
+          }
         }
         // ★ CALIBRATION IS NOT A WRIST CONTROL. ppm (and the HF+'s parts-per-BILLION
         // equivalent) is an extremely fine trim you set once against a known

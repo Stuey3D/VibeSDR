@@ -62,6 +62,11 @@ func sdrTutorialTips(isOwrx: Bool) -> [TutorialTip] {
     .init(icon: "hand.tap", text: "**Press and hold** the waterfall for the menu — the demodulator and step rate live in there."),
     .init(icon: "keyboard", text: "**Tap the frequency** to type one in directly."),
     .init(icon: "lock", text: "**Tap the padlock** to lock the controls."),
+    // ★★ SAY HOW TO STOP. Background audio now survives a crown press (the WKBackgroundModes
+    //    plist fix, 2026-07-28) — which is what everyone wanted, but it means walking away no
+    //    longer ends the session. Without this line the app appears to have no off switch, and
+    //    the user's only recourse is force-quitting it.
+    .init(icon: "stop.circle.fill", text: "Audio **keeps playing** when you lower your wrist or press the crown. To stop it and free the receiver, use **Stop** in the menu."),
     .init(icon: "antenna.radiowaves.left.and.right", text: "The **connection pill** shows how you're connected and the link quality to the server."),
     // ★ Explains a deliberate behaviour that would otherwise read as poor quality: with Automatic
     //   Link Management on we OPEN SLOWER on purpose, because connection setup is the moment a

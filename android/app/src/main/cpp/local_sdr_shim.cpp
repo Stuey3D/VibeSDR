@@ -5034,7 +5034,15 @@ void LocalSdrShim::setSampleRate(double rate) {
     Impl* impl = p;
     const bool tcp = impl->useTcp();
     const bool rsp = impl->useSdrplay();
-    if (!tcp && !rsp && !impl->dev) return;
+    // ★★★ THE AIRSPY WAS MISSING FROM THIS GUARD, so an HF+ — which has no `dev` — returned
+    // here and the whole function did nothing. The picker offered the radio's OWN rates, the
+    // user chose one, and the server silently discarded it (Stuart, 2026-07-29: "when i chose
+    // different options they dont change"). The restart branch for the HF+ was already written
+    // at the bottom of this function; it was simply never reachable.
+    // ★ FIFTH time this exact shape has bitten: `tcp / rsp / else-means-dongle`. See the note in
+    //   the hwinfo rates list, radioCapsJson and resumeCaptureIdle. NAME EVERY SOURCE.
+    const bool ahf = impl->useAirspyHf();
+    if (!tcp && !rsp && !ahf && !impl->dev) return;
     // Stop the IQ source + drain the DSP consumer BEFORE taking modeMtx (the
     // dspThread locks modeMtx per buffer, so holding it across the join would
     // deadlock). With both quiesced, the rtlsdr control transfer below runs on an
@@ -5044,6 +5052,9 @@ void LocalSdrShim::setSampleRate(double rate) {
     // tearing the device down is what crashed it earlier. Just stop consuming while the
     // engine is rebuilt.
     else if (rsp) { impl->sdrp->setPaused(true); }
+    // ★ Same treatment as the RSP: the HF+ reconfigures in place, so pause the consumer rather
+    //   than tearing the device down — tearing down is what crashed the RSP earlier.
+    else if (ahf) { impl->ahf->setPaused(true); }
     else          { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->stopDspThread();
@@ -5059,6 +5070,11 @@ void LocalSdrShim::setSampleRate(double rate) {
     } else if (rsp) {
         impl->sdrp->setSampleRate(rate);   // also moves the IF bandwidth to match the span
         actual = (uint32_t)llround(rate);  // the RSP takes the rate it is given
+    } else if (ahf) {
+        // ★ ASK THE RADIO, do not assume. The HF+ snaps to its own list, and everything
+        //   downstream — fftSize, the DSP's channel rates, the waterfall calibration — is built
+        //   on this number. The device itself is set in the restart branch below.
+        actual = (uint32_t)impl->ahf->nearestRate(rate);
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
