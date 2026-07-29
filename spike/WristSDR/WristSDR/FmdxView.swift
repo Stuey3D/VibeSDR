@@ -263,7 +263,14 @@ struct FmdxView: View {
         if isMHz {
           let label = Text("\(Int(hz / 1_000_000))").font(.system(size: 10, weight: .semibold, design: .rounded))
             .foregroundStyle(.green.opacity(0.85))
-          ctx.draw(label, at: CGPoint(x: x, y: size.height - 21))
+          // ★ CLAMP INSIDE THE CANVAS. `draw(at:)` centres on x, so an edge label lost half
+          //   its digits off-screen — on a 44 mm Series 6 the dial read "7 … 88 … 8" instead
+          //   of "87 … 88 … 89" (Stuart, 2026-07-29). The tick still marks the true
+          //   frequency; only the text is nudged in, which is far better than half a number.
+          let resolved = ctx.resolve(label)
+          let half = resolved.measure(in: size).width / 2 + 1
+          let lx = min(size.width - half, max(half, x))
+          ctx.draw(resolved, at: CGPoint(x: lx, y: size.height - 21))
         }
         hz += 100_000
       }

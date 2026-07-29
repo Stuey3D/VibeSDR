@@ -11,6 +11,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.vibesdr.app",
       "infoPlist": {
+        "NSLocationDefaultAccuracyReduced": true,
         "NSLocationWhenInUseUsageDescription": "VibeSDR uses your approximate location to sort the SDR instance list by distance and to align the map for local SDR decodes. Your location is coarsened and only used on-device for sorting.",
         "NSLocalNetworkUsageDescription": "VibeSDR uses local network access to scan for and connect to SDR servers on your network, such as RTL-TCP servers and local KiwiSDR, UberSDR or OpenWebRX receivers.",
         "UIBackgroundModes": [

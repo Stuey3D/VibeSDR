@@ -69,6 +69,13 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<!-- ★ COARSE ONLY, AND SAY SO TO THE SYSTEM. Setting desiredAccuracy in code is only a
+	     REQUEST — the Precise/Approximate switch in the permission prompt is driven by this
+	     key, so without it watchOS offered a Precise toggle for an app that never wants it
+	     (Stuart, 2026-07-29). It also keeps us honest against the App Privacy declaration,
+	     which says Coarse Location, and against the usage string below. -->
+	<key>NSLocationDefaultAccuracyReduced</key>
+	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your approximate location sorts the SDR server list by distance, nearest first. It stays on your watch.</string>
 	<!-- Local-network + Bonjour: discover VibeServers (your own phone serving its dongle) advertised on the
