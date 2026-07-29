@@ -43,6 +43,30 @@ export function isVersionOld(ver: string | null): boolean {
   return false; // equal
 }
 
+/** Normalised key for matching a connected URL back to a directory entry:
+ *  host[:port] only, so http/https, a trailing slash or a ws:// rewrite all agree. */
+export function serverKey(url: string): string {
+  return url.replace(/^\w+:\/\//, '').replace(/\/+$/, '').toLowerCase();
+}
+
+/**
+ * The owner's per-listener limit for a server we are ALREADY connected to, in
+ * minutes — or undefined if the directory doesn't list one.
+ *
+ * ★★ Looked up from the URL rather than threaded through navigation on purpose.
+ * The limit used to travel as a route param and reached the receiver on ONE of
+ * seven `navigate('SDR')` paths: connect from a favourite, the default server on
+ * launch, a deep link, a custom URL or the watch's Reopen and it was silently
+ * dropped, so we sat past the owner's limit and were cut off with no warning.
+ * A new call site would have re-broken it. The receiver knows its own URL, so it
+ * can just ask. Cache-only — never blocks a connect on a network round trip.
+ */
+export function sessionLimitForUrl(url: string): number | undefined {
+  if (!_cache || !url) return undefined;
+  const k = serverKey(url);
+  return _cache.find(i => i.url && serverKey(i.url) === k)?.sessionLimitMins;
+}
+
 // Module-level cache
 let _cache:     SDRInstance[] | null = null;
 let _cacheTime  = 0;
@@ -138,6 +162,14 @@ export async function fetchInstances(
         ? item.country_code : null,
       distance:  item.distance          ?? null,
       bestSnr,
+      // ★ The owner's per-listener time limit, in SECONDS from the directory.
+      //   Every UberSDR entry carries it (seen: 3600–43200) and we ignored it
+      //   entirely until 2026-07-29 — so we sat past the limit and were kicked
+      //   without warning, on someone else's receiver. Round DOWN: a limit we
+      //   over-state would have us still showing time when the server cuts us.
+      sessionLimitMins: typeof item.max_session_time === 'number' && item.max_session_time > 0
+        ? Math.max(1, Math.floor(item.max_session_time / 60))
+        : undefined,
     };
   });
 

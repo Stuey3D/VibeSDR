@@ -134,7 +134,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi } from '../services/eibi';
-import { getUserLocation } from '../services/instancesApi';
+import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
 import { countryForCallsign } from '../services/callsignCountry';
 import { onCollectionChanged, requestSync } from '../services/cloudSync';
@@ -389,8 +389,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [isSpy, setIsSpy] = useState(false);
   // Session limit (minutes) from the directory. The server enforces it; we just
   // warn up front and count down, rather than letting it look like a crash.
-  const sessionLimitMins: number = route.params.sessionLimitMins ?? 0;
+  // ★★ Route param FIRST (SpyServer passes one), then the directory, keyed off the
+  //    URL we are connected to. Every other way into this screen — favourites, the
+  //    default server on launch, a deep link, a typed URL, the watch's Reopen —
+  //    carries no param, and used to run with no limit at all.
+  const sessionLimitMins: number =
+    route.params.sessionLimitMins ?? sessionLimitForUrl(baseUrl) ?? 0;
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
+  /** Counting down to handing a shared receiver back — null when not idle. */
+  const [idleWarnLeftMs, setIdleWarnLeftMs] = useState<number | null>(null);
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
   /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
   const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
@@ -3035,8 +3042,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   const IDLE_SLOW_MS = 30_000;
   const IDLE_DIVISOR = 3; // skin default-waterfall parity
 
+  // ── Idle hand-back: give a SHARED receiver's slot back when nobody is there ──
+  // ★ Separate from the 30 s powersave above, which only slows the spectrum and
+  //   MUST keep working exactly as it does — this ends the session outright, so it
+  //   is deliberately far less trigger-happy and always asks first.
+  // ★★ Why it has to exist: our Kiwi keepalive runs at 1 Hz for ever, which DEFEATS
+  //   the server's own "are you still there" kick. An app left running in a pocket
+  //   held a public receiver's only slot until the process died. That is the exact
+  //   discourtesy that gets third-party clients blocked.
+  const IDLE_RELEASE_MS = 30 * 60_000;  // no interaction at all for half an hour
+  const IDLE_RELEASE_WARN_MS = 60_000;  // then a full minute to say "still here"
+
   const lastInteractRef = useRef(Date.now());
   const idleActiveRef   = useRef(false);
+  /** Last moment a watch or an open analyser counted as someone watching — the
+   *  hand-back's own baseline, kept apart from the powersave saver's. */
+  const lastViewerRef   = useRef(Date.now());
 
   const markInteract = useCallback(() => {
     lastInteractRef.current = Date.now();
@@ -3094,6 +3115,44 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearInterval(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idleSlow, baseUrl]); // baseUrl: new client starts at divisor 1
+
+  // ── Idle hand-back ─────────────────────────────────────────────────────────
+  // Warn at 30 min of no interaction, release a minute later. ANY touch cancels
+  // it — `markInteract` above already stamps every gesture and Pressable.
+  useEffect(() => {
+    // Your own radio has no queue to be polite to: local hardware, an RTL-TCP or
+    // SpyServer shim, and your own VibeServer are all yours to leave running.
+    if (isLocal || !connected) { setIdleWarnLeftMs(null); return; }
+    const t = setInterval(() => {
+      // The same "someone IS watching" exemptions the powersave saver uses: a watch
+      // showing the waterfall, and an open RDS analyser, are active viewers even
+      // though nobody is touching the phone.
+      // ★ Stamp OUR OWN baseline, never `lastInteractRef` — that ref belongs to the
+      //   30 s powersave saver, and writing to it from here would silently change
+      //   when the saver engages. The two timers share the same "user touched
+      //   something" signal and nothing else.
+      if (watchProvider.isActive || advRdsOpenRef.current) {
+        lastViewerRef.current = Date.now();
+        setIdleWarnLeftMs(null);
+        return;
+      }
+      const idleFor = Date.now() - Math.max(lastInteractRef.current, lastViewerRef.current);
+      if (idleFor < IDLE_RELEASE_MS) { setIdleWarnLeftMs(null); return; }
+      const left = IDLE_RELEASE_MS + IDLE_RELEASE_WARN_MS - idleFor;
+      if (left > 0) { setIdleWarnLeftMs(left); return; }
+      // Time's up: hand the slot back and say so plainly. Not an error, and not
+      // phrased as one — they did nothing wrong and can walk straight back in.
+      setIdleWarnLeftMs(null);
+      client.current?.disconnectSocket?.();
+      setRefusal({
+        title: 'HANDED BACK',
+        body: 'Nothing had touched this for half an hour, so we gave the receiver back for someone else to use.',
+        note: 'Reconnect whenever you like — this is just so an app left running in a pocket does not hold a shared radio all day.',
+      });
+    }, 5000);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLocal, connected, baseUrl]);
 
   const onSmoothTune = useCallback((v: boolean) => {
     setSmoothTune(v);
@@ -4979,6 +5038,23 @@ export default function SDRScreen({ route, navigation }: Props) {
             ◐  POWER SAVE · spectrum slowed — touch to wake
           </Text>
         </View>
+      ) : null}
+
+      {/* ★ About to hand a shared receiver back. Sits ABOVE the powersave pill (by
+          then it is showing too) and, unlike that one, is DELIBERATELY tappable:
+          this one ends the session, so it must be possible to stop it without
+          hunting for a gesture. Any touch anywhere cancels it via markInteract. */}
+      {idleWarnLeftMs !== null ? (
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={markInteract}
+          style={[styles.powersavePill,
+                  { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34,
+                    borderColor: 'rgba(255,150,60,0.85)' }]}>
+          <Text style={[styles.powersavePillText, { color: 'rgba(255,175,90,0.98)' }]}>
+            ⏻  STILL THERE? handing this receiver back in {Math.ceil(idleWarnLeftMs / 1000)}s — tap to stay
+          </Text>
+        </TouchableOpacity>
       ) : null}
 
       {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (

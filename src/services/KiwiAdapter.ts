@@ -216,6 +216,14 @@ export class KiwiAdapter implements SDRBackend {
     this.adoptedDefaults = false;
     if (frequency) this.freq = frequency;
     if (mode) { this.mode = mode; const p = KIWI_MODE[mode]; this.bwLow = p.lo; this.bwHigh = p.hi; }
+    // ★★★ A reconnect that did not pass through disconnect() left the OLD 1 Hz
+    // keepalive running, and the handle was then overwritten below — so it could
+    // never be cleared, and it kept firing at the NEW sockets. Two reconnects and
+    // the server sees 3 `SET keepalive` per second, for ever. Kiwi rate-limits its
+    // control plane, which makes this a candidate for the drops we cannot explain:
+    // admitted, streams for ~10 s, cut. ★ Testable prediction — if this is it, the
+    // drops follow a RECONNECT and never a first connect.
+    this.stopKeepalive();
     this.started = true;
     this.viewInit = false;
     this.wfOpened = false;
