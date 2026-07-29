@@ -364,7 +364,9 @@ link.setAutoContrast(wfAutoContrast)
       if CpuMeter.enabled {
         VStack {
           HStack {
-            Text(String(format: "%.0f%%", cpuMeter.cpu))
+            // Compact on purpose: this badge already sits partly behind OWRX's listener glyph,
+            // so "45%·32/48M" (now/peak) rather than anything more readable.
+            Text(String(format: "%.0f%%·%.0f/%.0fM", cpuMeter.cpu, cpuMeter.memMB, cpuMeter.peakMB))
               .font(.system(size: 11, weight: .semibold, design: .monospaced))
               .foregroundStyle(.white.opacity(0.75))
               .padding(.leading, 8)

@@ -22,6 +22,12 @@ final class CpuMeter: ObservableObject {
   static let enabled = true
 
   @Published var cpu: Double = 0
+  /// Resident footprint in MB — the number jetsam actually judges us on.
+  @Published var memMB: Double = 0
+  /// Highest footprint seen this launch. A watch app is killed at a LIMIT, so the peak is
+  /// the number that mattered, not whatever it happens to be when you look.
+  @Published var peakMB: Double = 0
+  private static var crumbedPeak: Double = 0
 
   private var timer: Timer?
 
@@ -30,7 +36,22 @@ final class CpuMeter: ObservableObject {
     // 2s cadence matches the spike's Vitals log, so the two readouts are directly
     // comparable rather than sampled on different clocks.
     let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.cpu = CpuMeter.processCpuPercent() }
+      Task { @MainActor in
+        guard let self else { return }
+        self.cpu = CpuMeter.processCpuPercent()
+        let m = CpuMeter.footprintMB()
+        self.memMB = m
+        if m > self.peakMB { self.peakMB = m }
+        // ★★ THE LEAK TEST, WRITTEN DOWN. Jr dies after minutes on UberSDR with no crash report
+        //    of any kind — consistent with jetsam, which leaves none. Crumbing only each new 2MB
+        //    high-water mark turns jr-vitals.log into a growth curve instead of a flood: a
+        //    footprint that climbs steadily until the app vanishes IS a leak; one that sits flat
+        //    and still gets killed is system pressure, and those need opposite fixes.
+        if m > CpuMeter.crumbedPeak + 2 {
+          CpuMeter.crumbedPeak = m
+          Vitals.crumb(String(format: "MEM peak %.1fMB cpu %.0f%%", m, self.cpu))
+        }
+      }
     }
     RunLoop.main.add(t, forMode: .common)
     timer = t
@@ -38,6 +59,22 @@ final class CpuMeter: ObservableObject {
   }
 
   func stop() { timer?.invalidate(); timer = nil }
+
+  /// Resident footprint (phys_footprint) in MB — the same accounting jetsam uses, which is why
+  /// it is this and not resident_size: footprint counts dirty + compressed pages charged to us,
+  /// so compressed memory still shows up. On a watch the limit is small and the waterfall,
+  /// the Opus decoder and the audio buffers are all real; guessing is not good enough.
+  static func footprintMB() -> Double {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / 4
+    let kr = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+      }
+    }
+    guard kr == KERN_SUCCESS else { return 0 }
+    return Double(info.phys_footprint) / 1_048_576.0
+  }
 
   /// Whole-process CPU as a percentage of ONE core (>100% is possible and normal —
   /// render, audio and any DSP are different threads). Copied verbatim in method
