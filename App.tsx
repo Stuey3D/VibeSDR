@@ -384,6 +384,19 @@ export default function App() {
     // Decide what to connect to with no user to ask: default → connect, else picker/setup.
     // Shared by the headless boot AND the watch's Reopen, so both behave identically.
     const decideAndConnect = () => {
+      // ★★★ IF THE PHONE IS ALREADY ON A RECEIVER, DO NOTHING. This is shared by the
+      // headless cold boot and the watch's Reopen, and for a COLD phone "go to the
+      // default" is right. On a LIVE one it is a hijack: Buddy showed its Start screen
+      // while the phone was happily on VibeServer, and pressing Start tore that session
+      // down and connected to the default UberSDR instead (Stuart, 2026-07-29).
+      // ★ The watch showing Start while the phone is live is a SEPARATE state desync —
+      // this guard only makes pressing it harmless, which is the half that loses work.
+      const route = navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined;
+      if (route === 'SDR' || route === 'Tuner') {
+        watchTargetPending.claimed = false;
+        watchProvider.setPhoneStatus('live');
+        return;
+      }
       watchTargetPending.claimed = true;      // the picker must not race us
       watchProvider.setPhoneStatus('starting');
       Promise.all([getDefaultInstance(), getFavourites(), getViewMode()])
