@@ -4464,7 +4464,9 @@ function initBw() {
 function formatStep(hz: number): string {
   if (hz >= 1000) {
     const k = hz / 1000;
-    return `${k % 1 === 0 ? k : k.toFixed(1)}kHz`;
+    // ★ toFixed(1) rounded the new 6.25 kHz dPMR/NXDN step to a WRONG "6.3kHz".
+    //   Two places, then trim: 12.5 stays "12.5kHz", 6.25 reads "6.25kHz".
+    return `${k % 1 === 0 ? k : Number(k.toFixed(2))}kHz`;
   }
   return `${hz}Hz`;
 }

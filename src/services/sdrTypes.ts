@@ -13,7 +13,11 @@ export const STEPS = [10, 100, 500, 1000, 9000, 10000];
 // VHF/UHF tuning steps — 10 kHz is uselessly small for broadcast FM (100 kHz),
 // NFM repeaters (12.5/25 kHz) and air/marine. Used above 30 MHz (e.g. OWRX VHF
 // profiles). 12.5k/25k shown as "12.5k"/"25k" by formatStep.
-export const STEPS_VHF = [1000, 5000, 12500, 25000, 50000, 100000];
+// ★ 6.25 kHz is the narrowband digital-voice raster — dPMR and NXDN both channel
+//   on it, and so does the 12.5 kHz offset grid. Without it those channels can
+//   only be reached by typing the frequency, which is what a user reported on
+//   GitHub. It sits between 5k and 12.5k so the ladder stays ascending.
+export const STEPS_VHF = [1000, 5000, 6250, 12500, 25000, 50000, 100000];
 export function stepsForFreq(hz: number): number[] {
   return hz >= 30_000_000 ? STEPS_VHF : STEPS;
 }
