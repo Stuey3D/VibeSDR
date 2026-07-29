@@ -431,8 +431,15 @@ final class FavStore: ObservableObject {
     if let i = favourites.firstIndex(where: { $0.url == s.url }) {
       favourites.remove(at: i)
     } else {
+      // ★★★ CARRY THE HOST. This omitted `host:` entirely, so every favourite made by STARRING a
+      //    server got the `""` default — and a starred VibeServer then had no address to connect
+      //    to, which is the whole "VibeServer never works on the watch" bug. `addCustom` and
+      //    `saveVibe` both set it; only this path did not, and it is the one the star uses.
+      //    (InstancePickerView also calls toggle with an explicit host: "", which deriving here
+      //    renders harmless.)
       favourites.append(Favourite(name: s.name, url: s.url, serverType: s.serverType,
                                   latitude: s.latitude, longitude: s.longitude, bestSnr: s.bestSnr,
+                                  host: s.host.isEmpty ? hostPort(s.url) : s.host,
                                   isCustom: false,     // saved from a directory listing
                                   updatedAt: Date().timeIntervalSince1970 * 1000))
     }
