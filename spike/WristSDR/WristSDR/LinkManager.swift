@@ -25,8 +25,22 @@ final class LinkManager {
     case lowData     // pin the low-data floor, no adaptation (metered plans)
   }
 
+  /// ★★★ DEFAULT IS LOW DATA ON THE WATCH, not adaptive. Measured on a Series 6
+  /// (watchOS 26.6, 2026-07-29): on `full` and `adaptive` the spectrum repeatedly got
+  /// STUCK ON "reconnecting", while pinned Low Data ran continuously and the row
+  /// interpolation smoothed it so well that the lower rate is not the experience anyone
+  /// notices. Adaptation is the thing that was failing, not the bandwidth.
+  ///
+  /// ★★ Why adaptive is the wrong default HERE specifically: it starts mid-ladder and
+  /// then hunts, and every hunt is a resubscribe. On a slower watch over a Bluetooth
+  /// relay those resubscribes cost more than the frames they are trying to protect, so
+  /// the controller spends its time recovering from itself. A pinned rung never hunts.
+  ///
+  /// ★ It is also the polite default on somebody else's receiver — fewer frames, less
+  /// bandwidth, no churn — and it costs less battery. `full` and `adaptive` remain one
+  /// tap away for anyone who wants them.
   static var mode: Mode {
-    get { Mode(rawValue: UserDefaults.standard.string(forKey: "vibeLinkMode") ?? "") ?? .adaptive }
+    get { Mode(rawValue: UserDefaults.standard.string(forKey: "vibeLinkMode") ?? "") ?? .lowData }
     set { UserDefaults.standard.set(newValue.rawValue, forKey: "vibeLinkMode") }
   }
 
