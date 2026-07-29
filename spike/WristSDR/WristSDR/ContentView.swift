@@ -853,7 +853,13 @@ link.setAutoContrast(wfAutoContrast)
       // ★ SUSPENDED OR KILLED? A log that ends on one of these lines was put to sleep; one that
       //   stops mid-tick was terminated. That distinction is the whole point of the last-breath
       //   file, and it costs one crumb per scene change.
-      Vitals.crumb("SCENE phase=\(phase)")
+      // ★★★ THE FOOTPRINT AT THE MOMENT OF SUSPENSION, because that is the number watchOS judges.
+      //    A backgrounded watch app gets a far SMALLER allowance than a foreground one, so a
+      //    process that is comfortable at 29MB while you are looking at it can be over the line
+      //    the instant it is not. Series 6, 2026-07-29: died FIVE SECONDS after phase=inactive
+      //    with audio confirmed playing — and the high-water crumb alone could not say what we
+      //    were holding when it went. Now every scene change records it.
+      Vitals.crumb(String(format: "SCENE phase=%@ mem=%.1fMB", "\(phase)", CpuMeter.footprintMB()))
       // ★ Coming back to the wrist is a FRESH INTENT — drop the Display shortcut rather than
       //   have the menu button behave oddly for a tweak made before the screen slept.
       if phase != .active { displayTweakAt = nil }
