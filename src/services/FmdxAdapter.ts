@@ -166,6 +166,10 @@ export class FmdxAdapter implements SDRBackend {
     this.destroyed = true;
     this.textGen++;                                          // supersede any in-flight socket
     if (this.textReconnectTimer) { clearTimeout(this.textReconnectTimer); this.textReconnectTimer = null; }
+    // ★ Drop any queued commands — a disconnected session must not keep firing at
+    //   the server after the user has walked away from it.
+    if (this.sendTimer) { clearTimeout(this.sendTimer); this.sendTimer = null; }
+    this.sendQueue = [];
     if (this.audioStarted) { Vibe?.stopFmdxAudio?.(); this.audioStarted = false; }
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
@@ -297,7 +301,38 @@ export class FmdxAdapter implements SDRBackend {
   }
 
   // ── Control ─────────────────────────────────────────────────────────────────
+  /** ★★ RATE LIMIT, matching fm-dx-console's command pump (THROTTLE_MS = 125,
+   *  8 commands/sec — src/lib/connection.js `_startCommandPump`). Tuning was
+   *  already the gentle case: TunerScreen debounces the drum and the arrow keys
+   *  into ONE retune 220 ms after you stop, where console streams one per tick.
+   *  But antenna, bandwidth, EQ/IMS and mono went straight out unthrottled, so a
+   *  fast hand on those had no limit at all. This is a leaky bucket rather than a
+   *  fixed pump: the FIRST command goes immediately (no added latency on the
+   *  common single tune) and only a burst is spread out. */
+  private lastSendAt = 0;
+  private sendQueue: string[] = [];
+  private sendTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly THROTTLE_MS = 125;   // 8/sec, same as console
+
   private send(cmd: string): void {
+    const gap = Date.now() - this.lastSendAt;
+    if (!this.sendQueue.length && gap >= FmdxAdapter.THROTTLE_MS) { this.flushSend(cmd); return; }
+    this.sendQueue.push(cmd);
+    if (this.sendTimer) return;
+    const wait = Math.max(0, FmdxAdapter.THROTTLE_MS - gap);
+    this.sendTimer = setTimeout(() => { this.sendTimer = null; this.pumpSend(); }, wait);
+  }
+
+  private pumpSend(): void {
+    const cmd = this.sendQueue.shift();
+    if (cmd !== undefined) this.flushSend(cmd);
+    if (this.sendQueue.length && !this.destroyed) {
+      this.sendTimer = setTimeout(() => { this.sendTimer = null; this.pumpSend(); }, FmdxAdapter.THROTTLE_MS);
+    }
+  }
+
+  private flushSend(cmd: string): void {
+    this.lastSendAt = Date.now();
     const ws = this.ws;
     if (ws && ws.readyState === 1) { try { ws.send(cmd); } catch {} }
   }
