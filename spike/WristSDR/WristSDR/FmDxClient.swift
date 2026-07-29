@@ -63,6 +63,15 @@ struct FmdxAntenna: Identifiable, Equatable {
 /// MP3 decoder emits interleaved L/R and we hand `channels: 2` straight to WatchAudio — the first stereo
 /// path on the wrist, and the one VibeServer's full WFM stereo will reuse.
 final class FmDxClient: SDRClient {
+
+  /// ★★★ How Jr introduces itself to somebody else's FM-DX server.
+  /// Announced SEPARATELY from the phone app: the watch is a different client
+  /// with different behaviour on a shared radio, so an operator can allow one and
+  /// refuse the other. Until 2026-07-29 Jr sent no User-Agent at all and an FM-DX
+  /// operator on the FMDX.org Discord asked how to keep VibeSDR off his server —
+  /// the honest answer was that he could not, because we never said who we were.
+  /// ★ Keep STABLE: operators write filter rules against this string.
+  static let ua = "VibeSDR Jr/1.0 (+https://vibesdr.net)"
   // ── SDRClient surface ──
   @Published var frequency: Double = 0
   @Published var mode = "WFM"           // FM-DX is WFM broadcast only
@@ -196,7 +205,7 @@ final class FmDxClient: SDRClient {
       }
     }
     status = "connecting"
-    textSock.open(url: wsURL("/text"))
+    textSock.open(url: wsURL("/text"), headers: [("User-Agent", "\(Self.ua) (text)")])
   }
 
   // FM-DX pushes a whole-state JSON snapshot per frame; non-JSON lines are keepalive.
@@ -292,7 +301,7 @@ final class FmDxClient: SDRClient {
       Task { @MainActor in guard let self else { return }
         if st.contains("failed") || st.contains("cancelled") { self.retry(self.openChat) } }
     }
-    chatSock.open(url: wsURL("/chat"))
+    chatSock.open(url: wsURL("/chat"), headers: [("User-Agent", "\(Self.ua) (chat)")])
   }
 
   nonisolated private func onChatFrame(_ t: String) {
@@ -339,7 +348,7 @@ final class FmDxClient: SDRClient {
         if st.contains("failed") || st.contains("cancelled") { self.retry(self.openAudio) }
       }
     }
-    audioSock.open(url: wsURL("/audio"))
+    audioSock.open(url: wsURL("/audio"), headers: [("User-Agent", "\(Self.ua) (audio)")])
   }
 
   private func retry(_ reopen: @escaping () -> Void) {

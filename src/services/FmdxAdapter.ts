@@ -17,6 +17,7 @@ import type {
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI } from '../constants/fmBand';
+import { USER_AGENT } from '../constants/version';
 
 const Vibe = NativeModules.VibePowerModule as {
   startFmdxAudio?: (baseUrl: string) => void;
@@ -92,7 +93,10 @@ export class FmdxAdapter implements SDRBackend {
     this.textGen++;
     const gen = this.textGen;
     let ws: WebSocket;
-    try { ws = new WebSocket(wsUrl(this.base, '/text')); }
+    // ★ Identify ourselves — see USER_AGENT. An operator must be able to see who
+    //   is on their receiver and block us by name if they want to.
+    try { ws = new (WebSocket as any)(wsUrl(this.base, '/text'), null,
+                                      { headers: { 'User-Agent': `${USER_AGENT} (text)` } }) as WebSocket; }
     catch (e) { onErr?.(e as Error); return; }
     this.ws = ws;
 
@@ -150,7 +154,8 @@ export class FmdxAdapter implements SDRBackend {
   private openChatWs(): void {
     if (this.chatWs) return;
     let cw: WebSocket;
-    try { cw = new WebSocket(wsUrl(this.base, '/chat')); }
+    try { cw = new (WebSocket as any)(wsUrl(this.base, '/chat'), null,
+                                      { headers: { 'User-Agent': `${USER_AGENT} (chat)` } }) as WebSocket; }
     catch { return; }
     this.chatWs = cw;
     cw.onmessage = (e) => {
@@ -295,7 +300,7 @@ export class FmdxAdapter implements SDRBackend {
   private fetchStaticData(): void {
     const base = this.base.replace(/\/+$/, '');
     const url = /^https?:\/\//.test(base) ? base + '/static_data' : 'http://' + base + '/static_data';
-    fetch(url).then((r) => r.json()).then((j) => {
+    fetch(url, { headers: { 'User-Agent': USER_AGENT } }).then((r) => r.json()).then((j) => {
       if (this.destroyed) return;
       // ant = { enabled, ant1:{enabled,name}, ant2:{...}, … }. Only expose the
       // switch when ant.enabled, and only the individual antennas marked enabled.

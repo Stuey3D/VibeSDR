@@ -6,6 +6,8 @@
 // NOTE: the endpoint is plain HTTP (https redirects to http). The app already
 // permits cleartext for Kiwi/OWRX, so this fetch is fine on both platforms.
 
+import { USER_AGENT } from '../constants/version';
+
 const FMDX_API = 'http://servers.fmdx.org/api/';
 
 export interface FmdxServer {
@@ -95,7 +97,7 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): nu
 /** Fetch the public FM-DX server list, active servers only, distance-sorted
  *  when a location is supplied (else alphabetical). */
 export async function fetchFmdxServers(lat?: number, lon?: number): Promise<FmdxServer[]> {
-  const res = await fetch(FMDX_API);
+  const res = await fetch(FMDX_API, { headers: { 'User-Agent': USER_AGENT } });
   const json = await res.json();
   const rows: any[] = Array.isArray(json?.dataset) ? json.dataset : [];
   const out: FmdxServer[] = [];

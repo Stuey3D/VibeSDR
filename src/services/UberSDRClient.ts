@@ -20,6 +20,7 @@ import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
+import { USER_AGENT } from '../constants/version';
 
 /** Powersave target, in frames/sec — an absolute floor, not a divisor. */
 const POWERSAVE_FPS = 5;
@@ -810,7 +811,7 @@ export class UberSDRClient {
       method: 'POST',
       headers: {
         'Content-Type':   'application/json',
-        'User-Agent':     'VibeSDR/2.0 (iOS; React Native)',
+        'User-Agent':     USER_AGENT,   // ★ was a hardcoded 'VibeSDR/2.0' long after v2
         'X-Requested-With': 'VibeSDR',
       },
       // password = bypass auth: rate-limited/blocked IPs get through with it

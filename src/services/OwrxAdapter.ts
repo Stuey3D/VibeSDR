@@ -21,6 +21,7 @@ import type {
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
 import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
+import { USER_AGENT } from '../constants/version';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -359,7 +360,9 @@ export class OwrxAdapter implements SDRBackend {
     return new Promise((resolve, reject) => {
       let settled = false;
       let ws: WebSocket;
-      try { ws = new WebSocket(this.wsUrl); }
+      // ★ Identify ourselves to somebody else's receiver — see USER_AGENT.
+      try { ws = new (WebSocket as any)(this.wsUrl, null,
+                                        { headers: { 'User-Agent': USER_AGENT } }) as WebSocket; }
       catch (e) { reject(e); return; }
       this.ws = ws;
       ws.binaryType = 'arraybuffer';
