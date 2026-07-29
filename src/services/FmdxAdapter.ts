@@ -50,6 +50,10 @@ function wsUrl(base: string, path: string): string {
   return s + path;
 }
 
+/** Reopen ladder for a dropped /text socket — see scheduleTextReconnect. */
+const FMDX_RETRY_CAP_MS  = 30_000;
+const FMDX_MAX_RETRIES   = 8;      // ~2 minutes of trying, then stop and say so
+
 export class FmdxAdapter implements SDRBackend {
   readonly kind: BackendKind = 'fmdx';
   readonly caps: BackendCapabilities = FMDX_CAPS;
@@ -69,6 +73,9 @@ export class FmdxAdapter implements SDRBackend {
   private imsOn = false;
   private textGen = 0;
   private textReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Consecutive failed reopen attempts — drives the backoff below. Reset on a
+   *  socket that actually opens. */
+  private textRetries = 0;
   private paused = false;            // power-saving pause — suppress auto-reconnect
   private deepLinkFreq?: number;
 
@@ -102,6 +109,7 @@ export class FmdxAdapter implements SDRBackend {
 
     ws.onopen = () => {
       if (this.textGen !== gen) return;
+      this.textRetries = 0;            // a real connection clears the backoff
       this.cb.onConnect();
       this.cb.onLink?.(3);
       this.cb.onChatEnabled?.(true);
@@ -131,12 +139,27 @@ export class FmdxAdapter implements SDRBackend {
     };
   }
 
+  /** ★★★ BACKOFF, and a limit. This retried every 2 s for ever, so a server that
+   *  was down, full or deliberately refusing us got knocked on twice a minute
+   *  indefinitely — from every copy of the app that had it open. That is the
+   *  behaviour that makes an operator want to block a client, and an FM-DX
+   *  operator asked to do exactly that (FMDX.org Discord, 2026-07-29).
+   *  ★ Same shape as the KiwiSDR retry loop we already had to bound — see
+   *  kiwi_reconnect_etiquette. 2s, 4, 8, 16, 30, 30 … then stop at FMDX_MAX_RETRIES
+   *  and let the user decide, rather than hammering someone else's box for hours. */
   private scheduleTextReconnect(): void {
     if (this.textReconnectTimer || this.destroyed || this.paused) return;
+    if (this.textRetries >= FMDX_MAX_RETRIES) {
+      // Out of politeness, not defeat: say so instead of retrying silently.
+      this.cb.onError?.('Lost the connection to this FM-DX server and it is not coming back. Tap to try again, or pick another server.');
+      return;
+    }
+    const delay = Math.min(FMDX_RETRY_CAP_MS, 2000 * 2 ** this.textRetries);
+    this.textRetries++;
     this.textReconnectTimer = setTimeout(() => {
       this.textReconnectTimer = null;
       if (!this.destroyed) this.openTextWs();
-    }, 2000);
+    }, delay);
   }
 
   destroy(): void {
@@ -216,6 +239,9 @@ export class FmdxAdapter implements SDRBackend {
   resumeFromPower(): void {
     if (!this.paused) return;
     this.paused = false;
+    // ★ A deliberate resume is a fresh start, not a continuation of the backoff:
+    //   the user is here and asking, and the pause may have lasted hours.
+    this.textRetries = 0;
     if (!this.destroyed) this.openTextWs();
   }
 
