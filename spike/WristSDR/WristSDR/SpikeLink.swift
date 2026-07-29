@@ -137,6 +137,8 @@ final class SpikeLink: ObservableObject {
   /// The backend client's own status string (Kiwi: 'live' / 'registering' / 'reconnecting N: <reason>').
   /// Surfaced small on screen so a mid-session drop's REASON is visible (debug).
   @Published var backendStatus = ""
+  /// Sticky reason for the last VibeServer auth failure — see UberClient.vibeDiag.
+  @Published var vibeDiag = ""
   /// Non-fatal "heavy server for the phone link" advisory — set only when on the iPhone relay and the
   /// inbound load sits above what that relay reliably carries. nil = nothing to say.
   @Published var bandwidthWarning: String? = nil
@@ -523,6 +525,7 @@ final class SpikeLink: ObservableObject {
     // Only a VibeServer (UberClient in vibe mode) can ask for a PIN.
     let wantsPin = (client as? UberClient)?.needsPin ?? false
     if needsPin != wantsPin { needsPin = wantsPin }
+    if let u = client as? UberClient, vibeDiag != u.vibeDiag { vibeDiag = u.vibeDiag }
     if let u = client as? UberClient {
       if evicted != u.evicted { evicted = u.evicted }
       // ★ The SERVER's word on the session, not our local clock. The countdown is a
@@ -597,6 +600,15 @@ final class SpikeLink: ObservableObject {
       lastRowsPushed = client.rowsPushed
       lastRowAt = Date()
       if !everGotRow { everGotRow = true }
+      // Rows are flowing again — the resume is over, whatever the status string still says.
+      if resumingFromPause { resumingFromPause = false }
+    }
+
+    // ★ GRACE, NOT A BLINDFOLD. If the spectrum has not returned within 10s this is no longer
+    //   "resuming" — it is a real failure, and the honest warnings must be allowed through.
+    if resumingFromPause {
+      if resumeAt == 0 { resumeAt = now }
+      else if now - resumeAt > 10 { resumingFromPause = false }
     }
 
     // Our own socket-health score, standing in for the phone's link meter.
@@ -768,7 +780,24 @@ final class SpikeLink: ObservableObject {
   var isBackground: Bool { client?.status.hasPrefix("background") ?? false }
 
   /// Set by the scene handler: true while the app is foreground/active (wrist UP, screen on).
-  @Published var sceneActive = true
+  @Published var sceneActive = true {
+    didSet {
+      guard sceneActive != oldValue else { return }
+      // ★★ WRIST UP AFTER A DELIBERATE PAUSE IS NOT A FAULT. We dropped the spectrum socket
+      //    ourselves; reopening it takes a second or two, during which `isBackground` is still
+      //    true and `deliberatelyPaused` has ALREADY gone false (the wrist is up) — so every
+      //    warning path fired and the user was told the link was poor and the connection had
+      //    dropped, about work the app chose to do. Latch the resume instead and say so.
+      if sceneActive, isBackground { resumingFromPause = true; resumeAt = 0 }
+      if !sceneActive { resumingFromPause = false }
+    }
+  }
+
+  /// True from wrist-up until the spectrum actually comes back (or the grace expires). Drives
+  /// the "Resuming from power saving…" pill in place of the drop/weak-link wording.
+  @Published private(set) var resumingFromPause = false
+  /// driverTick timestamp the resume began; 0 = not stamped yet (no Date() in the tick path).
+  private var resumeAt: Double = 0
 
   /// We are DELIBERATELY power-saving: the spectrum was dropped AND the wrist is actually down.
   /// The WARNING + GLYPH logic keys off this, not isBackground — so a wrist-UP moment where the

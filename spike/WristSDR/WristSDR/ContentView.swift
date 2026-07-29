@@ -1621,12 +1621,27 @@ link.setAutoContrast(wfAutoContrast)
   /// `working` drives the styling — a step in progress is informational (white, with a spinner), a
   /// refusal is a problem (orange). Everything reads as a warning if it is all one colour.
   private var connectionStatus: (text: String, working: Bool)? {
+    guard var r = connectionStatusBase else { return nil }
+    // ★ The sticky VibeServer auth reason (code @ host). Appended rather than substituted so the
+    //   ladder's own wording is untouched — see SpikeLink.vibeDiag for why it cannot live in
+    //   `status`. Empty for everyone who is not chasing a LAN failure.
+    if !link.vibeDiag.isEmpty { r.text += " · \(link.vibeDiag)" }
+    return r
+  }
+
+  private var connectionStatusBase: (text: String, working: Bool)? {
     let s = link.backendStatus
     guard !s.isEmpty, s != "live", s != "idle" else { return nil }
 
     // Live developer read-outs (OWRX's KB/s + fft + cpu line, secondary-decoder debug). Never
     // user-facing — they are numbers for us, noise for everyone else.
     if s.contains("KB/s") || s.contains("cpu:") || s.hasPrefix("sec=") { return nil }
+
+    // ★★ COMING BACK FROM WRIST-DOWN. Ahead of every other reading, because the status string
+    //    still says "background"/"reconnecting" while our own socket reopens and both of those
+    //    read as a fault the user did not cause. SpikeLink drops the latch the moment a row
+    //    lands, or after 10s if it never does — so a genuine failure still surfaces.
+    if link.resumingFromPause { return ("Resuming from power saving…", true) }
 
     switch s {
     case "starting":              return ("Starting up…", true)
@@ -1693,7 +1708,7 @@ link.setAutoContrast(wfAutoContrast)
     // ★ deliberatelyPaused, not isBackground: only suppress when the wrist is ACTUALLY down. On
     // wrist-up over a weak link the status still says "background" but the black screen is a real
     // problem the user is staring at — let the stall message through. (Shower repro 2026-07-23.)
-    if link.deliberatelyPaused { return nil }
+    if link.deliberatelyPaused || link.resumingFromPause { return nil }
     // A reconnect is NOT a hard fault on the standalone watch — the audio keeps playing and the
     // spectrum socket is coming back. Let the soft "Reconnecting" pill (rawHint) own it instead
     // of throwing up the black "spectrum stopped" box. (The companion's hard overlay is for a

@@ -419,6 +419,14 @@ final class UberClient: ObservableObject {
 
   // ── Published state (the UI mirrors this and nothing else) ────────────────
   @Published var status = "starting"
+  /// ★★★ STICKY AUTH DIAGNOSTIC. `status` is owned by the reconnect ladder, which stamps
+  /// "reconnecting" over it before every retry — and `SpikeLink.driverTick` only SAMPLES the
+  /// status at 20fps, so a reason written and overwritten between two ticks is never even
+  /// mirrored, let alone read. That is why the Series 6 showed no error code: the code was
+  /// being set correctly and destroyed milliseconds later, every time. This field is written
+  /// ONLY by resolveVibeAuth and cleared ONLY when the server actually answers, so it
+  /// survives the churn and stays on screen where it can be read off the wrist.
+  @Published var vibeDiag = ""
   @Published var frequency: Double = 648_000        // Radio Caroline
   @Published var mode = "am"
 
@@ -1581,6 +1589,7 @@ final class UberClient: ObservableObject {
     do {
       let (data, _) = try await httpSession.data(from: url)
       Vitals.crumb("VIBE auth OK \(data.count)B")
+      vibeDiag = ""          // we reached it — drop any stale reason
       guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         status = "not a VibeServer?"; return false
       }
@@ -1626,6 +1635,10 @@ final class UberClient: ObservableObject {
       //     -1009 offline               → no usable interface at all
       //   Four different bugs that are indistinguishable behind "can't reach server".
       status = "can't reach server (\(ns.code))"
+      // ★ AND STICK IT SOMEWHERE THE LADDER CANNOT REACH — with the host, because one live
+      //   suspect is a `.local` name the watch cannot resolve, and "which URL did we try" is
+      //   half the diagnosis.
+      vibeDiag = "\(ns.code) @ \(url.host ?? host)"
       return false
     }
   }
