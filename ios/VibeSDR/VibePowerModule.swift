@@ -82,6 +82,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     super.init()
     VibePowerModule.shared = self
     startVoiceObserver()
+    VibeCrashLog.install()      // record uncaught ObjC exceptions — see VibeCrashLog
   }
 
   // MARK: - State
@@ -974,6 +975,24 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func getPendingVoiceQuery(_ resolve: @escaping RCTPromiseResolveBlock,
                                   rejecter _: @escaping RCTPromiseRejectBlock) {
     resolve(VibeVoice.takePending())
+  }
+
+  /// The last uncaught ObjC exception, or nil. Local only — see VibeCrashLog.
+  @objc func getNativeCrash(_ resolve: @escaping RCTPromiseResolveBlock,
+                            rejecter _: @escaping RCTPromiseRejectBlock) {
+    resolve(VibeCrashLog.take())
+  }
+
+  @objc func clearNativeCrash() { VibeCrashLog.clear() }
+
+  /// Device identifiers for the diagnostics report. No name, no account, no location.
+  @objc func getDeviceInfo(_ resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter _: @escaping RCTPromiseRejectBlock) {
+    resolve([
+      "model": VibeCrashLog.hardwareModel(),
+      "os": UIDevice.current.systemVersion,
+      "systemName": UIDevice.current.systemName,
+    ])
   }
 
   /// Bridge the Siri intent (which runs separately) to JS via a notification.
@@ -2538,4 +2557,68 @@ final class AutoNotch {
       }
     }
   }
+}
+
+// MARK: - Native crash diagnostics
+//
+// ★★★ WHY THIS EXISTS. A TestFlight crash from an iPhone 11 on iOS 16.5.1 (VibeSDR
+// 9.0.1 build 8, 68 minutes into a session) was an UNCAUGHT OBJ-C EXCEPTION — and the
+// report contained NO `Last Exception Backtrace`, so the throw site was simply absent.
+// Symbolicating it would have added nothing; the information was never recorded.
+// Apple's pipeline is also opt-in, so most users' crashes never reach us at all: nine
+// crashes were counted in ASC and not one produced a readable log.
+//
+// This records the exception ourselves, the moment it is raised, while the stack is
+// still alive.
+//
+// ★★ LOCAL ONLY, DELIBERATELY. Nothing is transmitted: it is written to UserDefaults
+// and read back by JS for the diagnostics screen, where the user can SEE it and choose
+// to share it through the system share sheet. That is what keeps it out of the App
+// Privacy declaration — data that never leaves the device to us is not "collected" —
+// and keeps the privacy policy's "everything stays on your device" true.
+//
+// ★ NEVER put a PIN, an admin password or a precise location in here.
+enum VibeCrashLog {
+  private static let key = "vibe.lastNativeCrash"
+
+  /// Installed once at launch. Chains to any existing handler so we do not swallow
+  /// another module's reporting.
+  /// ★ Held statically, NOT captured: NSSetUncaughtExceptionHandler takes a C function
+  ///   pointer, and "a C function pointer cannot be formed from a closure that captures
+  ///   context" — so the chained handler has to be reachable without a capture.
+  private static var previousHandler: (@convention(c) (NSException) -> Void)?
+
+  static func install() {
+    previousHandler = NSGetUncaughtExceptionHandler()
+    NSSetUncaughtExceptionHandler { ex in
+      let frames = ex.callStackSymbols.prefix(24).joined(separator: "\n")
+      let entry: [String: Any] = [
+        "ts": Date().timeIntervalSince1970 * 1000,
+        "name": ex.name.rawValue,
+        "reason": ex.reason ?? "",
+        "stack": frames,
+        "os": UIDevice.current.systemVersion,
+        "model": VibeCrashLog.hardwareModel(),
+      ]
+      // Synchronous write — the process is about to die.
+      UserDefaults.standard.set(entry, forKey: "vibe.lastNativeCrash")
+      UserDefaults.standard.synchronize()
+      VibeCrashLog.previousHandler?(ex)
+    }
+  }
+
+  /// e.g. "iPhone12,1" — the identifier crash reports use, not the marketing name.
+  static func hardwareModel() -> String {
+    var sysinfo = utsname(); uname(&sysinfo)
+    return withUnsafePointer(to: &sysinfo.machine) {
+      $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(validatingUTF8: $0) ?? "?" }
+    }
+  }
+
+  static func take() -> [String: Any]? {
+    let v = UserDefaults.standard.dictionary(forKey: key)
+    return v
+  }
+
+  static func clear() { UserDefaults.standard.removeObject(forKey: key) }
 }

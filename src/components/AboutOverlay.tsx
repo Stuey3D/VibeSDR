@@ -7,11 +7,15 @@
 
 import React from 'react';
 import {
-  Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Alert, Image, Linking, Modal, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';   // nativeBuildVersion = the actual installed CFBundleVersion
 import { APP_VERSION } from '../constants/version';
+import { buildDiagnostics } from '../services/diagnostics';
+
+/** Support address, same as the one in PRIVACY.md. */
+const SUPPORT_EMAIL = 'stuey3dttb@icloud.com';
 
 export interface AboutOverlayProps {
   visible: boolean;
@@ -337,6 +341,43 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
               <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers — and your own RTL-SDR hardware</Text>
             </View>
           </View>
+
+          {/* ★ DIAGNOSTICS. Local only: assembled on demand, SHOWN to the user, then handed
+              to the system share sheet so they choose where it goes. The app never sends
+              anything itself — which is what keeps this out of the App Privacy declaration
+              and keeps "everything stays on your device" true. See services/diagnostics.ts. */}
+          <Text style={styles.section}>DIAGNOSTICS</Text>
+          <Text style={[styles.body, { marginBottom: 10 }]}>
+            If VibeSDR has crashed or misbehaved, this gathers what it recorded — the app
+            version, your device and iOS version, and the last error with its stack. It
+            contains no PINs, no passwords and no location, you can read it before it goes
+            anywhere, and nothing is sent unless you send it.
+          </Text>
+          <TouchableOpacity
+            onPress={async () => {
+              const report = await buildDiagnostics();
+              Alert.alert(
+                'Send diagnostics?',
+                report.length > 900 ? report.slice(0, 900) + '\n…' : report,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Share',
+                    onPress: () => {
+                      Share.share({
+                        message: report,
+                        title: 'VibeSDR diagnostics',
+                      }).catch(() => {});
+                    },
+                  },
+                ],
+              );
+            }}>
+            <Text style={styles.link}>Send diagnostics…</Text>
+          </TouchableOpacity>
+          <Text style={[styles.body, { marginTop: 6, opacity: 0.75 }]}>
+            Send it to {SUPPORT_EMAIL} — or anywhere you like; it is your file.
+          </Text>
 
           <Text style={styles.section}>A MESSAGE FROM STUART</Text>
           {STUART_MESSAGE.map((p, i) => (
