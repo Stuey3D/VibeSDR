@@ -1713,7 +1713,9 @@ final class UberClient: ObservableObject {
   }
 
   private func sendTune() {
-    let msg: [String: Any] = ["type": "tune", "frequency": Int(frequency), "mode": mode]
+    // ★ Int64: on arm64_32 `Int` is 32-bit and traps past 2.147e9, which a tune in Hz
+    //   reaches on an SDRplay RSP (2 GHz) — uncomfortably close, and a trap is a crash.
+    let msg: [String: Any] = ["type": "tune", "frequency": Int64(frequency), "mode": mode]
     audioSock.send(json: msg)
     // NOTE: we deliberately do NOT flush the audio/spectrum on tune. The buffer draining at the
     // old frequency is the "swishing through the stations" sweep as you cross signals — Stuart

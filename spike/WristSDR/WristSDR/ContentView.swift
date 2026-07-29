@@ -1404,7 +1404,18 @@ link.setAutoContrast(wfAutoContrast)
     Group {
       if link.linkSettling {
         // Cycle: index advances off the same 12Hz clock the rest of the chrome breathes on.
-        let i = Int(Date().timeIntervalSinceReferenceDate * 3) % settleTints.count
+        // ★★★ Int64, and reduce BEFORE converting. On arm64_32 — every watch below
+        // watchOS 27, which today is every watch not on the beta — Swift's `Int` is
+        // 32 bits, and `timeIntervalSinceReferenceDate * 3` is ~2.42e9, past Int32.max
+        // (2.147e9). Converting an out-of-range Double to Int TRAPS, so this line was a
+        // guaranteed crash the instant the link began settling.
+        // ★ It has been overflowing since 2023-09-08 — before that the product still fitted
+        // in 32 bits, which is why it ever worked. Invisible on the Ultra 3 (watchOS 27,
+        // arm64, 64-bit Int), and that is the only watch we had.
+        // ★★ Symptom trail, 2026-07-29 Series 6: Kiwi died at connect, VibeServer and FM-DX
+        // on or just after connect, and OWRX ran beautifully until one stutter set
+        // linkSettling — then it crashed. Same line every time.
+        let i = Int(Int64(Date().timeIntervalSinceReferenceDate * 3) % Int64(settleTints.count))
         InstanceNodes()
           .stroke(settleTints[i],
                   style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))

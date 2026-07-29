@@ -218,7 +218,14 @@ final class KiwiClient: ObservableObject, SDRClient {
   // ── Endpoint ──
   private let wsBase: String     // ws(s)://host:port
   private let secure: Bool
-  private let ts = Int(Date().timeIntervalSince1970 * 1000)
+  // ★★★ Int64, NOT Int. On arm64_32 — every watch below watchOS 27, e.g. a Series 6 —
+  // Swift's `Int` is THIRTY-TWO BITS. Unix ms is ~1.78e12, some 800× past Int32.max, and
+  // converting an out-of-range Double to Int TRAPS. So this line crashed the app the
+  // instant a Kiwi client was constructed, on every older watch, while being completely
+  // fine on the Ultra 3 (watchOS 27, arm64, 64-bit Int). Symptom: "Kiwi crashed as it
+  // tried to connect", 2026-07-29.
+  // ★ It is only a cache-buster in the socket path, so the exact value never mattered.
+  private let ts = Int64(Date().timeIntervalSince1970 * 1000)
 
   // ── Kiwi state ──
   private var rxBw = KiwiClient.fullBW
