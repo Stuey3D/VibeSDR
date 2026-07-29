@@ -1200,7 +1200,13 @@ struct ContentView: View {
     Group {
       if link.linkSettling {
         // Cycle: index advances off the same 12Hz clock the rest of the chrome breathes on.
-        let i = Int(Date().timeIntervalSinceReferenceDate * 3) % settleTints.count
+        // ★★★ Int64, and reduce BEFORE converting — see the same fix in Jr
+        // (spike/WristSDR ContentView). On arm64_32, which is EVERY watch below
+        // watchOS 27, Swift's `Int` is 32-bit and this product (~2.42e9) is past
+        // Int32.max (2.147e9). Converting an out-of-range Double TRAPS, so this
+        // crashed Buddy the instant the link began settling. Overflowing since
+        // 2023-09-08. Invisible on the Ultra 3 because watchOS 27 is arm64.
+        let i = Int(Int64(Date().timeIntervalSinceReferenceDate * 3) % Int64(settleTints.count))
         InstanceNodes()
           .stroke(settleTints[i],
                   style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))

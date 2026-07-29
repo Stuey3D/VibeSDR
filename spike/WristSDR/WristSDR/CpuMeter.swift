@@ -16,7 +16,10 @@ final class CpuMeter: ObservableObject {
 
   /// Flip to false (or delete the badge in ContentView) before a store/TestFlight
   /// build. On while Stuart is comparing companion vs standalone.
-  static let enabled = false
+  // ★★ ON for the Series 6 / watchOS 26 investigation (2026-07-29), shipped only to
+  //    INTERNAL TestFlight. MUST be false before any App Store submission — it is a
+  //    developer comparison overlay, not a feature.
+  static let enabled = true
 
   @Published var cpu: Double = 0
 
