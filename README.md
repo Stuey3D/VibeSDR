@@ -39,7 +39,8 @@ A mobile-first SDR receiver app for iOS, Android **and Apple Watch** — and far
 - **VibeDSP** — its own from-scratch, ARM-NEON-optimised DSP engine for the on-device paths (no SDR++ / FFTW / VOLK), so the local radio is fast, light on battery, and free of bundled third-party GPL DSP.
 
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
-> Free software under the GNU GPL-3.0.
+> Free and open source under the GNU GPL-3.0 — free as in freedom. The App Store build
+> costs £2.99 because Apple charges to be there; the source is public and always will be.
 
 ---
 

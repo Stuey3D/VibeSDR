@@ -1,6 +1,7 @@
 # VibeSDR — Changelog
 
-VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/Stuey3D/VibeSDR
+VibeSDR is free and open source under the **GNU GPL v3** — free as in freedom, not price.
+Source: https://github.com/Stuey3D/VibeSDR
 
 ---
 
