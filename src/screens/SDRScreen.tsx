@@ -4927,8 +4927,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   );
 
   const sdrTour = useCoachmarkTour([
-    { id: 'freq', title: 'Set the frequency',
-      body: 'Tap the frequency readout to type one in directly (kHz or MHz).',
+    // ★ Bookmarks were RELOCATED here from the menu (see FreqModal: "relocated from MenuSheet
+    //   §4.2"), and nothing said so — they are behind a Tune | Bookmarks header on this same card,
+    //   which nobody finds by accident. The tour is the only place most people will meet them.
+    { id: 'freq', title: 'Set the frequency, and your bookmarks',
+      body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth.',
@@ -4955,11 +4958,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ THIS CARD USED TO BE WRONG, and a tour that misdirects is worse than no tour: it sends
     //    someone hunting through the cog for a noise-reduction slider that is not there, and they
     //    conclude the feature is missing rather than that the card is. NR, the auto notch and
-    //    squelch are the AUDIO sheet (the speaker button); the cog is display, controls, bookmarks,
-    //    recordings and server settings. Verified against MenuSheet's sections and AudioSheet's,
+    //    squelch are the AUDIO sheet (the speaker button), BOOKMARKS are the frequency card, and the
+    //    cog is display, controls, recordings and server settings. Verified against MenuSheet's sections and AudioSheet's,
     //    not from memory. (Stuart, 2026-07-30.)
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and controls, bookmarks, recordings and server settings all live behind the settings cog. Audio is separate — noise reduction, the auto notch and squelch are under the speaker button.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog. Audio is separate — noise reduction, the auto notch and squelch are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
