@@ -94,6 +94,15 @@ final class WatchAudio {
   private let floorQueued: Double = 0.15
   /// Above this, a delivery burst is just building latency for no benefit. Drop it.
   private let maxQueued: Double = 1.60
+  /// ★★ DRIFT, not a burst. Above this the queue is carrying real latency rather than a cushion —
+  /// comfortably clear of targetQueued (0.35) so ordinary jitter never trips it, and below
+  /// maxQueued so we act long before the crude drop-everything ceiling does.
+  private let resyncQueued: Double = 0.90
+  /// How long the queue must STAY deep before we jump to live. A stall's catch-up burst drains
+  /// through in well under this; a parked queue never does. See the keeper.
+  private let resyncAfter: Double = 5.0
+  /// When the queue first went deep (0 = it isn't). Reference-time, on `q` only.
+  private var deepSince: Double = 0
 
   private(set) var lastError: String = ""
   private(set) var route: String = "—"
@@ -193,6 +202,28 @@ final class WatchAudio {
   func start(_ done: @escaping (Bool, String) -> Void) {
     startDone = done
     hookColdStart()
+
+    // ★★★ ALREADY PLAYING? THEN LEAVE THE SESSION ALONE. A mid-session RECONNECT calls start()
+    //   again — the link drops, the client re-handshakes, and audio is restarted along with it —
+    //   which used to re-run setCategory() and activate() on a session that was live and playing.
+    //   That is precisely the move we removed from didBecomeActive as the cause of the random
+    //   quits; it was simply still happening on the reconnect path, where it is harder to notice
+    //   because a reconnect is already a moment of disruption.
+    //
+    //   ★★ Series 6, 2026-07-30, at the end of a half-hour torture test: the link struggled, the
+    //   client re-authed against VibeServer and re-activated at 10:54:10, and the app was gone
+    //   four seconds after the next wrist drop — with audio confirmed healthy (eng=1 play=1
+    //   q=0.94s), so it was reaped, not starved. A newly re-taken session backgrounded seconds
+    //   later is the one case still standing after build 12 fixed the common one.
+    //
+    //   The engine and the socket still get rebuilt by the reconnect; only the SESSION is left
+    //   undisturbed, because a session that is already playing needs nothing done to it.
+    if live, engine.isRunning {
+      Vitals.crumb("AUDIO start(): already live — reusing the session, not re-activating")
+      done(true, route)
+      return
+    }
+
     let session = AVAudioSession.sharedInstance()
     do {
       // .longFormAudio, AND THE ROUTE PICKER IS THE PRICE OF IT.
@@ -640,6 +671,32 @@ final class WatchAudio {
         return
       }
       self.loggedEngineStop = false
+
+      // ★★★ THE QUEUE HAD A CEILING AND A FLOOR AND NO WAY BACK DOWN. `playLocked` drops packets
+      //    only when the queue is ABOVE maxQueued (1.60s), so after a stall-and-catch-up it parks
+      //    wherever the burst left it and STAYS there — measured on the Series 6, 2026-07-30:
+      //    q sat at 1.44–1.52s for minutes, four times the 0.35s target. The listener is then a
+      //    second and a half behind live and every tune feels that late, which is exactly the tax
+      //    targetQueued was lowered to 0.35 to avoid. Nothing reported it because nothing is
+      //    WRONG — audio plays perfectly, just late — and only the log shows the depth.
+      //
+      //    So: if the queue stays deep for a sustained spell, JUMP TO LIVE. One brief skip, and it
+      //    is the right trade for a radio — you want to be listening to now, not to a second and a
+      //    half ago. Sustained, not instantaneous, so a legitimate delivery burst (which the
+      //    cushion exists to absorb) is never mistaken for drift.
+      if self.queuedSeconds > self.resyncQueued {
+        let t = Date().timeIntervalSinceReferenceDate
+        if self.deepSince == 0 { self.deepSince = t }
+        else if t - self.deepSince > self.resyncAfter {
+          self.deepSince = 0
+          Vitals.crumb("AUDIO resync: queue parked at \(String(format: "%.2f", self.queuedSeconds))s → jumping to live")
+          self.flushLocked(to: self.targetQueued)
+          return
+        }
+      } else {
+        self.deepSince = 0
+      }
+
       guard self.queuedSeconds < self.floorQueued else { return }   // healthy — leave it alone
       // ★ RAN DRY. The cushion is meant to make this essentially never fire, so every occurrence
       //   is evidence — throttled to one a second so a sustained stall leaves a trail, not a flood.
@@ -845,13 +902,20 @@ final class WatchAudio {
   /// hearing the OLD frequency play out of the cushion (the ~queue-depth of tune latency). The
   /// keeper refills a small silence floor immediately so the node never starves.
   func flush() {
-    q.async { [weak self] in
-      guard let self, self.started, self.engine.isRunning else { return }
-      self.flushGen &+= 1            // stale completions from the stopped buffers become no-ops
-      self.player.stop()            // discards all scheduled (old-frequency) buffers
-      self.queuedSeconds = 0
-      self.player.play()            // ready for the new-frequency packets
-      self.topUp(to: self.floorQueued)
-    }
+    q.async { [weak self] in self?.flushLocked(to: self?.floorQueued ?? 0.15) }
+  }
+
+  /// The body of flush(), for callers ALREADY on `q` — the keeper's resync is one, and hopping
+  /// through q.async from inside q would let another packet in between the decision and the act.
+  /// `refill` is the difference between the two uses: a TUNE wants the floor (least latency, the
+  /// new frequency arrives immediately), a drift resync wants the full cushion back so the very
+  /// stall that caused the drift doesn't immediately starve us.
+  private func flushLocked(to refill: Double) {
+    guard started, engine.isRunning else { return }
+    flushGen &+= 1                 // stale completions from the stopped buffers become no-ops
+    player.stop()                  // discards all scheduled (old-frequency / stale) buffers
+    queuedSeconds = 0
+    player.play()                  // ready for the new packets
+    topUp(to: refill)
   }
 }
