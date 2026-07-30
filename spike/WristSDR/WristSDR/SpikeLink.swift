@@ -762,7 +762,15 @@ final class SpikeLink: ObservableObject {
         warningIcon = "wifi.exclamationmark"
         bandwidthWarning = relayDropping
           ? "Too heavy for the phone\u{2019}s Bluetooth link — it keeps dropping. Switch to the watch\u{2019}s own Wi-Fi or cellular."
-          : "At the limit of the phone\u{2019}s Bluetooth link (~\(kb) KB/s). Use the watch\u{2019}s own Wi-Fi or cellular for this server."
+          // ★★ ADVISORY, NOT A VERDICT. This fires while the link is still WORKING — it is a
+          //    throughput reading against a fixed ceiling, and "at the limit" plus "use Wi-Fi"
+          //    told a user to change something that was streaming perfectly stably (Stuart,
+          //    2026-07-30, on OWRX). The two cases beside each other need different voices: the
+          //    `relayDropping` branch above describes a failure that HAS happened, so it
+          //    instructs; this one describes a margin getting thin, so it offers.
+          //    ★ See methodGlyph's note on what green promises — near the edge of Bluetooth range
+          //      the real ceiling collapses, so being near the limit genuinely may not bite.
+          : "Close to the phone\u{2019}s Bluetooth limit (~\(kb) KB/s). If you hit problems, switch to the watch\u{2019}s own Wi-Fi or cellular."
       }
     } else {
       relayHeavySince = nil
