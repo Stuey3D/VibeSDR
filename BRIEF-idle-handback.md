@@ -69,3 +69,20 @@ session…"); we could count down to it instead, which is the difference between
 seems to break and one that tells you where you stand.
 ★ See also `BRIEF-server-identity-header.md`: the countdown box currently draws over the server's
 own name on UberSDR.
+
+### ★★★ EVERY BACKEND WITH A LIMIT SHOULD COUNT DOWN — Stuart, 2026-07-30
+| Backend | Limit | State today |
+|---|---|---|
+| **UberSDR / VibeServer** | per-session seconds | ✅ `sessionSecsLeft` → countdown |
+| **KiwiSDR** | ★ daily per-IP (`ip_limit_mins`, 25 min/day verified) and per-session on many receivers | ✗ we only react to the KICK — **the one to do** |
+| **FM-DX** | shared tuner; check whether the server sends any per-user clock | ✗ nothing parsed — needs a protocol check |
+| **SpyServer** | check | ✗ nothing parsed — needs a protocol check |
+| **OpenWebRX** | SLOTS, not a clock — its own code frees "the server slot" on pause | probably nothing to count down |
+
+★★★ **THE RULE: only count down what the SERVER TELLS US.** Never estimate a remaining time from
+when we connected, and never assume a default. A countdown that is wrong is worse than no countdown
+— it either panics someone with time left or drops them with none. This is
+[[feedback_no_inferred_hardware_readouts]] applied to time: if the receiver does not say, show
+nothing.
+★ Where a server sends a limit but no remaining time, a plain statement ("this receiver allows 25
+minutes a day") beats a fabricated clock.
