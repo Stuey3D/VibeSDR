@@ -260,11 +260,22 @@ final class OwrxClient: ObservableObject, SDRClient {
           self.applyStartMod("adsb")
           self.sendDemod(); self.send(["type": "dspcontrol", "action": "start"])
         }
+        // ★★★ BOTH OF THESE ARE DEVELOPER READOUTS AND BOTH WERE UNGATED. The second one runs
+        //   whenever frames are flowing, so a perfectly healthy OWRX session showed
+        //   "wifi 12KB/s 10fft cpu:47" in the CONNECTION PILL — a telemetry line where the user
+        //   expects to be told whether they are connected. Nothing in the app displays them
+        //   deliberately; they simply overwrite `status`, which the pill renders.
+        //   Gated with the rest of the debug state (see CpuMeter.enabled); "live" is the honest
+        //   answer, and the one the pill's own mapping already understands.
         if self.mode == "adsb" {
           // ADS-B diagnostic (no pill on that screen): decoder engaged? modes loaded? aircraft-msgs seen?
-          self.status = "sec=\(self.secondaryDecoder ?? "nil") adsb=\(self.serverModes["adsb"]?.type ?? "MISSING") m=\(self.serverModes.count) sd=\(self.sdCount) cpu:\(Int(CpuMeter.processCpuPercent()))"
+          self.status = CpuMeter.enabled
+            ? "sec=\(self.secondaryDecoder ?? "nil") adsb=\(self.serverModes["adsb"]?.type ?? "MISSING") m=\(self.serverModes.count) sd=\(self.sdCount) cpu:\(Int(CpuMeter.processCpuPercent()))"
+            : "live"
         } else if self.everFrame, !self.retrying {
-          self.status = "\(self.linkIface) \(self.kbPerSec)KB/s \(self.fftFps)fft cpu:\(Int(CpuMeter.processCpuPercent()))"
+          self.status = CpuMeter.enabled
+            ? "\(self.linkIface) \(self.kbPerSec)KB/s \(self.fftFps)fft cpu:\(Int(CpuMeter.processCpuPercent()))"
+            : "live"
         }
         // DAB re-lock safety net: a DAB profile that came up but produced NO ensemble after a few
         // seconds usually means the re-asserted `dspcontrol start` raced the retune and the dablin

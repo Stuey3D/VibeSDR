@@ -1689,7 +1689,13 @@ link.setAutoContrast(wfAutoContrast)
     // SOCKET-LEVEL FAILURES. AudioSocket reports raw state ("kiwi-snd ws waiting: POSIXErrorCode
     // (rawValue: 53): Software caused connection abort") — a stack trace in a status line. The
     // errno IS the useful part, so translate it rather than dropping it.
-    if s.contains("ws waiting") || s.contains("POSIXErrorCode") {
+    // ★★★ ANY raw socket state, not just the two we happened to have seen. AudioSocket emits
+    //   "<name> ws ready [wifi]", "ws cancelled", "ws failed: …", "ws recv: …" and assigns them
+    //   straight to `status` before the first frame — and the fallback at the end of this function
+    //   passes an unrecognised status through VERBATIM. So "kiwi-snd ws cancelled" was appearing
+    //   on screen, which is the single clearest way to make a shipping app look like a debug
+    //   build. Catching only "ws waiting" left every other lifecycle word to leak.
+    if s.contains(" ws ") || s.contains("POSIXErrorCode") {
       let posix: [Int: String] = [
         51: "The network is unreachable",
         53: "The server dropped the connection",   // ECONNABORTED
@@ -1704,9 +1710,17 @@ link.setAutoContrast(wfAutoContrast)
          let msg = posix[code] {
         return ("\(msg) — retrying…", true)
       }
+      // ★ Before the first frame a socket that is merely OPENING is not "reconnecting" — saying so
+      //   on a first connect invents a failure that hasn't happened.
+      if s.contains("ready") || s.contains("setup") || s.contains("preparing") {
+        return ("Connecting…", true)
+      }
       return ("Reconnecting to the server…", true)
     }
     if s.hasPrefix("retrying (fresh session)") { return ("Retrying with a fresh session…", true) }
+    // ★ "retrying (ws)…" — the transport's name is ours, not the user's. Any other retry reads the
+    //   same way to them, so say the one thing that is true of all of them.
+    if s.hasPrefix("retrying")                 { return ("Retrying…", true) }
     if s.hasPrefix("reconnect ")               { return ("Reconnecting…", true) }
     if s.hasPrefix("connection failed:")       { return ("Couldn't connect", false) }
     // An HTTP refusal carries THE SERVER'S OWN WORDS after the colon. Keep them: that sentence is
