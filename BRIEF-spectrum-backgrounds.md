@@ -10,17 +10,29 @@ of it. So on every backend but one, the pane is plain.
 ★ It works well: Stuart's own UberSDR skyline sits behind the trace and neither fights the other,
 because the artwork is dark where the trace lives.
 
-## The ask
-Let the user supply their own image, with a **three-way choice** (Stuart's wording):
+## The ask — TWO controls that compose, not three states
+In **Display settings**:
 
-| Setting | Behaviour |
-|---|---|
-| **Never** | Server's image if it sends one, otherwise plain. Today's behaviour. |
-| **When the server sends none** | The user's image fills the gap — so every backend gets the UberSDR look, and UberSDR keeps its operator's artwork. |
-| **Always** | The user's image overrides the server's. |
+1. **Custom background** — a button that opens the picture chooser (prompting for photo-library
+   permission on first use), plus a **Clear** that returns to plain black.
+2. **Apply to** — *All servers* / *Only servers that don't send their own*.
 
-★★ The middle option is the interesting one: it makes the feature about **the other five backends**
-rather than about replacing UberSDR. Most users will never see a server-sent background at all.
+★★★ **THE ELEGANT PART: "cleared" IS a background.** Because the scope control governs the blank
+choice too, `no image + apply to all` means **plain black everywhere** — which is how a user hides
+a server's artwork. Hiding server backgrounds falls out of the two controls rather than needing a
+third setting for it. (Stuart's design; Claude's first draft had a clumsier three-state "never /
+when the server sends none / always".)
+
+So the four combinations are all meaningful:
+
+| Image | Apply to | Result |
+|---|---|---|
+| none | only where the server sends none | **Today's behaviour** — server artwork, else black |
+| none | all servers | **Plain black everywhere** — server artwork suppressed |
+| chosen | only where the server sends none | Server artwork wins; yours fills the other five backends |
+| chosen | all servers | Yours everywhere |
+
+★ Default must be row 1, so nothing changes for anyone who never opens the setting.
 
 ## ★★ NOT a moderation feature — do not re-argue this
 Claude framed this as an App Store risk (unmoderated third-party imagery, Guideline 1.2). **Wrong:
@@ -38,8 +50,11 @@ Claude framed this as an App Store risk (unmoderated third-party imagery, Guidel
 - **Storage is LOCAL.** iCloud sync uses `NSUbiquitousKeyValueStore` (~1 MB total, shared with
   every favourite and bookmark) — an image cannot go in it. Say so in the UI rather than let people
   expect it to follow them to another device.
-- **Privacy.** Reading from the photo library is a new permission prompt and a new App Privacy
-  answer. A file picker may avoid the library permission entirely — check before choosing.
+- **Privacy.** The chooser prompts for photo-library access on first use, which is a new permission
+  AND a new App Privacy answer on the listing. ★ Check whether `PHPickerViewController` (iOS) can
+  do this WITHOUT the permission — it hands back only the chosen image and normally needs no
+  authorisation at all, which would mean no prompt, no privacy declaration, and one less thing a
+  cautious user can refuse. Same question for Android's photo picker.
 - **Both panes?** Decide whether the image sits behind the spectrum only (as now) or the waterfall
   too. Behind the waterfall it will be invisible under a busy band and distracting under a quiet
   one.
