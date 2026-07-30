@@ -221,7 +221,10 @@ int main(int argc, char** argv) {
         {"AM",                   RxPipeline::Mode::AM,       10000.0, false, false, false},
         {"SSB (USB)",            RxPipeline::Mode::SSB_USB,   2800.0, false, false, false},
     };
-    const double rates[] = {2400000.0, 2048000.0, 1024000.0};
+    // ★ 912 kHz is the Airspy HF+ Discovery's top rate (added 2026-07-30 — the HF+ became a
+    //   supported radio after this list was written, and it is the one people run on a Pi for FM
+    //   DX). Lowest rate first would reorder the table, so it goes last to keep the descending run.
+    const double rates[] = {2400000.0, 2048000.0, 1024000.0, 912000.0};
 
     for (double fs : rates) {
         printf("── %.3f MSPS ─────────────────────────────────────────────\n", fs / 1e6);
