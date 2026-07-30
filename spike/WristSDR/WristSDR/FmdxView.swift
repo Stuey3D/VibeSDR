@@ -24,6 +24,7 @@ struct FmdxView: View {
   @State private var volumeMode = false
   @AppStorage("seenFmdxTutorial") private var seenTut = false
   @State private var showTut = false
+  @State private var showNumpad = false
   @State private var disarmAt: Date? = nil
   @State private var volTimer: DispatchWorkItem?
   @State private var crown = 0.0
@@ -54,20 +55,18 @@ struct FmdxView: View {
       // very top-right corner and can't be covered, so this sits a row DOWN (top 40) to clear it —
       // the connection method + link-quality pair the DAB/ADS-B screens carry.
       ZStack(alignment: .topTrailing) {
-        // ★★ THE PAIR STACKS, THE BATTERY SITS BESIDE IT. Three items in a row made this capsule
-        //   wide enough for the display's corner arc to cut the battery's right edge — visibly, at
-        //   the top-right of an FM-DX screen. The waterfall screen solved the same problem long ago
-        //   and said so in its own comment ("vertical so it hugs the corner curve without
-        //   clipping"); these three screens simply never got the treatment. Method above quality,
-        //   exactly as there, so the two arrangements read as one idea.
-        HStack(spacing: 6) {
-          VStack(spacing: 3) {
-            ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
-            QualityGlyph(link: link)
-          }
+        // ★★ SIDE BY SIDE, AND SCALED. The fault was only a SLIGHT clip of the battery against the
+        //   display's corner arc. Stacking the pair vertically fixed that but cost more than it
+        //   saved — the capsule grew taller and reached down into the station name on a 44mm, worse
+        //   on a 41mm — so the row stays a row and SHRINKS instead (see WatchScale). A few points
+        //   of trim beats a change of layout when the fault is a few points wide.
+        HStack(spacing: WatchScale.s(6)) {
+          ConnGlyph(transport: link.transport, relayLoad: link.relayLoad)
+            .font(.system(size: WatchScale.s(11)))
+          QualityGlyph(link: link)
           BatteryPill(level: link.battery, scrim: false)
         }
-        .padding(.horizontal, 8).padding(.vertical, 3)
+        .padding(.horizontal, WatchScale.s(8)).padding(.vertical, WatchScale.s(3))
         .background(Capsule().fill(.black.opacity(0.55)))
         .padding(.top, 40).padding(.trailing, 10)
       }
@@ -125,6 +124,11 @@ struct FmdxView: View {
     .sheet(isPresented: $showTut) {
       TutorialSheet(title: "FM-DX Tuner", tips: fmdxTutorialTips()) { seenTut = true; showTut = false }
     }
+    // A PUSH, not a sheet — the same choice the waterfall screen made: a sheet's grabber and inset
+    // eat the top of the pad and push its bottom row off a small screen.
+    .navigationDestination(isPresented: $showNumpad) {
+      NumpadView().environmentObject(link)
+    }
   }
 
   private func armVolTimeout() {
@@ -180,7 +184,7 @@ struct FmdxView: View {
       // station name underneath. Invisible at 49mm where there is slack; visible fouling at
       // 41mm. Reserve the overhang instead of clipping the badge, which is the bit that
       // tells you whether the crown is armed. (Found on a 41mm simulator, 2026-07-19.)
-      .frame(height: 36)
+      .frame(height: WatchScale.s(36))
   }
 
   private var volumeButton: some View {
@@ -189,13 +193,13 @@ struct FmdxView: View {
       WKInterfaceDevice.current().play(volumeMode ? .start : .stop)
     } label: {
       Image(systemName: link.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-        .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+        .font(.system(size: WatchScale.s(12), weight: .semibold)).foregroundStyle(.white)
         .overlay(alignment: .bottomTrailing) {
           Image(systemName: volumeMode ? "checkmark.circle.fill" : "xmark.circle.fill")
-            .font(.system(size: 8, weight: .bold)).foregroundStyle(volumeMode ? .green : .red)
-            .background(Circle().fill(.black)).offset(x: 5, y: 4)
+            .font(.system(size: WatchScale.s(8), weight: .bold)).foregroundStyle(volumeMode ? .green : .red)
+            .background(Circle().fill(.black)).offset(x: WatchScale.s(5), y: WatchScale.s(4))
         }
-        .frame(width: 36, height: 30)
+        .frame(width: WatchScale.s(36), height: WatchScale.s(30))
         .background(RoundedRectangle(cornerRadius: 8).fill(volumeMode ? .green.opacity(0.22) : .white.opacity(0.14)))
         .contentShape(Rectangle())
     }.buttonStyle(.plain)
@@ -209,13 +213,13 @@ struct FmdxView: View {
       WKInterfaceDevice.current().play(armed ? .start : .stop)
     } label: {
       TuneScaleGlyph().stroke(.white, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
-        .frame(width: 18, height: 11)
+        .frame(width: WatchScale.s(18), height: WatchScale.s(11))
         .overlay(alignment: .bottomTrailing) {
           Image(systemName: armed ? "checkmark.circle.fill" : "xmark.circle.fill")
-            .font(.system(size: 8, weight: .bold)).foregroundStyle(armed ? .green : .red)
-            .background(Circle().fill(.black)).offset(x: 5, y: 4)
+            .font(.system(size: WatchScale.s(8), weight: .bold)).foregroundStyle(armed ? .green : .red)
+            .background(Circle().fill(.black)).offset(x: WatchScale.s(5), y: WatchScale.s(4))
         }
-        .frame(width: 36, height: 30)
+        .frame(width: WatchScale.s(36), height: WatchScale.s(30))
         .background(RoundedRectangle(cornerRadius: 8).fill(armed ? .green.opacity(0.22) : .white.opacity(0.14)))
         .contentShape(Rectangle())
     }.buttonStyle(.plain)
@@ -323,8 +327,17 @@ struct FmdxView: View {
   private var readouts: some View {
     VStack(spacing: 2) {
       marquee(rdsLine)
-      Text(freqText).font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
-        .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+      // ★★ TAP THE FREQUENCY TO TYPE ONE. The waterfall screen has had this since the numpad was
+      //   built; FM-DX never got it, so the ONLY way to move was the crown — fine for a nudge,
+      //   hopeless for crossing the band. Same gesture, same numpad, same place on the screen, so
+      //   there is nothing new to learn.
+      // ★ NOT gated on `armed`. That gate exists because a crown is easy to turn by accident on a
+      //   receiver everyone else is listening to; typing a frequency and confirming it is not an
+      //   accident. Gating it would make the deliberate path harder than the careless one.
+      Button { showNumpad = true } label: {
+        Text(freqText).font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
+          .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+      }.buttonStyle(.plain)
       HStack(spacing: 5) {
         if !st.pi.isEmpty {
           Text(st.pi.uppercased()).font(.system(size: 10, weight: .semibold, design: .rounded))

@@ -386,9 +386,29 @@ final class FmDxClient: SDRClient {
   }
 
 func tune(delta: Int, step: Double) {
-    // FM broadcast is a fixed 100 kHz raster — IGNORE the shared UI's step (which is set for SDR bands).
-    let target = (frequency > 0 ? frequency : Double(lastKhz) * 1000) + Double(delta) * 100_000
+    // The shared UI's `step` is set for SDR bands and is wrong here, so FM-DX keeps its own —
+    // see stepHz. (It used to be a hardcoded 100 kHz "fixed raster", which is only true of some
+    // countries and made half the band unreachable elsewhere.)
+    let target = (frequency > 0 ? frequency : Double(lastKhz) * 1000) + Double(delta) * stepHz
     tuneTo(max(tuneMinHz, min(tuneMaxHz, target)))
+  }
+
+  /// ★★★ THE TUNING STEP IS NOT UNIVERSALLY 100 kHz. This was hardcoded on the assumption that FM
+  /// broadcast is a fixed 100 kHz raster — true in the UK and North America, and NOT true elsewhere:
+  /// much of Europe spaces at 100 kHz but places carriers on 50 kHz boundaries, Italy has long used
+  /// 50 kHz, and DXers want 10 kHz to sit off-channel and pull a weak signal out from under a strong
+  /// neighbour. Other FM-DX apps offer down to 10 kHz; we offered one choice and it was the coarsest.
+  ///
+  /// Persisted, because it is a property of where the user LIVES, not of the session.
+  @Published var stepHz: Double = {
+    let saved = UserDefaults.standard.double(forKey: "fmdxStepHz")
+    return saved > 0 ? saved : 100_000
+  }()
+
+  func setStep(_ hz: Double) {
+    guard hz > 0, hz != stepHz else { return }
+    stepHz = hz
+    UserDefaults.standard.set(hz, forKey: "fmdxStepHz")
   }
 
   // ── No-ops / stubs for the SDR surface FM-DX doesn't have ──

@@ -52,6 +52,29 @@ struct FmdxSettingsSheet: View {
         toggleRow(title: "iMS", on: info.ims,
                   blurb: "Suppresses multipath distortion") { link.fmdxClient?.setIms(!info.ims) }
 
+        // ★★ TUNING STEP. Was hardcoded to 100 kHz on the assumption of a fixed FM raster — true in
+        //   the UK and North America, not elsewhere. 50 kHz is normal across much of Europe, and
+        //   10 kHz is what a DXer wants to sit off-channel and pull a weak signal out from under a
+        //   strong neighbour. Other FM-DX apps offer all three; we offered the coarsest and no
+        //   choice. Persisted, because it is a property of where you live, not of the session.
+        VStack(alignment: .leading, spacing: 4) {
+          Text("TUNING STEP").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+          HStack(spacing: 4) {
+            ForEach([10_000.0, 50_000.0, 100_000.0], id: \.self) { hz in
+              let on = (link.fmdxClient?.stepHz ?? 100_000) == hz
+              Button { link.fmdxClient?.setStep(hz) } label: {
+                Text("\(Int(hz / 1000))k")
+                  .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                  .frame(maxWidth: .infinity).padding(.vertical, 7)
+                  .foregroundColor(on ? .black : .white)
+                  .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(on ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.12))))
+              }.buttonStyle(.plain)
+            }
+          }
+        }
+        .padding(.top, 2)
+
         // SERVERS — at the bottom, as the way OUT of this receiver rather than a setting of it.
         Button { dismiss(); link.backToPicker() } label: {
           HStack(spacing: 6) {

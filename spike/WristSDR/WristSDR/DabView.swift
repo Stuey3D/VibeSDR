@@ -126,14 +126,12 @@ struct DabView: View {
   // PASSIVE status icons only — safe up in the clock's band (which doesn't take touches). The lock/menu
   // BUTTONS live in the header (tappable area).
   private var chrome: some View {
-    // ★★ Method above quality, beside the battery — the waterfall screen's arrangement, and the
-    //   narrower footprint keeps the row clear of the corner arc. See FmdxView's chrome.
+    // ★ Left alone deliberately: this row sits at the top-LEADING edge, so it never met the
+    //   corner-arc clip that FM-DX's trailing capsule did. Nothing to fix here.
     HStack(spacing: 6) {
       BatteryPill(level: link.battery)
-      VStack(spacing: 3) {
-        ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
-        QualityGlyph(link: link)
-      }
+      ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
+      QualityGlyph(link: link)
     }
     .padding(.leading, 28).padding(.top, 3)
     .ignoresSafeArea(edges: .top)
