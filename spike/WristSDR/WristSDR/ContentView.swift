@@ -1102,17 +1102,22 @@ link.setAutoContrast(wfAutoContrast)
     //      and only adapts smaller ones. The tuned relationship is preserved, not re-guessed.
     //    ★ The 44mm/40mm values still want a screenshot check — that is how the originals were
     //      converged, and 1–2pt is perceptible here.
-    let k  = size.width / 410            // Ultra 3 = 410x502pt, the watch it was tuned on
-    let cw: CGFloat = 54 * k   // hug the clock, not a spare-icon slot: narrowed off the LEFT (right edge is
-    let ch: CGFloat = 26 * k   // pinned near the digits) so it doesn't slide half-under a left status glyph.
-    ctx.fill(
-      // Right edge 8pt off the bezel. The system clock is NOT flush to the bezel — it's inset a fair
-      // way — so a pill flush to the bezel overhung to the right of the digits and read as shifted.
-      // Pulling the right edge in ~8pt sits the pill back under the clock. (Tunable — nudge if needed.)
-      Path(roundedRect: CGRect(x: size.width - cw - 12 * k, y: 15 * (size.height / 502), width: cw, height: ch),
-           cornerRadius: ch / 2),
-      with: .color(.black.opacity(0.72))
-    )
+    // ★★★ REMOVED, 2026-07-30, DELIBERATELY — do not add it back without reading this.
+    //
+    //    The pill was hand-tuned on the Ultra 3 over many on-device round-trips and then scaled by
+    //    screen width for smaller watches. That scaling is wrong in principle: the pill exists to
+    //    sit behind the SYSTEM CLOCK, and watchOS keeps the status bar's type broadly constant
+    //    while the screen changes — so on a 44mm (k≈0.9) the pill shrank while the clock did not,
+    //    and it read as too small. Fixing that properly meant another screenshot-converged tuning
+    //    pass per watch size, which is what made this the most expensive 54x26 rectangle in the app.
+    //
+    //    ★★ And it was darkening nothing. This is the SPECTRUM pane's top-right corner, which is
+    //    background — the trace fills from the bottom. It only ever looked necessary in a
+    //    screenshot taken with brightness cranked to maximum to force the trace up there, which is
+    //    not a usable display. At any real setting the clock is already on black.
+    //
+    //    ★ If a bright palette ever does reach the top-right corner, the answer is a gradient the
+    //    spectrum draws for itself — not a fixed rectangle that has to be re-tuned per watch.
 
     // Hairline under the band, so the trace's baseline and the waterfall's top
     // edge don't bleed into one another.
