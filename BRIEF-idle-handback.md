@@ -86,3 +86,33 @@ when we connected, and never assume a default. A countdown that is wrong is wors
 nothing.
 ★ Where a server sends a limit but no remaining time, a plain statement ("this receiver allows 25
 minutes a day") beats a fabricated clock.
+
+---
+
+## ★★ SEPARATE AND CONFIRMED: an UberSDR LIVENESS PROBE shows as a disconnect
+Stuart, 2026-07-30, on WESSEX: *"if I don't tune or do anything for a bit it asks if we are still
+there… we put a disconnect message up and to be fair the reconnect button was instant, but it's not
+a full disconnect, it was a server checking for life."*
+
+★ **Confirmed theirs, not ours:** it fires at about **5 minutes** (our hand-back is 30), and the
+same prompt appears in WESSEX's OWN web UI. So this is an UberSDR server feature we do not speak.
+
+★★★ **We silently drop unknown messages.** `UberSDRClient` handles exactly: `pong`, `rds`,
+`session_expired`, `cooldown`, `busy`, `evicted`, `session_warning`, `admin`, `rdsx`, `hwinfo`,
+`config`. The probe is none of those, so it is ignored, the server gives up, and the drop surfaces
+as "disconnected" — a failure message for a question.
+
+**Fix, in order:**
+1. ★ **LOG UNKNOWN MESSAGE TYPES.** One line, and it is how this class of thing gets found at all:
+   a server adds a message, we ignore it, and the symptom appears somewhere unrelated. That single
+   change would have identified this in minutes instead of by inference.
+2. Then handle it: present the receiver's question AS a question — "the receiver is asking if you
+   are still listening" with a button — not as a disconnect.
+3. ★★★ **DO NOT AUTO-ANSWER IT BLINDLY.** That is precisely the discourtesy recorded in
+   [[third_party_receiver_etiquette]] and in the hand-back's own comment: our Kiwi keepalive runs at
+   1 Hz for ever and DEFEATS the server's own idle kick, so an abandoned app holds a public
+   receiver's slot. If we ever answer automatically, answer only on real evidence of presence
+   (decoder output, recent interaction, screen on) — the same test §1 above needs.
+
+★ Get the message name from the WESSEX web client (the popup is in its own JS), or from the log in
+(1) once it ships.
