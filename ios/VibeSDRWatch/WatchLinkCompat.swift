@@ -102,10 +102,21 @@ extension WatchLink {
       p.flight = a.flight; p.country = a.country; p.ccode = a.ccode
       p.altitude = a.altitude; p.speed = a.speed; p.vspeed = a.vspeed
       p.course = a.course; p.squawk = a.squawk; p.rssi = a.rssi
+      // ★★★ AND THE POSITION. `located` filters on lat/lon, so leaving these out made the map's
+      //   annotation loop iterate an ALWAYS-EMPTY array — the list worked, the map drew nothing.
+      //   Two places had to be wrong at once for that: the wire struct did not decode them (fixed
+      //   in WatchLink.Aircraft) and this mapping did not carry them.
+      p.lat = a.lat; p.lon = a.lon
       p.distKm = a.distKm; p.bearing = a.bearing
       return p
     }
   }
+  /// ★★ THE HOME MARKER IS STILL MISSING, and unlike the aircraft this one genuinely is not on the
+  ///   wire: the phone never sends the receiver's position, so there is nothing to return. The map
+  ///   now plots aircraft correctly but has no fixed reference for them to move around.
+  ///   To finish it: add receiverLat/Lon to the WatchLink payload, send them alongside the aircraft
+  ///   table (watchProvider.sendAircraft), and return them here. Jr does not need any of this — it
+  ///   talks to OWRX itself and reads the receiver position straight from the server.
   var receiverLat: Double? { nil }
   var receiverLon: Double? { nil }
 

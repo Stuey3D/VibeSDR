@@ -270,6 +270,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var course: Double? = nil
     var squawk: String? = nil
     var rssi: Double? = nil
+    // ★★★ POSITION. These were MISSING, and their absence is why Buddy's ADS-B map has never
+    //   plotted a single aircraft: the list populated (callsign, altitude, distance) while the map
+    //   drew empty, which reads as a broken map rather than a missing field. The phone has ALWAYS
+    //   sent them — it JSON-encodes its whole Aircraft record, and `lat`/`lon` are right there in
+    //   SDRBackend.Aircraft — but this struct did not declare them, so the decoder silently
+    //   dropped them. A Codable that omits a field does not fail; it just quietly loses it.
+    var lat: Double? = nil
+    var lon: Double? = nil
     var distKm: Double? = nil
     var bearing: Double? = nil
     var id: String { icao }
