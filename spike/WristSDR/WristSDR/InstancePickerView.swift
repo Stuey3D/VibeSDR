@@ -92,27 +92,20 @@ struct InstancePickerView: View {
   // stalls until a real streaming connection wakes the stack), so in practice this fills in after your
   // first server connection of the session; the saved FAVOURITE is the reliable path.
   @ViewBuilder private var discoveredSection: some View {
-    // ★ ALWAYS shown, even with nothing found — because "nothing found" is the common
-    //   case on watchOS and the user had no way to do anything about it. VibeMdns.refresh()
-    //   has existed since the beginning ("USER-TRIGGERED RESCAN … give the user a button")
-    //   and was never wired to one, so cold discovery just sat there stalled with no
-    //   recourse. It also gives a DELIBERATE local-network browse, which is the action that
-    //   provokes the Local Network permission prompt where the OS asks for one.
-    Section("ON YOUR NETWORK") {
-      if mdns.found.isEmpty {
-        Text("No VibeServers found yet — discovery is slow to warm up on watchOS.")
-          .font(.system(size: 12)).foregroundColor(Self.dim)
-      }
-      Button {
-        mdns.refresh()
-      } label: {
-        HStack(spacing: 8) {
-          Image(systemName: "arrow.clockwise").font(.system(size: 13))
-          Text("Scan again").font(.system(size: 15))
-          Spacer()
-        }.foregroundColor(Self.amber)
-      }.buttonStyle(.plain)
-    }
+    // ★★★ SHOWN ONLY WHEN SOMETHING WAS ACTUALLY FOUND. There used to be a permanent
+    //   "ON YOUR NETWORK" section here with a "Scan again" button and a "no VibeServers found
+    //   yet" line, on the reasoning that "nothing found" is the common case on watchOS and the
+    //   user deserved some recourse. That was wrong for the commonest setup of all: a watch on
+    //   BLUETOOTH, tethered through the phone, is not on the LAN at all, so no amount of
+    //   scanning can ever find anything. The button therefore did nothing, visibly, most of the
+    //   time — and a control that reliably does nothing reads as a BROKEN control, not as an
+    //   honest empty state. ([[feedback_no_inferred_hardware_readouts]]: if we cannot actually
+    //   tell, show nothing.)
+    //
+    //   The background browse is untouched — mdns.start() runs on appear, independently of any
+    //   button, so discovery still warms up and still provokes the Local Network permission
+    //   prompt. A genuinely reachable VibeServer appears here the moment it resolves; the
+    //   saved FAVOURITE remains the reliable path, and works over Bluetooth.
     if !mdns.found.isEmpty {
       Section("ON YOUR NETWORK") {
         ForEach(mdns.found) { ad in
