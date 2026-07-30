@@ -56,10 +56,14 @@ struct AircraftView: View {
 
   // PASSIVE status icons only — safe to sit up in the clock's band (which doesn't take touches).
   private var chrome: some View {
+    // ★★ Method above quality, beside the battery — the waterfall screen's arrangement, and the
+    //   narrower footprint keeps the row clear of the corner arc. See FmdxView's chrome.
     HStack(spacing: 6) {
       BatteryPill(level: link.battery)
-      ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
-      QualityGlyph(link: link)
+      VStack(spacing: 3) {
+        ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
+        QualityGlyph(link: link)
+      }
     }
     .padding(.leading, 28).padding(.top, 3)   // clear the rounded top-left corner
     .ignoresSafeArea(edges: .top)

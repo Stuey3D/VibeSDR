@@ -54,9 +54,17 @@ struct FmdxView: View {
       // very top-right corner and can't be covered, so this sits a row DOWN (top 40) to clear it —
       // the connection method + link-quality pair the DAB/ADS-B screens carry.
       ZStack(alignment: .topTrailing) {
+        // ★★ THE PAIR STACKS, THE BATTERY SITS BESIDE IT. Three items in a row made this capsule
+        //   wide enough for the display's corner arc to cut the battery's right edge — visibly, at
+        //   the top-right of an FM-DX screen. The waterfall screen solved the same problem long ago
+        //   and said so in its own comment ("vertical so it hugs the corner curve without
+        //   clipping"); these three screens simply never got the treatment. Method above quality,
+        //   exactly as there, so the two arrangements read as one idea.
         HStack(spacing: 6) {
-          ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
-          QualityGlyph(link: link)
+          VStack(spacing: 3) {
+            ConnGlyph(transport: link.transport, relayLoad: link.relayLoad).font(.system(size: 11))
+            QualityGlyph(link: link)
+          }
           BatteryPill(level: link.battery, scrim: false)
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
