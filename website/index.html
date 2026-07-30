@@ -603,6 +603,20 @@
     <p class="sub big">
       It serves its own web page too, so you're not tied to the app — point any browser at <i>vibesdr.local</i> and tune from your desktop. And because VibeDSP does the compression, you're sending a finished radio rather than a firehose of raw IQ: about 25× lighter than rtl_tcp, which is the difference between working over a hotspot and not.
     </p>
+    <!-- ★ THE UBERSDR CREDIT. Dropped once already, in the v10 rewrite (1d7c023) — the .vs-eq CSS
+         was left behind orphaned, which is how it was noticed. VibeServer speaks UberSDR's
+         protocol; the attribution is not decoration. If the page is rewritten again, this figure
+         comes with it. -->
+    <figure class="vs-eq" aria-label="VibeDSP plus UberSDR equals VibeServer">
+      <span class="eq-term"><img src="assets/family-vibedsp.png" loading="lazy" alt="VibeDSP" /><b>VibeDSP</b></span>
+      <span class="eq-op">+</span>
+      <a class="eq-term eq-link" href="https://ubersdr.org" target="_blank" rel="noopener">
+        <img src="assets/logo_ubersdr.png" loading="lazy" alt="UberSDR" /><b>UberSDR</b></a>
+      <span class="eq-op">=</span>
+      <span class="eq-term"><img src="assets/family-vibeserver.png" loading="lazy" alt="VibeServer" /><b>VibeServer</b></span>
+      <figcaption>The lightweight power of <b>VibeDSP</b> meets the powerful networking of
+        <a href="https://ubersdr.org" target="_blank" rel="noopener">UberSDR</a>.</figcaption>
+    </figure>
     <figure class="wc-shot">
       <img src="assets/web-client.jpg" loading="lazy" alt="VibeServer's built-in web client running in a desktop browser — full spectrum, waterfall and controls, with no software installed" />
       <figcaption>No app required at the other end — VibeServer serves this itself.</figcaption>
