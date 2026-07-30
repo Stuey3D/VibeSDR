@@ -97,6 +97,23 @@ a full disconnect, it was a server checking for life."*
 ★ **Confirmed theirs, not ours:** it fires at about **5 minutes** (our hand-back is 30), and the
 same prompt appears in WESSEX's OWN web UI. So this is an UberSDR server feature we do not speak.
 
+### ★★ THE STREAM KEEPS RUNNING WHILE THE PROBE IS UP
+Stuart: *"I'm not sure, but I think the data keeps running whilst that message is up — the
+spectrum/audio keeps running."* (His words, hedged; worth confirming, but it fits.)
+
+★★★ **That REFRAMES the bug.** If the server keeps serving while it waits for an answer, then the
+probe is ADVISORY and the disconnect only comes later, when nobody replies. So we are NOT
+mislabelling a probe as a disconnect — **we are missing the QUESTION entirely and reporting only the
+CONSEQUENCE.** The disconnect message was accurate by the time it appeared; the user simply never
+got the chance to say "still here".
+
+★ Which makes the fix smaller and more obviously right: surface the question WHEN IT ARRIVES,
+while everything is still working, and the drop never happens. Nothing needs to intercept or
+suppress the disconnect handling that already exists.
+★ To confirm: watch whether frames keep arriving between the probe and the drop — if they do, the
+window between the two is exactly how long the user has to answer, and that is what the UI should
+show.
+
 ★★★ **We silently drop unknown messages.** `UberSDRClient` handles exactly: `pong`, `rds`,
 `session_expired`, `cooldown`, `busy`, `evicted`, `session_warning`, `admin`, `rdsx`, `hwinfo`,
 `config`. The probe is none of those, so it is ignored, the server gives up, and the drop surfaces
