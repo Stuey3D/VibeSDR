@@ -86,11 +86,13 @@ extension WatchLink {
   var dabEnsembleName: String { dab?.ensemble ?? "" }
 
   /// ADS-B: the phone decodes and sends finished aircraft.
-  /// ★ NO lat/lon ON THE WIRE — the phone sends distance and BEARING only, so the map has nothing
-  ///   to plot in Buddy while the list (sorted by distance) is unaffected. And whatever fixes that
-  ///   later, THE ORIGIN IS THE RECEIVER, NEVER THE WATCH (Stuart): every distance is measured from
-  ///   the SDR's site, so centring on the wearer would misplace every aircraft — worst when you are
-  ///   furthest from the receiver, which is the remote-SDR case.
+  /// ★★ lat/lon ARE on the wire and always were — the phone JSON-encodes its whole Aircraft record.
+  ///   What was missing was this mapping and the `lat`/`lon` fields on WatchLink.Aircraft, so the
+  ///   decoder dropped them silently and the map iterated an always-empty array while the list
+  ///   (sorted by distance) looked perfect. Fixed 2026-07-30.
+  /// ★★★ THE ORIGIN IS THE RECEIVER, NEVER THE WATCH (Stuart). Every distance is measured from the
+  ///   SDR's site, so centring on the wearer would misplace every aircraft — worst when you are
+  ///   furthest from the receiver, which is exactly the remote-SDR case.
   ///
   /// ★ MODULE-QUALIFIED ON PURPOSE. Inside `extension WatchLink` the bare name `Aircraft` resolves
   ///   to the NESTED `WatchLink.Aircraft` (the wire struct), not the global one the views use — so
@@ -111,14 +113,13 @@ extension WatchLink {
       return p
     }
   }
-  /// ★★ THE HOME MARKER IS STILL MISSING, and unlike the aircraft this one genuinely is not on the
-  ///   wire: the phone never sends the receiver's position, so there is nothing to return. The map
-  ///   now plots aircraft correctly but has no fixed reference for them to move around.
-  ///   To finish it: add receiverLat/Lon to the WatchLink payload, send them alongside the aircraft
-  ///   table (watchProvider.sendAircraft), and return them here. Jr does not need any of this — it
-  ///   talks to OWRX itself and reads the receiver position straight from the server.
-  var receiverLat: Double? { nil }
-  var receiverLon: Double? { nil }
+  /// The receiver's own position — the map's home marker, the fixed reference the aircraft move
+  /// around. Buddy cannot derive it (it never talks to OWRX), so the phone sends it on the `rx`
+  /// message kind: its own kind rather than folded into the aircraft table, because the table
+  /// churns every few seconds and this changes about once a session. Jr needs none of this — it
+  /// reads the receiver position straight from the server.
+  var receiverLat: Double? { rxLat }
+  var receiverLon: Double? { rxLon }
 
   /// OWRX profiles and listener count are the PHONE's session; it does not forward them yet.
   var profiles: [SDRProfile] { [] }

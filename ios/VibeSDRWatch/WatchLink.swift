@@ -226,6 +226,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// OWRX ADS-B. Same shape of thing as DAB: the profile IS the content (1090 MHz),
   /// so there is nothing to tune and a waterfall of it is a slab of noise.
   @Published var aircraft: [Aircraft] = []
+  /// ★★ THE RECEIVER'S OWN POSITION, for the ADS-B map's home marker. Buddy cannot work this out —
+  ///   it never talks to OWRX — so the phone, which already has it for its own map, sends it. Sent
+  ///   on its own message kind rather than folded into the aircraft table: the table churns every
+  ///   few seconds and this changes about once a session.
+  @Published var rxLat: Double? = nil
+  @Published var rxLon: Double? = nil
   @Published var logo: Data? = nil
   /// The phone's dial memory, mirrored — station names pinned to frequencies, learned
   /// from RDS as you tune. The wrist draws the same dial rather than inventing one.
@@ -979,6 +985,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
           if heartbeat == nil { startHeartbeat() }
         }
       }
+
+    case "rx":
+      if let la = m["la"] as? Double, let lo = m["lo"] as? Double { rxLat = la; rxLon = lo }
 
     case "air":
       if let j = m[WK.json] as? String, let d = j.data(using: .utf8),

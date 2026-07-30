@@ -4024,6 +4024,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ADS-B on the watch: aircraft, not a waterfall. 1090 MHz is a whole-profile mode —
   // there is nothing to tune, and its spectrum is a slab of noise.
   useEffect(() => { watchProvider.sendAircraft(aircraft); }, [aircraft]);
+  // ★ The receiver's site, for the watch map's home marker — the aircraft are plotted around it.
+  //   Sent separately from the (throttled, churning) aircraft table because it changes once a
+  //   session. watchProvider drops repeats, so this is safe to fire on every recvLoc render.
+  useEffect(() => {
+    if (recvLoc) watchProvider.sendReceiver(recvLoc.lat, recvLoc.lon);
+  }, [recvLoc]);
 
   // Mode/step: rare, so send immediately.
   useEffect(() => {

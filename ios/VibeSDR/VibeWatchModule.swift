@@ -359,6 +359,17 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "air", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// ★★ THE RECEIVER'S OWN POSITION — the ADS-B map's home marker on the watch. Buddy cannot work
+  /// this out (it never talks to OWRX), and the phone already has it for its own map. Its OWN
+  /// message kind rather than a field on the aircraft table: that table churns every few seconds
+  /// and is throttled, while this changes about once a session.
+  @objc(sendReceiver:lon:)
+  func sendReceiver(_ lat: NSNumber, lon: NSNumber) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "rx", "la": lat.doubleValue, "lo": lon.doubleValue],
+                  replyHandler: nil, errorHandler: nil)
+  }
+
   /// What the PHONE is doing — a boot is not a fault, and the watch should say which.
   @objc(sendPhone:)
   func sendPhone(_ status: String) {

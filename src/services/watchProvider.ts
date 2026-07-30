@@ -41,6 +41,7 @@ const Native = NativeModules.VibeWatchModule as
       sendStations(json: string): void;
       sendDab(json: string): void;
       sendAircraft(json: string): void;
+      sendReceiver(lat: number, lon: number): void;
       sendFavourites(json: string): void;
       sendDirectory(json: string): void;
       sendPhone(status: string): void;
@@ -557,6 +558,21 @@ class WatchProvider {
       this.airTimer = setTimeout(() => { this.airTimer = null; this.flushAir(); }, wait);
     }
   }
+
+  /** The receiver's own position, for the watch ADS-B map's home marker.
+   *
+   *  Sent on change rather than on a timer: unlike the aircraft table this moves about once a
+   *  session (a new server, or the user picking a city). Buddy has no way to derive it — it never
+   *  talks to OWRX — and without it the map plots aircraft around nothing. */
+  sendReceiver(lat: number, lon: number) {
+    if (!this.isActive) return;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    if (this.lastRxLat === lat && this.lastRxLon === lon) return;   // idempotent
+    this.lastRxLat = lat; this.lastRxLon = lon;
+    Native!.sendReceiver(lat, lon);
+  }
+  private lastRxLat: number | null = null;
+  private lastRxLon: number | null = null;
 
   private flushAir() {
     if (!this.isActive || !this.lastAir) return;
