@@ -1,7 +1,16 @@
 # BRIEF: two decoder-panel bugs — first fixes of the next release
 
-**Status:** not started. Stuart, 2026-07-30, deliberately NOT in v10. Both diagnosed below; neither
-needs investigation, only doing.
+**Status:** not started. Stuart, 2026-07-30, deliberately NOT in v10.
+
+## ★★★ THE FIRST TWO FIXES IN 10.0.1, IN THIS ORDER
+1. **The BIG button, for EVERY decoder** — §1 below.
+2. **SSTV/WEFAX share as an IMAGE** — §2 below.
+
+★ A third idea, NOT in that list because it is real work rather than a fix: a share button for the
+TEXT decoders (RTTY, FT8, NAVTEX, Morse…) that exports the decoded log as a plain text file.
+Stuart: *"that will require some extra work by us to implement."* Worth doing, separately.
+
+Both of the first two are diagnosed below; neither needs investigation, only doing.
 
 ---
 
@@ -96,6 +105,16 @@ platform-specific branch rather than adding one.
 ```
 FileSystem.cacheDirectory + `${decoderName}_${ts}.png`  →  writeAsStringAsync(base64)  →  Share/Sharing
 ```
+### ★★ CONFIRMED ON iPHONE — it half-works, which is the tell
+Stuart, 2026-07-30: *"the save button half works — if I add it to a message it shows a picture, but
+no Save to Photos or Save to Files options are in the first row."*
+
+★★★ **That is the diagnosis in one sentence.** The bytes arrive (Messages renders the picture), but
+iOS does not know it is an IMAGE, so the image-only actions — Save to Photos, Save to Files — never
+appear. A `data:` URL carries no filename and no type, so the share sheet cannot classify it. On
+macOS the same absence produces a wholly blank sheet; on iPhone it produces a sheet missing exactly
+the actions that require a known image type. **Same cause, two symptoms.**
+
 ★★ **AND IT MAKES SSTV SHARE AS AN IMAGE** (Stuart). A `data:` URL tells the OS nothing, so even
 where the sheet appears it offers generic targets. A `file://` URL ending `.png` is recognised as an
 image, so the user gets the IMAGE share sheet — Photos, AirDrop with a thumbnail, Messages with a
