@@ -358,11 +358,10 @@ final class KiwiClient: ObservableObject, SDRClient {
         guard let self, !self.everFrame else { return }
         // Include the last socket state (debug): "ready" ⇒ socket opened but Kiwi sent no frames
         // (handshake/UA/protocol), "waiting"/"preparing" ⇒ the connection never completed.
-        if let advice = self.ownerBlockAdvice(self.sockState) {
-          self.fail("\(advice)\n[state: \(self.sockState)]")
-        } else {
-          self.fail("No data from this KiwiSDR after 12s.\n[state: \(self.sockState)]")
-        }
+        // ★ RELEASE: the raw socket state (`POSIXErrorCode(rawValue: 53)…`) is crumbed, not shown.
+        Vitals.crumb("KIWI connect timeout — state: \(self.sockState)")
+        self.fail(self.ownerBlockAdvice(self.sockState)
+                  ?? "No data from this KiwiSDR after 12s.")
       }
     }
     RunLoop.main.add(ct, forMode: .common); connectTimer = ct
@@ -533,7 +532,8 @@ final class KiwiClient: ObservableObject, SDRClient {
           if self.everFrame {
             self.retrySnd(reason: st)
           } else {
-            self.fail("\(self.ownerBlockAdvice(st) ?? "This KiwiSDR wouldn’t open a connection.")\n[\(st)]")
+            Vitals.crumb("KIWI socket failed — state: \(st)")
+            self.fail(self.ownerBlockAdvice(st) ?? "This KiwiSDR wouldn’t open a connection.")
           }
         }
       }

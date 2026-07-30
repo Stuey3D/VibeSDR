@@ -1663,11 +1663,14 @@ final class UberClient: ObservableObject {
       //     -1001 timed out             → reached the network, got no answer
       //     -1009 offline               → no usable interface at all
       //   Four different bugs that are indistinguishable behind "can't reach server".
-      status = "can't reach server (\(ns.code))"
-      // ★ AND STICK IT SOMEWHERE THE LADDER CANNOT REACH — with the host, because one live
-      //   suspect is a `.local` name the watch cannot resolve, and "which URL did we try" is
-      //   half the diagnosis.
-      vibeDiag = "\(ns.code) @ \(url.host ?? host)"
+      // ★ RELEASE: the raw URLSession code is a DIAGNOSTIC and does not belong in front of a
+      //   user — "can't reach server (-1004)" reads as an internal error escaping. The code is
+      //   still recorded in the crumb log above, where it is just as useful to us and invisible
+      //   to them. Put it back in the status line only for an internal TestFlight build.
+      status = "can't reach server"
+      // ★ vibeDiag stays for the reasons a PERSON can act on ("no host in this favourite"); a
+      //   bare errno and a hostname is not one of them.
+      vibeDiag = ""
       return false
     }
   }

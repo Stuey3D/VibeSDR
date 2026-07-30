@@ -19,7 +19,7 @@ final class CpuMeter: ObservableObject {
   // ★★ ON for the Series 6 / watchOS 26 investigation (2026-07-29), shipped only to
   //    INTERNAL TestFlight. MUST be false before any App Store submission — it is a
   //    developer comparison overlay, not a feature.
-  static let enabled = true
+  static let enabled = false   // ★ OFF for release. Flip to true for an internal TestFlight build.
 
   @Published var cpu: Double = 0
   /// Resident footprint in MB — the number jetsam actually judges us on.
