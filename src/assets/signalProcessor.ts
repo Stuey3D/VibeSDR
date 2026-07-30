@@ -51,7 +51,21 @@ const NOISE_PERCENTILE     = 0.10;  // 10th percentile = noise floor estimate
 // statistic being dominated by the one part of the spectrum that is guaranteed not to be signal.
 // ★ STATISTICS ONLY. Every bin is still DISPLAYED — hiding the roll-off would be a different and
 // much worse lie than mis-scaling it.
-const EDGE_EXCLUDE_FRAC    = 0.06;  // per side, from the auto-range statistics only
+// ★★★ 0.06 WAS NOT ENOUGH, AND THE AIRSPY PROVED IT. The HF+ still blew out at default zoom after
+// the 2026-07-27 fix, because 6% a side lands INSIDE its dead lobe — so the 10th-percentile noise
+// floor was still computed partly from the dead region, collapsed, and the live middle of the span
+// mapped to the top of the palette.
+// ★ The figure comes from SDR++ Brown's "Fill-In bandwidth" (airspyhf_source), which carves the
+// unusable edges off an HF+ for real: 80 kHz per side at 912 kHz — 8.8% each, ~752 kHz usable of
+// 912. Its author calls them "experimental values", i.e. measured rather than published, which is
+// the only kind of figure available for this: no driver reports a usable bandwidth (see
+// [[airspy_hf_backend]]). 0.09 covers the HF+ at its top rate and stays well clear of anything
+// real — at 1024 bins that is 92 bins a side of guaranteed-not-signal.
+// ★ STILL STATISTICS ONLY. Every bin is DISPLAYED, unchanged. Hiding the roll-off is a bigger lie
+// than mis-scaling it — and the honest way to remove it is Brown's: FILTER it out and send less
+// data, which for us is a bandwidth saving too. That is the "Fill-In bandwidth" button, and it
+// belongs server-side in the Airspy backend, not here.
+const EDGE_EXCLUDE_FRAC    = 0.09;  // per side, from the auto-range statistics only
 // ★★ The ceiling ignores the very top of the distribution rather than taking the single
 // strongest bin. A retune puts a brief DC/LO spike at the centre bin — one or two bins
 // tens of dB above anything real — and a single-bin maximum hands the whole palette to it,
