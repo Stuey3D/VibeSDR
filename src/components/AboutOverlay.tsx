@@ -342,7 +342,12 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
             <View style={{ flex: 1 }}>
               <Text style={styles.appName}>VibeSDR</Text>
-              <Text style={styles.appVer}>Version {APP_VERSION} · build {Constants.nativeBuildVersion ?? '?'}</Text>
+              {/* ★ Show the build ONLY when we actually know it. Constants.nativeBuildVersion is null in
+                    some contexts (an iOS app running on Apple Silicon among them), and "build ?" is worse
+                    than no build number at all — it reads as the app being unsure what it is. */}
+              <Text style={styles.appVer}>
+                Version {APP_VERSION}{Constants.nativeBuildVersion ? ` · build ${Constants.nativeBuildVersion}` : ''}
+              </Text>
               <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers — and your own RTL-SDR hardware</Text>
             </View>
           </View>
@@ -392,7 +397,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V10 BETA 1</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V10</Text>
           {V10_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
