@@ -133,3 +133,46 @@ as "disconnected" — a failure message for a question.
 
 ★ Get the message name from the WESSEX web client (the popup is in its own JS), or from the log in
 (1) once it ships.
+
+---
+
+# ★★★ SOLVED FROM THE UBERSDR SOURCE — we ping the WRONG SOCKET
+
+Stuart: *"check the UberSDR source code it may give us the answers."* It did.
+`madpsy/ka9q_ubersdr` is public; `static/idle-detector.js` is the whole mechanism.
+
+## How UberSDR actually works
+1. The page fetches **`session_timeout`** from `POST /connection`.
+2. The server counts that down. **`{"type":"ping"}` resets it.**
+3. The browser sends that ping **ON USER ACTIVITY** — mouse, key, touch, scroll, wheel — at most
+   once per 10 s, and again when the user returns after 30 s away.
+4. ★★★ **It sends the ping to BOTH WEBSOCKETS — audio AND spectrum:**
+```js
+if (window.ws …)                       window.ws.send(JSON.stringify({type:'ping'}));            // audio
+if (window.spectrumDisplay?.ws …)      window.spectrumDisplay.ws.send(JSON.stringify({type:'ping'})); // spectrum
+```
+5. At `session_timeout − 30 s` it shows the confirmation dialog, with 30 s to answer. **The stream
+   keeps running throughout** — which is exactly what Stuart observed.
+
+## ★★★ THE BUG
+`UberSDRClient` pings **`this.spectrumWs` only**, on a 5-second interval. We never ping the audio
+socket. So the session timer never sees us and drops us at `session_timeout`, with no warning,
+while our spectrum pings sail past it.
+
+★ It is the same shape as [[jr_vibeserver_release_pass]] — *"a field parsed off the WRONG MESSAGE is
+SILENT"*. Here it is a keepalive sent down the wrong socket, and the symptom appeared five minutes
+and one screen away from the cause.
+
+## ★★ THE FIX IS NOT "ALSO PING THE AUDIO SOCKET"
+That alone would keep every session alive for ever, because our ping is UNCONDITIONAL — a 5-second
+timer that runs whether anyone is there or not. That is precisely the discourtesy already on file:
+our Kiwi keepalive *"runs at 1 Hz for ever, which DEFEATS the server's own 'are you still there'
+kick"* ([[third_party_receiver_etiquette]]).
+
+**Copy their model instead:**
+- Ping **both** sockets.
+- Ping **on activity**, throttled to ~10 s — not on a blind timer.
+- Read `session_timeout` from `/connection` and show the countdown from it, so the user sees the
+  clock the web client shows.
+- ★ Then our own 30-minute hand-back becomes redundant ON UBERSDR — the server's own timeout does
+  the job properly, which is the outcome the etiquette note actually wants.
