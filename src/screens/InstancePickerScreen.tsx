@@ -603,7 +603,34 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }
   }, [navigation, viewMode]);
 
-  // V4 local hardware (Android only): start the on-device shim (RTL-SDR over
+  // ★★★ NAME THE RADIO THAT IS ACTUALLY PLUGGED IN. This heading was the literal string
+  //   "RTL-SDR", written when a dongle was the only thing we could open — so plugging in an
+  //   Airspy HF+ announced "RTL-SDR", and with nothing attached the failures said "No RTL-SDR
+  //   found" to someone who may never own one. ([[else_means_dongle_trap]] again: two supported
+  //   radios means "a device we know" no longer implies "a dongle".)
+  //
+  //   listDevices() now reports `label` per device, so we ask instead of assuming. Empty until
+  //   the answer arrives, and "USB SDR" if something is attached that we cannot name — never a
+  //   guess at the model. Android only; iOS has no USB host SDR.
+  const [localSdrLabel, setLocalSdrLabel] = useState('');
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    let alive = true;
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.listDevices) return;
+    Local.listDevices()
+      .then((devs: Array<{ label?: string }>) => {
+        if (!alive) return;
+        if (!devs?.length) { setLocalSdrLabel(''); return; }
+        // More than one attached and we cannot say which the "Listen" row will open
+        // (openAndProbe takes the first), so stay generic rather than name the wrong one.
+        setLocalSdrLabel(devs.length === 1 ? (devs[0]?.label || 'USB SDR') : 'USB SDR');
+      })
+      .catch(() => { if (alive) setLocalSdrLabel(''); });
+    return () => { alive = false; };
+  }, []);
+
+  // V4 local hardware (Android only): start the on-device shim (an RTL-SDR or Airspy HF+ over
   // USB OTG) and connect to it on localhost. Audio rides /ws/audio (external
   // PCM); spectrum/control reuse the UberSDR path against ws://127.0.0.1.
   const connectLocal = useCallback(async (modeOverride?: typeof viewMode) => {
@@ -1994,7 +2021,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     "Local Hardware" row with a share action bolted underneath.
                     Android only: iOS has no USB host SDR. */}
                 {Platform.OS === 'android' && (<>
-                  <SectionHeader label="RTL-SDR" fs={fs} F={F} C={C} />
+                  <SectionHeader label={localSdrLabel || 'USB SDR'} fs={fs} F={F} C={C} />
                   <ChooserRow
                     style={[styles.row, { borderColor: C.amber }]}
                     onPress={() => connectLocal()}

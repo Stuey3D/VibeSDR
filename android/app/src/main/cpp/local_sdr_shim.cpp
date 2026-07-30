@@ -4318,7 +4318,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     {
         const int index = -fd - 1;
         const uint32_t nDev = rtlsdr_get_device_count();
-        if (nDev == 0) { err = "no RTL-SDR found — is the dongle plugged in?"; delete impl; return -1; }
+        if (nDev == 0) { err = "no SDR found — is it plugged in?"; delete impl; return -1; }
         if ((uint32_t)index >= nDev) {
             err = "RTL-SDR index " + std::to_string(index) + " out of range (" + std::to_string(nDev) + " found)";
             delete impl; return -1;

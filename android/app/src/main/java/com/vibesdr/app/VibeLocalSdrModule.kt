@@ -66,6 +66,15 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putString("productName", dev.productName ?: "")
             m.putString("manufacturerName", dev.manufacturerName ?: "")
         }
+        // ★★★ SAY WHICH RADIO IT IS. describe() reported ids and a USB product string but never
+        //   which driver we would actually open it with, so every caller had to assume — and the
+        //   only caller assumed RTL, which is how an Airspy HF+ came up labelled "RTL-SDR".
+        //   openAndProbe has reported `driver`/`model` for a while (see the radioCaps builder);
+        //   this puts the same two facts on the LISTING, where the UI decides what to call it
+        //   before anything is opened. Same family as [[else_means_dongle_trap]]: with two radios
+        //   supported, "it is a device we know" no longer implies "it is a dongle".
+        m.putString("kind", if (isAirspyHf(dev)) "airspyhf" else "rtl")
+        m.putString("label", dev.productName ?: (if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"))
         m.putBoolean("hasPermission", hasPermission)
         return m
     }
@@ -93,7 +102,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun openAndProbe(promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
-            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+            ?: run { promise.reject("no_device", "No SDR found"); return }
 
         if (mgr.hasPermission(dev)) {
             openAndProbe(mgr, dev, promise)
@@ -180,7 +189,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun startSpectrum(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
-            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+            ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             // Reuse the permission flow, then retry once granted.
             openAndProbeThen(mgr, dev, promise) { startSpectrumNow(mgr, dev, opts, promise) }
@@ -286,7 +295,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun startVibeServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
-            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+            ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startVibeServerNow(mgr, dev, opts, promise) }
             return
@@ -568,7 +577,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
-            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+            ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
             return

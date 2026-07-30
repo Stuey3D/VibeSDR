@@ -106,7 +106,7 @@ object VibeServerRestore {
         val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return "no USB service"
         val dev: UsbDevice = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
-            ?: return "no RTL-SDR attached"
+            ?: return "no SDR attached"
         // No prompt is possible here (no activity), but after a crash the grant is
         // still live — the dongle never left.
         if (!mgr.hasPermission(dev)) return "no USB permission"
