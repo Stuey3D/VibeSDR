@@ -580,6 +580,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 This does not survive a REBOOT — Android will not detect a dongle that was
                 plugged in while the phone was off, and no app can change that. Replug it.
               </Text>
+              {/* ★★ LEAVING IT UP FOR WEEKS IS A DIFFERENT PROBLEM FROM SURVIVING A CRASH, and the
+                  phone is the thing that breaks it. The start-up check asks for background usage,
+                  which covers being throttled — it does NOT cover the phone deciding to reboot on a
+                  schedule. Samsung ships "Auto restart" ON by default (every few days, ~3am), and a
+                  reboot is exactly the case the line above says we cannot recover from: the dongle
+                  needs replugging by hand. Somebody running a public receiver will otherwise find
+                  it dead every few days with no idea why. */}
+              <Text style={[styles.hint, { color: C.amber, fontFamily: F, marginTop: 10 }]}>
+                Leaving this running long term? Turn OFF battery optimisation for VibeSDR, and turn
+                OFF any scheduled auto-restart — Samsung phones restart every few days by default,
+                and a reboot needs the dongle replugged by hand.
+              </Text>
             </View>
 
             {/* Web server. Turning this OFF means a browser gets nothing — only the
