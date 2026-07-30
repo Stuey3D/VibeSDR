@@ -237,13 +237,17 @@ int main(int argc, char** argv) {
     //               so it is the cheapest an RSP can be run and the realistic serving rate
     //     912 kHz   Airspy HF+ Discovery top rate — what people put on a Pi for FM DX
     //
-    // ★★★ OPEN QUESTION, 2026-07-30: the stereo pilot LOCKS at 2.4 / 2.048 / 1.024 MSPS and does
-    //     NOT lock at 6.0 or at exactly 2.0. 2.0 matters — it is the RSP's zero-IF floor, so it is
-    //     a rate real users will pick. Either the synthetic MPX in makeIq() lands badly at those
-    //     rates (a bench artefact), or WFM stereo genuinely fails at the channel rates they
-    //     produce (a shipping bug affecting every RSP user on the minimum rate). The bench prints
-    //     its own warning on those rows, so the numbers are not silently wrong — but find out
-    //     which it is before quoting any WFM figure at 6.0 or 2.0.
+    // ★★★ THE SYNTHETIC MPX DOES NOT SURVIVE EVERY RATE — a BENCH limitation, not a DSP bug.
+    //     The pilot locks at 2.4 / 2.048 / 1.024 MSPS and does NOT at 6.0 or at exactly 2.0, so
+    //     the WFM rows at those two rates measure a mono receiver and the bench says so on each.
+    //     ★ It is the GENERATOR, not the radio: Stuart runs an SDRplay RSP at up to 8 MHz with
+    //       stereo and RDS working, and has never seen a problem. Real hardware beats synthetic IQ.
+    //     ★ Ruled out: it is not the tune (setTune matches makeIq's 200 kHz offset) and not the
+    //       run length (fails at 8 s as well as 1 s). It is rate-specific and unexplained —
+    //       2.048 works and 2.0 does not, which is the clue worth pulling on.
+    //     ★★ So: TRUST THE NON-WFM ROWS AT EVERY RATE, and read WFM only where the pilot locked.
+    //        Fixing makeIq() would make 6.0 and 2.0 usable, and 2.0 is the RSP's realistic serving
+    //        rate, so it is worth doing before the capacity numbers are published.
     const double rates[] = {6000000.0, 2400000.0, 2048000.0, 2000000.0, 1024000.0, 912000.0};
 
     for (double fs : rates) {
