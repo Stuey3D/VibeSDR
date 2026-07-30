@@ -786,7 +786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             button.title = ""
             button.toolTip = server.deviceCount == 0
-                ? "VibeServer — no RTL-SDR connected"
+                ? "VibeServer — no SDR connected"
                 : "VibeServer — stopped"
         }
     }
@@ -870,7 +870,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func statusLine() -> String {
         if !server.running {
-            return server.deviceCount == 0 ? "No RTL-SDR connected" : "Stopped"
+            // ★ NOT "RTL-SDR": the Mac build drives an SDRplay RSP and an Airspy HF+ as well, so
+//   naming the dongle told an Airspy owner their working radio was absent. Same fix as
+//   the Android module and the shim (2026-07-30).
+            return server.deviceCount == 0 ? "No SDR connected" : "Stopped"
         }
         if server.radioLost { return "Radio disconnected — plug it back in, then Reconnect Radio" }
         let n = server.listeners
