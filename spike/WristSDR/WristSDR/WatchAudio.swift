@@ -103,6 +103,39 @@ final class WatchAudio {
   /// started. Anything less is a finding.
   private(set) var live = false
 
+  /// THE AUDIO THAT IS CURRENTLY PLAYING, for the scene crumb. Each backend client owns its own
+  /// WatchAudio (UberClient, KiwiClient, OwrxClient, FmDxClient) and only one is ever live, so the
+  /// alternative was threading a reference through four clients and the view purely so a log line
+  /// could ask a question. Weak, so a torn-down client is not kept alive by a diagnostic.
+  nonisolated(unsafe) private(set) static weak var current: WatchAudio?
+
+  /// ★★★ WHAT THE AUDIO WAS DOING AT THE MOMENT THE WRIST DROPPED. The last-breath log's final
+  /// line is `SCENE phase=inactive`, and until now that line said nothing about the one thing the
+  /// suspension actually turns on: whether sound was still being produced. "It died a minute after
+  /// wrist-down" and "it went silent, and a minute later watchOS reaped a silent app" are different
+  /// bugs with the same last line. One string per scene change settles it.
+  var stateLine: String {
+    let out = AVAudioSession.sharedInstance().currentRoute.outputs
+      .map { $0.portType.rawValue.replacingOccurrences(of: "AVAudioSessionPort", with: "") }
+      .joined(separator: "+")
+    return String(format: "live=%d eng=%d play=%d q=%.2fs route=[%@] pkts=%d",
+                  live ? 1 : 0, engine.isRunning ? 1 : 0, player.isPlaying ? 1 : 0,
+                  queuedSeconds, out.isEmpty ? "NONE" : out, packets)
+  }
+
+  /// ★★★ DID WE TAKE THE SESSION BEFORE THERE WAS ANYWHERE TO PLAY IT? Series 6, 2026-07-30:
+  /// `activate ok=true route=[NONE]`, and the Bluetooth route only appeared a SECOND LATER. The
+  /// retry ladder in activateAttempt() exists to wait for a usable route, but it only ever fires on
+  /// `ok=false` — a success with an empty route sails straight through it. That matters because the
+  /// long-form background grant is a property of a QUALIFYING ROUTE, and at the instant we asked
+  /// there was no route to qualify.
+  ///
+  /// ★★ DIAGNOSTIC ONLY, and kept precisely because it disproved itself: the run that logged this
+  /// went on to survive FIVE MINUTES backgrounded. So an activation with no route is NOT what ends
+  /// the app, however plausible it looks, and nothing acts on this flag. Do not re-litigate it
+  /// without a log line that contradicts 2026-07-30 09:43:36.
+  private var activatedWithoutRoute = false
+
   /// Is the current OUTPUT route mono? The built-in watch speaker is 48k MONO; AirPods/BT are
   /// stereo. Drives Jr's audio request: on a mono route we ask VibeServer for a fullband mono Opus
   /// stream (all 64k in one channel) instead of receiving stereo and downmixing a band-limited pair.
@@ -181,17 +214,13 @@ final class WatchAudio {
       forName: WKApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { [weak self] _ in
       guard let self else { return }
-      // ★ RE-ACTIVATE IN THE FOREGROUND if the grant was taken outside it. Cheap, idempotent, and
-      //   the only way to convert a playing-but-unentitled session into one that survives a wrist
-      //   drop. We are demonstrably foreground here — this is didBecomeActive.
-      if self.live, !self.activatedInForeground {
-        self.activatedInForeground = true
-        let s = AVAudioSession.sharedInstance()
-        try? s.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
-        s.activate(options: []) { ok, err in
-          Vitals.crumb("AUDIO re-activate in FOREGROUND for the background grant: ok=\(ok) err=\(err?.localizedDescription ?? "-")")
-        }
-      }
+      // ★★★ BUILD 11 RE-ACTIVATED THE SESSION HERE, on the theory that a grant taken outside the
+      //    foreground could be repaired afterwards. REMOVED — see the didBecomeActive handler in
+      //    watchSession(), which carries the evidence. The theory was wrong twice over: the log
+      //    shows the app surviving five minutes backgrounded on a grant taken with the scene
+      //    inactive AND no route, so the premise does not hold; and re-activating a live session
+      //    is now our leading suspect for destroying a grant that was working. Nothing re-takes
+      //    the session after start any more.
       guard !self.live, let done = self.startDone else { return }
       Vitals.crumb("AUDIO cold-start recovery: not live on didBecomeActive — retrying start()")
       self.start(done)
@@ -210,6 +239,12 @@ final class WatchAudio {
         let fg = WKApplication.shared().applicationState == .active
         self.activatedInForeground = fg
         if !fg { Vitals.crumb("AUDIO activate succeeded but NOT foreground — no background grant yet") }
+        // ★★★ ACTIVATED INTO THIN AIR. See activatedWithoutRoute: a success with an empty route is
+        //   a grant taken against nothing, and the route-change handler has to re-take it.
+        if AVAudioSession.sharedInstance().currentRoute.outputs.isEmpty {
+          self.activatedWithoutRoute = true
+          Vitals.crumb("AUDIO activate succeeded with NO ROUTE — will re-take the session when one arrives")
+        }
       }
 
       // SAY EXACTLY WHAT WE GOT, because the difference between "audio is playing" and
@@ -256,6 +291,7 @@ final class WatchAudio {
         do {
           try self.startEngine()
           self.live = true
+          WatchAudio.current = self
           // SAY WHERE IT WENT AND HOW LOUD. "Audio is arriving" and "audio is audible" are
           // different claims, and the gap between them is where an hour disappears: the
           // packets were decoding perfectly and being played into a route with no volume.
@@ -357,10 +393,29 @@ final class WatchAudio {
     }
     NotificationCenter.default.addObserver(
       forName: AVAudioSession.routeChangeNotification, object: s, queue: nil
-    ) { n in
+    ) { [weak self] n in
       let r = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
       let out = s.currentRoute.outputs.first?.portType.rawValue ?? "NONE"
       Vitals.crumb("AUDIO route change (reason \(r)) → \(out)")
+      guard let self else { return }
+
+      // ★★★ THIS HANDLER USED TO ONLY LOG. It now restarts the ENGINE — and deliberately does NOT
+      //    re-take the SESSION, though an earlier draft of this change did.
+      //
+      //    That draft was built on `activate ok=true route=[NONE]`: we take the grant before any
+      //    output exists (the Series 6 has no speaker media route, so Bluetooth is the only
+      //    candidate and it attaches a second late), so re-taking it once a real route arrived
+      //    looked obviously right. The log refuted it — the run that activated with NO ROUTE went
+      //    on to survive FIVE MINUTES in the background. An empty route at activation is simply
+      //    not the thing that kills us, and adding a third re-activation would have worked against
+      //    the actual finding. Left here as a warning: this one is very convincing and it is wrong.
+      //
+      // RESTART THE ENGINE IF THE ROUTE CHANGE KILLED IT. A stopped engine means idle hardware,
+      //    and idle hardware is precisely what gets the app suspended when the wrist drops — the
+      //    silence keeper deliberately leaves a stopped engine alone, because it cannot tell this
+      //    apart from the intentional watch-face stop. Here we CAN tell: a route change is not the
+      //    user leaving. Guarded on `live` so we never start an engine we never started.
+      if self.live { self.restartAudio("route change") }
     }
     // BACK TO THE FOREGROUND. A wrist-flick / dismiss backgrounds the app and can stop the engine
     // (audio then dead until a force-quit). Restart the engine + player whenever the app becomes active
@@ -369,8 +424,29 @@ final class WatchAudio {
       forName: WKApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { [weak self] _ in
       guard let self else { return }
-      try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
-      AVAudioSession.sharedInstance().activate(options: []) { _, _ in }
+      // ★★★ DO NOT RE-ACTIVATE THE SESSION HERE. There used to be a setCategory() + activate() on
+      //    this line, on every single foreground, with the result discarded. It is the best
+      //    candidate we have ever had for the random quits, and the Series 6 log of 2026-07-30 is
+      //    why:
+      //
+      //      09:45:03  SCENE phase=inactive     ← wrist down
+      //      09:46:25  keeper: ran dry          ← ALIVE, 82s into the background
+      //      09:50:08  SCENE phase=active       ← wrist up, FIVE MINUTES later. Survived.
+      //      09:50:13  SCENE phase=inactive     ← wrist down again. Dead in 5 seconds.
+      //
+      //    ★★★ It did NOT die after a minute of wrist-down. It survived the FIRST backgrounding
+      //    for five minutes and died five seconds after the SECOND — i.e. after a round trip
+      //    through the foreground. The background grant plainly WORKS; something in that round
+      //    trip destroys it. This was the only thing in the round trip that touched the session,
+      //    and re-activating a session that is already active and playing is exactly how you would
+      //    lose a grant you already hold.
+      //
+      //    It also explains why this looked random and timing-related for months: it depends on
+      //    how often you GLANCE at the watch, not on how long the wrist is down.
+      //
+      //    The engine still needs restarting on the way back — a wrist-flick can stop it — and
+      //    restartAudio does that without going near the session. Interruption-ended still
+      //    re-activates, which is legitimate: there the system took the session away from us.
       self.restartAudio("didBecomeActive")
     }
   }

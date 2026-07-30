@@ -859,7 +859,13 @@ link.setAutoContrast(wfAutoContrast)
       //    the instant it is not. Series 6, 2026-07-29: died FIVE SECONDS after phase=inactive
       //    with audio confirmed playing — and the high-water crumb alone could not say what we
       //    were holding when it went. Now every scene change records it.
-      Vitals.crumb(String(format: "SCENE phase=%@ mem=%.1fMB", "\(phase)", CpuMeter.footprintMB()))
+      // ★★★ AND WHAT THE AUDIO WAS DOING. The final line of a last-breath log is this one, and it
+      //    could not say the single thing the suspension turns on: whether sound was still being
+      //    produced when the wrist fell. "It was playing and watchOS reaped us anyway" (no
+      //    background grant) and "it had already gone silent, so watchOS reaped a silent app"
+      //    are different bugs that leave an IDENTICAL last line. See WatchAudio.stateLine.
+      Vitals.crumb(String(format: "SCENE phase=%@ mem=%.1fMB %@", "\(phase)", CpuMeter.footprintMB(),
+                          WatchAudio.current?.stateLine ?? "audio=none"))
       // ★ Coming back to the wrist is a FRESH INTENT — drop the Display shortcut rather than
       //   have the menu button behave oddly for a tweak made before the screen slept.
       if phase != .active { displayTweakAt = nil }
