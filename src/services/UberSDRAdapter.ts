@@ -70,6 +70,14 @@ export class UberSDRAdapter implements SDRBackend {
   setHwAgc(on: boolean)   { this.client.setHwAgc(on); }
   setHwPpm(ppm: number)   { this.client.setHwPpm(ppm); }
   setHwSampleRate(rate: number) { this.client.setHwSampleRate(rate); }
+  /** ★★★ THE ADAPTER IS THE OBJECT SDRScreen HOLDS, not the client. Adding setDeemph/setStereo to
+   *  UberSDRClient alone left them unreachable: SDRScreen calls them on `client.current`, which is
+   *  THIS, and `rc.setDeemph?.(tau)` on an object without the method silently does nothing. The
+   *  optional call is what made it silent — de-emphasis appeared fixed and still did nothing, on a
+   *  build that genuinely contained the fix (2026-07-30).
+   *  ★ Every hardware control needs BOTH halves. If a control does nothing, check here first. */
+  setDeemph(tau: number)  { this.client.setDeemph(tau); }
+  setStereo(on: boolean)  { this.client.setStereo(on); }
 
   /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */
