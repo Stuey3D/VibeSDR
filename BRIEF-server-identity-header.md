@@ -24,6 +24,13 @@ The WEB client shows the server's name top-right; the APP does not, even on Vibe
 know the name. Stuart: *"not an urgent fix though as it may mess with the timer clock and I don't
 want to break that so close to release."*
 
+★★★ **OBSERVED 2026-07-30, NOT THEORETICAL** — Stuart's screenshot of an UberSDR (WESSEX,
+terminated delta loop) shows the "YOUR TURN ENDS IN 239:37" box drawn straight THROUGH the server's
+own name and location: both texts are legible on top of each other. The countdown is
+`position:'absolute', top: insets.top+46, right: …` with a 0.72-alpha background and `zIndex:210`
+(`SDRScreen.tsx`), so it overlays whatever the server put there. **This is a bug today on UberSDR
+with a long name, before we add a header of our own.**
+
 ★★ **THE TIMER CLOCK SHARES THAT CORNER** — the "YOUR TURN ENDS IN 29:18" session countdown sits
 exactly where the name would go. That is the real constraint, not the sourcing: whatever is built
 must give way to the countdown, or share the corner deliberately, and it must be tested WITH a

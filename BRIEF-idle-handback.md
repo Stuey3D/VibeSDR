@@ -55,3 +55,17 @@ differs per receiver — you own some of them.
 ## Order
 Fix (1) first — it is a bug, it is small, and it removes most of the reason anyone would want (2).
 Then (2), which is a genuine convenience for people running their own receivers.
+
+---
+
+## ★★ RELATED: the session countdown exists on ONE backend
+Checked 2026-07-30. `sessionSecsLeft` / `onSessionWarning` live **only in `UberSDRClient`** — which
+covers UberSDR AND VibeServer (same protocol). **Kiwi, OWRX, FM-DX and SpyServer show nothing.**
+
+★ Kiwi is the gap worth closing: it is the backend most likely to time you out, and it already tells
+us — `KiwiAdapter` handles `ip_limit`, and the note there records `ip_limit_mins` verified at 25
+minutes a day on a live receiver. Today we only REACT when kicked ("This KiwiSDR keeps ending the
+session…"); we could count down to it instead, which is the difference between a receiver that
+seems to break and one that tells you where you stand.
+★ See also `BRIEF-server-identity-header.md`: the countdown box currently draws over the server's
+own name on UberSDR.
