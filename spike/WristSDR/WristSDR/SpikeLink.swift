@@ -40,7 +40,11 @@ final class SpikeLink: ObservableObject {
   // Band label + colour follow the tuned frequency automatically — several update paths set
   // `frequency` and only some remembered to call updateBand(), so the ticker wash could stay
   // stuck on the boot band's colour (looked "always blue"). A didSet can't miss a path.
-  @Published var frequency = 0.0 { didSet { if frequency != oldValue { updateBand() } } }
+  // ★ The same didSet also feeds the system's Now Playing card, which used to be a hardcoded
+  //   "648 kHz · AM" — see WatchAudio.setNowPlaying. Hooked HERE, on the shared façade, so every
+  //   backend gets it: the four clients each own their own WatchAudio, but they all publish the
+  //   dial through SpikeLink.
+  @Published var frequency = 0.0 { didSet { if frequency != oldValue { updateBand(); WatchAudio.setNowPlaying(freqHz: frequency, mode: mode) } } }
   @Published var span = 0.0
   /// Bookmark gating (all Hz), mirrored from the client each tick. `tuneMin/Max` is the window
   /// reachable RIGHT NOW (OWRX = current profile only); `coverMin/Max` is the server's broad
@@ -91,7 +95,7 @@ final class SpikeLink: ObservableObject {
   /// Smoothed 0..1 meter fill behind the frequency pill. STUB: the spike's DSP does not
   /// surface a normalised level yet, so this stays 0 (empty bar). NOTE for later.
   @Published var level = 0.0
-  @Published var mode = ""
+  @Published var mode = "" { didSet { if mode != oldValue { WatchAudio.setNowPlaying(freqHz: frequency, mode: mode) } } }
   @Published var step = 9_000.0
 
   /// Always true — we are DIRECT, there is no phone hop to lose.

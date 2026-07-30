@@ -103,6 +103,36 @@ final class WatchAudio {
   /// started. Anything less is a finding.
   private(set) var live = false
 
+  /// ★★★ WHAT THE NOW PLAYING CARD SAYS. This was the STRING LITERAL "648 kHz · AM" — not stale
+  /// metadata but a placeholder that had never once changed, and it read as correct only because
+  /// 648 kHz AM is the app's DEFAULT tuning (UberClient: `frequency = 648_000  // Radio Caroline`).
+  /// So the watch face confidently announced Radio Caroline while you listened to FM.
+  ///
+  /// It is a system surface — the Smart Stack, the Now Playing card, the lock screen — so it is
+  /// arguably the most public text the app has, and nothing pointed at it because nothing in the
+  /// app displays it.
+  nonisolated(unsafe) private static var npTitle = ""
+
+  /// Publish the real dial to the system. Cheap and idempotent: identical titles are dropped, so
+  /// this can be called from a `didSet` on every tune without churning the card.
+  static func setNowPlaying(freqHz: Double, mode: String) {
+    guard freqHz > 0 else { return }
+    let f: String = freqHz < 1_000_000
+      ? String(format: "%.0f kHz", freqHz / 1_000)
+      : String(format: "%@ MHz", String(format: "%.3f", freqHz / 1_000_000)
+                                   .replacingOccurrences(of: "0+$", with: "", options: .regularExpression)
+                                   .replacingOccurrences(of: "\\.$", with: "", options: .regularExpression))
+    let title = mode.isEmpty ? f : "\(f) · \(mode.uppercased())"
+    guard title != npTitle else { return }
+    npTitle = title
+    DispatchQueue.main.async {
+      var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+      guard !info.isEmpty else { return }   // not registered yet — start() will pick up npTitle
+      info[MPMediaItemPropertyTitle] = title
+      MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+  }
+
   /// THE AUDIO THAT IS CURRENTLY PLAYING, for the scene crumb. Each backend client owns its own
   /// WatchAudio (UberClient, KiwiClient, OwrxClient, FmDxClient) and only one is ever live, so the
   /// alternative was threading a reference through four clients and the view purely so a log line
@@ -360,7 +390,7 @@ final class WatchAudio {
     }
 
     MPNowPlayingInfoCenter.default().nowPlayingInfo = [
-      MPMediaItemPropertyTitle: "648 kHz · AM",
+      MPMediaItemPropertyTitle: WatchAudio.npTitle.isEmpty ? "VibeSDR Jr" : WatchAudio.npTitle,
       MPMediaItemPropertyArtist: "VibeSDR Jr",
       // LIVE. Not a track with a position — say so, or the system draws a scrubber for a
       // stream that cannot be scrubbed.

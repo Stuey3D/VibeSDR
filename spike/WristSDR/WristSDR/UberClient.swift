@@ -411,7 +411,27 @@ final class UberClient: ObservableObject {
   func setAgc(_ on: Bool) { guard isVibe else { return }; agc = on; specSock.send(json: ["type": "agc", "on": on]); saveVibeHw() }
   func setPpm(_ v: Int) { guard isVibe else { return }; ppm = v; specSock.send(json: ["type": "ppm", "value": v]); saveVibeHw() }
   func setCaptureRate(_ hz: Int) { guard isVibe else { return }; sampleRate = hz; specSock.send(json: ["type": "sampleRate", "value": hz]); saveVibeHw() }
-  func setDeemph(_ tau: Int) { guard isVibe else { return }; deemph = tau; specSock.send(json: ["type": "deemph", "tau": tau]); saveVibeHw() }
+  /// ★★★ THE WIRE WANTS SECONDS, THE UI TALKS MICROSECONDS. `deemph` is 0/50/75 µs because that is
+  ///   how the world labels de-emphasis and how the menu shows it — but the shim's handler is
+  ///   explicit: "tau in SECONDS (0 = off, 50e-6 or 75e-6)". We were sending the bare 50, i.e.
+  ///   asking for a FIFTY SECOND time constant: a one-pole lowpass a few millihertz up, which
+  ///   strips everything audible and leaves DC.
+  ///
+  ///   ★★ It presented as "de-emphasis kills the audio", and it survived a restart because the
+  ///   setting is persisted and re-sent on connect. OFF worked only because tau=0 bypasses the
+  ///   filter entirely (pipeline.cpp: `useDeemph_ = (tau > 0.0)`), which made "off" look like the
+  ///   fix rather than the diagnosis. ★ Nothing detected it: the server keeps sending audio
+  ///   packets at the normal rate, so the queue never runs dry, the silence keeper stays quiet and
+  ///   Now Playing keeps saying it is playing. Near-silence and silence are not the same thing to
+  ///   any of our liveness checks.
+  ///
+  ///   The web client had it right all along (`f.setDeemph(d * 1e-6)`) — this is Jr's bug alone.
+  func setDeemph(_ tau: Int) {
+    guard isVibe else { return }
+    deemph = tau
+    specSock.send(json: ["type": "deemph", "tau": Double(tau) * 1e-6])
+    saveVibeHw()
+  }
   /// FFT frame rate — the primary adaptive-quality lever (the shim's `fftRate`).
   func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
   /// Force mono — the ABR last resort (only meaningful on WFM).
