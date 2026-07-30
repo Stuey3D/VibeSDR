@@ -83,7 +83,9 @@ function countryOf(st: FmdxState | null): string {
 }
 // FM step ladder (Hz) — server accepts any kHz via T<kHz>, so we lock the STEP
 // button to broadcast-FM-sensible values (1 kHz DX → 1 MHz coarse).
-const FM_STEPS = [1_000, 10_000, 100_000, 1_000_000];
+// ★ 50 kHz added 2026-07-30: it is the normal spacing across much of Europe (Italy especially), it
+//   was the one common raster the ladder skipped, and the watch offers it — the two must agree.
+const FM_STEPS = [1_000, 10_000, 50_000, 100_000, 1_000_000];
 // VFO drum feel — ported from SDRScreen's velocity-adaptive tuning.
 const DRUM_VFO_SENS = 22, VFO_FINE_MULT = 4, VFO_VEL_FINE = 40, VFO_VEL_FAST = 350;
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -746,7 +748,13 @@ export default function TunerScreen({ route, navigation }: Props) {
   // Stable callback so <FmdxDial> (React.memo) isn't re-rendered every parent
   // render — the dial only needs to re-render when its own props change.
   const onDialTune = useCallback((hz: number) => {
-    onConfirmFreq(Math.round(hz / 100_000) * 100_000);
+    // ★★ SNAP TO THE CHOSEN STEP, not a hardcoded 100 kHz. The STEP button has offered 1 kHz
+    //    upwards for as long as it has existed, but the DIAL quantised every drag to 100 kHz — so
+    //    picking a finer step changed the buttons and did nothing to the dial, and a 50/10 kHz
+    //    country could not be tuned by dragging at all. Read through the ref so this callback
+    //    stays stable and <FmdxDial> (React.memo) doesn't re-render on every step change.
+    const s = stepRef.current || 100_000;
+    onConfirmFreq(Math.round(hz / s) * s);
   }, [onConfirmFreq]);
 
   // Zoom drum → zoom the dial (FM-DX has no bandwidth). Octave zoom anchored on

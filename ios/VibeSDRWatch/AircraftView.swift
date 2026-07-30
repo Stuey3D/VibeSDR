@@ -52,15 +52,12 @@ struct AircraftView: View {
 
   // PASSIVE status icons only — safe to sit up in the clock's band (which doesn't take touches).
   private var chrome: some View {
-    // ★★ Method above quality, beside the battery — matches Jr and the waterfall screen. Three
-    //   items in a row made the group wide enough for the display's corner arc to clip the
-    //   battery on smaller watches; stacking the pair narrows it. See Jr's FmdxView chrome.
+    // ★ Left alone deliberately: this row sits at the top-LEADING edge, so it never met the
+    //   corner-arc clip that FM-DX's trailing capsule did. Nothing to fix here.
     HStack(spacing: 6) {
       BatteryPill(level: link.battery)
-      VStack(spacing: 3) {
-        ConnGlyph(transport: link.transport).font(.system(size: 11))
-        QualityGlyph(link: link)
-      }
+      ConnGlyph(transport: link.transport).font(.system(size: 11))
+      QualityGlyph(link: link)
     }
     .padding(.leading, 28).padding(.top, 3)   // clear the rounded top-left corner
     .ignoresSafeArea(edges: .top)
@@ -218,8 +215,28 @@ struct ConnGlyph: View {
 
 /// The coloured server-link quality glyph (the instance triangle, green/yellow/red), next to the
 /// connection method. Mirrors the main screen's quality indicator, derived from the link's health.
+/// ★★★ ONE SCALE FOR OUR OWN CHROME — mirrors Jr's. Watch faces run 324pt (40mm) to 410pt (49mm),
+/// a 27% spread, and every button and glyph was an absolute point size tuned on whichever watch was
+/// in hand. So the FM-DX controls fitted the Ultra and fouled the station name on a 44mm.
+///
+/// ★★ This is NOT the mistake the clock scrim made (deleted; see the note where it used to be). That
+/// pill was scaled by screen width while the thing it sat behind — the SYSTEM CLOCK — does not
+/// scale. These are OUR controls: they scale with the layout around them.
+enum WatchScale {
+  static let k: CGFloat = {
+    let w = WKInterfaceDevice.current().screenBounds.width
+    guard w > 0 else { return 1 }
+    return max(0.80, min(1.0, w / 410))
+  }()
+  /// Round to whole points — half-points blur a 1pt stroke.
+  static func s(_ v: CGFloat) -> CGFloat { (v * k).rounded() }
+}
+
 struct QualityGlyph: View {
   @ObservedObject var link: WatchLink
+  /// ★ Sizable, and scaled by default — it is the taller half of the method+quality pair, so it
+  ///   drove the group's height on every screen regardless of how little room there was.
+  var size: CGFloat = WatchScale.s(15)
   var body: some View {
     if link.transport == .none {
       Image(systemName: "xmark").foregroundStyle(.red)
@@ -227,7 +244,7 @@ struct QualityGlyph: View {
       let tint: Color = (link.why == "reconnecting" || link.serverLink <= 1) ? .yellow : .green
       InstanceNodes()
         .stroke(tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-        .frame(width: 15, height: 15)
+        .frame(width: size, height: size)
     }
   }
 }
