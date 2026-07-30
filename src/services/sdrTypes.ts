@@ -17,7 +17,14 @@ export const STEPS = [10, 100, 500, 1000, 9000, 10000];
 //   on it, and so does the 12.5 kHz offset grid. Without it those channels can
 //   only be reached by typing the frequency, which is what a user reported on
 //   GitHub. It sits between 5k and 12.5k so the ladder stays ascending.
-export const STEPS_VHF = [1000, 5000, 6250, 12500, 25000, 50000, 100000];
+// ★★ 100 Hz and 500 Hz added 2026-07-30. 1 kHz was the floor above 30 MHz, which made some
+//    airband channels UNREACHABLE by the controls at all — an airband VOLMET at 128.5928 MHz was
+//    the case that surfaced it: the grid snaps to whole kHz and steps straight over it. Typeable on
+//    the phone, but on the WATCH there is no keypad on that path, so the channel simply did not
+//    exist. Exactly the argument that added 6.25 kHz above, one order of magnitude finer.
+//    ★ It is only an option — nobody has to cross VHF in 100 Hz steps, they just gain the ability
+//      to land on a channel that is not on a kHz boundary.
+export const STEPS_VHF = [100, 500, 1000, 5000, 6250, 12500, 25000, 50000, 100000];
 export function stepsForFreq(hz: number): number[] {
   return hz >= 30_000_000 ? STEPS_VHF : STEPS;
 }
