@@ -128,10 +128,15 @@ struct DabView: View {
   // PASSIVE status icons only — safe up in the clock's band (which doesn't take touches). The lock/menu
   // BUTTONS live in the header (tappable area).
   private var chrome: some View {
+    // ★★ Method above quality, beside the battery — matches Jr and the waterfall screen. Three
+    //   items in a row made the group wide enough for the display's corner arc to clip the
+    //   battery on smaller watches; stacking the pair narrows it. See Jr's FmdxView chrome.
     HStack(spacing: 6) {
       BatteryPill(level: link.battery)
-      ConnGlyph(transport: link.transport).font(.system(size: 11))
-      QualityGlyph(link: link)
+      VStack(spacing: 3) {
+        ConnGlyph(transport: link.transport).font(.system(size: 11))
+        QualityGlyph(link: link)
+      }
     }
     .padding(.leading, 28).padding(.top, 3)
     .ignoresSafeArea(edges: .top)

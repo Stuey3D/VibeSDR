@@ -906,27 +906,22 @@ struct ContentView: View {
     // Now it just hugs the clock digits (18→58.8pt from the right edge). The watchOS status glyphs
     // (car mode, location, recording) live top-LEFT and are colourful enough to read on the
     // waterfall unaided — and we can't know when one is shown, so we don't darken there.
-    // ★★ SCALED, NOT MOVED. The four numbers below were hand-tuned on the Ultra 3 over many
-    //    on-device round-trips and are LOCKED (see memory: watch_clock_pill_settled — "THIS
-    //    DOES NOT MOVE AGAIN"). They were absolute points, which is right on a 410x502 Ultra
-    //    and drifts off the clock on anything smaller: watchOS scales the status bar and the
-    //    clock's own type with the watch, so a fixed 12pt inset is a different fraction of a
-    //    368pt-wide Series 6. Reported there as "the pill is completely off the clock".
-    //    ★ Scaling against the Ultra's geometry leaves THAT WATCH BYTE-IDENTICAL (ratio 1.0)
-    //      and only adapts smaller ones. The tuned relationship is preserved, not re-guessed.
-    //    ★ The 44mm/40mm values still want a screenshot check — that is how the originals were
-    //      converged, and 1–2pt is perceptible here.
-    let k  = size.width / 410            // Ultra 3 = 410x502pt, the watch it was tuned on
-    let cw: CGFloat = 54 * k   // hug the clock, not a spare-icon slot: narrowed off the LEFT (right edge is
-    let ch: CGFloat = 26 * k   // pinned near the digits) so it doesn't slide half-under a left status glyph.
-    ctx.fill(
-      // Right edge 8pt off the bezel. The system clock is NOT flush to the bezel — it's inset a fair
-      // way — so a pill flush to the bezel overhung to the right of the digits and read as shifted.
-      // Pulling the right edge in ~8pt sits the pill back under the clock. (Tunable — nudge if needed.)
-      Path(roundedRect: CGRect(x: size.width - cw - 12 * k, y: 15 * (size.height / 502), width: cw, height: ch),
-           cornerRadius: ch / 2),
-      with: .color(.black.opacity(0.72))
-    )
+    // ★★★ REMOVED, 2026-07-30, DELIBERATELY — the same deletion as Jr's, for the same two reasons.
+    //
+    //    It could not be sized right. The four numbers were hand-tuned on the Ultra 3 and then
+    //    scaled by SCREEN WIDTH, which is the wrong ruler: the pill sits behind the SYSTEM CLOCK,
+    //    and watchOS keeps the status bar's type broadly constant while the screen changes. So on
+    //    a 44mm (k≈0.9) the pill shrank while the clock did not — "far too small" on the Series 6.
+    //    Getting it right meant another screenshot-converged pass per watch size, on top of the
+    //    many it had already cost.
+    //
+    //    ★★ And it darkened nothing. This is the SPECTRUM pane's top-right corner, which is
+    //    background — the trace fills from the bottom. It only looked necessary in a screenshot
+    //    taken with brightness cranked to maximum to force the trace up there, which is not a
+    //    usable display. At any real setting the clock is already on black.
+    //
+    //    ★ If a bright palette ever does reach that corner, the answer is a gradient the spectrum
+    //    draws for itself — not a fixed rectangle that has to be re-tuned per watch.
 
     // Hairline under the band, so the trace's baseline and the waterfall's top
     // edge don't bleed into one another.

@@ -54,9 +54,15 @@ struct FmdxView: View {
       // very top-right corner and can't be covered, so this sits a row DOWN (top 40) to clear it —
       // the connection method + link-quality pair the DAB/ADS-B screens carry.
       ZStack(alignment: .topTrailing) {
+        // ★★ THE PAIR STACKS, THE BATTERY SITS BESIDE IT. Three items in a row made this capsule
+        //   wide enough for the display's corner arc to cut the battery's right edge — seen at the
+        //   top-right of Jr's FM-DX screen on a 44mm, and this is the same layout. Method above
+        //   quality, matching the waterfall screen, so the two arrangements read as one idea.
         HStack(spacing: 6) {
-          ConnGlyph(transport: link.transport).font(.system(size: 11))
-          QualityGlyph(link: link)
+          VStack(spacing: 3) {
+            ConnGlyph(transport: link.transport).font(.system(size: 11))
+            QualityGlyph(link: link)
+          }
           BatteryPill(level: link.battery, scrim: false)
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
