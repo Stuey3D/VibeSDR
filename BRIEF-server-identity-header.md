@@ -19,6 +19,16 @@ corner so all servers have the same look and feel as UberSDR."*
 screen. It is what makes a signal mean something — a station heard on a loop in Northamptonshire is
 a different claim from the same station on a beverage in Norway.
 
+## ★ Confirmed missing on VibeServer too (2026-07-30)
+The WEB client shows the server's name top-right; the APP does not, even on VibeServer where we
+know the name. Stuart: *"not an urgent fix though as it may mess with the timer clock and I don't
+want to break that so close to release."*
+
+★★ **THE TIMER CLOCK SHARES THAT CORNER** — the "YOUR TURN ENDS IN 29:18" session countdown sits
+exactly where the name would go. That is the real constraint, not the sourcing: whatever is built
+must give way to the countdown, or share the corner deliberately, and it must be tested WITH a
+session limit running. Do not treat the corner as empty just because it usually looks it.
+
 ## Where the text comes from
 We already hold it, which is why this is cheap:
 - The **directory entry** (name, location, country) for a listed server.
