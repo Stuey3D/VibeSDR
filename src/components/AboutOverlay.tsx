@@ -348,7 +348,10 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
               <Text style={styles.appVer}>
                 Version {APP_VERSION}{Constants.nativeBuildVersion ? ` · build ${Constants.nativeBuildVersion}` : ''}
               </Text>
-              <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers — and your own RTL-SDR hardware</Text>
+              {/* ★ Keep this in step with the backends we actually speak. It sat at three receivers and
+                    "your own RTL-SDR" long after FM-DX, SpyServer, VibeServer, the Airspy HF+ and the
+                    SDRplay RSP arrived — a one-line description of the app that had stopped describing it. */}
+              <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX, KiwiSDR, FM-DX and SpyServer receivers — and your own RTL-SDR, Airspy HF+ or SDRplay, shared by VibeServer</Text>
             </View>
           </View>
 
