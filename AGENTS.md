@@ -32,3 +32,15 @@ Grep for the control's OLD home and its NAME before you finish the move. A tour 
 worse than no tour: someone hunts for a slider that is not there and concludes the FEATURE is
 missing, not the card. And do not trust these files to be right — they describe a layout that was
 true when they were written.
+
+# A CONTROL THAT ONLY WORKS ON ONE RADIO SHOULD NOT BE THERE
+
+Stuart: *"I would rather a control be removed if it only works in one scenario than keep it there
+dead."* Three radios are supported and they do not share a gain model — RTL has a gain list, the
+Airspy HF+ has no variable gain at all (attenuator + preamp), the SDRplay RSP uses IF gain
+reduction. A control built for one of them is dead or misleading on the other two.
+
+Either branch on `radio.driver` and draw the right control (as `LocalHardwarePanel` does), or
+remove it. Do not leave it visible and inert — the user concludes the FEATURE is broken, not the
+control. Same rule as "never offer a control whose every use is a no-op" in `FmdxSettings`.
+

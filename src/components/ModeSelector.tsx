@@ -7,7 +7,6 @@ import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
 import { NativeEventEmitter, NativeModules } from 'react-native';
-import GainSlider from './GainSlider';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper';
@@ -132,11 +131,15 @@ interface ModeSelectorProps {
   activeDecoder?: string;
   onSelect: (mode: Mode) => void;
   onClose:  () => void;
-  /** V4 local hardware: quick-access RTL-SDR gain control shown above the modes. */
-  gainControl?: {
-    gains: number[]; gainTenthDb: number; auto: boolean;
-    onAuto: (auto: boolean) => void; onGain: (tenthDb: number) => void;
-  };
+  /** ★★★ THE QUICK-ACCESS GAIN SLIDER WAS REMOVED (2026-07-30). It only ever spoke ONE radio's
+   *  gain model — the RTL's list of discrete tuner gains — and three are supported: the Airspy HF+
+   *  has no variable gain at all (fixed front end, +6 dB preamp, 0-48 dB attenuator in 6 dB steps)
+   *  and the SDRplay RSP uses IF gain reduction with an LNA state table. So on two of the three it
+   *  was a live-looking control that did nothing, or worse, described the hardware wrongly.
+   *  ★★ LocalHardwarePanel already branches on radio.driver and draws the RIGHT control for each —
+   *  that is where gain belongs. Stuart: "I would rather a control be removed if it only works in
+   *  one scenario than keep it there dead."
+   *  If it comes back, it must be per-radio like the panel, not a second copy of the RTL slider. */
   /** Bandwidth (passband) — a demodulator control, so it lives here under the
    *  mode grid. Mirrored sliders around the carrier; SYNC mirrors both edges. */
   filterLow?:    number;
@@ -176,7 +179,7 @@ interface ModeSelectorProps {
   } | null;
 }
 
-export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl,
+export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
   filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth,
   showServerMaps = false, onServerMap, owrxPages,
   decoderControls, spotsControls }: ModeSelectorProps) {
@@ -265,17 +268,6 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
           DEMODULATOR
         </Text>
-        {gainControl ? (
-          <View style={st.gainWrap}>
-            <GainSlider
-              gains={gainControl.gains}
-              gainTenthDb={gainControl.gainTenthDb}
-              auto={gainControl.auto}
-              onAuto={gainControl.onAuto}
-              onGain={gainControl.onGain}
-            />
-          </View>
-        ) : null}
         <NavRow><View style={st.grid}>
           {common.map(m => (
             <NavItem key={m.id} onPress={() => pick(m.id)}>{(navFocused, navRef) => (
@@ -574,7 +566,6 @@ const st = StyleSheet.create({
   },
   sheetLabel:   { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
   grid:         { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  gainWrap:     { marginBottom: 12, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.15)' },
   bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12 },
   bwHalfSlider: { flex: 1, height: 32 },
   bwEdgeVal:    { color: BW_GOLD, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },

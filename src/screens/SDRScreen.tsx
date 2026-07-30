@@ -5869,9 +5869,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Mode selector */}
       <ModeSelector
         visible={modeSelOpen}
-        gainControl={isLocal ? {
-          gains: hwGains, gainTenthDb: hwGain, auto: hwAutoGain, onAuto: onHwAuto, onGain: onHwGain,
-        } : undefined}
         current={status.mode}
         modes={isLocal ? LOCAL_MODES : route.params.serverType === 'owrx' ? serverModes : undefined}
         activeDecoder={route.params.serverType === 'owrx'
