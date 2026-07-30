@@ -536,6 +536,16 @@ export class UberSDRClient {
   setHwBiasT(on: boolean) { this._sendCtl({ type: 'biasT', on }); }
   setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
   setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
+  /** ★★★ FM DE-EMPHASIS — tau in SECONDS (0 = off, 50e-6 EU/UK, 75e-6 Americas).
+   *
+   *  These two were MISSING, and their absence is why both controls did nothing on a networked
+   *  server: SDRScreen called the LOCAL USB module for them, which on a remote VibeServer is an
+   *  idle shim while the server does the decoding. The server has always accepted them and the web
+   *  client has always sent them — the app was the only client that never did. Found on a Mac
+   *  against VibeServer with an Airspy (Stuart, 2026-07-30), and de-emphasis is the first thing an
+   *  FM-DXer reaches for: Hans picked it up immediately the first time he used VibeServer. */
+  setDeemph(tau: number)  { this._sendCtl({ type: 'deemph', tau }); }
+  setStereo(on: boolean)  { this._sendCtl({ type: 'stereo', on }); }
   // Capture sample rate = the spectrum span the server sends. The shim restarts
   // the IQ stream and pushes a fresh config, so the waterfall span self-updates.
   setHwSampleRate(rate: number) { this._sendCtl({ type: 'sampleRate', value: Math.round(rate) }); }

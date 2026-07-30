@@ -600,6 +600,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHwGain?: (t: number, a: boolean) => void; setHwBiasT?: (on: boolean) => void;
         setHwAgc?: (on: boolean) => void; setHwPpm?: (n: number) => void;
         setHwSampleRate?: (r: number) => void;
+        setDeemph?: (tau: number) => void; setStereo?: (on: boolean) => void;
       } | null)
     : null), [isRemoteShim]);
 
@@ -656,8 +657,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (rc) rc.setHwAgc?.(on); else LocalHw?.setAgc?.(on);
   }, [LocalHw, hwClient]);
   const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
-  const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
-  const onHwStereo = useCallback((on: boolean) => { setHwStereo(on); LocalHw?.setStereoEnabled?.(on); }, [LocalHw]);
+  // ★★★ THESE TWO WENT ONLY TO THE LOCAL MODULE, so on a networked server they did NOTHING —
+  //   the call landed on this app's own idle shim while the SERVER did the decoding. Every other
+  //   hardware control already had the `rc ? remote : local` branch; these were simply never given
+  //   one. De-emphasis is the first thing an FM-DXer reaches for.
+  //   ★ `directSampling` below still has no remote branch. Left alone deliberately: it is RTL-only,
+  //     admin-gated server-side, and changing it is a hardware mode switch — not something to add
+  //     untested days before a release.
+  const onHwDeemph = useCallback((tau: number) => {
+    setHwDeemph(tau);
+    const rc = hwClient();
+    if (rc) rc.setDeemph?.(tau); else LocalHw?.setDeemphasis?.(tau);
+  }, [LocalHw, hwClient]);
+  const onHwStereo = useCallback((on: boolean) => {
+    setHwStereo(on);
+    const rc = hwClient();
+    if (rc) rc.setStereo?.(on); else LocalHw?.setStereoEnabled?.(on);
+  }, [LocalHw, hwClient]);
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
   // re-subscribing the whole audio callback every time the threshold moves.
   const hwSquelchRef = useRef(-100);

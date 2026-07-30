@@ -4,7 +4,7 @@ import {
   Switch, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from './PanelNav';
+import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
@@ -100,6 +100,14 @@ function Seg<T>({ options, value, onChange, fmt, slot }: {
   /** Claims a place in the panel's focus order — see the note in LocalHardwarePanel. */
   slot?: (run: () => void) => boolean;
 }) {
+  // ★★★ THE FOCUS RING IS NOT A SELECTION. It was drawn whenever a slot held keyboard focus —
+  //   including when nobody had touched a keyboard — so opening this panel put a green ring on the
+  //   FIRST control (AGC threshold "Low") while the actually-selected option was highlighted too.
+  //   Two green things, and it reads as both being on. (Stuart, 2026-07-30, on the Mac.)
+  //   The app already tracks this: PanelNav.useKeyboardMode() is true only after a real key, and
+  //   SDRScreen calls noteTouchInteraction() on every touch to end it. This panel simply never
+  //   asked. Gate the ring on it and the ambiguity disappears without changing the focus order.
+  const kb = useKeyboardMode();
   return (
     <View style={styles.segRow}>
       {options.map((o, i) => {
@@ -108,7 +116,7 @@ function Seg<T>({ options, value, onChange, fmt, slot }: {
         return (
           <TouchableOpacity key={i}
             style={[styles.seg, active && styles.segActive,
-                    on && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                    on && kb && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
             onPress={() => onChange(o)}>
             <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
           </TouchableOpacity>
@@ -120,6 +128,8 @@ function Seg<T>({ options, value, onChange, fmt, slot }: {
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
+  // ★ Same rule as Seg's ring: only show keyboard focus when a keyboard is actually driving.
+  const kbNav = useKeyboardMode();
   const [adminPw, setAdminPw] = useState('');
   // ★ Decide from what the RADIO SAID, never from what else happens to be set.
   const isAhf = p.radio?.driver === 'airspyhf';
@@ -345,9 +355,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           {!p.isSpy && isRtl && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
-            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
             <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
-            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm + 1)) && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm + 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
           </View>
 
           <View style={styles.toggleRow}>
