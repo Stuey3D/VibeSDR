@@ -212,19 +212,39 @@ int main(int argc, char** argv) {
         // ★ THIS IS THE ROW TO LOOK AT before enabling FM-DX on a small host. Shipped
         // un-benchmarked on 2026-07-27 with a warning on the switch rather than a number we
         // had made up; this row replaces the guess.
-        {"WFM (stereo)",         RxPipeline::Mode::WFM,     180000.0, false, false, false},
-        {"WFM (stereo + RDS)",   RxPipeline::Mode::WFM,     180000.0, true,  false, false},
-        {"WFM + ADV RDS",        RxPipeline::Mode::WFM,     180000.0, true,  false, true },
-        {"FM-DX (RDS + noise)",   RxPipeline::Mode::WFM,     180000.0, true,  true , false},
-        {"FM-DX + ADV RDS",      RxPipeline::Mode::WFM,     180000.0, true,  true , true },
+        // ★★ THE "FM-DX" ROWS ARE GONE — that mode was removed, and the flag they set
+        //    (setRdsNoiseCorrection) is now tied to the ADVANCED RDS PANEL instead:
+        //    local_sdr_shim.cpp does `if (type=="rdsx") { rdsxOn.store(on); setRdsNoiseCorrection(on); }`
+        //    and turns it off again with "nobody looking: stop paying for it". So noise correction
+        //    and the ADV payload are ONE switch in the shipping app, and the old table measured two
+        //    combinations that cannot occur. The middle two rows below are kept only to ATTRIBUTE
+        //    the cost between the payload and the noise measurement — neither ships on its own.
+        {"WFM (stereo)",             RxPipeline::Mode::WFM,     180000.0, false, false, false},
+        {"WFM + RDS",                RxPipeline::Mode::WFM,     180000.0, true,  false, false},
+        {"WFM + RDS, noise corr",    RxPipeline::Mode::WFM,     180000.0, true,  true , false},
+        {"WFM + ADV payload",        RxPipeline::Mode::WFM,     180000.0, true,  false, true },
+        {"WFM + ADV RDS (as shipped)", RxPipeline::Mode::WFM,   180000.0, true,  true , true },
         {"NFM",                  RxPipeline::Mode::NFM,      12500.0, false, false, false},
         {"AM",                   RxPipeline::Mode::AM,       10000.0, false, false, false},
         {"SSB (USB)",            RxPipeline::Mode::SSB_USB,   2800.0, false, false, false},
     };
-    // ★ 912 kHz is the Airspy HF+ Discovery's top rate (added 2026-07-30 — the HF+ became a
-    //   supported radio after this list was written, and it is the one people run on a Pi for FM
-    //   DX). Lowest rate first would reorder the table, so it goes last to keep the descending run.
-    const double rates[] = {2400000.0, 2048000.0, 1024000.0, 912000.0};
+    // ★ ONE RATE PER RADIO WE ACTUALLY SUPPORT (updated 2026-07-30 — the list predated both the
+    //   Airspy HF+ and the SDRplay RSP, so the two newest receivers were the two not measured):
+    //     6.0 MSPS  SDRplay RSP, a wide setting — the one that will break a Pi first
+    //     2.4 MSPS  RTL-SDR, the fastest it reliably sustains
+    //     2.048/1.024 MSPS  RTL-SDR, lower settings
+    //     2.0 MSPS  SDRplay RSP MINIMUM — zero-IF floor (sdrplay_source.cpp clamps below this),
+    //               so it is the cheapest an RSP can be run and the realistic serving rate
+    //     912 kHz   Airspy HF+ Discovery top rate — what people put on a Pi for FM DX
+    //
+    // ★★★ OPEN QUESTION, 2026-07-30: the stereo pilot LOCKS at 2.4 / 2.048 / 1.024 MSPS and does
+    //     NOT lock at 6.0 or at exactly 2.0. 2.0 matters — it is the RSP's zero-IF floor, so it is
+    //     a rate real users will pick. Either the synthetic MPX in makeIq() lands badly at those
+    //     rates (a bench artefact), or WFM stereo genuinely fails at the channel rates they
+    //     produce (a shipping bug affecting every RSP user on the minimum rate). The bench prints
+    //     its own warning on those rows, so the numbers are not silently wrong — but find out
+    //     which it is before quoting any WFM figure at 6.0 or 2.0.
+    const double rates[] = {6000000.0, 2400000.0, 2048000.0, 2000000.0, 1024000.0, 912000.0};
 
     for (double fs : rates) {
         printf("── %.3f MSPS ─────────────────────────────────────────────\n", fs / 1e6);
