@@ -174,3 +174,51 @@ one step what a whole afternoon of reasoning could not. Build that comparison IN
   says how many radios/clients the host can carry, the runtime guard enforces it.
 - **The Pi 5 demo server** — would have answered "can 20 users share this?" by measurement rather
   than by my arithmetic in `BRIEF-public-demo-server.md` §3.
+
+---
+
+# ★★★ FIRST JOB: WHAT DOES THE NEW RDS WORK ACTUALLY COST?
+
+**Asked 2026-07-30 (Stuart):** *"we need to know if all the new RDS stuff adds a huge amount of
+processing overhead."* Nothing measures Advanced RDS today, and the Pi is the machine that decides
+whether it matters.
+
+## What is ALREADY known (do not re-measure this)
+From `memory/rds_cost_and_decimation.md`, 2026-07-25, on a 32-bit ARM Pi at 2.4 MSPS:
+
+| | % of one core |
+|---|---|
+| WFM stereo, no RDS | **101%** |
+| + basic RDS, BEFORE the 8x fix | 190% (could not serve one listener) |
+| + basic RDS, AFTER the fix | **112%** (predicted 112, measured 112.0) |
+
+So **basic RDS costs ~11% of a core** on the Pi. That figure is trustworthy — it was predicted from
+a model and then confirmed on hardware.
+
+## ★★ THE EXTRAS ARE GATED — verify this holds before blaming them
+`pipeline.cpp`: *"The MPX spectrum, computed only when the Advanced RDS panel is watching"* —
+`if (wantRds && cb_.rdsExt)`. The shim gates too (`rdsxOn`, and `sendRdsExt` runs on every OTHER
+frame, not every frame). **A listener with the panel closed should cost the same as before v10.**
+★ The first measurement should CONFIRM that, because if it is wrong, every listener is paying for a
+panel almost nobody opens — which would be the whole finding.
+
+## The matrix to measure (Stuart's shape)
+One radio, 2.4 MSPS (and repeat at 912 kHz for the Airspy HF+), steady state, % of one core:
+
+1. **Advanced RDS + stereo** — panel OPEN, all plots live
+2. **Advanced RDS + stereo, panel CLOSED** — ★ the gating check
+3. **Traditional RDS + stereo** — the 112% baseline above
+4. **Stereo only, RDS off**
+5. **WFM mono**
+6. **SSB / AM / NFM** — the cheap floor, for scale
+
+★ Then the number that actually matters: **listeners per Pi** for each row, and whether an open
+Advanced RDS panel changes the recommendation.
+
+## Where to measure
+- **The Pi is the machine that decides.** The Mac has so much headroom that a real cost hides in the
+  noise: the same RDS fix that took the Pi from 190% to 112% only moved the Mac from 5.4% to 3.5%.
+- ★ 32-bit vs 64-bit ARM matters — the 2026-07-25 figures are 32-bit.
+- Sustained, not cold: a Pi in a case throttles, and the whole point of the Sustained tier above is
+  that the trustworthy number comes from a hot machine.
+
