@@ -12,6 +12,18 @@ Stuart: *"that will require some extra work by us to implement."* Worth doing, s
 
 Both of the first two are diagnosed below; neither needs investigation, only doing.
 
+## ★★ WHY THIS WAITED — the testing is the work, not the code
+Stuart, 2026-07-30: *"I'm not going to risk our submissions on these as the boxes will need to be
+tested on all my devices first which is a big work load."* Correct, and worth stating so nobody
+later mistakes it for a small change:
+
+The BIG button touches **three height constants** and **every decoder mode**, so the matrix is
+modes × devices: SSTV · WEFAX · RTTY · NAVTEX · Morse · Whisper · FT8 · ADS-B · DAB, across phone,
+iPad, Mac, and both orientations. A height that behaves on one mode can collapse another — ADS-B
+already needs `height` where the rest need `maxHeight`, and it renders an empty box if that is got
+wrong. **The code is an afternoon; the testing is the project.**
+★ Budget for it, and do it when a release is NOT in review.
+
 ---
 
 ## 1. ★★★ THE DECODER BOX CANNOT BE MADE BIGGER — for any decoder
