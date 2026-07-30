@@ -7,28 +7,45 @@ needs investigation, only doing.
 
 ## 1. ★★ You cannot see a whole SSTV image on an iPad
 
-**Symptom:** the decoder box is too short on iPad — an SSTV picture has to be scrolled around
-instead of being looked at.
+**Symptom:** the decoder box is too short — an SSTV picture has to be scrolled around instead of
+looked at.
 
-**Cause:** the image height is a **hardcoded 200 points**, on every device.
-- `DecoderPanel.tsx`: `<DecoderImageCanvas maxHeight={200} …>` and `dp.body: { maxHeight: 200 }`
-- `DecoderImageCanvas.tsx` scales the image to the panel's WIDTH with aspect preserved:
-  `scale = panelW / dispDims.w; drawH = dispDims.h * scale` — then puts it in a `ScrollView` capped
-  at `maxHeight`.
+**Cause:** the image height is a **hardcoded 200 points** on every device
+(`DecoderPanel.tsx`: `maxHeight={200}`, `dp.body: { maxHeight: 200 }`), while
+`DecoderImageCanvas` scales the image to the panel's WIDTH with aspect preserved
+(`scale = panelW / dispDims.w`).
+★★★ **So the wider the screen, the worse it gets.** A 320×256 frame draws ~288 pt on a phone and
+~640 pt on an iPad — both into the same 200 pt window. The device with the most room to spare shows
+the least of the picture.
 
-★★★ **The wider the screen, the WORSE it gets.** A 320×256 SSTV frame on a phone at ~360 pt wide
-draws ~288 pt tall — already over the cap. On an iPad at ~800 pt wide it draws ~640 pt tall into the
-same 200 pt window, so you see under a third of the picture. The one device with room to spare shows
-the least of it.
+## ★★★ THE FIX ALREADY EXISTS AND ALREADY SHIPS — copy the Advanced RDS panel
+Stuart, 2026-07-30: *"we keep the decode box small on purpose so the waterfall and spectrum remain
+visible — well if a user wants to look at SSTV then THAT is the primary content, so the big button
+could expand the window to show the full image."*
 
-**Fix:** make the cap responsive instead of constant — a fraction of the window height (with a
-sensible floor), or enough to show the full `drawH` when the space exists. The scroll should be the
-fallback for a tall WEFAX roll, not the normal way to view a 4:3 SSTV frame.
-★ Check WEFAX too: it grows continuously, so it legitimately wants scrolling — the cap must not
-become "infinite" for that mode.
-★ Check landscape and Split View on iPad, where height is scarce and width is not.
+`AdvRdsPanel.tsx` solved this exact problem, and both hazards worth worrying about are already
+handled there:
+```js
+const { height: winH } = useWindowDimensions();
+const insets = useSafeAreaInsets();
+const avail  = Math.max(180, winH - p.bottomOffset - insets.top - 16);  // never into the status bar
+const maxH   = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.34);     // BIG vs SMALL
+```
+★★ Its own comment records the bug not to repeat: *"LEAVE THE STATUS BAR ALONE. In BIG mode the
+panel is anchored at the bottom and grew straight up past the notch, covering the clock and
+battery."* That is already fixed here — inherit it rather than rediscover it.
 
----
+**So:** a BIG/SMALL button on the decoder panel, same place and same behaviour as RDS's.
+- **SMALL** = today's 200 pt. The waterfall and spectrum stay visible, which is why the box is
+  small in the first place — that is a deliberate choice, not an oversight.
+- **BIG** = grow to `avail`, so a whole SSTV frame is visible at once.
+- ★ **The image SHRINKS TO FIT when the box cannot grow any further** (Stuart). Scale by
+  `min(panelW / w, maxH / h)` rather than by width alone — that is the one change needed in
+  `DecoderImageCanvas`, and it makes the picture fit on a phone in landscape too.
+- ★ **WEFAX still scrolls.** It grows continuously, so it legitimately wants a scroll even in BIG —
+  shrink-to-fit is right for a fixed-size SSTV frame, wrong for an endless fax roll.
+- ★ Do NOT copy the RDS panel's other trick: there, SMALL renders *fewer fields*. Here both modes
+  show the same one image; only the box changes.
 
 ## 2. ★★ SAVE opens a BLANK share sheet on macOS
 
