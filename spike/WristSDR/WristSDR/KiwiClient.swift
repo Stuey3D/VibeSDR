@@ -358,7 +358,11 @@ final class KiwiClient: ObservableObject, SDRClient {
         guard let self, !self.everFrame else { return }
         // Include the last socket state (debug): "ready" ⇒ socket opened but Kiwi sent no frames
         // (handshake/UA/protocol), "waiting"/"preparing" ⇒ the connection never completed.
-        self.fail("No data from this KiwiSDR after 12s.\n[state: \(self.sockState)]")
+        if let advice = self.ownerBlockAdvice(self.sockState) {
+          self.fail("\(advice)\n[state: \(self.sockState)]")
+        } else {
+          self.fail("No data from this KiwiSDR after 12s.\n[state: \(self.sockState)]")
+        }
       }
     }
     RunLoop.main.add(ct, forMode: .common); connectTimer = ct
@@ -372,6 +376,23 @@ final class KiwiClient: ObservableObject, SDRClient {
   /// per-IP time limit above all. The plain `guard !everFrame` was written for handshake-time
   /// refusals, and would have silently swallowed exactly the message that explains a mid-session
   /// kick, leaving the reconnect loop to guess again.
+  /// ★★★ SAY WHAT THE OWNER DID, NOT WHAT THE SOCKET SAID. A KiwiSDR that only accepts its own web
+  /// page does not send a refusal — it lets the WebSocket open and then aborts it, so the user was
+  /// shown `POSIXErrorCode(rawValue: 53): Software caused connection abort`, which reads as "Jr is
+  /// broken" when it is the receiver's owner exercising a choice we should respect and explain.
+  /// (ECONNABORTED at handshake time is the signature; it is not something OUR end can do anything
+  /// about, so the message must not invite the user to retry.)
+  ///
+  /// Deliberately hedged — a blocked client is the usual cause but not the only one a Kiwi can abort
+  /// for. See [[third_party_receiver_etiquette]]: we identify ourselves honestly and honour a no.
+  private func ownerBlockAdvice(_ state: String) -> String? {
+    let s = state.lowercased()
+    guard s.contains("connection abort") || s.contains("rawvalue: 53") else { return nil }
+    return "This KiwiSDR closed the connection straight away.\n"
+         + "Its owner has most likely restricted it to their own web page, which blocks apps like "
+         + "Jr. Nothing you can change at this end — try another server."
+  }
+
   private func fail(_ msg: String, midSession: Bool = false) {
     guard !errorShown, midSession || !everFrame else { return }
     gaveUp = true          // a stated rule is final — never keep knocking after one
@@ -512,7 +533,7 @@ final class KiwiClient: ObservableObject, SDRClient {
           if self.everFrame {
             self.retrySnd(reason: st)
           } else {
-            self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
+            self.fail("\(self.ownerBlockAdvice(st) ?? "This KiwiSDR wouldn’t open a connection.")\n[\(st)]")
           }
         }
       }
