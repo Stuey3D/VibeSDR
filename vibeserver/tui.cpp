@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <algorithm>
 
 namespace {
 
@@ -193,7 +194,22 @@ void draw(int sel, const std::string& msg, bool editing) {
     row++;
 
     attron(A_BOLD); mvprintw(row++, 2, "Settings"); attroff(A_BOLD);
-    for (size_t i = 0; i < fields.size(); i++) {
+
+    // ★★★ SCROLL, OR THE BOTTOM HALF IS UNREACHABLE. The full list is longer than a default 80x24
+    // terminal, and an SSH window is exactly where you get 24 lines — so without this the Radio and
+    // Advanced sections simply do not exist for anyone who has not resized their window, which is
+    // the same class of bug as a control drawn behind another one.
+    // ★ Keep the SELECTED row visible and let the rest move around it, rather than paging: the
+    // cursor is where attention is, and a list that jumps a page at a time loses your place.
+    const int listTop  = row;
+    const int reserve  = 5;                                   // help + hint + message lines below
+    const int visible  = std::max(4, LINES - listTop - reserve);
+    static int scroll  = 0;
+    if (sel < scroll) scroll = sel;
+    if (sel >= scroll + visible) scroll = sel - visible + 1;
+    if (scroll > (int)fields.size() - visible) scroll = std::max(0, (int)fields.size() - visible);
+
+    for (size_t i = (size_t)scroll; i < fields.size() && (int)(i - scroll) < visible; i++) {
         if (isHeading(fields[i])) {
             attron(A_BOLD | COLOR_PAIR(4));
             mvprintw(row++, 2, "%s", fields[i].label + 1);
@@ -209,6 +225,8 @@ void draw(int sel, const std::string& msg, bool editing) {
         else mvprintw(row, 23, "%s", v.c_str());
         row++;
     }
+    if (scroll > 0 || scroll + visible < (int)fields.size())
+        mvprintw(row++, 2, "   … %d of %d", sel + 1, (int)fields.size());
     row++;
     mvprintw(row++, 2, "%s", fields[sel].help);
     row++;
