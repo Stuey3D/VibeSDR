@@ -398,6 +398,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
   /** Counting down to handing a shared receiver back — null when not idle. */
   const [idleWarnLeftMs, setIdleWarnLeftMs] = useState<number | null>(null);
+  /** The RECEIVER's own idle limit in seconds, 0 = it declares none. From POST /connection. */
+  const [serverIdleSecs, setServerIdleSecs] = useState(0);
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
   /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
   const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
@@ -2374,6 +2376,18 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         setSessionEndsAt(Date.now() + secs * 1000);
       },
+      // ★★★ THE RECEIVER'S OWN TERMS, read from POST /connection at connect (see
+      // UberSDRClient._checkConnection). Two uses, both important:
+      //  1. Warn BEFORE the server drops us. Their web client shows its own dialog at
+      //     (session_timeout − 30 s) — driven by a LOCAL TIMER, not by any server message. There is
+      //     no "are you still there?" packet to receive; the server simply counts down and cuts.
+      //     So the warning has to be OURS, built from this number. Without it Stuart was booted
+      //     from WESSEX at 4 minutes with no warning at all (2026-07-31).
+      //  2. Stand our OWN hand-back down when the server already manages presence — see below.
+      onIdlePolicy: (p) => {
+        if (destroyed.current) return;
+        setServerIdleSecs(p.idleSecs > 0 ? p.idleSecs : 0);
+      },
       onReconnecting: (busy: boolean) => {
         // Tell the WRIST a recovery is under way. There are two links in series and
         // they fail independently; from the watch, "the phone is healing its server
@@ -3182,6 +3196,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     // Your own radio has no queue to be polite to: local hardware, an RTL-TCP or
     // SpyServer shim, and your own VibeServer are all yours to leave running.
+    // ★★★★ THE 30-MINUTE HAND-BACK IS OFF. Stuart, 2026-07-31: "I would remove our 30 minute idle
+    // timer — servers who have time limits have already got them set, other servers are happy for
+    // unlimited."
+    //
+    // ★★★ THE PRINCIPLE: A SESSION LIMIT IS THE OPERATOR'S DECISION TO EXPRESS. WESSEX declares a
+    // 4-minute idle limit AND a 4-hour cap and is heavily moderated besides — ours added nothing
+    // there but a second, stricter limit nobody asked for. An operator who set NO limit has made a
+    // choice too, and inventing one on their behalf is us deciding their policy. Same rule as
+    // never inventing a hardware readout the driver does not report.
+    //
+    // ★★ WHAT THIS DOES **NOT** EXCUSE. The hand-back was written because of one specific finding
+    // in memory/third_party_receiver_etiquette.md: "our Kiwi keepalive runs at 1 Hz FOR EVER, which
+    // DEFEATS the server's own 'are you still there' kick." On Kiwi, "their timer already handles
+    // it" may be false *because of us*. Removing ours while still sending an unconditional
+    // keepalive is the worst combination: no courtesy of ours, and theirs disabled.
+    // ★★★ SO THE FOLLOW-UP IS MANDATORY, NOT OPTIONAL: make the Kiwi keepalive ACTIVITY-DRIVEN,
+    // exactly as UberSDR's now is (see UberSDRClient.noteActivity). Until that ships, Kiwi is the
+    // one backend where this removal is a net loss.
+    //
+    // ★ Left inert rather than deleted for one release, so the decision is reversible and the
+    // reasoning stays attached to the code. Delete the effect, IDLE_RELEASE_MS, the warn pill and
+    // idleWarnLeftMs once the Kiwi keepalive lands.
+    setIdleWarnLeftMs(null);
+    return;
+    // eslint-disable-next-line no-unreachable
     if (isLocal || !connected) { setIdleWarnLeftMs(null); return; }
     const t = setInterval(() => {
       // The same "someone IS watching" exemptions the powersave saver uses: a watch
