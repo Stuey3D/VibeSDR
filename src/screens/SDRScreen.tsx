@@ -3107,9 +3107,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (RTTY/NAVTEX/Morse/Whisper), an image growing a line at a time (SSTV/WEFAX — its info string
   // carries the line count, so it changes as the picture builds), FT8/CW spot rows, and ADS-B
   // aircraft updates. Each is genuine evidence that the receiver is doing work someone asked for.
-  const markDecodeOutput = useCallback(() => { lastDecodeRef.current = Date.now(); }, []);
+  const markDecodeOutput = useCallback(() => {
+    lastDecodeRef.current = Date.now();
+    // ★★ AND TELL THE SERVER. UberSDR counts down session_timeout and a ping resets it; decoder
+    // output is real evidence a human is waiting on a result, which is exactly what that timer
+    // asks. Throttled inside the client to ~10 s, and it only answers the LIVENESS limit — the
+    // four-hour fairness cap is never touched. See UberSDRClient.noteActivity.
+    (client.current as { noteActivity?: () => void } | null)?.noteActivity?.();
+  }, []);
 
   const markInteract = useCallback(() => {
+    // ★ A touch is the plainest evidence of presence there is — answer the receiver's liveness
+    // check with it, on BOTH sockets, exactly as UberSDR's own web client does.
+    (client.current as { noteActivity?: () => void } | null)?.noteActivity?.();
     lastInteractRef.current = Date.now();
     if (idleActiveRef.current) {
       idleActiveRef.current = false;
