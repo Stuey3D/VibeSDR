@@ -41,6 +41,17 @@ struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
     bool        useUsb  = true;          // default: drive the dongle directly
     bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
+    // ★★★ THE ADMIN / OPERATOR SETTINGS. Without these a Pi CANNOT SAFELY BE MADE PUBLIC — Stuart,
+    // 2026-07-31. The admin password is not a convenience: it is what stands between a stranger and
+    // BIAS-T (DC on the feedline), DIRECT SAMPLING (reconfigures the front end) and CALIBRATION
+    // (miscalibrates the radio invisibly and permanently). The Mac has had all of this since v10;
+    // the headless build shipped without any of it, which made it the LEAST safe place to host.
+    std::string adminPass;
+    int         sessionLimitMin = 0;     // per-listener minutes; 0 = unlimited
+    bool        forceIdleSaver  = false; // listeners may not switch idle power-saving off
+    int         uncompressed    = 0;     // 0 = off, 1 = listener's choice, 2 = compatibility only
+    // Receiver identity — published to every listener, and the reason a directory entry is useful.
+    std::string rxName, rxPlace, rxIso, rxGrid, rxLat, rxLon;
     std::string tcpHost = "127.0.0.1";   // rtl_tcp source (when --tcp is given)
     int         tcpPort = 1234;
     double      freq    = 9'410'000;     // Hz
@@ -76,7 +87,21 @@ void usage() {
         "  --no-web          do not serve the browser client at GET /\n"
         "  -h, --help\n\n"
         "By default the dongle is driven DIRECTLY over libusb — nothing else to install or run.\n"
-        "--tcp is for development against a remote or synthetic source.\n");
+        "--tcp is for development against a remote or synthetic source.\n"
+        "\nReceiver identity (published to listeners)\n"
+        "  --name TEXT       receiver name shown over the spectrum\n"
+        "  --place TEXT      town or area shown beneath it\n"
+        "  --country XX      two-letter code; sets the flag and the ITU band plan\n"
+        "  --locator GRID    Maidenhead square (deliberately coarse ~4 km)\n"
+        "  --lat N --lon N   exact coordinates; these win over a locator\n"
+        "\nAccess and operator limits\n"
+        "  --pin SECRET          who may CONNECT at all\n"
+        "  --admin-pass SECRET   who may change settings that can DAMAGE the radio\n"
+        "                        (bias-T, direct sampling, calibration). Set this on any\n"
+        "                        receiver reachable from the internet.\n"
+        "  --session-limit MIN   per-listener time limit; 0 = unlimited\n"
+        "  --force-idle-saver    listeners may not switch idle power-saving off\n"
+        "  --uncompressed MODE   off | choice | compat  (raw audio is ~20x the bytes)\n");
 }
 
 bool parse(int argc, char** argv, Opts& o) {
@@ -108,6 +133,17 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--max-fps")   o.maxFps   = std::atof(need(i));
         else if (a == "--lock-rate") o.lockRate = std::atof(need(i));
         else if (a == "--no-web")    o.web      = false;
+        else if (a == "--admin-pass")     o.adminPass       = need(i);
+        else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
+        else if (a == "--force-idle-saver") o.forceIdleSaver = true;
+        else if (a == "--uncompressed")   { std::string v = need(i);
+            o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }
+        else if (a == "--name")     o.rxName  = need(i);
+        else if (a == "--place")    o.rxPlace = need(i);
+        else if (a == "--country")  o.rxIso   = need(i);
+        else if (a == "--locator")  o.rxGrid  = need(i);
+        else if (a == "--lat")      o.rxLat   = need(i);
+        else if (a == "--lon")      o.rxLon   = need(i);
         else { std::fprintf(stderr, "unknown option: %s\n\n", a.c_str()); usage(); std::exit(2); }
     }
     return true;
@@ -146,6 +182,43 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerWebEnabled(o.web);
+    // ★★★ THE OPERATOR SETTINGS — every one of these setters already existed and the CLI simply
+    // never called any of them. So a headless VibeServer had no admin password, no per-listener
+    // limit, no audio policy and no identity: it was the LEAST safe place to host a public
+    // receiver, which is the exact opposite of what a Pi appliance is for
+    // (Stuart, 2026-07-31: "the Pi isn't safe to use to make a server public").
+    // ★★ ADMIN PASSWORD IS THE IMPORTANT ONE. The PIN decides who may LISTEN; this decides who may
+    // touch bias-T (DC on the feedline), direct sampling (reconfigures the front end) and
+    // calibration (miscalibrates the radio invisibly and permanently). A public receiver typically
+    // wants NO pin and a STRONG admin password.
+    LocalSdrShim::setVibeServerAdminSecret(o.adminPass);
+    LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
+    LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
+    LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
+    // ★ Identity, published to every listener — and what makes a directory entry worth anything.
+    // Built here in exactly the shape the Mac app produces (VibeServerApp.swift locationJson), so
+    // the same receiver looks the same however it is hosted.
+    {
+        std::string j; auto add = [&](const std::string& k, const std::string& v, bool quote) {
+            if (v.empty()) return;
+            if (!j.empty()) j += ",";
+            j += "\"" + k + "\":" + (quote ? "\"" + v + "\"" : v);
+        };
+        add("name",  o.rxName,  true);
+        add("iso",   o.rxIso,   true);
+        add("label", o.rxPlace, true);
+        add("lat",   o.rxLat,   false);
+        add("lon",   o.rxLon,   false);
+        add("grid",  o.rxGrid,  true);
+        if (!j.empty()) LocalSdrShim::setLocationJson("{" + j + "}");
+    }
+    // ★★ SAY SO WHEN IT IS WIDE OPEN. Someone putting a receiver on the internet should be told at
+    // the moment they start it, not discover it from a stranger changing their bias-T.
+    if (o.adminPass.empty())
+        std::fprintf(stderr,
+            "VibeServer: NO ADMIN PASSWORD SET — anyone who can reach this server may change\n"
+            "            bias-T, direct sampling and calibration. Set --admin-pass before\n"
+            "            putting this receiver on a public address.\n");
 
     // The shim is a singleton — one radio, one pipeline, one server per process.
     LocalSdrShim& shim = LocalSdrShim::instance();
