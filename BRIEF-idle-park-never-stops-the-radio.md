@@ -120,3 +120,56 @@ The Airspy HF+ LED is the cheapest instrument we have for this whole class of bu
 truth about whether the USB stream is running, independent of anything the app claims.
 **Blue with no client connected = parked but still streaming.** Use it to confirm any fix, and keep
 using it: it found this, and nothing in the software would have.
+
+---
+
+# ★★★ THE COUNTER-RISK: DOES POWERING DOWN LET ANDROID SLEEP ON US?
+Stuart, 2026-07-31: *"if we power down too much, will Android then put us to sleep and prevent us
+waking up from a network probe?"* and *"jetsam happens on low-RAM devices because it is detected as
+sleeping."*
+
+★★ **The right worry — because today the BUG is doing the job of a wakelock.** Continuous USB
+traffic is part of what keeps the phone responsive, so removing it removes something that
+accidentally works.
+
+## 1. ✅ The wake path is ALREADY EXPLICIT — this part is safe
+```kotlin
+// RtlTcpServerService.kt:100-101 — VibeServer's start path calls this service
+acquireWakeLock()      // PARTIAL_WAKE_LOCK
+wifiLock.acquire()     // WIFI_MODE_FULL_LOW_LATENCY (HIGH_PERF below the API level)
+```
+The CPU is held awake and Wi-Fi is held out of power-save **by design**, not by USB traffic. Those
+locks answer the network probe and they would still be held. ★ Manifest carries `WAKE_LOCK` and
+`CHANGE_WIFI_MULTICAST_STATE` (the latter matters for mDNS/`vibesdr.local`).
+
+## 2. ★★★ THE SHARP EDGE: `foregroundServiceType="connectedDevice"`
+```xml
+<service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" .../>
+```
+From **Android 14** the platform enforces that a foreground service type's preconditions actually
+hold. ★★★ **If "park" means CLOSING the USB device, we may stop qualifying for the very service type
+keeping us alive** — and the result is precisely Stuart's fear: the service torn down on a low-RAM
+device that has decided we are doing nothing.
+
+★★ **CHECK THIS AGAINST THE VERSIONED DOCS BEFORE WRITING ANY OF IT.** It could invalidate the
+close/reopen approach on Android specifically, while leaving it correct on macOS/Pi.
+
+## 3. ★★ THEREFORE THE MIDDLE OPTION — STOP STREAMING, KEEP THE HANDLE
+The RTL's draw is dominated by the **R820T tuner and the ADC**, so halting the stream recovers most
+of the power **without** releasing the USB claim, **without** changing FGS eligibility, and
+**without** the full close/reopen that the libusb race lives in.
+- Less saving than a true power-down; far less risk.
+- ★ **Verifiable by eye:** on the HF+ the LED should go from **blue back to orange**. Use it.
+- ★ A true close/reopen can still be the answer on macOS and the Pi, where no FGS rules apply.
+
+## 4. Two things that soften the risk
+- ★ `VibeServerRestore.kt` already rebuilds the server after a kill, so a jetsam is degraded rather
+  than fatal.
+- ★ **Doze does not apply while charging.** The mains setup Stuart tested is the SAFEST case; the
+  battery/field case is where this has to be proven. Do not generalise from a plugged-in test.
+
+## 5. ★ AND IT SHOULD PROBABLY BE THE USER'S CHOICE
+"Keep the radio ready (instant connect, more battery)" vs "power the radio down when idle (a second
+or two to first audio, far longer battery)". ★ The answer genuinely differs between a phone on a
+shelf at home and one in a bag on a hill — the same reasoning as the per-server idle override in
+`BRIEF-idle-handback.md` §2.
