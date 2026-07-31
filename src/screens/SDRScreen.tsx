@@ -400,6 +400,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [idleWarnLeftMs, setIdleWarnLeftMs] = useState<number | null>(null);
   /** The RECEIVER's own idle limit in seconds, 0 = it declares none. From POST /connection. */
   const [serverIdleSecs, setServerIdleSecs] = useState(0);
+  /** ★ Shown briefly ON CONNECTION so the terms are known BEFORE they bite. */
+  const [showIdleTerms, setShowIdleTerms] = useState(false);
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
   /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
   const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
@@ -3234,6 +3236,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearInterval(t);
   }, [isLocal, connected, serverIdleSecs]);
 
+  // ★★★ AND SAY IT ON CONNECTION, not only 30 s before the axe falls. A warning that arrives with
+  // 30 seconds left tells you what is ABOUT TO HAPPEN; it does not let you decide how to use the
+  // receiver. Stuart, 2026-07-31: "no warning that after 3:30 I will get asked if I'm still here
+  // and at 4 minutes it will boot me."
+  // ★★ Only where the limit is SHORT ENOUGH TO MATTER. A four-hour cap needs no announcement; four
+  // minutes does. Anything over 15 minutes is a normal session and saying so would be noise.
+  // ★ Shown once per connection, for a few seconds. Never invented: if the receiver declares no
+  // idle limit, nothing is said.
+  useEffect(() => {
+    if (isLocal || !connected || serverIdleSecs <= 0 || serverIdleSecs > 15 * 60) {
+      setShowIdleTerms(false); return;
+    }
+    setShowIdleTerms(true);
+    const t = setTimeout(() => setShowIdleTerms(false), 9000);
+    return () => clearTimeout(t);
+  }, [isLocal, connected, serverIdleSecs]);
+
   // ── The old 30-minute hand-back, left inert for one release ──────────────────
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const _deadIdleHandback = () => {
@@ -5242,6 +5261,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           then it is showing too) and, unlike that one, is DELIBERATELY tappable:
           this one ends the session, so it must be possible to stop it without
           hunting for a gesture. Any touch anywhere cancels it via markInteract. */}
+      {/* ★ The receiver's terms, stated on arrival. Its own wording: this is the SERVER's liveness
+          rule, not ours, and it exists so somebody else can have a turn on a busy receiver. */}
+      {showIdleTerms && idleWarnLeftMs === null ? (
+        <View pointerEvents="none"
+              style={[styles.powersavePill,
+                      { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34,
+                        borderColor: 'rgba(255,160,0,0.55)' }]}>
+          <Text style={[styles.powersavePillText, { color: 'rgba(255,190,110,0.95)' }]}>
+            {`\u23F1  This receiver disconnects idle listeners after ${
+              serverIdleSecs % 60 === 0 ? `${serverIdleSecs / 60} min` : `${serverIdleSecs}s`
+            } \u2014 it will ask first`}
+          </Text>
+        </View>
+      ) : null}
+
       {idleWarnLeftMs !== null ? (
         <TouchableOpacity
           activeOpacity={0.8}
