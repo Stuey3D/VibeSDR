@@ -1,0 +1,11 @@
+# USB access for VibeServer without root.
+# ★ The Airspy HF+ needed none of this on Debian 13 (it opened as an ordinary user), but an
+#   RTL-SDR generally does — and a rule that is already there is one less thing to debug in a
+#   cupboard. plugdev is the conventional group and the service joins it.
+# RTL-SDR (RTL2832U, all common tuner variants)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", MODE="0660", GROUP="plugdev"
+# Airspy HF+ / Discovery
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="800c", MODE="0660", GROUP="plugdev"
+# Airspy R2 / Mini (not supported yet, but harmless and saves a future puzzle)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60a1", MODE="0660", GROUP="plugdev"
