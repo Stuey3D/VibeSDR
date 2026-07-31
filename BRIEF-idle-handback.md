@@ -217,14 +217,40 @@ disconnects you after 4 minutes of inactivity"* while that is still true would b
 own bug as the server's rule** — and it would fire for people who ARE actively listening. Fix the
 ping first; then the statement is true.
 
-### ★ WORDING
-Avoid *"requires active interaction to maintain connection"* — it reads as a demand, and it is about
-PRESENCE, not interaction. Prefer the receiver's actual intent:
-> **This receiver releases your slot after 4 minutes with no activity, so someone else can listen.**
+### ★★ WORDING — say what resets it, without teaching people to defeat it
+Stuart: *"the warning should say how to keep the connection alive — 'this server has an idle
+disconnect time of 4 minutes; to maintain connection, interact with the receiver'."* ★ Right
+instinct: a warning that does not say what to do about it is just anxiety. Two cautions:
+
+1. ★★ **"Interact" is awkward for RADIO specifically.** On a web page you generate mouse movement and
+   scrolling incidentally just by being present — which is why their idle detector works. On a phone
+   you tune a station, put it in your pocket and LISTEN. **The most engaged user produces the least
+   interaction.** An instruction to keep touching things describes the opposite of how the app is
+   used.
+2. ★★★ **Do NOT coach the user to defeat it.** [[third_party_receiver_etiquette]] is explicit that
+   our Kiwi keepalive *"runs at 1 Hz for ever, which DEFEATS the server's own 'are you still there'
+   kick"*, and that this is what gets third-party clients blocked. "Here is how to stay connected
+   indefinitely" is the user-facing form of the same discourtesy. Explaining the rule is fine;
+   framing it as a workaround is not.
+
+**Proposed copy** — states the limit, says why, says what resets it, and promises the question:
+> **WESSEX releases your slot after 4 minutes with no activity, so others can listen.**
+> Using the controls resets the timer, and you'll be asked before the session ends.
+
+★★ The last clause is only TRUTHFUL once the probe is handled (see "we silently drop unknown
+message types"). Today the user gets no question at all, which is exactly why this reads as a fault
+rather than a policy.
 
 ★ Take the number from the field, never hardcode it — 240 is that operator's choice, not an UberSDR
-constant. ★ And once the ping is right, a live countdown in the existing session-timer slot probably
-says it better than any warning text.
+constant. UK English throughout ([[feedback_uk_english]]).
+
+**Display rules:**
+- ★★ **Once per server, not every connect.** A notice that appears every time becomes one people
+  dismiss without reading.
+- ★ **Only when the limit is short enough to matter.** A four-hour cap needs no warning; four
+  minutes does. (Threshold to pick — 15 minutes is a reasonable starting line.)
+- ★ Once the ping is right, a live countdown in the existing session-timer slot probably says it
+  better than any warning text.
 
 ## ★★ THE FIX IS NOT "ALSO PING THE AUDIO SOCKET"
 That alone would keep every session alive for ever, because our ping is UNCONDITIONAL — a 5-second
