@@ -52,7 +52,9 @@ VibeServer."*
 ★ So the mobile story on the primary platform is **a VibeServer in the bag** — an Android phone or a
 Mac with a dongle — and that is the intended shape, not a workaround. Do not design as though the
 iPhone can log alone, and do not treat the server path as a fallback: on iOS it is the ONLY path,
-which makes §8 (the VibeServer half) load-bearing rather than a bonus.
+so VibeServer is load-bearing for this feature rather than an alternative to it.
+★ NOTE: "the phone logs THROUGH VibeServer" means the user is CONNECTED and listening — it is not
+unattended logging, which §8 rules out.
 
 ### ★★★ THE FIELD KIT: A PI ZERO 2 W ON ITS OWN HOTSPOT
 Stuart: *"it's another use of the Pi Zero 2 W and radio, which then broadcasts a captive hotspot —
