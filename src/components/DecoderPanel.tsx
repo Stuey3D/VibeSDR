@@ -437,6 +437,44 @@ export default function DecoderPanel({
     if (hdrSlots.current.length !== hdrCount) setHdrCount(hdrSlots.current.length);
   });
 
+  // ★★ THE HEADER RUN SCROLLS. On an iPhone SE — and worse, an SE in Display Zoom, which is the
+  // narrowest layout the app ever draws — the header controls ran off the right edge. AGE was
+  // half-cut and BIG, − and × were off-screen ENTIRELY: the box could not be resized, minimised
+  // or CLOSED. A clipped decoration is untidy; a clipped × is a trap, and it is the reason this
+  // is a blocker rather than a polish item. (Stuart, 2026-08-01, on the SE.)
+  //
+  // So: the variable-length run of controls scrolls horizontally, and MINIMISE and CLOSE are
+  // PINNED OUTSIDE it. Whatever else happens, the two controls that get you out of the box are
+  // always on screen. The chevrons only appear when there is genuinely something more to reach —
+  // an arrow that cannot move is the same lie as a control that does nothing.
+  const hdrScroll = useRef<ScrollView | null>(null);
+  const [runW, setRunW] = useState(0);          // the visible width of the run
+  const [runContentW, setRunContentW] = useState(0);
+  const [runX, setRunX] = useState(0);          // current horizontal offset
+  const runOverflow = runContentW > runW + 1;
+  const canScrollL = runOverflow && runX > 1;
+  const canScrollR = runOverflow && runX < runContentW - runW - 1;
+  const nudge = (dir: 1 | -1) => {
+    const step = Math.max(80, runW * 0.7);
+    const to = Math.max(0, Math.min(runContentW - runW, runX + dir * step));
+    hdrScroll.current?.scrollTo({ x: to, animated: true });
+  };
+
+  // Keyboard focus must drag the run with it, or the focus ring lands on a button that is
+  // scrolled out of sight and the layer looks broken. This is not SE-only — a narrow Mac window
+  // overflows too, and the keyboard layer is a Mac feature. Layouts are recorded only for
+  // buttons INSIDE the run; the pinned ones live in another coordinate space.
+  const hdrBtnX = useRef<Record<number, { x: number; width: number }>>({});
+  const runIdx = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (kbZone !== 'header') return;
+    const l = hdrBtnX.current[hdrIdx];
+    if (!l || !runIdx.current.has(hdrIdx) || runW <= 0) return;
+    if (l.x < runX) hdrScroll.current?.scrollTo({ x: Math.max(0, l.x - 12), animated: true });
+    else if (l.x + l.width > runX + runW)
+      hdrScroll.current?.scrollTo({ x: l.x + l.width - runW + 12, animated: true });
+  }, [kbZone, hdrIdx, runW, runX]);
+
   // The list this box is showing, if any. ADS-B and spots have nothing to select — Stuart:
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
   // Space does nothing rather than pretending to.
@@ -661,12 +699,22 @@ export default function DecoderPanel({
   }, [kbZone, hdrIdx, listIdx, autoOwn, leaveAnnounced]);
 
   /** A header control that takes part in the left/right order. */
-  const HBtn = ({ onPress, style, children, ...rest }: any) => {
+  // ★ `run` marks a button as living INSIDE the scrolling run, so its layout is recorded in the
+  // run's coordinate space and keyboard focus can scroll to it. It must be an explicit prop, not
+  // a ref read during render: children render AFTER the parent's JSX is built, so a ref toggled
+  // around the run would always read back false by the time these bodies actually run.
+  const HBtn = ({ onPress, style, children, run, ...rest }: any) => {
     const i = hdrSlots.current.length;
     hdrSlots.current.push(onPress ?? (() => {}));
     const on = kbZone === 'header' && hdrIdx === i;
+    const mine = !!run;
+    if (mine) runIdx.current.add(i); else runIdx.current.delete(i);
     return (
       <TouchableOpacity onPress={onPress}
+        onLayout={mine ? (e: any) => {
+          const { x, width } = e.nativeEvent.layout;
+          hdrBtnX.current[i] = { x, width };
+        } : undefined}
         style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
         {children}
       </TouchableOpacity>
@@ -735,11 +783,32 @@ export default function DecoderPanel({
               : decoderStatus}
           </Text>
 
+          {/* ── The scrolling control run ─────────────────────────────────────────────────
+              Everything variable-length lives in here. MINIMISE and CLOSE do NOT — see the
+              note by `hdrScroll`. ‹ and › appear only when there is more to reach. */}
+          {canScrollL && (
+            <TouchableOpacity hitSlop={8} style={dp.runArrow}
+              onPress={(e: any) => { e?.stopPropagation(); nudge(-1); }}>
+              <Text style={[dp.runArrowTxt, { color: dc.btnTxt, fontFamily: t.font }]}>‹</Text>
+            </TouchableOpacity>
+          )}
+          <ScrollView
+            ref={hdrScroll}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="always"
+            style={dp.btnScroll}
+            contentContainerStyle={dp.btnScrollContent}
+            onLayout={(e: any) => setRunW(e.nativeEvent.layout.width)}
+            onContentSizeChange={(w: number) => setRunContentW(w)}
+            onScroll={(e: any) => setRunX(e.nativeEvent.contentOffset.x)}
+            scrollEventThrottle={16}
+          >
           {/* EXPAND LEADS, and stays outside the filter run. It changes how each row is DRAWN;
               MODE/BAND/AGE change WHICH rows are listed. Sitting it between two cyclers read as
               a fourth filter. */}
           {isSpotsMode && spotsKind === 'digi' && (
-            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); setSpotsExpanded(v => !v); }}>
               <Text style={[dp.hbtnTxt, {
                 color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
@@ -749,7 +818,7 @@ export default function DecoderPanel({
           )}
           {/* Spots filter cyclers (skin sf-mode / sf-band / sf-age dropdowns) */}
           {isSpotsMode && spotsKind === 'digi' && (
-            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfMode(SF_MODES[(SF_MODES.indexOf(sfMode) + 1) % SF_MODES.length]);
@@ -761,7 +830,7 @@ export default function DecoderPanel({
             </HBtn>
           )}
           {isSpotsMode && (
-            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfBand(SF_BANDS[(SF_BANDS.indexOf(sfBand) + 1) % SF_BANDS.length]);
@@ -773,7 +842,7 @@ export default function DecoderPanel({
             </HBtn>
           )}
           {isSpotsMode && (
-            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 const i = SF_AGES.findIndex(a => a.minutes === sfAge);
@@ -788,7 +857,7 @@ export default function DecoderPanel({
 
           {/* CLR — text decoders (skin _clearB) */}
           {!isImageMode && !isSpotsMode && !isDabMode && (
-            <HBtn hitSlop={6}
+            <HBtn run hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onClear?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>CLR</Text>
@@ -798,7 +867,7 @@ export default function DecoderPanel({
           {/* DAB speed correction (§4.5) — opens the SPEED FIX popup (separate preset
               buttons), a popup like the spots filters. Highlighted when not Off. */}
           {isDabMode && onDabSpeed && (
-            <HBtn hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); setDabSpeedOpen(o => !o); }}>
               <Text style={[dp.hbtnTxt, {
                 color: Math.abs((dabSpeed ?? 1) - 1) > 0.001 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
@@ -809,7 +878,7 @@ export default function DecoderPanel({
 
           {/* Morse quality filter (skin lsv-dec-sf-quality) */}
           {activeDecoder === 'morse' && (
-            <HBtn hitSlop={6}
+            <HBtn run hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
@@ -824,7 +893,7 @@ export default function DecoderPanel({
 
           {/* PREV/LIVE + SAVE — image decoders (skin _prevB/_saveB) */}
           {isImageMode && hasPrev && (
-            <HBtn hitSlop={6}
+            <HBtn run hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onTogglePrev?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>
@@ -833,7 +902,7 @@ export default function DecoderPanel({
             </HBtn>
           )}
           {isImageMode && (
-            <HBtn hitSlop={6}
+            <HBtn run hitSlop={6}
               style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onSave?.(); }}>
               <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>SAVE</Text>
@@ -841,7 +910,7 @@ export default function DecoderPanel({
           )}
           {/* ★★ BIG / SMALL — offered for EVERY decoder, not just images. See the block at the top
               of this component for why the 200 pt cap was wrong on large screens. */}
-          <HBtn hitSlop={6}
+          <HBtn run hitSlop={6}
             style={[dp.hbtn, { borderColor: dc.btnBdr }]}
             onPress={(e: any) => { e?.stopPropagation(); setTall((v: boolean) => !v); }}>
             <Text style={[dp.hbtnTxt, { color: tall ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
@@ -853,7 +922,15 @@ export default function DecoderPanel({
               {imageInfo}
             </Text>
           )}
+          </ScrollView>
+          {canScrollR && (
+            <TouchableOpacity hitSlop={8} style={dp.runArrow}
+              onPress={(e: any) => { e?.stopPropagation(); nudge(1); }}>
+              <Text style={[dp.runArrowTxt, { color: dc.btnTxt, fontFamily: t.font }]}>›</Text>
+            </TouchableOpacity>
+          )}
 
+          {/* ★ PINNED — outside the run, so the way out of the box is never scrolled away. */}
           {/* Minimise / restore (skin _minB: − / □) */}
           <HBtn
             hitSlop={8}
@@ -1043,8 +1120,16 @@ const dp = StyleSheet.create({
   dotOn:     { backgroundColor: C.dotOn, shadowColor: '#55d98d', shadowOpacity: 0.60, shadowRadius: 4, shadowOffset: { width:0, height:0 } },
   title:     { fontSize: 10, letterSpacing: 2, color: C.goldDim, fontFamily: FONT, flexShrink: 0 },
   titleMin:  { color: 'rgba(255,160,0,0.40)' },
-  btnScroll: { flexShrink: 1 },
+  // flexShrink with an auto basis is what makes the priority come out right: the status text is
+  // flex:1 (basis 0) so it only ever takes SPARE room, while the run keeps its natural width and
+  // gives ground only when there is none. On a wide panel the status fills the gap; on the SE it
+  // collapses and the controls get the space, which is the correct order of importance.
+  btnScroll: { flexShrink: 1, flexGrow: 0 },
   btnScrollContent: { flexDirection: 'row', gap: 5, alignItems: 'center' },
+  // The chevrons are affordances, not buttons in the visual sense — no border, so they read as
+  // "there is more that way" rather than as two more controls to understand.
+  runArrow:    { paddingHorizontal: 2, paddingVertical: 3, flexShrink: 0 },
+  runArrowTxt: { fontFamily: FONT, fontSize: 15, lineHeight: 17, color: 'rgba(255,160,0,0.60)' },
   hbtn: {
     borderWidth: 1, borderColor: C.btnBdr, borderRadius: 4,
     paddingHorizontal: 8, paddingVertical: 3,
