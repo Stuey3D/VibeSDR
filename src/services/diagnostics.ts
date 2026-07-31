@@ -21,6 +21,7 @@
 import { Platform, NativeModules } from 'react-native';
 import { APP_VERSION } from '../constants/version';
 import { getLastCrash } from './crashGuard';
+import { unhandledLog } from './protocolLog';
 
 const Vibe = (NativeModules as {
   VibePowerModule?: {
@@ -47,6 +48,16 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
   } catch {}
 
   if (extra) for (const [k, v] of Object.entries(extra)) lines.push(`${k.padEnd(10)}: ${String(v)}`);
+
+  // ── Server messages we did not handle ────────────────────────────────────
+  // ★★ The single most useful thing in this report when a receiver misbehaves: a server says
+  // something, we ignore it, and the symptom turns up somewhere unrelated. See protocolLog.ts.
+  lines.push('', '--- unhandled server messages ---');
+  {
+    const u = unhandledLog();
+    if (!u.length) lines.push('none');
+    else for (const l of u) lines.push(`${new Date(l.ts).toISOString().slice(11, 19)} ${l.backend.padEnd(8)} ${l.text}`);
+  }
 
   // ── JS crash (crashGuard) ────────────────────────────────────────────────
   lines.push('', '--- last JS error ---');
