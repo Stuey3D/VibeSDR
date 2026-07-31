@@ -122,7 +122,18 @@ bool saveConf(std::string& err) {
 std::string svcState()  { return run("systemctl is-active vibeserver 2>/dev/null"); }
 std::string svcSince()  { return run("systemctl show vibeserver -p ActiveEnterTimestamp --value 2>/dev/null"); }
 std::string radioLine() { return run("lsusb 2>/dev/null | grep -iE 'airspy|rtl|realtek' | sed 's/.*ID [0-9a-f:]* //' | head -1"); }
-std::string listenPort(){ return run("ss -tlnp 2>/dev/null | grep -o '0\\.0\\.0\\.0:[0-9]*' | head -1 | cut -d: -f2"); }
+/** ★★ THE PORT THE SERVICE IS ACTUALLY ON — and not somebody else's.
+ *  A bare `ss` scan returned the FIRST listening socket on the box, which on a Pi you just SSH'd
+ *  into is port 22: the settings screen cheerfully told you to point a browser at your own SSH
+ *  daemon. Take the configured port if there is one, otherwise look only inside the range
+ *  VibeServer actually auto-picks from. Never report a port we cannot attribute to ourselves.
+ *  ★ `ss -p` cannot name another user's process unless we are root, so filtering by process is not
+ *  available here — the port range is. */
+std::string listenPort() {
+    for (auto& f : fields) if (f.flag && strcmp(f.flag, "--port") == 0 && !f.value.empty()) return f.value;
+    std::string p = run("ss -tln 2>/dev/null | grep -oE ':(4800[0-9]|480[1-4][0-9])\\b' | head -1 | tr -d ':'");
+    return p;
+}
 std::string myIp()      { return run("hostname -I 2>/dev/null | awk '{print $1}'"); }
 
 void draw(int sel, const std::string& msg, bool editing) {
