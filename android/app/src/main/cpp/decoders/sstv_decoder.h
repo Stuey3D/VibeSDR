@@ -99,7 +99,10 @@ public:
     void demodulate(SstvBuffer& pcm, double rate, int skip,
                     const std::function<void(int, const uint8_t*)>& lineSender,
                     const std::atomic<bool>& abort);
-    std::vector<uint8_t> redrawFromLuminance(double rate, int skip); // RGB w*h*3
+    /** RGB w*h*3. ★ `okOut` reports whether every pixel came from a REAL captured sample —
+     *  false means the redraw ran past the end of what was actually decoded and the result must
+     *  NOT be shown. See the slant-correction guard in videoThread(). */
+    std::vector<uint8_t> redrawFromLuminance(double rate, int skip, bool* okOut = nullptr); // RGB w*h*3
     const std::vector<uint8_t>& syncFlags() const { return hasSync; }
 
     std::vector<SstvPixel> pixelGrid(double rate, int skip);
@@ -118,6 +121,10 @@ private:
     SstvFFT fft;
     std::vector<uint8_t> hasSync;   // 1/0 per sync sample
     std::vector<uint8_t> storedLum;
+    /** ★★ HOW MUCH OF storedLum WAS ACTUALLY WRITTEN. The buffer is allocated with 1.3x headroom
+     *  but only filled while the decode loop runs, and that loop BREAKS EARLY when the audio runs
+     *  short. Everything past this index is a zero that was never a sample. */
+    int storedLumWritten = 0;
 };
 
 // ── Sync corrector ───────────────────────────────────────────────────────────
