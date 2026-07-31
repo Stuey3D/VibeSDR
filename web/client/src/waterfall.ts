@@ -284,6 +284,11 @@ export class Waterfall {
     // happened — while the app, which sharpens in its SkSL shader, looked visibly
     // crisper on the same signal (Stuart, 2026-07-28). The GPU path now takes it.
     if (patch.wfSharpness !== undefined && this.gl) this.gl.sharpness = patch.wfSharpness;
+    // ★★ AND CONTRAST — the same omission, one slider along. Stored in the processor and never
+    // read here, so the manual contrast control did nothing from end to end (Stuart, 2026-07-31,
+    // seen on both the Pi and Android because they share this client). If a third slider is ever
+    // added, it needs a line HERE as well as a setting: the processor is a store, not a renderer.
+    if (patch.wfContrast !== undefined && this.gl) this.gl.contrast = patch.wfContrast;
   }
   getSettings(): SignalProcessorSettings { return this.proc.getSettings(); }
   getRange() { return this.proc.getRange(); }
