@@ -21,8 +21,11 @@ export default class CrashBoundary extends React.Component<Props, State> {
     return { hasError: true };
   }
 
-  componentDidCatch(error: any) {
-    const info = recordCrash(error, 'render');
+  componentDidCatch(error: any, errorInfo: React.ErrorInfo) {
+    // ★★ TAKE THE COMPONENT STACK. React hands it here and nowhere else, and for a render error it
+    // is the ONLY thing that names the culprit: the JS stack ends inside React's own work loop with
+    // no application frames (React #327, 2026-07-31 — `performWorkOnRoot` and nothing else).
+    const info = recordCrash(error, 'render', errorInfo?.componentStack ?? undefined);
     // Remount the tree on the next tick (back to the picker), then warn.
     setTimeout(() => {
       this.setState({ hasError: false });
