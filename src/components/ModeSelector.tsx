@@ -190,7 +190,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const advRdsLabel = winW >= 340 ? 'ADVANCED RDS' : 'ADV RDS';
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
-  const [bwSync, setBwSync] = useState(false);
+  // ★★★ SYNC DEFAULTS ON FOR A DUAL-SIDEBAND MODE. On AM, SAM, DSB or any FM the passband IS
+  // symmetric about the carrier — the two edges are one number wearing two hats — so starting with
+  // them unlinked means every bandwidth change has to be made twice, and a user who moves only one
+  // has quietly made the filter lopsided on a signal that has no reason to be
+  // (Stuart, 2026-07-31). SSB and CW are the opposite: one sideband, edges genuinely independent.
+  // ★★ Keyed on the CLASS, not the mode, so it flips only when crossing between symmetric and
+  // single-sideband. Toggling it by hand within a mode therefore STICKS — switching AM→SAM will not
+  // undo your choice, and we are not fighting the user every render.
+  const symmetric = ['am', 'sam', 'dsb', 'fm', 'nfm', 'wfm'].includes(String(current).toLowerCase());
+  const [bwSync, setBwSync] = useState(symmetric);
+  useEffect(() => { setBwSync(symmetric); }, [symmetric]);
   const bwStep = bwEdgeMax > 20000 ? 1000 : 50;
   const showBw = onFilterBoth != null;
   // Collapse the decoder dropdown when the sheet closes, so reopening it lands on

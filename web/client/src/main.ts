@@ -4459,8 +4459,14 @@ function initBw() {
   };
 
   const sync = $<HTMLButtonElement>('bwSync');
+  // ★★ DEFAULT ON FOR A DUAL-SIDEBAND MODE, matching the app (2026-07-31). AM/SAM/DSB/FM have a
+  // passband that is symmetric about the carrier, so leaving the edges unlinked makes every change
+  // a two-step and lets a user lopside a filter that has no reason to be. SSB and CW keep them
+  // independent. ★ A SAVED preference still wins — this only changes the starting point.
   const savedSync = prefs().bwSync;
-  bwSync = typeof savedSync === 'boolean' ? savedSync : false;
+  const symmetricMode = ['am', 'sam', 'dsb', 'fm', 'nfm', 'wfm']
+    .includes(String(spec?.mode ?? '').toLowerCase());
+  bwSync = typeof savedSync === 'boolean' ? savedSync : symmetricMode;
   sync.classList.toggle('on', bwSync);
   sync.onclick = () => {
     bwSync = !bwSync;
