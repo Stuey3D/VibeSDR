@@ -654,7 +654,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
-				MARKETING_VERSION = 10.0.0;
+				MARKETING_VERSION = 10.0.1;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.vibesdr.app.watchkitapp;
@@ -685,7 +685,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
-				MARKETING_VERSION = 10.0.0;
+				MARKETING_VERSION = 10.0.1;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.vibesdr.app.watchkitapp;
@@ -722,7 +722,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 10.0.0;
+				MARKETING_VERSION = 10.0.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -756,7 +756,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 10.0.0;
+				MARKETING_VERSION = 10.0.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",

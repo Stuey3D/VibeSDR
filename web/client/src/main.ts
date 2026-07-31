@@ -625,6 +625,25 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBytes: (n) => { audioBytes += n; },
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
+  // ★★★ RUNTIME FALLBACK TO UNCOMPRESSED. `AudioDecoder.isConfigSupported()` said yes and the
+  // decoder then failed for real — Edge on Windows 11 played nothing until the user found the
+  // uncompressed switch themselves (Stuart, 2026-07-31). A capability probe is a PREDICTION; only
+  // decoding is proof. So on the first genuine failure, drop `codec=opus` and reopen: raw PCM is
+  // heavier but it always works, and silence is the one outcome worth spending bandwidth to avoid.
+  // ★ One shot — AudioPlayer sets opusBroken before calling, so the new player never asks for Opus
+  // again this session and cannot ping-pong.
+  if (audioUrl.includes('codec=opus')) {
+    audio.onOpusFailure = () => {
+      const rawUrl = audioUrl.replace(/&codec=opus\b/, '').replace(/\?codec=opus&/, '?');
+      console.warn('[audio] reopening without Opus:', rawUrl);
+      try { audio?.close(); } catch {}
+      audio = new AudioPlayer(rawUrl, {
+        onBytes: (n) => { audioBytes += n; },
+        onStatus: (st) => { if (st === 'error') setStatus('error', 'audio'); },
+      });
+      audio.start().catch((e) => console.error('audio restart failed', e));
+    };
+  }
   // The AudioContext is built after several awaits, so the browser no longer
   // credits it to the Connect click and may leave it suspended. Rather than rely
   // on that chain surviving, always arm a resume on the next real interaction.

@@ -10,7 +10,7 @@
 // ★ Now matches app.json's expo.version exactly, as the note below has always asked.
 //   NOTE: USER_AGENT derives from this, so it moves 'VibeSDR/10.0' -> 'VibeSDR/10.0.0'. That is
 //   "only the version moves", which is what operators' filter rules are written to tolerate.
-export const APP_VERSION = '10.0.0';
+export const APP_VERSION = '10.0.1';
 
 /**
  * How we introduce ourselves to SOMEBODY ELSE'S receiver.

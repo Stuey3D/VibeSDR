@@ -487,6 +487,23 @@ export class KiwiAdapter implements SDRBackend {
       case 'redirect':
         this.dbg('redirect ' + val);   // proxy.kiwisdr.com hop — TODO follow if needed
         break;
+      // ★★★ EVERYTHING ELSE — LOGGED, NOT DROPPED IN SILENCE.
+      //
+      // Kiwi sends a great deal we do not handle, and ignoring it quietly has already cost us:
+      //   • Some receivers boot us after ~30 SECONDS and we still cannot say why. It is NOT the
+      //     keepalive (we send `SET keepalive` at 1 Hz on both sockets and `SET ident_user` early),
+      //     so it is something the server says that we throw away.
+      //   • Kiwi publishes a LIVE remaining-time counter and an acknowledgement we could send —
+      //     `rn` (seconds left) and `rt` (1 = inactivity, else the 24-hour limit), answered with
+      //     `SET inactivity_ack`. We only found that by reading their JavaScript, and we still do
+      //     not know which message carries it. THIS LOG IS HOW WE FIND OUT: connect, wait, read.
+      // ★ Known-but-unhandled names seen in kiwisdr.min.js: exclusive_use, monitor, wb_only,
+      //   camp/camping, password_timeout, no_reopen_retry, inactivity_timeout, tlimit_exempt_by_pwd.
+      // ★★ Cheap by design — this goes through dbg(), which is the in-app debug surface on a
+      // release build, where the reports that matter actually come from.
+      default:
+        this.dbg(`unhandled MSG ${key}=${val.slice(0, 80)} (${stream})`);
+        break;
     }
   }
 

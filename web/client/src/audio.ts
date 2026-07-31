@@ -465,9 +465,34 @@ export class AudioPlayer {
   static async supportsOpus(): Promise<boolean> {
     try {
       if (typeof AudioDecoder === 'undefined') return false;
-      const s = await AudioDecoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
-      return !!s.supported;
+      // ★★ PROBE BOTH CHANNEL COUNTS — we used to test STEREO and then configure with the stream's
+      // ACTUAL count, which is MONO by default. So the capability we tested was not the capability
+      // we used, and a platform decoder that supports one and not the other passed the probe and
+      // then failed for real. Edge on Windows 11 routes through a different media stack from
+      // Chrome on macOS and could not play Opus at all (Stuart, 2026-07-31); this is one of the
+      // candidate causes.
+      for (const numberOfChannels of [1, 2]) {
+        const s = await AudioDecoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels });
+        if (!s.supported) return false;
+      }
+      return true;
     } catch { return false; }
+  }
+
+  /** ★★★ Set once a decode or configure has actually FAILED, so the caller can fall back to PCM.
+   *  `isConfigSupported` is a PREDICTION, not a guarantee — see _ensureOpus. */
+  opusBroken = false;
+  /** Called on the first real failure so the page can re-open the audio socket without `codec=opus`. */
+  onOpusFailure: (() => void) | null = null;
+  private opusFailed = false;
+  private _failOpus(what: string, e: unknown) {
+    console.warn(`[audio] opus ${what} failed — falling back to uncompressed`, e);
+    if (this.opusFailed) return;      // one shot: the socket is being replaced
+    this.opusFailed = true;
+    this.opusBroken = true;
+    try { this.opusDec?.close(); } catch {}
+    this.opusDec = null;
+    this.onOpusFailure?.();
   }
 
   private _ensureOpus(ch: number) {
@@ -475,24 +500,32 @@ export class AudioPlayer {
     if (this.opusDec) { try { this.opusDec.close(); } catch {} }
     this.opusDec = new AudioDecoder({
       output: (d) => this._onOpusData(d),
-      // A decode error must not kill audio silently — log it; the stream self-heals on the next
-      // key packet (every Opus packet is independently decodable).
-      error: (e) => console.warn('[audio] opus decode error', e),
+      // ★★★ A DECODE ERROR USED TO ONLY BE LOGGED, on the reasoning that "the stream self-heals on
+      // the next key packet (every Opus packet is independently decodable)". That is true for ONE
+      // bad packet and FALSE when every packet fails: the audio then stays silent for ever, the only
+      // evidence is a console warning nobody sees, and the user has to discover the uncompressed
+      // setting for themselves — which is exactly what happened on Edge/Windows 11.
+      // ★★ So a persistent failure now falls back to PCM, which we KNOW works on that machine.
+      error: (e) => this._failOpus('decode', e),
     });
-    this.opusDec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: ch });
+    try {
+      this.opusDec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: ch });
+    } catch (e) { this._failOpus('configure', e); return; }
     this.opusCh = ch;
     this.opusTs = 0;
   }
 
   private _decodeOpus(buf: ArrayBuffer, channels: number) {
+    if (this.opusBroken) return;      // fallback in progress; drop rather than log-spam
     this._ensureOpus(channels || 1);
+    if (!this.opusDec) return;        // configure failed → _failOpus already fired
     // Copy the packet out of the frame (offset 6). Each Opus packet is a self-contained 20 ms frame.
     const data = buf.slice(6);
     try {
       this.opusDec!.decode(new EncodedAudioChunk({
         type: 'key', timestamp: this.opusTs, duration: 20000, data,
       }));
-    } catch (e) { console.warn('[audio] opus enqueue failed', e); }
+    } catch (e) { this._failOpus('enqueue', e); return; }
     this.opusTs += 20000;   // 20 ms in microseconds
   }
 

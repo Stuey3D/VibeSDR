@@ -1838,6 +1838,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const dc = new DecoderClient(decoderBase, sessionUuid, {
       onText: (text: string) => {
         setDecoding(true);
+        markDecodeOutput();          // ★ output = presence; see the idle-release effect
         setDecoderText((prev: string) => {
           const next = prev + text;
           return next.length > 3000 ? next.slice(next.length - 3000) : next;
@@ -1973,6 +1974,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!s.country && s.call) s.country = countryForCallsign(s.call);
       }
       buf.reverse(); // arrival order oldest→newest; display newest first
+      markDecodeOutput();            // ★ spots are decoder output too
       setSpots((prev: SpotRow[]) => {
         const next = buf.concat(prev);
         return next.length > 200 ? next.slice(0, 200) : next;
@@ -2451,7 +2453,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater, source: 'server' as const })));
       },
-      onAircraft: (list) => { if (!destroyed.current) setAircraft(list); },
+      onAircraft: (list) => { if (!destroyed.current) { markDecodeOutput(); setAircraft(list); } },
 
       onDecoderText: (line, replace) => {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
@@ -2465,6 +2467,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (dt) { activeDecRef.current = dt; setActiveDecoder(dt); }
         }
         setDecoding(true);
+        markDecodeOutput();          // ★ output = presence; see the idle-release effect
         if (replace) { setDecoderText(line); return; }
         // Append raw — the adapter newline-terminates records and char-stream
         // decoders (RTTY/CW) carry their own line breaks.
@@ -2477,6 +2480,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // OWRX decodes SSTV/Fax server-side and streams scanlines — paint them
         // on the SAME decoder canvas UberSDR uses (Fax → 'wefax' greyscale path).
         if (destroyed.current) return;
+        markDecodeOutput();          // ★ a scanline IS output — this is the SSTV case that started it
         const dt: DecoderType = ev.kind === 'sstv' ? 'sstv' : 'wefax';
         if (activeDecRef.current !== dt) { activeDecRef.current = dt; setActiveDecoder(dt); }
         if (ev.phase === 'start') { decoderImageRef.current?.imageStart(ev.width, ev.height); setDecoderStatus(`receiving ${ev.width}x${ev.height}`); }
@@ -3092,6 +3096,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** Last moment a watch or an open analyser counted as someone watching — the
    *  hand-back's own baseline, kept apart from the powersave saver's. */
   const lastViewerRef   = useRef(Date.now());
+  /** ★ Last time a decoder actually PRODUCED something. See the idle-release effect below.
+   *  Starts at 0, not now(): "no decoder has ever produced anything" must not read as recent. */
+  const lastDecodeRef   = useRef(0);
+  /** How long a decoder's output keeps counting as presence. Generous because SSTV and WEFAX are
+   *  slow by nature — a frame can be minutes between visible progress — but far short of the
+   *  30-minute release, so an abandoned phone still hands the slot back. */
+  const DECODE_ACTIVE_MS = 5 * 60_000;
+  // ★★ STAMPED FROM EVERY DECODER'S OUTPUT, whatever shape that output takes: text lines
+  // (RTTY/NAVTEX/Morse/Whisper), an image growing a line at a time (SSTV/WEFAX — its info string
+  // carries the line count, so it changes as the picture builds), FT8/CW spot rows, and ADS-B
+  // aircraft updates. Each is genuine evidence that the receiver is doing work someone asked for.
+  const markDecodeOutput = useCallback(() => { lastDecodeRef.current = Date.now(); }, []);
 
   const markInteract = useCallback(() => {
     lastInteractRef.current = Date.now();
@@ -3165,7 +3181,19 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   30 s powersave saver, and writing to it from here would silently change
       //   when the saver engages. The two timers share the same "user touched
       //   something" signal and nothing else.
-      if (watchProvider.isActive || advRdsOpenRef.current) {
+      // ★★★ A RUNNING DECODER IS A VIEWER. This hand-back watched TOUCHES plus "a watch or an open
+      // analyser", and a decoder counted as NEITHER — so 30 minutes of SSTV on Stuart's own UberSDR
+      // with nobody touching the screen looked exactly like a phone in a pocket, and the slot was
+      // given back MID-PICTURE (2026-07-30).
+      // ★★ Decoding is arguably the STRONGEST evidence of use there is: the user is waiting on a
+      // result that takes minutes to arrive, and can do nothing but wait.
+      // ★★★ OUTPUT, NOT INTENT — stamped when a decoder PRODUCES something, never merely when one
+      // is selected. A decoder left on a dead frequency produces nothing, and a phone in a pocket
+      // is exactly the case this feature exists for.
+      // ★ It is also the honest answer to the question the server is asking: an idle kick asks "is a
+      // human still listening?", and a decoder producing output is real evidence that one is.
+      if (watchProvider.isActive || advRdsOpenRef.current
+          || Date.now() - lastDecodeRef.current < DECODE_ACTIVE_MS) {
         lastViewerRef.current = Date.now();
         setIdleWarnLeftMs(null);
         return;
