@@ -880,7 +880,22 @@ Button 2  →  back
 |---|---|---|---|---|
 | **Siri Remote** | the physical ring | the touchpad, directionally | touchpad click | back arrow |
 | **Game controller** | sticks | D-pad | ✕ / A | ○ / B (system-owned — honour it) |
-| **Keyboard** | arrows | Tab / Shift-Tab | Enter | Esc |
+| **Keyboard** | arrows | *(not needed — see below)* | Enter | Esc |
+
+### ★★★ THE KEYBOARD KEEPS ITS DIRECT KEYS — SETTLED 2026-07-31
+Stuart: *"our current keyboard layout is great, keep that with the direct keys; this new layout is for
+Siri Remote and game controllers."*
+
+★★ **Direct keys are STRICTLY BETTER than walking a highlight** — one keystroke to Audio beats four
+presses and a click, which is why every desktop app has accelerators as well as a tab order. The
+two-D-pad model exists for devices that have **no keys**.
+★ And the shipped layout already IS D-pad 1 + both buttons: `SDRScreen.tsx:4820` binds arrows to
+tune/zoom, Enter to the frequency box and Esc to back, with `D M S A C` opening the panels directly.
+The keyboard is only "missing" D-pad 2 and substitutes something better for it.
+★★★ **WASD IS NOT AVAILABLE ANYWAY** — `A` (audio), `S` (step) and `D` (demodulator) are bound. So is
+the reverse mapping. Do not revisit this.
+★★ **NOTHING SHIPPED CHANGES.** All of this is ADDITIVE, so the build in review is untouched — there
+is no reason to pull or alter it.
 
 ★★ Where a device's first D-pad happens to be **proportional** (a stick, or a finger sliding on
 glass), that is a **BONUS LAYERED ON THE SAME HANDLER** — it gives sweep RATE, not a second control
