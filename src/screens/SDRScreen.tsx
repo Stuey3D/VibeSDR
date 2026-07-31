@@ -17,6 +17,7 @@
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
+import { setSessionTeardown } from '../services/crashGuard';
 import {
   Alert,
   AppState,
@@ -2808,7 +2809,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       // better answer than our hardcoded one.
       c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
     });
-    return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
+    // ★★★ GIVE crashGuard A WAY TO KILL THIS SESSION. A render crash resets navigation, but this
+    // client and the NATIVE audio engine would otherwise survive it — and then every later
+    // connection lands on top of a dead session and fails identically, until the app is force
+    // quit (Stuart, 2026-07-31). See crashGuard.setSessionTeardown.
+    setSessionTeardown(() => {
+      try { destroyed.current = true; } catch {}
+      try { c.destroy(); } catch {}
+      client.current = null;
+      try { VibePowerModule?.stopAudioEngine?.(); } catch {}
+    });
+    return () => {
+      cancelled = true; destroyed.current = true; c.destroy(); client.current = null;
+      setSessionTeardown(null);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, connEpoch]);
 
