@@ -5276,21 +5276,28 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
+      {/* ★★★ THE RECEIVER IS ASKING A QUESTION, SO ASK IT PROPERLY — a card with a BUTTON, not a
+          pill you might not notice. UberSDR's own client shows a confirmation panel at
+          (session_timeout − 30) with 30 seconds to answer; this is that, in our clothes.
+          ★★ NOT a full-screen overlay. A transparent-LOOKING sheet that swallows taps is the
+          v9.0.2 splash bug and the coachmark bug — twice bitten. The wrapper is `box-none` and
+          only the card itself takes touches, so the radio stays usable while it is up (the stream
+          keeps running throughout — the server is waiting for an answer, not disconnecting yet).
+          ★ Answering calls markInteract, which pings BOTH sockets — a real reply to the server,
+          not just dismissing our own UI. */}
       {idleWarnLeftMs !== null ? (
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={markInteract}
-          style={[styles.powersavePill,
-                  { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34,
-                    borderColor: 'rgba(255,150,60,0.85)' }]}>
-          <Text style={[styles.powersavePillText, { color: 'rgba(255,175,90,0.98)' }]}>
-            {/* ★★ THE RECEIVER'S wording, not ours — this is now the SERVER's liveness check
-                (session_timeout), not the app's own hand-back, which has been removed. It must not
-                claim we are giving the slot away: the receiver is asking whether anyone is still
-                listening, and a tap answers it with a ping on both sockets. */}
-            ⏻  STILL LISTENING? this receiver disconnects idle listeners in {Math.ceil(idleWarnLeftMs / 1000)}s — tap to stay
-          </Text>
-        </TouchableOpacity>
+        <View pointerEvents="box-none"
+              style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', zIndex: 240 }]}>
+          <View style={styles.stillHereCard}>
+            <Text style={styles.stillHereTitle}>STILL LISTENING?</Text>
+            <Text style={styles.stillHereBody}>
+              {`This receiver disconnects idle listeners so others can have a turn.\nYou will be disconnected in ${Math.ceil(idleWarnLeftMs / 1000)}s.`}
+            </Text>
+            <TouchableOpacity activeOpacity={0.8} onPress={markInteract} style={styles.stillHereBtn}>
+              <Text style={styles.stillHereBtnTxt}>YES, I'M HERE</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       ) : null}
 
       {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
@@ -6319,6 +6326,30 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // ★ The receiver's "are you still there?" card — see the render for why it is not a Modal.
+  stillHereCard: {
+    maxWidth: 420, paddingHorizontal: 22, paddingVertical: 18, borderRadius: 16,
+    backgroundColor: 'rgba(10,8,4,0.96)', borderWidth: 1, borderColor: 'rgba(255,150,60,0.85)',
+    alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 18, shadowOffset: { width: 0, height: 6 },
+  },
+  stillHereTitle: {
+    fontFamily: 'Nixie One', fontSize: 18, letterSpacing: 2,
+    color: 'rgba(255,185,100,0.98)', marginBottom: 8,
+  },
+  stillHereBody: {
+    fontFamily: 'Atkinson Hyperlegible', fontSize: 13.5, lineHeight: 19, textAlign: 'center',
+    color: 'rgba(255,255,255,0.88)', marginBottom: 16,
+  },
+  stillHereBtn: {
+    paddingHorizontal: 26, paddingVertical: 11, borderRadius: 10,
+    borderWidth: 1, borderColor: 'rgba(255,170,70,0.9)', backgroundColor: 'rgba(255,150,60,0.16)',
+  },
+  stillHereBtnTxt: {
+    fontFamily: 'Atkinson Hyperlegible', fontSize: 14, fontWeight: 'bold', letterSpacing: 0.6,
+    color: 'rgba(255,200,140,0.98)',
+  },
+
   // ★ The server-refusal card (TIME UP / PLEASE WAIT). Deliberately plain and
   // centred: it is the only thing on screen that matters at that moment.
   noticeBackdrop: {
