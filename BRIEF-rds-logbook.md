@@ -31,6 +31,10 @@ Stuart, and this is the decision that makes the whole feature coherent:
 says nothing about your receiver, your aerial or where you were standing. It is not your catch.
 That is the convention of the hobby, not merely a scoping convenience.
 
+★★ **THE RULE IS "YOUR STATION", NOT "OUR DSP".** "Local hardware and VibeServer" is today's
+enumeration of it, not the definition — see §1b. What is excluded is other people's REMOTE
+receivers, not other people's silicon.
+
 Consequences, all good:
 - **No FM-DX / TunerScreen split.** An earlier draft worried that gating on Advanced RDS would
   exclude the FM-DX backend, *"where the FM DXers are"*. Out of scope by definition now — that
@@ -79,6 +83,43 @@ reachable at write time and it fails in precisely the field scenario it exists f
   **decoration resolved later**, never part of the record.
 - ★ Also expect the transport glyph to be wrong here — `UberClient.transportFor` has already been
   wrong in both directions, and "Wi-Fi that is actually a Pi in your pocket" is a new case for it.
+
+---
+
+## 1b. ★★★ THE TEF6686 BELONGS IN SCOPE — AND THE LOGBOOK IS WHY IT IS WORTH BUILDING
+Stuart: *"this is where the TEF connection could really be useful for us, as it turns VibeSDR into
+an FM-DX logging tool too."*
+
+A TEF6686 on your desk **is your own station** — the §1 rule admits it. Only remote receivers you do
+not own are excluded.
+
+★★★ **AND IT INVERTS THE CASE FOR THE TEF INTEGRATION.** The logbook was listed as one benefit among
+several (Now Playing from RT+, RadioText history, deeper decoding). It is actually **the reason**:
+the TEF's own screen fundamentally cannot log — no trustworthy clock, no GPS, no storage, no export
+— and its users are the most log-motivated people in the hobby. Serious FM DX is done on TEF
+portables, not RTL dongles. The phone is not a nicer display for the TEF; **it is the missing half of
+the instrument.**
+
+★★ It also changes what VibeSDR IS in that market: not "an SDR client that also talks to your TEF"
+but **an FM-DX logging tool** — a category with an existing audience already keeping logs by hand or
+in a spreadsheet.
+
+**Both design consequences are already accommodated:**
+- **Confirmation** (§4) — the TEF decodes RDS in silicon, so there is no BER from our DSP and no
+  confirmed/raw pairs. But it publishes its OWN RSSI, SNR, multipath and RDS block-error flags: a
+  legitimate measurement of your own station, made by different apparatus. §4's rule already covers
+  it — **the gate grades an entry, it does not decide whether one exists** — and §3's provenance
+  block records which apparatus measured it.
+- **Gain** (§3) — the TEF has no gain control in our sense (AGC + attenuator), so it is a fourth row
+  in that table, not a special case. Precisely why per-driver gain was the right call.
+
+★ The TEF cannot supply **grid or antenna** — no GPS, and it does not know what is plugged into it.
+The phone provides both, as it already does for local hardware.
+★★ Integration shape, audio and the open firmware question: no audio streaming is needed (these
+radios have their own speakers); the phone is a remote control and display. Not yet briefed
+separately — the open question is whether any shipping firmware exposes a TCP control port, and
+whether groups arrive RAW or pre-parsed. Note `FmdxAdapter.ts` already emits TEF chip commands
+(`G` = EQ/IMS, the antenna switch, `bwSwitch`) in the XDR-GTK vocabulary, so part of the work exists.
 
 ---
 
@@ -182,6 +223,36 @@ unambiguous beside `RTL-SDR v4`; `att 0 dB, preamp on` only parses if you know i
 together the entry is **self-interpreting** — a year later "what did I have the HF+ set to when I
 caught that?" is answerable from the file itself, with no outside knowledge required. Never write
 one without the other.
+
+## 3c. ★★ NOTES — TWO LEVELS, AND THE ONE MUTABLE FIELD
+Stuart: *"a notes tab a user could — say — write down the weather conditions etc."*
+
+**Two levels, not one.** Conditions apply to an OUTING, not to a catch. In a sporadic-E opening a
+user may log forty stations in an hour and will not type the weather forty times:
+- **Session note** — written once, applies to everything logged in that sitting. *"Sporadic-E, hot
+  and still."* ★ This is where weather belongs.
+- **Entry note** — the specific one. *"PS flickered, PI held steady"*, *"first time heard"*.
+
+★ That is how people log by hand, and it is the difference between a notes field that gets used and
+one ignored because it is too much typing.
+
+### ★★★ THE LINE THAT KEEPS THE SYNC STORY SIMPLE
+Notes are the **only** thing edited after the fact, which reintroduces mutability into a store §5
+calls append-only. Resolve it as a rule, not an exception:
+
+> ★★★ **Nothing the radio MEASURED may ever be edited. Anything the HUMAN WROTE may be.**
+
+- Frozen: signal, gain, PI/PS/RT, grid, hardware, timestamps.
+- Mutable: session note, entry note, antenna text — each with an `updatedAt` stamp, resolved exactly
+  as `userBookmarks.ts` already does it.
+
+★★ So the sync remains a conflict-free union everywhere except these fields, and a last-writer
+conflict on a free-text note is genuinely harmless — unlike on a measurement, where it would be
+falsification. See [[BRIEF-icloud-sync]].
+
+★ **Do NOT fetch the weather automatically.** On the Pi's own hotspot there is no internet — which is
+exactly when the user is in a field caring about conditions. Free text is the right answer, not a
+degraded automatic one.
 
 ## 3b. ★★★ LOCATION = THE MAIDENHEAD SQUARE
 Stuart: *"we detect coarse location, so in the logbook a reception location could simply be the
