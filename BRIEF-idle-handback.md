@@ -222,22 +222,44 @@ Stuart: *"the warning should say how to keep the connection alive — 'this serv
 disconnect time of 4 minutes; to maintain connection, interact with the receiver'."* ★ Right
 instinct: a warning that does not say what to do about it is just anxiety. Two cautions:
 
-1. ★★ **"Interact" is awkward for RADIO specifically.** On a web page you generate mouse movement and
-   scrolling incidentally just by being present — which is why their idle detector works. On a phone
-   you tune a station, put it in your pocket and LISTEN. **The most engaged user produces the least
-   interaction.** An instruction to keep touching things describes the opposite of how the app is
-   used.
-2. ★★★ **Do NOT coach the user to defeat it.** [[third_party_receiver_etiquette]] is explicit that
-   our Kiwi keepalive *"runs at 1 Hz for ever, which DEFEATS the server's own 'are you still there'
-   kick"*, and that this is what gets third-party clients blocked. "Here is how to stay connected
-   indefinitely" is the user-facing form of the same discourtesy. Explaining the rule is fine;
-   framing it as a workaround is not.
+### ★★★ THE TWO TIMERS HAVE DIFFERENT PURPOSES — DO NOT BLUR THEM
+Stuart, correcting an earlier draft of this section: *"in this case it's not etiquette — the 4-HOUR
+timer is the etiquette thing. The 4-MINUTE timer is simply making sure a user is listening to the
+radio, so to prove it they need to interact with it."*
 
-**Proposed copy** — states the limit, says why, says what resets it, and promises the question:
-> **WESSEX releases your slot after 4 minutes with no activity, so others can listen.**
-> Using the controls resets the timer, and you'll be asked before the session ends.
+| Limit | Field | Purpose | Rationale to use in copy |
+|---|---|---|---|
+| **4 hours** | `max_session_time` | **FAIRNESS** — sharing a scarce receiver | *"so others get a turn"* |
+| **4 minutes** | `session_timeout` | **LIVENESS** — is a human still there? | *"the receiver checks someone is listening"* |
 
-★★ The last clause is only TRUTHFUL once the probe is handled (see "we silently drop unknown
+★★ An earlier draft attached the FAIRNESS rationale ("releases your slot so others can listen") to
+the LIVENESS timer. Wrong, and it makes the app sound as though it is rationing a user who is
+sitting right there.
+
+**So telling a PRESENT user how to answer is not defeating anything** — it is using the mechanism as
+intended. ★★★ The etiquette line sits one step over: **US answering automatically on a blind timer
+while nobody is there.** That is the Kiwi problem in [[third_party_receiver_etiquette]] — our
+keepalive *"runs at 1 Hz for ever, which DEFEATS the server's own 'are you still there' kick"* — and
+it is a lie told on the user's behalf. Instructing a present listener to say "I'm here" is honest; a
+timer saying it for an empty room is not.
+
+★★★ **AND THAT SHARPENS §1 RATHER THAN COMPROMISING IT.** If the question is genuinely *"is a human
+listening?"*, then **decoder output, audio playing to a foreground app, and the screen being on are
+TRUTHFUL ANSWERS TO IT** — not workarounds. Answering on real evidence of presence is not a
+concession to etiquette; it is the correct answer to the question actually being asked.
+
+### ★ ONE REAL CAUTION ON THE COPY
+"Interact" is still awkward for radio: on a web page you generate mouse movement and scrolling
+incidentally just by being present, which is why their detector works. On a phone you tune a
+station, pocket it and LISTEN — **the most engaged user produces the least interaction.** Say what
+counts, rather than implying the user must keep fiddling.
+
+**Proposed copy:**
+> **WESSEX checks that someone is still listening.** After 4 minutes with no activity it will ask,
+> and end the session if there's no reply.
+> Tuning or changing any control shows you're there.
+
+★★ The "it will ask" clause is only TRUTHFUL once the probe is handled (see "we silently drop unknown
 message types"). Today the user gets no question at all, which is exactly why this reads as a fault
 rather than a policy.
 
