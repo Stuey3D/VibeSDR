@@ -2608,6 +2608,26 @@ function spotDistanceKm(grid?: string): number | null {
   return haversineKm(me, them);
 }
 
+/** Great-circle bearing from the receiver to a spot, degrees true. Same pairing as the distance
+ *  above — both are only meaningful because the SERVER publishes where it is (see /location). */
+function spotBearingDeg(grid?: string): number | null {
+  const me = myPos();
+  const them = grid ? gridToLatLon(grid) : null;
+  if (!me || !them) return null;
+  const φ1 = me.lat * Math.PI / 180, φ2 = them.lat * Math.PI / 180;
+  const Δλ = (them.lon - me.lon) * Math.PI / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+/** hh:mm:ssZ — the exact time, for the expanded row only. */
+function fmtSpotTimeSec(t: number): string {
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}z`;
+}
+
 interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean }
 
 // Verbatim from the app (DecoderClient RTTY_PRESETS).
@@ -3528,8 +3548,13 @@ function resetDecImages() {
   updateDecImageButtons();
 }
 
+/** ★ EXPAND / COLLAPSE, as the app has. Collapsed is one line to SCAN; expanded adds the message,
+ *  grid, bearing and exact time — context to READ. Remembered between sessions like the filters. */
+let spotsExpanded = false;
+
 function renderSpots() {
   const host = $('spotList');
+  host.classList.toggle('expanded', spotsExpanded);
   host.innerHTML = '';
 
   // Newest per callsign+band — a station calling CQ every cycle would otherwise
@@ -3545,6 +3570,7 @@ function renderSpots() {
   for (const sp of rows) {
     const country = countryForCallsign(sp.callsign);
     const km = spotDistanceKm(sp.grid);
+    const bearing = spotsExpanded ? spotBearingDeg(sp.grid) : null;
     const row = document.createElement('div');
     row.className = 'sres spot';
     // The app's columns: time · band · snr · call · country · distance.
@@ -3554,7 +3580,21 @@ function renderSpots() {
       `<span class="snr ${sp.snr >= 0 ? 'pos' : 'neg'}">${sp.snr}</span>` +
       `<span class="call">${escapeHtml(sp.callsign)}</span>` +
       `<span class="cty">${escapeHtml(abbrCountry(country) || '')}</span>` +
-      `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>`;
+      `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>` +
+      // ★★ Dimmer than line 1 on purpose: this is context to READ, not a scan target. Parts are
+      // joined with · and any missing piece simply DROPS OUT — a report or a 73 carries no locator,
+      // so the row must not leave a gap where the grid would have been. (The app's rule, verbatim.)
+      (spotsExpanded
+        // ★★ NO MESSAGE HERE, and it is not an omission we can fix in the client: the server's
+        // spot payload is {mode,callsign,snr,frequency,band,grid,timestamp} — it never sends the
+        // decoded text, so the app's "CQ RA3Y KO73" line has no equivalent on the wire. Adding
+        // `msg` to digital_spot is a SERVER change; until then this shows what exists.
+        ? `<span class="sdetail">${escapeHtml([
+            sp.mode, sp.grid,
+            bearing != null ? `${Math.round(bearing)}°` : '',
+            fmtSpotTimeSec(sp.timestamp),
+          ].filter(Boolean).join(' · '))}</span>`
+        : '');
     row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
     row.onclick = () => {
       spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true, retarget: true });
@@ -3564,8 +3604,24 @@ function renderSpots() {
   }
 }
 
-/** Header cyclers, as in the app: tap to step through the options. */
+/** Header cyclers. ★★ THE APP NO LONGER CYCLES — v10 replaced these with popup menus ("a step-rate
+ *  menu instead of cycling through a list", its own changelog). The comment here said "as in the
+ *  app", faithfully copying a behaviour that had already gone (Stuart, 2026-08-01). Left cycling
+ *  for now and noted so the next person does not read this as current. */
 function initSpotFilters() {
+  // ★ EXPAND / COLLAPSE — remembered, like the filters beside it.
+  {
+    const el = $<HTMLButtonElement>('sfExpand');
+    const saved = prefs()['spotsExpanded'];
+    spotsExpanded = typeof saved === 'boolean' ? saved : false;
+    const paint = () => {
+      el.textContent = spotsExpanded ? 'COLLAPSE' : 'EXPAND';
+      el.classList.toggle('on', spotsExpanded);
+    };
+    el.onclick = () => { spotsExpanded = !spotsExpanded; savePref('spotsExpanded', spotsExpanded);
+                         paint(); renderSpots(); };
+    paint();
+  }
   const cycle = (id: string, get: () => number, set: (i: number) => void,
                  labels: string[]) => {
     const el = $<HTMLButtonElement>(id);

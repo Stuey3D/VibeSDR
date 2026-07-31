@@ -929,6 +929,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #spotFilters { display: none; gap: 3px; }
 #spotFilters.show { display: inline-flex; }
 #spotFilters .btn { padding: 2px 6px; font-size: 10px; }
+/* ★ The expanded second line — dimmer than line 1 on purpose: context to READ, not to scan.
+   Spans the full row width beneath the columns. */
+#spotList .sdetail { grid-column: 1 / -1; color: var(--text-dim); font-size: 11px;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#spotList.expanded .sres.spot { padding-bottom: 3px; }
 /* Columns: time · band · snr · call · country · distance.
    The CALL was 1fr, so it soaked up all the slack (a lake of dead space) while
    COUNTRY sat at a fixed 2.6em and collided with the distance. Country is the
@@ -1115,6 +1120,8 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="sfMode" title="Mode filter">ALL</button>
       <button class="btn" id="sfBand" title="Band filter">ALL</button>
       <button class="btn" id="sfAge" title="Age filter">AGE</button>
+      <!-- ★ EXPAND / COLLAPSE, as the app has: one line to scan, two to read. -->
+      <button class="btn" id="sfExpand" title="Show grid, bearing and exact time">EXPAND</button>
     </span>
     <!-- Image decoders (WEFAX/SSTV): PREV switches to the last completed image while live decode
          continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
