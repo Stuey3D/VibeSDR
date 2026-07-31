@@ -52,6 +52,8 @@ const LS_SERVERS = 'vibesdr_web_servers_v1';   // { "host:port": pin }
 const LS_PREFS   = 'vibesdr_web_prefs_v1';
 
 let step = 1000;                 // tuning step, Hz (restored from prefs on load)
+/** ★ Wheel = TUNE rather than ZOOM. Same choice the app offers; see the wheel handler. */
+let wheelTunes = false;
 let spec: SpectrumClient | null = null;
 let audio: AudioPlayer | null = null;
 let wf: Waterfall | null = null;
@@ -4190,6 +4192,8 @@ function buildMenu() {
 
   slider('bright', 'brightVal', (v) => String(v),
     (v) => wf!.applySettings({ wfBrightness: v }), 'wfBrightness');
+  // ★ MOUSE WHEEL — zoom (0) or tune (1). Remembered, like the app's.
+  segment('wheelAction', 'v', (v) => { wheelTunes = v === 1; }, 'wheelAction');
   slider('contrast', 'contrastVal', (v) => String(v),
     (v) => wf!.applySettings({ wfContrast: v }), 'wfContrast');
   slider('sharp', 'sharpVal', (v) => String(v),
@@ -5286,6 +5290,15 @@ function initWaterfallInput() {
   c.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (!spec || !wf) return;
+    // ★★ WHEEL = ZOOM **OR** TUNE. The app has offered this choice for a while and this client did
+    // not, so the same gesture did different things depending on which one you were in front of —
+    // reaching for the wheel to tune and getting a zoom instead (Stuart, 2026-08-01).
+    // ★ Scroll UP means IN / UP-BAND in both modes, matching the app's `dir` convention exactly, so
+    // the direction never reverses between the two.
+    if (wheelTunes) {
+      nudge((e.deltaY < 0 ? 1 : -1) * step);   // `step` is the tuning step the user already chose
+      return;
+    }
     // Anchor on the CURSOR: the frequency under the pointer stays under the
     // pointer, so you zoom into whatever you were looking at.
     const rect = c.getBoundingClientRect();
