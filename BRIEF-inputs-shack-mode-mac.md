@@ -529,7 +529,14 @@ dropped.
 ★ RULE FOR ANY FUTURE TV FLANK: include it only if it is *readable* (status, frequency, meters) or
 *actuable from a keyboard*. If its only affordance is touch or drag, it stays on the phone.
 
-### ★★★ SETTLED: NO ANALOGUE STICKS — the D-pad does tune/zoom, like the arrow keys (Stuart)
+### ~~★★★ SETTLED: NO ANALOGUE STICKS — the D-pad does tune/zoom~~ ★★★ SUPERSEDED 2026-07-31
+> ★★★ **READ THE APPLE TV SECTION AT THE END OF THIS BRIEF BEFORE ACTING ON THIS.** Once the MAIN
+> SCREEN gained a focus highlight, the D-pad's job became unambiguous — it always moves the
+> highlight — and tune/zoom moved to the STICKS. The reasoning below is kept because it explains the
+> tvOS obligation (the Siri Remote must work, and reports as `dpad`), which is still true; but its
+> conclusion is no longer the scheme. Do not re-derive the old mapping from this section.
+
+### The original reasoning (retained for the tvOS obligation)
 
 ★ Right for a stronger reason than simplicity: **it is the only mapping that satisfies Apple's floor
 with ONE code path.** tvOS MANDATES that the Siri Remote works; the remote has no sticks, but its
@@ -566,7 +573,8 @@ rather than two features. Missed while thinking of sticks as velocity.
 ★ The nostalgia lineage now completes: **80s boombox drums → 90s car stereo keys → the tuning dial with
 the finger dimple.** A third era of radio control, on the surface that suits it. Feeds the website story.
 
-#### ★★★ THE WHOLE SCHEME IN ONE LINE (Stuart): D-PAD = THE KEYS. STICKS = THE DRUMS.
+#### ~~★★★ THE WHOLE SCHEME IN ONE LINE: D-PAD = THE KEYS. STICKS = THE DRUMS.~~
+#### ★★★ REVISED 2026-07-31 — **STICKS = TUNE/ZOOM. D-PAD = THE HIGHLIGHT.** (see the Apple TV section)
 
 *"So D-pad will act like the keyboard arrows do now and map to the 90s car stereo buttons. Analogue
 sticks map to the drums."*
@@ -828,3 +836,33 @@ the phone as the pointing device.
 ★ So the question that decides it: is the goal **the big screen** (solved by mirroring) or **the TV
 without the phone** — a living-room app driven by the remote alone? Only the second justifies a
 tvOS target, and it is a different product for a different audience.
+
+## ★★★ AND IT SIMPLIFIES THE GAME CONTROLLER — the scheme, revised
+Stuart, immediately after the Apple TV design above: *"actually that simplifies the game controller
+too. Analogue sticks for tune and zoom, and the D-pad with ✕ for enter and back — ○ is used for
+system-wide back."*
+
+★★★ **IT REMOVES AN IMPLICIT MODE.** The previous scheme had the D-pad doing double duty — tuning on
+the main screen, moving focus in menus — and called that "one device, both jobs, no modes". It was a
+mode: the same control meant different things depending on what was open. **Once the main screen has
+a focus highlight, that ambiguity is gone.**
+
+| Control | Job — EVERYWHERE, ALWAYS |
+|---|---|
+| **Analogue sticks** | tune / zoom |
+| **D-pad** | move the highlight |
+| **✕ / A** | activate the focused control |
+| **○ / B** | back — ★ the SYSTEM claims this on Apple platforms, so we HONOUR it rather than binding it |
+
+★ Nothing changes meaning depending on what is on screen. Simpler than what this brief said before.
+
+### ★★ THE INVERSION, NAMED SO IT IS A DECISION AND NOT AN ACCIDENT
+- **Siri Remote:** the DISCRETE control (the ring) tunes; the CONTINUOUS one (the touchpad) navigates.
+- **Game controller:** INVERTED — continuous sticks tune, discrete D-pad navigates.
+
+★★ The principle that makes both correct: **each device tunes with whichever of its controls is
+better at fine adjustment.** The ring has detent-like clicks and the touchpad does not; a stick is
+smooth and a D-pad is not.
+★ Honest cost: this breaks the "ONE D-pad handler serves the remote, every controller and the arrow
+keys" economy the original decision was built on. Accepted deliberately — suitability beats symmetry
+when the devices are this different, and a user has one or the other in their hands, not both.
