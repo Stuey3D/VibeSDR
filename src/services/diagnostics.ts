@@ -69,6 +69,8 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
       lines.push(`screen : ${c.route ?? '?'}`);
       lines.push(`message: ${c.message}`);
       if (c.stack) lines.push('stack  :', c.stack.slice(0, 3000));
+      // ★ The part that actually names the component — see CrashInfo.componentStack.
+      if (c.componentStack) lines.push('components:', c.componentStack.slice(0, 2000));
     }
   } catch { lines.push('unavailable'); }
 

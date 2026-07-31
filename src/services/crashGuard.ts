@@ -17,7 +17,14 @@ import type { RootStackParamList } from '../../App';
 const KEY = 'vibe.lastCrash';
 let recovering = false;
 
-export type CrashInfo = { ts: number; message: string; stack?: string; route?: string };
+export type CrashInfo = {
+  ts: number; message: string; stack?: string; route?: string;
+  /** ★ React's COMPONENT stack — which component threw, in tree order. The JS stack is useless for
+   *  a render error: it ends inside React's own work loop (`performWorkOnRoot`) with no application
+   *  frames at all, which is exactly what React #327 gave us on 2026-07-31. This is the only thing
+   *  that names the culprit in a minified release build. */
+  componentStack?: string;
+};
 
 export async function getLastCrash(): Promise<CrashInfo | null> {
   try { const s = await AsyncStorage.getItem(KEY); return s ? JSON.parse(s) : null; } catch { return null; }
@@ -44,12 +51,13 @@ export async function clearLastCrash(): Promise<void> {
 let sessionTeardown: (() => void) | null = null;
 export function setSessionTeardown(fn: (() => void) | null): void { sessionTeardown = fn; }
 
-export function recordCrash(error: any, route?: string): CrashInfo {
+export function recordCrash(error: any, route?: string, componentStack?: string): CrashInfo {
   const info: CrashInfo = {
     ts: Date.now(),
     message: String(error?.message ?? error),
     stack: typeof error?.stack === 'string' ? error.stack.slice(0, 4000) : undefined,
     route,
+    componentStack: componentStack ? componentStack.slice(0, 2000) : undefined,
   };
   try { AsyncStorage.setItem(KEY, JSON.stringify(info)); } catch {}
   // NSLog via console so a live `idevicesyslog` capture also sees it.
