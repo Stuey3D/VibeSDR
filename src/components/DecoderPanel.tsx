@@ -307,6 +307,13 @@ export default function DecoderPanel({
   const isWhite = t.name === 'white';
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
+  // ★★ The spots filters were CYCLERS: each tap advanced by one and you read the label to find
+  // out where you had landed. BAND has ELEVEN options, so choosing 10m meant ten taps and ten
+  // list redraws — and on an iPhone SE, where the run already has to scroll, that is the worst
+  // possible way to pick from a list. They now open a popup and you choose. (Stuart, 2026-08-01.)
+  // ★ SPEED FIX had been a popup since it was written; this makes the header consistent with the
+  // one control in it that already did the right thing, rather than inventing a new pattern.
+  const [sfOpen, setSfOpen] = useState<null | 'mode' | 'band' | 'age'>(null);
 
   // ★ Expanding changes every row's height at once, so any preserved offset points somewhere
   // different afterwards. Going to the top is a DEFINED position rather than a guessed one —
@@ -426,7 +433,7 @@ export default function DecoderPanel({
   // Stuart flagged the exception himself — a key that means something different depending on
   // where you are is the thing that has caused most of the confusion in this work. Space is
   // free, and "space activates the focused thing" is a convention rather than a rule to learn.
-  const [kbZone, setKbZone] = useState<null | 'header' | 'list' | 'speed'>(null);
+  const [kbZone, setKbZone] = useState<null | 'header' | 'list' | 'popup'>(null);
   const [speedIdx, setSpeedIdx] = useState(0);
   const [hdrIdx, setHdrIdx] = useState(0);
   const [listIdx, setListIdx] = useState(0);
@@ -577,7 +584,7 @@ export default function DecoderPanel({
       if (!kbZoneRef.current) return;               // not ours until Tab says so
       if (k === 'Escape' || k === 'Backspace') {
         // Deepest first: close the speed popup before anything else, without changing it.
-        if (kbZoneRef.current === 'speed') { setDabSpeedOpenRef.current(false); return; }
+        if (kbZoneRef.current === 'popup') { popCloseRef.current(); return; }
         // Where the box OWNS the arrows there is nothing to hand them back to, so these step
         // back to the list rather than leaving them tuning a locked VFO.
         if (autoOwnRef.current) { setKbZone('list'); return; }
@@ -585,11 +592,11 @@ export default function DecoderPanel({
         return;
       }
       // The popup is a dropdown: it owns every arrow while open, Space picks, Backspace leaves.
-      if (kbZoneRef.current === 'speed') {
+      if (kbZoneRef.current === 'popup') {
         if (k === 'ArrowLeft' || k === 'ArrowUp') { setSpeedIdx(i => Math.max(0, i - 1)); return; }
-        if (k === 'ArrowRight' || k === 'ArrowDown') { setSpeedIdx(i => Math.min(DAB_SPEEDS.length - 1, i + 1)); return; }
-        if (k === 'Space' || k === 'Enter') { onDabSpeedRef.current(speedIdxRef.current); return; }
-        if (k === 'Tab') { setDabSpeedOpenRef.current(false); return; }
+        if (k === 'ArrowRight' || k === 'ArrowDown') { setSpeedIdx(i => Math.min(popLenRef.current - 1, i + 1)); return; }
+        if (k === 'Space' || k === 'Enter') { popApplyRef.current(speedIdxRef.current); return; }
+        if (k === 'Tab') { popCloseRef.current(); return; }
         return;
       }
       if (k === 'ArrowLeft' || k === 'ArrowRight') {
@@ -640,12 +647,8 @@ export default function DecoderPanel({
   const autoOwnRef = useRef(autoOwn); autoOwnRef.current = autoOwn;
   const onOpenFreqRef = useRef(onOpenFreq); onOpenFreqRef.current = onOpenFreq;
   const speedIdxRef = useRef(speedIdx); speedIdxRef.current = speedIdx;
-  const setDabSpeedOpenRef = useRef(setDabSpeedOpen); setDabSpeedOpenRef.current = setDabSpeedOpen;
-  const onDabSpeedRef = useRef((i: number) => {});
-  onDabSpeedRef.current = (i: number) => {
-    const o = DAB_SPEEDS[i];
-    if (o) { onDabSpeed?.(o.v); setDabSpeedOpen(false); }
-  };
+  // ★ The DAB-speed-specific refs that used to live here are gone: popApplyRef/popCloseRef do the
+  // same job for whichever popup is open, so there is one path to keep working rather than four.
   const onSelectDabRef = useRef((i: number) => {
     const p = dabProgrammes[i];
     if (p) onSelectDab?.(p.id);
@@ -676,12 +679,76 @@ export default function DecoderPanel({
   // expands the header for them but I cannot move the selector down to get to them." A
   // control that opens a list has to hand the list the keys, or it has only half worked.
   useEffect(() => {
-    if (!dabSpeedOpen) { setKbZone(z => (z === 'speed' ? 'header' : z)); return; }
+    if (!dabSpeedOpen) { setKbZone(z => (z === 'popup' ? 'header' : z)); return; }
     const cur = DAB_SPEEDS.findIndex(o => Math.abs((dabSpeed ?? 1) - o.v) < 0.001);
     setSpeedIdx(cur >= 0 ? cur : 0);
-    setKbZone('speed');
+    setKbZone('popup');
     announce();
   }, [dabSpeedOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── The header popup ──────────────────────────────────────────────────────────
+  // ★ ONE popup, described by whichever control opened it, so SPEED FIX and the three spots
+  // filters share a single renderer and a single keyboard path. The alternative — four popups
+  // that each grew their own arrow handling — is how the DAB one ended up reachable by mouse
+  // but not by keyboard in the first place.
+  // `wrap` is the one real difference: four speed presets sit happily in one row, eleven bands
+  // do not.
+  const popup: null | {
+    title: string; wrap: boolean;
+    opts: Array<{ key: string; label: string; on: boolean; apply: () => void }>;
+    close: () => void;
+  } =
+    isDabMode && dabSpeedOpen ? {
+      title: 'SPEED FIX · remembered per station', wrap: false,
+      opts: DAB_SPEEDS.map(o => ({
+        key: o.l, label: o.l, on: Math.abs((dabSpeed ?? 1) - o.v) < 0.001,
+        apply: () => onDabSpeed?.(o.v),
+      })),
+      close: () => setDabSpeedOpen(false),
+    }
+    : sfOpen === 'mode' ? {
+      title: 'MODE', wrap: true,
+      opts: SF_MODES.map(m => ({ key: m, label: m, on: sfMode === m, apply: () => setSfMode(m) })),
+      close: () => setSfOpen(null),
+    }
+    : sfOpen === 'band' ? {
+      title: 'BAND', wrap: true,
+      opts: SF_BANDS.map(b => ({ key: b, label: b, on: sfBand === b, apply: () => setSfBand(b) })),
+      close: () => setSfOpen(null),
+    }
+    : sfOpen === 'age' ? {
+      title: 'AGE · hide spots older than', wrap: true,
+      opts: SF_AGES.map(a => ({
+        key: a.label, label: a.minutes === 0 ? 'ANY' : a.label,
+        on: sfAge === a.minutes, apply: () => setSfAge(a.minutes),
+      })),
+      close: () => setSfOpen(null),
+    }
+    : null;
+
+  // Same hand-the-keys rule as SPEED FIX above, for the filters.
+  useEffect(() => {
+    if (!sfOpen) { setKbZone(z => (z === 'popup' ? 'header' : z)); return; }
+    setSpeedIdx(Math.max(0, popup?.opts.findIndex(o => o.on) ?? 0));
+    setKbZone('popup');
+    announce();
+  }, [sfOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Only one popup at a time, and none of them survive a decoder change — a BAND list left open
+  // over a WEFAX image would be filtering a list that is no longer on screen.
+  useEffect(() => { setSfOpen(null); setDabSpeedOpen(false); }, [activeDecoder, spotsKind, isDabMode]);
+
+  const popCloseRef = useRef(() => {});
+  popCloseRef.current = () => { popup?.close(); };
+  const popLenRef = useRef(0);
+  popLenRef.current = popup?.opts.length ?? 0;
+  const popApplyRef = useRef((i: number) => {});
+  popApplyRef.current = (i: number) => {
+    const o = popup?.opts[i];
+    if (!o) return;
+    o.apply();
+    popup?.close();
+  };
 
   // Minimising hands the keyboard back — the list is not on screen to be walked.
   useEffect(() => { if (minimised && kbZone) leave(); }, [minimised]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -772,7 +839,7 @@ export default function DecoderPanel({
               // ★ Always says where Tab goes NEXT, so the cycle is discoverable by using it
               // rather than by being remembered. The wording differs by zone AND by whether
               // the box owns the arrows or merely borrowed them.
-              ? (kbZone === 'speed'  ? 'enter to set · backspace to cancel'
+              ? (kbZone === 'popup' ? 'enter to set · backspace to cancel'
                  : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'enter to press · tab for stations · t to tune'
                                                                : 'enter to press · tab for the list · t to tune')
                                                   : 'enter to press · tab to leave')
@@ -821,7 +888,7 @@ export default function DecoderPanel({
             <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
-                setSfMode(SF_MODES[(SF_MODES.indexOf(sfMode) + 1) % SF_MODES.length]);
+                setSfOpen(o => (o === 'mode' ? null : 'mode'));
               }}>
               <Text style={[dp.hbtnTxt, {
                 color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
@@ -833,7 +900,7 @@ export default function DecoderPanel({
             <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
-                setSfBand(SF_BANDS[(SF_BANDS.indexOf(sfBand) + 1) % SF_BANDS.length]);
+                setSfOpen(o => (o === 'band' ? null : 'band'));
               }}>
               <Text style={[dp.hbtnTxt, {
                 color: sfBand !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
@@ -845,8 +912,7 @@ export default function DecoderPanel({
             <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
-                const i = SF_AGES.findIndex(a => a.minutes === sfAge);
-                setSfAge(SF_AGES[(i + 1) % SF_AGES.length].minutes);
+                setSfOpen(o => (o === 'age' ? null : 'age'));
               }}>
               <Text style={[dp.hbtnTxt, {
                 color: sfAge > 0 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
@@ -1002,24 +1068,25 @@ export default function DecoderPanel({
 
         {/* DAB service list (§5.2) — logos resolve cleanly because DAB programme names are
             EXACT ensemble strings (no RDS guessing like FM). Tap a row to switch service. */}
-        {/* SPEED FIX popup (§4.5) — separate preset buttons; fixes the dablin/OWRX
-            chipmunk misread. Remembered per station. */}
-        {!minimised && isDabMode && dabSpeedOpen && (
+        {/* The header popup — SPEED FIX (§4.5, the dablin/OWRX chipmunk misread, remembered per
+            station) or one of the spots filters. Drawn as a strip under the header rather than
+            as a floating overlay: the box already sits above the control bar and an overlay
+            would need measuring to avoid going off the top of an SE. */}
+        {!minimised && popup && (
           <View style={[dp.dabSpeedPop, { borderBottomColor: dc.hdrBdr }]}>
-            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: t.font }]}>SPEED FIX · remembered per station</Text>
-            <View style={dp.dabSpeedRow}>
-              {DAB_SPEEDS.map((o) => {
-                const on = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
-                return (
-                  <TouchableOpacity key={o.l}
-                    style={[dp.dabSpeedBtn, { borderColor: on ? dc.btnActT : dc.btnBdr }, on && { backgroundColor: dc.btnAct },
-                            kbZone === 'speed' && speedIdx === DAB_SPEEDS.indexOf(o)
-                              && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
-                    onPress={() => { onDabSpeed?.(o.v); setDabSpeedOpen(false); }} activeOpacity={0.7}>
-                    <Text style={[dp.dabSpeedBtnTxt, { color: on ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>{o.l}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: t.font }]}>{popup.title}</Text>
+            <View style={popup.wrap ? dp.popWrapRow : dp.dabSpeedRow}>
+              {popup.opts.map((o, oi) => (
+                <TouchableOpacity key={o.key}
+                  style={[popup.wrap ? dp.popChip : dp.dabSpeedBtn,
+                          { borderColor: o.on ? dc.btnActT : dc.btnBdr }, o.on && { backgroundColor: dc.btnAct },
+                          kbZone === 'popup' && speedIdx === oi && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                  onPress={() => { o.apply(); popup.close(); }} activeOpacity={0.7}>
+                  <Text style={[dp.dabSpeedBtnTxt, { color: o.on ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                    {o.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </View>
         )}
@@ -1194,6 +1261,11 @@ const dp = StyleSheet.create({
   dabSpeedTitle: { fontSize: 10, letterSpacing: 0.5, marginBottom: 6 },
   dabSpeedRow: { flexDirection: 'row', gap: 6 },
   dabSpeedBtn: { flex: 1, borderWidth: 1, borderRadius: 4, paddingVertical: 8, alignItems: 'center' },
+  // Eleven bands will not sit in one row on an SE, so the filter popups wrap. Chips size to
+  // their own text rather than sharing the width equally — '160m' and 'ALL' in equal columns
+  // wastes the room the SE has least of.
+  popWrapRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  popChip:    { borderWidth: 1, borderRadius: 4, paddingVertical: 7, paddingHorizontal: 12, alignItems: 'center' },
   dabSpeedBtnTxt: { fontSize: 11, fontWeight: '600' },
   output: {
     fontSize: 12, letterSpacing: 0.8, lineHeight: 20,
