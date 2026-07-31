@@ -132,7 +132,9 @@ class SstvSync {
 public:
     SstvSync(const SstvMode* mode, double sampleRate, const std::vector<uint8_t>& hasSync)
         : m(mode), sampleRate(sampleRate), hasSync(hasSync) {}
-    void findSync(double& rateOut, int& skipOut);
+    /** ★ `confOut` (0..1) is how much the sync data supports the answer. Near zero means the
+     *  Hough peak is noise and the "correction" is a random shift — see the guard in videoThread. */
+    void findSync(double& rateOut, int& skipOut, double* confOut = nullptr);
 private:
     const SstvMode* m; double sampleRate; const std::vector<uint8_t>& hasSync;
 };
