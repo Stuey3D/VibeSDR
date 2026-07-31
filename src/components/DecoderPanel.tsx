@@ -367,11 +367,24 @@ export default function DecoderPanel({
   // would just be tall empty rows.
   useEffect(() => { setSpotsExpanded(false); }, [spotsKind]);
 
-  // Scroll to bottom when text grows
+  // Scroll to bottom when text grows.
+  //
+  // ★★★ GUARDED, AND THE TIMER IS CANCELLED ON UNMOUNT. Under the New Architecture an imperative
+  // command dispatched to a view that has since DETACHED throws — and `outputRef.current?.` does
+  // NOT protect against it, because the ref still holds a detached instance rather than null. A
+  // throw from a timer or frame callback propagates out through JSI as a C++ exception, which
+  // means it NEVER REACHES crashGuard's ErrorUtils handler and takes the whole process down with
+  // a bare "abort() called" and no JS message.
+  // ★★ Suspected cause of the crash Stuart hit on 2026-07-31: RTTY, tap BIG, tap CLR — clearing
+  // the text re-runs this effect, and the 40 ms timer can land after the panel has gone.
+  // ★ Cheap either way: cancelling the timer on unmount is correct regardless, and the try/catch
+  // costs nothing on the happy path. A failed scroll is not worth a crash.
   useEffect(() => {
-    if (!minimised) {
-      setTimeout(() => outputRef.current?.scrollToEnd({ animated: false }), 40);
-    }
+    if (minimised) return;
+    const t = setTimeout(() => {
+      try { outputRef.current?.scrollToEnd({ animated: false }); } catch {}
+    }, 40);
+    return () => clearTimeout(t);
   }, [decoderText, minimised]);
 
   // ── Keyboard: the decoder box takes the keyboard on TAB ─────────────────────
@@ -886,7 +899,12 @@ export default function DecoderPanel({
         {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
-            style={[dp.body, { maxHeight: bodyH }]}
+            // ★★★ minHeight AS WELL AS maxHeight. As a cap alone, BIG did NOTHING on a text
+            // decoder until the output already overflowed 200 pt — so on RTTY with a few lines
+            // Stuart pressed it repeatedly and nothing moved, which is indistinguishable from a
+            // broken button. In BIG the box takes the room whether or not there is text to fill
+            // it; in SMALL it goes back to sizing itself.
+            style={[dp.body, tall ? { height: bodyH } : { maxHeight: bodyH }]}
             contentContainerStyle={dp.bodyContent}
             {...bodyScroll}
             showsVerticalScrollIndicator
