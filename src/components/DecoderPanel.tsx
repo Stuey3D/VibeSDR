@@ -249,6 +249,15 @@ export default function DecoderPanel({
   // their own natural size — see DecoderImageCanvas — so this ceiling mostly governs the text and
   // list modes, which genuinely benefit from the rows.
   const bodyH = Math.round(Math.min(availH, tall ? winH * 0.62 : 200));
+  // ★★★ AND CAP THE WIDTH. `wrap` is left:8/right:8 — full bleed, which is correct on a phone and
+  // absurd on an iPad or a Mac window, where a decoder box stretched the entire width of the screen
+  // (Stuart, 2026-07-31: "it's also a bit wide on the iPad, Mac view too"). It was sized to the
+  // CONTROLS, and the controls are full-width because THAT is right on a handset — a phone-shaped
+  // decision inherited by every larger screen.
+  // ★ 760 is about the width the content actually wants: an SSTV frame at its 2x ceiling is 640,
+  // and the widest control row (RTTY shift/baud) fits comfortably. Beyond that the box is just
+  // padding. Centred, so it sits under the middle of the screen rather than hugging an edge.
+  const PANEL_MAX_W = 760;
   const isDabMode = dabProgrammes.length > 0;
   const isSpotsMode = !isDabMode && spotsKind !== null;
   const isImageMode = !isSpotsMode && !isDabMode && IMAGE_DECODERS.includes(activeDecoder);
@@ -655,7 +664,8 @@ export default function DecoderPanel({
     <Animated.View
       style={[dp.wrap, { bottom: bottomOffset, opacity, transform: [{ translateY: slideY }] }]}
     >
-      <View style={[dp.inner, { borderColor: kbZone ? NAV_FOCUS : dc.border }]}
+      <View style={[dp.inner, { borderColor: kbZone ? NAV_FOCUS : dc.border,
+                                width: '100%', maxWidth: PANEL_MAX_W }]}
             onTouchStart={noteTouchInteraction}>
 
         {/* ★ Arrival / departure flash. A border that brightens once and fades, so taking the
@@ -988,6 +998,7 @@ const dp = StyleSheet.create({
   wrap: {
     position: 'absolute', left: 8, right: 8,
     zIndex: 200,
+    alignItems: 'center',   // ★ so `inner`'s maxWidth can take effect — see PANEL_MAX_W
   },
   inner: {
     backgroundColor: C.bg,
