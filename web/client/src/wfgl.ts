@@ -36,6 +36,7 @@ uniform float uRows;       // ring height (fixed, generous)
 uniform float uVisible;    // how many rows the display actually shows (the waterfall pixel height)
 uniform float uCols;       // ring width (bins)
 uniform float uSharp;      // 0 = off; unsharp-mask amount (see below)
+uniform float uContrast;   // -1..1 S-curve mix (see below)
 varying vec2 vUv;
 void main() {
   // Top of the output (vUv.y = 0) is the newest row = head; walk down uVisible rows into the ring.
@@ -64,7 +65,22 @@ void main() {
     float hi = v - (l + r) * 0.5;
     v = clamp(v + hi * uSharp, 0.0, 1.0);
   }
-  gl_FragColor = texture2D(uLut, vec2(v, 0.5));
+  // ★★★ CONTRAST — THE SAME BUG AS THE SHARPNESS SLIDER ABOVE, in the same file, one control
+  // along. wfContrast was handed to applySettings and stored, and NOTHING HERE EVER READ IT: the
+  // manual contrast slider under Brightness moved from end to end with no visible change at all,
+  // on the Pi and on Android alike, because they share this web client (Stuart, 2026-07-31).
+  //
+  // ★★ Ported from the app's SkSL so the two look the same on the same signal — an S-CURVE mix,
+  // not a multiply:
+  //     positive → mix toward smoothstep(raw): darks darker, brights brighter, midtones spread
+  //     negative → mix toward a flattened ramp: everything pulled to the middle
+  // A plain gain would clip the strong signals off the top of the palette, which on a waterfall
+  // means losing the very carriers the user turned contrast up to see.
+  float raw = clamp(v, 0.0, 1.0);
+  float sc  = raw * raw * (3.0 - 2.0 * raw);
+  v = uContrast > 0.0 ? mix(raw, sc, uContrast)
+                      : mix(raw, raw * 0.5 + 0.25, -uContrast);
+  gl_FragColor = texture2D(uLut, vec2(clamp(v, 0.0, 1.0), 0.5));
 }`;
 
 function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
@@ -90,8 +106,11 @@ export class WaterfallGL {
   private uVisible: WebGLUniformLocation;
   private uCols: WebGLUniformLocation;
   private uSharp: WebGLUniformLocation;
+  private uContrast: WebGLUniformLocation;
   /** 0…10 from the UI, mapped to the mask amount at draw time. */
   sharpness = 0;
+  /** −10..10 from the slider; the shader takes −1..1. See the S-curve in the fragment shader. */
+  contrast = 0;
   // Reusable RGBA upload buffer (the dB index packed into R). The ring is RGBA, not LUMINANCE, so it
   // is a color-RENDERABLE format — the FBO that preserves history across a resize needs that.
   private rgba: Uint8Array | null = null;
@@ -126,6 +145,7 @@ export class WaterfallGL {
     this.uVisible = gl.getUniformLocation(prog, 'uVisible')!;
     this.uCols = gl.getUniformLocation(prog, 'uCols')!;
     this.uSharp = gl.getUniformLocation(prog, 'uSharp')!;
+    this.uContrast = gl.getUniformLocation(prog, 'uContrast')!;
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   }
 
@@ -223,6 +243,8 @@ export class WaterfallGL {
     // linear so every step moves something. Do not reintroduce the curve here.
     const SHARP_BASE = 2.0;
     gl.uniform1f(this.uSharp, Math.max(0, Math.min(10, this.sharpness)) / 5 * SHARP_BASE);
+    // ★ /10 to reach the shader's −1..1, matching WaterfallView.tsx:370 exactly.
+    gl.uniform1f(this.uContrast, Math.max(-1, Math.min(1, this.contrast / 10)));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
