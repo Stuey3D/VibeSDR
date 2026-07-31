@@ -856,13 +856,42 @@ a focus highlight, that ambiguity is gone.**
 
 ★ Nothing changes meaning depending on what is on screen. Simpler than what this brief said before.
 
-### ★★ THE INVERSION, NAMED SO IT IS A DECISION AND NOT AN ACCIDENT
-- **Siri Remote:** the DISCRETE control (the ring) tunes; the CONTINUOUS one (the touchpad) navigates.
-- **Game controller:** INVERTED — continuous sticks tune, discrete D-pad navigates.
+### ~~★★ THE INVERSION~~ ★★★ RESOLVED — THERE IS NO INVERSION: **TWO D-PADS AND TWO BUTTONS**
+★ An earlier draft recorded a "deliberate cost": that the remote tunes with its DISCRETE control and
+navigates with its CONTINUOUS one while a controller does the opposite, breaking the one-handler
+economy. **Stuart dissolved it:**
 
-★★ The principle that makes both correct: **each device tunes with whichever of its controls is
-better at fine adjustment.** The ring has detent-like clicks and the touchpad does not; a stick is
-smooth and a D-pad is not.
-★ Honest cost: this breaks the "ONE D-pad handler serves the remote, every controller and the arrow
-keys" economy the original decision was built on. Accepted deliberately — suitability beats symmetry
-when the devices are this different, and a user has one or the other in their hands, not both.
+> *"Realistically we can control the entire app with 2 D-PADS and 2 BUTTONS with this method. This is
+> the exact thing the Siri Remote is: D-pad 1 is the ring of physical buttons around the touchpad —
+> that is tune and zoom; the touchpad is the 2nd set of directional controls that moves the
+> highlight; the click of the touchpad is enter; the back arrow is back."*
+
+★★★ **Read the touchpad as a SECOND D-PAD (swipe = direction), not as an analogue surface, and the
+discrete/continuous split disappears.** Every device is the same shape:
+
+```
+D-pad 1   →  tune / zoom
+D-pad 2   →  move the highlight
+Button 1  →  activate
+Button 2  →  back
+```
+
+| Device | D-pad 1 | D-pad 2 | Activate | Back |
+|---|---|---|---|---|
+| **Siri Remote** | the physical ring | the touchpad, directionally | touchpad click | back arrow |
+| **Game controller** | sticks | D-pad | ✕ / A | ○ / B (system-owned — honour it) |
+| **Keyboard** | arrows | Tab / Shift-Tab | Enter | Esc |
+
+★★ Where a device's first D-pad happens to be **proportional** (a stick, or a finger sliding on
+glass), that is a **BONUS LAYERED ON THE SAME HANDLER** — it gives sweep RATE, not a second control
+law. **So the one-handler economy is restored, not lost.**
+
+### ★ WHAT IT IMPLIES STRUCTURALLY — a thin input-intent layer
+Every device resolves to `{ navDx, navDy, tuneDx, tuneDy, activate, back }`. `PanelNav` consumes the
+nav half, `SDRScreen` the tune half, and **no component ever knows which device it is talking to.**
+★ Add a device by writing one adapter to that shape; add a screen by consuming it. Nothing else.
+
+### ★★ AND IT IS AN ACCESSIBILITY POSITION, NOT ONLY A CONVENIENCE
+An app fully operable with two directional inputs and two buttons works for someone who cannot manage
+a touchscreen, and it makes a cheap Bluetooth remote a legitimate control surface rather than
+Apple's hardware being the only one that counts.
