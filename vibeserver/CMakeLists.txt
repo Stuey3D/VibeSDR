@@ -85,8 +85,17 @@ add_executable(vibeserver
 # hardened-runtime app that links one crashes on launch for everyone (absent without Homebrew; rejected
 # for a Team-ID mismatch even on the dev box). The old NAMES-based find preferred the .dylib and the
 # swap-to-.a fallback was fragile; this is bulletproof.
+# ★★★ STATIC IS A macOS RULE, NOT A UNIVERSAL ONE. Everything above is about shipping ONE .app out
+# of a DMG with nothing to install — a notarised hardened-runtime binary that links a Homebrew dylib
+# crashes on launch for everyone. NONE of that applies on Linux, where the package manager owns the
+# libraries and the .deb simply declares Depends:.
+# ★★ And forcing static there actively BREAKS: Debian's libusb-1.0.a needs libudev symbols that are
+# not pulled in, so the link fails with a wall of undefined `udev_*` references (Raspberry Pi,
+# 2026-07-31). Shared linking is both idiomatic and the only thing that works.
 set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
-set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+if(APPLE)
+  set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+endif()
 find_library(RTLSDR_LIB NAMES rtlsdr HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_library(USB_LIB    NAMES usb-1.0 HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 set(CMAKE_FIND_LIBRARY_SUFFIXES ${_saved_suffixes})
@@ -161,7 +170,7 @@ elseif(AIRSPYHF_LIB AND AIRSPYHF_INC)
   # Prefer the static archive next to whatever find_library cached, exactly as the librtlsdr and
   # libopus blocks do — a cached dylib path is how a notarised build ships broken.
   get_filename_component(_ahf_dir "${AIRSPYHF_LIB}" DIRECTORY)
-  if(EXISTS "${_ahf_dir}/libairspyhf.a")
+  if(APPLE AND EXISTS "${_ahf_dir}/libairspyhf.a")   # ★ macOS only
     set(AIRSPYHF_LIB "${_ahf_dir}/libairspyhf.a")
   endif()
   message(STATUS "libairspyhf: ${AIRSPYHF_LIB}")
@@ -182,7 +191,7 @@ if(NOT OPUS_LIB OR NOT OPUS_INC)
   message(FATAL_ERROR "libopus not found. On macOS: brew install opus")
 endif()
 get_filename_component(_opus_dir "${OPUS_LIB}" DIRECTORY)
-if(EXISTS "${_opus_dir}/libopus.a")
+if(APPLE AND EXISTS "${_opus_dir}/libopus.a")   # ★ macOS only — see the suffix block above
   set(OPUS_LIB "${_opus_dir}/libopus.a")
 endif()
 message(STATUS "libopus:   ${OPUS_LIB}")
