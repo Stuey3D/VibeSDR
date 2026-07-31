@@ -3,6 +3,11 @@
 // WebSocket (int16 PCM, mono or stereo for WFM) plus tune/mode/bandwidth
 // control, so the existing VibeSDR audio engine plays local hardware.
 #pragma once
+// ★ <cstdint> EXPLICITLY. Clang (Android NDK, Apple) pulls the fixed-width types in transitively
+// through <string>/<vector>; GCC 14 on Debian 13 does NOT, so uint32_t/uint64_t here failed to name
+// a type and the whole shim refused to compile on the Raspberry Pi (2026-07-31). Include what you
+// use — the header is shared by three toolchains and can only rely on what the standard promises.
+#include <cstdint>
 #include <string>
 #include <vector>
 
