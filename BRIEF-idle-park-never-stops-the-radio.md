@@ -82,6 +82,15 @@ LEAVES                                          < 0.4 W for DSP + Wi-Fi + OS + s
 ★★ So on this measurement **the dongle is roughly 80% of the entire drain** — Stuart's *"the SDR
 itself is the biggest drain"* is most of the number, not just the direction.
 
+### ★★ CORROBORATED BY THERMALS — INDEPENDENT OF THE ARITHMETIC
+Stuart: *"the phone doesn't get warm."* ★★ A warm phone means the SoC is working; a COOL phone
+running a server means the power is leaving through the **USB port**, not being burnt in the chip.
+So the thermals reach the same conclusion as the sums above by a completely different route — and it
+matches every CPU measurement we hold ([[jr_cpu_measured_2026_07_29]], the Pi bench), where the DSP
+has consistently come out cheaper than expected.
+★ It also means there is **no thermal argument** against leaving a phone plugged in permanently. The
+limiting factor is the dongle's constant draw, not heat.
+
 ### ★★★ THEREFORE: AN IDLE SERVER COSTS THE SAME AS A BUSY ONE
 Because the radio never stops, a server with **nobody connected** is also burning ~10.9 %/hr. A
 phone left serving overnight dies in nine hours whether anyone listens or not.
