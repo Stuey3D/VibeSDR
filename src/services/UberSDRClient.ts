@@ -18,6 +18,7 @@
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
+import { noteUnhandled } from './protocolLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 import { USER_AGENT } from '../constants/version';
@@ -1796,7 +1797,11 @@ export class UberSDRClient {
     // in-app debug surface on a release build where the real reports come from. Truncated because
     // an unknown message may be large, and the TYPE is the part that matters.
     if (typeof msg.type === 'string') {
-      this.dbg(`unhandled message type "${msg.type}": ${JSON.stringify(msg).slice(0, 200)}`);
+      const line = `unhandled "${msg.type}": ${JSON.stringify(msg).slice(0, 140)}`;
+      this.dbg(line);
+      // ★ ALSO into the ring buffer — dbg() reaches nothing on a release build, and release builds
+      // are where the reports come from. See services/protocolLog.ts.
+      noteUnhandled('ubersdr', line);
     }
   }
 

@@ -18,6 +18,7 @@
 //  - Keepalive: `SET keepalive` ~1 Hz on BOTH sockets or the server kicks us.
 
 import type { SDRMode, SDRStatus } from './UberSDRClient';
+import { noteUnhandled } from './protocolLog';
 import type {
   SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind,
 } from './SDRBackend';
@@ -528,9 +529,14 @@ export class KiwiAdapter implements SDRBackend {
       //   camp/camping, password_timeout, no_reopen_retry, inactivity_timeout, tlimit_exempt_by_pwd.
       // ★★ Cheap by design — this goes through dbg(), which is the in-app debug surface on a
       // release build, where the reports that matter actually come from.
-      default:
-        this.dbg(`unhandled MSG ${key}=${val.slice(0, 80)} (${stream})`);
+      default: {
+        const line = `unhandled MSG ${key}=${val.slice(0, 80)} (${stream})`;
+        this.dbg(line);
+        // ★ dbg() is invisible on a release build; this survives into the diagnostics export, which
+        // is the only way a Kiwi drop in the field ever gets explained.
+        noteUnhandled('kiwi', line);
         break;
+      }
     }
   }
 
