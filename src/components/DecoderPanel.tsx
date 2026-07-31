@@ -232,11 +232,23 @@ export default function DecoderPanel({
   const [tall, setTall] = useState(false);
   const { height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const availH = Math.max(180, winH - bottomOffset - insets.top - 16);
+  // ★★★ THE HEADER IS PART OF THE PANEL AND WAS NOT COUNTED. AdvRdsPanel applies its computed
+  // maximum to the INNER CONTAINER — the whole panel — whereas this value sizes the BODY ALONE. So
+  // a body allowed to fill the available height put the header ON TOP of it and the panel grew
+  // straight past the notch: exactly the hazard AdvRdsPanel's own comment records ("LEAVE THE
+  // STATUS BAR ALONE"), reintroduced by applying the right number to the wrong box.
+  // ★ Reserved rather than measured: onLayout would settle a frame late and make BIG visibly jump.
+  const HEADER_H = 46;
+  const availH = Math.max(160, winH - bottomOffset - insets.top - 16 - HEADER_H);
   // ★★★ ONE COMPUTED VALUE DRIVES ALL THREE PLACES THE 200 USED TO LIVE (the image canvas, the
   // ADS-B box and the text ScrollView). They MUST move together or BIG works in some modes and not
   // others.
-  const bodyH = Math.round(Math.min(availH, tall ? winH * 0.82 : 200));
+  // ★★ 0.62, not AdvRdsPanel's 0.82. That panel is a phone-shaped stack of text rows; this one has
+  // to look sane in a MAC WINDOW ~1300 pt tall, where 0.82 was a decoder box swallowing the entire
+  // app (Stuart, 2026-07-31: "on the Mac the SSTV box is too big"). Images additionally shrink to
+  // their own natural size — see DecoderImageCanvas — so this ceiling mostly governs the text and
+  // list modes, which genuinely benefit from the rows.
+  const bodyH = Math.round(Math.min(availH, tall ? winH * 0.62 : 200));
   const isDabMode = dabProgrammes.length > 0;
   const isSpotsMode = !isDabMode && spotsKind !== null;
   const isImageMode = !isSpotsMode && !isDabMode && IMAGE_DECODERS.includes(activeDecoder);
