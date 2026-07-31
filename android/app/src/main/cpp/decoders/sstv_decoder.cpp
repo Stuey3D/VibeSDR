@@ -362,7 +362,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
         if (sampleNum % 6 == 0) freq = demodFreq(pcm, snr);
 
         uint8_t lum = clip((freq - (1500.0 + headerShift)) / 3.1372549);
-        if (sampleNum < (int)storedLum.size()) storedLum[sampleNum] = lum;
+        if (sampleNum < (int)storedLum.size()) { storedLum[sampleNum] = lum; storedLumWritten = sampleNum + 1; }
 
         while (pixelIdx < (int)grid.size() && grid[pixelIdx].time == sampleNum) {
             SstvPixel p = grid[pixelIdx];
@@ -415,15 +415,25 @@ std::vector<uint8_t> SstvVideo::toRGB(const std::vector<uint8_t>& img) {
     return rgb;
 }
 
-std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip) {
+std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool* okOut) {
     auto grid = pixelGrid(rate, skip);
+    // ★★★ REPORT WHETHER THIS REDRAW IS EVEN POSSIBLE. The corrected grid asks for sample times
+    // that may lie past the end of what was actually captured — the decode loop breaks early when
+    // the audio runs short, and the tail of storedLum is then zeros that were never samples.
+    // The old code silently substituted storedLum.back() for those, which is why a slant-corrected
+    // picture could line up perfectly at the TOP and drift apart at the BOTTOM (Stuart,
+    // 2026-07-31): the top mapped to real samples, the bottom to a single repeated value.
+    if (okOut) *okOut = true;
     std::vector<uint8_t> img((size_t)m->imgWidth*m->numLines*3, 0);
     auto IMG = [&](int x,int y,int c)->uint8_t&{ return img[((size_t)y*m->imgWidth+x)*3+c]; };
     std::string nm = m->name;
     for (auto& p : grid) {
         uint8_t lum;
-        if (p.time >= 0 && p.time < (int)storedLum.size()) lum = storedLum[p.time];
-        else if (p.time >= (int)storedLum.size()) lum = storedLum.back();
+        // ★ storedLumWritten, NOT storedLum.size(): the buffer is over-allocated and the tail is
+        // zeros that were never captured. Reading them produces a plausible-looking image that is
+        // simply wrong, which is worse than not correcting at all.
+        if (p.time >= 0 && p.time < storedLumWritten) lum = storedLum[p.time];
+        else if (p.time >= storedLumWritten) { if (okOut) *okOut = false; continue; }
         else continue;
         if (p.x < m->imgWidth && p.y < m->numLines) IMG(p.x,p.y,p.channel) = lum;
         if (p.channel > 0 && (nm == "Robot 36" || nm == "Robot 24") && p.y+1 < m->numLines)
@@ -550,11 +560,22 @@ void SstvDecoder::videoThread() {
         if (onStatus) onStatus("Correcting slant...");
         SstvSync sync(mode, sampleRate, video.syncFlags());
         double aRate; int aSkip; sync.findSync(aRate, aSkip);
-        auto pixels = video.redrawFromLuminance(aRate, aSkip);
-        if (onRedrawStart) onRedrawStart();
-        for (int y = 0; y < mode->numLines; y++)
-            if (onLine) onLine(y, mode->imgWidth, pixels.data() + (size_t)y*mode->imgWidth*3);
-        if (onComplete) onComplete();
+        bool ok = false;
+        auto pixels = video.redrawFromLuminance(aRate, aSkip, &ok);
+        // ★★★ ONLY REPLACE THE PICTURE IF THE CORRECTION IS COMPLETE. A redraw that ran past the
+        // captured samples produces an image whose top is aligned and whose bottom is not —
+        // "sliced up and assembled out of alignment" (Stuart, 2026-07-31, on a Scottie S2 that had
+        // decoded cleanly). ★★ AND THE UNCORRECTED PICTURE IS THE BETTER ONE: a readable image with
+        // a constant horizontal wrap beats a torn one, because the eye can read past a wrap and
+        // cannot read past a tear. When we cannot finish the job, leave the user what they had.
+        if (ok) {
+            if (onRedrawStart) onRedrawStart();
+            for (int y = 0; y < mode->numLines; y++)
+                if (onLine) onLine(y, mode->imgWidth, pixels.data() + (size_t)y*mode->imgWidth*3);
+            if (onComplete) onComplete();
+        } else if (onStatus) {
+            onStatus("slant not corrected \u2014 incomplete audio");
+        }
     }
 
     // Reset for the next image.
