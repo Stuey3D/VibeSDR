@@ -163,6 +163,69 @@ while our spectrum pings sail past it.
 SILENT"*. Here it is a keepalive sent down the wrong socket, and the symptom appeared five minutes
 and one screen away from the cause.
 
+## ★★★ MEASURED AGAINST WESSEX, 2026-07-31 — the limits arrive AT CONNECT and we discard them
+Stuart: *"on UberSDR can we determine upon connection if a server requires a confirmation of life
+every x mins? As we fire up the server we could warn the user."* ★★ **Yes — and we already make the
+request.** One `POST /connection` to `wessex.zapto.org`:
+
+```json
+{"client_ip":"…","allowed":false,"reason":"Invalid or missing user_session_id",
+ "session_timeout":240, "max_session_time":14400, "bypassed":false,
+ "allowed_iq_modes":["iq48","iq96"],
+ "daily_time_used_secs":0, "daily_time_remaining_secs":-1}
+```
+
+★★★ **`UberSDRClient.ts:838` throws all of it away:**
+```ts
+const json = await resp.json() as { allowed: boolean; reason?: string };
+```
+So this needs **no new request, no protocol work and no server change** — only to stop discarding
+the response we already have.
+
+### What is genuinely new here
+- ★★★ **`session_timeout: 240`** — the IDLE limit, in SECONDS. **Not read anywhere today.** This is
+  the one dropping people on WESSEX. Their `idle-detector.js` warns at `timeout − 30s` and allows 30s
+  to answer, so the real sequence is **210 s idle → dialog → drop at 240 s**. Stuart's "about 5
+  minutes" was a good estimate; now it is read from the server instead of guessed.
+- ★★ **`daily_time_used_secs` / `daily_time_remaining_secs`** — a DAILY QUOTA, the Kiwi-style
+  mechanism we had assumed UberSDR lacked. `-1` = unlimited for this IP.
+- ★★ **It all arrives AT CONNECT**, not in a later warning message — which is what makes Stuart's
+  idea work: state the terms before the user settles in, rather than only reacting when a clock is
+  nearly up.
+
+### ★ NOT new — `max_session_time: 14400` is ALREADY DISPLAYED
+That is the four-hour cap, and it is the **240-minute countdown** in Stuart's screenshot. It reaches
+us via `sessionSecsLeft` on `session_warning` messages (`UberSDRClient.ts:1570`), not from
+`/connection`. ★ Its known bug is the overlap with the station name — see
+`BRIEF-server-identity-header.md`, already on the 10.0.1 list. Do not "discover" this twice.
+
+### ★★★ Three traps in the field semantics
+1. **It is PER-IP, not per-server.** Their code: *"session timeout disabled (0) — idle detection
+   DISABLED for this IP"*, and the daily counters are per-client. **Read it fresh on every
+   connection; never cache across servers or assume it is constant.** A receiver may be generous to a
+   known user and strict with a stranger.
+2. **`0` means NO TIMEOUT — a valid value, not a missing one.** Their code uses nullish coalescing
+   precisely to avoid treating 0 as absent, and defaults to **300** only when the field is genuinely
+   missing. ★ Getting this backwards would put a countdown on a server that has none.
+3. **The policy is returned even when `allowed` is false.** The probe above was REJECTED for a
+   malformed session id and still received the full picture. ★ So the "server is busy" screen could
+   tell someone what the limits are and how long they would get, instead of only turning them away.
+
+### ★★★ SEQUENCING: DO NOT SHIP THE WARNING BEFORE THE PING FIX
+We currently ping the spectrum socket only, on a blind 5-second timer. Displaying *"this receiver
+disconnects you after 4 minutes of inactivity"* while that is still true would be **advertising our
+own bug as the server's rule** — and it would fire for people who ARE actively listening. Fix the
+ping first; then the statement is true.
+
+### ★ WORDING
+Avoid *"requires active interaction to maintain connection"* — it reads as a demand, and it is about
+PRESENCE, not interaction. Prefer the receiver's actual intent:
+> **This receiver releases your slot after 4 minutes with no activity, so someone else can listen.**
+
+★ Take the number from the field, never hardcode it — 240 is that operator's choice, not an UberSDR
+constant. ★ And once the ping is right, a live countdown in the existing session-timer slot probably
+says it better than any warning text.
+
 ## ★★ THE FIX IS NOT "ALSO PING THE AUDIO SOCKET"
 That alone would keep every session alive for ever, because our ping is UNCONDITIONAL — a 5-second
 timer that runs whether anyone is there or not. That is precisely the discourtesy already on file:
