@@ -277,11 +277,28 @@ export class KiwiAdapter implements SDRBackend {
       // (openWf in onmessage) is kept as a no-op fallback via the wfOpened guard.
       this.openWf();
 
-      // Keepalive on BOTH sockets (Kiwi kicks idle clients).
+      // Keepalive on BOTH sockets — Kiwi kicks a client that stops sending it.
+      //
+      // ★★★ 5 SECONDS, MATCHING KIWI'S OWN CLIENT. We sent this at 1 Hz, five times more often
+      // than the browser does for no benefit. Verified against the receiver's own
+      // `kiwisdr.min.js` (2026-07-31):
+      //     window.setInterval(send_keepalive, 5000);                       // main
+      //     setInterval(function(){ ext_send("SET keepalive"); }, 5000);    // extensions
+      //     setInterval(function(){ msg_send('SET keepalive'); … }, 2500);  // queue/monitor
+      //
+      // ★★★ AND IT CORRECTS memory/third_party_receiver_etiquette.md, which claimed our keepalive
+      // "DEFEATS the server's own 'are you still there' kick". IT DOES NOT — the official client
+      // sends it unconditionally on a timer as well, so this is transport liveness, not presence.
+      // Kiwi's inactivity timeout is driven by something else (user commands, and the rn/rt
+      // counter its client watches). That claim was the entire reason the app grew its own
+      // 30-minute hand-back; the premise was false.
+      // ★ Do NOT make this activity-driven. Stopping it gets us kicked, and it would make us
+      // behave UNLIKE the reference client on somebody else's receiver — the opposite of the
+      // etiquette we are trying to keep.
       this.keepalive = setInterval(() => {
         this.sndSend('SET keepalive');
         this.wfSend('SET keepalive');
-      }, 1000);
+      }, 5000);
 
       // Resolve once audio params are away (we're effectively connected); guard
       // with a timeout so a silent server still rejects.

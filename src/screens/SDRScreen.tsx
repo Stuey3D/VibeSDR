@@ -3206,14 +3206,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     // choice too, and inventing one on their behalf is us deciding their policy. Same rule as
     // never inventing a hardware readout the driver does not report.
     //
-    // ★★ WHAT THIS DOES **NOT** EXCUSE. The hand-back was written because of one specific finding
-    // in memory/third_party_receiver_etiquette.md: "our Kiwi keepalive runs at 1 Hz FOR EVER, which
-    // DEFEATS the server's own 'are you still there' kick." On Kiwi, "their timer already handles
-    // it" may be false *because of us*. Removing ours while still sending an unconditional
-    // keepalive is the worst combination: no courtesy of ours, and theirs disabled.
-    // ★★★ SO THE FOLLOW-UP IS MANDATORY, NOT OPTIONAL: make the Kiwi keepalive ACTIVITY-DRIVEN,
-    // exactly as UberSDR's now is (see UberSDRClient.noteActivity). Until that ships, Kiwi is the
-    // one backend where this removal is a net loss.
+    // ★★★ AND THE OBJECTION TO IT HAS BEEN CHECKED AND WITHDRAWN. The hand-back was written on one
+    // claim in memory/third_party_receiver_etiquette.md: "our Kiwi keepalive runs at 1 Hz for ever,
+    // which DEFEATS the server's own 'are you still there' kick." Read against Kiwi's OWN client
+    // (2026-07-31) that is FALSE — the browser sends `SET keepalive` unconditionally on a timer
+    // too. It is transport liveness, not presence, so it never disabled anything and the premise
+    // for the hand-back did not hold. See the comment in KiwiAdapter's keepalive block.
     //
     // ★ Left inert rather than deleted for one release, so the decision is reversible and the
     // reasoning stays attached to the code. Delete the effect, IDLE_RELEASE_MS, the warn pill and
