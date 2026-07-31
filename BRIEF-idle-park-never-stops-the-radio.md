@@ -259,3 +259,40 @@ needs the radio genuinely running, and duty-cycling would **silently produce an 
 - ★ A user connecting must **trigger a wake immediately**, not wait for the next tick.
 - ★ RTL settle time after open (PLL/AGC) sets the floor on the snapshot duration — measure it, since
   it decides the real duty cycle.
+
+---
+
+# ★★★ THE OBSERVATION THAT MAY KILL MOST OF THIS — MEASURE THE FLOOR FIRST
+Stuart: *"the RTL-SDR gets super hot even just being plugged in with NO APPS RUNNING AT ALL — so it's
+clearly consuming power doing nothing."*
+
+★★★ **Then there is a BASELINE DRAW NO SOFTWARE CHANGE CAN TOUCH.** The RTL2832U, its 28.8 MHz
+oscillator and the regulators come up the moment VBUS appears, independent of any host. We can stop
+ASKING for samples; we cannot stop the chip being powered.
+
+★★ **So the honest question is not "which option saves most" but "HOW MUCH IS AVAILABLE TO SAVE?"**
+If a powered-but-untouched dongle already pulls, say, 200 mA of the ~300 mA it pulls streaming, then
+every option above is fighting over a third of the load and the ~9 h → 40+ h prize evaporates.
+
+## ★★★ THE METER NEEDS A FOURTH READING, TAKEN FIRST
+```
+0. dongle in a CHARGER, no host software at all   ← THE FLOOR. Take this one first.
+1. streaming at 2.4 MSPS
+2. streaming at the minimum rate
+3. device open, not streaming
+```
+★★★ **Reading (0) decides whether any of this is worth building.** If (0) ≈ (1), the correct
+conclusion is *"there is nothing here for software to win"* — and the only remaining lever is cutting
+**VBUS** to the port, for which **Android offers no API**. That would be a genuinely useful NEGATIVE
+result: it saves building three options that cannot deliver.
+
+## Two things that might rescue it
+- ★★ **It may differ sharply PER RADIO.** The Airspy HF+ has a properly power-managed design and an
+  LED that visibly changes state, which implies it HAS distinct modes. The RTL is a cheap dongle that
+  essentially runs flat out whenever powered. So the answer may be **"worth it on the HF+, pointless
+  on the RTL"** — exactly the per-radio split [[one_radio_assumption_family]] keeps warning about.
+  ★ Do NOT implement one behaviour for "the SDR". Measure each.
+- ★ **Heat matters beyond battery.** A hot RTL DRIFTS — crystal stability degrades as it warms, a
+  known and irritating characteristic. If duty-cycling let it cool between snapshots, better
+  frequency stability would be a second benefit alongside the power. But only if there is a real
+  state to drop into, which (0) will tell us.
