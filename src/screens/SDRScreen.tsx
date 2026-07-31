@@ -400,6 +400,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [idleWarnLeftMs, setIdleWarnLeftMs] = useState<number | null>(null);
   /** The RECEIVER's own idle limit in seconds, 0 = it declares none. From POST /connection. */
   const [serverIdleSecs, setServerIdleSecs] = useState(0);
+  /** ★ Height of the notice pills stacked above the controls (POWER SAVE, idle terms). The decoder
+   *  panel adds this to its bottom offset so it sits ABOVE them instead of covering them — and,
+   *  because the panel's available height is derived from that offset, the box shrinks to suit
+   *  instead of running off the top on a small screen. One pill ≈ 34 pt including its gap. */
+  const NOTICE_PILL_H = 34;
   /** ★ Shown briefly ON CONNECTION so the terms are known BEFORE they bite. */
   const [showIdleTerms, setShowIdleTerms] = useState(false);
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
@@ -1052,6 +1057,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c && 'linkMode' in c) c.linkMode = linkMode;
   }, [linkMode]);
   const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
+  // ★★★ HOW MUCH IS STACKED ABOVE THE CONTROLS RIGHT NOW. The decoder panel adds this to its
+  // bottom offset, so notices are never covered by the box that they are often about.
+  // ★★ Stuart, 2026-07-31: "the top stays, the box shrinks with how much it is pushed up by the
+  // pills." That is exactly what happens for free — DecoderPanel derives its available height from
+  // this same offset, so a taller stack shrinks the body rather than pushing it past the notch.
+  // ★ The "still listening?" card is CENTRED, not stacked, so it contributes nothing here.
+  const noticeStackH = (powersaveUi ? NOTICE_PILL_H : 0) + (showIdleTerms ? NOTICE_PILL_H : 0);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
@@ -5329,7 +5341,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           decoding={decoding}
           // Sit ABOVE the VTS bar (which shows the live station) rather than covering it —
           // both visible, VTS between the box and the controls. Lift by the measured VTS height.
-          bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0)}
+          // ★★★ STACK ABOVE EVERYTHING BELOW IT, NOT JUST THE VTS BAR. The panel already lifted by
+          // vtsBarH, but a POWER SAVE or idle-terms pill sits in the same column and the box was
+          // drawn straight over it — the notice ends up underneath the very content it is about
+          // (Stuart, 2026-07-31). One number now covers the whole stack.
+          // ★★ And because `availH` is computed from this offset, a taller stack automatically
+          // SHRINKS the box rather than pushing it off the top — which is what "in BIG mode on a
+          // smaller screen, the box itself gets smaller" asks for, with no separate logic.
+          bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClear={() => setDecoderText('')}
           onClose={dismissDecoderPanel}
           morseQuality={morseQuality}
