@@ -210,3 +210,52 @@ None of us has measured this. An inline **USB power meter** (~£10) answers it i
 
 ★ Do this BEFORE writing any of the three options. Between the Airspy's status LED and a phone that
 reports %/hr, this rig can settle it better than most.
+
+---
+
+# ★★★ THE BEST OPTION: DUTY-CYCLE IT — power down, wake for a snapshot, sleep again
+Stuart: *"we power down the SDR, then every 15–30 seconds we wake it for a snapshot of the spectrum
+then sleep it again."*
+
+★★ **Already designed** — `BRIEF-band-activity-snapshots.md` §3 lists "periodic wake" as one of
+three options for an idle radio, and §3b has the cadence worked out as *"a timelapse, not a
+waterfall"*, decaying to a maintenance rate so the radio is ~99% idle.
+★★★ **What is NEW is the framing: the periodic wake is not merely how the snapshot stays fresh — it
+is the IDLE STRATEGY ITSELF.** The power fix and the band-activity feature are the same mechanism.
+
+## Why it wins
+**1. It gets essentially the whole saving.** A snapshot = open, settle, a few FFTs ≈ 0.5 s. At a
+30 s cadence that is **~2% duty**, so the dongle's ~1.7 W averages ~0.05 W. Idle falls to roughly
+what the phone alone costs — the ~9 h → 40+ h prize — **while still producing something useful.**
+
+**2. ★★★ IT FIXES WHAT MAKES CLOSE/REOPEN SCARY.** Today the resume path runs RARELY — only when
+someone connects — which is precisely why the libusb abort was so nasty: *"armed by an EMPTY server
+and fired by the next person to arrive."* **A rare path is where Heisenbugs live.** At 30 s cadence
+it runs **~2,880 times a day**, so either it is genuinely solid or we find out within minutes of
+switching it on. ★★ That turns the riskiest part of the fix into the **best-exercised code in the
+server**, and it is the strongest argument for this option.
+★ The flip side: anything that leaks — an fd, a buffer, a thread — compounds 2,880×/day instead of
+twice. Also caught fast, but watch for it specifically.
+
+**3. It produces a feature rather than only a saving** — the band-activity timelapse the other brief
+wants, for free, out of the idle state.
+
+## ★★★ INCOMPATIBILITY TO RECORD: SNAPSHOT MODE ≠ LOGGING MODE
+A half-second sample every 30 s **cannot decode RDS** — that needs SECONDS of CONTINUOUS groups to
+establish block sync, let alone confirm a PI. So the unattended logging in `BRIEF-rds-logbook.md` §8
+needs the radio genuinely running, and duty-cycling would **silently produce an empty logbook.**
+
+★★ Both are legitimate idle behaviours; they cannot be the SAME one. So the owner setting is three
+-way, not two:
+| Mode | Radio when idle | For |
+|---|---|---|
+| **Park** | off | longest battery, nothing observed |
+| **Snapshot** | ~2% duty | band-activity timelapse, near-full saving |
+| **Monitor** | continuous | unattended RDS logging — full power, and that is the point |
+
+## Open questions carried over
+- ★★ Does `foregroundServiceType="connectedDevice"` survive being CLOSED between snapshots?
+  Reopening every 30 s may or may not satisfy it. Same check as the section above.
+- ★ A user connecting must **trigger a wake immediately**, not wait for the next tick.
+- ★ RTL settle time after open (PLL/AGC) sets the floor on the snapshot duration — measure it, since
+  it decides the real duty cycle.
