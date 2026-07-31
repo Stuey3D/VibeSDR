@@ -316,12 +316,23 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     const fitsWhole = decoderName !== 'wefax';
     const wScale = dispDims.w > 0 ? panelW / dispDims.w : 1;
     const hScale = dispDims.h > 0 ? maxHeight / dispDims.h : 1;
-    const scale  = fitsWhole ? Math.min(wScale, hScale) : wScale;
+    // ★★★ NEVER MAGNIFY PAST THE SOURCE BY MORE THAN THIS. An SSTV frame is 320x240 — on a Mac
+    // window the fit-to-box maths wanted a 4-5x upscale, which is not "big", it is BLOCKY AND SOFT:
+    // there are no extra pixels to show, so all the extra area buys is a magnified JPEG-ish mush
+    // (Stuart, 2026-07-31: "the SSTV image will be huge and it's only a 320x240 image").
+    // ★ 2x is the honest ceiling: enough that a phone still fills its width, not so much that a
+    // desktop turns a postage stamp into a poster.
+    const MAX_UPSCALE = 2;
+    const scale = Math.min(fitsWhole ? Math.min(wScale, hScale) : wScale, MAX_UPSCALE);
     const drawW  = Math.max(1, Math.round(dispDims.w * scale));
     const drawH  = Math.max(1, Math.round(dispDims.h * scale));
+    // ★★★ AND THE BOX TAKES WHAT THE IMAGE NEEDS, NOT WHAT IT IS ALLOWED. maxHeight is a CEILING;
+    // using it as the height left a fixed-size frame floating in a vast black box on a big screen.
+    // WEFAX keeps the full ceiling because it grows without limit and genuinely wants the room.
+    const boxH = fitsWhole ? Math.min(maxHeight, drawH) : maxHeight;
 
     return (
-      <ScrollView style={{ maxHeight }} showsVerticalScrollIndicator>
+      <ScrollView style={{ height: boxH, maxHeight }} showsVerticalScrollIndicator>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
             otherwise sit against the left edge with dead space beside it. */}
         <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
