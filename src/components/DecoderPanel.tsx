@@ -249,6 +249,14 @@ export default function DecoderPanel({
   // their own natural size — see DecoderImageCanvas — so this ceiling mostly governs the text and
   // list modes, which genuinely benefit from the rows.
   const bodyH = Math.round(Math.min(availH, tall ? winH * 0.62 : 200));
+  // ★★★ EVERY SCROLLING BODY MUST USE THIS. `dp.body` used to carry `maxHeight: 200` and FOUR
+  // places relied on it — the text ScrollView, the DAB list, the spots list and (via its own prop)
+  // the image canvas. Moving the number inline and updating only ONE of them left DAB and SPOTS
+  // completely UNCAPPED, so an FT8 feed grew the panel straight off the top of the screen, header
+  // and controls with it (Stuart, 2026-07-31). A shared constant became four call sites and three
+  // were missed.
+  // ★ Use `bodySize` everywhere. If a new scrolling body is added, it gets this too.
+  const bodySize = tall ? { height: bodyH } : { maxHeight: bodyH };
   // ★★★ AND CAP THE WIDTH. `wrap` is left:8/right:8 — full bleed, which is correct on a phone and
   // absurd on an iPad or a Mac window, where a decoder box stretched the entire width of the screen
   // (Stuart, 2026-07-31: "it's also a bit wide on the iPad, Mac view too"). It was sized to the
@@ -904,7 +912,7 @@ export default function DecoderPanel({
             // Stuart pressed it repeatedly and nothing moved, which is indistinguishable from a
             // broken button. In BIG the box takes the room whether or not there is text to fill
             // it; in SMALL it goes back to sizing itself.
-            style={[dp.body, tall ? { height: bodyH } : { maxHeight: bodyH }]}
+            style={[dp.body, bodySize]}
             contentContainerStyle={dp.bodyContent}
             {...bodyScroll}
             showsVerticalScrollIndicator
@@ -939,7 +947,7 @@ export default function DecoderPanel({
           </View>
         )}
         {!minimised && isDabMode && (
-          <ScrollView ref={dabScroll} style={dp.body} showsVerticalScrollIndicator {...bodyScroll}>
+          <ScrollView ref={dabScroll} style={[dp.body, bodySize]} showsVerticalScrollIndicator {...bodyScroll}>
             {dabProgrammes.map((p, pi) => {
               const active = p.id === activeDabId;
               const navOn = kbZone === 'list' && listIdx === pi;
@@ -964,7 +972,7 @@ export default function DecoderPanel({
         {!minimised && isSpotsMode && (
           <FlatList
             ref={spotsRef}
-            style={dp.body}
+            style={[dp.body, bodySize]}
             {...bodyScroll}
             data={visibleSpots}
             // ★★ NO INDEX IN THE KEY. Spots are newest-first, so a burst PREPENDS rows and
