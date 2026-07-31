@@ -392,19 +392,25 @@ it back.
 
 ---
 
-## 8. ★★ THE VIBESERVER HALF: LOGGING WHEN NOBODY IS WATCHING
-The thing only VibeServer can do. It runs 24/7 on a Pi, a Mac or an Android, it has the aerial, and
-it is already decoding RDS continuously. It could record every PI it sees, all day, **unattended** —
-so a sporadic-E opening at 11am on a Tuesday is in the log when you get home instead of missed. No
-phone app can do this: the phone is not on the aerial and is not awake.
+## 8. ★★★ NOT A BACKGROUND FEATURE — IT LOGS WHILE YOU LISTEN
+★ An earlier draft of this brief proposed unattended logging: a VibeServer left running for days,
+recording every PI it saw so an opening at 11am on a Tuesday was in the log when you got home.
+**Cut.** Stuart, 2026-07-31: *"RDS logging is not a background, server-not-in-use thing."*
 
-★ That turns VibeServer from *"a receiver you connect to"* into *"a receiver that has been listening
-for you"* — a larger product claim. It also gives the multi-radio pool ([[vibeserver_multiradio]]) a
-purpose beyond capacity: one radio parked on a band monitoring while another is being listened to.
-★ Cost is known and measured — see the Pi benchmark: ADV RDS as shipped is ~115% of a core at
-1.024 MSPS on a 32-bit Pi, so an unattended monitor is one core, not a spare machine.
+★★ It follows from §1's own rule. A logbook is a record of **your own station** — and, by the same
+token, of **your own listening**. Something the receiver caught while nobody was there is not a
+catch in the sense the hobby means; you were not there to hear it.
 
----
+**Consequences, all simplifying:**
+- The logbook runs **only while a user is connected and listening**. No daemon, no scheduler, no
+  "was anyone watching?" question.
+- ★ It removes the conflict with the idle-power work: an idle radio is free to **park or duty-cycle**
+  with nothing competing for it. See `BRIEF-idle-park-never-stops-the-radio.md` — its idle setting is
+  a simple two-way (park · snapshot), NOT three.
+- ★ What an idle server DOES produce is a **band-activity timelapse** — wake, snapshot a slice of
+  spectrum, sleep, and let a spectrogram build up over time, exactly as UberSDR's own
+  `band_activity.html` does. That is `BRIEF-band-activity-snapshots.md`, and it is a different
+  feature with a different purpose. Do not merge the two.
 
 ## 9. ★ THE PAYOFF VIEW — a band-conditions display
 Once the fields exist, the list can update **live** while connected: each entry showing what it is

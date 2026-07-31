@@ -240,18 +240,21 @@ twice. Also caught fast, but watch for it specifically.
 **3. It produces a feature rather than only a saving** — the band-activity timelapse the other brief
 wants, for free, out of the idle state.
 
-## ★★★ INCOMPATIBILITY TO RECORD: SNAPSHOT MODE ≠ LOGGING MODE
-A half-second sample every 30 s **cannot decode RDS** — that needs SECONDS of CONTINUOUS groups to
-establish block sync, let alone confirm a PI. So the unattended logging in `BRIEF-rds-logbook.md` §8
-needs the radio genuinely running, and duty-cycling would **silently produce an empty logbook.**
+## ★★ NO "MONITOR" MODE — RDS LOGGING IS NOT A BACKGROUND FEATURE
+★ An earlier draft of this brief invented a third idle mode for unattended RDS logging, and made the
+point that a half-second snapshot every 30 s cannot decode RDS (block sync needs SECONDS of
+continuous groups). **True, but moot.** Stuart, 2026-07-31: *"RDS logging is not a background,
+server-not-in-use thing."*
 
-★★ Both are legitimate idle behaviours; they cannot be the SAME one. So the owner setting is three
--way, not two:
+★★ The logbook records what the USER heard while listening — see [[rds_logbook_design]], whose own
+rule is that a logbook is a record of your own station. Something caught while nobody was there is
+not a catch in that sense.
+
+★★★ **So nothing competes for the idle state**, and the owner setting is a simple two-way:
 | Mode | Radio when idle | For |
 |---|---|---|
 | **Park** | off | longest battery, nothing observed |
 | **Snapshot** | ~2% duty | band-activity timelapse, near-full saving |
-| **Monitor** | continuous | unattended RDS logging — full power, and that is the point |
 
 ## Open questions carried over
 - ★★ Does `foregroundServiceType="connectedDevice"` survive being CLOSED between snapshots?
