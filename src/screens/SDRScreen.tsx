@@ -5267,6 +5267,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View pointerEvents="none"
               style={[styles.powersavePill,
                       { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34,
+                        // ★★★ ABOVE THE DECODER PANEL. `powersavePill` is zIndex 55 and
+                        // DecoderPanel is 200, so anything using that style is drawn BEHIND an open
+                        // decoder box — which is exactly why Stuart never saw the idle warning with
+                        // WEFAX up, and got booted with no notice at all (2026-07-31). A message
+                        // about losing the connection must outrank the content it is about.
+                        zIndex: 240,
                         borderColor: 'rgba(255,160,0,0.55)' }]}>
           <Text style={[styles.powersavePillText, { color: 'rgba(255,190,110,0.95)' }]}>
             {`\u23F1  This receiver disconnects idle listeners after ${
