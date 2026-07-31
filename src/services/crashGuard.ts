@@ -132,7 +132,19 @@ export function installCrashGuard(navRef: NavigationContainerRef<RootStackParamL
       recovering = true;
       try {
         if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'InstancePicker') {
-          navRef.reset({ index: 0, routes: [{ name: 'InstancePicker' }] });
+          // ★★★ noAutoConnect — OR THE RECOVERY UNDOES ITSELF. Resetting to the picker is the
+          // whole point of the recovery: get out of the screen that just threw. But a user with a
+          // DEFAULT SERVER set has an auto-connect waiting there, and it fires immediately and
+          // drags them straight back onto a receiver — into a screen that was half torn down. The
+          // result is audio playing with a dead waterfall and dead controls, under a dialog that
+          // correctly says "returned you to the server list" (Stuart, 2026-07-31, React #327).
+          // ★★ The message was telling the truth and something else undid it. If we say we have
+          // put someone on the server list, that is where they must stay — a default is a
+          // preference for a NORMAL launch, not an instruction to re-enter a screen that just
+          // crashed.
+          // ★ `noAutoConnect` already exists for the watch path, which stands down for the same
+          // reason. Reusing it rather than inventing a second mechanism.
+          navRef.reset({ index: 0, routes: [{ name: 'InstancePicker', params: { noAutoConnect: true } }] });
         }
       } catch {}
       setTimeout(() => {
