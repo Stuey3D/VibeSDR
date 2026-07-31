@@ -5191,7 +5191,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       ) : null}
 
       {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
-        <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
+        // ★★ CLEAR THE VTS BAR — the third time this exact collision has been fixed. VTSBar also
+        // sits at `pillBottom + 8` (see its render below), so this banner was drawn straight ON TOP
+        // of the live-station bar, with the station name bleeding out at both ends
+        // (Stuart, 2026-07-31, screenshot). The DecoderPanel and the powersave pill above already
+        // add this clearance; this banner replaces the panel and never inherited it.
+        // ★ Anything anchored to `pillBottom + 8` must account for vtsBarH. Grep before adding one.
+        <View style={[styles.rotateBanner,
+                      { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>
             ⟳ ROTATE TO PORTRAIT TO VIEW DECODER
@@ -5234,9 +5241,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Chat rotate hint — chat is portrait-only, button stays for unread */}
       {chatRotateHint && (
+        // ★ Same VTS clearance, and the same condition as the decoder banner above — INCLUDING
+        // advRdsOpen, which was missing here. With only the analyser open the decoder banner showed
+        // and this one did not step over it, so the two hints landed on each other.
         <View style={[styles.rotateBanner, {
-                bottom: pillBottom + 8 +
-                  (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0) ? 42 : 0),
+                bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) +
+                  (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? 42 : 0),
               }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>
