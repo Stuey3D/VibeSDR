@@ -85,6 +85,8 @@ export class UberSDRAdapter implements SDRBackend {
   setNrEnabled(on: boolean, strength?: number) { this.client.setNrEnabled(on, strength); }
   setSquelchDb(db: number)              { this.client.setSquelchDb(db); }
   setNotch(on: boolean)                 { this.client.setNotch(on); }
+  /** ★ Presence, forwarded — see UberSDRClient.noteActivity. Adapter half, as ever. */
+  noteActivity()                        { this.client.noteActivity(); }
 
   /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */

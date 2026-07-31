@@ -587,6 +587,36 @@ export class UberSDRClient {
   /** db <= -100 means OFF — the server's convention, and the app's own. */
   setSquelchDb(db: number) { this._sendCtl({ type: 'squelch', db }); }
   setNotch(on: boolean)    { this._sendCtl({ type: 'notch', on }); }
+
+  /** ★★★ TELL THE SERVER SOMEONE IS ACTUALLY HERE — on BOTH sockets, on ACTIVITY.
+   *
+   *  UberSDR counts down `session_timeout` (read in _checkConnection) and `{"type":"ping"}` resets
+   *  it. Their own `idle-detector.js` sends that ping to the AUDIO socket AND the spectrum socket,
+   *  on real user activity, throttled to ~10 s. We only ever pinged the SPECTRUM socket, on a blind
+   *  5-second timer — so the session timer never saw us and WESSEX dropped Stuart at 4 minutes
+   *  while he was sitting there listening (2026-07-30/31).
+   *
+   *  ★★ NOT a second blind timer. An unconditional keepalive would hold a public receiver's slot
+   *  for ever and DEFEAT the operator's own idle kick — precisely the discourtesy recorded in
+   *  memory/third_party_receiver_etiquette.md, and the reason the app's 30-minute hand-back exists.
+   *  So this is driven by EVIDENCE OF A HUMAN: touches, and decoder output.
+   *
+   *  ★ The distinction that makes this honest: `session_timeout` is a LIVENESS check — "is anyone
+   *  still there?" — so answering it when someone IS there is using the mechanism as intended.
+   *  `max_session_time` is a FAIRNESS limit and must never be answered automatically. This only
+   *  ever touches the former; the four-hour cap is untouched and still ends the session. */
+  noteActivity(): void {
+    const now = Date.now();
+    if (now - this.lastActivityPing < 10_000) return;   // their throttle, matched
+    this.lastActivityPing = now;
+    const msg = JSON.stringify({ type: 'ping' });
+    // ★ The AUDIO socket is owned by NATIVE (VibePowerModule / VibeStreamModule), not by JS — which
+    // is exactly why it was never pinged. `sendAudioCommand` already exists on both platforms and
+    // is already typed in AudioPlayer.tsx, so this needs no native change.
+    try { VibePowerModule?.sendAudioCommand?.(msg); } catch {}
+    try { if (this.spectrumWs?.readyState === WebSocket.OPEN) this.spectrumWs.send(msg); } catch {}
+  }
+  private lastActivityPing = 0;
   // Capture sample rate = the spectrum span the server sends. The shim restarts
   // the IQ stream and pushes a fresh config, so the waterfall span self-updates.
   setHwSampleRate(rate: number) { this._sendCtl({ type: 'sampleRate', value: Math.round(rate) }); }
