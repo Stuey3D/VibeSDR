@@ -71,13 +71,16 @@ seems to break and one that tells you where you stand.
 own name on UberSDR.
 
 ### ★★★ EVERY BACKEND WITH A LIMIT SHOULD COUNT DOWN — Stuart, 2026-07-30
+★★ **Table revised 2026-07-31 after probing all three backends directly** — see "MEASURED" sections
+below. Nothing here is inferred; every row was read from the server or from its own client JS.
+
 | Backend | Limit | State today |
 |---|---|---|
-| **UberSDR / VibeServer** | per-session seconds | ✅ `sessionSecsLeft` → countdown |
-| **KiwiSDR** | ★ daily per-IP (`ip_limit_mins`, 25 min/day verified) and per-session on many receivers | ✗ we only react to the KICK — **the one to do** |
-| **FM-DX** | shared tuner; check whether the server sends any per-user clock | ✗ nothing parsed — needs a protocol check |
+| **UberSDR / VibeServer** | idle `session_timeout` **+** `max_session_time` **+** a daily quota | ⚠️ only `max_session_time` shown; the other two arrive at connect and are DISCARDED |
+| **KiwiSDR** | inactivity timeout **+** 24-hour per-IP limit, **both with a LIVE remaining-seconds counter** | ✗ neither countdown nor its ack — **the one to do** |
+| **OpenWebRX** | **SLOTS, not a clock** — `max_clients` only | ✅ correctly nothing to count down (confirmed) |
+| **FM-DX** | nothing in the directory; would need the server's own socket | ✗ unknown — not in the map API |
 | **SpyServer** | check | ✗ nothing parsed — needs a protocol check |
-| **OpenWebRX** | SLOTS, not a clock — its own code frees "the server slot" on pause | probably nothing to count down |
 
 ★★★ **THE RULE: only count down what the SERVER TELLS US.** Never estimate a remaining time from
 when we connected, and never assume a default. A countdown that is wrong is worse than no countdown
@@ -287,3 +290,114 @@ kick"* ([[third_party_receiver_etiquette]]).
   clock the web client shows.
 - ★ Then our own 30-minute hand-back becomes redundant ON UBERSDR — the server's own timeout does
   the job properly, which is the outcome the etiquette note actually wants.
+
+---
+
+# ★★★ MEASURED 2026-07-31 — KIWI, OWRX AND FM-DX, PROBED DIRECTLY
+
+Stuart: *"try and connect to a few Kiwis and see what they send across… and then a few OWRX and a
+few FM-DX servers just to see if they send the same kind of messages over."*
+
+★★ **No slots were taken.** Kiwi `/status`, OWRX `status.json` and the FM-DX map API are all plain
+HTTP and cost a receiver nothing; the Kiwi protocol below came from the receiver's own
+`kiwisdr.min.js` (served gzipped — `gunzip` it before grepping). ★ Keep it that way when verifying:
+[[kiwi_one_listener_per_ip]] means an exploratory socket displaces a real listener.
+
+## 1. ★★★ KIWISDR — far richer than we thought, and we use almost none of it
+
+### 1a. `/status` costs NOTHING and answers questions we ask after connecting
+```
+users=3  users_max=8                       ← LIVE OCCUPANCY, before we connect
+sdr_hw=KiwiSDR 2 v1.902 ⁣ ⏳ Limits ⁣ 📻 DRM ⁣   ← the operator's OWN badge: LIMITS EXIST
+antenna=80m Dipole                          ← the operator's antenna description
+grid=IO90QU  gps=(50.85,-0.66)  asl=17  snr=43,42  loc=Chichester UK  uptime=83395
+```
+- ★★ **`users`/`users_max` before connecting** — the picker could show "3/8" instead of finding out
+  by being refused. Compare `too_busy`, which we only learn by trying.
+- ★ **The `⏳ Limits` badge in `sdr_hw`** is the operator declaring that limits are configured. Enough
+  to warn without knowing the numbers.
+- ★ `antenna` is free text a real operator wrote — *"100 mtr beverage, end terminated"*. Direct
+  validation of the logbook's free-text antenna field ([[rds_logbook_design]]): a picker would have
+  been wrong.
+
+### 1b. THREE limit mechanisms; we handle ONE
+| Mechanism | Message | Today |
+|---|---|---|
+| Inactivity timeout | `MSG inactivity_timeout=<mins>` | ✗ nothing |
+| 24-hour per-IP limit | `MSG ip_limit=<mins>,<ip>` | ✅ `KiwiAdapter.ts:445` |
+| Time-limit exemption by password | `tlimit_exempt_by_pwd` (with `is_local`) | ✗ nothing |
+
+★ `inactivity_timeout` is the **DEATH NOTICE, not an announcement** — its handler is literally
+`'Sorry, this KiwiSDR has an inactivity timeout after '+mins+' minutes.<br>Reload the page to
+continue.'` It arrives as you are kicked. Do not mistake it for an up-front declaration the way
+UberSDR's `session_timeout` is.
+
+### 1c. ★★★ KIWI PUBLISHES A LIVE COUNTDOWN — AND AN ACK WE CAN SEND
+The user-list object carries **`rn`** (seconds remaining) and **`rt`** (1 = inactivity, otherwise the
+24-hour limit). Their client watches it continuously:
+```js
+if (obj.rn <= 55 && !kiwi.inactivity_panel) {
+  s = (obj.rt == 1) ? 'Inactivity timeout in one minute.<br>Close this panel to avoid disconnection.'
+                    : 'Per 24-hour connection timeout in one minute.';
+  confirmation_show_content(s, 360, 55, function(){ msg_send('SET inactivity_ack'); … });
+}
+```
+★★★ So Kiwi satisfies **THE RULE — only count down what the SERVER TELLS US** — for *both* of its
+timers, and unlike UberSDR there is a documented way to answer: **`SET inactivity_ack`**. We see
+neither the counter nor the question.
+
+**Implement, in order:**
+1. Parse `rn`/`rt` → drive the existing countdown UI. Two different clocks, so label which.
+2. Surface the question at `rn <= 55`, as a question.
+3. ★★★ **DO NOT AUTO-ACK.** Sending `SET inactivity_ack` on a timer is precisely
+   [[third_party_receiver_etiquette]]'s 1 Hz keepalive problem — a lie told on the user's behalf. The
+   liveness/fairness distinction above applies: `rt==1` asks *"is a human there?"* and may be
+   answered by real evidence of presence (decoder output, foreground audio, screen on); `rt!=1` is
+   the **fairness** limit and must NEVER be auto-answered.
+
+### 1d. ★★ THE 30-SECOND BOOT — NOT FOUND, and here is what it is NOT
+Stuart: *"the Kiwi may reveal something as to why some servers boot us after 30 seconds."*
+★ **It is not the keepalive.** We send `SET keepalive` at 1 Hz on **both** sockets
+(`KiwiAdapter.ts:281-283`) and `SET ident_user` early (`:255`). `ip_limit` would explain an
+almost-instant kick on a receiver already used that day — but we parse that and would say so.
+
+★★★ **Which leaves a message we do not parse.** `KiwiAdapter.ts:356` drops anything that is not
+`MSG`, and the switch ignores every unmatched case silently. **This is the third independent
+occurrence of the same lesson** (UberSDR's liveness probe, this, and whatever comes next):
+**LOG UNKNOWN MESSAGE TYPES**, reproduce once, and the answer appears. Candidates seen in their JS
+but unhandled by us: `exclusive_use`, `monitor`, `wb_only`, `camp`/`camping`, `password_timeout`,
+`no_reopen_retry`.
+
+## 2. ✅ OPENWEBRX — "SLOTS, NOT A CLOCK" CONFIRMED
+`status.json`, no auth, no slot cost:
+```json
+{"receiver":{"name":…,"admin":…,"gps":{…},"asl":28,"location":"Bedford, England, UK"},
+ "max_clients":20, "version":"v1.2.118",
+ "sdrs":[{"name":"RTL-SDR V3","type":"RtlSdrSoapySource",
+          "profiles":[{"name":"2M","center_freq":145000000,"sample_rate":2048000}, …]}]}
+```
+★ **No time limits and no current client count.** So there is genuinely nothing to count down —
+the brief's original guess was right, and this row can be closed rather than left as "check".
+★ The useful payload is elsewhere: the **profile list is band coverage**, declared up front
+(`center_freq` + `sample_rate` per profile). Relevant to [[BRIEF-multi-radio-band-coverage]] and to
+the picker, not to timers.
+
+## 3. ★★★ FM-DX — NO LIMITS IN THE DIRECTORY, BUT A DECISIVE NUMBER
+`https://servers.fmdx.org/api/` → `{"dataset":[ … ]}`, **541 servers**. ★ Note it is `dataset`, not a
+bare array, and the `http://` form 301s — use HTTPS.
+
+Keys: `name, desc, contact, tuner, version, bwLimit, coords, url, country, countryName, city,
+status, audioQuality, audioChannels, os, sponsor_url, sponsor_image`.
+★ **No session, user or limit fields at all** — any FM-DX limit would have to come from the server's
+own socket, so that row stays open.
+
+★★★ **THE TUNER BREAKDOWN:**
+```
+tef: 534      sdr: 4      xdr: 3
+```
+**Effectively the ENTIRE FM-DX network is TEF6686 hardware.** ★★ The strongest evidence yet for
+[[BRIEF-rds-logbook]] §1b: we already drive TEF chips on 534 servers through `FmdxAdapter`'s
+XDR-GTK `G` commands. A direct TEF integration is not a new frontier — it is removing the host from
+a path we already speak.
+★ `bwLimit` is populated on **209 of 541** ("65 - 108 MHz") — the tuning range, and the reason
+[[fmdx_band_limits_unreadable]] mattered.
