@@ -169,6 +169,20 @@ here.
   ★★ That is also the only version that works for unattended logging (§8), where no phone is
   present to ask.
 
+★★ **FREE TEXT — DO NOT BUILD A PICKER.** Antennas are infinitely varied ("6-element yagi at 10m,
+120°", "loft dipole", "wet string out the window"), so any dropdown we invent is wrong for someone
+by the second week. It is also the one field we can never validate, so it **exports verbatim,
+exactly as typed**. ★ Offer RECENT VALUES as suggestions — most people have two or three and retype
+them constantly — but never constrain the input.
+
+### ★ WHY THE MODEL AND THE GAIN MUST TRAVEL TOGETHER
+Stuart: *"that's why we log the radio model — so we can put the exact gain settings for that unit;
+the user-editable field then says the type of antenna used."* ★★ `28.0 dB` is meaningless alone and
+unambiguous beside `RTL-SDR v4`; `att 0 dB, preamp on` only parses if you know it is an HF+. Logged
+together the entry is **self-interpreting** — a year later "what did I have the HF+ set to when I
+caught that?" is answerable from the file itself, with no outside knowledge required. Never write
+one without the other.
+
 ## 3b. ★★★ LOCATION = THE MAIDENHEAD SQUARE
 Stuart: *"we detect coarse location, so in the logbook a reception location could simply be the
 Maidenhead square."* ★★ **This is better than a privacy compromise — it is the hobby's NATIVE
