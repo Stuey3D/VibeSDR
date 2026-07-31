@@ -50,6 +50,36 @@ Mac with a dongle — and that is the intended shape, not a workaround. Do not d
 iPhone can log alone, and do not treat the server path as a fallback: on iOS it is the ONLY path,
 which makes §8 (the VibeServer half) load-bearing rather than a bonus.
 
+### ★★★ THE FIELD KIT: A PI ZERO 2 W ON ITS OWN HOTSPOT
+Stuart: *"it's another use of the Pi Zero 2 W and radio, which then broadcasts a captive hotspot —
+VibeServer is almost like plugging that radio directly into the phone."*
+
+★ **That is the pitch.** Not "a server" (which sounds like infrastructure) but *a radio with no
+wire*. And it is exactly what closes the iOS gap above: no dext, no USB, but a dongle on your belt
+and the phone on its hotspot is functionally the same product on the platform where it is otherwise
+impossible.
+
+Already specced — `BRIEF-vibeserver-pi-iso.md` has the first-boot flow (no network on boot → open
+the `VibeServer` hotspot → captive config page), and [[vibeserver_pi_two_products]] holds the
+boundary: **the AP belongs to the APPLIANCE layer, never to VibeServer's config schema.**
+
+★ **The Zero 2 W should BEAT the benchmark numbers.** It is a quad A53 and **64-bit capable**, so
+Raspberry Pi OS 64-bit gets NEON compiled in — whereas every figure we have was measured on a
+32-bit `armv7l` PiAware host with **no NEON**. Those numbers are the floor. WFM + ADV RDS as shipped
+was 115% of one core at 1.024 MSPS; the Zero 2 W has four, and runs for hours off a USB power bank.
+
+### ★★★ THEREFORE THE LOGBOOK MUST WORK WITH NO INTERNET AT ALL
+On the Pi's own hotspot the phone has **no route out** — no iCloud, no station logos, no server
+directory, no maps. **State it as a requirement**, or someone builds this assuming iCloud is
+reachable at write time and it fails in precisely the field scenario it exists for.
+
+- Every write is **local and complete**; sync is a later, separate step when the phone rejoins a
+  real network. ★ The append-only shape (§5) makes that easy — union with de-dup, no conflicts.
+- Anything the entry needs from the network (a logo, a transmitter database lookup, a map tile) is
+  **decoration resolved later**, never part of the record.
+- ★ Also expect the transport glyph to be wrong here — `UberClient.transportFor` has already been
+  wrong in both directions, and "Wi-Fi that is actually a Pi in your pocket" is a new case for it.
+
 ---
 
 ## 2. THE RECORD IS AN ENCOUNTER, NOT A GROUP
@@ -84,19 +114,95 @@ at bookmark time is a snapshot presented as a property of the station. Store **b
 
 ---
 
-## 3. ★★★ THE RADIO MODEL IS NOT A NICE-TO-HAVE
-Stuart: *"maybe even store the radio model used too."* ★ **This is what makes the numbers mean
-anything.**
+## 3. ★★★ PROVENANCE — THE STATION BLOCK
+Stuart: *"we could log the entire RDS stack, the Maidenhead grid it was received at, the hardware
+used (RTL-SDR v4, Airspy HF+ etc), the gain settings at the time and the signal quality"* — plus
+*"an editable field so a user can describe the antenna they were using."*
 
-dBFS is relative to the receiver's own full scale. −60 dBFS on an Airspy HF+ with a real aerial and
-−60 dBFS on an RTL dongle on a whip are not the same signal, and SNR varies with the backend's
-bandwidth choices too. Without provenance a log spanning receivers produces numbers that look
-comparable and are not — [[feedback_no_inferred_hardware_readouts]] in its most seductive form,
-because these ARE measured, just not on a common scale.
+★ **This is what makes the numbers mean anything.** dBFS is relative to the receiver's own full
+scale: −60 dBFS on an Airspy HF+ with a real aerial and −60 dBFS on an RTL dongle on a whip are not
+the same signal, and SNR varies with the backend's bandwidth choices too. Without provenance a log
+produces numbers that look comparable and are not — [[feedback_no_inferred_hardware_readouts]] in
+its most seductive form, because these ARE measured, just not on a common scale.
 
-**Record with every entry:** radio driver + model (`hwinfo` already carries both) · sample rate ·
-server URL / "local" · antenna (a free-text field the user sets per receiver) · app version.
-★ Scope §1 means these rarely vary, which is exactly why the few times they DO vary must be visible.
+**Record with every entry:** radio driver + model (`hwinfo` carries both) · gain state (see below) ·
+sample rate · antenna text · Maidenhead grid (§3b) · server URL or "local" · app version.
+
+### ★★★ "GAIN SETTINGS" IS NOT ONE FIELD
+Straight from the AGENTS.md rule — **the three radios do not share a gain model**:
+
+| Radio | What "gain" is |
+|---|---|
+| RTL-SDR v4 | a gain list in dB, plus AGC on/off |
+| Airspy HF+ | **no variable gain at all** — attenuator + preamp |
+| SDRplay RSP | IF gain **reduction**, plus an LNA state |
+
+★★ A single numeric `gain` column would be actively misleading: 28 on an RTL and 28 on an RSP mean
+opposite things, and on an HF+ it means nothing at all. **Store the driver's own gain state**,
+structured per driver, PLUS a human-readable string for display and export:
+```
+"RTL-SDR v4 · 28.0 dB, AGC off"   "Airspy HF+ · att 0 dB, preamp on"   "RSPdx · IF GR 40, LNA 3"
+```
+Export shows the string. Anyone analysing the CSV then gets something honest instead of a column
+that silently means three different things. See [[one_radio_assumption_family]].
+
+### ★★★ THE STATION BLOCK IS A SNAPSHOT, NEVER A POINTER
+Hardware, antenna, grid and gain are constant across hundreds of entries, which makes it tempting
+to store them once as a profile and reference it. **DO NOT.**
+
+★ If entry #400 points at "my antenna" and in October the user puts up a better aerial and edits
+that field, **every catch they ever made has just been rewritten.** A log entry is an immutable
+record of what was true at that moment — that is the entire point of a log, and the one property
+that cannot be recovered once lost.
+
+**So:** keep an editable **station profile** for convenience (it pre-fills the fields, and it is
+where the antenna text is maintained), but **copy the values into each entry at write time.** The
+storage cost is a few dozen bytes against an append-only file. The de-duplication instinct is wrong
+here.
+
+### ★ WHERE THE ANTENNA FIELD LIVES — two cases, and they differ
+- **Local hardware** — the antenna belongs to the phone's session; editable in the app.
+- **VibeServer** — the antenna belongs to the **SERVER**, exactly as its location does today
+  (published, opt-in, never assumed). The Pi in the loft knows what it is connected to; the phone
+  does not. So it is a VibeServer config field alongside location, published to clients, and the
+  log takes it from there.
+  ★★ That is also the only version that works for unattended logging (§8), where no phone is
+  present to ask.
+
+## 3b. ★★★ LOCATION = THE MAIDENHEAD SQUARE
+Stuart: *"we detect coarse location, so in the logbook a reception location could simply be the
+Maidenhead square."* ★★ **This is better than a privacy compromise — it is the hobby's NATIVE
+UNIT.** DXers already exchange locators; lat/long would be the foreign format.
+
+**The machinery exists:**
+- `src/services/grid.ts`
+- `vibeServer.ts:255` — *"Maidenhead: 2 letters, 2 digits, optionally 2 more letters. Decoded
+  locally."*
+- `ServerModeScreen.tsx:649` — *"A Maidenhead locator works **OFFLINE** — use it if this server has
+  no internet."*
+
+★★★ That last one is decisive given the Pi hotspot (§1): a town name needs a geocoder and therefore
+the internet; **a locator needs neither.** It is the only location format that works in the exact
+field scenario this feature exists for.
+
+★★ **The privacy win is bigger than "coarse".** Logs get SHARED — that is what a logbook is for. A
+6-character locator is ~5 × 2.5 km and a 4-character one ~111 × 70 km (`DecoderPanel.tsx:152`
+already makes this point in our own code), so an exported log can be posted publicly without leaking
+a home address. **The coarsening is in the FORMAT**, not in a policy someone has to remember to
+apply on export. Far stronger than storing lat/lon and rounding later.
+
+★ It also yields **distance and bearing to the transmitter** for free — *the* number in DX — and
+plugs into the FT8 map, which already plots Maidenhead grids.
+
+### ★★ SO §7's CAUTION LARGELY DISSOLVES — coarse location is ALREADY declared
+```
+AndroidManifest.xml:2   ACCESS_COARSE_LOCATION
+Info.plist              NSLocationDefaultAccuracyReduced = true
+                        NSLocationWhenInUseUsageDescription (sorting + map)
+```
+A grid square needs **no new permission**. ★ The iOS purpose string should gain the logging use — it
+names only sorting and maps today, and Apple does care that it covers what the app actually does —
+but that is an edit, not a new capability. See §7 for what is still deliberately out.
 
 ---
 
@@ -171,19 +277,33 @@ properly, so the third feature that needs it simply works.
 
 ---
 
-## 7. LOCATION — DELIBERATELY HELD BACK
-Time and place is what turns a log into a catch record, and *"out and about"* makes it more valuable
-still. **But:** `ACCESS_FINE_LOCATION` was **removed** from the Android manifest for the v10 Play
-submission — it was declared, never used, and contradicted the Play declaration; best explanation for
-9.0.2 sitting in review a week.
+## 7. LOCATION — COARSE ONLY, AND NOTHING MORE
+★ Superseded in part by §3b: the **Maidenhead square** is the location field, coarse location is
+already declared on both platforms, and no new permission is needed.
 
-★★ Re-adding location, even coarse, means a new Play data-safety declaration and an iOS purpose
-string. Everything else in this brief is local-only and needs **no declaration at all** (same
-reasoning as the deferred Diagnostics row).
+**What remains true and must be held:**
+- ★★★ **NEVER store precise coordinates**, not even privately. The grid square IS the record. A
+  lat/lon in the file is a home address waiting to be exported, and export is the point of a log.
+- ★ Keep it **opt-in**, consistent with how VibeServer already publishes its own location — *"opt-in,
+  never assumed"*. A log entry with no grid is perfectly valid.
+- ★ Update the iOS `NSLocationWhenInUseUsageDescription`: it currently names only instance sorting
+  and map alignment.
+- ★ Play data-safety: local-only storage is not "collection", but the export path deserves a check
+  before shipping rather than an assumption.
 
-**So:** build the logbook without location, leave the field in the schema, and treat location as a
-separate opt-in decision. It must not ride in on this feature's coat-tails and re-open a review
-problem that was just closed.
+### ★★★ UNRELATED BUT FOUND HERE — `ACCESS_FINE_LOCATION` IS STILL IN THE TREE
+Checked 2026-07-31: `AndroidManifest.xml:3` **and** `app.json:50` both still declare
+`ACCESS_FINE_LOCATION`. The notes record it as REMOVED for the v10 Play submission (versionCode 86),
+as the best explanation for 9.0.2 sitting in review for a week. But the manifest has not been
+touched since **11 July** (`cfaf08c2`), and `git log -G ACCESS_FINE_LOCATION` finds only the
+initial-release commit — **no commit ever removed it.**
+
+Either it was an uncommitted working-tree edit that has since been lost, or it was never done and
+the note recorded an intention as a fact. The AAB is no longer on the Desktop, so what actually
+shipped could not be verified.
+★★ **Resolve this independently of the logbook.** If the uploaded bundle still declares it, the
+theory about the stalled review is untested; if it did not, the next Android build will silently put
+it back.
 
 ---
 
