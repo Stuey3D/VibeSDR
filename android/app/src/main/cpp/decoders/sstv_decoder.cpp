@@ -582,8 +582,35 @@ void SstvDecoder::videoThread() {
             state.store(WaitingVIS); pcm.reset(); delete vis; vis = nullptr;
             return;
         }
+        // ★★★ APPLY THE OFFSET TO THE WHOLE PICTURE, NOT A SHEAR. findSync returns TWO corrections:
+        //   • `skip` — a CONSTANT horizontal offset, identical on every line.
+        //   • `rate` — a SHEAR, shifting each line slightly more than the last (a true "slant").
+        // We applied both. But the defect here is the OFFSET: the decoder latched onto the wrong
+        // point in the line, so the picture arrives WRAPPED — the right-hand edge down the left, by
+        // the SAME amount on every row.
+        //
+        // ★★ Applying a shear on top of that is exactly why the top came out aligned and everything
+        // below it walked away — corrected as a slice rather than as a picture. Reproduced on
+        // Scottie S2 and Martin M2 (Stuart, 2026-07-31): "all you have to do is literally do the
+        // alignment at the top to the whole picture, not just a slice."
+        //
+        // ★★★ AND THERE SHOULD BE NO SLANT TO CORRECT ON AN SDR. Slant correction exists for
+        // SOUNDCARD CLOCK DRIFT — a sample rate that is not quite what it claims to be. An SDR's
+        // clock is locked and its rate exact, so the timebase is already right and only the line
+        // START is wrong. Estimating a shear from sync pulses in noise then invents a correction for
+        // a fault that does not exist, and can only make the picture worse.
+        // ★★ WHAT THE PICTURES ACTUALLY SHOW (Stuart, over an evening of live SSTV): "some come
+        // through slanted, but MOST have been fine just with a tiny strip of the right side on the
+        // left." So the common defect by far is a pure constant offset, and the shear is the rare
+        // case — which is the wrong way round from what the code assumed, since it applied the
+        // shear every time and thereby broke the many to serve the few.
+        // ★ `aRate` is still computed — findSync needs it internally to locate the sync position —
+        // and deliberately NOT applied. Re-enabling it should be gated on a slant estimate that is
+        // both CONFIDENT and LARGE ENOUGH TO BE REAL, so the common offset-only case is never
+        // sheared. Do not simply switch it back on.
         bool ok = false;
-        auto pixels = video.redrawFromLuminance(aRate, aSkip, &ok);
+        auto pixels = video.redrawFromLuminance(sampleRate, aSkip, &ok);
+        (void)aRate;
         // ★★★ ONLY REPLACE THE PICTURE IF THE CORRECTION IS COMPLETE. A redraw that ran past the
         // captured samples produces an image whose top is aligned and whose bottom is not —
         // "sliced up and assembled out of alignment" (Stuart, 2026-07-31, on a Scottie S2 that had
