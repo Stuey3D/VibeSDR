@@ -51,17 +51,50 @@ struct Field {
 // ★ ORDER MATCHES THE MAC. Radio first (what am I), then network (how do people reach me), then
 // the ceilings an owner sets for other people. Someone who has seen the menu-bar app should not
 // have to re-learn anything here.
+// ★★★ SAME SETTINGS, SAME ORDER, SAME WORDS AS THE MAC PANEL. The first version of this screen
+// carried nine CLI flags and called itself "the macOS menu bar over SSH" — which was the rule
+// stated and then not followed. Worse, the omissions were the SAFETY ones: no admin password meant
+// a public Pi let any listener touch bias-T, direct sampling and calibration
+// (Stuart, 2026-07-31: "the Pi isn't safe to use to make a server public").
+// ★★ Sections mirror the Mac: Receiver → Access → Limits → Radio → Advanced. Someone who has seen
+// the menu-bar app should not have to re-learn anything here, and when a control moves there it
+// moves here too.
+struct Section { const char* title; };
+
 std::vector<Field> fields = {
-    { "Port",            "--port",      "",  "Leave blank for the first free port from 48000." },
-    { "PIN",             "--pin",       "",  "Blank = open to anyone who can reach this machine." },
-    { "Frequency (Hz)",  "--freq",      "",  "Where the receiver starts. Listeners can retune." },
-    { "Mode",            "--mode",      "",  "am | lsb | usb | nfm | wfm | cw" },
-    { "Sample rate (Hz)","--rate",      "",  "Capture width. The Airspy HF+ tops out at 912000." },
-    { "Lock rate",       "--lock-rate", "",  "Pin the capture rate so listeners cannot change it." },
-    { "Max bandwidth",   "--max-bw",    "",  "Ceiling on what a listener may ask for. Blank = no cap." },
-    { "Max frame rate",  "--max-fps",   "",  "Spectrum frames/sec ceiling. Blank = no cap." },
-    { "Web client",      "--no-web",    "on","Serve the browser client at /. Off = app only.", true },
+    { "~Receiver",         nullptr,       "",  "" },
+    { "Name",              "--name",      "",  "Shown to listeners over the spectrum." },
+    { "Place",             "--place",     "",  "Town or area shown beneath the name." },
+    { "Country",           "--country",   "",  "Two-letter code — sets the flag and the ITU band plan." },
+    { "Locator",           "--locator",   "",  "Maidenhead square. Deliberately coarse (~4 km) — a receiver's position is published." },
+    { "Latitude",          "--lat",       "",  "Exact coordinates win over a locator. Leave blank to use the locator." },
+    { "Longitude",         "--lon",       "",  "Exact coordinates win over a locator." },
+
+    { "~Access",           nullptr,       "",  "" },
+    { "PIN",               "--pin",       "",  "Who may CONNECT at all. Blank = anyone who can reach this machine." },
+    { "Admin password",    "--admin-pass","",  "Who may change settings that can DAMAGE the radio: bias-T, direct sampling, calibration. SET THIS on a public receiver." },
+    { "Time limit (min)",  "--session-limit","","Per listener. Blank or 0 = unlimited. For a receiver on the internet." },
+
+    { "~Limits",           nullptr,       "",  "" },
+    { "Max bandwidth",     "--max-bw",    "",  "Ceiling on what a listener may ask for. Blank = no cap." },
+    { "Max frame rate",    "--max-fps",   "",  "Spectrum frames/sec ceiling. Blank = no cap." },
+    { "Lock capture rate", "--lock-rate", "",  "Pin the capture rate so listeners cannot change it." },
+    { "Force idle saver",  "--force-idle-saver","off","Listeners may NOT switch idle power-saving off. For solar or metered hosts.", true },
+    { "Uncompressed audio","--uncompressed","off","off | choice | compat. Raw audio is ~187 KB/s per listener, about 20x compressed." },
+
+    { "~Radio",            nullptr,       "",  "" },
+    { "Frequency (Hz)",    "--freq",      "",  "Where the receiver starts. Listeners can retune." },
+    { "Mode",              "--mode",      "",  "am | lsb | usb | nfm | wfm | cw" },
+    { "Sample rate (Hz)",  "--rate",      "",  "Capture width. The Airspy HF+ tops out at 912000." },
+    { "Gain (tenths dB)",  "--gain",      "",  "Blank or negative = automatic." },
+
+    { "~Advanced",         nullptr,       "",  "" },
+    { "Port",              "--port",      "",  "Blank = the first free port from 48000." },
+    { "Web client",        "--no-web",    "on","Serve the browser client at /. Off = the app only.", true },
 };
+
+/** Section headings are rows too, so the list stays one array — but they are never selectable. */
+bool isHeading(const Field& f) { return f.label[0] == '~'; }
 
 /** Read VIBESERVER_ARGS out of the config and spread it across the fields. */
 void loadConf() {
@@ -161,6 +194,12 @@ void draw(int sel, const std::string& msg, bool editing) {
 
     attron(A_BOLD); mvprintw(row++, 2, "Settings"); attroff(A_BOLD);
     for (size_t i = 0; i < fields.size(); i++) {
+        if (isHeading(fields[i])) {
+            attron(A_BOLD | COLOR_PAIR(4));
+            mvprintw(row++, 2, "%s", fields[i].label + 1);
+            attroff(A_BOLD | COLOR_PAIR(4));
+            continue;
+        }
         bool cur = ((int)i == sel);
         if (cur) attron(A_REVERSE);
         mvprintw(row, 2, " %-18s ", fields[i].label);
@@ -190,8 +229,9 @@ int vibeserverTui() {
     init_pair(1, COLOR_GREEN,  -1);
     init_pair(2, COLOR_RED,    -1);
     init_pair(3, COLOR_YELLOW, -1);
+    init_pair(4, COLOR_CYAN,   -1);
 
-    int sel = 0; std::string msg; bool editing = false; std::string buf;
+    int sel = 1; std::string msg; bool editing = false; std::string buf;   // 0 is a heading
     for (;;) {
         draw(sel, msg, editing);
         int c = getch();
@@ -203,8 +243,12 @@ int vibeserverTui() {
             continue;
         }
         switch (c) {
-            case KEY_UP:   sel = (sel + (int)fields.size() - 1) % (int)fields.size(); msg.clear(); break;
-            case KEY_DOWN: sel = (sel + 1) % (int)fields.size(); msg.clear(); break;
+            case KEY_UP:
+                do { sel = (sel + (int)fields.size() - 1) % (int)fields.size(); } while (isHeading(fields[sel]));
+                msg.clear(); break;
+            case KEY_DOWN:
+                do { sel = (sel + 1) % (int)fields.size(); } while (isHeading(fields[sel]));
+                msg.clear(); break;
             case '\n': case KEY_ENTER: case ' ':
                 if (fields[sel].isToggle) { fields[sel].value = (fields[sel].value == "off") ? "on" : "off";
                                             msg = "changed — press s to save and restart"; }
