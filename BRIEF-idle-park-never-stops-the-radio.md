@@ -68,8 +68,34 @@ supplies it over OTG. We are leaving the single biggest load running while servi
 **CAPACITY** — how many listeners fit. **BATTERY is almost entirely the radio.** Do not reach for
 `BRIEF-vibeserver-benchmark.md` figures to reason about runtime.
 
-- ★★ **Idle draw ≈ active draw.** Re-check [[vibeserver_battery_measured]] against this — an
-  unattended server on battery is burning full power serving nobody.
+### ★★★ MEASURED — 10.9 %/hr, and ~80% of it is the dongle
+Stuart, Moto G35, **WFM stereo, 2.4 MHz, RTL-SDR**: **10.9 % per hour** ≈ **9 hours** from full.
+
+Arithmetic (★ assumes the 5000 mAh cell, typical RTL draw, and an ESTIMATED boost efficiency — so
+treat as an order-of-magnitude, not a measurement):
+```
+10.9 %/hr × 5000 mAh  ≈ 545 mAh/hr @ ~3.85 V   ≈ 2.1 W total
+RTL-SDR v3/v4         ≈ 280–300 mA @ 5 V       ≈ 1.5 W
+  … via OTG boost at ~85–90%                   ≈ 1.7 W drawn from the battery
+LEAVES                                          < 0.4 W for DSP + Wi-Fi + OS + screen-off
+```
+★★ So on this measurement **the dongle is roughly 80% of the entire drain** — Stuart's *"the SDR
+itself is the biggest drain"* is most of the number, not just the direction.
+
+### ★★★ THEREFORE: AN IDLE SERVER COSTS THE SAME AS A BUSY ONE
+Because the radio never stops, a server with **nobody connected** is also burning ~10.9 %/hr. A
+phone left serving overnight dies in nine hours whether anyone listens or not.
+
+★★★ **The size of the prize:** if the fix genuinely powers the dongle down when parked, idle falls
+from ~2.1 W to whatever the phone alone costs — plausibly under 0.5 W, i.e. **~9 hours → 40+**. That
+turns "leave a spare phone as a receiver" from a mains-only proposition into a portable one, which
+is the field-kit story in `BRIEF-vibeserver-pi-iso.md`.
+
+### ★★ THE ONE MEASUREMENT THAT WOULD SETTLE IT
+**%/hr with the server running and NOBODY connected.** If it comes back near 10.9, the bug is
+measured directly instead of inferred, and that single figure justifies the whole piece of work.
+★ Re-check [[vibeserver_battery_measured]] against this too — those figures were taken with a
+listener, and this brief says the idle case is no cheaper.
 - ★ **The Pi field kit** — same code, so a Zero 2 W on a power bank does this too
   (`BRIEF-vibeserver-pi-iso.md`).
 - ★★ **Unattended logging** (`BRIEF-rds-logbook.md` §8) genuinely WANTS the radio streaming with
