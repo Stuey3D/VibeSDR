@@ -20,7 +20,9 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS } from './PanelNav';
@@ -209,6 +211,32 @@ export default function DecoderPanel({
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   onOpenFreq,
 }: DecoderPanelProps) {
+  // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
+  //
+  // The image height was a hardcoded 200 pt on every device while DecoderImageCanvas scales the
+  // image to the panel's WIDTH, so THE WIDER THE SCREEN THE WORSE IT GOT: a 320x256 SSTV frame
+  // draws ~288 pt on a phone and ~640 pt on an iPad, both into the same 200 pt window. The device
+  // with the most room to spare showed the least of the picture — and an iPad is what an App Store
+  // reviewer picks up (Stuart, 2026-07-30: "SSTV may bite us if a user cannot view the whole
+  // thing").
+  //
+  // ★★ SMALL stays 200 pt ON PURPOSE. The box is capped so the waterfall and spectrum remain
+  // visible; that is a deliberate choice, not an oversight. BIG is for when the decoded content IS
+  // what the user came for.
+  // ★ EVERY decoder benefits, not just SSTV: more rows of RTTY/NAVTEX/Morse text, more FT8 spots,
+  // more aircraft, more DAB services.
+  //
+  // Sizing copied from AdvRdsPanel, which solved this first — including the hazard its own comment
+  // records: "LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
+  // straight up past the notch, covering the clock and battery." Inherited, not rediscovered.
+  const [tall, setTall] = useState(false);
+  const { height: winH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const availH = Math.max(180, winH - bottomOffset - insets.top - 16);
+  // ★★★ ONE COMPUTED VALUE DRIVES ALL THREE PLACES THE 200 USED TO LIVE (the image canvas, the
+  // ADS-B box and the text ScrollView). They MUST move together or BIG works in some modes and not
+  // others.
+  const bodyH = Math.round(Math.min(availH, tall ? winH * 0.82 : 200));
   const isDabMode = dabProgrammes.length > 0;
   const isSpotsMode = !isDabMode && spotsKind !== null;
   const isImageMode = !isSpotsMode && !isDabMode && IMAGE_DECODERS.includes(activeDecoder);
@@ -768,6 +796,15 @@ export default function DecoderPanel({
               <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>SAVE</Text>
             </HBtn>
           )}
+          {/* ★★ BIG / SMALL — offered for EVERY decoder, not just images. See the block at the top
+              of this component for why the 200 pt cap was wrong on large screens. */}
+          <HBtn hitSlop={6}
+            style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            onPress={(e: any) => { e?.stopPropagation(); setTall((v: boolean) => !v); }}>
+            <Text style={[dp.hbtnTxt, { color: tall ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+              {tall ? 'SMALL' : 'BIG'}
+            </Text>
+          </HBtn>
           {isImageMode && !!imageInfo && (
             <Text style={[dp.status, { color: dc.status, fontFamily: t.font }]} numberOfLines={1}>
               {imageInfo}
@@ -806,7 +843,7 @@ export default function DecoderPanel({
           <View style={dp.bodyContent}>
             <DecoderImageCanvas
               ref={imageRef}
-              maxHeight={200}
+              maxHeight={bodyH}
               decoderName={activeDecoder ?? 'image'}
               onInfo={setImageInfo}
               onStatus={(s: string) => onImageStatus?.(s)}
@@ -820,14 +857,14 @@ export default function DecoderPanel({
             box rendered empty. The text body doesn't hit this because a ScrollView
             sizes to its content. */}
         {!minimised && isAircraftMode && (
-          <View style={[dp.bodyContent, { height: 200 }]}>
+          <View style={[dp.bodyContent, { height: bodyH }]}>
             <AircraftPanel aircraft={aircraft!} scrollRef={aircraftRef} />
           </View>
         )}
         {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
-            style={dp.body}
+            style={[dp.body, { maxHeight: bodyH }]}
             contentContainerStyle={dp.bodyContent}
             {...bodyScroll}
             showsVerticalScrollIndicator
@@ -1013,7 +1050,9 @@ const dp = StyleSheet.create({
   },
   settingsGap: { width: 6 },
   closeBtn: { color: C.closeCl, fontSize: 16, paddingHorizontal: 2, flexShrink: 0 },
-  body:        { maxHeight: 200 },
+  // ★ maxHeight is applied INLINE from bodyH (see the BIG/SMALL block); this keeps the rest of
+  // the style and no longer hardcodes the cap.
+  body:        {},
   bodyContent: { padding: 12 },
   dabRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   dabName:     { flex: 1, fontSize: 14 },

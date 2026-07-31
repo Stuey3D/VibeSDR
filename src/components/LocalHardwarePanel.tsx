@@ -319,13 +319,19 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                    .replace(/0+$/, '').replace(/\.$/, '.0')}M — set by the server.`}
             </Text>
           ) : <>
-          {/* A real USB dongle runs sluggish/underfiltered below ~1 MHz, so only
-              offer >=1 MHz for local hardware; RTL-TCP keeps the low rates (a
-              networked rtl_tcp source like UberSDR only sends ~192 kHz). */}
-          {/* VibeServer sends its own supported rates → use them verbatim; else
-              RTL-TCP keeps the low rates and local USB filters to >=1 MHz. */}
+          {/* ★★★ ASK THE RADIO WHAT IT SUPPORTS. The >=1 MHz filter below is an RTL RULE —
+              a real RTL dongle runs sluggish and underfiltered under ~1 MHz — and it was applied to
+              ALL local USB hardware. The Airspy HF+ MAXES OUT AT 912 kHz, so every option in the
+              list failed that test, every choice collapsed to the same rate, and the picker looked
+              broken (Stuart: "Airspy sample rate does nothing on Android").
+              ★★ This is the one-radio assumption family again: a rule true of the first radio,
+              applied to a radio it was never about. hwinfo has carried `rates` all along.
+              ★ Priority: the server's pin > the server's list > THE RADIO'S OWN LIST > the RTL
+              default. The last branch keeps the >=1 MHz filter, because there it IS an RTL. */}
           <Seg slot={slot} options={p.serverRates && p.serverRates.length
                           ? [...p.serverRates].sort((a, b) => a - b)
+                          : p.radio?.rates && p.radio.rates.length
+                          ? [...p.radio.rates].sort((a, b) => a - b)
                           : p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
                value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />

@@ -303,16 +303,31 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       },
     }), [rebuild, rollToPrev, growTo, viewingPrev, img, onInfo, onStatus, onPrevState, decoderName]);
 
-    // ── Render: scaled to panel width, aspect preserved, scrolls as it grows ──
-    const scale = dispDims.w > 0 ? panelW / dispDims.w : 1;
-    const drawH = Math.max(1, Math.round(dispDims.h * scale));
+    // ── Render ────────────────────────────────────────────────────────────────
+    // ★★★ SHRINK TO FIT WHEN THE BOX CANNOT GROW ANY FURTHER (Stuart, 2026-07-30).
+    // Scaling by WIDTH alone is what made a big screen show LESS of the picture: the wider the
+    // panel, the taller the drawn image, against a fixed cap. Scaling by min(width, height) means a
+    // whole SSTV frame is visible at once — and it fixes a phone in landscape too, where the box is
+    // short and wide.
+    //
+    // ★★ WEFAX IS THE EXCEPTION AND MUST KEEP SCROLLING. It is an endless fax roll that grows
+    // continuously, so "fit the whole thing" would shrink it to a thread. Shrink-to-fit is right for
+    // a FIXED-SIZE frame and wrong for a stream, so it is chosen per decoder rather than globally.
+    const fitsWhole = decoderName !== 'wefax';
+    const wScale = dispDims.w > 0 ? panelW / dispDims.w : 1;
+    const hScale = dispDims.h > 0 ? maxHeight / dispDims.h : 1;
+    const scale  = fitsWhole ? Math.min(wScale, hScale) : wScale;
+    const drawW  = Math.max(1, Math.round(dispDims.w * scale));
+    const drawH  = Math.max(1, Math.round(dispDims.h * scale));
 
     return (
       <ScrollView style={{ maxHeight }} showsVerticalScrollIndicator>
-        <View style={[styles.canvasWrap, { width: panelW, height: drawH }]}>
+        {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
+            otherwise sit against the left edge with dead space beside it. */}
+        <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
           {img && (
-            <Canvas style={{ width: panelW, height: drawH }}>
-              <SkiaImage image={img} x={0} y={0} width={panelW} height={drawH} fit="fill" />
+            <Canvas style={{ width: drawW, height: drawH }}>
+              <SkiaImage image={img} x={0} y={0} width={drawW} height={drawH} fit="fill" />
             </Canvas>
           )}
         </View>
