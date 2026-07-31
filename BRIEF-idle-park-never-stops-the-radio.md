@@ -100,19 +100,20 @@ from ~2.1 W to whatever the phone alone costs — plausibly under 0.5 W, i.e. **
 turns "leave a spare phone as a receiver" from a mains-only proposition into a portable one, which
 is the field-kit story in `BRIEF-vibeserver-pi-iso.md`.
 
-### ★★ THE ONE MEASUREMENT THAT WOULD SETTLE IT
-**%/hr with the server running and NOBODY connected.** If it comes back near 10.9, the bug is
-measured directly instead of inferred, and that single figure justifies the whole piece of work.
-★ Re-check [[vibeserver_battery_measured]] against this too — those figures were taken with a
-listener, and this brief says the idle case is no cheaper.
+### Who else this hits
 - ★ **The Pi field kit** — same code, so a Zero 2 W on a power bank does this too
-  (`BRIEF-vibeserver-pi-iso.md`).
+  (`BRIEF-vibeserver-pi-iso.md`), and there the whole point is running off a battery.
 - ★★ **Unattended logging** (`BRIEF-rds-logbook.md` §8) genuinely WANTS the radio streaming with
   nobody listening — that is the whole feature. ★ So after this fix, "keep the radio on with no
   listener" becomes a **deliberate choice made when logging is armed**, rather than something that
   happens by accident every time the last listener leaves. That is the right relationship between
   the two: today the accident is doing the feature's job for free, and badly.
-- ★ Thermal and wear on a phone left plugged in permanently, which is the recommended setup.
+
+### ★★ THE ONE MEASUREMENT THAT WOULD SETTLE IT
+**%/hr with the server running and NOBODY connected.** If it comes back near 10.9, the bug is
+measured directly instead of inferred, and that single figure justifies the whole piece of work.
+★ Re-check [[vibeserver_battery_measured]] against this too — those figures were taken with a
+listener, and this brief says the idle case is no cheaper.
 
 ## ★ VERIFY LIKE THIS
 The Airspy HF+ LED is the cheapest instrument we have for this whole class of bug — it is ground
