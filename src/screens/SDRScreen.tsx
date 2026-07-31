@@ -3216,9 +3216,27 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ Left inert rather than deleted for one release, so the decision is reversible and the
     // reasoning stays attached to the code. Delete the effect, IDLE_RELEASE_MS, the warn pill and
     // idleWarnLeftMs once the Kiwi keepalive lands.
-    setIdleWarnLeftMs(null);
-    return;
-    // eslint-disable-next-line no-unreachable
+    // ★★★ WHAT REPLACES IT: WARN FROM THE RECEIVER'S OWN LIMIT. WESSEX declares
+    // session_timeout=240 and simply CUTS at it — there is no "are you still there?" message to
+    // receive, because their web client computes (session_timeout − 30) on a LOCAL timer and shows
+    // its own dialog. So the warning has to be ours, built from their number, or the user is just
+    // dropped mid-listen with no explanation (Stuart, 2026-07-31, twice on WESSEX).
+    // ★ Only the LIVENESS limit: answering it when someone IS there is using the mechanism as
+    // intended. `max_session_time` is the fairness cap and still ends the session on its own.
+    if (isLocal || !connected || serverIdleSecs <= 0) { setIdleWarnLeftMs(null); return; }
+    const WARN_LEAD_MS = 30_000;      // their client's own lead time, matched
+    const t = setInterval(() => {
+      const idleFor = Date.now() - Math.max(lastInteractRef.current, lastDecodeRef.current);
+      const left = serverIdleSecs * 1000 - idleFor;
+      // Show only inside the last 30 s, and never a negative clock.
+      setIdleWarnLeftMs(left <= WARN_LEAD_MS && left > 0 ? left : null);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [isLocal, connected, serverIdleSecs]);
+
+  // ── The old 30-minute hand-back, left inert for one release ──────────────────
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _deadIdleHandback = () => {
     if (isLocal || !connected) { setIdleWarnLeftMs(null); return; }
     const t = setInterval(() => {
       // The same "someone IS watching" exemptions the powersave saver uses: a watch
@@ -3260,8 +3278,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       });
     }, 5000);
     return () => clearInterval(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocal, connected, baseUrl]);
+  };
+  void _deadIdleHandback;   // referenced so the retained body does not read as dead code
 
   const onSmoothTune = useCallback((v: boolean) => {
     setSmoothTune(v);
@@ -5232,7 +5250,11 @@ export default function SDRScreen({ route, navigation }: Props) {
                   { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34,
                     borderColor: 'rgba(255,150,60,0.85)' }]}>
           <Text style={[styles.powersavePillText, { color: 'rgba(255,175,90,0.98)' }]}>
-            ⏻  STILL THERE? handing this receiver back in {Math.ceil(idleWarnLeftMs / 1000)}s — tap to stay
+            {/* ★★ THE RECEIVER'S wording, not ours — this is now the SERVER's liveness check
+                (session_timeout), not the app's own hand-back, which has been removed. It must not
+                claim we are giving the slot away: the receiver is asking whether anyone is still
+                listening, and a tap answers it with a ping on both sockets. */}
+            ⏻  STILL LISTENING? this receiver disconnects idle listeners in {Math.ceil(idleWarnLeftMs / 1000)}s — tap to stay
           </Text>
         </TouchableOpacity>
       ) : null}
