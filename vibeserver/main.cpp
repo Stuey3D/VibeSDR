@@ -19,6 +19,7 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include "airspyhf_source.h"
 
 #include <atomic>
 #include <chrono>
@@ -38,6 +39,7 @@ void onSignal(int) { g_stop = true; }
 struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
     bool        useUsb  = true;          // default: drive the dongle directly
+    bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
     std::string tcpHost = "127.0.0.1";   // rtl_tcp source (when --tcp is given)
     int         tcpPort = 1234;
     double      freq    = 9'410'000;     // Hz
@@ -84,7 +86,7 @@ bool parse(int argc, char** argv, Opts& o) {
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "-h" || a == "--help") { usage(); return false; }
-        else if (a == "--device") { o.device = std::atoi(need(i)); o.useUsb = true; }
+        else if (a == "--device") { o.device = std::atoi(need(i)); o.useUsb = true; o.deviceGiven = true; }
         else if (a == "--tcp") {
             o.useUsb = false;
             std::string v = need(i);
@@ -137,11 +139,27 @@ int main(int argc, char** argv) {
     LocalSdrShim& shim = LocalSdrShim::instance();
     std::string err;
     // fd < 0 selects the desktop USB path: -1 = device 0, -2 = device 1, … (see local_sdr_shim.cpp).
-    const int port = o.useUsb
-        ? shim.start(-(o.device + 1), 0, 0, o.freq, o.rate, o.gain,
-                     o.fftSize, o.fftRate, o.mode, err)
-        : shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
-                        o.fftSize, o.fftRate, o.mode, err);
+    // ★★★ FIND WHATEVER RADIO IS ACTUALLY PLUGGED IN. This used to call the RTL path and nothing
+    // else, so an Airspy HF+ sitting on the USB bus — visible in lsusb, working perfectly — was
+    // reported as "no SDR found — is it plugged in?" (Raspberry Pi, 2026-07-31). The shim has had
+    // startAirspyHf() all along; the CLI simply never asked for it, because on Android the driver
+    // is chosen from the USB descriptor and on the Mac the menu-bar app picks it.
+    // ★★ A HEADLESS BOX HAS NOBODY TO ASK. It boots with whatever is in the port and must work it
+    // out itself, so: try the RTL path, and if there is no dongle but there IS an HF+, use that.
+    // ★ Order is deliberate — an explicit --device N means the user named an RTL index, so that
+    // still wins. Same "never infer what the hardware can tell you" rule, applied to discovery.
+    int port;
+    if (!o.useUsb) {
+        port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
+                             o.fftSize, o.fftRate, o.mode, err);
+    } else if (!o.deviceGiven && vibe::AirspyHfSource::deviceCount() > 0) {
+        std::printf("VibeServer: Airspy HF+ detected\n");
+        port = shim.startAirspyHf(0, o.freq, o.rate, o.gain,
+                                  o.fftSize, o.fftRate, o.mode, err);
+    } else {
+        port = shim.start(-(o.device + 1), 0, 0, o.freq, o.rate, o.gain,
+                          o.fftSize, o.fftRate, o.mode, err);
+    }
     if (port <= 0) {
         std::fprintf(stderr, "VibeServer: failed to start — %s\n",
                      err.empty() ? "(no reason given)" : err.c_str());
@@ -153,7 +171,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (o.useUsb) std::printf("VibeServer listening on port %d  (RTL-SDR device %d)\n", port, o.device);
+    if (o.useUsb) std::printf("VibeServer listening on port %d\n", port);
     else          std::printf("VibeServer listening on port %d  (IQ from rtl_tcp %s:%d)\n",
                               port, o.tcpHost.c_str(), o.tcpPort);
     std::printf("  clients: http://<this-machine>:%d/    auth: %s\n",
