@@ -263,7 +263,15 @@ export class KiwiAdapter implements SDRBackend {
 
       this.sndWs.onopen = () => {
         this.dbg('SND open');
-        this.sndSend(`SET auth t=kiwi p=${this.password}`);
+        // ★★ '#' MEANS "NO PASSWORD", NOT AN EMPTY STRING. Kiwi's own client:
+        //      pwd = (pwd != '') ? pwd : '#';
+        //      ext_send('SET auth t=' + conn_type + ' p=' + pwd + ipl + reset_s, ws);
+        // We sent `p=` with nothing after it. Verified 2026-07-31 that this alone does NOT fix the
+        // receivers that refuse us after ~10 s — so it is not the cause of that — but behaving
+        // identically to the reference client on someone else's hardware is the whole point of
+        // memory/third_party_receiver_etiquette.md, and an empty field is the sort of thing a
+        // stricter server is entitled to reject.
+        this.sndSend(`SET auth t=kiwi p=${this.password || '#'}`);
         // Ident goes EARLY, right after auth — a "require name/callsign" server checks it at
         // connect time, so sending it late (buried in the RX params) means the refusal has
         // already happened. See kiwiIdent / IdentModal.
