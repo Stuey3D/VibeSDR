@@ -766,3 +766,65 @@ harmless, which keeps the state machine simple.
 
 ★ Needs a user-facing control for state 1 ("big screen only"), since it is deliberate rather than
 detected. States 2 and 3 follow automatically from what the user is touching.
+
+---
+
+# ★★★ APPLE TV: A FOCUS HIGHLIGHT, NOT A CURSOR (Stuart, 2026-07-31)
+
+Stuart asked whether the Siri Remote's touchpad could drive an **on-screen cursor**, then answered
+it better himself. ★★ **The answer is not to build a cursor at all.**
+
+> *"Up/down/left/right are tune and zoom. The touchpad moves a highlight about, which the click
+> activates and the back arrow comes out of. The frequency box could be an on-screen numpad and the
+> search box the system keyboard. The main waterfall screen would be a small pill with no drums
+> flanking it — just the frequency box, 4 controls and the servers chip at the top. The touchpad
+> moves a GREEN BOX about those, click to use, back to close the menu it opens."*
+
+★★★ **This dissolves the problem rather than solving it.** A free cursor fights tvOS (the focus
+engine is the platform's model, and Apple's HIG discourages pointers), and it collided with the
+rotary-dial design above, which wants the same continuous x/y. A highlight moving between DISCRETE
+controls is what tvOS does natively — so this is a conventional Apple TV app, no gesture
+classification, no modes, no precision problem on a 65" screen.
+
+## ✅ MOST OF IT ALREADY EXISTS — `PanelNav.tsx`
+A **2-D grid focus navigator**, 668 lines, already shared by **MenuSheet, StepPicker, AudioSheet and
+ModeSelector**, with owner arbitration so stacked panels do not both consume one key. Its own header:
+> *"the SAME machinery is what a game controller's D-pad will drive"*
+
+★★ So the Siri Remote is simply another D-pad on a layer that is already shipped and
+device-validated. **Stuart's green box IS its focus ring.**
+
+## ★★★ THE ONE NEW PIECE IS NOT TVOS-SPECIFIC
+Stuart: *"the only thing we don't have today is moving about the buttons on the MAIN SCREEN."*
+Exactly right — all four current consumers are PANELS. ★★ **Adding SDRScreen to PanelNav helps
+KEYBOARD and GAME-CONTROLLER users today**, on iPad and Mac, whether or not a tvOS app ever ships.
+That makes it ordinary work on the existing roadmap, not speculative platform spend.
+
+## The mapping
+| Remote | Does |
+|---|---|
+| Ring up/down/left/right | **tune / zoom** — the radio verbs, on the existing `createHoldSweep` law |
+| Touchpad swipe | move the **green highlight** between controls |
+| Click | activate the focused control |
+| Back / Menu | close the panel it opened |
+
+★ Text fields get the **tvOS system keyboard** free (and can be typed from a phone). A numeric grid
+for the frequency box is just another focus grid — no new concept.
+
+## ★★ THE ONE RISK TO VERIFY ON HARDWARE
+Both the **ring presses** and the **touch swipes** arrive through the same `dpad` element on
+`GCMicroGamepad`, and `reportsAbsoluteDpadValues` changes how the whole element is interpreted. ★★★
+**And the two remote generations differ**: the 2021 remote has a physical directional ring around a
+touch centre; the original Siri Remote is one sheet of glass with **no ring at all**, so
+"press an edge vs swipe the surface" does not physically exist there.
+★ Answerable in an evening with a remote and a test app. Settle it before committing to the scheme.
+
+## ★ THE REAL COST IS THE PLATFORM, NOT THE INTERACTION
+There is **no tvOS target today** and VibeSDR is Expo/React Native, so it means the
+`react-native-tvos` fork: a separate build and store listing before a single pixel exists.
+★★ Meanwhile the alternative is ALREADY TESTED and works — AirPlay mirroring from the iPhone, driven
+by the keyboard, *"everything was super responsive"* (§ above). That gives the big screen today with
+the phone as the pointing device.
+★ So the question that decides it: is the goal **the big screen** (solved by mirroring) or **the TV
+without the phone** — a living-room app driven by the remote alone? Only the second justifies a
+tvOS target, and it is a different product for a different audience.
