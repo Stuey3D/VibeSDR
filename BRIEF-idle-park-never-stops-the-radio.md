@@ -173,3 +173,40 @@ of the power **without** releasing the USB claim, **without** changing FGS eligi
 or two to first audio, far longer battery)". ★ The answer genuinely differs between a phone on a
 shelf at home and one in a bag on a hill — the same reasoning as the per-server idle override in
 `BRIEF-idle-handback.md` §2.
+
+---
+
+# ★★ OPTION: DROP TO THE LOWEST IQ RATE WHILE IDLE?
+Stuart: *"would it be worth, rather than sleeping the SDR entirely, maybe dropping it to its lowest
+IQ mode to reduce load, then increasing when in use?"*
+
+★★ Lower risk than a power-down — but it probably **saves the wrong part**, and the brief should say
+so plainly.
+
+**Where the RTL's power actually goes:** the RTL2832U's ADC runs at a **fixed 28.8 MHz clock and
+decimates internally**, and the R820T tuner is powered continuously. So the OUTPUT sample rate
+barely touches the dongle's own current. Dropping 2.4 MSPS → 250 kSPS cuts **USB bus activity and
+host CPU** — which the measurement above puts at **under 0.4 W of 2.1 W**. That is optimising the
+cheap 20% and leaving the expensive 80% running. The real saving needs the tuner and ADC actually
+powered down, i.e. the device closed (or its power-down registers hit) — back to the risky option.
+
+**It is still not worthless, and may be the right FIRST step:**
+- ✅ The stream stays alive, so the watchdog's liveness test still works and the `connectedDevice`
+  FGS precondition is untouched — both hazards from the section above are avoided.
+- ✅ Resume is a control transfer, not a device re-open, so first-audio latency stays tiny.
+- ★ **CATCH:** changing an RTL's sample rate generally wants the async read stopped and the buffer
+  reset — **the same stop/start path the libusb abort lives in.** So it may not dodge that race
+  after all. Check before assuming it is the safe option.
+
+## ★★★ STOP SPECULATING — THREE READINGS SETTLE IT
+None of us has measured this. An inline **USB power meter** (~£10) answers it in ten minutes:
+1. streaming at **2.4 MSPS**
+2. streaming at the **minimum rate**
+3. device **open but not streaming**
+
+- If (2) ≈ (1), the rate drop saves nothing and only a real power-down will do.
+- If (2) ≪ (1), it is a cheap win worth taking on its own merits.
+- (3) tells us whether "stop streaming, keep the handle" is worth anything at all.
+
+★ Do this BEFORE writing any of the three options. Between the Airspy's status LED and a phone that
+reports %/hr, this rig can settle it better than most.
