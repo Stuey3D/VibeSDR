@@ -1782,6 +1782,15 @@ select.btn { padding: 6px 8px; }
     <input type="range" id="maxDb" min="-100" max="0" value="-20">
     <span class="val" id="maxDbVal">−20</span>
   </div>
+  <!-- ★★ MOUSE WHEEL — the app has had this toggle for a while and the web client did not, so a
+       wheel that tuned on the phone ZOOMED here. Stuart, 2026-08-01: "a few times I went to tune
+       with the wheel only to find it zooming instead." Same setting, same two words as the app. -->
+  <div class="mrow">
+    <label for="wheelAction">MOUSE WHEEL</label>
+    <div class="seg" id="wheelAction">
+      <button data-v="0">ZOOM</button><button data-v="1">TUNE</button>
+    </div>
+  </div>
   <div class="mrow">
     <label for="bright">BRIGHTNESS</label>
     <input type="range" id="bright" min="-20" max="20" value="0">
