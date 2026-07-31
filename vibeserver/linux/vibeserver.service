@@ -1,0 +1,35 @@
+[Unit]
+# ★★ A HEADLESS BOX MUST COME BACK BY ITSELF. This is the whole point of the Pi appliance: it lives
+# in a cupboard with a radio, and after a power cut nobody is going to log in and start it.
+Description=VibeServer — SDR receiver server
+Documentation=https://vibesdr.net
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ★ Options live in a config file, not in this unit. A user editing settings must never have to
+# understand systemd — and `systemctl edit` overrides are invisible to anyone reading /etc.
+EnvironmentFile=-/etc/vibeserver/vibeserver.conf
+ExecStart=/usr/bin/vibeserver $VIBESERVER_ARGS
+# ★★ RESTART ALWAYS, and rate-limited. A radio that fails to open (unplugged, or claimed by
+# something else) must not spin the CPU retrying forever; five seconds is long enough to be polite
+# and short enough that a replugged dongle comes back on its own.
+Restart=always
+RestartSec=5
+# Run as an ordinary system user, not root. USB access comes from the udev rules shipped alongside.
+User=vibeserver
+Group=vibeserver
+SupplementaryGroups=plugdev
+# Modest hardening — this thing may be exposed to the internet.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+StateDirectory=vibeserver
+ReadWritePaths=/var/lib/vibeserver
+# ★ The radio needs raw USB; everything else stays off.
+DeviceAllow=char-usb_device rw
+
+[Install]
+WantedBy=multi-user.target
