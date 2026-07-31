@@ -107,6 +107,10 @@ export class KiwiAdapter implements SDRBackend {
   private sndWs: WebSocket | null = null;
   private wfWs: WebSocket | null = null;
   private keepalive: ReturnType<typeof setInterval> | null = null;
+  /** ★ When the server last said `too_busy`. See the too_busy case and _tooBusyClose(). */
+  private tooBusyAt = 0;
+  /** Did a close follow a too_busy closely enough to be that rejection taking effect? */
+  private _tooBusyClose(): boolean { return this.tooBusyAt > 0 && Date.now() - this.tooBusyAt < 5000; }
   // ── Incoming-rate readout ───────────────────────────────────────────────────
   // ★ Kiwi reported neither KB/s nor fps — the readout was simply blank, exactly
   // as it was on OWRX. Counts BOTH sockets: Kiwi decodes its audio in JS (IMA
@@ -459,13 +463,30 @@ export class KiwiAdapter implements SDRBackend {
         break;
       }
       case 'too_busy':
-        // too_busy=0 is a NORMAL status ('you are NOT too busy') that healthy
-        // Kiwis broadcast — only a NON-ZERO value means the receiver is full.
-        // (We were self-booting on too_busy=0 → false 'server full' on clear
-        // servers.) On a real busy, mark not-started so the close doesn't also
-        // fire the generic serverLost.
+        // ★★★ `too_busy` IS ALWAYS A REJECTION — the VALUE IS NOT A FLAG. Read from Kiwi's own
+        // client (2026-07-31):
+        //     function kiwi_too_busy(rx_chans) {
+        //       var s = 'Sorry, the KiwiSDR server is too busy right now ('+rx_chans+' users max)…';
+        //       kiwi_show_msg(s); }
+        // The parameter is the CHANNEL COUNT FOR THE MESSAGE TEXT. The browser shows the busy
+        // dialog for any value, including 0.
+        //
+        // ★★ The old comment here claimed "too_busy=0 is a NORMAL status ('you are NOT too busy')
+        // that healthy Kiwis broadcast". That was a mis-inference, and it is why receivers could
+        // admit us, stream for ten seconds and then cut with no explanation: THE SERVER WAS SAYING
+        // WHY AND WE WERE DISCARDING IT because the number was zero. Reproduced 2026-07-31 against
+        // two different receivers — `too_busy=0` then a server-side close 0.3 s later, every time.
+        //
+        // ★★★ BUT DO NOT SIMPLY INVERT IT. The old behaviour was introduced because acting on
+        // too_busy=0 produced FALSE "server full" reports on receivers that then worked fine. So
+        // this ARMS rather than fires: remember that the server said it, and let the CLOSE decide.
+        // If the socket closes soon after, we explain the drop; if it does not, nothing is claimed.
+        // ★ Belt and braces — a wrong "server is busy" is a bad message, but an unexplained
+        // disconnect is a worse one, and this way neither can happen on a guess.
+        this.dbg('too_busy=' + val + ' → armed');
+        this.tooBusyAt = Date.now();
+        noteUnhandled('kiwi', `too_busy=${val} (rejection armed)`);
         if (val !== '0' && val !== '') {
-          this.dbg('too_busy=' + val + ' → busy');
           this.started = false;
           this.cb.onServerBusy?.();
         }
@@ -965,6 +986,15 @@ export class KiwiAdapter implements SDRBackend {
       // wrong cause sends people off to fix something that was never the problem.
       // Say what we observed, offer the possibilities, and be clear it is the
       // receiver's decision rather than their connection.
+      // ★★★ …EXCEPT WHEN IT DID SAY WHY. If `too_busy` arrived just before the close, that IS the
+      // explanation, and the honest message names it. This is the whole point of arming rather than
+      // ignoring: the receiver told us, and until 2026-07-31 we threw it away because the value
+      // happened to be 0. An unexplained boot is what made this maddening to diagnose; an explained
+      // one is just a busy receiver.
+      if (this._tooBusyClose()) {
+        this.cb.onError('This KiwiSDR reported that it is too busy and closed the session. Its channels are in use, or the owner reserves them — it is the receiver’s decision, not a problem with your connection. Try another, or come back later.');
+        return;
+      }
       this.cb.onError('This KiwiSDR accepted us and then closed the session after a few seconds, without saying why. That is the receiver’s decision, not a problem with your connection — owners variously cap daily listening time per address, allow only their own web page, or reserve slots. Try another KiwiSDR; this one may let you back in later.');
     } else {
       // Was streaming for a while, then dropped — a genuine mid-session loss.
