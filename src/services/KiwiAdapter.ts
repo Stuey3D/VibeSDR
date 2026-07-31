@@ -223,6 +223,16 @@ export class KiwiAdapter implements SDRBackend {
     // control plane, which makes this a candidate for the drops we cannot explain:
     // admitted, streams for ~10 s, cut. ★ Testable prediction — if this is it, the
     // drops follow a RECONNECT and never a first connect.
+    //
+    // ★★★ 2026-07-31 — A STRONGER VERSION OF THE SAME HYPOTHESIS, and it survives the stacking fix
+    // below. Even with NO stacking we were sending at 1 Hz, while Kiwi's OWN browser client sends
+    // every 5 s (verified in kiwisdr.min.js — see the keepalive block). A rate limiter calibrated
+    // to the reference client would see us at FIVE TIMES the expected rate: admitted, watched
+    // briefly, cut. Stuart's read, 2026-07-31, and it fits the ~30-second boots better than
+    // stacking does because it needs no reconnect.
+    // ★★ The interval is now 5 s to match. **NEW TESTABLE PREDICTION: the boots stop entirely.**
+    // If they persist at 5 s, rate limiting is exonerated and the answer is in the unhandled-MSG
+    // log added the same day (see onMsg's default case).
     this.stopKeepalive();
     this.started = true;
     this.viewInit = false;
