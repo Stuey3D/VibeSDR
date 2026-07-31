@@ -48,16 +48,30 @@ image, so it comes up on the network first boot. (Stuart has no HDMI adapter —
 
 ---
 
-## 2. ★★★ IT MUST WORK WITH NO COMMAND LINE AT ALL
+## 2. ★★★ THE BAR: APT AND NOTHING ELSE
 Stuart, 2026-07-31, naming the target user as himself:
 > *"To be honest I don't know command line that well, so it's more for someone like me installing it
 > and using it."*
+…then, precisely: *"I know basic command line like `sudo apt update`, `sudo apt upgrade`,
+`sudo apt install vibeserver`."*
 
-★★ **That is the acceptance test for this whole package.** The normal path must never require a flag:
-- `apt install ./vibeserver_*.deb` → **service enabled, started, radio detected, already serving.**
+★★ **So the bar is not "no command line" — it is "NOTHING BEYOND APT".** Installing is fine;
+CONFIGURING must not need flags, file editing or `systemctl`. That is what the TUI is for.
+- `apt install …` → **service enabled, started, radio detected, already serving.**
 - The install **prints the URL** to open.
 - The service **always starts, detects the radios and serves them by default** (Stuart's words). Zero
   config is the default state, exactly as "plug it in and tap" is on Android.
+
+### ★★ `apt install vibeserver` (no path) MEANS AN APT REPOSITORY
+Stuart's own phrasing implies the repo, not a downloaded file — worth designing for from the start
+because it fixes the package name and versioning scheme.
+- A Debian repo is **just static files** (`Packages`, `Release`, `InRelease`, the `.deb`s) plus a
+  **GPG signing key**. The user pastes two lines once: the key, and the source.
+- ★★★ **The payoff is `sudo apt upgrade`.** For a box in a loft that is the difference between
+  updates happening and not — nobody re-downloads a `.deb` for a device they cannot see.
+- ★ **We are already set up to host it:** the website runs on Cloudflare via `npx wrangler deploy`
+  ([[website_deploy]]), so `apt.vibesdr.net` is the same mechanism serving different static files.
+- ★ Build the plain `.deb` FIRST — it is the artefact either way; the repo is only where it is put.
 
 ### ★★★ TYPING `vibeserver` ON ITS OWN OPENS THE TUI — NOT A USAGE DUMP
 The one thing a command-line-shy person will try is the program's name. ★ If it answers with a wall
