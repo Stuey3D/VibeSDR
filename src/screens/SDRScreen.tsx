@@ -601,6 +601,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHwAgc?: (on: boolean) => void; setHwPpm?: (n: number) => void;
         setHwSampleRate?: (r: number) => void;
         setDeemph?: (tau: number) => void; setStereo?: (on: boolean) => void;
+        setNrEnabled?: (on: boolean, strength?: number) => void;
+        setSquelchDb?: (db: number) => void; setNotch?: (on: boolean) => void;
       } | null)
     : null), [isRemoteShim]);
 
@@ -677,17 +679,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
   // re-subscribing the whole audio callback every time the threshold moves.
   const hwSquelchRef = useRef(-100);
+  /** ★★★ THESE THREE MUST GO TO THE SERVER ON A VIBESERVER — the de-emphasis bug again, found by
+   *  Stuart 2026-07-31: "NR/Squelch/Auto-Notch do nothing on a VibeServer; they work on rtl_tcp and
+   *  in the web client."
+   *  ★★ `isLocal` is TRUE for a VibeServer as well as for a dongle in this phone, so these handlers
+   *  are the ones that run — and they called the LOCAL USB module, which on a remote VibeServer is
+   *  an IDLE SHIM. The DSP is on the server there, so the control has to cross the wire.
+   *  ★ Exactly the shape of onHwDeemph/onHwStereo above: ask hwClient() first, fall back to LocalHw.
+   *  ★★ TEST ON A VIBESERVER. rtl_tcp and on-device hardware pass whether or not the wire command
+   *  exists, which is how this survived two releases. */
   const onLocalSquelch = useCallback((db: number) => {
-    setHwSquelch(db); hwSquelchRef.current = db; LocalHw?.setSquelch?.(db > -100, db);
-  }, [LocalHw]);
+    setHwSquelch(db); hwSquelchRef.current = db;
+    const rc = hwClient();
+    if (rc) rc.setSquelchDb?.(db); else LocalHw?.setSquelch?.(db > -100, db);
+  }, [LocalHw, hwClient]);
   const onLocalNR = useCallback((level: number) => {
     setHwNrLevel(level);
+    const rc = hwClient();
+    // The server takes strength 0..1 and its own on/off, in one message.
+    if (rc) { rc.setNrEnabled?.(level > 0, level / 15); return; }
     LocalHw?.setNrStrength?.(level / 15);
     LocalHw?.setNR?.(level > 0);
-  }, [LocalHw]);
+  }, [LocalHw, hwClient]);
   const onLocalNotch = useCallback((on: boolean) => {
-    setHwNotch(on); LocalHw?.setNotch?.(on);
-  }, [LocalHw]);
+    setHwNotch(on);
+    const rc = hwClient();
+    if (rc) rc.setNotch?.(on); else LocalHw?.setNotch?.(on);
+  }, [LocalHw, hwClient]);
   // Network auto notch (UberSDR/OWRX/Kiwi): client-side, applied in the audio
   // engine (iOS VibePowerModule / Android VibeStreamService). Persisted globally
   // and (re)applied whenever the connection comes up — see the effect below.

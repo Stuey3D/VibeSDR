@@ -64,6 +64,18 @@ export interface SDRStatus {
  *  ★ Every gated field appears TWICE: the plain name is CONFIRMED BY REPETITION, the `*Raw`
  *  one is what arrived this instant. The server always sends both and never picks — a viewer
  *  switching to RAW must not change what another listener on the same receiver sees. */
+/** ★★ What POST /connection tells us about OUR standing with this receiver — per-IP, read fresh on
+ *  every connect. Measured against WESSEX 2026-07-31; see _checkConnection for the traps.
+ *   idleSecs        seconds of inactivity before the server drops us. **0 = NO LIMIT** (valid).
+ *   maxSessionSecs  hard session cap (WESSEX: 14400 = 4 h). 0 = none advertised.
+ *   dailyUsedSecs / dailyLeftSecs   per-IP daily quota. **−1 = unlimited.** */
+export interface IdlePolicy {
+  idleSecs: number;
+  maxSessionSecs: number;
+  dailyUsedSecs: number;
+  dailyLeftSecs: number;
+}
+
 export interface RdsExt {
   pty: number; tp: number; ta: number; ms: number; di: number;
   ptyRaw: number; tpRaw: number; taRaw: number; msRaw: number; diRaw: number;
@@ -167,6 +179,9 @@ export interface SDRCallbacks {
    *  ★ This is the AUTHORITATIVE remaining time; our local clock is only an interpolation
    *  between these, so re-base on it rather than trusting our own arithmetic. */
   onSessionWarning?: (secs: number) => void;
+  /** ★ The receiver's own terms, read from POST /connection at connect (see _checkConnection).
+   *  idleSecs 0 = NO idle limit (a valid value, not a missing one); daily* −1 = unlimited. */
+  onIdlePolicy?: (p: IdlePolicy) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -546,6 +561,32 @@ export class UberSDRClient {
    *  FM-DXer reaches for: Hans picked it up immediately the first time he used VibeServer. */
   setDeemph(tau: number)  { this._sendCtl({ type: 'deemph', tau }); }
   setStereo(on: boolean)  { this._sendCtl({ type: 'stereo', on }); }
+
+  /** ★★★ THE AUDIO DSP CONTROLS — THE SAME BUG AS DE-EMPHASIS ABOVE, ONE LAYER DEEPER.
+   *  Noise reduction, squelch and the auto-notch worked on rtl_tcp and local hardware (where the
+   *  DSP is OURS, on-device) and in the web client (which sends these) — and did NOTHING from the
+   *  app on a VibeServer, because there was no wire path at all. Stuart, 2026-07-31.
+   *
+   *  ★★ The server has implemented them all along, and its own comment says who for:
+   *    local_sdr_shim.cpp:2437 — "…the on-device JS via JNI, so a REMOTE client (web or phone) had
+   *    no way to touch them. Exposing them here gives BOTH remote clients the same audio controls
+   *    the local app has."
+   *  Built for both remote clients; only the web one was ever connected.
+   *
+   *  ★ TEST THESE ON A VIBESERVER, NOT ON rtl_tcp. rtl_tcp passes whether or not the wire command
+   *  exists, which is exactly how this got through twice. */
+  /** ★ NOT `setNr` — that name is already taken on SDRBackend by OWRX's setNr(threshold: number),
+   *  which means something else entirely. Two meanings on one name is how the next bug gets
+   *  written; the distinct name is deliberate. */
+  setNrEnabled(on: boolean, strength?: number) {
+    const m: Record<string, unknown> = { type: 'nr', on };
+    // Server clamps to 0..1 itself; send only when we have a value so "toggle" stays a toggle.
+    if (typeof strength === 'number' && Number.isFinite(strength)) m.strength = strength;
+    this._sendCtl(m);
+  }
+  /** db <= -100 means OFF — the server's convention, and the app's own. */
+  setSquelchDb(db: number) { this._sendCtl({ type: 'squelch', db }); }
+  setNotch(on: boolean)    { this._sendCtl({ type: 'notch', on }); }
   // Capture sample rate = the spectrum span the server sends. The shim restarts
   // the IQ stream and pushes a fresh config, so the waterfall span self-updates.
   setHwSampleRate(rate: number) { this._sendCtl({ type: 'sampleRate', value: Math.round(rate) }); }
@@ -835,8 +876,39 @@ export class UberSDRClient {
       const text = await resp.text().catch(() => '');
       throw new Error(`HTTP ${resp.status}: ${text.slice(0, 120)}`);
     }
-    const json = await resp.json() as { allowed: boolean; reason?: string };
-    this.dbg(`/connection → allowed=${json.allowed} reason=${json.reason ?? 'ok'}`);
+    // ★★★ THE SERVER TELLS US ITS WHOLE POLICY HERE AND WE USED TO PARSE TWO FIELDS.
+    // Measured against WESSEX 2026-07-31 — a single POST returns:
+    //   session_timeout 240   IDLE limit, SECONDS. Their own client warns at (timeout − 30) and
+    //                         allows 30 s to answer, so 210 s idle → dialog → drop at 240 s.
+    //   max_session_time 14400  the four-hour cap — this is the countdown ALREADY on screen,
+    //                         which reaches us as sessionSecsLeft on session_warning. Not new.
+    //   daily_time_used_secs / daily_time_remaining_secs   a per-IP daily quota (−1 = unlimited).
+    //
+    // ★★ THREE TRAPS IN THE SEMANTICS:
+    //  1. These are PER-IP, not per-server — read fresh on every connection, never cache across
+    //     servers or assume constant. A receiver may be generous to a known user and strict with a
+    //     stranger.
+    //  2. `0` MEANS NO TIMEOUT and is a VALID value, not a missing one. Their client uses nullish
+    //     coalescing precisely to avoid treating 0 as absent, and defaults to 300 only when the
+    //     field is genuinely absent. Getting this backwards puts a countdown on a server that has
+    //     none.
+    //  3. The policy is returned EVEN WHEN allowed IS FALSE — so a refusal still carries the terms.
+    const json = await resp.json() as {
+      allowed: boolean; reason?: string;
+      session_timeout?: number; max_session_time?: number;
+      daily_time_used_secs?: number; daily_time_remaining_secs?: number;
+    };
+    this.idlePolicy = {
+      // undefined ⇒ absent ⇒ their documented default of 300. 0 ⇒ genuinely no idle limit.
+      idleSecs:      typeof json.session_timeout === 'number' ? json.session_timeout : 300,
+      maxSessionSecs: Number(json.max_session_time) || 0,
+      dailyUsedSecs:  typeof json.daily_time_used_secs === 'number' ? json.daily_time_used_secs : -1,
+      dailyLeftSecs:  typeof json.daily_time_remaining_secs === 'number' ? json.daily_time_remaining_secs : -1,
+    };
+    this.dbg(`/connection → allowed=${json.allowed} reason=${json.reason ?? 'ok'} `
+           + `idle=${this.idlePolicy.idleSecs}s maxSession=${this.idlePolicy.maxSessionSecs}s `
+           + `dailyLeft=${this.idlePolicy.dailyLeftSecs}s`);
+    this.callbacks.onIdlePolicy?.({ ...this.idlePolicy });
     if (!json.allowed) throw new Error(json.reason ?? 'Server rejected connection');
   }
 
@@ -1061,6 +1133,10 @@ export class UberSDRClient {
    *  lever this server speaks: VibeServer takes `fftRate` in fps, UberSDR takes a `set_rate`
    *  divisor. Everything else about the controller is identical. */
   private isVibeServer = false;
+  /** Per-IP, per-connection — never cached across servers. See _checkConnection. */
+  private idlePolicy: IdlePolicy = { idleSecs: 300, maxSessionSecs: 0, dailyUsedSecs: -1, dailyLeftSecs: -1 };
+  /** The receiver's terms as last read. Undefined fields never happen — see the defaults above. */
+  getIdlePolicy(): IdlePolicy { return { ...this.idlePolicy }; }
 
   /**
    * Bins to ask a VibeServer for — the FFT/BIN lever, as Jr has always used.
@@ -1673,6 +1749,24 @@ export class UberSDRClient {
       this.view.centerHz     = this.status.centerHz;
       this.view.binBandwidth = this.status.binBandwidth;
       this.callbacks.onStatus({ ...this.status });
+      return;
+    }
+    // ★★★ EVERYTHING ELSE FALLS THROUGH TO HERE — AND USED TO DO SO IN SILENCE.
+    //
+    // A server adds a message, we ignore it, and the symptom surfaces somewhere unrelated with no
+    // evidence attached. That has now cost us THREE separate investigations:
+    //   • UberSDR's "are you still there?" LIVENESS PROBE — never handled, so the server gave up
+    //     and the drop surfaced as a bare "disconnected". A failure message for a question.
+    //   • KiwiSDR booting some clients after ~30 s — still unexplained, and the only remaining
+    //     route to it is seeing what the server actually said.
+    //   • Kiwi's rn/rt countdown, which we only found by reading their JavaScript.
+    // Each was inferred over hours; ONE LOG LINE would have named them in minutes.
+    //
+    // ★ Cheap on purpose: __DEV__-gated console, but ALWAYS through onDbg, so it reaches the
+    // in-app debug surface on a release build where the real reports come from. Truncated because
+    // an unknown message may be large, and the TYPE is the part that matters.
+    if (typeof msg.type === 'string') {
+      this.dbg(`unhandled message type "${msg.type}": ${JSON.stringify(msg).slice(0, 200)}`);
     }
   }
 

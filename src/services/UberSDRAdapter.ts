@@ -79,6 +79,13 @@ export class UberSDRAdapter implements SDRBackend {
   setDeemph(tau: number)  { this.client.setDeemph(tau); }
   setStereo(on: boolean)  { this.client.setStereo(on); }
 
+  /** ★★ The audio DSP trio — same story as de-emphasis, found 2026-07-31: they worked on rtl_tcp
+   *  (our DSP, on-device) and in the web client, and did nothing from the app on a VibeServer.
+   *  Both halves, again — client method AND this passthrough. See UberSDRClient.setNrEnabled. */
+  setNrEnabled(on: boolean, strength?: number) { this.client.setNrEnabled(on, strength); }
+  setSquelchDb(db: number)              { this.client.setSquelchDb(db); }
+  setNotch(on: boolean)                 { this.client.setNotch(on); }
+
   /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */
   private async fetchReceiverLon(): Promise<void> {

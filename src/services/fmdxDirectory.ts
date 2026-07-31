@@ -8,7 +8,9 @@
 
 import { USER_AGENT } from '../constants/version';
 
-const FMDX_API = 'http://servers.fmdx.org/api/';
+// ★ HTTPS, not HTTP: the http form 301-redirects (verified 2026-07-31), which is a wasted
+// round trip on precisely the slow links where it hurts most.
+const FMDX_API = 'https://servers.fmdx.org/api/';
 
 export interface FmdxServer {
   name:     string;
@@ -97,7 +99,10 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): nu
 /** Fetch the public FM-DX server list, active servers only, distance-sorted
  *  when a location is supplied (else alphabetical). */
 export async function fetchFmdxServers(lat?: number, lon?: number): Promise<FmdxServer[]> {
-  const res = await fetch(FMDX_API, { headers: { 'User-Agent': USER_AGENT } });
+  // ★★ TIMED OUT — see directories.ts DIR_TIMEOUT_MS: an untimed directory fetch is what left
+  // the watch spinning for ever on a blocked host (Shanghai, 2026-07-31).
+  const res = await fetch(FMDX_API, { headers: { 'User-Agent': USER_AGENT },
+                                      signal: AbortSignal.timeout(12_000) });
   const json = await res.json();
   const rows: any[] = Array.isArray(json?.dataset) ? json.dataset : [];
   const out: FmdxServer[] = [];

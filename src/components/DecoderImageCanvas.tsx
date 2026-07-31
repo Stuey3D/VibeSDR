@@ -21,6 +21,8 @@ import React, {
   forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react';
 import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+// ★★ A REAL FILE, NOT A data: URL — see save() below for why.
+import { File, Paths } from 'expo-file-system';
 import {
   Canvas, Image as SkiaImage, Skia,
   AlphaType, ColorType, ImageFormat, type SkImage,
@@ -272,19 +274,31 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       async save() {
         const buf = viewingPrev ? prev.current : live.current;
         if (!buf || !img) { onStatus('nothing to save'); return; }
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const name = `${decoderName}_${ts}.png`;
         try {
           const b64 = img.encodeToBase64(ImageFormat.PNG, 100);
-          const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-          // iOS share sheet accepts data: URLs; Android may only take message —
-          // expo-file-system temp-file fallback is the documented follow-up.
-          await Share.share(
-            { url: `data:image/png;base64,${b64}` } as any,
-            { subject: `${decoderName}_${ts}.png` } as any,
-          );
-          onStatus(`shared: ${decoderName}_${ts}.png`);
+          // ★★★ WRITE A REAL FILE AND SHARE A file:// URL. This used to hand the share sheet a
+          // `data:` URL, which carries NEITHER A FILENAME NOR A TYPE — so the OS cannot classify it
+          // as an image. Three symptoms, one cause (Stuart, 2026-07-30):
+          //   • macOS  — a completely BLANK share sheet (AppKit will not take a data: URL).
+          //   • iPhone — the sheet appears and Messages renders the picture, but Save to Photos and
+          //              Save to Files are ABSENT, because those actions require a known image type.
+          //   • Android — documented as message-only in the comment this replaces.
+          // ★★ A file:// URL ending .png is recognised as an IMAGE, so the user gets the image share
+          // sheet — Photos, AirDrop with a thumbnail, Messages with a preview — which is what someone
+          // who has just decoded a picture expects. ONE fix, all three platforms.
+          const f = new File(Paths.cache, name);
+          try { f.create({ overwrite: true }); } catch {}   // exists ⇒ fine, write overwrites
+          f.write(b64, { encoding: 'base64' });
+          await Share.share({ url: f.uri } as any, { subject: name } as any);
+          onStatus(`shared: ${name}`);
         } catch (e: any) {
-          if (e?.message !== 'User did not share') onStatus('share failed');
-          else onStatus('share cancelled');
+          // ★ The old code reported "shared" unconditionally, so a blank sheet still claimed success.
+          // Say what actually happened, or say nothing — "shared" over a blank sheet is worse than
+          // silence because it sends the user looking for the file.
+          if (e?.message === 'User did not share') onStatus('share cancelled');
+          else onStatus('save failed');
         }
       },
     }), [rebuild, rollToPrev, growTo, viewingPrev, img, onInfo, onStatus, onPrevState, decoderName]);

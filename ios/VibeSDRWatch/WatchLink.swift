@@ -637,7 +637,30 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
 
   /// Ask the PHONE to browse a directory and send us its servers (we mirror; we never fetch our own).
-  func browse(_ dir: String) { send(["cmd": "browse", "dir": dir]) }
+  ///
+  /// ★★★ AND TIME IT OUT. This was FIRE-AND-FORGET, and `directories[dir] == nil` means "still
+  /// waiting" to the picker — so if the phone never replied the row spun FOR EVER. A TestFlight
+  /// report from Shanghai (2026-07-31) is exactly that: the phone's own directory fetch had no
+  /// timeout either, so a blocked host hung it, no reply ever came, and the watch sat on "Loading…".
+  /// The phone not running at all produces the identical symptom.
+  /// ★★ Publishing `[]` is what makes the picker render its EXISTING "Couldn't load — tap to retry"
+  /// row, which until now was unreachable in this case. A dead end becomes a retry button.
+  /// ★ 20 s > the phone's own 12 s directory timeout, so a slow-but-working fetch is never cut off
+  /// by us; this only fires when the phone genuinely is not going to answer.
+  func browse(_ dir: String) {
+    send(["cmd": "browse", "dir": dir])
+    browseTimers[dir]?.invalidate()
+    browseTimers[dir] = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: false) { [weak self] _ in
+      guard let self else { return }
+      Task { @MainActor in
+        self.browseTimers[dir] = nil
+        // Only if still unanswered — a reply that arrived first must not be wiped.
+        if self.directories[dir] == nil { self.directories[dir] = [] }
+      }
+    }
+  }
+  /// One pending timer per directory id, cancelled by the reply. See browse().
+  private var browseTimers: [String: Timer] = [:]
 
   /// STOP — tell the phone to leave the SDR screen: that tears down the client (audio + sockets stop)
   /// and returns the phone to its server list to WAIT, idle. Unlike pause (which stays on the stopped
@@ -1056,6 +1079,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // A directory listing the PHONE fetched (we asked via browse). Mirror it — no local fetching.
       if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
          let msg = try? JSONDecoder().decode(DirMsg.self, from: d) {
+        // ★ The reply landed — cancel the watchdog so it cannot later blank a good list.
+        browseTimers[msg.dir]?.invalidate(); browseTimers[msg.dir] = nil
         directories[msg.dir] = msg.servers.map { r in
           SDRServer(name: r.name, url: r.id, host: URL(string: r.id)?.host ?? r.id,
                     serverType: ServerType(rawValue: r.type) ?? .ubersdr,

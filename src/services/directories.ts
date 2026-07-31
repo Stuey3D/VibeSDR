@@ -32,6 +32,19 @@ export const DIRECTORIES: DirectoryMeta[] = [
   // SPECIFIC known SpyServer is still available via the manual add-server modal.
 ];
 
+/** ★★★ EVERY DIRECTORY FETCH IS TIMED OUT — a TestFlight report from Shanghai (2026-07-31) sat on
+ *  "Loading…" for ever on the Apple Watch, because the WATCH asks the PHONE to browse and the phone
+ *  never replied: its fetch had NO timeout, so a blocked or crawling host hung indefinitely and the
+ *  watch's `nil` ("still waiting") never became `[]` ("couldn't load"). The retry UI existed and was
+ *  unreachable.
+ *  ★★ Every one of these hosts is foreign to a large part of the world and at least one is commonly
+ *  unreachable from mainland China. A directory that fails FAST and says so is strictly better than
+ *  one that hangs: the user can retry, pick another, or type a custom address.
+ *  ★ 12 s is deliberately generous — receiverbook is a ~400 KB page we parse — but finite. */
+const DIR_TIMEOUT_MS = 12_000;
+const dirFetch = (url: string, init?: RequestInit) =>
+  fetch(url, { ...init, signal: AbortSignal.timeout(DIR_TIMEOUT_MS) });
+
 const SPYSERVER_DIR_URL = 'https://airspy.com/directory/status.json';
 
 const RECEIVERBOOK_URL = 'https://www.receiverbook.de/map';
@@ -84,7 +97,7 @@ const blank = (over: Partial<SDRInstance>): SDRInstance => ({
  *  location:{coordinates:[lng,lat]}, receivers:[{type,version,url,label}]} ]`.
  *  Flatten to individual receivers, keep only OWRX/Kiwi (drop WebSDR/unknown). */
 async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstance[]> {
-  const res = await fetch(RECEIVERBOOK_URL);
+  const res = await dirFetch(RECEIVERBOOK_URL);
   const html = await res.text();
   const sites = extractJsArray(html, 'var receivers');
   if (!sites) return [];
@@ -119,7 +132,7 @@ async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstanc
 /** kiwisdr.com public list (via linkfanel's snapshot) — `var kiwisdr_com = [ … ]`
  *  with name/url/loc/gps/users/users_max/snr per receiver. */
 async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]> {
-  const res = await fetch(KIWI_LIST_URL);
+  const res = await dirFetch(KIWI_LIST_URL);
   const js = await res.text();
   const arr = extractJsArray(js, 'var kiwisdr_com');
   if (!arr) return [];
@@ -172,7 +185,7 @@ async function fetchFmdx(lat?: number, lon?: number): Promise<SDRInstance[]> {
  * `full` here saves the user a confusing failed connect.
  */
 async function fetchSpyServers(lat?: number, lon?: number): Promise<SDRInstance[]> {
-  const res = await fetch(SPYSERVER_DIR_URL);
+  const res = await dirFetch(SPYSERVER_DIR_URL);
   if (!res.ok) throw new Error(`SpyServer directory: HTTP ${res.status}`);
   const json = await res.json();
   const rows: any[] = Array.isArray(json?.servers) ? json.servers : [];
