@@ -19,6 +19,7 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include <fstream>
 #include <unistd.h>
 #include "airspyhf_source.h"
 
@@ -68,6 +69,34 @@ struct Opts {
     bool        web     = true;
 };
 
+/** Read VIBESERVER_ARGS="…" out of a config file and splice it into the argument list.
+ *  ★ Honours single and double quotes so a value may contain spaces — the whole reason this
+ *  exists. Comments (#) and blank lines are ignored; anything that is not VIBESERVER_ARGS is
+ *  ignored too, so the file can carry notes without confusing us. */
+static bool loadConfigFile(const std::string& path, std::vector<std::string>& out) {
+    std::ifstream f(path);
+    if (!f) { std::fprintf(stderr, "VibeServer: cannot read %s\n", path.c_str()); return false; }
+    std::string line, raw;
+    while (std::getline(f, line)) {
+        size_t p = line.find_first_not_of(" \t");
+        if (p == std::string::npos || line[p] == '#') continue;
+        if (line.compare(p, 16, "VIBESERVER_ARGS=") != 0) continue;
+        raw = line.substr(p + 16);
+        break;
+    }
+    // shell-ish split: quotes group, everything else splits on whitespace
+    std::string cur; char quote = 0; bool any = false;
+    for (char c : raw) {
+        if (quote) { if (c == quote) quote = 0; else cur += c; continue; }
+        if (c == '"' || c == '\'') { quote = c; any = true; continue; }
+        if (c == ' ' || c == '\t') { if (!cur.empty()) { out.push_back(cur); cur.clear(); } continue; }
+        cur += c;
+    }
+    (void)any;
+    if (!cur.empty()) out.push_back(cur);
+    return true;
+}
+
 void usage() {
     std::printf(
         "VibeServer (standalone)\n\n"
@@ -105,12 +134,25 @@ void usage() {
 }
 
 bool parse(int argc, char** argv, Opts& o) {
-    auto need = [&](int& i) -> const char* {
-        if (i + 1 >= argc) { std::fprintf(stderr, "%s needs a value\n", argv[i]); std::exit(2); }
-        return argv[++i];
-    };
+    // ★★ TWO PASSES, so --config can contribute arguments. The first pass flattens argv and splices
+    // in anything a config file supplies; the second parses the result. File options come FIRST,
+    // so an explicit command-line flag always overrides the file — which is what anyone would
+    // expect when they run the binary by hand to test something.
+    std::vector<std::string> args;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
+        if (a == "--config") {
+            if (i + 1 >= argc) { std::fprintf(stderr, "--config needs a path\n"); std::exit(2); }
+            if (!loadConfigFile(argv[++i], args)) return false;
+        } else args.push_back(a);
+    }
+    const int n = (int)args.size();
+    auto need = [&](int& i) -> const char* {
+        if (i + 1 >= n) { std::fprintf(stderr, "%s needs a value\n", args[i].c_str()); std::exit(2); }
+        return args[++i].c_str();
+    };
+    for (int i = 0; i < n; i++) {
+        const std::string& a = args[i];
         if (a == "-h" || a == "--help") { usage(); return false; }
         else if (a == "--device") { o.device = std::atoi(need(i)); o.useUsb = true; o.deviceGiven = true; }
         else if (a == "--tcp") {

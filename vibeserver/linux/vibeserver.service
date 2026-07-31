@@ -10,8 +10,12 @@ Wants=network-online.target
 Type=simple
 # ★ Options live in a config file, not in this unit. A user editing settings must never have to
 # understand systemd — and `systemctl edit` overrides are invisible to anyone reading /etc.
-EnvironmentFile=-/etc/vibeserver/vibeserver.conf
-ExecStart=/usr/bin/vibeserver $VIBESERVER_ARGS
+# ★★★ THE DAEMON READS THE FILE, NOT SYSTEMD. This was EnvironmentFile + $VIBESERVER_ARGS, and
+# systemd expands a variable but does NOT honour quotes inside the expansion — it splits on
+# whitespace. So `--name VibeServer Pi500` sent "Pi500" in as a stray argument, the binary exited 2,
+# and Restart=always looped it: saving any setting containing a SPACE broke the service
+# (Stuart, 2026-08-01). Nothing shell-like ever parses that string, so quoting cannot save it.
+ExecStart=/usr/bin/vibeserver --config /etc/vibeserver/vibeserver.conf
 # ★★ RESTART ALWAYS, and rate-limited. A radio that fails to open (unplugged, or claimed by
 # something else) must not spin the CPU retrying forever; five seconds is long enough to be polite
 # and short enough that a replugged dongle comes back on its own.
