@@ -443,7 +443,7 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
 }
 
 // ── Sync corrector ───────────────────────────────────────────────────────────
-void SstvSync::findSync(double& rateOut, int& skipOut) {
+void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
     double rate = sampleRate;
     int lineWidth = (int)(m->lineTime / m->syncTime * 4);
     if (lineWidth < 1) lineWidth = 1;
@@ -506,6 +506,17 @@ void SstvSync::findSync(double& rateOut, int& skipOut) {
         skipTime += m->porchTime*2 - m->pixelTime*m->imgWidth/2.0;
     rateOut = rate;
     skipOut = (int)(skipTime * rate);
+
+    // ★★★ HOW MUCH DID THE DATA ACTUALLY SUPPORT THIS? `maxC` is the strength of the convolution
+    // peak that chose xMax — the horizontal shift applied to EVERY line. On a clean signal roughly
+    // one sync edge per line contributes, so maxC scales with numLines. On a weak or noisy signal
+    // few sync pulses are detected, the peak is essentially arbitrary, and the "correction" becomes
+    // a RANDOM SHIFT of the whole picture.
+    // ★★ That is the failure Stuart hit on 2026-07-31: a Martin M2 at S4 decoded roughly aligned,
+    // then "Correcting slant..." displaced the middle and bottom and made it unreadable. The rate
+    // loop already gives up safely (it restores sampleRate after maxRetries); the sync POSITION had
+    // no such protection and was applied however weak the evidence.
+    if (confOut) *confOut = (m->numLines > 0) ? (maxC / (double)m->numLines) : 0.0;
 }
 
 // ── Top-level decoder ────────────────────────────────────────────────────────
@@ -559,7 +570,18 @@ void SstvDecoder::videoThread() {
     if (autoSync) {
         if (onStatus) onStatus("Correcting slant...");
         SstvSync sync(mode, sampleRate, video.syncFlags());
-        double aRate; int aSkip; sync.findSync(aRate, aSkip);
+        double aRate; int aSkip; double conf = 0;
+        sync.findSync(aRate, aSkip, &conf);
+        // ★★★ DO NOT "CORRECT" ON EVIDENCE THIS WEAK. Below this the sync peak is indistinguishable
+        // from noise and the shift is arbitrary — applying it turns a readable picture into an
+        // unreadable one, which is the worst possible trade for a decoder. 0.25 = a quarter of the
+        // lines contributing a clean sync edge; a genuine signal clears it easily.
+        static const double MIN_SYNC_CONF = 0.25;
+        if (conf < MIN_SYNC_CONF) {
+            if (onStatus) onStatus("slant not corrected \u2014 sync too weak");
+            state.store(WaitingVIS); pcm.reset(); delete vis; vis = nullptr;
+            return;
+        }
         bool ok = false;
         auto pixels = video.redrawFromLuminance(aRate, aSkip, &ok);
         // ★★★ ONLY REPLACE THE PICTURE IF THE CORRECTION IS COMPLETE. A redraw that ran past the
