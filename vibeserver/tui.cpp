@@ -130,7 +130,15 @@ std::string buildArgs() {
     for (auto& f : fields) {
         if (f.isToggle) { if (f.value == "off") { s += (s.empty()?"":" "); s += f.flag; } continue; }
         if (f.value.empty()) continue;
-        s += (s.empty()?"":" "); s += f.flag; s += " "; s += f.value;
+        s += (s.empty()?"":" "); s += f.flag; s += " ";
+        // ★ QUOTE ANYTHING WITH A SPACE. A receiver name is the obvious case ("VibeServer Pi500"),
+        // and before the daemon parsed this file itself an unquoted space took the service down.
+        // Quotes are meaningful now, so use them — and escape any the user typed.
+        if (f.value.find(' ') != std::string::npos || f.value.find('\t') != std::string::npos) {
+            s += '"';
+            for (char c : f.value) { if (c == '"' || c == '\\') s += '\\'; s += c; }
+            s += '"';
+        } else s += f.value;
     }
     return s;
 }
