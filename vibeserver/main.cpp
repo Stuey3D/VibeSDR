@@ -19,6 +19,7 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include <unistd.h>
 #include "airspyhf_source.h"
 
 #include <atomic>
@@ -115,6 +116,17 @@ bool parse(int argc, char** argv, Opts& o) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // ★★★ NO ARGUMENTS AND A TERMINAL ⇒ A HUMAN TYPED `vibeserver`, so show the settings screen.
+    // That is the one thing a command-line-shy person will try, and answering it with a wall of
+    // flags tells them they are in the wrong place (Stuart, 2026-07-31).
+    // ★★ SAFE FOR THE SERVICE: systemd runs us with NO TTY, so an empty VIBESERVER_ARGS still
+    // starts the daemon. The TTY test is what separates the two, not the argument count alone.
+#ifdef VIBE_HAVE_TUI
+    if (argc == 1 && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+        extern int vibeserverTui();
+        return vibeserverTui();
+    }
+#endif
     Opts o;
     if (!parse(argc, argv, o)) return 0;
 

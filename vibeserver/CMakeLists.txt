@@ -75,8 +75,23 @@ target_include_directories(vibeserver_core PUBLIC
 target_link_libraries(vibeserver_core PUBLIC vibedsp)
 
 # ── the CLI harness ───────────────────────────────────────────────────────────
+# ★ The TUI is part of the SAME binary, not a second one: Stuart's requirement is "SSH in, type
+# vibeserver, and it pops up". A separate `vibeserver-tui` would be one more name to remember.
+# See tui.cpp for how one binary is both — no arguments AND a terminal means a human typed it.
+if(UNIX AND NOT APPLE)
+  find_package(Curses)
+endif()
 add_executable(vibeserver
-    "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
+    $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
+if(CURSES_FOUND)
+  target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)
+  target_include_directories(vibeserver PRIVATE ${CURSES_INCLUDE_DIRS})
+  target_link_libraries(vibeserver PRIVATE ${CURSES_LIBRARIES})
+  message(STATUS "TUI: enabled (ncurses)")
+else()
+  message(STATUS "TUI: not built (ncurses not found)")
+endif()
 # ── librtlsdr + libusb: the dongle, driven DIRECTLY ───────────────────────────
 # STATIC on purpose. A user drags one .app out of a DMG and it works — no Homebrew, no dylib
 # hunting, nothing to install. Prefer the static archives; fall back to whatever is found so a
