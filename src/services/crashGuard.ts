@@ -27,6 +27,23 @@ export async function clearLastCrash(): Promise<void> {
 }
 
 /** Persist + log a caught error. Exported so CrashBoundary can reuse it. */
+/** ★★★ WHAT MUST BE TORN DOWN BEFORE WE RECOVER.
+ *
+ *  Resetting navigation is NOT enough. The crashed screen's SDR client and the NATIVE audio engine
+ *  outlive it — the audio engine especially, because it is deliberately owned by native so it can
+ *  survive JS suspension. So after a recovery the app looks like it is on the server list while a
+ *  dead session is still holding sockets and pouring audio out of the previous receiver.
+ *
+ *  ★★ The symptom that identified it (Stuart, 2026-07-31): after one crash, EVERY server —
+ *  whatever the type — gave the identical error and "half connected" to his own; only quitting the
+ *  app entirely cleared it. That is wedged in-memory state, not stored data: each new connection
+ *  was landing on top of the previous session's leftovers.
+ *
+ *  ★ Registered by SDRScreen rather than imported, so this module stays free of screen imports and
+ *  cannot itself throw during a crash. Failure here is swallowed — a recovery must never fail. */
+let sessionTeardown: (() => void) | null = null;
+export function setSessionTeardown(fn: (() => void) | null): void { sessionTeardown = fn; }
+
 export function recordCrash(error: any, route?: string): CrashInfo {
   const info: CrashInfo = {
     ts: Date.now(),
@@ -130,6 +147,9 @@ export function installCrashGuard(navRef: NavigationContainerRef<RootStackParamL
     // Fatal: recover instead of letting RN abort the process.
     if (!recovering) {
       recovering = true;
+      // ★★★ KILL THE SESSION FIRST. See setSessionTeardown — without this the old client and the
+      // native audio engine survive the reset and every subsequent connection fails the same way.
+      try { sessionTeardown?.(); } catch {}
       try {
         if (navRef.isReady() && navRef.getCurrentRoute()?.name !== 'InstancePicker') {
           // ★★★ noAutoConnect — OR THE RECOVERY UNDOES ITSELF. Resetting to the picker is the
