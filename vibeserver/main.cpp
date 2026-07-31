@@ -84,7 +84,19 @@ static bool loadConfigFile(const std::string& path, std::vector<std::string>& ou
         raw = line.substr(p + 16);
         break;
     }
-    // shell-ish split: quotes group, everything else splits on whitespace
+    // ★★★ STRIP THE ASSIGNMENT'S OWN QUOTES FIRST. The file holds VIBESERVER_ARGS="…" — those outer
+    // quotes belong to the shell-style assignment, not to any argument. Treating them as grouping
+    // swallowed the ENTIRE line into a single token, so the first attempt at this fix failed in a
+    // new way while looking like the old one. Strip them, THEN split, so inner quotes can do the
+    // job they are actually for: holding a value that contains a space.
+    {
+        size_t b = raw.find_first_not_of(" \t\r\n");
+        size_t e = raw.find_last_not_of(" \t\r\n");
+        if (b != std::string::npos) raw = raw.substr(b, e - b + 1); else raw.clear();
+        if (raw.size() >= 2 && (raw.front() == '"' || raw.front() == '\'') && raw.back() == raw.front())
+            raw = raw.substr(1, raw.size() - 2);
+    }
+    // shell-ish split: inner quotes group, everything else splits on whitespace
     std::string cur; char quote = 0; bool any = false;
     for (char c : raw) {
         if (quote) { if (c == quote) quote = 0; else cur += c; continue; }
