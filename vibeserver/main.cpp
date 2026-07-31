@@ -19,6 +19,7 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include <cctype>
 #include <fstream>
 #include <unistd.h>
 #include "airspyhf_source.h"
@@ -263,6 +264,42 @@ int main(int argc, char** argv) {
     // Built here in exactly the shape the Mac app produces (VibeServerApp.swift locationJson), so
     // the same receiver looks the same however it is hosted.
     {
+        // ★★★ DERIVE lat/lon FROM THE LOCATOR. The first version passed the grid straight through
+        // and computed no coordinates, so a receiver with only a locator set showed no place under
+        // its name and did not appear on any map (Stuart, 2026-08-01). The Mac has always done this
+        // (VibeServerApp.swift gridCentre) and only emits "grid" INSIDE the lat/lon block — so
+        // without coordinates the grid never reaches a client either.
+        // ★★ THE CENTRE OF THE SQUARE, NOT THE CORNER. A corner biases every distance by half a
+        // square in a fixed direction, which is a systematic error rather than the honest rounding
+        // the operator asked for by giving a locator in the first place. Same comment as the Mac's,
+        // and the same arithmetic, so the two agree to the metre.
+        auto gridCentre = [](const std::string& g, double& lat, double& lon) -> bool {
+            std::string u; for (char c : g) u += (char)toupper((unsigned char)c);
+            if (u.size() != 4 && u.size() != 6) return false;
+            if (!isalpha((unsigned char)u[0]) || !isalpha((unsigned char)u[1])
+                || !isdigit((unsigned char)u[2]) || !isdigit((unsigned char)u[3])) return false;
+            int f1 = u[0] - 'A', f2 = u[1] - 'A';
+            if (f1 < 0 || f1 >= 18 || f2 < 0 || f2 >= 18) return false;
+            int s1 = u[2] - '0',  s2 = u[3] - '0';
+            lon = f1 * 20.0 + s1 * 2.0 - 180.0;
+            lat = f2 * 10.0 + s2 * 1.0 - 90.0;
+            if (u.size() == 6) {
+                if (!isalpha((unsigned char)u[4]) || !isalpha((unsigned char)u[5])) return false;
+                int t1 = u[4] - 'A', t2 = u[5] - 'A';
+                if (t1 < 0 || t1 >= 24 || t2 < 0 || t2 >= 24) return false;
+                lon += t1 * (2.0 / 24.0) + (1.0 / 24.0);      // + half a sub-square
+                lat += t2 * (1.0 / 24.0) + (0.5 / 24.0);
+            } else { lon += 1.0; lat += 0.5; }                // + half a square
+            return true;
+        };
+        double la = 0, lo = 0; bool haveLL = false;
+        if (!o.rxLat.empty() && !o.rxLon.empty()) {
+            la = atof(o.rxLat.c_str()); lo = atof(o.rxLon.c_str()); haveLL = true;
+        } else if (!o.rxGrid.empty()) {
+            haveLL = gridCentre(o.rxGrid, la, lo);            // exact coordinates win; this is the fallback
+            if (!haveLL) std::fprintf(stderr, "VibeServer: --locator \"%s\" is not a Maidenhead square "
+                                              "(expected 4 or 6 characters, e.g. IO92nh)\n", o.rxGrid.c_str());
+        }
         std::string j; auto add = [&](const std::string& k, const std::string& v, bool quote) {
             if (v.empty()) return;
             if (!j.empty()) j += ",";
@@ -271,9 +308,15 @@ int main(int argc, char** argv) {
         add("name",  o.rxName,  true);
         add("iso",   o.rxIso,   true);
         add("label", o.rxPlace, true);
-        add("lat",   o.rxLat,   false);
-        add("lon",   o.rxLon,   false);
-        add("grid",  o.rxGrid,  true);
+        if (haveLL && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+            char b[64];
+            std::snprintf(b, sizeof b, "%.6f", la); add("lat", b, false);
+            std::snprintf(b, sizeof b, "%.6f", lo); add("lon", b, false);
+            // ★ Echo the operator's OWN locator when they gave one — recomputing it from the
+            // square's centre returns the same square, but showing back exactly what was typed is
+            // less confusing than showing a value they did not enter. (The Mac's words.)
+            add("grid", o.rxGrid, true);
+        }
         if (!j.empty()) LocalSdrShim::setLocationJson("{" + j + "}");
     }
     // ★★ SAY SO WHEN IT IS WIDE OPEN. Someone putting a receiver on the internet should be told at
