@@ -198,7 +198,17 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--locator")  o.rxGrid  = need(i);
         else if (a == "--lat")      o.rxLat   = need(i);
         else if (a == "--lon")      o.rxLon   = need(i);
-        else { std::fprintf(stderr, "unknown option: %s\n\n", a.c_str()); usage(); std::exit(2); }
+        // ★★★ AN UNKNOWN ARGUMENT MUST NOT KEEP A RECEIVER OFFLINE. This printed the usage and
+        // exited 2, which for a SERVICE means systemd restarts it, it exits 2 again, and the radio
+        // stays down until somebody SSHs in — from one stray token in a config file
+        // (Stuart, 2026-08-01: the service would not come back after a save).
+        // ★★ For a box in a loft, resilience beats strictness: say so loudly enough that it cannot
+        // be missed in the journal, ignore the token, and serve. One ignored setting is a far
+        // better outcome than no receiver.
+        // ★ Typed at a terminal it is still obvious — the warning is the first thing on screen, and
+        // `vibeserver --help` is one command away.
+        else std::fprintf(stderr, "VibeServer: ignoring unknown option \"%s\" "
+                                  "(run `vibeserver --help` for the list)\n", a.c_str());
     }
     return true;
 }
