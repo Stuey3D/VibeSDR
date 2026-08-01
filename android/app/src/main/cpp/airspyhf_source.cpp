@@ -479,9 +479,15 @@ bool AirspyHfSource::setSampleRate(double hz) {
     //     to do, the DSP is built for what it is ACTUALLY doing — which is also the only approach
     //     that survives a different HF+ model, a firmware update, or the next radio to do this.
     if (streaming_) {
+        // ★★★ LET THE OLD RATE DRAIN FIRST. Counting straight after the change measures the
+        //     buffers still in flight from the PREVIOUS rate — so asking for 912 while the radio
+        //     was at 456 measured ~456, "corrected" curRate_ to 456, and built the entire DSP for
+        //     half the real rate: no audio, no spectrum (Stuart, 2026-08-02, "broken completely").
+        //     A measurement that includes the transition is not a measurement of the new state.
+        impl_->mtx.unlock();                       // let the stream callback run
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));   // drain the old rate
         sampCount_.store(0, std::memory_order_relaxed);
         const double t0 = nowSecsMono();
-        impl_->mtx.unlock();                       // let the stream callback run
         std::this_thread::sleep_for(std::chrono::milliseconds(600));
         impl_->mtx.lock();
         const double dt = nowSecsMono() - t0;
@@ -489,7 +495,15 @@ bool AirspyHfSource::setSampleRate(double hz) {
         if (dt > 0.2 && n > 1000) {
             const double measured = (double)n / dt;
             const uint32_t snapped = nearestRate(measured);   // reject counting jitter
-            if (snapped && std::fabs((double)snapped - (double)r) > 1.0) {
+            // ★★★ AND ONLY BELIEVE A MEASUREMENT THAT IS ACTUALLY CLOSE TO A REAL RATE. Snapping
+            //     alone is not enough: a count taken across a transition lands between two rates
+            //     and snaps confidently to the wrong one. Within 5% or the request stands — a
+            //     radio genuinely running something else misses by 19% (912 vs 768) at worst.
+            const bool trust = snapped && std::fabs(measured - (double)snapped) < 0.05 * snapped;
+            if (!trust) {
+                std::fprintf(stderr, "airspyhf: measured %.0f S/s does not match any rate closely "
+                                     "— keeping the requested %u\n", measured, (unsigned)r);
+            } else if (snapped && std::fabs((double)snapped - (double)r) > 1.0) {
                 std::fprintf(stderr, "airspyhf: asked %u but the radio is running %u "
                                      "(measured %.0f S/s) — using the measured rate\n",
                              (unsigned)r, (unsigned)snapped, measured);
