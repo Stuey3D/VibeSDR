@@ -146,36 +146,48 @@ html, body {
 html #bar { display: none; }
 
 #mcard {
-  display: flex; flex-direction: column; gap: 0.55em;
+  display: flex; flex-direction: column; gap: 0.4em;
   /* Floats over the waterfall rather than taking a band out of it — screen height is the
      scarce thing on a phone, and on a desktop the waterfall is the point. */
   position: absolute; left: 50%; transform: translateX(-50%);
   bottom: max(0.6em, env(safe-area-inset-bottom, 0px));
   width: min(96vw, 1100px); z-index: 40;
-  padding: 0.6em; border-radius: 14px;
+  padding: 0.45em; border-radius: 12px;
   background: rgba(10, 10, 10, 0.92);
   border: 1px solid var(--bar-border);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
   font-size: clamp(11px, 1.35vw, 15px);
 }
 
-/* ★★ WIDE: the pads FLANK the frequency (Stuart). The pill takes the middle track and the
-   two dials size to their content, so the frequency stays centred in the card at any width
-   and the controls sit either side of it — one glance, one row. */
-#mMain { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.5em; align-items: stretch; }
-#mMain .mDial { min-width: 12em; }
+/* ★★★ THE CONTROLS MUST GET OUT OF THE WAY. The waterfall and spectrum are the primary view
+   — that is the app's whole design language — so this card is kept to ONE ROW wherever it
+   fits. The four buttons flank the pill as two stacked pairs rather than taking a row of
+   their own: same controls, roughly half the height, and every one of them within a thumb's
+   travel of the frequency instead of a row away from it (Stuart, 2026-08-01).
 
-/* ★★ NARROW: they FLOW UNDER it. Below this the three-across row squeezes the frequency to
-   the point where the digits are the smallest thing on a card built to display them.
-   `order` keeps the pill on top even though the tune pad comes first in the markup — the
-   markup order is the one that reads correctly when the pads flank. */
-@media (max-width: 720px) {
+   WIDE: [tune] [step/menu] [PILL] [audio/dec] [zoom] — the pill takes the only flexible
+   track, so the frequency stays the widest thing on the card at any window size. */
+#mMain {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  gap: 0.45em; align-items: stretch;
+}
+#mMain .mDial { min-width: 10.5em; }
+/* Two half-height buttons in the space one full-height one would take. */
+.mStack { display: grid; grid-template-rows: 1fr 1fr; gap: 0.3em; }
+.mStack .mBtn { min-height: 0; padding: 0.2em 0.7em; font-size: 0.95em; }
+
+/* NARROW: the pads and stacks FLOW UNDER the frequency (Stuart). `order` keeps the pill on
+   top even though the tune pad comes first in the markup — the markup order is the one that
+   reads correctly when things flank, and layout should bend to that rather than the reverse. */
+@media (max-width: 900px) {
   #mMain { grid-template-columns: 1fr 1fr; }
   #mPill { grid-column: 1 / -1; order: -1; }
   #mMain .mDial { min-width: 0; }
+  .mStack { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
+  .mStack .mBtn { min-height: max(2.4em, 40px); }
 }
-/* One pad per row once even a half-width pad is too cramped to hit. */
-@media (max-width: 420px) { #mMain { grid-template-columns: 1fr; } }
+@media (max-width: 440px) { #mMain { grid-template-columns: 1fr; } }
 
 /* ── The pill: the signal meter is its BACKGROUND, not a separate row ────────── */
 #mPill {
@@ -1495,6 +1507,15 @@ select.btn { padding: 6px 8px; }
            outlines it reads as one label and people tap the mode expecting the mode and get a
            number pad. The pill itself is NOT clickable, so there is no invisible third
            button. The meter reading is a third: tap it to cycle SNR / S-meter / dBFS. -->
+      <!-- ★★★ THE BUTTONS FLANK THE PILL IN TWO STACKED PAIRS, as the app's landscape bar
+           does — not a full-width row underneath. The pairs put the four things you reach for
+           within a thumb's travel of the frequency instead of a row away from it, and they
+           keep the dial the widest thing on the card. Left is what you TUNE with (step, menu);
+           right is what you LISTEN with (audio, decoders). -->
+      <div class="mStack" id="mStackL">
+        <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
+        <button class="mBtn" id="mMenu"  title="Menu" aria-label="Menu"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/></svg></button>
+      </div>
       <div id="mPill">
         <div id="mSig"></div>
         <div id="mPillIn">
@@ -1503,24 +1524,15 @@ select.btn { padding: 6px 8px; }
         </div>
       </div>
 
+      <div class="mStack" id="mStackR">
+        <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></button>
+        <button class="mBtn" id="mDec"   title="Decoders" aria-label="Decoders">⌗</button>
+      </div>
       <div class="mDial" id="mZoomDial">
         <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
         <span class="mDialGlyph" title="Zoom"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg></span>
         <button class="mBtn" id="mZoomIn" aria-label="Zoom in">+</button>
       </div>
-    </div>
-
-    <!-- ★★★ ORDER TAKEN FROM ControlsBar.tsx AS IT IS NOW — step, audio, menu, then the
-         fourth slot. NOT from screenshots/ and NOT from the PocketUberSDR skin: both are
-         older than the app and show a different set (step, menu, chat, share). Copying either
-         would teach the wrong muscle memory for the app this is a demo of.
-         ★ The app's fourth is CHAT, which this client does not have at all — a dead chat
-         button is the no-op control AGENTS.md forbids, so the slot takes DECODERS. -->
-    <div id="mBtns">
-      <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
-      <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></button>
-      <button class="mBtn" id="mMenu"  title="Menu" aria-label="Menu"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/></svg></button>
-      <button class="mBtn" id="mDec"   title="Decoders" aria-label="Decoders">⌗</button>
     </div>
 
     <!-- ★ Clock, recording timer, link cluster — where the app puts them. All MIRRORED from

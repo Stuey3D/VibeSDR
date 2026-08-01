@@ -184,6 +184,10 @@ export function initMobileControls(deps: MobileDeps) {
   //    stacked, and with the font-size clamp.
   const publishHeight = () => {
     document.documentElement.style.setProperty('--mcard-h', `${Math.round(card.offsetHeight)}px`);
+    // ★ The decoder box measures the card directly, so nudge it whenever the card resizes —
+    //   otherwise it only re-places itself when the VTS appears, and a card that grew (a
+    //   wider window, a longer status line) would be overlapped until something else moved.
+    (window as unknown as { _vibeSetDecBoxOffset?: () => void })._vibeSetDecBoxOffset?.();
   };
   publishHeight();
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(publishHeight).observe(card);

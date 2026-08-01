@@ -1256,8 +1256,17 @@ function setDecBoxOffset() {
   const vts = $('vts');
   const showing = vts.classList.contains('show');
   const h = showing ? vts.offsetHeight + 10 : 0;
-  document.documentElement.style.setProperty('--decBoxBottom', `${14 + h}px`);
+  // ★★ AND CLEAR OF THE CONTROL CARD. This only counted the VTS, because when it was written
+  //    the controls were a BAR that took its own band out of the layout and nothing could
+  //    overlap it. The card FLOATS over the waterfall, so the decoder box drew straight
+  //    through it (Stuart, 2026-08-01). Measured, not assumed: the card's height changes with
+  //    the arrangement and the font clamp.
+  const card = document.getElementById('mcard');
+  const cardH = card ? card.offsetHeight + 12 : 0;
+  document.documentElement.style.setProperty('--decBoxBottom', `${14 + h + cardH}px`);
 }
+// Exposed so the card's ResizeObserver can re-run it — see mobile.ts.
+(window as unknown as { _vibeSetDecBoxOffset?: () => void })._vibeSetDecBoxOffset = setDecBoxOffset;
 
 // ── dB axis ──────────────────────────────────────────────────────────────────
 // Five stops down the left of the spectrum, with faint reference lines — same as
