@@ -283,25 +283,14 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
       if (airspyhf_version_string_read(impl_->dev, ver, sizeof(ver) - 1) == AIRSPYHF_SUCCESS)
           std::fprintf(stderr, "airspyhf: firmware \"%s\"\n", ver); }
 
-    // ★★★ PROBE THE CANONICAL RATES DIRECTLY. Edouard Griffiths (SDRangel/gr-osmosdr), on the
-    //   Airspy list: the HF+ hardware rates are 192/256/384/456/768/912 and everything else people
-    //   see — 228, 128, 114 — is SDR# doing software decimation without saying so (228 = 456/2).
-    //   This device reports 192 228 384 456 650 768 912: 228 where 256 should be, and a 650 that
-    //   should not exist (Stuart found the thread, 2026-08-01).
-    //   ★ libairspyhf turns a rate into an INDEX by matching the value EXACTLY against the
-    //   firmware table, and returns AIRSPYHF_ERROR when there is no match. So asking for 256000
-    //   is a direct question to the firmware: "is this one of yours?" — rc 0 means the table we
-    //   read is wrong, an error means the table is right and this radio really has no 256.
-    for (uint32_t probe : {192000u, 228000u, 256000u, 384000u, 456000u, 650000u, 768000u, 912000u}) {
-        const int prc = airspyhf_set_samplerate(impl_->dev, probe);
-        std::fprintf(stderr, "airspyhf: probe %7u -> rc %d %s\n", probe, prc,
-                     prc == AIRSPYHF_SUCCESS ? "ACCEPTED" : "rejected");
-    }
-    // ★ PUT IT BACK. The probe walks the device through every candidate, so the last one tried
-    //   would otherwise become the rate we run on — a diagnostic that changes the thing it
-    //   measures. Restore what the caller actually asked for.
-    airspyhf_set_samplerate(impl_->dev, nearestRate(sampleRateHz));
-
+    // ★★★ THE CANONICAL-RATE PROBE HAS BEEN REMOVED, and this note is why it must not come back
+    //     as a startup step. It walked the device through every candidate rate at EVERY open to
+    //     answer one question (does this firmware have 256? — no, it is rejected; the seven it
+    //     reports are genuine). Each step re-tunes the LO and flips the IF architecture, and 912
+    //     kHz — correct all evening — started tuning wrongly once it shipped (Stuart, 2026-08-02:
+    //     "456 is correct, 912 is now broken. It was correct before all this work").
+    //     ★ A diagnostic that perturbs the thing it measures is fine for one run and unacceptable
+    //     as a permanent cost. If the question ever needs re-asking, ask it in a throwaway build.
     // ★ AND WHAT THEY ARE. "7 rates offered" is not enough to tell whether a rate the user picked
     //   is one the radio actually has — which is the whole question when some rates play at the
     //   wrong pitch.
