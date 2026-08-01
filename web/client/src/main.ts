@@ -1502,13 +1502,26 @@ function noteFrame() {
 }
 
 function updateLink() {
-  // No frame for a long time = stalled, regardless of what the last gap said.
+  // ★★★ THE HEALTHY CASE WAS NEVER ASSIGNED. linkQ starts at 0 and the old code only ever
+  //     wrote 1 or 0 — the branch for "frames arriving normally" set nothing at all, so the
+  //     value kept whatever it had, which from startup was 0. The indicator could therefore
+  //     show only the red ✕ or one red bar: THREE GREEN AND TWO YELLOW WERE UNREACHABLE, and
+  //     a perfectly healthy link displayed as disconnected (Stuart, 2026-08-01).
+  // ★★ Now a full ladder, matching the app's LinkBars: 3 green = solid, 2 yellow = jitter or
+  //    some drops, 1 red = stalling/reconnecting, 0 = disconnected. Same four states, the same
+  //    meanings and the same colours, so the two clients cannot say different things about
+  //    the same link.
   if (!spec || !lastFrameAt) linkQ = 0;
   else {
     const expected = 1000 / Math.max(1, wantedFps());
     const since = performance.now() - lastFrameAt;
-    if (since > expected * 8) linkQ = 1;
-    if (since > 5000) linkQ = 0;
+    // ★ The thresholds are multiples of the EXPECTED frame interval, not fixed milliseconds:
+    //   at 5 fps a 300 ms gap is normal and at 20 fps it is a stall, so a fixed number would
+    //   be wrong at one end of the rate ladder or the other.
+    if (since > 5000)             linkQ = 0;   // nothing for five seconds — gone
+    else if (since > expected * 8) linkQ = 1;   // stalling / reconnecting
+    else if (since > expected * 3) linkQ = 2;   // jitter, dropped frames
+    else                           linkQ = 3;   // solid
   }
   const el = $('linkBars');
   el.className = `q${linkQ}`;
