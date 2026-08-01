@@ -1653,6 +1653,9 @@ function buildControls() {
       //   line lands exactly where the signal would have to reach to open the gate. −1 = off.
       //   Computed here rather than in the card: this is the scale the meter itself uses, and
       //   a second derivation would put the line somewhere subtly wrong.
+      // ★ CLOSED, not merely ARMED. A threshold set above the noise is normal; the state
+      //   worth shouting about is the gate actively muting right now.
+      sqlClosed: squelchDb > -100 && lastSigDb < squelchDb,
       sqlNorm: squelchDb > -100
         ? Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / Math.max(1, sqlScaleMax - sqlScaleMin)))
         : -1,
