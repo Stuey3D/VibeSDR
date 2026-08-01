@@ -279,6 +279,37 @@ html, body {
   #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 }
 
+/* ── Tuning group: search + bookmarks travel with the dial ───────────────────── */
+#mTune { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
+
+/* ★★ ROWS THAT EXIST ONLY WHILE THE CARD DOES. The desktop bar carries controls the
+   panels do not (volume, mute, REC, recordings, lock, centre, fit), so hiding the bar on a
+   narrow window made them unreachable — no menu entry, no other route. Rather than
+   duplicate them on desktop, where the bar already has them, these rows appear only in the
+   width range where the bar is hidden. Same control, one visible copy at any width. */
+.mOnly { display: none; }
+@media (max-width: 1280px) { .mOnly { display: flex; } }
+.mOnly.mrow { align-items: center; gap: 0.6em; }
+.mOnlyGrid { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 0.5em; }
+.mPanelBtn {
+  background: var(--btn-bg); color: var(--btn-text);
+  border: 1px solid var(--btn-border); border-radius: 7px;
+  font: inherit; min-height: 44px; cursor: pointer;
+}
+.mPanelBtn:active { background: rgba(255,160,0,0.18); }
+.mPanelBtn.rec { border-color: #ff3b30; color: #ff3b30; }
+#mPanelVol { flex: 1 1 auto; min-width: 0; height: 44px; touch-action: none; }
+
+/* ── House glyphs ────────────────────────────────────────────────────────────── */
+/* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform —
+   Apple's 📻 and Android's are not the same object, neither matches the app, and both drag
+   in a colour scheme the rest of the card does not use. These are ported coordinate-for-
+   coordinate from buildIconPath() in DrumWheel.tsx and the paths in ControlsBar.tsx, so
+   they inherit `currentColor` and sit in the same visual family as the app (Stuart:
+   "we lose the branding"). */
+.mGlyph { height: 1.15em; width: auto; vertical-align: -0.16em; }
+.mDrumIcon .mGlyph { height: 1.35em; }
+
 /* ── Status line ─────────────────────────────────────────────────────────────── */
 #mStatus {
   display: flex; align-items: center; justify-content: space-between;
@@ -1428,10 +1459,19 @@ select.btn { padding: 6px 8px; }
          A dead chat button would be exactly the no-op control AGENTS.md forbids, so the
          slot takes DECODERS instead: it exists here, it is the next most useful thing on a
          phone, and the three shared buttons keep the app's positions. -->
+    <!-- ★ WITH THE TUNING, as the app has it: finding a station and returning to one are
+         both part of the dial, not a separate mode. Everything else the desktop bar carries
+         goes where it BELONGS rather than into a junk drawer — the waterfall/spectrum
+         controls into the menu, the recorder in with the audio (Stuart). -->
+    <div id="mTune">
+      <button class="mBtn" id="mSearch" title="Search stations, bands, frequencies"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg> SEARCH</button>
+      <button class="mBtn" id="mBookmarks" title="Bookmarks">★ BOOKMARKS</button>
+    </div>
+
     <div id="mBtns">
       <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
-      <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio">◍</button>
-      <button class="mBtn" id="mMenu"  title="Menu" aria-label="Menu">☰</button>
+      <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></button>
+      <button class="mBtn" id="mMenu"  title="Menu" aria-label="Menu"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/></svg></button>
       <button class="mBtn" id="mDec"   title="Decoders" aria-label="Decoders">⌗</button>
     </div>
 
@@ -1441,12 +1481,12 @@ select.btn { padding: 6px 8px; }
     <div id="mDrums">
       <div class="mDrum" id="mVfoDrum">
         <button class="mDrumEnd" id="mVfoDown" aria-label="Tune down">−</button>
-        <div class="mDrumFace" id="mVfoFace"><span class="mDrumIcon">📻</span></div>
+        <div class="mDrumFace" id="mVfoFace"><span class="mDrumIcon"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span></div>
         <button class="mDrumEnd" id="mVfoUp" aria-label="Tune up">+</button>
       </div>
       <div class="mDrum" id="mZoomDrum">
         <button class="mDrumEnd" id="mZoomOut" aria-label="Zoom out">−</button>
-        <div class="mDrumFace" id="mZoomFace"><span class="mDrumIcon">🔍</span></div>
+        <div class="mDrumFace" id="mZoomFace"><span class="mDrumIcon"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg></span></div>
         <button class="mDrumEnd" id="mZoomIn" aria-label="Zoom in">+</button>
       </div>
     </div>
@@ -1521,7 +1561,7 @@ select.btn { padding: 6px 8px; }
           <button class="btn" id="muteBtn">MUTE</button>
           <button class="btn" id="audioBtn" title="Squelch, noise reduction, notch, de-emphasis">AUDIO</button>
           <button class="btn" id="recordingsBtn" title="Saved recordings">RECORDINGS</button>
-          <button class="btn" id="recBtn" title="Record audio to a WAV file">● REC</button>
+          <button class="btn" id="recBtn" title="Record audio to a WAV file"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg> REC</button>
           <span class="lbl" id="recTime"></span>
         </div>
       </div>
@@ -1612,7 +1652,20 @@ select.btn { padding: 6px 8px; }
   <!-- ★ Only shown when the operator has set "listener's choice" — on any other setting the
        row is hidden entirely rather than disabled, because an inert control still reads as an
        offer. Changing it reconnects the audio socket: the codec is fixed at connect time. -->
-  <div class="mrow" id="rawAudioRow" hidden>
+  <!-- ★ THE RECORDER LIVES WITH THE AUDIO (Stuart), matching the app — recording is an
+     audio decision, not a separate mode. Volume and mute come too: they are in the desktop
+     bar, so hiding the bar on a narrow window left a listener with no way to turn it down.
+     .mOnly keeps these to the widths where the bar is hidden, so desktop keeps ONE copy. -->
+<div class="mrow mOnly"><label>VOLUME</label>
+  <button class="mPanelBtn" id="mPanelMute" title="Mute" style="width:3.4em"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></button>
+  <input type="range" id="mPanelVol" min="0" max="100" step="1" aria-label="Volume">
+</div>
+<div class="mrow mOnly mOnlyGrid">
+  <button class="mPanelBtn" id="mPanelRec" title="Start / stop recording"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg> REC</button>
+  <button class="mPanelBtn" id="mPanelRecs" title="Recordings">RECORDINGS</button>
+  <span></span>
+</div>
+<div class="mrow" id="rawAudioRow" hidden>
     <label>UNCOMPRESSED AUDIO</label>
     <div class="seg"><button class="btn" id="rawAudio">OFF</button></div>
   </div>
@@ -1779,7 +1832,15 @@ select.btn { padding: 6px 8px; }
   <!-- ★ Which receiver you are actually listening through. It was blank, which is a strange
        thing for a radio application to be coy about — and it matters more now there is more
        than one kind of radio behind it. -->
-  <div class="mrow">
+  <!-- ★ WATERFALL / SPECTRUM CONTROLS BELONG IN THE MENU (Stuart) — they are view
+     settings, and the menu is already where every other display setting lives. Present
+     only while the bar is hidden, which is the only time they are otherwise unreachable. -->
+<div class="mrow mOnly mOnlyGrid">
+  <button class="mPanelBtn" id="mPanelLock" title="Lock the view to the dial">LOCK</button>
+  <button class="mPanelBtn" id="mPanelCentre" title="Centre the view on the dial">CENTRE</button>
+  <button class="mPanelBtn" id="mPanelFit" title="Fit the whole band">FIT</button>
+</div>
+<div class="mrow">
     <label>RECEIVER</label>
     <span class="val" id="radioName" style="flex:1">—</span>
   </div>

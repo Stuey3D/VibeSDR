@@ -173,6 +173,53 @@ export function initMobileControls(deps: MobileDeps) {
   $('mFreqBox').onclick = () => deps.openFreqEntry();
   $('mMode').onclick    = () => openModePicker();
 
+  // ── Controls the desktop bar owns, mirrored where they BELONG ───────────────
+  // ★★★ CLICK THE ORIGINAL, DO NOT REIMPLEMENT IT. Every one of these drives the existing
+  //     bar control, so behaviour, state and any future change live in exactly one place.
+  //     A second implementation of REC or LOCK would drift the first time either is touched.
+  const mirror = (fromId: string, toId: string) => {
+    const from = document.getElementById(fromId);
+    const to = document.getElementById(toId);
+    if (from && to) from.onclick = () => to.click();
+  };
+  mirror('mSearch', 'search');          // focus handled below — a click alone won't do it
+  mirror('mBookmarks', 'bookmarksBtn');
+  mirror('mPanelRec', 'recBtn');
+  mirror('mPanelRecs', 'recordingsBtn');
+  mirror('mPanelMute', 'muteBtn');
+  mirror('mPanelLock', 'lockBtn');
+  mirror('mPanelCentre', 'centreBtn');
+  mirror('mPanelFit', 'zoomReset');
+
+  // ★ Search is an INPUT, not a button: clicking it does nothing useful. Open the panel it
+  //   lives in and put the cursor in it, or the button looks broken.
+  const searchBtn = document.getElementById('mSearch');
+  const searchInput = document.getElementById('search') as HTMLInputElement | null;
+  if (searchBtn && searchInput) {
+    searchBtn.onclick = () => {
+      searchInput.scrollIntoView({ block: 'nearest' });
+      searchInput.focus();
+      searchInput.select();
+    };
+  }
+
+  // ★★ THE VOLUME SLIDER IS A VALUE, NOT AN ACTION — mirroring a click would do nothing.
+  //    Copy the value across and fire `input`, which is the event the audio path listens on;
+  //    seed from the original so the mobile slider opens where the audio actually is rather
+  //    than snapping it to a default the moment the panel is opened.
+  const vol = document.getElementById('vol') as HTMLInputElement | null;
+  const mVol = document.getElementById('mPanelVol') as HTMLInputElement | null;
+  if (vol && mVol) {
+    mVol.min = vol.min; mVol.max = vol.max; mVol.step = vol.step;
+    mVol.value = vol.value;
+    mVol.oninput = () => {
+      vol.value = mVol.value;
+      vol.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    // Keep in step if the desktop slider moves (a keyboard shortcut, a restored pref).
+    vol.addEventListener('input', () => { mVol.value = vol.value; });
+  }
+
   // ★★ THE VTS SITS IN THE SAME CORNER AS THIS CARD (#vts is bottom:14px), so without an
   //    offset the station strip draws straight over the controls. Publish the card's MEASURED
   //    height and let the stylesheet lift the VTS clear of it. A fixed number would be wrong
