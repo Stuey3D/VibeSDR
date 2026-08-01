@@ -96,6 +96,28 @@ static int streamCb(airspyhf_transfer_t* t) {
     // keep it is our decision, not the hardware's. Stamping after the pause check made an
     // idle-parked radio indistinguishable from an unplugged one.
     if (c->lastRx) c->lastRx->store(nowSecsMono(), std::memory_order_relaxed);
+    // ★★★ MEASURE WHAT THE RADIO IS ACTUALLY DELIVERING. Setting a rate and being told "rc 0" is
+    //     not evidence that the device changed — and if it keeps streaming at 912 kHz while the
+    //     DSP is rebuilt for 384 kHz, the audio comes out slow with no error anywhere (Stuart:
+    //     "it seems as if we are getting the full 0.912 from the radio and simply dividing it").
+    //     This counts samples over a real second and prints them, which settles it either way.
+    {
+        static std::atomic<long long> cnt{0};
+        static std::atomic<double> t0{0};
+        const double now = nowSecsMono();
+        double start = t0.load(std::memory_order_relaxed);
+        if (start == 0) { t0.store(now, std::memory_order_relaxed); cnt.store(0, std::memory_order_relaxed); }
+        else {
+            cnt.fetch_add(t->sample_count, std::memory_order_relaxed);
+            const double dt = now - start;
+            if (dt >= 2.0) {
+                std::fprintf(stderr, "airspyhf: IQ measured %.0f S/s over %.1fs\n",
+                             cnt.load(std::memory_order_relaxed) / dt, dt);
+                t0.store(now, std::memory_order_relaxed);
+                cnt.store(0, std::memory_order_relaxed);
+            }
+        }
+    }
     if (c->paused && *c->paused) return 0;   // idle: drop, never tear the device down
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming
