@@ -169,13 +169,21 @@ export function initMobileControls(deps: MobileDeps) {
     return isFinite(s.snr) ? `SNR ${Math.round(s.snr)} dB` : '—';
   };
 
-  // ── Drums ──────────────────────────────────────────────────────────────────
-  attachDrum($('mVfoFace'), (dir) => deps.nudgeSteps(dir));
-  // ★ A QUARTER-OCTAVE PER DETENT, matching the desktop bar's hold-sweep rate. A full
-  //   factor of 2 per detent made the zoom drum unusable — one flick and the whole band
-  //   was gone.
+  // ── Drums: BUTTONS ONLY IN THE WEB CLIENT ──────────────────────────────────
+  // ★★★ THE DRAG AND ITS MOMENTUM ARE DELIBERATELY NOT WIRED HERE. On the phone the drums are
+  //     driven by a thumb on glass and the inertia is the point — it is what makes them feel
+  //     like a weighted dial. On a TRACKPAD the same gesture is far too twitchy, and the coast
+  //     actively fights the user: every attempt to fine-tune ended with the momentum carrying
+  //     the dial past the frequency they were trying to settle on (Stuart, 2026-08-01).
+  //     A control that overshoots on the last, most precise step of a task is worse than no
+  //     control at all, so in the client it is the − / + ends that tune, with press-and-hold
+  //     to sweep. The drum FACE stays as the readout it looks like.
+  // ★ The drag code (attachDrum) is kept, not deleted: the physics is right for touch and this
+  //   is a per-surface decision, not a verdict on the design. If the card is ever driven by a
+  //   real touchscreen we turn it back on for coarse pointers only — `pointer: coarse` is the
+  //   honest test, and it is the one thing user-agent sniffing genuinely cannot fake.
   const ZOOM_DETENT = Math.pow(2, 0.25);
-  attachDrum($('mZoomFace'), (dir) => deps.zoomBy(dir > 0 ? ZOOM_DETENT : 1 / ZOOM_DETENT));
+  void attachDrum; void ZOOM_DETENT;
 
   attachRepeat($('mVfoDown'), () => deps.nudgeSteps(-1));
   attachRepeat($('mVfoUp'),   () => deps.nudgeSteps(1));
