@@ -5151,10 +5151,15 @@ void LocalSdrShim::setSampleRate(double rate) {
         //   barry white") — and seen as the spectrum lagging the audio while the stale-rate
         //   samples drain through.
         impl->ahf->setSampleRate(rate);
-        // ★ ASK THE RADIO, do not assume. The HF+ snaps to its own list, and everything
-        //   downstream — fftSize, the DSP's channel rates, the waterfall calibration — is built
-        //   on this number.
-        actual = (uint32_t)impl->ahf->nearestRate(rate);
+        // ★★★ MEASURE THE RADIO, do not assume — and do not trust its own list either. An HF+
+        //   Discovery advertises seven rates, implements THREE (912/456/228), and silently rounds
+        //   everything else UP while returning success. `nearestRate()` therefore agreed with the
+        //   request and disagreed with reality, so the DSP was built for a rate the radio was not
+        //   running: heard as Barry White, slow by exactly the ratio between the two (measured on
+        //   hardware 2026-08-01 — see AirspyHfSource::setSampleRate for the full table).
+        //   currentRate() is what the samples say, counted after the change.
+        actual = (uint32_t)llround(impl->ahf->currentRate());
+        if (!actual) actual = (uint32_t)impl->ahf->nearestRate(rate);
         // ★★★ RE-APPLY THE TUNED CENTRE. An HF+ runs LOW-IF at some sample rates and zero-IF at
         //   others (airspyhf_is_low_if reports which, and open() logs it), so the offset the
         //   library applies to reach baseband is RATE-DEPENDENT. Changing the rate could
