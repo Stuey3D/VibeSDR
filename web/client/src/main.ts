@@ -1298,6 +1298,10 @@ function drawDbAxis(ctx: CanvasRenderingContext2D, W: number, H: number) {
 // ── Signal meter (derived from the SPEC bins — the shim sends no S-meter) ────
 
 let sigSmooth = 0, sigPeak = 0;
+/** ★ The last passband peak in dBFS. updateSignal() computes it as a local, but the card's
+ *  meter can be switched to show dBFS or S-units, and both need the raw figure rather than the
+ *  0..1 the gradient uses. Mirrored here rather than recomputed, so every readout agrees. */
+let lastSigDb = -160;
 
 let snrSmooth = 0;
 
@@ -1323,6 +1327,7 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
 
   const snr = Math.max(0, sigDb - noiseDb);
   snrSmooth += (snr - snrSmooth) * 0.2;
+  lastSigDb = sigDb;
 
   const { dbMin, dbMax } = wf!.getRange();
   const norm = Math.max(0, Math.min(1, (sigDb - dbMin) / Math.max(1, dbMax - dbMin)));
@@ -1618,8 +1623,9 @@ function buildControls() {
     mode:       () => spec?.mode ?? '',
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
-    // sigSmooth is the same 0..1 the desktop meter fills to, so both readouts agree.
-    signal:     () => ({ level: sigSmooth, caption: `SNR ${snrSmooth.toFixed(0)} dB` }),
+    // sigSmooth is the same 0..1 the desktop meter fills to, and the three readings come from
+    // the same figures its status line prints — so the card can never contradict the bar.
+    signal:     () => ({ level: sigSmooth, snr: snrSmooth, dbfs: lastSigDb, sUnit: toSUnit(lastSigDb) }),
     openFreqEntry: () => $('pill').click(),
     modes:      () => MODES as unknown as string[],
     setMode:    (m) => setMode(m as SDRMode, true),
