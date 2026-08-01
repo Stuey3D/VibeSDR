@@ -266,6 +266,22 @@ html #bar { display: none; }
 #mAudio.muted .mIcMute { display: inline; }
 #mAudio.muted { color: #ff3b30; border-color: #ff3b30; }
 
+/* ── "Back to the dial" button ────────────────────────────────────────────────── */
+#mCentreFloat {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  /* Sits just above the card, measured — the card's height changes with the arrangement. */
+  bottom: calc(var(--mcard-h, 190px) + 3.4em);
+  z-index: 46;
+  background: rgba(10,10,10,0.94); color: var(--phosphor);
+  border: 1px solid var(--phosphor); border-radius: 999px;
+  padding: 0.5em 1.1em; min-height: 44px;
+  font: inherit; font-size: clamp(11px, 1.3vw, 14px); letter-spacing: 0.08em;
+  cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+  animation: sqlBreathe 2s ease-in-out infinite;
+}
+#mCentreFloat[hidden] { display: none; }
+#mCentreFloat:active { background: rgba(53,224,138,0.2); }
+
 /* ── House glyphs ────────────────────────────────────────────────────────────── */
 /* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform,
    none matches the app, and each drags in its own colour scheme. These are ported
@@ -367,6 +383,9 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 }
 .mPanelBtn:active { background: rgba(255,160,0,0.18); }
 .mPanelBtn.rec { border-color: #ff3b30; color: #ff3b30; }
+/* ★ LOCKED is the resting state and reads as normal; FREE is the one worth noticing, because
+   a view that no longer follows the dial is how someone loses their station off-screen. */
+#mPanelLock.free { border-color: var(--phosphor); color: var(--phosphor); }
 #mPanelVol { flex: 1 1 auto; min-width: 0; height: 44px; touch-action: none; }
 /* ★ The relocated search box must FILL its host row. In the bar it sat in a flex row that
    gave it the remaining space; dropped into a panel row with no such sibling it would
@@ -1520,6 +1539,15 @@ select.btn { padding: 6px 8px; }
        own background), a four-button row, twin drums, and the status line. Same design
        lineage as the PocketUberSDR skin (Stuart's own, MIT) that the app was built from.
   -->
+  <!-- ★★ THE DIAL IS OFF SCREEN — a button to get back to it, floating over the waterfall as
+       the app does. Panning away from your station is easy and there is nothing on screen to
+       say which way it went; without this the only route back is the menu, which is a long
+       way to go for "undo". Hidden whenever the VFO is visible, or whenever the view is
+       locked to it and cannot wander.
+       ★ It names the DIRECTION as well: knowing the station is off to the left is most of
+       what you wanted to know, and it costs nothing since we already computed which side. -->
+  <button id="mCentreFloat" hidden></button>
+
   <!-- ══ CONTROLS ══════════════════════════════════════════════════════════════
        ★★★ ONE CONTROL SURFACE AT EVERY WIDTH. This and the desktop bar used to swap at a
        breakpoint, and nearly every bug in this file came from that arrangement: both drawing
@@ -1958,10 +1986,19 @@ select.btn { padding: 6px 8px; }
   <!-- ★ WATERFALL / SPECTRUM CONTROLS BELONG IN THE MENU (Stuart) — they are view
      settings, and the menu is already where every other display setting lives. Present
      only while the bar is hidden, which is the only time they are otherwise unreachable. -->
+<!-- ★★ A NAME AND A STATE, NOT ONE WORD DOING BOTH. "LOCK" alone cannot say whether the
+     view IS locked or whether pressing it WILL lock it, and the two readings are opposites
+     (Stuart). The row now names the setting — VFO CENTRE, i.e. does the view stay centred on
+     the dial — and the button reads its current state, LOCKED or FREE. -->
+<div class="mrow mOnly">
+  <label>VFO CENTRE</label>
+  <button class="mPanelBtn" id="mPanelLock"
+          title="LOCKED: the view stays centred on the dial. FREE: pan the view independently.">LOCKED</button>
+</div>
 <div class="mrow mOnly mOnlyGrid">
-  <button class="mPanelBtn" id="mPanelLock" title="Lock the view to the dial">LOCK</button>
-  <button class="mPanelBtn" id="mPanelCentre" title="Centre the view on the dial">CENTRE</button>
+  <button class="mPanelBtn" id="mPanelCentre" title="Snap the view back onto the dial">CENTRE</button>
   <button class="mPanelBtn" id="mPanelFit" title="Fit the whole band">FIT</button>
+  <span></span>
 </div>
 <div class="mrow">
     <label>RECEIVER</label>

@@ -1733,6 +1733,21 @@ function updateCentreBtn() {
     offscreen = spec.frequency < lo || spec.frequency > hi;
   }
   $('centreBtn').hidden = !offscreen && spec.followVfo;
+
+  // ★★ AND THE FLOATING ONE, over the waterfall. The menu copy is no use for this: the whole
+  //    point is that the dial has gone off screen and you want it back NOW, and a control you
+  //    have to open a menu to reach is not an undo. Shown only while it is genuinely
+  //    off screen — a button that is always there stops meaning anything.
+  const float = document.getElementById('mCentreFloat');
+  if (float) {
+    float.hidden = !offscreen;
+    if (offscreen) {
+      const lo = wf.displayCenterHz() - span / 2;
+      // Which way did it go? We have already worked it out to decide `offscreen`, and
+      // "your station is off to the left" is most of what the user wanted to know.
+      float.textContent = spec.frequency < lo ? '‹ BACK TO DIAL' : 'BACK TO DIAL ›';
+    }
+  }
 }
 
 function updateViewOverlays() {
