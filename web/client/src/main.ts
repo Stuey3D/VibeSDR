@@ -1621,6 +1621,8 @@ function buildControls() {
     // sigSmooth is the same 0..1 the desktop meter fills to, so both readouts agree.
     signal:     () => ({ level: sigSmooth, caption: `SNR ${snrSmooth.toFixed(0)} dB` }),
     openFreqEntry: () => $('pill').click(),
+    modes:      () => MODES as unknown as string[],
+    setMode:    (m) => setMode(m as SDRMode, true),
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
