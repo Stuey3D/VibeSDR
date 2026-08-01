@@ -1,0 +1,16 @@
+#!/bin/sh
+# ★★ PURGE REMOVES THE CONFIG, PLAIN REMOVE KEEPS IT. Someone who removes and reinstalls expects
+#    their receiver name, locator and admin password to survive; someone who PURGES has asked for
+#    every trace to go. Deleting on plain remove would silently destroy settings on an upgrade
+#    path that went wrong.
+set -e
+case "$1" in
+  purge)
+    rm -f /etc/vibeserver/vibeserver.conf
+    rmdir /etc/vibeserver 2>/dev/null || true
+    ;;
+esac
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+exit 0
