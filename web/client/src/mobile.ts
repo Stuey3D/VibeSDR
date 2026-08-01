@@ -38,93 +38,6 @@ export type MobileDeps = {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-// ★★ PIXELS PER DETENT. Low enough that a short drag does something, high enough that a
-// clumsy thumb does not fling you across the band. 14 px matches the app's feel on a
-// 3x-density phone; it is deliberately NOT scaled by DPR — a finger is the same size on
-// every screen, so the useful unit is CSS pixels, not device pixels.
-const PX_PER_DETENT = 14;
-// ★ Below this the coast is imperceptible and just burns frames — stop rather than crawl.
-const MIN_COAST_VELOCITY = 0.02;
-// ★ Per-frame velocity decay. 0.94 gives roughly a second of coast from a hard flick,
-// which reads as a weighted dial; 0.98 felt like ice and overshot constantly.
-const FRICTION = 0.94;
-
-/**
- * Make one drum face draggable. `onDetent` fires once per PX_PER_DETENT of travel, with
- * the direction, during BOTH the drag and the coast that follows it.
- */
-function attachDrum(face: HTMLElement, onDetent: (dir: number) => void) {
-  let dragging = false;
-  let lastX = 0;
-  let accum = 0;          // sub-detent travel carried between events
-  let offset = 0;         // background scroll, purely cosmetic
-  let velocity = 0;       // px per frame, for the coast
-  let raf = 0;
-
-  const paint = () => { face.style.backgroundPosition = `${offset}px 0`; };
-
-  const travel = (dx: number) => {
-    offset += dx;
-    accum += dx;
-    // ★ A LOOP, NOT AN `if`. A fast flick can cross several detents inside one pointermove
-    // (or one coast frame); handling only the first would silently swallow the rest and
-    // make the drum feel like it was slipping.
-    while (Math.abs(accum) >= PX_PER_DETENT) {
-      const dir = accum > 0 ? 1 : -1;
-      accum -= dir * PX_PER_DETENT;
-      onDetent(dir);
-    }
-    paint();
-  };
-
-  const stopCoast = () => {
-    if (raf) { cancelAnimationFrame(raf); raf = 0; }
-    velocity = 0;
-    face.classList.remove('coasting');
-  };
-
-  const coast = () => {
-    velocity *= FRICTION;
-    if (Math.abs(velocity) < MIN_COAST_VELOCITY) { stopCoast(); return; }
-    travel(velocity);
-    raf = requestAnimationFrame(coast);
-  };
-
-  face.addEventListener('pointerdown', (e) => {
-    // ★ TOUCHING A COASTING DRUM STOPS IT. That is how a real dial behaves and it is the
-    // only way to catch a flick that went too far without fighting it.
-    stopCoast();
-    dragging = true;
-    lastX = e.clientX;
-    accum = 0;
-    face.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  });
-
-  face.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - lastX;
-    lastX = e.clientX;
-    // ★ Blend rather than replace, so one jittery sample cannot define the throw.
-    velocity = velocity * 0.6 + dx * 0.4;
-    travel(dx);
-  });
-
-  const release = (e: PointerEvent) => {
-    if (!dragging) return;
-    dragging = false;
-    try { face.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
-    if (Math.abs(velocity) > 0.5) {
-      face.classList.add('coasting');
-      raf = requestAnimationFrame(coast);
-    } else {
-      velocity = 0;
-    }
-  };
-  face.addEventListener('pointerup', release);
-  face.addEventListener('pointercancel', release);
-}
-
 /** Press-and-hold repeat for the drums' − / + ends, for people who would rather tap. */
 function attachRepeat(btn: HTMLElement, fire: () => void) {
   let hold = 0, rep = 0;
@@ -169,22 +82,15 @@ export function initMobileControls(deps: MobileDeps) {
     return isFinite(s.snr) ? `SNR ${Math.round(s.snr)} dB` : '—';
   };
 
-  // ── Drums: BUTTONS ONLY IN THE WEB CLIENT ──────────────────────────────────
-  // ★★★ THE DRAG AND ITS MOMENTUM ARE DELIBERATELY NOT WIRED HERE. On the phone the drums are
-  //     driven by a thumb on glass and the inertia is the point — it is what makes them feel
-  //     like a weighted dial. On a TRACKPAD the same gesture is far too twitchy, and the coast
-  //     actively fights the user: every attempt to fine-tune ended with the momentum carrying
-  //     the dial past the frequency they were trying to settle on (Stuart, 2026-08-01).
-  //     A control that overshoots on the last, most precise step of a task is worse than no
-  //     control at all, so in the client it is the − / + ends that tune, with press-and-hold
-  //     to sweep. The drum FACE stays as the readout it looks like.
-  // ★ The drag code (attachDrum) is kept, not deleted: the physics is right for touch and this
-  //   is a per-surface decision, not a verdict on the design. If the card is ever driven by a
-  //   real touchscreen we turn it back on for coarse pointers only — `pointer: coarse` is the
-  //   honest test, and it is the one thing user-agent sniffing genuinely cannot fake.
-  const ZOOM_DETENT = Math.pow(2, 0.25);
-  void attachDrum; void ZOOM_DETENT;
-
+  // ── Tune / zoom pads ───────────────────────────────────────────────────────
+  // ★★★ BUTTONS, NOT A DRAGGABLE DRUM. On glass the drum's inertia is the whole point — it is
+  //     what makes it feel like a weighted dial. On a TRACKPAD it was far too twitchy and the
+  //     coast fought the user: every attempt to fine-tune ended with the momentum carrying the
+  //     dial past the frequency they were settling on (Stuart, 2026-08-01). Overshooting on the
+  //     last and most precise step of a task is worse than having no control at all.
+  // ★ The drag implementation is not carried here as dead code — it is in git history if the
+  //   card is ever driven by a real touchscreen, where `pointer: coarse` would be the honest
+  //   test for turning it back on.
   attachRepeat($('mVfoDown'), () => deps.nudgeSteps(-1));
   attachRepeat($('mVfoUp'),   () => deps.nudgeSteps(1));
   attachRepeat($('mZoomOut'), () => deps.zoomBy(2));
