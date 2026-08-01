@@ -2482,7 +2482,15 @@ struct LocalSdrShim::Impl {
         // idle, so an unattended (solar/battery) server stops burning CPU and
         // Wi-Fi on a waterfall nobody is looking at. Audio keeps running.
         if (type == "fftRate") {
-            if (jsonNum(msg, "value", v) && v > 0) LocalSdrShim::instance().setFftRate(v);
+            // ★ LOGGED, because a client can SAY it has slowed down and not have. The app showed
+            //   "POWER SAVE - spectrum slowed" while the status line read 14 fps and 23 kB/s
+            //   (Stuart, 2026-08-01) — the pill and the wire disagreeing, with nothing to say
+            //   which side failed. The server sees the truth: either the 5 arrives here or it
+            //   never left.
+            if (jsonNum(msg, "value", v) && v > 0) {
+                LOGI("client asked for %.0f fps", v);
+                LocalSdrShim::instance().setFftRate(v);
+            }
             return;
         }
     }
