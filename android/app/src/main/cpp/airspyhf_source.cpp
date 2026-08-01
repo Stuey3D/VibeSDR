@@ -176,6 +176,11 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
         rates_.assign(n, 0);
         if (airspyhf_get_samplerates(impl_->dev, rates_.data(), n) != AIRSPYHF_SUCCESS)
             rates_.clear();
+        // ★★★ KEEP THE RADIO'S OWN ORDER. libairspyhf turns a rate in Hz into an INDEX by
+        //   matching against this array and sends the INDEX to the device — so the order is not
+        //   cosmetic, it is the wire format. We sort a copy for display and must never let that
+        //   sorted order stand in for the device's.
+        rawRates_ = rates_;
         std::sort(rates_.begin(), rates_.end());
     }
     // ★ A LAST RESORT ONLY — the real list comes from the radio. 912 kHz is the Discovery's
@@ -212,7 +217,10 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     //   is one the radio actually has — which is the whole question when some rates play at the
     //   wrong pitch.
     { std::string l; for (uint32_t v : rates_) { l += " "; l += std::to_string(v); }
-      std::fprintf(stderr, "airspyhf: rates:%s\n", l.c_str()); }
+      std::fprintf(stderr, "airspyhf: rates (sorted):%s\n", l.c_str());
+      std::string r; for (size_t i = 0; i < rawRates_.size(); i++)
+          r += " [" + std::to_string(i) + "]=" + std::to_string(rawRates_[i]);
+      std::fprintf(stderr, "airspyhf: rates (device order, index=wire value):%s\n", r.c_str()); }
     return true;
 }
 
