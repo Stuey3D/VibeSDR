@@ -124,6 +124,139 @@ html, body {
    only got down to 9.8px there, which was ~10% too big for the content.
    0.65vw fits 1280x720 with room to spare and costs the 1920 case just half a pixel,
    because the 13px cap is what governs any screen worth calling large. */
+/* ══ MOBILE CONTROL CARD ══════════════════════════════════════════════════════
+   A port of the phone app's control layout (ControlsBar.tsx) for narrow windows.
+
+   ★★★ THE BREAKPOINTS ARE THE WHOLE DESIGN HERE. The desktop bar's three grid tracks
+   reach their min-content width and then OVERFLOW — the meter, search box and
+   right-hand controls are simply cut off the window edge with nothing to say so and no
+   way to reach them. That was reported in the field (a user on a smaller screen,
+   2026-08-01) at a width ABOVE the old 1100px stacking rule, which is why the rule
+   never fired: the number was set below the width where clipping had actually been
+   observed (~1230px). A control you cannot see or reach is the worst outcome in the
+   bar, so the switch now happens at 1280px — comfortably above the observed failure.
+
+   ★ Two stages below that, matching the app: LANDSCAPE (one row, drums beside the
+   pill) then PORTRAIT (stacked, as the app's portrait card). Gated on WIDTH, never on
+   user-agent — a tablet, a split-screen window and a handset each get the layout that
+   fits rather than the one their browser string implies, and a desktop user can test
+   the whole ladder by dragging the window edge. */
+#mcard { display: none; }
+
+@media (max-width: 1280px) {
+  #bar { display: none; }
+  #mcard {
+    display: flex; flex-direction: column; gap: 0.55em;
+    /* Floats over the waterfall exactly as the app's card does, rather than taking a
+       band out of it — screen height is the scarce thing on a phone. */
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: max(0.6em, env(safe-area-inset-bottom, 0px));
+    width: min(96vw, 620px); z-index: 40;
+    padding: 0.6em; border-radius: 14px;
+    background: rgba(10, 10, 10, 0.92);
+    border: 1px solid var(--bar-border);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+    font-size: clamp(11px, 3.1vw, 16px);
+    /* ★ The drums are drag surfaces. Without this the browser claims the gesture for
+       page panning and the drum never sees the move — the same touch-action rule the
+       app's sliders depend on. */
+    touch-action: none;
+  }
+  #mcard[aria-hidden="true"] { aria-hidden: false; }
+}
+
+/* ── The pill: the signal meter is its BACKGROUND, not a separate row ────────── */
+#mPill {
+  position: relative; overflow: hidden;
+  border-radius: 9px; border: 1px solid var(--btn-border);
+  min-height: 2.9em; display: flex; align-items: center; cursor: pointer;
+}
+#mSig {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, #e8462a 0%, #e8a02a 38%, #35e08a 100%);
+  /* Width is set from the live signal level; the unfilled part stays dark. */
+  width: 0%; transition: width 0.12s linear;
+}
+#mPillIn {
+  position: relative; z-index: 1; display: flex; align-items: baseline;
+  justify-content: center; gap: 0.4em; width: 100%; padding: 0 0.7em;
+  /* ★ The readout sits ON the gradient, so it needs its own contrast rather than
+     trusting whichever colour happens to be behind it at that signal level. */
+  text-shadow: 0 1px 3px #000, 0 0 6px #000;
+}
+#mFreq { font-size: 1.85em; font-variant-numeric: tabular-nums; color: #fff; letter-spacing: 0.02em; }
+#mUnit { font-size: 0.8em; color: var(--unit); }
+#mMode { margin-left: auto; font-size: 1.05em; color: #fff; }
+#mSnr  { font-size: 0.78em; color: var(--unit); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────── */
+#mBtns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em; }
+.mBtn {
+  /* ★ 44px is Apple's minimum touch target and the reason this is in em with a floor:
+     the card's font-size scales with the viewport, but a target must not scale BELOW
+     what a thumb can hit. */
+  min-height: max(2.8em, 44px);
+  background: var(--btn-bg); color: var(--btn-text);
+  border: 1px solid var(--btn-border); border-radius: 9px;
+  font: inherit; font-size: 1.05em; cursor: pointer;
+}
+.mBtn:active { background: rgba(255, 160, 0, 0.18); }
+.mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
+
+/* ── Twin drums ──────────────────────────────────────────────────────────────── */
+#mDrums { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
+.mDrum {
+  display: flex; align-items: stretch; gap: 0;
+  border: 1px solid var(--phosphor-dim); border-radius: 9px; overflow: hidden;
+  background: #060806;
+}
+.mDrumEnd {
+  flex: 0 0 auto; width: 2.4em; min-height: max(3em, 44px);
+  background: transparent; color: var(--phosphor); border: 0;
+  font: inherit; font-size: 1.15em; cursor: pointer;
+}
+.mDrumEnd:active { background: rgba(53, 224, 138, 0.18); }
+/* ★ The drum face itself. The repeating gradient IS the drum: as you drag, the whole
+   pattern shifts, so movement is visible even when the frequency digits are changing
+   too fast to read. The red centre line is the datum you are dragging PAST. */
+.mDrumFace {
+  flex: 1 1 auto; position: relative; min-height: max(3em, 44px);
+  background-image: repeating-linear-gradient(90deg,
+      rgba(53,224,138,0.55) 0px, rgba(53,224,138,0.55) 1px,
+      transparent 1px, transparent 9px);
+  background-position: 0 0;
+  cursor: ew-resize; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+}
+.mDrumFace::after {
+  content: ""; position: absolute; top: 12%; bottom: 12%; left: 50%;
+  width: 2px; margin-left: -1px; background: #ff3b30;
+}
+.mDrumIcon { opacity: 0.75; font-size: 1.1em; pointer-events: none; }
+/* ★ Coasting after release — a visual cue that the drum is still moving and that a
+   touch will stop it, which is how a real weighted dial behaves. */
+.mDrumFace.coasting { box-shadow: inset 0 0 14px rgba(53, 224, 138, 0.28); }
+
+/* ── Status line ─────────────────────────────────────────────────────────────── */
+#mStatus {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 0.78em; color: var(--unit); padding: 0 0.2em;
+}
+
+/* ── PORTRAIT: the app's stacked card. Below this the two drums side by side leave
+      neither wide enough to drag usefully, so they stack and the pill grows. ─────── */
+@media (max-width: 620px) {
+  #mDrums { grid-template-columns: 1fr; }
+  #mFreq { font-size: 2.1em; }
+}
+/* ── A landscape phone has almost no height: drop the drums to one row and tighten,
+      or the card eats the waterfall it exists to control. ───────────────────────── */
+@media (max-height: 460px) {
+  #mcard { gap: 0.35em; padding: 0.45em; }
+  #mDrums { grid-template-columns: 1fr 1fr; }
+  #mStatus { display: none; }
+}
+
 #bar {
   flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
   font-size: clamp(8px, 0.65vw, 13px);
@@ -1212,6 +1345,71 @@ select.btn { padding: 6px 8px; }
   </div>
 </div>
   </div><!-- /#wfWrap -->
+
+  <!-- ══ MOBILE CONTROL CARD ═══════════════════════════════════════════════════
+       An HTML port of the phone app's control layout, for narrow windows.
+
+       ★★ GATED ON WIDTH, NOT ON BROWSER SNIFFING (Stuart). Shrink the window and the
+       desktop bar squishes until its tracks would overlap, then this card takes over —
+       landscape arrangement first, then portrait as it narrows further. A desktop user
+       dragging the window sees exactly what a phone user sees, which makes it testable
+       without a phone and means a tablet, a split-screen window and a handset all get
+       the layout that actually fits rather than the one their user-agent implies.
+
+       ★ Layout mirrors ControlsBar.tsx: the frequency pill (with the signal meter as its
+       own background), a four-button row, twin drums, and the status line. Same design
+       lineage as the PocketUberSDR skin (Stuart's own, MIT) that the app was built from.
+  -->
+  <div id="mcard" aria-hidden="true">
+    <!-- The pill. The signal meter IS the background — red at the noise floor through to
+         green at full scale — so level is read without spending a row on a meter. -->
+    <div id="mPill" title="Tap to enter a frequency">
+      <div id="mSig"></div>
+      <div id="mPillIn">
+        <span id="mFreq">—</span><span id="mUnit">MHz</span>
+        <span id="mMode">NFM</span><span id="mSnr"></span>
+      </div>
+    </div>
+
+    <!-- ★★★ ORDER TAKEN FROM ControlsBar.tsx AS IT IS NOW — step, audio, menu, then the
+         fourth slot. NOT from the PocketUberSDR skin and NOT from screenshots/: both are
+         older than the app and both show a DIFFERENT set (step, menu, chat, share). Copy
+         either and the web client would teach a phone user the wrong muscle memory for
+         the app it is a demo of. This is AGENTS.md's "when a control moves, fix the copy
+         that says where it is" — the screenshot was the copy, and it had already moved on.
+         ★ The app's fourth button is CHAT, which the web client does not have AT ALL (no
+         chat anywhere in this client — it is a Kiwi/UberSDR feature, not a VibeServer one).
+         A dead chat button would be exactly the no-op control AGENTS.md forbids, so the
+         slot takes DECODERS instead: it exists here, it is the next most useful thing on a
+         phone, and the three shared buttons keep the app's positions. -->
+    <div id="mBtns">
+      <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
+      <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio">◍</button>
+      <button class="mBtn" id="mMenu"  title="Menu" aria-label="Menu">☰</button>
+      <button class="mBtn" id="mDec"   title="Decoders" aria-label="Decoders">⌗</button>
+    </div>
+
+    <!-- ★ TWIN DRUMS — the protected part of the design. Drag horizontally to tune or
+         zoom; they carry inertia and coast. The − / + ends are discrete steps for
+         people who would rather tap than drag. -->
+    <div id="mDrums">
+      <div class="mDrum" id="mVfoDrum">
+        <button class="mDrumEnd" id="mVfoDown" aria-label="Tune down">−</button>
+        <div class="mDrumFace" id="mVfoFace"><span class="mDrumIcon">📻</span></div>
+        <button class="mDrumEnd" id="mVfoUp" aria-label="Tune up">+</button>
+      </div>
+      <div class="mDrum" id="mZoomDrum">
+        <button class="mDrumEnd" id="mZoomOut" aria-label="Zoom out">−</button>
+        <div class="mDrumFace" id="mZoomFace"><span class="mDrumIcon">🔍</span></div>
+        <button class="mDrumEnd" id="mZoomIn" aria-label="Zoom in">+</button>
+      </div>
+    </div>
+
+    <div id="mStatus">
+      <span id="mClock">—</span>
+      <span id="mLink"></span>
+    </div>
+  </div>
 
   <div id="bar">
     <div class="barRow">

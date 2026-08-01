@@ -1,0 +1,209 @@
+// ── Mobile control card ──────────────────────────────────────────────────────
+// An HTML port of the phone app's control layout (src/components/ControlsBar.tsx) for
+// narrow windows. Shown by CSS at ≤1280px; this module only wires behaviour.
+//
+// ★★ WHAT CAME FROM WHERE. The CONTROL SET and their ORDER come from ControlsBar.tsx as
+// it is today — not from screenshots/ and not from the PocketUberSDR skin, both of which
+// are older than the app and show a different set. What DID carry over from the skin is
+// the FEEL of the drums: weighted, draggable, and they coast. That is Stuart's own design
+// (PocketUberSDR, MIT) and the thing users recognise; the skin itself was UberSDR-only, so
+// none of its UberSDR-specific controls (chat, share, VTS) are ported.
+//
+// ★ The drums are the protected part of the design — see the app's README: "Two large
+// weighted drums with real inertia. Spin them, flick them, let them coast. It feels like
+// tuning a radio, because that's what it's modelled on."
+
+export type MobileDeps = {
+  /** Tune by a signed number of STEPS (not Hz) — the caller owns step size and clamping. */
+  nudgeSteps: (steps: number) => void;
+  /** Multiply the view span. >1 zooms out, <1 zooms in, matching spec.zoomBy. */
+  zoomBy: (factor: number) => void;
+  /** Current dial frequency in Hz, or null before the first tune. */
+  freqHz: () => number | null;
+  mode: () => string;
+  /** Formatted step label for the step button, e.g. "1k". */
+  stepLabel: () => string;
+  /** Advance to the next tuning step (the step button's job). */
+  cycleStep: () => void;
+  /** 0..1 signal level for the pill's gradient, and a short SNR caption. */
+  signal: () => { level: number; caption: string };
+  openFreqEntry: () => void;
+  openMenu: () => void;
+  openAudio: () => void;
+  openDecoders: () => void;
+};
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+// ★★ PIXELS PER DETENT. Low enough that a short drag does something, high enough that a
+// clumsy thumb does not fling you across the band. 14 px matches the app's feel on a
+// 3x-density phone; it is deliberately NOT scaled by DPR — a finger is the same size on
+// every screen, so the useful unit is CSS pixels, not device pixels.
+const PX_PER_DETENT = 14;
+// ★ Below this the coast is imperceptible and just burns frames — stop rather than crawl.
+const MIN_COAST_VELOCITY = 0.02;
+// ★ Per-frame velocity decay. 0.94 gives roughly a second of coast from a hard flick,
+// which reads as a weighted dial; 0.98 felt like ice and overshot constantly.
+const FRICTION = 0.94;
+
+/**
+ * Make one drum face draggable. `onDetent` fires once per PX_PER_DETENT of travel, with
+ * the direction, during BOTH the drag and the coast that follows it.
+ */
+function attachDrum(face: HTMLElement, onDetent: (dir: number) => void) {
+  let dragging = false;
+  let lastX = 0;
+  let accum = 0;          // sub-detent travel carried between events
+  let offset = 0;         // background scroll, purely cosmetic
+  let velocity = 0;       // px per frame, for the coast
+  let raf = 0;
+
+  const paint = () => { face.style.backgroundPosition = `${offset}px 0`; };
+
+  const travel = (dx: number) => {
+    offset += dx;
+    accum += dx;
+    // ★ A LOOP, NOT AN `if`. A fast flick can cross several detents inside one pointermove
+    // (or one coast frame); handling only the first would silently swallow the rest and
+    // make the drum feel like it was slipping.
+    while (Math.abs(accum) >= PX_PER_DETENT) {
+      const dir = accum > 0 ? 1 : -1;
+      accum -= dir * PX_PER_DETENT;
+      onDetent(dir);
+    }
+    paint();
+  };
+
+  const stopCoast = () => {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    velocity = 0;
+    face.classList.remove('coasting');
+  };
+
+  const coast = () => {
+    velocity *= FRICTION;
+    if (Math.abs(velocity) < MIN_COAST_VELOCITY) { stopCoast(); return; }
+    travel(velocity);
+    raf = requestAnimationFrame(coast);
+  };
+
+  face.addEventListener('pointerdown', (e) => {
+    // ★ TOUCHING A COASTING DRUM STOPS IT. That is how a real dial behaves and it is the
+    // only way to catch a flick that went too far without fighting it.
+    stopCoast();
+    dragging = true;
+    lastX = e.clientX;
+    accum = 0;
+    face.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  face.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    lastX = e.clientX;
+    // ★ Blend rather than replace, so one jittery sample cannot define the throw.
+    velocity = velocity * 0.6 + dx * 0.4;
+    travel(dx);
+  });
+
+  const release = (e: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    try { face.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+    if (Math.abs(velocity) > 0.5) {
+      face.classList.add('coasting');
+      raf = requestAnimationFrame(coast);
+    } else {
+      velocity = 0;
+    }
+  };
+  face.addEventListener('pointerup', release);
+  face.addEventListener('pointercancel', release);
+}
+
+/** Press-and-hold repeat for the drums' − / + ends, for people who would rather tap. */
+function attachRepeat(btn: HTMLElement, fire: () => void) {
+  let hold = 0, rep = 0;
+  const stop = () => {
+    if (hold) { clearTimeout(hold); hold = 0; }
+    if (rep) { clearInterval(rep); rep = 0; }
+  };
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    fire();
+    hold = window.setTimeout(() => { rep = window.setInterval(fire, 70); }, 380);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    btn.addEventListener(ev, stop);
+  }
+  window.addEventListener('pointerup', stop);
+}
+
+export function initMobileControls(deps: MobileDeps) {
+  const card = document.getElementById('mcard');
+  if (!card) return;
+
+  // ── Drums ──────────────────────────────────────────────────────────────────
+  attachDrum($('mVfoFace'), (dir) => deps.nudgeSteps(dir));
+  // ★ A QUARTER-OCTAVE PER DETENT, matching the desktop bar's hold-sweep rate. A full
+  //   factor of 2 per detent made the zoom drum unusable — one flick and the whole band
+  //   was gone.
+  const ZOOM_DETENT = Math.pow(2, 0.25);
+  attachDrum($('mZoomFace'), (dir) => deps.zoomBy(dir > 0 ? ZOOM_DETENT : 1 / ZOOM_DETENT));
+
+  attachRepeat($('mVfoDown'), () => deps.nudgeSteps(-1));
+  attachRepeat($('mVfoUp'),   () => deps.nudgeSteps(1));
+  attachRepeat($('mZoomOut'), () => deps.zoomBy(2));
+  attachRepeat($('mZoomIn'),  () => deps.zoomBy(0.5));
+
+  // ── Buttons — the app's order: step, audio, menu, [decoders] ────────────────
+  $('mStep').onclick  = () => { deps.cycleStep(); refresh(); };
+  $('mAudio').onclick = () => deps.openAudio();
+  $('mMenu').onclick  = () => deps.openMenu();
+  $('mDec').onclick   = () => deps.openDecoders();
+  $('mPill').onclick  = () => deps.openFreqEntry();
+
+  // ── Readout ────────────────────────────────────────────────────────────────
+  // ★ The pill shows MHz or kHz on the same rule the app uses: below 10 MHz a kHz
+  //   reading has more useful digits, above it MHz does. Switching unit is not cosmetic —
+  //   it is what keeps the significant figures on screen at every band.
+  function refresh() {
+    const hz = deps.freqHz();
+    const fEl = $('mFreq'), uEl = $('mUnit');
+    if (hz == null) {
+      fEl.textContent = '—';
+    } else if (hz < 10_000_000) {
+      fEl.textContent = (hz / 1e3).toFixed(3);
+      uEl.textContent = 'kHz';
+    } else {
+      fEl.textContent = (hz / 1e6).toFixed(3);
+      uEl.textContent = 'MHz';
+    }
+    $('mMode').textContent = deps.mode().toUpperCase();
+    $('mStep').textContent = deps.stepLabel();
+
+    const sig = deps.signal();
+    // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
+    $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
+    $('mSnr').textContent = sig.caption;
+  }
+
+  // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so
+  //   the reading a listener needs is the one they see first.
+  function clock() {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    const utc = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
+    const loc = `${p(d.getHours())}:${p(d.getMinutes())}`;
+    $('mClock').textContent = `${utc} · ${loc}`;
+  }
+
+  refresh();
+  clock();
+  // 4 Hz is enough for a frequency that changes as fast as a thumb can drag, and cheap
+  // enough to leave running on a phone.
+  setInterval(refresh, 250);
+  setInterval(clock, 10_000);
+  return { refresh };
+}
