@@ -2451,7 +2451,17 @@ function initPanels() {
   // a box-shadow, so there is no backdrop element to hang this on.
   window.addEventListener('pointerdown', (e) => {
     const t = e.target as HTMLElement;
-    if (!PANELS.some(id => $(id).contains(t)) && !t.closest('#bar')) closePanels();
+    // ★★★ #mcard IS EXEMPT FOR THE SAME REASON #bar IS. This closer runs on POINTERDOWN, so
+    //     without the exemption every tap on a card control closed the panels a beat before
+    //     that control's own click handler tried to open one — the two fought, and buttons
+    //     needed several presses before one happened to land (Stuart, 2026-08-01). #bar was
+    //     exempted when it was the only control surface; the card is the second one and
+    //     inherited none of it.
+    //     ★ The popups are exempt too: #stepMenu and #mModeMenu are anchored menus rather than
+    //     PANELS members, so a click on one of their options counted as "outside".
+    if (!PANELS.some(id => $(id).contains(t))
+        && !t.closest('#bar') && !t.closest('#mcard')
+        && !t.closest('#stepMenu') && !t.closest('#mModeMenu')) closePanels();
   });
 }
 
@@ -4650,7 +4660,12 @@ function buildVfo() {
   if (typeof saved === 'number' && saved > 0) step = saved;
   attachHoldSweep($('tuneDown'), () => nudge(-step));
   attachHoldSweep($('tuneUp'),   () => nudge(step));
-  $('stepBtn').onclick  = openStepMenu;
+  // ★★ WRAPPED, NOT PASSED DIRECTLY. openStepMenu now takes an optional anchor, and an
+  //    onclick handler is called WITH THE EVENT — so assigning it bare handed a MouseEvent in
+  //    as the anchor, getBoundingClientRect() did not exist on it, the handler threw and the
+  //    desktop step button stopped working entirely (Stuart, 2026-08-01). Any function that
+  //    grows a first parameter must be re-checked wherever it is used bare as a listener.
+  $('stepBtn').onclick  = () => openStepMenu();
   syncStep();
   renderFreq();
 }
