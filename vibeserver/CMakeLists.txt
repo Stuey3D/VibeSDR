@@ -253,7 +253,14 @@ if(UNIX AND NOT APPLE)
   set(CPACK_DEBIAN_PACKAGE_SECTION "hamradio")
   set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
   # ★ Read from the same place as everything else rather than repeating the number here.
-  set(CPACK_PACKAGE_VERSION "${VIBESERVER_VERSION}")
+  # ★★★ PLUS A DEBIAN REVISION. `apt install` is a SILENT NO-OP when the installed version already
+  #   matches — it says "already the newest version" and exits 0. A rebuilt package with an
+  #   unchanged version therefore does not install, and on an APT REPOSITORY that means nobody ever
+  #   receives the update, with nothing anywhere reporting it. scripts/publish-apt.sh derives the
+  #   next revision from what is already in the pool and passes it here, so every publish is a
+  #   version apt will actually act on. Local builds default to -1 and need not care.
+  set(VIBESERVER_DEB_REV "1" CACHE STRING "Debian package revision (publish-apt.sh sets this)")
+  set(CPACK_PACKAGE_VERSION "${VIBESERVER_VERSION}-${VIBESERVER_DEB_REV}")
   # ★★ ASK dpkg WHAT WE LINKED rather than hand-listing packages: shlibdeps reads the ELF and
   #   gets the versions right for the distro doing the build. A hand-written list rots the first
   #   time a dependency is added and produces a package that installs and then will not start.

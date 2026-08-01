@@ -1736,6 +1736,7 @@ function buildControls() {
     nudgeSteps: (n) => nudge(n * step),
     zoomBy:     (f) => { spec?.zoomBy(f); updateViewOverlays(); },
     freqHz:     () => spec?.frequency ?? null,
+    freqText:   () => cardFreqText(),
     mode:       () => spec?.mode ?? '',
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
@@ -5038,6 +5039,34 @@ const UNIT_DP:  Record<FreqUnit, number> = { hz: 0, khz: 3, mhz: 3 };
 const UNIT_LBL: Record<FreqUnit, string> = { hz: 'Hz', khz: 'kHz', mhz: 'MHz' };
 
 let freqUnit: FreqUnit = 'mhz';
+
+/**
+ * The card's frequency readout, in the unit the USER chose in the entry panel.
+ *
+ * ★★★ SPLIT INTO A MAIN AND A FINE PART. The step ladder's finest step is 10 Hz
+ * (sdrTypes.STEP_LABELS), and MHz at three decimals resolves to 1 kHz — so a 500 Hz or 100 Hz
+ * step changed the radio and not the display. The fine digits carry the resolution the ladder
+ * actually offers; the card dims them so the figure stays scannable (see refresh()).
+ * ★ Both parts are FIXED WIDTH per unit, because the island is sized by its contents — a readout
+ *   that grows a digit moves every control with it (see #mFreq's reservation in index.html).
+ */
+function cardFreqText(): { main: string; fine: string; unit: string } | null {
+  if (!spec) return null;
+  const hz = Math.round(spec.frequency);
+  if (freqUnit === 'hz') return { main: String(hz), fine: '', unit: 'Hz' };
+  if (freqUnit === 'khz') {
+    // kHz: three decimals is already 1 Hz, so there is nothing finer to split off.
+    return { main: (hz / 1e3).toFixed(3), fine: '', unit: 'kHz' };
+  }
+  // MHz: 3 decimals reads as kHz (what people quote), and the last two carry 100 Hz and 10 Hz.
+  const main = Math.floor(hz / 1e3) / 1e3;
+  const fine = Math.abs(hz) % 1000;                    // Hz within the kHz
+  return {
+    main: main.toFixed(3),
+    fine: String(Math.floor(fine / 10)).padStart(2, '0'),
+    unit: 'MHz',
+  };
+}
 
 function renderFreq() {
   if (!spec) return;
