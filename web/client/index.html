@@ -224,6 +224,14 @@ html #bar { display: none; }
    two dials side by side. Explicit row/column placement gets that from the same markup,
    without a second copy of the DOM for narrow windows. */
 @media (max-width: 900px) {
+  /* ★★ A FIXED WIDTH ON A PHONE, not max-content. Sizing by content is right on a desktop, where
+     the island should not sprawl across the waterfall — but on a phone it means the card RESIZES
+     when the status row changes: start recording and the timer appears, idle for 30s and `· IDLE`
+     appears, and the whole island jumps wider each time (Stuart). There is nothing to save here
+     anyway: taking the width that is already there removes the jump AND makes every button, the
+     pill and the meter bigger. The widest state was always going to be the size of this card, so
+     it may as well be the size of it all the time. */
+  #mcard { width: min(96vw, 700px); }
   #mMain { grid-template-columns: 1fr 1fr; }
   #mMain .mDial { min-width: 0; }
   #mPill    { grid-column: 1 / -1; grid-row: 1; }
