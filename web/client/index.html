@@ -207,6 +207,17 @@ html, body {
 .mBtn:active { background: rgba(255, 160, 0, 0.18); }
 .mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
 
+/* ── House glyphs ────────────────────────────────────────────────────────────── */
+/* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform,
+   none matches the app, and each drags in its own colour scheme. These are ported
+   coordinate-for-coordinate from buildIconPath() in DrumWheel.tsx and the paths in
+   ControlsBar.tsx, so they inherit currentColor and sit in the app's visual family.
+   ★★★ THE SIZING IS NOT OPTIONAL. An inline <svg> with no height defaults to roughly 150px,
+   so losing this one line blew every glyph up to the size of a button and threw the whole
+   card out of proportion — which is exactly what happened when a careless edit removed it
+   (2026-08-01). Never delete this without replacing it. */
+.mGlyph { height: 1.15em; width: auto; vertical-align: -0.16em; }
+
 /* ── Tune / zoom pads ────────────────────────────────────────────────────────── */
 #mDrums { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
 /* − glyph + : the glyph names the pair, so neither button needs a text label and both stay
@@ -1479,9 +1490,9 @@ select.btn { padding: 6px 8px; }
          green drum chrome would have been a foreign object in the middle of the card. -->
     <div id="mDrums">
       <div class="mDial">
-        <button class="mBtn" id="mVfoDown" aria-label="Tune down">−</button>
+        <button class="mBtn" id="mVfoDown" aria-label="Tune down">&lsaquo;</button>
         <span class="mDialGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
-        <button class="mBtn" id="mVfoUp" aria-label="Tune up">+</button>
+        <button class="mBtn" id="mVfoUp" aria-label="Tune up">&rsaquo;</button>
       </div>
       <div class="mDial">
         <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
