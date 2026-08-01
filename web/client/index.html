@@ -229,7 +229,10 @@ html, body {
       rgba(53,224,138,0.55) 0px, rgba(53,224,138,0.55) 1px,
       transparent 1px, transparent 9px);
   background-position: 0 0;
-  cursor: ew-resize; touch-action: none;
+  /* ★ NOT a drag surface in the client — see mobile.ts. It reads as a dial face, and the
+     − / + ends beside it are what actually tune, so it must not offer a grab cursor for a
+     gesture that no longer does anything. */
+  cursor: default;
   display: flex; align-items: center; justify-content: center;
 }
 .mDrumFace::after {
@@ -237,9 +240,6 @@ html, body {
   width: 2px; margin-left: -1px; background: #ff3b30;
 }
 .mDrumIcon { opacity: 0.75; font-size: 1.1em; pointer-events: none; }
-/* ★ Coasting after release — a visual cue that the drum is still moving and that a
-   touch will stop it, which is how a real weighted dial behaves. */
-.mDrumFace.coasting { box-shadow: inset 0 0 14px rgba(53, 224, 138, 0.28); }
 
 /* ── Mode picker (tap the MODE on the pill, as the app does) ──────────────────── */
 /* ★ The mode needs to LOOK tappable. Sitting inside a pill whose other half opens a
