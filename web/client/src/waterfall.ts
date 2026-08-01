@@ -458,13 +458,20 @@ export class Waterfall {
     if (!wfH || !prev || !cur || !blend) return;
     const n = cur.length;
 
-    if (t >= 1) {
-      blend.set(cur);
-    } else {
-      const a = Math.round(t * 256);
-      const b = 256 - a;
-      for (let i = 0; i < n; i++) blend[i] = (prev[i] * b + cur[i] * a) >> 8;
-    }
+    // ★★★ WHOLE ROWS, NOT BLENDS — this is what makes the app's waterfall sharp and ours soft.
+    //     Synthesised lines used to be a per-pixel average of the two frames either side, so at
+    //     14 fps in and 20 rows/sec out MOST of the rows on screen were averages of two moments.
+    //     Vertically that is a blur, and it is the "brighter and softer" in Stuart's side-by-side.
+    //     ★★ The app faces the identical problem and solves it in its shader with `uQuant`: whole
+    //     LINE steps when the view is settled, continuous blending only while a boost/tune is in
+    //     flight (WaterfallView.tsx, WF_SKSL). Settled is nearly all the time, so what the app
+    //     actually shows is raw frames — no blend. Repeating the newest row here gives the same
+    //     result: the scroll rate is unchanged (so idle power saving still costs nothing visually)
+    //     and every row on screen is a real measurement rather than an average of two.
+    //     ★ `prev` is kept: it is what a future in-shader interpolation would need, and the app's
+    //     continuous mode is worth porting if a tune ever looks steppy.
+    blend.set(t >= 0.5 ? cur : prev);
+    void n;
 
     // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
     // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium

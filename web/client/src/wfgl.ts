@@ -43,9 +43,15 @@ void main() {
   // The ring is taller than the display so a resize never reallocates it — history is just preserved.
   float ry = mod(uHead + vUv.y * uVisible, uRows);
   float ty = (ry + 0.5) / uRows;
-  float a = texture2D(uRing, vec2(vUv.x, ty)).r;
-  float b = texture2D(uRing, vec2(vUv.x + 1.0 / uCols, ty)).r;   // peak-preserve across the bin
-  float v = max(a, b);
+  // ★★★ ONE BIN, NOT THE BRIGHTER OF TWO. This used to sample the NEXT bin along as well and keep
+  //     the larger — "peak-preserve" — which paints every carrier a bin wider than it is. That is a
+  //     horizontal DILATION: on a busy band each signal grows into its neighbour, the gaps between
+  //     them fill in, and the whole display reads brighter and softer than it should. It also
+  //     fights the unsharp mask below, which then has a smeared neighbourhood to work against.
+  //     ★ The app's shader (WaterfallView.tsx, WF_SKSL) samples a single point, and the app is the
+  //     sharper of the two on the same signal — Stuart, comparing side by side on the same server:
+  //     "server appears brighter and softer", "that waterfall is the best I've ever seen".
+  float v = texture2D(uRing, vec2(vUv.x, ty)).r;
 
   // ★★ UNSHARP MASK — the web waterfall was visibly SOFTER than the app's for the
   // same signal, and the sharpness slider did nothing because nothing here read it
