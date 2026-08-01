@@ -12,6 +12,7 @@
 #endif
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -185,6 +186,11 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     std::fprintf(stderr, "airspyhf: open ok, rate %u Hz, %s-IF, %zu rates offered\n",
                  (unsigned)nearestRate(sampleRateHz),
                  airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero", rates_.size());
+    // ★ AND WHAT THEY ARE. "7 rates offered" is not enough to tell whether a rate the user picked
+    //   is one the radio actually has — which is the whole question when some rates play at the
+    //   wrong pitch.
+    { std::string l; for (uint32_t v : rates_) { l += " "; l += std::to_string(v); }
+      std::fprintf(stderr, "airspyhf: rates:%s\n", l.c_str()); }
     return true;
 }
 
@@ -299,7 +305,14 @@ bool AirspyHfSource::setSampleRate(double hz) {
     if (!impl_->dev) return false;
     const uint32_t r = nearestRate(hz);
     if (!r) return false;
-    if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
+    // ★★★ SAY WHAT HAPPENED. A rate the device REFUSES leaves it running at the old one while
+    //   everything downstream is rebuilt for the new figure — and a rate mismatch is heard as a
+    //   pitch shift, not as an error (Stuart, 2026-08-01: 912/456/228 fine, 768/650/384/192 all
+    //   slow). The failure was silent because this returned false and the caller ignored it.
+    const int rc = airspyhf_set_samplerate(impl_->dev, r);
+    std::fprintf(stderr, "airspyhf: setSampleRate asked %.0f -> nearest %u -> rc %d%s\n",
+                 hz, (unsigned)r, rc, rc == AIRSPYHF_SUCCESS ? "" : "  ** DEVICE REFUSED **");
+    if (rc != AIRSPYHF_SUCCESS) return false;
     curRate_ = (double)r;      // remembered for restartStream(deep)
     return true;
 }
