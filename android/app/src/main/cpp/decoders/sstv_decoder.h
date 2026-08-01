@@ -105,6 +105,14 @@ public:
     std::vector<uint8_t> redrawFromLuminance(double rate, int skip, bool* okOut = nullptr); // RGB w*h*3
     /** How far the last redraw ran past the captured audio, in samples (0 = it fitted). */
     int lastShortfallSamples = 0;
+    /** Lines the last redraw could fully cover — everything below this had missing samples. */
+    int lastGoodLines = 0;
+    /** ★ Highest line actually RECEIVED, +1 (0 = none). A signal that fades or ends mid-picture
+     *  leaves the rest blank, and the alignment pass has to know the difference between "these
+     *  lines are missing" and "these lines exist but I cannot correct them": the first is
+     *  harmless to leave out of a correction, the second is a tear. Public because that decision
+     *  belongs to the caller, which is the only place that knows what it is about to send. */
+    int linesReceived = 0;
     const std::vector<uint8_t>& syncFlags() const { return hasSync; }
 
     std::vector<SstvPixel> pixelGrid(double rate, int skip);

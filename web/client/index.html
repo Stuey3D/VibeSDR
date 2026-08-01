@@ -1195,6 +1195,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    radio behind it, and touch has no pointer to drag with at all. A button cannot be missed,
    works identically on a phone, and two sensible sizes are all anyone actually wanted —
    read the numbers, or watch the constellation (Stuart, 2026-07-26). */
+/* ★★ BIG = WIDER for the picture decoders. SSTV and WEFAX draw at the box's width, so the only
+   thing that makes them bigger is the box; the container queries then re-layout whatever is
+   inside at the new width, with no second set of breakpoints to keep in step. */
+#decBox.big { width: min(94vw, 900px); }
 #rdsSize { display: none; padding: 2px 5px; line-height: 0; }
 #rdsSize.show { display: inline-block; }
 #rdsSize svg { width: 11px; height: 13px; }

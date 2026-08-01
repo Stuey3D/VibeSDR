@@ -387,6 +387,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
                     }
                 }
                 lineSender(p.y, line.data());
+                if (p.y + 1 > linesReceived) linesReceived = p.y + 1;
             }
             pixelIdx++;
         }
@@ -437,6 +438,8 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
     // flag we would have to remember to keep in step with whether rate correction is enabled.
     const int allowShort = (int)(m->lineTime * rate * 2.0);
     int worstOver = 0;
+    // ★ The first line the correction cannot fully cover. Everything above it is correctable.
+    int firstBadLine = m->numLines;
     if (okOut) *okOut = true;
     std::vector<uint8_t> img((size_t)m->imgWidth*m->numLines*3, 0);
     auto IMG = [&](int x,int y,int c)->uint8_t&{ return img[((size_t)y*m->imgWidth+x)*3+c]; };
@@ -452,6 +455,7 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
             const int over = p.time - storedLumWritten + 1;
             if (over > worstOver) worstOver = over;
             if (over > allowShort && okOut) *okOut = false;
+            if (p.y < firstBadLine) firstBadLine = p.y;
             continue;
         }
         else continue;
@@ -459,6 +463,7 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
         if (p.channel > 0 && (nm == "Robot 36" || nm == "Robot 24") && p.y+1 < m->numLines)
             IMG(p.x,p.y+1,p.channel) = lum;
     }
+    lastGoodLines = firstBadLine;
     if (worstOver > 0) {
         // Worth saying out loud: it is the difference between "corrected, with a sliver missing"
         // and "not corrected at all", and the number tells which case this was.
@@ -648,16 +653,36 @@ void SstvDecoder::videoThread() {
         // the shortfall is now measured, and a skip-sized one (bounded by a single line) is
         // accepted with those few pixels left black — which is exactly what the reference
         // implementation does, and its 24/7 gallery is the evidence that it is invisible.
-        if (ok) {
+        // ★★★ A PICTURE THAT STOPPED EARLY CAN STILL BE ALIGNED. A fade, a QSY or a transmission
+        //     that simply ends leaves the lower part of the frame blank — and because those lines
+        //     have no samples, `ok` goes false and the WHOLE correction was abandoned, leaving the
+        //     part that did arrive wrapped. On HF that is not an edge case, it is most of them.
+        //     ★★ THE TEST IS NOT "how many lines can I correct" — correcting only the top of a
+        //     COMPLETE picture is precisely the tear this guard exists to prevent ("the top third
+        //     sits where the whole image should be and the rest stays put"). It is: CAN I CORRECT
+        //     EVERY LINE THAT ACTUALLY ARRIVED? If so there is nothing below the boundary to
+        //     mismatch — the rest of the frame is blank either way — and no seam is possible.
+        const int have = video.linesReceived;
+        const bool partialOk = !ok && have > 0 && video.lastGoodLines >= have;
+        if (ok || partialOk) {
             if (onRedrawStart) onRedrawStart();
-            for (int y = 0; y < mode->numLines; y++)
+            const int upto = ok ? mode->numLines : have;
+            for (int y = 0; y < upto; y++)
                 if (onLine) onLine(y, mode->imgWidth, pixels.data() + (size_t)y*mode->imgWidth*3);
             if (onComplete) onComplete();
+            if (partialOk && onStatus)
+                onStatus("aligned \u2014 signal ended after " + std::to_string(have) + " lines");
         } else if (onStatus) {
             // ★ Say WHICH case this was. "Incomplete audio" was reported for a one-line shortfall
             //   and for a tearing one alike, so the message could not tell a real failure from an
             //   over-strict guard — and it read as a fault when nothing was wrong.
-            onStatus("alignment skipped \u2014 correction would tear the picture");
+            // ★ WITH THE NUMBERS. "Would tear the picture" alone cannot be acted on or debugged:
+            //   short-by tells you whether it missed by a sliver or by a mile, and the line counts
+            //   say whether the picture was complete when it was refused.
+            onStatus("alignment skipped \u2014 would tear the picture (short by "
+                     + std::to_string(video.lastShortfallSamples) + " samples; "
+                     + std::to_string(video.lastGoodLines) + " of "
+                     + std::to_string(video.linesReceived) + " received lines correctable)");
         }
     }
 
