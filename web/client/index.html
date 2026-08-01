@@ -276,7 +276,11 @@ html, body {
    clamp, so any fixed number would be wrong at most widths. mobile.ts keeps --mcard-h in
    step with a ResizeObserver. */
 @media (max-width: 1280px) {
-  #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
+  /* ★★★ `html #vts`, NOT `#vts` — SAME TRAP AS #bar, AND I WALKED INTO IT TWICE. The base
+     rule `#vts { bottom: 14px }` is declared LATER in this stylesheet and a media query adds
+     no specificity, so the plain selector lost on source order and the station strip kept
+     drawing over the card. If a third override is ever needed here, it needs the same lift. */
+  html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 }
 
 /* ── Tuning group: search + bookmarks travel with the dial ───────────────────── */
@@ -309,6 +313,24 @@ html, body {
    "we lose the branding"). */
 .mGlyph { height: 1.15em; width: auto; vertical-align: -0.16em; }
 .mDrumIcon .mGlyph { height: 1.35em; }
+
+/* ── Link cluster in the card's status row ───────────────────────────────────── */
+#mNet { display: inline-flex; align-items: center; gap: 0.5em; }
+#mBars { display: inline-flex; align-items: flex-end; gap: 2px; height: 1em; }
+#mBars i { width: 3px; background: currentColor; border-radius: 1px; opacity: 0.28; }
+#mBars i:nth-child(1) { height: 40%; }
+#mBars i:nth-child(2) { height: 70%; }
+#mBars i:nth-child(3) { height: 100%; }
+/* ★ Lit bars = quality, and the COLOUR carries the same meaning as the desktop link bars:
+   green healthy, amber struggling, red stalled. Bars alone would be unreadable at this size. */
+#mBars.q3 { color: var(--phosphor); }
+#mBars.q3 i { opacity: 1; }
+#mBars.q2 { color: var(--phosphor); }
+#mBars.q2 i:nth-child(-n+2) { opacity: 1; }
+#mBars.q1 { color: #ffa000; }
+#mBars.q1 i:nth-child(1) { opacity: 1; }
+#mBars.q0 { color: #ff3b30; }
+#mBars.q0 i { opacity: 0.9; }
 
 /* ── Status line ─────────────────────────────────────────────────────────────── */
 #mStatus {
@@ -1491,9 +1513,13 @@ select.btn { padding: 6px 8px; }
       </div>
     </div>
 
+    <!-- ★ The app's card ends with a status row — clock on the left, the link cluster on the
+         right (Stuart: "that is where the status cluster will live like it does in the main
+         app"). The throughput/fps/rtt text and the link-quality bars are MIRRORED from the
+         desktop status line rather than recomputed, so both readouts can never disagree. -->
     <div id="mStatus">
       <span id="mClock">—</span>
-      <span id="mLink"></span>
+      <span id="mNet"><span id="mNetTxt"></span><span id="mBars" class="q3"><i></i><i></i><i></i></span></span>
     </div>
   </div>
 

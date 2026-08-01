@@ -289,6 +289,15 @@ export function initMobileControls(deps: MobileDeps) {
     $('mMode').textContent = deps.mode().toUpperCase();
     $('mStep').textContent = deps.stepLabel();
 
+    // ★★ MIRROR THE DESKTOP READOUTS, DO NOT RECOMPUTE THEM. Throughput, fps, rtt and link
+    //    quality are all derived in updateStatus()/updateLink(); a second derivation here
+    //    would disagree with the first the moment either changed, and two contradictory
+    //    status readouts is worse than one.
+    const st = document.getElementById('status');
+    const bars = document.getElementById('linkBars');
+    if (st) $('mNetTxt').textContent = st.textContent ?? '';
+    if (bars) $('mBars').className = bars.className;
+
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
     $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
