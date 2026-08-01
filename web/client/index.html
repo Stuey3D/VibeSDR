@@ -375,11 +375,22 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 #mSearchHost #searchWrap { flex: 1 1 auto; width: 100%; min-width: 0; }
 #mSearchHost #search { width: 100%; min-height: 44px; }
 
-/* ★ RECORDING TIMER. Red and monospaced so the digits do not jitter as they count, and it
-   occupies no space at all when not recording — the status line must not reflow the moment
-   someone presses REC. */
-#mRecTime { color: #ff3b30; font-variant-numeric: tabular-nums; }
-#mRecTime:empty { display: none; }
+/* ★ Clock and recording timer share the LEFT end (Stuart) — with three children in a
+   space-between row the timer floated to the middle, unattached to either side. */
+#mLeft { display: inline-flex; align-items: center; gap: 0.6em; }
+#mRecTime { display: none; align-items: center; gap: 0.35em; color: #ff3b30;
+            font-variant-numeric: tabular-nums; }
+#mRecTime.on { display: inline-flex; }
+#mRecDot { width: 0.55em; height: 0.55em; border-radius: 50%; background: #ff3b30;
+           animation: sqlBreathe 1.4s ease-in-out infinite; }
+
+/* ★★ THE READING BECOMES "SQL" WHILE THE GATE IS SHUT, breathing red, exactly as the app
+   does. A number that has simply stopped changing looks like a stalled stream; the word says
+   the silence is a setting doing its job. It replaces the reading rather than sitting beside
+   it — the pill has no room for both, and while the gate is closed the reading is the less
+   useful of the two. */
+#mSnr.sql { color: #ff3b30; border-color: rgba(255,59,48,0.75);
+            animation: sqlBreathe 1.5s ease-in-out infinite; }
 
 /* ── Link cluster + chips in the card's status row ──────────────────────────── */
 #mNet { display: inline-flex; align-items: center; gap: 0.5em; }
@@ -1572,15 +1583,23 @@ select.btn { padding: 6px 8px; }
     <!-- ★ Clock, recording timer, link cluster — where the app puts them. All MIRRORED from
          the existing readouts rather than recomputed, so two displays cannot disagree. -->
     <div id="mStatus">
-      <span id="mClock">—</span>
-      <span id="mRecTime"></span>
+      <span id="mLeft">
+        <span id="mClock">—</span>
+        <!-- ★ A breathing dot beside the time. Recording is a state you can forget you are in,
+             and a number alone reads as just another readout — motion is what catches an eye
+             that is on the waterfall, not on the status line. -->
+        <span id="mRecTime"><span id="mRecDot"></span><span id="mRecVal"></span></span>
+      </span>
       <!-- ★★★ THE REAL #linkStats IS MOVED IN HERE, not copied. It carries the link bars AND the
            three chips — SQL (squelch), SETTLING (gain settling) and OVERLOAD — and every one of
            those is a "this is why nothing is happening" indicator. They were stranded in the
            hidden bar, so the card silently lost all three; a squelch gate closing looked
            identical to a dead stream, which is the exact ambiguity this card is meant to
            remove. Moving the node keeps their logic and leaves ONE copy. -->
-      <span id="mNet"><span id="mNetTxt"></span><span id="mLinkHost"></span></span>
+      <!-- ★ NO MIRRORED COPY OF THE STATUS TEXT. #status lives INSIDE #linkStats, so moving
+           that node brought the real one along — and mirroring it as well printed the
+           throughput twice, once either side of the bars. -->
+      <span id="mNet"><span id="mLinkHost"></span></span>
     </div>
   </div>
 
