@@ -291,6 +291,12 @@ export function initMobileControls(deps: MobileDeps) {
       put(uEl, 'MHz');
     }
     put($('mMode'), deps.mode().toUpperCase());
+    // ★ MIRRORED from the real #stereo badge, exactly as the mute state below is — the RDS
+    //   decoder already toggles that one, and a second copy of the same boolean is how a badge
+    //   ends up claiming stereo on a mono signal. It clears itself when the mode leaves WFM,
+    //   because setMode() clears the element this reads.
+    $('mStereo')?.classList.toggle('on',
+      document.getElementById('stereo')?.classList.contains('on') === true);
     put($('mStep'), deps.stepLabel());
     // ★ Mirror the mute state from the real control rather than tracking our own copy — two
     //   booleans for one setting is how a button ends up showing the opposite of the truth.
