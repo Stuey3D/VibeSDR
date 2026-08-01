@@ -283,7 +283,13 @@ export function initMobileControls(deps: MobileDeps) {
     // ★ Mirror the mute state from the real control rather than tracking our own copy — two
     //   booleans for one setting is how a button ends up showing the opposite of the truth.
     const mb = document.getElementById('muteBtn');
-    if (mb) $('mAudio').classList.toggle('muted', mb.classList.contains('on'));
+    if (mb) {
+      const muted = mb.classList.contains('on');
+      $('mAudio').classList.toggle('muted', muted);
+      // ★ Both buttons read the SAME source. Two controls showing one fact from two copies is
+      //   how one ends up saying muted while the other says live.
+      $('mPanelMute')?.classList.toggle('muted', muted);
+    }
     // ★ Mirrored from the real control: 'on' there means followVfo, i.e. the view is LOCKED
     //   to the dial. Tracking our own copy is how a state label ends up saying the opposite.
     const lb = document.getElementById('lockBtn');
