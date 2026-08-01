@@ -238,6 +238,31 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     std::fprintf(stderr, "airspyhf: open ok, rate %u Hz, %s-IF, %zu rates offered\n",
                  (unsigned)nearestRate(sampleRateHz),
                  airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero", rates_.size());
+    // ★ WHICH RADIO AND WHICH FIRMWARE. The rate table comes straight out of firmware, so when it
+    //   disagrees with the published set for this model that is the first thing anyone will ask.
+    { char ver[128] = {0};
+      if (airspyhf_version_string_read(impl_->dev, ver, sizeof(ver) - 1) == AIRSPYHF_SUCCESS)
+          std::fprintf(stderr, "airspyhf: firmware \"%s\"\n", ver); }
+
+    // ★★★ PROBE THE CANONICAL RATES DIRECTLY. Edouard Griffiths (SDRangel/gr-osmosdr), on the
+    //   Airspy list: the HF+ hardware rates are 192/256/384/456/768/912 and everything else people
+    //   see — 228, 128, 114 — is SDR# doing software decimation without saying so (228 = 456/2).
+    //   This device reports 192 228 384 456 650 768 912: 228 where 256 should be, and a 650 that
+    //   should not exist (Stuart found the thread, 2026-08-01).
+    //   ★ libairspyhf turns a rate into an INDEX by matching the value EXACTLY against the
+    //   firmware table, and returns AIRSPYHF_ERROR when there is no match. So asking for 256000
+    //   is a direct question to the firmware: "is this one of yours?" — rc 0 means the table we
+    //   read is wrong, an error means the table is right and this radio really has no 256.
+    for (uint32_t probe : {192000u, 228000u, 256000u, 384000u, 456000u, 650000u, 768000u, 912000u}) {
+        const int prc = airspyhf_set_samplerate(impl_->dev, probe);
+        std::fprintf(stderr, "airspyhf: probe %7u -> rc %d %s\n", probe, prc,
+                     prc == AIRSPYHF_SUCCESS ? "ACCEPTED" : "rejected");
+    }
+    // ★ PUT IT BACK. The probe walks the device through every candidate, so the last one tried
+    //   would otherwise become the rate we run on — a diagnostic that changes the thing it
+    //   measures. Restore what the caller actually asked for.
+    airspyhf_set_samplerate(impl_->dev, nearestRate(sampleRateHz));
+
     // ★ AND WHAT THEY ARE. "7 rates offered" is not enough to tell whether a rate the user picked
     //   is one the radio actually has — which is the whole question when some rates play at the
     //   wrong pitch.
