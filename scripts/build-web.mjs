@@ -108,9 +108,19 @@ async function bundle() {
   // matched text", and minified JS is full of `$` sigils — a stray `$&` spliced
   // the original <script src=...> tag back into the middle of the bundle and
   // broke the whole page. A function replacement disables all $-substitution.
+  // ★★★ THE BUNDLE TRAVELS AS BASE64, because an inline <script> CANNOT carry a NUL byte. The
+  // HTML parser replaces U+0000 with U+FFFD in script data — that is the spec, in every browser —
+  // and the WASM Opus decoder's embedded module contains 206 of them, CRC32-checked. So the page
+  // was served byte-perfect and still arrived corrupt: `Decode failed crc32 validation`.
+  // Escaping the NULs in the JS fails the same check (see bundle()); base64 round-trips exactly.
+  // Verified in node: raw ok, NUL→U+FFFD FAILS, base64 ok.
+  // Indirect eval, so the bundle runs in global scope exactly as an inline script would.
+  const b64js = Buffer.from(js, 'utf8').toString('base64');
+  const loader = `var __vs=new TextDecoder().decode(Uint8Array.from(atob("${b64js}"),`
+               + `function(c){return c.charCodeAt(0)}));(0,eval)(__vs);`;
   const out = html.replace(
     /<script type="module" src="\.\/src\/main\.ts"><\/script>\s*$/,
-    () => `<script>\n${js}\n</script>\n`,
+    () => `<script>\n${loader}\n</script>\n`,
   );
   if (out === html) throw new Error('script tag not found in index.html — did the tag change?');
 
