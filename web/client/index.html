@@ -141,33 +141,41 @@ html, body {
    user-agent — a tablet, a split-screen window and a handset each get the layout that
    fits rather than the one their browser string implies, and a desktop user can test
    the whole ladder by dragging the window edge. */
-#mcard { display: none; }
+/* ★★★ ALWAYS ON — see the markup. The bar/card swap is gone, so there is no breakpoint at
+   which a control can disappear and nothing to point into a hidden bar. */
+html #bar { display: none; }
 
-@media (max-width: 1280px) {
-  /* ★★★ `html #bar`, NOT `#bar`. The base rule `#bar { display: flex }` is declared LATER in
-     this stylesheet, and a media query adds NO specificity — so a plain `#bar` here loses to
-     it on source order and BOTH bars render at once, overlapping (seen 2026-08-01). The
-     descendant selector lifts specificity above the base rule without resorting to
-     !important, which would then have to be fought by anything overriding it later. */
-  html #bar { display: none; }
-  #mcard {
-    display: flex; flex-direction: column; gap: 0.55em;
-    /* Floats over the waterfall exactly as the app's card does, rather than taking a
-       band out of it — screen height is the scarce thing on a phone. */
-    position: absolute; left: 50%; transform: translateX(-50%);
-    bottom: max(0.6em, env(safe-area-inset-bottom, 0px));
-    width: min(96vw, 620px); z-index: 40;
-    padding: 0.6em; border-radius: 14px;
-    background: rgba(10, 10, 10, 0.92);
-    border: 1px solid var(--bar-border);
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
-    font-size: clamp(11px, 3.1vw, 16px);
-    /* ★ The drums are drag surfaces. Without this the browser claims the gesture for
-       page panning and the drum never sees the move — the same touch-action rule the
-       app's sliders depend on. */
-    touch-action: none;
-  }
+#mcard {
+  display: flex; flex-direction: column; gap: 0.55em;
+  /* Floats over the waterfall rather than taking a band out of it — screen height is the
+     scarce thing on a phone, and on a desktop the waterfall is the point. */
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: max(0.6em, env(safe-area-inset-bottom, 0px));
+  width: min(96vw, 1100px); z-index: 40;
+  padding: 0.6em; border-radius: 14px;
+  background: rgba(10, 10, 10, 0.92);
+  border: 1px solid var(--bar-border);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+  font-size: clamp(11px, 1.35vw, 15px);
 }
+
+/* ★★ WIDE: the pads FLANK the frequency (Stuart). The pill takes the middle track and the
+   two dials size to their content, so the frequency stays centred in the card at any width
+   and the controls sit either side of it — one glance, one row. */
+#mMain { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.5em; align-items: stretch; }
+#mMain .mDial { min-width: 12em; }
+
+/* ★★ NARROW: they FLOW UNDER it. Below this the three-across row squeezes the frequency to
+   the point where the digits are the smallest thing on a card built to display them.
+   `order` keeps the pill on top even though the tune pad comes first in the markup — the
+   markup order is the one that reads correctly when the pads flank. */
+@media (max-width: 720px) {
+  #mMain { grid-template-columns: 1fr 1fr; }
+  #mPill { grid-column: 1 / -1; order: -1; }
+  #mMain .mDial { min-width: 0; }
+}
+/* One pad per row once even a half-width pad is too cramped to hit. */
+@media (max-width: 420px) { #mMain { grid-template-columns: 1fr; } }
 
 /* ── The pill: the signal meter is its BACKGROUND, not a separate row ────────── */
 #mPill {
@@ -252,10 +260,21 @@ html, body {
 #mModeMenu {
   position: fixed; z-index: 9998;
   background: #0d0d0d; border: 1px solid var(--phosphor-dim); border-radius: 9px;
-  padding: 5px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;
+  padding: 6px; display: flex; flex-direction: column; gap: 6px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
   font: inherit; font-size: clamp(12px, 3.4vw, 16px);
+  min-width: min(92vw, 340px); max-width: 92vw;
 }
+.mModeGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
+/* ★ The bandwidth row is borrowed from the bar and needs a heading here: in the bar it sat
+   directly under the mode buttons and its context was obvious, but in a popup a bare pair of
+   sliders could be anything. */
+.mBwSep {
+  font-size: 0.72em; letter-spacing: 1px; color: var(--unit);
+  border-top: 1px solid var(--btn-border); padding-top: 6px; margin-top: 2px;
+}
+#mModeMenu .bwRow { display: flex; align-items: center; gap: 0.4em; }
+#mModeMenu .bwRow input[type=range] { flex: 1 1 auto; min-width: 3em; height: 40px; }
 .mModeOpt {
   background: none; border: 1px solid transparent; border-radius: 6px;
   color: #ddd; font: inherit; cursor: pointer;
@@ -270,13 +289,12 @@ html, body {
    changes with the breakpoint, with whether the drums are stacked, and with the font-size
    clamp, so any fixed number would be wrong at most widths. mobile.ts keeps --mcard-h in
    step with a ResizeObserver. */
-@media (max-width: 1280px) {
-  /* ★★★ `html #vts`, NOT `#vts` — SAME TRAP AS #bar, AND I WALKED INTO IT TWICE. The base
-     rule `#vts { bottom: 14px }` is declared LATER in this stylesheet and a media query adds
-     no specificity, so the plain selector lost on source order and the station strip kept
-     drawing over the card. If a third override is ever needed here, it needs the same lift. */
-  html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
-}
+/* ★★ `html #vts`, NOT `#vts` — the base rule `#vts { bottom: 14px }` is declared LATER in
+   this stylesheet and a media query adds no specificity, so a plain selector loses on source
+   order and the station strip draws over the card (it did, twice). The offset is MEASURED:
+   the card's height changes with the arrangement and the font clamp, so any fixed number is
+   wrong at most widths. mobile.ts keeps --mcard-h in step with a ResizeObserver. */
+html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 
 /* ── Tuning group: search + bookmarks travel with the dial ───────────────────── */
 #mTune { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
@@ -286,8 +304,9 @@ html, body {
    narrow window made them unreachable — no menu entry, no other route. Rather than
    duplicate them on desktop, where the bar already has them, these rows appear only in the
    width range where the bar is hidden. Same control, one visible copy at any width. */
-.mOnly { display: none; }
-@media (max-width: 1280px) { .mOnly { display: flex; } }
+/* ★ Rows carrying controls the old desktop bar used to own. With that bar gone at every
+   width, these are no longer conditional — they are the only copy there is. */
+.mOnly { display: flex; }
 .mOnly.mrow { align-items: center; gap: 0.6em; }
 .mOnlyGrid { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 0.5em; }
 .mPanelBtn {
@@ -301,8 +320,7 @@ html, body {
 /* ★ The relocated search box must FILL its host row. In the bar it sat in a flex row that
    gave it the remaining space; dropped into a panel row with no such sibling it would
    collapse to its content width and look broken in a different way. */
-#mSearchHost { display: none; }
-@media (max-width: 1280px) { #mSearchHost { display: flex; } }
+#mSearchHost { display: flex; }
 #mSearchHost #searchWrap { flex: 1 1 auto; width: 100%; min-width: 0; }
 #mSearchHost #search { width: 100%; min-height: 44px; }
 
@@ -1451,32 +1469,53 @@ select.btn { padding: 6px 8px; }
        own background), a four-button row, twin drums, and the status line. Same design
        lineage as the PocketUberSDR skin (Stuart's own, MIT) that the app was built from.
   -->
+  <!-- ══ CONTROLS ══════════════════════════════════════════════════════════════
+       ★★★ ONE CONTROL SURFACE AT EVERY WIDTH. This and the desktop bar used to swap at a
+       breakpoint, and nearly every bug in this file came from that arrangement: both drawing
+       at once, controls vanishing as the window narrowed, buttons pointing into a hidden bar
+       and silently doing nothing. The card is now simply THE controls; width changes only the
+       ARRANGEMENT — wide, the tune and zoom pads flank the frequency; narrow, they flow under
+       it (Stuart). It also brings the web client into the app's design language rather than
+       running a second one alongside it.
+  -->
   <div id="mcard">
-    <!-- The pill. The signal meter IS the background — red at the noise floor through to
-         green at full scale — so level is read without spending a row on a meter. -->
-    <div id="mPill" title="Tap to enter a frequency">
-      <div id="mSig"></div>
-      <div id="mPillIn">
-        <!-- ★ TWO BOXES, TWO BUTTONS. The pill holds two unrelated actions — frequency entry
-             and the demodulator picker — and with no boxes it reads as one label, so people
-             tap the mode and get a number pad. Each target is outlined and padded to a thumb;
-             the pill itself is NOT clickable, so there is no invisible third button. -->
-        <span id="mFreqBox"><span id="mFreq">—</span><span id="mUnit">MHz</span></span>
-        <span id="mMode">NFM</span><span id="mSnr"></span>
+    <div id="mMain">
+      <!-- ★ Tune is ‹ › and zoom is − +: tuning MOVES ALONG the band (a direction) while zoom
+           changes the SPAN (a quantity). The glyph between each pair names it, so no button
+           needs a text label and both stay wide enough for a thumb. -->
+      <div class="mDial" id="mVfoDial">
+        <button class="mBtn" id="mVfoDown" aria-label="Tune down">&lsaquo;</button>
+        <span class="mDialGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
+        <button class="mBtn" id="mVfoUp" aria-label="Tune up">&rsaquo;</button>
+      </div>
+
+      <!-- The pill. The signal meter IS the background — red at the noise floor through to
+           green at full scale — so level is read without spending a row on a meter.
+           ★ TWO BOXES, TWO BUTTONS: frequency entry and the demodulator picker. With no
+           outlines it reads as one label and people tap the mode expecting the mode and get a
+           number pad. The pill itself is NOT clickable, so there is no invisible third
+           button. The meter reading is a third: tap it to cycle SNR / S-meter / dBFS. -->
+      <div id="mPill">
+        <div id="mSig"></div>
+        <div id="mPillIn">
+          <span id="mFreqBox"><span id="mFreq">—</span><span id="mUnit">MHz</span></span>
+          <span id="mMode">NFM</span><span id="mSnr"></span>
+        </div>
+      </div>
+
+      <div class="mDial" id="mZoomDial">
+        <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
+        <span class="mDialGlyph" title="Zoom"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg></span>
+        <button class="mBtn" id="mZoomIn" aria-label="Zoom in">+</button>
       </div>
     </div>
 
     <!-- ★★★ ORDER TAKEN FROM ControlsBar.tsx AS IT IS NOW — step, audio, menu, then the
-         fourth slot. NOT from the PocketUberSDR skin and NOT from screenshots/: both are
-         older than the app and both show a DIFFERENT set (step, menu, chat, share). Copy
-         either and the web client would teach a phone user the wrong muscle memory for
-         the app it is a demo of. This is AGENTS.md's "when a control moves, fix the copy
-         that says where it is" — the screenshot was the copy, and it had already moved on.
-         ★ The app's fourth button is CHAT, which the web client does not have AT ALL (no
-         chat anywhere in this client — it is a Kiwi/UberSDR feature, not a VibeServer one).
-         A dead chat button would be exactly the no-op control AGENTS.md forbids, so the
-         slot takes DECODERS instead: it exists here, it is the next most useful thing on a
-         phone, and the three shared buttons keep the app's positions. -->
+         fourth slot. NOT from screenshots/ and NOT from the PocketUberSDR skin: both are
+         older than the app and show a different set (step, menu, chat, share). Copying either
+         would teach the wrong muscle memory for the app this is a demo of.
+         ★ The app's fourth is CHAT, which this client does not have at all — a dead chat
+         button is the no-op control AGENTS.md forbids, so the slot takes DECODERS. -->
     <div id="mBtns">
       <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
       <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></button>
@@ -1484,38 +1523,10 @@ select.btn { padding: 6px 8px; }
       <button class="mBtn" id="mDec"   title="Decoders" aria-label="Decoders">⌗</button>
     </div>
 
-    <!-- ★ TWIN DRUMS — the protected part of the design. Drag horizontally to tune or
-         zoom; they carry inertia and coast. The − / + ends are discrete steps for
-         people who would rather tap than drag. -->
-    <!-- ★★ FOUR BUTTONS, NOT TWO DRUMS. The drum FACE was a drag surface, and with the drag
-         gone (it fought fine tuning on a trackpad) a painted dial that cannot be turned is a
-         control promising something it no longer does. Two pairs — tune and zoom — with the
-         glyph between them saying which pair is which.
-         ★ Styled as THIS client's buttons, not copied from the app: same --btn-bg/--btn-border
-         and the same square-cornered amber language as every other control here. The app's
-         green drum chrome would have been a foreign object in the middle of the card. -->
-    <div id="mDrums">
-      <div class="mDial">
-        <button class="mBtn" id="mVfoDown" aria-label="Tune down">&lsaquo;</button>
-        <span class="mDialGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
-        <button class="mBtn" id="mVfoUp" aria-label="Tune up">&rsaquo;</button>
-      </div>
-      <div class="mDial">
-        <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
-        <span class="mDialGlyph" title="Zoom"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg></span>
-        <button class="mBtn" id="mZoomIn" aria-label="Zoom in">+</button>
-      </div>
-    </div>
-
-    <!-- ★ The app's card ends with a status row — clock on the left, the link cluster on the
-         right (Stuart: "that is where the status cluster will live like it does in the main
-         app"). The throughput/fps/rtt text and the link-quality bars are MIRRORED from the
-         desktop status line rather than recomputed, so both readouts can never disagree. -->
+    <!-- ★ Clock, recording timer, link cluster — where the app puts them. All MIRRORED from
+         the existing readouts rather than recomputed, so two displays cannot disagree. -->
     <div id="mStatus">
       <span id="mClock">—</span>
-      <!-- ★ The recording timer sits between the clock and the link cluster: it only has
-           anything to say while recording, and an empty span costs nothing when it does not.
-           Mirrored from #recTime so there is one timer, not two that can disagree. -->
       <span id="mRecTime"></span>
       <span id="mNet"><span id="mNetTxt"></span><span id="mBars" class="q3"><i></i><i></i><i></i></span></span>
     </div>

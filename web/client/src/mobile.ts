@@ -196,14 +196,34 @@ export function initMobileControls(deps: MobileDeps) {
     document.getElementById('mModeMenu')?.remove();
     const menu = document.createElement('div');
     menu.id = 'mModeMenu';
+    const grid = document.createElement('div');
+    grid.className = 'mModeGrid';
     const cur = deps.mode().toLowerCase();
     for (const m of deps.modes()) {
       const b = document.createElement('button');
       b.textContent = m.toUpperCase();
       b.className = 'mModeOpt' + (m.toLowerCase() === cur ? ' on' : '');
       b.onclick = () => { deps.setMode(m); close(); refresh(); };
-      menu.appendChild(b);
+      grid.appendChild(b);
     }
+    menu.appendChild(grid);
+    // ★★★ THE BANDWIDTH ROW COMES WITH THE DEMODULATORS (Stuart). It lived in the desktop
+    //     bar's #demod block, beside the mode buttons, because the mode and the width you
+    //     listen at are one decision — pick USB and the first thing you reach for is how wide.
+    //     With the bar gone it was stranded, so the picker carries it.
+    // ★★ MOVED, NOT REBUILT. Two mirrored sliders with a SYNC toggle is real behaviour; a
+    //    second copy would drift. Relocating the node keeps every listener bound to it, the
+    //    same reason the search box is moved rather than duplicated.
+    const bw = document.querySelector('#demod .bwRow') as HTMLElement | null;
+    const bwHome = bw?.parentElement ?? null;
+    if (bw) {
+      const sep = document.createElement('div');
+      sep.className = 'mBwSep';
+      sep.textContent = 'BANDWIDTH';
+      menu.appendChild(sep);
+      menu.appendChild(bw);
+    }
+
     document.body.appendChild(menu);
     // Anchored to the pill, and flipped above it when there is no room below — on a
     // phone the pill sits near the bottom, so "below" is almost never where it fits.
@@ -214,6 +234,9 @@ export function initMobileControls(deps: MobileDeps) {
     menu.style.top = `${Math.max(8, top)}px`;
 
     const close = () => {
+      // ★ Put the bandwidth row back before the menu is destroyed, or it is removed with it
+      //   and the control is gone until the page reloads.
+      if (bw && bwHome) bwHome.appendChild(bw);
       menu.remove();
       document.removeEventListener('pointerdown', away, true);
       document.removeEventListener('keydown', esc, true);
