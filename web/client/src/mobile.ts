@@ -259,6 +259,9 @@ export function initMobileControls(deps: MobileDeps) {
     const bars = document.getElementById('linkBars');
     if (st) put($('mNetTxt'), st.textContent ?? '');
     if (bars) $('mBars').className = bars.className;
+    // ★ One timer, mirrored — a second countdown could drift from the recorder's own.
+    const rt = document.getElementById('recTime');
+    if (rt) put($('mRecTime'), rt.textContent ?? '');
 
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
