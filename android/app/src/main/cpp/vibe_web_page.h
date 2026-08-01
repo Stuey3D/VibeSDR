@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (385.8 KB)
+// Source: web/client/  (386.3 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -444,7 +444,13 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 /* ── Status line ─────────────────────────────────────────────────────────────── */
 #mStatus {
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 0.78em; color: var(--unit); padding: 0 0.2em;
+  /* ★★★ NOT --unit. That colour (#886600) exists for a unit suffix sitting beside a big bright
+     number, where being dim is the point. This row carries the clock, the LINK QUALITY and the
+     SQL / SETTLING / OVERLOAD warnings, and at 0.78em on a near-black card it was so dark it
+     read as an empty strip — the row measured 1080×13 in the inspector while looking like
+     nothing was there at all (Stuart: "no status row", 2026-08-01). A warning you cannot see
+     is not a warning. */
+  font-size: 0.82em; color: #c9922e; padding: 0.05em 0.2em;
   /* ★★ WRAP RATHER THAN LOSE THINGS. At the narrowest the row overflowed and the right-hand
      end simply fell off the card — and because the throughput text comes BEFORE the bars and
      chips in the DOM, what got cut was the LINK QUALITY and the SQL/OVERLOAD warnings: the
@@ -454,7 +460,7 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 }
 /* ★ The throughput is the one thing here that may shrink and truncate — it is a nice-to-know.
    The bars and chips never shrink: they are the whole point of the row. */
-#mStatus #status { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#mStatus #status { color: #c9922e; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #mStatus #linkBars, #mStatus #sqlChip,
 #mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
 #mStatus #linkStats { min-width: 0; flex-wrap: wrap; }
