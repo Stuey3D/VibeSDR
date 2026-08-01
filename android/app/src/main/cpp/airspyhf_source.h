@@ -69,6 +69,9 @@ public:
      *  assumed: an HF+ Discovery tops out around 912 kHz where a dongle does 2.4 MSPS, so a
      *  hard-coded list would offer rates it cannot do. Empty until open(). */
     const std::vector<uint32_t>& sampleRates() const { return rates_; }
+    /** The list in the RADIO'S OWN ORDER — libairspyhf indexes into this to build the USB
+     *  command, so it is the wire format, not a display detail. */
+    const std::vector<uint32_t>& rawSampleRates() const { return rawRates_; }
     /** Nearest supported rate to `hz` — the picker offers only real ones, but a saved
      *  preference from a different radio can still ask for something impossible. */
     uint32_t nearestRate(double hz) const;
@@ -155,6 +158,7 @@ private:
     Impl* impl_ = nullptr;
     IqSink sink_;
     std::vector<uint32_t> rates_;
+    std::vector<uint32_t> rawRates_;
     bool open_ = false, streaming_ = false, lost_ = false, paused_ = false;
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;
