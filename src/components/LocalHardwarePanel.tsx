@@ -247,7 +247,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                        onChange={(v) => p.onAhfAgcThreshold?.(v)}
                        fmt={(v) => (v ? 'High' : 'Low')} />
                   <Text style={styles.note}>
-                    The HF+'s only AGC adjustment. ★ Measured to have no audible effect above
+                    Tells the AGC to tolerate 3 dB more signal before it steps the attenuator, so
+                    High is the MORE sensitive setting — Airspy recommend it for marginal signals
+                    next to very strong blockers. ★ Measured to have no audible effect above
                     60 MHz — the API accepts it and the radio ignores it there.
                   </Text>
                 </>
@@ -288,12 +290,28 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   : `0–${((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)} dB in ${p.radio?.attStepDb ?? 6} dB steps. On an HF+ the useful range is attenuation, not gain.`}
               </Text>
 
+              {/* ★★★ "+6 dB preamp" WAS THE WRONG STORY. Airspy's own documentation: the preamp
+                  option "might be misleading, and should probably be renamed postamp. It has the
+                  same effect on the noise figure and the linearity as a preamp, but acts on the
+                  BACK-END (ADC + Digital/DSP post processing)... turn the preamp option off to get
+                  an extra 12 dB of dynamic range by scrapping the quantization noise margin."
+                  ★ So it is not free gain, it is a dynamic-range trade — and OFF is the better
+                  default on any real antenna. Stuart measured the same thing independently: on VHF
+                  the preamp HALVED the RDS constellation. Naming a control after what it does to
+                  YOUR signal beats naming it after the number in the datasheet. */}
               {p.radio?.hfLna && (
-                <View style={styles.toggleRow}>
-                  <Text style={styles.toggleLabel}>+6 dB preamp</Text>
-                  <Switch value={!!p.ahfLna} onValueChange={(v) => p.onAhfLna?.(v)}
-                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfLna ? C.gold : '#ccc'} />
-                </View>
+                <>
+                  <View style={styles.toggleRow}>
+                    <Text style={styles.toggleLabel}>Preamp (really a postamp)</Text>
+                    <Switch value={!!p.ahfLna} onValueChange={(v) => p.onAhfLna?.(v)}
+                      trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfLna ? C.gold : '#ccc'} />
+                  </View>
+                  <Text style={styles.note}>
+                    Airspy call this one misleading: it acts on the ADC and DSP back end, not the
+                    antenna. Leaving it OFF buys about 12 dB of dynamic range. Turn it on only on a
+                    quiet band chasing something weak.
+                  </Text>
+                </>
               )}
             </>
           ) : (
