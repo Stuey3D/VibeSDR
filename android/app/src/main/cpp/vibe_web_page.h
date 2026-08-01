@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (383.2 KB)
+// Source: web/client/  (383.8 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -388,7 +388,14 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
   background: var(--btn-bg); color: var(--btn-text);
   border: 1px solid var(--btn-border); border-radius: 7px;
   font: inherit; min-height: 44px; cursor: pointer;
+  /* ★ FLEX-CENTRED WITH A GAP. As a plain inline button the glyph and its label butted
+     straight together with no space, and the SVG sat on the text baseline rather than the
+     text's optical centre — .mGlyph's vertical-align nudge only works in inline flow, and a
+     flex row ignores it. Centring here fixes every icon+label button at once. */
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.45em;
 }
+/* The glyph must not stretch to the button's height when it is the only child. */
+.mPanelBtn .mGlyph, .mRecIc .mGlyph { flex: 0 0 auto; vertical-align: 0; }
 .mPanelBtn:active { background: rgba(255,160,0,0.18); }
 /* ★★ RECORDING IS A STATE YOU CAN WALK AWAY FROM. The button glows and breathes so it is
    obvious from across the room, and its label becomes STOP — a button still saying REC while
