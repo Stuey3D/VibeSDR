@@ -1108,9 +1108,12 @@ struct LocalSdrShim::Impl {
      *  completing transfers, so the capture thread sits there forever and any detection that waits
      *  for that call to return waits for ever too. Silence is the signal. */
     std::atomic<double> lastIqAt{0.0};
-    // Consecutive in-place stream restarts since the last healthy stretch — the backoff that
-    // stops a wedged API being hammered. Watchdog thread only.
-    int sdrpRestarts = 0;
+    // Consecutive in-place stream restarts since the last healthy stretch — drives the backoff
+    // that stops a wedged API being hammered, and for the Airspy decides when to escalate from
+    // restarting the stream to reopening the device. Watchdog thread only.
+    // ★ Renamed from sdrpRestarts: the RSP is no longer the only source that recovers.
+    int    srcRestarts = 0;
+    double lastRestartAt = 0.0;
     int usbIndex = -1;
     std::string usbSerial;
     std::thread hotplugThread;
@@ -3935,22 +3938,54 @@ struct LocalSdrShim::Impl {
                 // ★ BACK OFF. If the API is wedged rather than merely stalled, retrying every
                 // 2 s forever would hammer a system-wide mutex and bury the real error; after
                 // a few goes, stop and report honestly rather than thrash.
-                if (silent && useSdrplay() && sdrp && !captureIdle.load()) {
-                    if (sdrpRestarts < 4) {
-                        ++sdrpRestarts;
-                        LOGE("no IQ for 3s on an RSP — re-initialising the stream (attempt %d)",
-                             sdrpRestarts);
+                // ★★★ NEVER GIVE UP FOR GOOD. This was `if (sdrpRestarts < 4)` with the counter
+                // reset ONLY on a healthy tick — and a tick can only be healthy if a restart
+                // already worked. So four consecutive failures wedged the counter at 4 and the
+                // radio was never retried again for the life of the process: the operator saw a
+                // dead receiver that only a full restart cured (Stuart, on the Mac with an RSP,
+                // 2026-07-31). Back OFF instead of stopping: attempt n waits n*2s (capped at
+                // 30s) before the next go, so a genuinely wedged API isn't hammered and a radio
+                // that recovers on its own — a re-plug, a resumed hub — is picked straight back
+                // up with nobody having to touch anything.
+                const bool recoverable = silent && !captureIdle.load() &&
+                                         ((useSdrplay() && sdrp) || (useAirspyHf() && ahf));
+                if (recoverable) {
+                    const double waitS = std::min(30.0, 2.0 * (double)(srcRestarts + 1));
+                    if (nowSecs() - lastRestartAt >= waitS) {
+                        ++srcRestarts;
+                        lastRestartAt = nowSecs();
                         std::string rerr;
-                        if (sdrp->restartStream(rerr)) {
+                        bool ok = false;
+                        if (useSdrplay() && sdrp) {
+                            LOGE("no IQ for 3s on an RSP — re-initialising the stream (attempt %d)",
+                                 srcRestarts);
+                            ok = sdrp->restartStream(rerr);
+                        } else {
+                            // ★ ESCALATE. The first two goes restart the stream on the handle we
+                            // hold, which is all a stalled-but-present radio needs. After that the
+                            // handle itself is the suspect, so close and reopen by serial — the
+                            // case where a nudged USB plug left the device enumerated (LEDs still
+                            // lit) but the handle dead.
+                            const bool deep = srcRestarts > 2;
+                            LOGE("no IQ for 3s on an Airspy HF+ — %s (attempt %d)",
+                                 deep ? "reopening the device" : "restarting the stream",
+                                 srcRestarts);
+                            ok = ahf->restartStream(deep, rerr);
+                        }
+                        if (ok) {
                             // Give it a fresh clock, or the next tick sees the OLD timestamp
                             // and declares another stall before any sample could have arrived.
                             lastIqAt.store(nowSecs(), std::memory_order_relaxed);
                             continue;
                         }
-                        LOGE("RSP stream restart failed: %s", rerr.c_str());
+                        LOGE("stream restart failed: %s", rerr.c_str());
+                    } else {
+                        continue;      // still inside the back-off window — say nothing, wait
                     }
                 } else if (!silent) {
-                    sdrpRestarts = 0;   // healthy again: the next stall gets a full set of tries
+                    // Healthy again: the next stall gets a full set of tries from scratch.
+                    srcRestarts = 0;
+                    lastRestartAt = 0.0;
                 }
 
                 if (silent && !deviceLost.load()) {
