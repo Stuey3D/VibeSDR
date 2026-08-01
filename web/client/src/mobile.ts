@@ -28,6 +28,9 @@ export type MobileDeps = {
   /** 0..1 signal level for the pill's gradient, and a short SNR caption. */
   signal: () => { level: number; caption: string };
   openFreqEntry: () => void;
+  /** The demodulators this client offers, and a setter. Drives the mode picker. */
+  modes: () => string[];
+  setMode: (m: string) => void;
   openMenu: () => void;
   openAudio: () => void;
   openDecoders: () => void;
@@ -162,7 +165,50 @@ export function initMobileControls(deps: MobileDeps) {
   $('mAudio').onclick = () => deps.openAudio();
   $('mMenu').onclick  = () => deps.openMenu();
   $('mDec').onclick   = () => deps.openDecoders();
-  $('mPill').onclick  = () => deps.openFreqEntry();
+  // ★★ THE PILL HAS TWO TARGETS, exactly as the app's does: the FREQUENCY opens frequency
+  //    entry (onFreqTap) and the MODE opens the demodulator picker (onModeTap). Tapping the
+  //    mode and getting a number pad is the kind of thing that makes a control feel broken,
+  //    so the mode span stops the event before it reaches the pill.
+  $('mPill').onclick = () => deps.openFreqEntry();
+  $('mMode').addEventListener('click', (e) => { e.stopPropagation(); openModePicker(); });
+
+  // ★ A popup rather than a row of buttons: seven demodulators across a phone would leave
+  //   each one below a thumb's width, and the card has no room for a second row without
+  //   eating the waterfall it exists to control.
+  function openModePicker() {
+    document.getElementById('mModeMenu')?.remove();
+    const menu = document.createElement('div');
+    menu.id = 'mModeMenu';
+    const cur = deps.mode().toLowerCase();
+    for (const m of deps.modes()) {
+      const b = document.createElement('button');
+      b.textContent = m.toUpperCase();
+      b.className = 'mModeOpt' + (m.toLowerCase() === cur ? ' on' : '');
+      b.onclick = () => { deps.setMode(m); close(); refresh(); };
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    // Anchored to the pill, and flipped above it when there is no room below — on a
+    // phone the pill sits near the bottom, so "below" is almost never where it fits.
+    const r = $('mPill').getBoundingClientRect();
+    const h = menu.offsetHeight;
+    const top = r.top - h - 8 > 0 ? r.top - h - 8 : Math.min(r.bottom + 8, innerHeight - h - 8);
+    menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('pointerdown', away, true);
+      document.removeEventListener('keydown', esc, true);
+    };
+    const away = (ev: Event) => { if (!menu.contains(ev.target as Node)) close(); };
+    const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
+    // Deferred, or the click that OPENED the menu immediately closes it again.
+    setTimeout(() => {
+      document.addEventListener('pointerdown', away, true);
+      document.addEventListener('keydown', esc, true);
+    }, 0);
+  }
 
   // ── Readout ────────────────────────────────────────────────────────────────
   // ★ The pill shows MHz or kHz on the same rule the app uses: below 10 MHz a kHz
