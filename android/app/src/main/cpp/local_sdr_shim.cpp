@@ -3335,7 +3335,23 @@ struct LocalSdrShim::Impl {
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
         delete sstv;
-        sstv = new SstvDecoder(12000);
+        // ★★★ autoSync OFF. The post-reception "Correcting slant..." pass is the only thing
+        // breaking SSTV here: Stuart, 2026-08-01, watching a geometric test card (W6AOA's prism)
+        // come in — "it receives it perfect, then its the cleanup pass afterwards that breaks it",
+        // splitting the picture so the top third sits where the WHOLE image should be and the rest
+        // stays put.
+        //
+        // ★★ And it should never have been running. Slant correction exists for SOUNDCARD CLOCK
+        // DRIFT — a sample rate that is not quite what it claims. An SDR's clock is locked and its
+        // rate exact, so there is no drift to correct; `redrawFromLuminance`'s own comments have
+        // said so since the last attempt. The pass could only ever guess at a fault that was not
+        // there. It defaulted to true and was exposed NOWHERE, so every frame got it.
+        //
+        // ★ Three fixes have now been aimed at making the correction behave (overrun guard, sync
+        // confidence gate, offset-not-shear). Each was a real bug and none of them mattered,
+        // because the whole pass is wrong for this input. Do not re-enable it without a soundcard
+        // source to justify it AND the standalone harness to prove it.
+        sstv = new SstvDecoder(12000, /*autoSync=*/false);
         sstvDecim = 0; sstvAcc = 0.0f;
         sstv->onImageStart = [this](int w, int h) {
             std::vector<uint8_t> m; m.push_back(0x07); put32(m,(uint32_t)w); put32(m,(uint32_t)h);
