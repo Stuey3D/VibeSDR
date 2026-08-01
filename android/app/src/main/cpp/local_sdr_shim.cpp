@@ -5126,10 +5126,29 @@ void LocalSdrShim::setSampleRate(double rate) {
         impl->sdrp->setSampleRate(rate);   // also moves the IF bandwidth to match the span
         actual = (uint32_t)llround(rate);  // the RSP takes the rate it is given
     } else if (ahf) {
+        // ★★★ SET THE DEVICE **HERE**, BEFORE THE ENGINE IS BUILT. This used to only compute
+        //   the number and leave the actual `ahf->setSampleRate()` to the restart branch at the
+        //   BOTTOM of this function — i.e. after startEngine(), buildAudio() AND sendConfig().
+        //   So for the whole rebuild the radio was still delivering at the OLD rate into a DSP
+        //   chain built for the NEW one, and the client had already been told the new figure.
+        //   That is a rate mismatch by construction, and a rate mismatch is heard as a PITCH
+        //   SHIFT — chipmunks when the real rate is below what the chain assumes, Barry White
+        //   when it is above (Stuart, 2026-08-01: "some sample rates have the chipmunk and
+        //   barry white") — and seen as the spectrum lagging the audio while the stale-rate
+        //   samples drain through.
+        impl->ahf->setSampleRate(rate);
         // ★ ASK THE RADIO, do not assume. The HF+ snaps to its own list, and everything
         //   downstream — fftSize, the DSP's channel rates, the waterfall calibration — is built
-        //   on this number. The device itself is set in the restart branch below.
+        //   on this number.
         actual = (uint32_t)impl->ahf->nearestRate(rate);
+        // ★★★ RE-APPLY THE TUNED CENTRE. An HF+ runs LOW-IF at some sample rates and zero-IF at
+        //   others (airspyhf_is_low_if reports which, and open() logs it), so the offset the
+        //   library applies to reach baseband is RATE-DEPENDENT. Changing the rate could
+        //   therefore move the signal without anything re-tuning it — "some sample rates the
+        //   frequency is off". finishOpen() has always done setSampleRate THEN setFrequency in
+        //   that order for exactly this reason; the runtime path did the first and not the
+        //   second.
+        impl->ahf->setFrequency(impl->rtlCenter.load());
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
@@ -5149,10 +5168,11 @@ void LocalSdrShim::setSampleRate(double rate) {
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
     else if (rsp) { impl->sdrp->setPaused(false); }
     else if (impl->useAirspyHf()) {
-        // ★ The radio's own list decides — see startAirspyHf. Re-read it rather than trusting
-        // what was asked for, or every rate-derived figure downstream is built on a fiction.
-        impl->ahf->setSampleRate(rate);
-        impl->sampleRate = (double)impl->ahf->nearestRate(rate);
+        // ★ The device rate and the re-tune are applied UP THERE, before the engine is built —
+        //   see the long note in the `ahf` branch. Doing it here meant the radio only ever
+        //   agreed with the DSP at the rate finishOpen() had set, which is why the HF+ "only
+        //   works properly at the maximum sample rate": 912 kHz is the one it opens at, and
+        //   every runtime change took this broken ordering.
         impl->ahf->setPaused(false);
     }
     else {
