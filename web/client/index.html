@@ -246,6 +246,18 @@ html #bar { display: none; }
 .mBtn:active { background: rgba(255, 160, 0, 0.18); }
 .mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
 
+/* ★★ AUDIO SHOWS ITS STATE. Muting is the one setting on this card whose effect is total
+   silence, and silence is indistinguishable from a broken stream — so the button must SAY
+   which it is rather than leaving the user to guess. It keeps the glyph (the icon is
+   universal and a word would not add anything) and swaps the waves for a cross when muted,
+   in the same red the recording timer uses for "this state is why nothing is happening".
+   ★ Both states live in the markup and CSS picks one, so switching cannot fail halfway or
+   depend on a script having run. */
+#mAudio .mIcMute { display: none; }
+#mAudio.muted .mIcLive { display: none; }
+#mAudio.muted .mIcMute { display: inline; }
+#mAudio.muted { color: #ff3b30; border-color: #ff3b30; }
+
 /* ── House glyphs ────────────────────────────────────────────────────────────── */
 /* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform,
    none matches the app, and each drags in its own colour scheme. These are ported
@@ -1533,7 +1545,7 @@ select.btn { padding: 6px 8px; }
            right is what you LISTEN with (audio, decoders). -->
       <div class="mStack" id="mStackL">
         <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
-        <button class="mBtn" id="mMenu"  title="Menu" aria-label="Menu"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/></svg></button>
+        <button class="mBtn" id="mMenu" title="Menu">MENU</button>
       </div>
       <div id="mPill">
         <div id="mSig"></div>
@@ -1544,8 +1556,8 @@ select.btn { padding: 6px 8px; }
       </div>
 
       <div class="mStack" id="mStackR">
-        <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></button>
-        <button class="mBtn" id="mDec"   title="Decoders" aria-label="Decoders">⌗</button>
+        <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></span></button>
+        <button class="mBtn" id="mDec" title="Decoders">DECODERS</button>
       </div>
       <div class="mDial" id="mZoomDial">
         <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>

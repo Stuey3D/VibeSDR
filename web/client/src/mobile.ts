@@ -281,6 +281,10 @@ export function initMobileControls(deps: MobileDeps) {
     }
     put($('mMode'), deps.mode().toUpperCase());
     put($('mStep'), deps.stepLabel());
+    // ★ Mirror the mute state from the real control rather than tracking our own copy — two
+    //   booleans for one setting is how a button ends up showing the opposite of the truth.
+    const mb = document.getElementById('muteBtn');
+    if (mb) $('mAudio').classList.toggle('muted', mb.classList.contains('on'));
 
     // ★★ MIRROR THE DESKTOP READOUTS, DO NOT RECOMPUTE THEM. Throughput, fps, rtt and link
     //    quality are all derived in updateStatus()/updateLink(); a second derivation here
