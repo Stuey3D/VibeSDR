@@ -16,7 +16,9 @@
 export type MobileDeps = {
   /** Tune by a signed number of STEPS (not Hz) — the caller owns step size and clamping. */
   nudgeSteps: (steps: number) => void;
-  /** Multiply the view span. >1 zooms out, <1 zooms in, matching spec.zoomBy. */
+  /** spec.zoomBy — a MAGNIFICATION factor, not a span multiplier: >1 zooms IN (narrower
+   *  span, more detail), <1 zooms OUT. The desktop bar wires zoomIn→2 and zoomOut→0.5, and
+   *  reading it the other way round is what got these two buttons swapped. */
   zoomBy: (factor: number) => void;
   /** Current dial frequency in Hz, or null before the first tune. */
   freqHz: () => number | null;
@@ -93,8 +95,10 @@ export function initMobileControls(deps: MobileDeps) {
   //   test for turning it back on.
   attachRepeat($('mVfoDown'), () => deps.nudgeSteps(-1));
   attachRepeat($('mVfoUp'),   () => deps.nudgeSteps(1));
-  attachRepeat($('mZoomOut'), () => deps.zoomBy(2));
-  attachRepeat($('mZoomIn'),  () => deps.zoomBy(0.5));
+  // ★ IN magnifies, OUT widens — the same sense as the desktop bar (zoomIn→2, zoomOut→0.5).
+  //   These were the wrong way round: − zoomed in and + zoomed out.
+  attachRepeat($('mZoomIn'),  () => deps.zoomBy(2));
+  attachRepeat($('mZoomOut'), () => deps.zoomBy(0.5));
 
   // ── Buttons — the app's order: step, audio, menu, [decoders] ────────────────
   // ★ A POPUP, NOT A CYCLER (Stuart). Cycling makes you tap through every step to reach the
