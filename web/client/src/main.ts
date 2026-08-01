@@ -1617,7 +1617,7 @@ function buildControls() {
     freqHz:     () => spec?.frequency ?? null,
     mode:       () => spec?.mode ?? '',
     stepLabel:  () => formatStep(step),
-    cycleStep,
+    openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the same 0..1 the desktop meter fills to, so both readouts agree.
     signal:     () => ({ level: sigSmooth, caption: `SNR ${snrSmooth.toFixed(0)} dB` }),
     openFreqEntry: () => $('pill').click(),
@@ -4661,6 +4661,10 @@ function cycleStep() {
 function setStep(v: number) {
   step = v;
   $('stepBtn').textContent = formatStep(step);
+  // ★ The card's own step button carries the same label — updating only the desktop one left
+  //   the mobile button showing the previous step after every change.
+  const m = document.getElementById('mStep');
+  if (m) m.textContent = formatStep(step);
   savePref('step', step);
 }
 
@@ -4669,11 +4673,15 @@ function setStep(v: number) {
  *  that is a lot of clicks to go the wrong way round. A list you point at is the
  *  right control once the options stop being few (Stuart: "bothered me for ages").
  *  ★ The keyboard [ and ] keep cycling: there is nothing to aim at from a key. */
-function openStepMenu() {
+/** ★ ANCHOR IS A PARAMETER because the same popup is opened from two buttons. Anchoring it
+ *  to `stepBtn` unconditionally would have measured a HIDDEN element on a narrow window —
+ *  the desktop bar is display:none there, so getBoundingClientRect() returns zeros and the
+ *  menu lands in the top-left corner instead of on the button you tapped. */
+function openStepMenu(anchor?: HTMLElement) {
   if (!spec) return;
   document.getElementById('stepMenu')?.remove();
   const steps = stepsForFreq(spec.frequency);
-  const btn = $('stepBtn');
+  const btn = anchor ?? $('stepBtn');
   const r = btn.getBoundingClientRect();
 
   const m = document.createElement('div');

@@ -23,8 +23,8 @@ export type MobileDeps = {
   mode: () => string;
   /** Formatted step label for the step button, e.g. "1k". */
   stepLabel: () => string;
-  /** Advance to the next tuning step (the step button's job). */
-  cycleStep: () => void;
+  /** Open the step ladder as a popup, anchored to the element the user tapped. */
+  openStepMenu: (anchor: HTMLElement) => void;
   /** 0..1 signal level for the pill's gradient, and a short SNR caption. */
   signal: () => { level: number; caption: string };
   openFreqEntry: () => void;
@@ -161,7 +161,11 @@ export function initMobileControls(deps: MobileDeps) {
   attachRepeat($('mZoomIn'),  () => deps.zoomBy(0.5));
 
   // ── Buttons — the app's order: step, audio, menu, [decoders] ────────────────
-  $('mStep').onclick  = () => { deps.cycleStep(); refresh(); };
+  // ★ A POPUP, NOT A CYCLER (Stuart). Cycling makes you tap through every step to reach the
+  //   one you want and gives no sight of the ladder — and on a phone that is several taps of
+  //   a control that is already small. The desktop button opens a menu; so does this one, and
+  //   it is the SAME menu, anchored to whichever button was tapped.
+  $('mStep').onclick = () => deps.openStepMenu($('mStep'));
   $('mAudio').onclick = () => deps.openAudio();
   $('mMenu').onclick  = () => deps.openMenu();
   $('mDec').onclick   = () => deps.openDecoders();

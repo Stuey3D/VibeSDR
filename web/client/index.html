@@ -1481,15 +1481,6 @@ select.btn { padding: 6px 8px; }
          A dead chat button would be exactly the no-op control AGENTS.md forbids, so the
          slot takes DECODERS instead: it exists here, it is the next most useful thing on a
          phone, and the three shared buttons keep the app's positions. -->
-    <!-- ★ WITH THE TUNING, as the app has it: finding a station and returning to one are
-         both part of the dial, not a separate mode. Everything else the desktop bar carries
-         goes where it BELONGS rather than into a junk drawer — the waterfall/spectrum
-         controls into the menu, the recorder in with the audio (Stuart). -->
-    <div id="mTune">
-      <button class="mBtn" id="mSearch" title="Search stations, bands, frequencies"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg> SEARCH</button>
-      <button class="mBtn" id="mBookmarks" title="Bookmarks">★ BOOKMARKS</button>
-    </div>
-
     <div id="mBtns">
       <button class="mBtn" id="mStep"  title="Tuning step — tap to change">1k</button>
       <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></button>
@@ -1650,6 +1641,17 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-unit="khz">kHz</button>
       <button class="btn on" data-unit="mhz">MHz</button>
     </div>
+  </div>
+  <!-- ★★ SEARCH AND BOOKMARKS LIVE WITH FREQUENCY ENTRY, exactly as the app does — AGENTS.md
+       records the move ("Bookmarks moved to the frequency card") and FreqModal says so in its
+       own comment. On the card they had a row to themselves and ate a third of its height for
+       two buttons a listener touches occasionally (Stuart). Finding a station, recalling one
+       and typing one in are the same job, so they belong in the same place.
+       ★ .mOnly: the desktop bar already carries both, so this copy exists only at the widths
+       where that bar is hidden — one visible copy at any width, never two. -->
+  <div class="mrow mOnly" style="gap:0.5em">
+    <button class="mPanelBtn" id="mSearch" style="flex:1">SEARCH</button>
+    <button class="mPanelBtn" id="mBookmarks" style="flex:1">★ BOOKMARKS</button>
   </div>
   <div class="btnRow">
     <button class="btn" id="freqGo">TUNE</button>
