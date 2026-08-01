@@ -1,6 +1,7 @@
 // ── Mobile control card ──────────────────────────────────────────────────────
-// An HTML port of the phone app's control layout (src/components/ControlsBar.tsx) for
-// narrow windows. Shown by CSS at ≤1280px; this module only wires behaviour.
+// An HTML port of the phone app's control layout (src/components/ControlsBar.tsx), used at
+// every width — it replaced the desktop bar entirely. CSS handles the arrangement (pads flank
+// the pill when wide, flow under it when narrow); this module only wires behaviour.
 //
 // ★★ WHAT CAME FROM WHERE. The CONTROL SET and their ORDER come from ControlsBar.tsx as
 // it is today — not from screenshots/ and not from the PocketUberSDR skin, both of which
@@ -143,36 +144,18 @@ export function initMobileControls(deps: MobileDeps) {
   mirror('mPanelCentre', 'centreBtn');
   mirror('mPanelFit', 'zoomReset');
 
-  // ★★★ MOVE THE SEARCH BOX, DO NOT COPY IT. #searchWrap lives in the desktop bar; when that
-  //     bar is hidden the input inside it cannot be focused or typed into, so anything
-  //     pointing at it is dead. Relocating the NODE keeps every listener — they are bound to
-  //     the element, not to its position in the tree — so there is still exactly one search
-  //     implementation. It goes back when the bar returns, or a user who widens the window
-  //     would find the bar missing its search box.
-  // ★★ MOVE #linkStats TOO. It holds the link bars and the SQL / SETTLING / OVERLOAD chips,
-  //    all of which say why the audio is doing what it is doing. Copying the bars alone (an
-  //    earlier version did) silently dropped all three chips, so a closed squelch gate looked
-  //    exactly like a dead stream.
-  const stats = document.getElementById('linkStats');
-  const statsHost = document.getElementById('mLinkHost');
-  if (stats && statsHost && stats.parentElement !== statsHost) statsHost.appendChild(stats);
-
+  // ★★★ MOVE THE SEARCH BOX, DO NOT COPY IT. #searchWrap lives in the desktop bar, and that
+  //     bar is hidden at EVERY width now — an input inside it cannot be focused or typed into,
+  //     so anything pointing at it is dead. Relocating the NODE keeps every listener (they bind
+  //     to the element, not to its position in the tree), so there is still exactly one search.
+  // ★★ UNCONDITIONALLY. This used to be gated on a max-width media query, from when the bar
+  //    reappeared on wide windows. With the bar gone for good that gate simply left the search
+  //    box in a hidden container on any wide screen, and the frequency panel showed BOOKMARKS
+  //    with an empty space beside it (Stuart, 2026-08-01). A breakpoint that no longer means
+  //    anything is worse than no breakpoint: it still fires.
   const wrap = document.getElementById('searchWrap');
   const host = document.getElementById('mSearchHost');
-  const home = wrap?.parentElement ?? null;
-  const nextSibling = wrap?.nextElementSibling ?? null;
-  const narrow = window.matchMedia('(max-width: 1280px)');
-  const placeSearch = () => {
-    if (!wrap || !host || !home) return;
-    if (narrow.matches) {
-      if (wrap.parentElement !== host) host.appendChild(wrap);
-    } else if (wrap.parentElement !== home) {
-      // Back to its exact slot, not just appended — #findRow puts BOOKMARKS before it.
-      home.insertBefore(wrap, nextSibling);
-    }
-  };
-  placeSearch();
-  narrow.addEventListener('change', placeSearch);
+  if (wrap && host && wrap.parentElement !== host) host.appendChild(wrap);
 
   // ★★ THE VOLUME SLIDER IS A VALUE, NOT AN ACTION — mirroring a click would do nothing.
   //    Copy the value across and fire `input`, which is the event the audio path listens on;
@@ -314,6 +297,15 @@ export function initMobileControls(deps: MobileDeps) {
     //   #linkStats are MOVED into the card, so the real elements are already here. There is
     //   nothing to copy and nothing that can disagree.
     // ★ One timer, mirrored — a second countdown could drift from the recorder's own.
+    // ★ Mirrored from the real recorder button, never tracked separately — a second copy of
+    //   "am I recording" is how a STOP button ends up starting a second recording.
+    const rb = document.getElementById('recBtn');
+    if (rb) {
+      const recording = rb.classList.contains('rec');
+      $('mPanelRec')?.classList.toggle('rec', recording);
+      put($('mRecLbl'), recording ? 'STOP' : 'REC');
+    }
+
     const rt = document.getElementById('recTime');
     const rv = (rt?.textContent ?? '').trim();
     put($('mRecVal'), rv);

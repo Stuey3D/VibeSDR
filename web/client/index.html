@@ -382,7 +382,16 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
   font: inherit; min-height: 44px; cursor: pointer;
 }
 .mPanelBtn:active { background: rgba(255,160,0,0.18); }
-.mPanelBtn.rec { border-color: #ff3b30; color: #ff3b30; }
+/* ★★ RECORDING IS A STATE YOU CAN WALK AWAY FROM. The button glows and breathes so it is
+   obvious from across the room, and its label becomes STOP — a button still saying REC while
+   recording is asking you to press it again, which is the opposite of what it now does. */
+.mPanelBtn.rec {
+  border-color: #ff3b30; color: #ff3b30;
+  background: rgba(255,59,48,0.12);
+  box-shadow: 0 0 10px rgba(255,59,48,0.55), inset 0 0 8px rgba(255,59,48,0.18);
+  animation: sqlBreathe 1.4s ease-in-out infinite;
+}
+.mRecIc { display: inline-flex; align-items: center; }
 /* ★ LOCKED is the resting state and reads as normal; FREE is the one worth noticing, because
    a view that no longer follows the dial is how someone loses their station off-screen. */
 #mPanelLock.free { border-color: var(--phosphor); color: var(--phosphor); }
@@ -1812,7 +1821,7 @@ select.btn { padding: 6px 8px; }
   <input type="range" id="mPanelVol" min="0" max="100" step="1" aria-label="Volume">
 </div>
 <div class="mrow mOnly mOnlyGrid">
-  <button class="mPanelBtn" id="mPanelRec" title="Start / stop recording"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg> REC</button>
+  <button class="mPanelBtn" id="mPanelRec" title="Start / stop recording"><span class="mRecIc"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg></span><span id="mRecLbl">REC</span></button>
   <button class="mPanelBtn" id="mPanelRecs" title="Recordings">RECORDINGS</button>
   <span></span>
 </div>
