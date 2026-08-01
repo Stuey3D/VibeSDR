@@ -1011,10 +1011,21 @@ function drawBands() {
     else if (room > wShort + 8 * dpr) { label = short; tw = wShort; }
 
     if (label) {
+      // ★★ CLIPPED TO ITS OWN SEGMENT. The fit test above leaves a margin, but the shadow copy
+      //    is drawn a pixel right and down, and a fractional segment edge can round the other
+      //    way — so on a phone the last letter of "FM Broadcast Band" leaked into the band next
+      //    to it. A label that escapes its block reads as belonging to the WRONG BAND, which on
+      //    a band plan is not cosmetic. Clipping makes the overflow impossible rather than
+      //    unlikely, whatever the width, dpr or rounding.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, 0, x1 - x0, h);
+      ctx.clip();
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillText(label, (x0 + x1) / 2 - tw / 2 + dpr, h / 2 + dpr);
       ctx.fillStyle = 'rgba(255,255,255,0.95)';
       ctx.fillText(label, (x0 + x1) / 2 - tw / 2, h / 2);
+      ctx.restore();
     }
   }
 }
@@ -1158,14 +1169,36 @@ function updateVts() {
   const rtInner = $('vtsRtInner');
   const rt = rdsName ? rdsText : '';
   const showRt = !!rt && rt !== name;
-  if (rtInner.textContent !== rt) rtInner.textContent = rt;
+  // ★ Compare against the RAW message on the dataset, not textContent — while a long message is
+  //   circling the element holds TWO copies plus a separator, so textContent never equals `rt`
+  //   and every render would look like a change (and refit, and restart the loop).
+  const rtChanged = rtInner.dataset.rt !== rt;
+  if (rtChanged) { rtInner.dataset.rt = rt; rtInner.textContent = rt; }
   rtEl.classList.toggle('show', showRt);
   // Pin the bar's width while RadioText is on show. Without this the bar is
   // content-sized under a max-width, so it simply GREW to fit each message — which
   // meant the text never overflowed, never scrolled, and the whole bar visibly
   // expanded and contracted on every RadioText update instead.
   vts.classList.toggle('rt', showRt);
-  if (showRt) requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
+  // ★★★ ONLY REFIT WHEN THERE IS SOMETHING NEW TO FIT. This ran on EVERY VTS render — several
+  //     times a second — and each call rewrote `--rtShift` and `animation-duration` under a
+  //     RUNNING animation. A measurement that wobbles by a pixel (or dips below the scroll
+  //     threshold for a single frame) therefore restarted the marquee from the left, so a long
+  //     message could never reach its end no matter how fast it scrolled. Stuart could see it
+  //     jump on each RDS refresh — the speed was only ever half of this.
+  //     The width matters as much as the text: a rotate or a resize genuinely does need a refit.
+  if (showRt) {
+    // ★ TOLERANCE, not equality. The pill's other readouts (PI, flag, station name) change width
+    //   as they update, which moves this box by a pixel or two — and an exact comparison read
+    //   that as "the layout changed, refit", several times a second.
+    const w = Math.round(rtEl.clientWidth);
+    if (rtChanged || Math.abs(w - lastRtFitWidth) > 8) {
+      lastRtFitWidth = w;
+      requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
+    }
+  } else {
+    lastRtFitWidth = -1;   // next appearance is a fresh fit, not a stale match
+  }
 
   // RDS mark only when the data really IS RDS — not for a bookmark guess. A confirmed
   // PI counts: it came off the subcarrier exactly as a name does.
@@ -1247,17 +1280,62 @@ async function resolveRdsLogo(name: string, iso: string) {
 }
 
 /** Marquee the RadioText only when it doesn't fit. */
+/** Width the marquee was last measured against — see the refit guard in the VTS render. */
+let lastRtFitWidth = -1;
+
+/** The separator between the two copies of a circling message — it is what tells you the text
+ *  has come round again rather than run on into itself. */
+const RT_GAP = '\u00A0\u00A0\u00B7\u00A0\u00A0';
+
+/** ★★★ AN OFFSCREEN RULER, so measuring never touches the element that is animating.
+ *  fitRadioText used to strip the `scroll` class to measure an undoubled copy and put it back
+ *  afterwards — and REMOVING THAT CLASS RESTARTS THE ANIMATION. Every refit therefore snapped the
+ *  message back to the left, which is what Stuart saw on each RDS refresh: RadioText arrives in
+ *  pieces as it assembles, so "the text changed" fires repeatedly on what is really one message.
+ *  With a separate ruler the live element is only ever written to, never reset. */
+let rtRuler: HTMLElement | null = null;
+function measureRt(inner: HTMLElement, text: string): number {
+  if (!rtRuler) {
+    rtRuler = document.createElement('span');
+    rtRuler.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;'
+                          + 'white-space:pre;';
+    inner.parentElement?.appendChild(rtRuler);
+  }
+  // Same font as the live text, or the measurement means nothing.
+  const cs = getComputedStyle(inner);
+  rtRuler.style.font = cs.font;
+  rtRuler.style.letterSpacing = cs.letterSpacing;
+  rtRuler.textContent = text;
+  return rtRuler.offsetWidth;
+}
+
 function fitRadioText(box: HTMLElement, inner: HTMLElement) {
-  const overflow = inner.scrollWidth - box.clientWidth;
-  if (overflow > 4) {
-    inner.style.setProperty('--rtShift', `${-overflow - 8}px`);
-    // ~30px/sec, so a long message takes its time rather than whipping past.
-    inner.style.animationDuration = `${Math.max(6, (overflow + 8) / 30 * 2)}s`;
-    inner.classList.add('scroll');
-  } else {
+  // ★★★ A CIRCULAR TICKER, NOT A SLIDE-AND-SNAP. The old marquee ran to the end and jumped back,
+  //     so the LAST characters were never readable: they arrived at the moment of the reset, in
+  //     the very edge the fade mask softens. The message is doubled with a separator and
+  //     translated by exactly ONE copy, so the final frame is identical to the first — the loop
+  //     is seamless and every character passes through the middle of the pill.
+  const text = inner.dataset.rt ?? inner.textContent ?? '';
+  const one = measureRt(inner, text);
+
+  if (one - box.clientWidth <= 4) {              // it fits — plain, static text
     inner.classList.remove('scroll');
     inner.style.removeProperty('--rtShift');
+    if (inner.textContent !== text) inner.textContent = text;
+    return;
   }
+
+  const shift = measureRt(inner, text + RT_GAP); // one copy + separator = one revolution
+  const doubled = text + RT_GAP + text;
+  if (inner.textContent !== doubled) inner.textContent = doubled;
+  inner.style.setProperty('--rtShift', `${-shift}px`);
+  // ★ ~42px/s — gentler than the 55 it replaced (Stuart). With a continuous loop a slower pace
+  //   costs nothing, since nothing is missed waiting for a reset; the ceiling still guarantees a
+  //   full revolution inside a typical 10-20s RadioText refresh.
+  inner.style.animationDuration = `${Math.min(16, Math.max(6, shift / 42))}s`;
+  // ★ `add` on a class that is already present is a NO-OP — which is the point: an already
+  //   circling message keeps its position and its timing, and only genuinely new text starts over.
+  inner.classList.add('scroll');
 }
 
 /** Keep the decoder box clear of the VTS bar — same idea as the app's

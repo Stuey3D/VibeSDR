@@ -51,13 +51,26 @@ function attachRepeat(btn: HTMLElement, fire: () => void) {
   };
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    // ★★★ CAPTURE THE POINTER. Without this the release is delivered to whatever the finger is
+    //     over — and on iOS a long press raises the selection callout, which swallows it
+    //     entirely: the repeat kept firing and the button stayed visually stuck down, because
+    //     the press that started it never ended as far as this element was concerned. With
+    //     capture, pointerup/pointercancel ALWAYS come back here, so the hold can always end.
+    try { btn.setPointerCapture(e.pointerId); } catch { /* mouse on an old engine */ }
     fire();
     hold = window.setTimeout(() => { rep = window.setInterval(fire, 70); }, 380);
   });
-  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+  // ★ `lostpointercapture` matters as much as the rest: if the system takes the pointer away
+  //   (a callout, a gesture, a phone call) that is the ONLY event we get, and without it the
+  //   repeat runs on with nothing left to stop it.
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) {
     btn.addEventListener(ev, stop);
   }
   window.addEventListener('pointerup', stop);
+  // A last resort for the same class of failure: if the page is hidden or loses focus
+  // mid-hold, nothing above necessarily fires.
+  window.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
 }
 
 // ★★ THE SAME THREE READINGS THE APP OFFERS — `signalMode: 'snr' | 'smeter' | 'dbfs'` in
