@@ -514,7 +514,23 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv* env, jobject,
     std::vector<opus_int16> pcm((size_t)maxSamples * channels);
     const int got = opus_decode(g_opusDec, (const unsigned char*)buf.data(), (opus_int32)n,
                                 pcm.data(), maxSamples, 0);
-    if (got <= 0) return nullptr;
+    // ★★★ A DECODE FAILURE MUST NOT BE SILENT AND PERMANENT. This was a bare
+    // `if (got <= 0) return nullptr;`: opus_decode returns a NEGATIVE error code, an unhappy
+    // decoder is usually unhappy for the NEXT packet too, and nothing here ever rebuilt it —
+    // so one bad frame killed the audio for the rest of the session while spectrum, RDS and
+    // the signal meter carried on over their own sockets. Measured against the Pi on
+    // 2026-08-01: the server sent a flawless 250 frames per 5 s for five minutes on a noisy
+    // channel while the client sat silent. The audio never stopped arriving — we stopped
+    // decoding it. Same fix as VibePowerModule.pushExternalOpus on iOS.
+    // ★ Destroy it here and let the block above recreate it on the next packet, so the repair
+    //   costs nothing when nothing is wrong.
+    if (got <= 0) {
+        LOGE("opus_decode failed (%d) — rebuilding the decoder", got);
+        opus_decoder_destroy(g_opusDec);
+        g_opusDec = nullptr;
+        g_opusDecRate = 0; g_opusDecCh = 0;
+        return nullptr;
+    }
     const jsize outLen = (jsize)got * channels;
     jshortArray out = env->NewShortArray(outLen);
     if (out) env->SetShortArrayRegion(out, 0, outLen, (const jshort*)pcm.data());

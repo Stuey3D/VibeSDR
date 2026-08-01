@@ -381,6 +381,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var extOpusDec:  OpaquePointer?
   private var extOpusRate: Int32 = 0
   private var extOpusCh:   Int32 = 0
+  /// Consecutive opus_decode failures — drives the rebuild + thinned logging above.
+  private var extOpusFails: Int = 0
 
   @objc func pushExternalOpus(_ base64: String, sampleRate: NSNumber, channels: NSNumber) {
     guard externalAudio, !isMuted,
@@ -402,6 +404,35 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         opus_decode(dec, raw.baseAddress!.assumingMemoryBound(to: UInt8.self),
                     Int32(pkt.count), &pcm16, self.FRAME_SIZE, 0)
       }
+
+      // ★★★ A DECODE FAILURE WAS SILENT AND PERMANENT. opus_decode returns a NEGATIVE error
+      //   code, and `guard frames > 0 ... else { return }` swallowed it — no log, no reset, no
+      //   fallback. Every later packet then took the same path, so one bad frame killed the
+      //   audio for the rest of the session while the spectrum, RDS and signal meter carried
+      //   on perfectly (they are separate sockets). The cure was a retune, because a retune
+      //   changes the channel count and THAT is the only thing that ever rebuilt the decoder.
+      //   Measured on the Pi 2026-08-01: at 95.9 MHz — noise between two stations, where the
+      //   pilot lock flaps and the server's channel count flips with it — the server sent a
+      //   flawless 250 audio frames per 5 s for five solid minutes while the app sat silent.
+      //   The audio never stopped arriving. We stopped decoding it.
+      // ★★ REBUILD, DO NOT JUST COUNT. An Opus decoder carries state across packets; once it
+      //   is unhappy the next packet usually is too, so the recovery has to be a new decoder
+      //   rather than a retry. Rebuilding on the NEXT packet (nil here) keeps this off the
+      //   hot path when nothing is wrong.
+      if frames <= 0 {
+        self.extOpusFails += 1
+        // Log the first, then thin out — a wedged stream must not spam the device log.
+        if self.extOpusFails == 1 || self.extOpusFails % 50 == 0 {
+          NSLog("[VibePowerModule] opus decode failed (%d) x%d — rebuilding the decoder",
+                frames, self.extOpusFails)
+        }
+        opus_decoder_destroy(dec)
+        self.extOpusDec = nil          // recreated by the block above on the next packet
+        self.extOpusRate = 0; self.extOpusCh = 0
+        return
+      }
+      self.extOpusFails = 0
+
       guard frames > 0,
             let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr),
                                       channels: ch == 2 ? self.ENGINE_CH : 1, interleaved: false),
