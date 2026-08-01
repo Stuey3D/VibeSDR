@@ -25,8 +25,8 @@ export type MobileDeps = {
   stepLabel: () => string;
   /** Open the step ladder as a popup, anchored to the element the user tapped. */
   openStepMenu: (anchor: HTMLElement) => void;
-  /** 0..1 signal level for the pill's gradient, and a short SNR caption. */
-  signal: () => { level: number; caption: string };
+  /** 0..1 level for the pill's gradient, plus the three readings the meter can show. */
+  signal: () => { level: number; snr: number; dbfs: number; sUnit: string };
   openFreqEntry: () => void;
   /** The demodulators this client offers, and a setter. Drives the mode picker. */
   modes: () => string[];
@@ -143,9 +143,31 @@ function attachRepeat(btn: HTMLElement, fire: () => void) {
   window.addEventListener('pointerup', stop);
 }
 
+// ★★ THE SAME THREE READINGS THE APP OFFERS — `signalMode: 'snr' | 'smeter' | 'dbfs'` in
+//    ControlsBar.tsx, formatted by its meterText(). Three names for one measurement, and which
+//    one is useful depends entirely on what you are doing: SNR for judging a decode, S-units
+//    for a signal report, dBFS for setting gain. Cycling beats choosing for people in settings.
+type MeterMode = 'snr' | 'smeter' | 'dbfs';
+const METER_MODES: MeterMode[] = ['snr', 'smeter', 'dbfs'];
+const METER_PREF = 'vibe.mMeterMode';
+
 export function initMobileControls(deps: MobileDeps) {
   const card = document.getElementById('mcard');
   if (!card) return;
+
+  // ★ Remembered: someone who wants S-units wants them every session, and re-cycling from
+  //   SNR on every page load would be a small daily annoyance.
+  let meterMode: MeterMode = 'snr';
+  try {
+    const saved = localStorage.getItem(METER_PREF) as MeterMode | null;
+    if (saved && METER_MODES.includes(saved)) meterMode = saved;
+  } catch { /* private mode — the default is fine */ }
+
+  const meterText = (s: { snr: number; dbfs: number; sUnit: string }) => {
+    if (meterMode === 'smeter') return s.sUnit.trim();
+    if (meterMode === 'dbfs')   return `${Math.round(s.dbfs)} dBFS`;
+    return isFinite(s.snr) ? `SNR ${Math.round(s.snr)} dB` : '—';
+  };
 
   // ── Drums ──────────────────────────────────────────────────────────────────
   attachDrum($('mVfoFace'), (dir) => deps.nudgeSteps(dir));
@@ -176,6 +198,13 @@ export function initMobileControls(deps: MobileDeps) {
   //    number pad, and the gradient behind them was an invisible third button.
   $('mFreqBox').onclick = () => deps.openFreqEntry();
   $('mMode').onclick    = () => openModePicker();
+  // ★ Tap the reading to change WHICH reading it is: SNR → S-units → dBFS.
+  $('mSnr').onclick = () => {
+    meterMode = METER_MODES[(METER_MODES.indexOf(meterMode) + 1) % METER_MODES.length];
+    try { localStorage.setItem(METER_PREF, meterMode); } catch { /* non-fatal */ }
+    refresh();
+  };
+  $('mSnr').title = 'Tap to switch: SNR / S-meter / dBFS';
 
   // ── Controls the desktop bar owns, mirrored where they BELONG ───────────────
   // ★★★ CLICK THE ORIGINAL, DO NOT REIMPLEMENT IT. Every one of these drives the existing
@@ -315,7 +344,7 @@ export function initMobileControls(deps: MobileDeps) {
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
     $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
-    $('mSnr').textContent = sig.caption;
+    $('mSnr').textContent = meterText(sig);
   }
 
   // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so

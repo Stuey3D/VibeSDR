@@ -246,14 +246,21 @@ html, body {
    number pad, an unmarked label reads as a status readout — so it gets a hairline box
    and a pointer cursor, and its tap target is padded out to a thumb rather than the few
    pixels the glyphs occupy. */
-#mFreqBox, #mMode {
+/* ★ DARK ENOUGH TO READ AGAINST A FULL-SCALE SIGNAL. These boxes sit ON the meter gradient,
+   which runs to bright green at S9+ — at 0.22 the white text was fighting the brightest part
+   of the scale exactly when someone is looking at it. 0.62 holds the contrast across the
+   whole gradient without hiding the level behind them. */
+#mFreqBox, #mMode, #mSnr {
   cursor: pointer; border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.38);
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.62);
 }
 #mFreqBox { padding: 0.05em 0.5em; display: inline-flex; align-items: baseline; gap: 0.25em; }
 #mMode    { padding: 0.15em 0.45em; }
-#mFreqBox:active, #mMode:active { background: rgba(255, 255, 255, 0.18); }
+#mFreqBox:active, #mMode:active, #mSnr:active { background: rgba(255, 255, 255, 0.18); }
+/* ★ The SNR is a BUTTON now (it cycles the reading), so it gets the same boxed treatment as
+   the other two — an unmarked readout beside two marked buttons reads as static text. */
+#mSnr { padding: 0.15em 0.4em; font-variant-numeric: tabular-nums; min-width: 4.6em; text-align: center; }
 #mModeMenu {
   position: fixed; z-index: 9998;
   background: #0d0d0d; border: 1px solid var(--phosphor-dim); border-radius: 9px;
