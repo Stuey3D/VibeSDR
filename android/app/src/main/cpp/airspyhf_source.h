@@ -27,6 +27,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <atomic>
 
 namespace vibe {
 
@@ -72,6 +73,11 @@ public:
     /** The list in the RADIO'S OWN ORDER — libairspyhf indexes into this to build the USB
      *  command, so it is the wire format, not a display detail. */
     const std::vector<uint32_t>& rawSampleRates() const { return rawRates_; }
+    /** ★★★ THE RATE THE RADIO IS ACTUALLY RUNNING AT, measured after the last change — not the
+     *  one that was asked for. This device advertises rates it does not implement and reports
+     *  success anyway; everything downstream (DSP decimation, FFT span, waterfall calibration)
+     *  must be built on this number or the audio comes out pitch-shifted. */
+    double currentRate() const { return curRate_; }
     /** Nearest supported rate to `hz` — the picker offers only real ones, but a saved
      *  preference from a different radio can still ask for something impossible. */
     uint32_t nearestRate(double hz) const;
@@ -159,6 +165,9 @@ private:
     IqSink sink_;
     std::vector<uint32_t> rates_;
     std::vector<uint32_t> rawRates_;
+    /** Samples the radio has delivered — the basis for measuring its REAL rate. See
+     *  setSampleRate: this device advertises rates it does not implement, and says rc 0. */
+    std::atomic<long long> sampCount_{0};
     bool open_ = false, streaming_ = false, lost_ = false, paused_ = false;
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;

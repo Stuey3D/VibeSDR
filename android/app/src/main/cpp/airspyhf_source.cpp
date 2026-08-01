@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+#include <thread>
 
 namespace vibe {
 
@@ -28,6 +29,8 @@ struct CbCtx {
     bool* paused;
     /** ★ Stamped on EVERY buffer, before the idle-park drop — see lastRxSecs(). */
     std::atomic<double>* lastRx;
+    /** ★★ Samples delivered, for measuring the rate the radio is ACTUALLY running at. */
+    std::atomic<long long>* samps;
 };
 }  // namespace
 
@@ -96,28 +99,8 @@ static int streamCb(airspyhf_transfer_t* t) {
     // keep it is our decision, not the hardware's. Stamping after the pause check made an
     // idle-parked radio indistinguishable from an unplugged one.
     if (c->lastRx) c->lastRx->store(nowSecsMono(), std::memory_order_relaxed);
-    // ★★★ MEASURE WHAT THE RADIO IS ACTUALLY DELIVERING. Setting a rate and being told "rc 0" is
-    //     not evidence that the device changed — and if it keeps streaming at 912 kHz while the
-    //     DSP is rebuilt for 384 kHz, the audio comes out slow with no error anywhere (Stuart:
-    //     "it seems as if we are getting the full 0.912 from the radio and simply dividing it").
-    //     This counts samples over a real second and prints them, which settles it either way.
-    {
-        static std::atomic<long long> cnt{0};
-        static std::atomic<double> t0{0};
-        const double now = nowSecsMono();
-        double start = t0.load(std::memory_order_relaxed);
-        if (start == 0) { t0.store(now, std::memory_order_relaxed); cnt.store(0, std::memory_order_relaxed); }
-        else {
-            cnt.fetch_add(t->sample_count, std::memory_order_relaxed);
-            const double dt = now - start;
-            if (dt >= 2.0) {
-                std::fprintf(stderr, "airspyhf: IQ measured %.0f S/s over %.1fs\n",
-                             cnt.load(std::memory_order_relaxed) / dt, dt);
-                t0.store(now, std::memory_order_relaxed);
-                cnt.store(0, std::memory_order_relaxed);
-            }
-        }
-    }
+    // ★★ COUNTED BEFORE THE PAUSE DROP: this is what the RADIO is doing, not what we kept.
+    if (c->samps) c->samps->fetch_add(t->sample_count, std::memory_order_relaxed);
     if (c->paused && *c->paused) return 0;   // idle: drop, never tear the device down
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming
@@ -228,7 +211,7 @@ bool AirspyHfSource::start(std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!open_ || !impl_->dev) { err = "device not open"; return false; }
     if (streaming_) return true;
-    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx };
+    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx, &sampCount_ };
     if (airspyhf_start(impl_->dev, &streamCb, &impl_->ctx) != AIRSPYHF_SUCCESS) {
         err = "the Airspy HF+ would not start streaming";
         return false;
@@ -340,10 +323,47 @@ bool AirspyHfSource::setSampleRate(double hz) {
     //   pitch shift, not as an error (Stuart, 2026-08-01: 912/456/228 fine, 768/650/384/192 all
     //   slow). The failure was silent because this returned false and the caller ignored it.
     const int rc = airspyhf_set_samplerate(impl_->dev, r);
-    std::fprintf(stderr, "airspyhf: setSampleRate asked %.0f -> nearest %u -> rc %d%s\n",
-                 hz, (unsigned)r, rc, rc == AIRSPYHF_SUCCESS ? "" : "  ** DEVICE REFUSED **");
-    if (rc != AIRSPYHF_SUCCESS) return false;
-    curRate_ = (double)r;      // remembered for restartStream(deep)
+    if (rc != AIRSPYHF_SUCCESS) {
+        std::fprintf(stderr, "airspyhf: setSampleRate %u REFUSED (rc %d)\n", (unsigned)r, rc);
+        return false;
+    }
+    curRate_ = (double)r;      // provisional — the measurement below has the last word
+
+    // ★★★ MEASURE IT. DO NOT BELIEVE THE LIST, AND DO NOT BELIEVE `rc 0`.
+    //     This radio advertises seven rates and implements THREE. Measured on hardware
+    //     (2026-08-01, HF+ Discovery, every rate driven and counted):
+    //         912000 -> 912000     768000 -> 912000     650000 -> 912000
+    //         456000 -> 456000     384000 -> 456000
+    //         228000 -> 228000     192000 -> 228000
+    //     It silently rounds UP to its top rate halved, and reports success either way. The DSP
+    //     was then built for the number we asked for while the radio ran faster, and a rate
+    //     mismatch is heard as a PITCH SHIFT — Stuart: 912/456/228 fine, everything else "Barry
+    //     White", each one slow by exactly the ratio between what he picked and what it did.
+    //     ★ So the rate is settled by counting samples, not by asking. Whatever the radio decides
+    //     to do, the DSP is built for what it is ACTUALLY doing — which is also the only approach
+    //     that survives a different HF+ model, a firmware update, or the next radio to do this.
+    if (streaming_) {
+        sampCount_.store(0, std::memory_order_relaxed);
+        const double t0 = nowSecsMono();
+        impl_->mtx.unlock();                       // let the stream callback run
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        impl_->mtx.lock();
+        const double dt = nowSecsMono() - t0;
+        const long long n = sampCount_.load(std::memory_order_relaxed);
+        if (dt > 0.2 && n > 1000) {
+            const double measured = (double)n / dt;
+            const uint32_t snapped = nearestRate(measured);   // reject counting jitter
+            if (snapped && std::fabs((double)snapped - (double)r) > 1.0) {
+                std::fprintf(stderr, "airspyhf: asked %u but the radio is running %u "
+                                     "(measured %.0f S/s) — using the measured rate\n",
+                             (unsigned)r, (unsigned)snapped, measured);
+                curRate_ = (double)snapped;
+            } else {
+                std::fprintf(stderr, "airspyhf: rate %u confirmed (measured %.0f S/s)\n",
+                             (unsigned)r, measured);
+            }
+        }
+    }
     return true;
 }
 
