@@ -28,7 +28,7 @@ export type MobileDeps = {
   /** Open the step ladder as a popup, anchored to the element the user tapped. */
   openStepMenu: (anchor: HTMLElement) => void;
   /** 0..1 level for the pill's gradient, plus the three readings the meter can show. */
-  signal: () => { level: number; snr: number; dbfs: number; sUnit: string };
+  signal: () => { level: number; snr: number; dbfs: number; sUnit: string; sqlNorm: number };
   openFreqEntry: () => void;
   /** The demodulators this client offers, and a setter. Drives the mode picker. */
   modes: () => string[];
@@ -147,6 +147,14 @@ export function initMobileControls(deps: MobileDeps) {
   //     the element, not to its position in the tree — so there is still exactly one search
   //     implementation. It goes back when the bar returns, or a user who widens the window
   //     would find the bar missing its search box.
+  // ★★ MOVE #linkStats TOO. It holds the link bars and the SQL / SETTLING / OVERLOAD chips,
+  //    all of which say why the audio is doing what it is doing. Copying the bars alone (an
+  //    earlier version did) silently dropped all three chips, so a closed squelch gate looked
+  //    exactly like a dead stream.
+  const stats = document.getElementById('linkStats');
+  const statsHost = document.getElementById('mLinkHost');
+  if (stats && statsHost && stats.parentElement !== statsHost) statsHost.appendChild(stats);
+
   const wrap = document.getElementById('searchWrap');
   const host = document.getElementById('mSearchHost');
   const home = wrap?.parentElement ?? null;
@@ -291,9 +299,7 @@ export function initMobileControls(deps: MobileDeps) {
     //    would disagree with the first the moment either changed, and two contradictory
     //    status readouts is worse than one.
     const st = document.getElementById('status');
-    const bars = document.getElementById('linkBars');
     if (st) put($('mNetTxt'), st.textContent ?? '');
-    if (bars) $('mBars').className = bars.className;
     // ★ One timer, mirrored — a second countdown could drift from the recorder's own.
     const rt = document.getElementById('recTime');
     if (rt) put($('mRecTime'), rt.textContent ?? '');
@@ -302,6 +308,9 @@ export function initMobileControls(deps: MobileDeps) {
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
     $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
     put($('mSnr'), meterText(sig));
+    const sql = $('mSqlLine');
+    if (sig.sqlNorm >= 0) { sql.hidden = false; sql.style.left = `${sig.sqlNorm * 100}%`; }
+    else sql.hidden = true;
   }
 
   // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so
