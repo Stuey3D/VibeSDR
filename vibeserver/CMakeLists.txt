@@ -18,7 +18,10 @@
 #   ./vibeserver/build/vibeserver --tcp 127.0.0.1:1234
 
 cmake_minimum_required(VERSION 3.20)
-project(vibeserver CXX C)
+project(vibeserver VERSION 1.0.0 LANGUAGES CXX C)
+# ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
+#   so Linux starts level with it rather than inventing a separate number for the same server.
+set(VIBESERVER_VERSION "${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -221,3 +224,45 @@ if(APPLE)
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(vibeserver_core PUBLIC Threads::Threads)
+
+# ── Linux install + .deb packaging ────────────────────────────────────────────
+# ★★ A RELEASE IS NOT A BINARY. A working install is FOUR files — the binary, the systemd unit,
+# the udev rules and a default config — plus a user in `plugdev` and a udev reload. Every one of
+# those was done BY HAND on the Pi, which is fine for us and hopeless for anyone else: the
+# audience here is people leaving a Pi in a loft or on a solar panel, not people who want to
+# debug a group membership. Package it or it is not released.
+# ★ macOS ships as a notarised .app (see mac/build-app.sh) and wants none of this.
+if(UNIX AND NOT APPLE)
+  include(GNUInstallDirs)
+  install(TARGETS vibeserver RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(FILES linux/vibeserver.service DESTINATION lib/systemd/system)
+  # ★ /lib/udev/rules.d is the PACKAGE path; /etc/udev/rules.d is for the ADMIN's own overrides.
+  #   Shipping into /etc would fight the sysadmin and survive `apt purge`.
+  install(FILES linux/99-vibeserver-sdr.rules DESTINATION lib/udev/rules.d)
+  # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
+  #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
+  install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)
+
+  set(CPACK_GENERATOR "DEB")
+  set(CPACK_PACKAGE_NAME "vibeserver")
+  set(CPACK_PACKAGE_VENDOR "Stuart Carr")
+  set(CPACK_PACKAGE_CONTACT "https://github.com/Stuey3D/VibeSDR/issues")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+      "VibeServer — turn an SDR into a network receiver for VibeSDR and any browser")
+  set(CPACK_PACKAGE_HOMEPAGE_URL "https://vibesdr.net")
+  set(CPACK_DEBIAN_PACKAGE_SECTION "hamradio")
+  set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+  # ★ Read from the same place as everything else rather than repeating the number here.
+  set(CPACK_PACKAGE_VERSION "${VIBESERVER_VERSION}")
+  # ★★ ASK dpkg WHAT WE LINKED rather than hand-listing packages: shlibdeps reads the ELF and
+  #   gets the versions right for the distro doing the build. A hand-written list rots the first
+  #   time a dependency is added and produces a package that installs and then will not start.
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser")
+  set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+  set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+      "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postinst"
+      "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/prerm"
+      "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postrm")
+  include(CPack)
+endif()

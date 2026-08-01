@@ -1,0 +1,12 @@
+#!/bin/sh
+# ★ Stop before the binary is removed, or systemd is left supervising a file that is gone.
+set -e
+case "$1" in
+  remove|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop vibeserver.service >/dev/null 2>&1 || true
+      systemctl disable vibeserver.service >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+exit 0

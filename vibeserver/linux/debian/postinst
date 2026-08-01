@@ -1,0 +1,53 @@
+#!/bin/sh
+# VibeServer — post-install.
+# ★★ THE THREE THINGS THAT WERE DONE BY HAND ON THE PI, and every one of them is a silent
+#    failure if skipped: without the udev reload a fresh install cannot open the radio until
+#    the next reboot; without plugdev membership the same; without a config the daemon has no
+#    settings to read.
+set -e
+
+case "$1" in
+  configure)
+    # ── 1. The config: NEVER clobber the user's edits ────────────────────────
+    # ★ Copied from /usr/share on FIRST install only. Shipping it as a packaged file would let
+    #   an upgrade overwrite the name, locator and admin password someone set months ago.
+    if [ ! -e /etc/vibeserver/vibeserver.conf ]; then
+      mkdir -p /etc/vibeserver
+      cp /usr/share/vibeserver/vibeserver.conf /etc/vibeserver/vibeserver.conf
+      chmod 644 /etc/vibeserver/vibeserver.conf
+    fi
+
+    # ── 2. USB access without root ───────────────────────────────────────────
+    # ★ The rules file is installed by the package; udev must be told to re-read it, or the
+    #   radio stays root-only until reboot — which on a headless box in a cupboard reads as
+    #   "VibeServer cannot see my SDR".
+    if [ -x /bin/udevadm ] || [ -x /sbin/udevadm ] || command -v udevadm >/dev/null 2>&1; then
+      udevadm control --reload-rules >/dev/null 2>&1 || true
+      udevadm trigger --subsystem-match=usb >/dev/null 2>&1 || true
+    fi
+
+    # ★★ plugdev may not exist on a minimal Debian — create it rather than assume. The udev
+    #    rules grant the group, so a missing group means the rules grant nothing at all.
+    if ! getent group plugdev >/dev/null; then
+      addgroup --system plugdev >/dev/null 2>&1 || true
+    fi
+    # ★ The invoking user is the one who will run `vibeserver` interactively for the TUI.
+    #   SUDO_USER is who typed `sudo apt install`; without this they must know to add
+    #   themselves, which is exactly the sort of undocumented step that sinks an install.
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+      adduser "$SUDO_USER" plugdev >/dev/null 2>&1 || true
+      echo "VibeServer: added $SUDO_USER to 'plugdev' — log out and back in for it to take effect."
+    fi
+
+    # ── 3. systemd ───────────────────────────────────────────────────────────
+    # ★ Enabled but NOT started: the user has not chosen a radio, a name or a location yet, and
+    #   an unconfigured server that starts itself and fails is a worse first impression than one
+    #   that waits to be asked. `vibeserver` with no arguments opens the TUI to set that up.
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      systemctl enable vibeserver.service >/dev/null 2>&1 || true
+      echo "VibeServer: installed. Run 'vibeserver' to configure it, then 'sudo systemctl start vibeserver'."
+    fi
+    ;;
+esac
+exit 0
