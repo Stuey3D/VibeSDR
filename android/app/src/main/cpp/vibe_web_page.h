@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (360.0 KB)
+// Source: web/client/  (360.4 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -152,7 +152,12 @@ html, body {
 #mcard { display: none; }
 
 @media (max-width: 1280px) {
-  #bar { display: none; }
+  /* ★★★ `html #bar`, NOT `#bar`. The base rule `#bar { display: flex }` is declared LATER in
+     this stylesheet, and a media query adds NO specificity — so a plain `#bar` here loses to
+     it on source order and BOTH bars render at once, overlapping (seen 2026-08-01). The
+     descendant selector lifts specificity above the base rule without resorting to
+     !important, which would then have to be fought by anything overriding it later. */
+  html #bar { display: none; }
   #mcard {
     display: flex; flex-direction: column; gap: 0.55em;
     /* Floats over the waterfall exactly as the app's card does, rather than taking a
@@ -170,7 +175,6 @@ html, body {
        app's sliders depend on. */
     touch-action: none;
   }
-  #mcard[aria-hidden="true"] { aria-hidden: false; }
 }
 
 /* ── The pill: the signal meter is its BACKGROUND, not a separate row ────────── */
@@ -1368,7 +1372,7 @@ select.btn { padding: 6px 8px; }
        own background), a four-button row, twin drums, and the status line. Same design
        lineage as the PocketUberSDR skin (Stuart's own, MIT) that the app was built from.
   -->
-  <div id="mcard" aria-hidden="true">
+  <div id="mcard">
     <!-- The pill. The signal meter IS the background — red at the noise floor through to
          green at full scale — so level is read without spending a row on a meter. -->
     <div id="mPill" title="Tap to enter a frequency">
