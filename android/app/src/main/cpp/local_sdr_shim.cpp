@@ -3358,7 +3358,17 @@ struct LocalSdrShim::Impl {
         // confidence gate, offset-not-shear). Each was a real bug and none of them mattered,
         // because the whole pass is wrong for this input. Do not re-enable it without a soundcard
         // source to justify it AND the standalone harness to prove it.
-        sstv = new SstvDecoder(12000, /*autoSync=*/false);
+        // ★★★ BACK ON, because the cleanup is no longer the thing that breaks the picture. It was
+        //     switched off on 08-01 as the only way to stop a torn image — the right call at the
+        //     time, but it left every picture with the wrap it was meant to remove.
+        //     ★ What changed: the guard inside redrawFromLuminance now measures HOW FAR the
+        //     correction overruns the captured audio instead of whether it overruns at all. A
+        //     skip-sized overrun (bounded by one line) is applied; a drifting one still refuses.
+        //     ★★ PROVEN ON REAL AUDIO, not one lucky frame: the four Essex Ham recordings
+        //     (test/fixtures/sstv, Scottie S2 ×2 and Martin M2 ×2) went from 1 of 4 corrected to
+        //     4 of 4, checked as images. `tools/sstv_harness.cpp` replays them on the Mac — run it
+        //     before touching this again. Off-air remains the final word.
+        sstv = new SstvDecoder(12000, /*autoSync=*/true);
         sstvDecim = 0; sstvAcc = 0.0f;
         sstv->onImageStart = [this](int w, int h) {
             std::vector<uint8_t> m; m.push_back(0x07); put32(m,(uint32_t)w); put32(m,(uint32_t)h);

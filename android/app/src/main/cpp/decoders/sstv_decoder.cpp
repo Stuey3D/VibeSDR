@@ -423,6 +423,20 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
     // The old code silently substituted storedLum.back() for those, which is why a slant-corrected
     // picture could line up perfectly at the TOP and drift apart at the BOTTOM (Stuart,
     // 2026-07-31): the top mapped to real samples, the bottom to a single repeated value.
+    // ★★★ REFUSE A DRIFTING OVERRUN, TOLERATE A BOUNDED ONE. The first version of this guard
+    // rejected the redraw if ANY pixel fell past the captured samples — and that threw away a
+    // perfectly corrected picture because the last hundred pixels of the bottom line had no
+    // source. Measured on the Essex Ham fixtures: 3 of 4 refused, all of them correctable.
+    //   • A pure SKIP is a sync offset within one line, so the shortfall it causes is bounded at
+    //     ONE LINE — a sliver in the bottom-right corner, which is what the reference
+    //     implementation (UberSDR's 24/7 addon, GPL-3.0, same lineage) simply leaves black. Its
+    //     gallery is proof that this is invisible in practice.
+    //   • A RATE correction is the dangerous one: the error grows down the image, so the bottom
+    //     can land far past the buffer. That is what tore the picture and what this guard is FOR.
+    // Two lines of slack tells those two cases apart by their own arithmetic, rather than by a
+    // flag we would have to remember to keep in step with whether rate correction is enabled.
+    const int allowShort = (int)(m->lineTime * rate * 2.0);
+    int worstOver = 0;
     if (okOut) *okOut = true;
     std::vector<uint8_t> img((size_t)m->imgWidth*m->numLines*3, 0);
     auto IMG = [&](int x,int y,int c)->uint8_t&{ return img[((size_t)y*m->imgWidth+x)*3+c]; };
@@ -431,13 +445,24 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
         uint8_t lum;
         // ★ storedLumWritten, NOT storedLum.size(): the buffer is over-allocated and the tail is
         // zeros that were never captured. Reading them produces a plausible-looking image that is
-        // simply wrong, which is worse than not correcting at all.
+        // simply wrong, which is worse than not correcting at all — so those pixels are LEFT as
+        // they are (black), never substituted with the last sample.
         if (p.time >= 0 && p.time < storedLumWritten) lum = storedLum[p.time];
-        else if (p.time >= storedLumWritten) { if (okOut) *okOut = false; continue; }
+        else if (p.time >= storedLumWritten) {
+            const int over = p.time - storedLumWritten + 1;
+            if (over > worstOver) worstOver = over;
+            if (over > allowShort && okOut) *okOut = false;
+            continue;
+        }
         else continue;
         if (p.x < m->imgWidth && p.y < m->numLines) IMG(p.x,p.y,p.channel) = lum;
         if (p.channel > 0 && (nm == "Robot 36" || nm == "Robot 24") && p.y+1 < m->numLines)
             IMG(p.x,p.y+1,p.channel) = lum;
+    }
+    if (worstOver > 0) {
+        // Worth saying out loud: it is the difference between "corrected, with a sliver missing"
+        // and "not corrected at all", and the number tells which case this was.
+        lastShortfallSamples = worstOver;
     }
     return toRGB(img);
 }
@@ -611,19 +636,28 @@ void SstvDecoder::videoThread() {
         bool ok = false;
         auto pixels = video.redrawFromLuminance(sampleRate, aSkip, &ok);
         (void)aRate;
-        // ★★★ ONLY REPLACE THE PICTURE IF THE CORRECTION IS COMPLETE. A redraw that ran past the
-        // captured samples produces an image whose top is aligned and whose bottom is not —
+        // ★★★ REPLACE THE PICTURE UNLESS THE CORRECTION WOULD TEAR IT. A redraw that runs FAR past
+        // the captured samples produces an image whose top is aligned and whose bottom is not —
         // "sliced up and assembled out of alignment" (Stuart, 2026-07-31, on a Scottie S2 that had
-        // decoded cleanly). ★★ AND THE UNCORRECTED PICTURE IS THE BETTER ONE: a readable image with
-        // a constant horizontal wrap beats a torn one, because the eye can read past a wrap and
+        // decoded cleanly). ★★ AND THE UNCORRECTED PICTURE IS THE BETTER ONE THERE: a readable image
+        // with a constant horizontal wrap beats a torn one, because the eye can read past a wrap and
         // cannot read past a tear. When we cannot finish the job, leave the user what they had.
+        // ★★★ BUT "runs past at all" IS NOT THE SAME TEST AS "would tear it", and using the first
+        // for the second is what left three of the four Essex Ham fixtures uncorrected — every one
+        // of them correctable, refused over a sliver in the bottom line. See redrawFromLuminance:
+        // the shortfall is now measured, and a skip-sized one (bounded by a single line) is
+        // accepted with those few pixels left black — which is exactly what the reference
+        // implementation does, and its 24/7 gallery is the evidence that it is invisible.
         if (ok) {
             if (onRedrawStart) onRedrawStart();
             for (int y = 0; y < mode->numLines; y++)
                 if (onLine) onLine(y, mode->imgWidth, pixels.data() + (size_t)y*mode->imgWidth*3);
             if (onComplete) onComplete();
         } else if (onStatus) {
-            onStatus("slant not corrected \u2014 incomplete audio");
+            // ★ Say WHICH case this was. "Incomplete audio" was reported for a one-line shortfall
+            //   and for a tearing one alike, so the message could not tell a real failure from an
+            //   over-strict guard — and it read as a fault when nothing was wrong.
+            onStatus("alignment skipped \u2014 correction would tear the picture");
         }
     }
 
