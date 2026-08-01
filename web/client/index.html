@@ -246,11 +246,14 @@ html, body {
    number pad, an unmarked label reads as a status readout — so it gets a hairline box
    and a pointer cursor, and its tap target is padded out to a thumb rather than the few
    pixels the glyphs occupy. */
-#mMode {
-  cursor: pointer; padding: 0.15em 0.45em; border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
+#mFreqBox, #mMode {
+  cursor: pointer; border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  background: rgba(0, 0, 0, 0.22);
 }
-#mMode:active { background: rgba(255, 255, 255, 0.16); }
+#mFreqBox { padding: 0.05em 0.5em; display: inline-flex; align-items: baseline; gap: 0.25em; }
+#mMode    { padding: 0.15em 0.45em; }
+#mFreqBox:active, #mMode:active { background: rgba(255, 255, 255, 0.18); }
 #mModeMenu {
   position: fixed; z-index: 9998;
   background: #0d0d0d; border: 1px solid var(--phosphor-dim); border-radius: 9px;
@@ -265,6 +268,16 @@ html, body {
 }
 .mModeOpt.on { color: var(--phosphor); border-color: var(--phosphor-dim); }
 .mModeOpt:active { background: rgba(53, 224, 138, 0.18); }
+
+/* ★★ THE VTS SITS ABOVE THE CARD, NOT ON IT. #vts is bottom:14px — the same corner the
+   card occupies — so on a narrow window the station strip drew straight over the controls
+   (reported 2026-08-01). The offset is a MEASURED variable, not a guess: the card's height
+   changes with the breakpoint, with whether the drums are stacked, and with the font-size
+   clamp, so any fixed number would be wrong at most widths. mobile.ts keeps --mcard-h in
+   step with a ResizeObserver. */
+@media (max-width: 1280px) {
+  #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
+}
 
 /* ── Status line ─────────────────────────────────────────────────────────────── */
 #mStatus {
@@ -1395,7 +1408,11 @@ select.btn { padding: 6px 8px; }
     <div id="mPill" title="Tap to enter a frequency">
       <div id="mSig"></div>
       <div id="mPillIn">
-        <span id="mFreq">—</span><span id="mUnit">MHz</span>
+        <!-- ★ TWO BOXES, TWO BUTTONS. The pill holds two unrelated actions — frequency entry
+             and the demodulator picker — and with no boxes it reads as one label, so people
+             tap the mode and get a number pad. Each target is outlined and padded to a thumb;
+             the pill itself is NOT clickable, so there is no invisible third button. -->
+        <span id="mFreqBox"><span id="mFreq">—</span><span id="mUnit">MHz</span></span>
         <span id="mMode">NFM</span><span id="mSnr"></span>
       </div>
     </div>

@@ -165,12 +165,25 @@ export function initMobileControls(deps: MobileDeps) {
   $('mAudio').onclick = () => deps.openAudio();
   $('mMenu').onclick  = () => deps.openMenu();
   $('mDec').onclick   = () => deps.openDecoders();
-  // ★★ THE PILL HAS TWO TARGETS, exactly as the app's does: the FREQUENCY opens frequency
-  //    entry (onFreqTap) and the MODE opens the demodulator picker (onModeTap). Tapping the
-  //    mode and getting a number pad is the kind of thing that makes a control feel broken,
-  //    so the mode span stops the event before it reaches the pill.
-  $('mPill').onclick = () => deps.openFreqEntry();
-  $('mMode').addEventListener('click', (e) => { e.stopPropagation(); openModePicker(); });
+  // ★★ TWO SEPARATE TARGETS, exactly as the app's pill has: the FREQUENCY opens frequency
+  //    entry (onFreqTap) and the MODE opens the demodulator picker (onModeTap). Each is its
+  //    own boxed button and the PILL ITSELF IS NOT CLICKABLE — an earlier version put the
+  //    frequency handler on the whole pill, so tapping the mode bubbled up and produced a
+  //    number pad, and the gradient behind them was an invisible third button.
+  $('mFreqBox').onclick = () => deps.openFreqEntry();
+  $('mMode').onclick    = () => openModePicker();
+
+  // ★★ THE VTS SITS IN THE SAME CORNER AS THIS CARD (#vts is bottom:14px), so without an
+  //    offset the station strip draws straight over the controls. Publish the card's MEASURED
+  //    height and let the stylesheet lift the VTS clear of it. A fixed number would be wrong
+  //    at most widths: the height changes with the breakpoint, with whether the drums are
+  //    stacked, and with the font-size clamp.
+  const publishHeight = () => {
+    document.documentElement.style.setProperty('--mcard-h', `${Math.round(card.offsetHeight)}px`);
+  };
+  publishHeight();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(publishHeight).observe(card);
+  else window.addEventListener('resize', publishHeight);
 
   // ★ A popup rather than a row of buttons: seven demodulators across a phone would leave
   //   each one below a thumb's width, and the card has no room for a second row without
