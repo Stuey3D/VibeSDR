@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <mutex>
 #include "halfband.h"
 
 namespace vibe {
