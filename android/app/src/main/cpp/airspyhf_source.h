@@ -123,6 +123,32 @@ public:
      *  ★ Seconds on the same monotonic clock the shim uses. 0 = nothing yet. */
     double lastRxSecs() const;
 
+    /** ★★★ RECOVER A STALLED STREAM IN PLACE — the Airspy equivalent of
+     *  SdrplaySource::restartStream(). Nudging the phone was enough to make the HF+ stop
+     *  delivering IQ while its LEDs stayed lit and the device stayed enumerated: nothing had
+     *  been unplugged, so the watchdog's `deviceCount() > 0` said the radio was present and
+     *  cleared `deviceLost` — leaving the server reporting a healthy radio while delivering no
+     *  samples at all, until the operator restarted it (Stuart, 2026-07-31).
+     *
+     *  Two escalating attempts, because a USB glitch leaves one of two states:
+     *    1. the stream stalled but the handle is still good -> stop + start fixes it;
+     *    2. the handle itself is stale                      -> only close + reopen will.
+     *  `deep` selects the second. Rate, tuning and every gain setting are re-applied from the
+     *  members we already hold, so a listener sees a gap and nothing else.
+     *
+     *  ★★ SAFE FROM THE WATCHDOG THREAD, and this is the crucial difference from the RTL
+     *  path, which deliberately does NOT reopen: `dev` there is touched unlocked from the
+     *  control threads, so closing underneath them crashed the whole server on replug. Every
+     *  library call on THIS object already takes impl_->mtx — the same property that made the
+     *  RSP's in-place restart safe — and so does this.
+     *
+     *  ★ `deep` CANNOT WORK ON ANDROID when the device genuinely re-enumerated: the handle
+     *  came from a USB file descriptor owned by the Java layer (openFd), and a re-enumerated
+     *  device needs a fresh one that only Java can hand us. Reopening by serial is right on
+     *  desktop and is the best we can do here; if it fails we report honestly rather than
+     *  pretend. */
+    bool restartStream(bool deep, std::string& err);
+
 private:
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     struct Impl;
@@ -132,6 +158,11 @@ private:
     bool open_ = false, streaming_ = false, lost_ = false, paused_ = false;
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;
+    // ★ WHAT WE WERE LAST ASKED FOR — kept solely so restartStream(deep) can put the radio
+    //   back exactly as the operator had it. Everything else (agc_, lna_, att_) is already
+    //   mirrored above; only these three were passed in and forgotten.
+    double curRate_ = 0.0, curCentre_ = 0.0;
+    int    curGainTenth_ = -1;
 };
 
 }  // namespace vibe

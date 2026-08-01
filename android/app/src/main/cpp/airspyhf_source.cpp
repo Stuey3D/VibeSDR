@@ -215,11 +215,72 @@ void AirspyHfSource::close() {
     open_ = false;
 }
 
+// ★★★ See the header for why this is safe here and deliberately absent on the RTL path.
+bool AirspyHfSource::restartStream(bool deep, std::string& err) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    if (!open_ || !impl_->dev) { err = "device not open"; return false; }
+
+    if (!deep) {
+        // ── Shallow: the handle is still good, the stream just stopped delivering. ──
+        // ★ A failure to stop is EXPECTED and must not abort the restart — we are here
+        //   precisely because the device is misbehaving, and refusing to re-start because the
+        //   teardown of an already-broken stream complained would leave the radio dead for
+        //   good. Same reasoning as the RSP's Uninit.
+        if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
+        // start() re-seeds the callback context and sets streaming_ — don't duplicate it here.
+        if (!start(err)) return false;
+        lost_ = false;
+        std::fprintf(stderr, "airspyhf: stream restarted after a stall\n");
+        return true;
+    }
+
+    // ── Deep: the handle itself is suspect, so throw it away and open a fresh one. ──
+    // ★ BY SERIAL, NOT BY INDEX. Enumeration order is not stable across a re-plug, and this
+    //   box may well have more than one radio on it — reopening "device 0" could hand us a
+    //   different radio than the operator was listening to.
+    const uint64_t serial = impl_->serial;
+    const double   rate   = curRate_ > 0.0 ? curRate_ : 912000.0;
+    const double   centre = curCentre_;
+    const int      gain   = curGainTenth_;
+    const bool     wasStreaming = streaming_;
+
+    if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
+    airspyhf_close(impl_->dev);
+    impl_->dev = nullptr;
+    open_ = false;
+
+    if (serial == 0 ||
+        airspyhf_open_sn(&impl_->dev, serial) != AIRSPYHF_SUCCESS || !impl_->dev) {
+        impl_->dev = nullptr;
+        // ★ Report the truth. On Android a genuinely re-enumerated device needs a fresh USB
+        //   fd that only the Java layer can obtain — see the header.
+        err = "could not reopen the Airspy HF+ (it may have re-enumerated)";
+        std::fprintf(stderr, "airspyhf: deep restart FAILED: %s\n", err.c_str());
+        return false;
+    }
+    if (!finishOpen(rate, centre, gain, err)) {
+        std::fprintf(stderr, "airspyhf: deep restart re-open FAILED: %s\n", err.c_str());
+        return false;
+    }
+    // Put the HF+-specific switches back — finishOpen only replays rate/tune/gain.
+    setAgcThreshold(agcHigh_);
+    setLna(lna_);
+    if (wasStreaming && !start(err)) {
+        std::fprintf(stderr, "airspyhf: deep restart could not stream: %s\n", err.c_str());
+        return false;
+    }
+    lost_ = false;
+    std::fprintf(stderr, "airspyhf: device reopened after a stall (serial %016llx)\n",
+                 (unsigned long long)serial);
+    return true;
+}
+
 // ── Tuning and rate ─────────────────────────────────────────────────────────
 void AirspyHfSource::setFrequency(double hz) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!impl_->dev) return;
     airspyhf_set_freq(impl_->dev, (uint32_t)std::llround(hz));
+    curCentre_ = hz;           // remembered for restartStream(deep)
 }
 
 uint32_t AirspyHfSource::nearestRate(double hz) const {
@@ -238,7 +299,9 @@ bool AirspyHfSource::setSampleRate(double hz) {
     if (!impl_->dev) return false;
     const uint32_t r = nearestRate(hz);
     if (!r) return false;
-    return airspyhf_set_samplerate(impl_->dev, r) == AIRSPYHF_SUCCESS;
+    if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
+    curRate_ = (double)r;      // remembered for restartStream(deep)
+    return true;
 }
 
 // ── Gain ────────────────────────────────────────────────────────────────────
@@ -252,6 +315,7 @@ bool AirspyHfSource::setSampleRate(double hz) {
 void AirspyHfSource::setGainTenthDb(int tenthDb) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!impl_->dev) return;
+    curGainTenth_ = tenthDb;   // remembered for restartStream(deep)
     if (tenthDb < 0) { setAgc(true); return; }
     setAgc(false);
     const int wantDb = std::min(480, tenthDb) / 10;      // 0..48 dB of wanted gain
@@ -338,5 +402,8 @@ void AirspyHfSource::setLna(bool) {}
 void AirspyHfSource::setCalibrationPpb(int) {}
 std::string AirspyHfSource::model() const { return ""; }
 double AirspyHfSource::lastRxSecs() const { return 0.0; }
+bool AirspyHfSource::restartStream(bool, std::string& err) {
+    err = "this build has no Airspy HF+ support"; return false;
+}
 }  // namespace vibe
 #endif
