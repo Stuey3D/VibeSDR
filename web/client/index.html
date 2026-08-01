@@ -207,39 +207,16 @@ html, body {
 .mBtn:active { background: rgba(255, 160, 0, 0.18); }
 .mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
 
-/* ── Twin drums ──────────────────────────────────────────────────────────────── */
+/* ── Tune / zoom pads ────────────────────────────────────────────────────────── */
 #mDrums { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
-.mDrum {
-  display: flex; align-items: stretch; gap: 0;
-  border: 1px solid var(--phosphor-dim); border-radius: 9px; overflow: hidden;
-  background: #060806;
-}
-.mDrumEnd {
-  flex: 0 0 auto; width: 2.4em; min-height: max(3em, 44px);
-  background: transparent; color: var(--phosphor); border: 0;
-  font: inherit; font-size: 1.15em; cursor: pointer;
-}
-.mDrumEnd:active { background: rgba(53, 224, 138, 0.18); }
-/* ★ The drum face itself. The repeating gradient IS the drum: as you drag, the whole
-   pattern shifts, so movement is visible even when the frequency digits are changing
-   too fast to read. The red centre line is the datum you are dragging PAST. */
-.mDrumFace {
-  flex: 1 1 auto; position: relative; min-height: max(3em, 44px);
-  background-image: repeating-linear-gradient(90deg,
-      rgba(53,224,138,0.55) 0px, rgba(53,224,138,0.55) 1px,
-      transparent 1px, transparent 9px);
-  background-position: 0 0;
-  /* ★ NOT a drag surface in the client — see mobile.ts. It reads as a dial face, and the
-     − / + ends beside it are what actually tune, so it must not offer a grab cursor for a
-     gesture that no longer does anything. */
-  cursor: default;
+/* − glyph + : the glyph names the pair, so neither button needs a text label and both stay
+   wide enough for a thumb. */
+.mDial { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.35em; align-items: stretch; }
+.mDial .mBtn { font-size: 1.3em; line-height: 1; }
+.mDialGlyph {
   display: flex; align-items: center; justify-content: center;
+  min-width: 2.6em; opacity: 0.6; color: var(--btn-text);
 }
-.mDrumFace::after {
-  content: ""; position: absolute; top: 12%; bottom: 12%; left: 50%;
-  width: 2px; margin-left: -1px; background: #ff3b30;
-}
-.mDrumIcon { opacity: 0.75; font-size: 1.1em; pointer-events: none; }
 
 /* ── Mode picker (tap the MODE on the pill, as the app does) ──────────────────── */
 /* ★ The mode needs to LOOK tappable. Sitting inside a pill whose other half opens a
@@ -318,16 +295,6 @@ html, body {
 #mSearchHost #searchWrap { flex: 1 1 auto; width: 100%; min-width: 0; }
 #mSearchHost #search { width: 100%; min-height: 44px; }
 
-/* ── House glyphs ────────────────────────────────────────────────────────────── */
-/* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform —
-   Apple's 📻 and Android's are not the same object, neither matches the app, and both drag
-   in a colour scheme the rest of the card does not use. These are ported coordinate-for-
-   coordinate from buildIconPath() in DrumWheel.tsx and the paths in ControlsBar.tsx, so
-   they inherit `currentColor` and sit in the same visual family as the app (Stuart:
-   "we lose the branding"). */
-.mGlyph { height: 1.15em; width: auto; vertical-align: -0.16em; }
-.mDrumIcon .mGlyph { height: 1.35em; }
-
 /* ── Link cluster in the card's status row ───────────────────────────────────── */
 #mNet { display: inline-flex; align-items: center; gap: 0.5em; }
 #mBars { display: inline-flex; align-items: flex-end; gap: 2px; height: 1em; }
@@ -344,9 +311,7 @@ html, body {
 #mBars.q1 { color: #ffa000; }
 #mBars.q1 i:nth-child(1) { opacity: 1; }
 #mBars.q0 { color: #ff3b30; }
-#mBars.q0 i { opacity: 0.9; }
-
-/* ── Status line ─────────────────────────────────────────────────────────────── */
+#mBars.q0 i { opacity: 0.9; }/* ── Status line ─────────────────────────────────────────────────────────────── */
 #mStatus {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 0.78em; color: var(--unit); padding: 0 0.2em;
@@ -1505,17 +1470,25 @@ select.btn { padding: 6px 8px; }
     <!-- ★ TWIN DRUMS — the protected part of the design. Drag horizontally to tune or
          zoom; they carry inertia and coast. The − / + ends are discrete steps for
          people who would rather tap than drag. -->
+    <!-- ★★ FOUR BUTTONS, NOT TWO DRUMS. The drum FACE was a drag surface, and with the drag
+         gone (it fought fine tuning on a trackpad) a painted dial that cannot be turned is a
+         control promising something it no longer does. Two pairs — tune and zoom — with the
+         glyph between them saying which pair is which.
+         ★ Styled as THIS client's buttons, not copied from the app: same --btn-bg/--btn-border
+         and the same square-cornered amber language as every other control here. The app's
+         green drum chrome would have been a foreign object in the middle of the card. -->
     <div id="mDrums">
-      <div class="mDrum" id="mVfoDrum">
-        <button class="mDrumEnd" id="mVfoDown" aria-label="Tune down">−</button>
-        <div class="mDrumFace" id="mVfoFace"><span class="mDrumIcon"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span></div>
-        <button class="mDrumEnd" id="mVfoUp" aria-label="Tune up">+</button>
+      <div class="mDial">
+        <button class="mBtn" id="mVfoDown" aria-label="Tune down">−</button>
+        <span class="mDialGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
+        <button class="mBtn" id="mVfoUp" aria-label="Tune up">+</button>
       </div>
-      <div class="mDrum" id="mZoomDrum">
-        <button class="mDrumEnd" id="mZoomOut" aria-label="Zoom out">−</button>
-        <div class="mDrumFace" id="mZoomFace"><span class="mDrumIcon"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg></span></div>
-        <button class="mDrumEnd" id="mZoomIn" aria-label="Zoom in">+</button>
+      <div class="mDial">
+        <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
+        <span class="mDialGlyph" title="Zoom"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="M9.2 9.2L13 13"/><path d="M3.5 6L8.5 6"/></svg></span>
+        <button class="mBtn" id="mZoomIn" aria-label="Zoom in">+</button>
       </div>
+    </div>
     </div>
 
     <!-- ★ The app's card ends with a status row — clock on the left, the link cluster on the
