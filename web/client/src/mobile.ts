@@ -186,7 +186,6 @@ export function initMobileControls(deps: MobileDeps) {
     const to = document.getElementById(toId);
     if (from && to) from.onclick = () => to.click();
   };
-  mirror('mSearch', 'search');          // focus handled below — a click alone won't do it
   mirror('mBookmarks', 'bookmarksBtn');
   mirror('mPanelRec', 'recBtn');
   mirror('mPanelRecs', 'recordingsBtn');
@@ -195,17 +194,28 @@ export function initMobileControls(deps: MobileDeps) {
   mirror('mPanelCentre', 'centreBtn');
   mirror('mPanelFit', 'zoomReset');
 
-  // ★ Search is an INPUT, not a button: clicking it does nothing useful. Open the panel it
-  //   lives in and put the cursor in it, or the button looks broken.
-  const searchBtn = document.getElementById('mSearch');
-  const searchInput = document.getElementById('search') as HTMLInputElement | null;
-  if (searchBtn && searchInput) {
-    searchBtn.onclick = () => {
-      searchInput.scrollIntoView({ block: 'nearest' });
-      searchInput.focus();
-      searchInput.select();
-    };
-  }
+  // ★★★ MOVE THE SEARCH BOX, DO NOT COPY IT. #searchWrap lives in the desktop bar; when that
+  //     bar is hidden the input inside it cannot be focused or typed into, so anything
+  //     pointing at it is dead. Relocating the NODE keeps every listener — they are bound to
+  //     the element, not to its position in the tree — so there is still exactly one search
+  //     implementation. It goes back when the bar returns, or a user who widens the window
+  //     would find the bar missing its search box.
+  const wrap = document.getElementById('searchWrap');
+  const host = document.getElementById('mSearchHost');
+  const home = wrap?.parentElement ?? null;
+  const nextSibling = wrap?.nextElementSibling ?? null;
+  const narrow = window.matchMedia('(max-width: 1280px)');
+  const placeSearch = () => {
+    if (!wrap || !host || !home) return;
+    if (narrow.matches) {
+      if (wrap.parentElement !== host) host.appendChild(wrap);
+    } else if (wrap.parentElement !== home) {
+      // Back to its exact slot, not just appended — #findRow puts BOOKMARKS before it.
+      home.insertBefore(wrap, nextSibling);
+    }
+  };
+  placeSearch();
+  narrow.addEventListener('change', placeSearch);
 
   // ★★ THE VOLUME SLIDER IS A VALUE, NOT AN ACTION — mirroring a click would do nothing.
   //    Copy the value across and fire `input`, which is the event the audio path listens on;

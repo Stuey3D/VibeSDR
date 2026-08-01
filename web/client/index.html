@@ -303,6 +303,13 @@ html, body {
 .mPanelBtn:active { background: rgba(255,160,0,0.18); }
 .mPanelBtn.rec { border-color: #ff3b30; color: #ff3b30; }
 #mPanelVol { flex: 1 1 auto; min-width: 0; height: 44px; touch-action: none; }
+/* ★ The relocated search box must FILL its host row. In the bar it sat in a flex row that
+   gave it the remaining space; dropped into a panel row with no such sibling it would
+   collapse to its content width and look broken in a different way. */
+#mSearchHost { display: none; }
+@media (max-width: 1280px) { #mSearchHost { display: flex; } }
+#mSearchHost #searchWrap { flex: 1 1 auto; width: 100%; min-width: 0; }
+#mSearchHost #search { width: 100%; min-height: 44px; }
 
 /* ── House glyphs ────────────────────────────────────────────────────────────── */
 /* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform —
@@ -1650,9 +1657,15 @@ select.btn { padding: 6px 8px; }
        ★ .mOnly: the desktop bar already carries both, so this copy exists only at the widths
        where that bar is hidden — one visible copy at any width, never two. -->
   <div class="mrow mOnly" style="gap:0.5em">
-    <button class="mPanelBtn" id="mSearch" style="flex:1">SEARCH</button>
     <button class="mPanelBtn" id="mBookmarks" style="flex:1">★ BOOKMARKS</button>
   </div>
+  <!-- ★★★ THE REAL SEARCH INPUT IS MOVED IN HERE, not copied. A button that focused #search
+       did nothing at all: that input lives in the desktop bar, which is display:none on a
+       narrow window, and a HIDDEN ELEMENT CANNOT TAKE FOCUS — so it read as a dead button
+       (Stuart). A second input would mean a second copy of the search logic, which would
+       drift. Moving the node keeps every handler bound to it, because listeners belong to the
+       element and not to where it sits. mobile.ts moves it back when the bar returns. -->
+  <div class="mrow mOnly" id="mSearchHost"></div>
   <div class="btnRow">
     <button class="btn" id="freqGo">TUNE</button>
     <button class="btn" id="freqShare" title="Copy a link to this frequency">SHARE</button>
