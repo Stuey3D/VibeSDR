@@ -3012,9 +3012,13 @@ function showDecBox(what: string) {
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
   $('rdsPanel').classList.toggle('show', isRds);
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
-  $('rdsSize').classList.toggle('show', isRds);
+  // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
+  //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
+  //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
+  //    heights; the others grow the box itself, which is what makes an image bigger.
+  $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
-  if (isRds) applyRdsSize();
+  applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
   updateVts();
@@ -3049,6 +3053,16 @@ function applyRdsSize() {
   const btn = $('rdsSize');
   // Phones get a smaller pair: the waterfall behind still has to be usable for tuning.
   const phone = window.innerWidth <= 760;
+
+  // ★★★ FOR EVERY OTHER DECODER, BIG MEANS WIDER. An SSTV or WEFAX image is drawn at the box's
+  //     width, so height alone does nothing for it — the picture only gets bigger if the box
+  //     does. The class does the work in CSS so the container query keeps governing the layout
+  //     inside at whichever width results.
+  $('decBox').classList.toggle('big', rdsTall && !rdsPanelOpen());
+  btn.classList.toggle('tall', rdsTall);
+  btn.title = rdsTall ? 'Smaller panel' : 'Bigger panel';
+  if (!rdsPanelOpen()) { panel.style.height = ''; panel.style.maxHeight = ''; return; }
+
   if (rdsTall) {
     // ★★ TALL FITS THE CONTENT, it does not reach for a number. A fixed tall height left a
     // large black void whenever the station sent less than the maximum — and RDS fields
@@ -3064,8 +3078,6 @@ function applyRdsSize() {
     panel.style.height = phone ? 'min(30vh, 240px)' : 'min(40vh, 330px)';
     panel.style.maxHeight = 'none';
   }
-  btn.classList.toggle('tall', rdsTall);
-  btn.title = rdsTall ? 'Shorter panel' : 'Taller panel';
 }
 
 function initRdsResize() {
@@ -3077,7 +3089,7 @@ function initRdsResize() {
     applyRdsSize();
   };
   // A rotated phone changes which pair of sizes is right.
-  window.addEventListener('resize', () => { if (rdsPanelOpen()) applyRdsSize(); });
+  window.addEventListener('resize', () => applyRdsSize());
 }
 
 /** True while the Advanced RDS decoder owns the RDS display. */
