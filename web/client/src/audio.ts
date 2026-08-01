@@ -485,13 +485,47 @@ export class AudioPlayer {
   /** Called on the first real failure so the page can re-open the audio socket without `codec=opus`. */
   onOpusFailure: (() => void) | null = null;
   private opusFailed = false;
+  private opusFails = 0;
+  /** ★ Set by the page from the server's advertised policy. When the owner does NOT allow
+   *  uncompressed audio there is nothing to fall back TO — the server refuses a socket opened
+   *  without `codec=opus` — so giving up on Opus produces silence rather than a fallback. */
+  allowUncompressed = false;
+  /** Opus is failing repeatedly and this server forbids the uncompressed fallback. */
+  private opusStuck = false;
+  /** ★★ HOW MANY CONSECUTIVE FAILURES BEFORE WE GIVE UP ON OPUS. One is not enough: every
+   *  Opus packet is independently decodable, so a single bad frame genuinely does self-heal,
+   *  and tearing the decoder down for it turns a glitch into a permanent outage. */
+  private static readonly OPUS_FAIL_LIMIT = 4;
+
   private _failOpus(what: string, e: unknown) {
-    console.warn(`[audio] opus ${what} failed — falling back to uncompressed`, e);
+    this.opusFails++;
+    // ★★★ REBUILD FIRST, GIVE UP LAST. An Opus decoder that has errored is usually unhappy for
+    //     the next packet too, so the recovery that actually works is a NEW decoder — the same
+    //     fix the iOS and Android clients needed today, where a decode failure was silent and
+    //     permanent. Dropping the decoder here makes _ensureOpus build a fresh one.
+    try { this.opusDec?.close(); } catch {}
+    this.opusDec = null;
+    if (this.opusFails < AudioPlayer.OPUS_FAIL_LIMIT) {
+      console.warn(`[audio] opus ${what} failed (${this.opusFails}) — rebuilding the decoder`, e);
+      return;
+    }
+    // ★★★ AND IF THERE IS NOWHERE TO FALL BACK TO, DO NOT FALL BACK. With the owner's
+    //     uncompressed policy OFF, re-opening without `codec=opus` is REFUSED by the server —
+    //     so the "fallback" replaced a struggling stream with no stream at all, silently. Keep
+    //     rebuilding instead, and say so out loud: a listener who can hear nothing deserves to
+    //     know why, and the owner is the only one who can change the policy.
+    if (!this.allowUncompressed) {
+      if (this.opusFails === AudioPlayer.OPUS_FAIL_LIMIT || this.opusFails % 50 === 0) {
+        console.error(`[audio] opus ${what} keeps failing and this server does not allow `
+          + `uncompressed audio — still retrying`, e);
+      }
+      this.opusStuck = true;   // surfaced through health, on the meter where faults live
+      return;
+    }
+    console.warn(`[audio] opus ${what} failed ${this.opusFails}x — falling back to uncompressed`, e);
     if (this.opusFailed) return;      // one shot: the socket is being replaced
     this.opusFailed = true;
     this.opusBroken = true;
-    try { this.opusDec?.close(); } catch {}
-    this.opusDec = null;
     this.onOpusFailure?.();
   }
 
@@ -530,6 +564,10 @@ export class AudioPlayer {
   }
 
   private _onOpusData(ad: AudioData) {
+    // ★ A packet decoded = the decoder is healthy. Without this reset, four failures spread
+    //   across an hour of perfect audio would eventually trip the limit.
+    this.opusFails = 0;
+    this.opusStuck = false;
     const ch = ad.numberOfChannels, frames = ad.numberOfFrames;
     const pcm = new Int16Array(frames * ch);
     const plane = new Float32Array(frames);
@@ -635,7 +673,11 @@ export class AudioPlayer {
    * dead socket, our own mute, or (invisibly to us) SAFARI'S PER-TAB MUTE, which
    * no in-page control can override. Say which, rather than just going quiet.
    */
-  get health(): 'ok' | 'suspended' | 'no-stream' | 'muted' | 'squelched' | 'silent' {
+  get health(): 'ok' | 'suspended' | 'no-stream' | 'muted' | 'squelched' | 'silent' | 'opus-stuck' {
+    // ★ Ranked ABOVE the others: when Opus is failing on a server that forbids the fallback,
+    //   every other symptom ('silent', 'no-stream') is a consequence, and reporting the
+    //   consequence sends the listener looking at their tab mute instead of the real cause.
+    if (this.opusStuck) return 'opus-stuck';
     if (!this.ctx) return 'no-stream';
     if (this.suspended) return 'suspended';
     if (!this.streaming) return 'no-stream';
