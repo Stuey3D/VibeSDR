@@ -195,6 +195,8 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Reference for the RDS PI-code + ECC → country mapping (IEC 62106) that shows country flags from live RDS. MIT-licensed.' },
   { name: 'Opus — Xiph.Org Foundation',
     detail: 'Audio codec used for all streaming and decoding.' },
+  { name: 'opus-decoder (wasm-audio-decoders) — Ethan Halsall',
+    detail: 'libopus compiled to WebAssembly. It is what lets VibeServer’s web client play Opus in any browser, on a plain http:// address — where the browser’s own WebCodecs decoder is unavailable. MIT-licensed. Found by way of UberSDR, which uses it for the same reason.' },
   { name: 'EiBi',
     detail: 'Shortwave broadcast schedules used for live station bookmarks.' },
   { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',

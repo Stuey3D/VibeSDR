@@ -18,6 +18,7 @@
     "expo-haptics": "~57.0.0",
     "expo-keep-awake": "~57.0.0",
     "expo-status-bar": "~57.0.0",
+    "opus-decoder": "^0.7.11",
     "pako": "^2.1.0",
     "react": "19.2.3",
     "react-native": "0.86.0",

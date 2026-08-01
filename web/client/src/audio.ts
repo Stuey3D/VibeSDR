@@ -17,6 +17,14 @@
  */
 
 import { decodeVibeAdpcmFrame } from '../../../src/services/imaAdpcm';
+// ★★★ THE OPUS DECODER THAT ALWAYS EXISTS. WebCodecs' AudioDecoder is [SecureContext] — on
+// http://vibeserver.local:48000 it is simply UNDEFINED, so `supportsOpus()` said no, we asked
+// for uncompressed, and the server (uncompressed off) REFUSED the socket: audio 0 KB/s, silent.
+// It only ever worked on the dev Mac because loopback is exempt from the policy and gets raw PCM.
+// UberSDR ships this same library (`opus-decoder.min.js`, wasm-audio-decoders, MIT) and plays
+// fine over plain http on a LAN IP — WASM has no secure-context gate and no platform media stack
+// to disagree with. The wasm is inlined in the module, so the single-file page stays self-contained.
+import { OpusDecoder } from 'opus-decoder';
 
 /** Playout worklet: a ring buffer drained at the device rate. Kept tiny — it
  *  runs on the audio thread. Late frames are dropped, not queued, so a stalled
@@ -430,7 +438,22 @@ export class AudioPlayer {
       if (!this.closedByUs) setTimeout(() => this._openWs(), 3000);
     };
     ws.onmessage = (e) => {
+      // ★★★ THE SERVER EXPLAINS ITSELF AND WE USED TO THROW IT AWAY. `local_sdr_shim.cpp:3125`
+      //     refuses a socket opened without `codec=opus` when the owner forbids uncompressed —
+      //     it sends {"type":"needs_codec"} and closes. Nothing anywhere handled that message,
+      //     so the only evidence was `audio 0 KB/s` and a reconnect loop every 3 s, for ever.
+      //     With the WASM decoder we should never be refused again; if we are, SAY SO.
+      if (typeof e.data === 'string') {
+        try {
+          if (JSON.parse(e.data)?.type === 'needs_codec') {
+            console.error('[audio] server requires Opus and refused this socket');
+            this.needsCodec = true;
+          }
+        } catch { /* not ours */ }
+        return;
+      }
       if (!(e.data instanceof ArrayBuffer)) return;
+      this.needsCodec = false;
       this.cb.onBytes?.(e.data.byteLength);
       this._handleFrame(e.data);
     };
@@ -460,9 +483,17 @@ export class AudioPlayer {
     this._playPcm(pcm, ch);
   }
 
-  /** Does this browser decode Opus via WebCodecs? Awaited before we ask the server for Opus, so a
-   *  browser that can't (Safari <=16.3, Firefox <130, ancient WebViews) transparently gets PCM. */
-  static async supportsOpus(): Promise<boolean> {
+  /** ★★★ CAN THIS BROWSER PLAY OPUS AT ALL? Now always YES — we carry a WASM decoder, so the
+   *  answer no longer depends on the browser, the origin's secure-context status, or the OS media
+   *  stack. This matters because a "no" here is NOT a graceful degrade: on a server with
+   *  uncompressed off, asking for PCM gets the socket REFUSED, which is silence. The old answer
+   *  was a WebCodecs probe, and WebCodecs is unavailable on exactly the http:// LAN origin every
+   *  real listener uses. Kept as a method (and still awaited) so the call sites read the same. */
+  static async supportsOpus(): Promise<boolean> { return true; }
+
+  /** Does this browser have the CHEAP path — hardware/platform Opus via WebCodecs? Used to pick a
+   *  decoder, never to decide whether to ask for Opus. A `false` here now costs CPU, not audio. */
+  static async supportsWebCodecsOpus(): Promise<boolean> {
     try {
       if (typeof AudioDecoder === 'undefined') return false;
       // ★★ PROBE BOTH CHANNEL COUNTS — we used to test STEREO and then configure with the stream's
@@ -492,6 +523,8 @@ export class AudioPlayer {
   allowUncompressed = false;
   /** Opus is failing repeatedly and this server forbids the uncompressed fallback. */
   private opusStuck = false;
+  /** The server told us outright that it refuses this socket without Opus (`needs_codec`). */
+  private needsCodec = false;
   /** ★★ HOW MANY CONSECUTIVE FAILURES BEFORE WE GIVE UP ON OPUS. One is not enough: every
    *  Opus packet is independently decodable, so a single bad frame genuinely does self-heal,
    *  and tearing the decoder down for it turns a glitch into a permanent outage. */
@@ -507,6 +540,16 @@ export class AudioPlayer {
     this.opusDec = null;
     if (this.opusFails < AudioPlayer.OPUS_FAIL_LIMIT) {
       console.warn(`[audio] opus ${what} failed (${this.opusFails}) — rebuilding the decoder`, e);
+      return;
+    }
+    // ★★★ THE REAL FALLBACK IS ANOTHER DECODER, NOT ANOTHER STREAM. Whatever WebCodecs cannot
+    //     do here (Edge's media stack was the suspect for a week), libopus-in-WASM can — it is
+    //     the same code the native apps run, with no platform in the way. Switch and stay
+    //     switched; only if WASM ALSO fails is there anything to escalate.
+    if (!this.useWasm) {
+      console.warn(`[audio] opus ${what} failed ${this.opusFails}x on WebCodecs — switching to the WASM decoder`, e);
+      this.useWasm = true;
+      this.opusFails = 0;
       return;
     }
     // ★★★ AND IF THERE IS NOWHERE TO FALL BACK TO, DO NOT FALL BACK. With the owner's
@@ -549,9 +592,73 @@ export class AudioPlayer {
     this.opusTs = 0;
   }
 
+  // ── WASM Opus (the always-available path) ──────────────────────────────────
+  private wasmDec: OpusDecoder | null = null;
+  private wasmReady = false;
+  private wasmCh = 0;
+  /** Set once we have decided WebCodecs is not usable here — either absent (insecure origin) or
+   *  it failed for real. From then on every packet goes to WASM and we stop probing. */
+  // ★ `#wasmopus` forces it even where WebCodecs works. Without an override the WASM path is
+  //   invisible from the dev loop — localhost IS a secure context, so the Mac would always take
+  //   WebCodecs and the decoder every real listener uses would never be exercised where it is
+  //   developed. That is precisely how this bug survived a week. `#webcodecs` forces the other way.
+  private useWasm = location.hash.includes('wasmopus')
+    || (!location.hash.includes('webcodecs') && typeof AudioDecoder === 'undefined');
+
+  /** Build (or rebuild) the WASM decoder for `ch` channels. Decoding is synchronous once ready;
+   *  the ~20 ms of packets that arrive during startup are dropped, which is inaudible. */
+  private _ensureWasm(ch: number) {
+    if (this.wasmDec && this.wasmCh === ch) return;
+    try { this.wasmDec?.free(); } catch {}
+    this.wasmReady = false;
+    this.wasmCh = ch;
+    const dec = new OpusDecoder({ channels: ch });
+    this.wasmDec = dec;
+    dec.ready.then(() => {
+      if (this.wasmDec === dec) this.wasmReady = true;
+    }).catch((e) => {
+      // Nothing left to try: WebCodecs is gone or broken and WASM will not start. Say so on the
+      // meter rather than going quiet — see the `opus-stuck` note in _failOpus.
+      console.error('[audio] the WASM Opus decoder failed to start', e);
+      if (this.wasmDec === dec) { this.wasmDec = null; this.opusStuck = true; }
+    });
+  }
+
+  private _decodeWasm(packet: Uint8Array, ch: number) {
+    this._ensureWasm(ch);
+    if (!this.wasmDec || !this.wasmReady) return;   // still starting up — drop, do not queue
+    let out;
+    try {
+      out = this.wasmDec.decodeFrame(packet);
+    } catch (e) {
+      // Per-packet failure. Every Opus packet is independently decodable, so one bad frame
+      // self-heals; only a run of them means anything, and _failOpus counts them.
+      this._failOpus('wasm decode', e);
+      return;
+    }
+    const chans = out.channelData;
+    const n = out.samplesDecoded;
+    if (!chans.length || n <= 0) return;
+    this.opusFails = 0;
+    this.opusStuck = false;
+    const nc = chans.length;
+    const pcm = new Int16Array(n * nc);
+    for (let c = 0; c < nc; c++) {
+      const src = chans[c];
+      for (let i = 0; i < n; i++) {
+        let s = Math.round(src[i] * 32767);
+        s = s < -32768 ? -32768 : s > 32767 ? 32767 : s;
+        pcm[i * nc + c] = s;
+      }
+    }
+    this._playPcm(pcm, nc);
+  }
+
   private _decodeOpus(buf: ArrayBuffer, channels: number) {
     if (this.opusBroken) return;      // fallback in progress; drop rather than log-spam
-    this._ensureOpus(channels || 1);
+    const ch = channels || 1;
+    if (this.useWasm) { this._decodeWasm(new Uint8Array(buf, 6), ch); return; }
+    this._ensureOpus(ch);
     if (!this.opusDec) return;        // configure failed → _failOpus already fired
     // Copy the packet out of the frame (offset 6). Each Opus packet is a self-contained 20 ms frame.
     const data = buf.slice(6);
@@ -677,7 +784,7 @@ export class AudioPlayer {
     // ★ Ranked ABOVE the others: when Opus is failing on a server that forbids the fallback,
     //   every other symptom ('silent', 'no-stream') is a consequence, and reporting the
     //   consequence sends the listener looking at their tab mute instead of the real cause.
-    if (this.opusStuck) return 'opus-stuck';
+    if (this.needsCodec || this.opusStuck) return 'opus-stuck';
     if (!this.ctx) return 'no-stream';
     if (this.suspended) return 'suspended';
     if (!this.streaming) return 'no-stream';
@@ -724,5 +831,8 @@ export class AudioPlayer {
     this.node = null;
     this.gain = null;
     this.ring = null;
+    try { this.wasmDec?.free(); } catch {}
+    this.wasmDec = null;
+    this.wasmReady = false;
   }
 }

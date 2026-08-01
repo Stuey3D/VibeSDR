@@ -418,8 +418,13 @@ async function connect(host: string, pin: string) {
   const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
   const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
   const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
-  console.info(wantOpus ? '[audio] requesting Opus (WebCodecs supported)'
-                        : `[audio] requesting uncompressed (${srvLocal ? 'loopback' : 'listener choice'})`);
+  // ★★★ WE CAN ALWAYS TAKE OPUS NOW, so this only ever says no when RAW was ASKED for. The old
+  // gate answered "no Opus" on every plain-http LAN origin (WebCodecs is [SecureContext]) and the
+  // server then refused the uncompressed socket it had just been asked for — silence, on the only
+  // origin real listeners use. Which decoder does the work is now a CPU question, logged as such.
+  console.info(wantOpus
+    ? `[audio] requesting Opus (${await AudioPlayer.supportsWebCodecsOpus() ? 'WebCodecs' : 'WASM'} decoder)`
+    : `[audio] requesting uncompressed (${srvLocal ? 'loopback' : 'listener choice'})`);
   refreshRawAudioRow();   // the policy is only known now, and the panel may already be built
   refreshAdminRow();
 
@@ -1562,6 +1567,9 @@ function updateStatus() {
     case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
     // ★ The one fault the LISTENER cannot fix: only the server's owner can allow the
     //   uncompressed fallback, so say who has to act rather than just what is wrong.
+    // ★★ It should now be unreachable — every browser has the WASM decoder, so nothing is
+    //    turned away for lack of Opus. If it ever shows again, both decoders died, and that
+    //    is worth knowing rather than presenting as a mysterious silence.
     case 'opus-stuck': fault = 'OPUS FAILING — OWNER MUST ALLOW UNCOMPRESSED AUDIO'; break;
     // Squelch is NOT a fault and no longer takes an overlay — the message clipped inside the
     // meter and hid the very bar you watch while waiting for a signal. It shows as the breathing
