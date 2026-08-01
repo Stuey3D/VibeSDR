@@ -44,7 +44,19 @@ async function bundle() {
     write: false,
     legalComments: 'none',
   });
-  const js = res.outputFiles[0].text;
+  let js = res.outputFiles[0].text;
+
+  // ★★★ NO RAW NUL BYTES IN THE BUNDLE. The page is compiled into the shim as a C++ `const char*`
+  // and served via `std::string kPage(kVibeWebPage)` — strlen (local_sdr_shim.cpp:2990). One NUL
+  // truncates EVERYTHING after it, with no error anywhere: the Pi happily served 233,787 bytes of
+  // a 488,109-byte page. The WASM Opus decoder embeds its module as a binary string literal, which
+  // is where these come from. A raw NUL is only legal inside a JS string literal in the first
+  // place, and there `\x00` is exactly equivalent — so this is a safe, content-blind swap.
+  const nuls = (js.match(/\0/g) || []).length;
+  if (nuls) {
+    js = js.replace(/\0/g, '\\x00');
+    console.log(`escaped ${nuls} NUL byte${nuls === 1 ? '' : 's'} in the bundle (strlen-safe)`);
+  }
 
   // A VibeServer is plain http:// on a LAN IP — NOT a secure context. Anything
   // gated on one is undefined there and throws at runtime, but works fine in dev
@@ -127,6 +139,14 @@ async function emitCppHeader(html) {
   const DELIM = 'VIBEWEB';
   if (html.includes(`)${DELIM}"`)) {
     throw new Error('raw-string delimiter collides with page content');
+  }
+  // ★★★ A NUL TRUNCATES THE WHOLE PAGE. The shim does `std::string kPage(kVibeWebPage)` — strlen —
+  // so one embedded NUL silently serves a prefix and nothing anywhere reports an error. This is
+  // how the WASM decoder first shipped: byte-perfect for 233 KB, then simply stopped.
+  const nul = Buffer.from(html, 'utf8').indexOf(0);
+  if (nul !== -1) {
+    throw new Error(`NUL byte at offset ${nul} — the shim serves this page with strlen(), so `
+      + `everything after it would be dropped. Keep the bundle ASCII (esbuild charset).`);
   }
   // Safari will NOT use a data: URI favicon — it silently falls back to its default
   // arrow. So the icon is also emitted as raw bytes and served from a real URL
