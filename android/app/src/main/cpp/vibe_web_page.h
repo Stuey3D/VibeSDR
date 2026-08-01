@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (383.8 KB)
+// Source: web/client/  (384.6 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -444,7 +444,19 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 #mStatus {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 0.78em; color: var(--unit); padding: 0 0.2em;
+  /* ★★ WRAP RATHER THAN LOSE THINGS. At the narrowest the row overflowed and the right-hand
+     end simply fell off the card — and because the throughput text comes BEFORE the bars and
+     chips in the DOM, what got cut was the LINK QUALITY and the SQL/OVERLOAD warnings: the
+     only items on that row that mean anything is wrong. The readouts you can afford to lose
+     were the ones surviving (Stuart, 2026-08-01). */
+  flex-wrap: wrap; row-gap: 0.15em; column-gap: 0.6em;
 }
+/* ★ The throughput is the one thing here that may shrink and truncate — it is a nice-to-know.
+   The bars and chips never shrink: they are the whole point of the row. */
+#mStatus #status { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#mStatus #linkBars, #mStatus #sqlChip,
+#mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
+#mStatus #linkStats { min-width: 0; flex-wrap: wrap; }
 
 /* ── PORTRAIT: the app's stacked card. Below this the two drums side by side leave
       neither wide enough to drag usefully, so they stack and the pill grows. ─────── */
