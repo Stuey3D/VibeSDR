@@ -306,6 +306,12 @@ html, body {
 #mSearchHost #searchWrap { flex: 1 1 auto; width: 100%; min-width: 0; }
 #mSearchHost #search { width: 100%; min-height: 44px; }
 
+/* ★ RECORDING TIMER. Red and monospaced so the digits do not jitter as they count, and it
+   occupies no space at all when not recording — the status line must not reflow the moment
+   someone presses REC. */
+#mRecTime { color: #ff3b30; font-variant-numeric: tabular-nums; }
+#mRecTime:empty { display: none; }
+
 /* ── Link cluster in the card's status row ───────────────────────────────────── */
 #mNet { display: inline-flex; align-items: center; gap: 0.5em; }
 #mBars { display: inline-flex; align-items: flex-end; gap: 2px; height: 1em; }
@@ -1500,7 +1506,6 @@ select.btn { padding: 6px 8px; }
         <button class="mBtn" id="mZoomIn" aria-label="Zoom in">+</button>
       </div>
     </div>
-    </div>
 
     <!-- ★ The app's card ends with a status row — clock on the left, the link cluster on the
          right (Stuart: "that is where the status cluster will live like it does in the main
@@ -1508,6 +1513,10 @@ select.btn { padding: 6px 8px; }
          desktop status line rather than recomputed, so both readouts can never disagree. -->
     <div id="mStatus">
       <span id="mClock">—</span>
+      <!-- ★ The recording timer sits between the clock and the link cluster: it only has
+           anything to say while recording, and an empty span costs nothing when it does not.
+           Mirrored from #recTime so there is one timer, not two that can disagree. -->
+      <span id="mRecTime"></span>
       <span id="mNet"><span id="mNetTxt"></span><span id="mBars" class="q3"><i></i><i></i><i></i></span></span>
     </div>
   </div>
