@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (385.2 KB)
+// Source: web/client/  (385.8 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -304,7 +304,6 @@ html #bar { display: none; }
 .mGlyph { height: 1.15em; width: auto; vertical-align: -0.16em; }
 
 /* ── Tune / zoom pads ────────────────────────────────────────────────────────── */
-#mDrums { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
 /* − glyph + : the glyph names the pair, so neither button needs a text label and both stay
    wide enough for a thumb. */
 .mDial { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.35em; align-items: stretch; }
@@ -460,19 +459,24 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 #mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
 #mStatus #linkStats { min-width: 0; flex-wrap: wrap; }
 
-/* ── PORTRAIT: the app's stacked card. Below this the two drums side by side leave
-      neither wide enough to drag usefully, so they stack and the pill grows. ─────── */
-@media (max-width: 620px) {
-  #mDrums { grid-template-columns: 1fr; }
-  #mFreq { font-size: 2.1em; }
+/* ── Short windows: TIGHTEN, NEVER HIDE ──────────────────────────────────────── */
+/* ★★★ THIS BLOCK USED TO DO `#mStatus { display: none }`. It was written when the card was a
+   phone-only overlay, where dropping the status line on a landscape handset seemed a fair
+   trade for height. It is not one now: the card IS the controls at every size, so that rule
+   silently took away the clock, the recording timer, the link bars AND every warning chip —
+   SQL, SETTLING, OVERLOAD — the moment a window got short, which on a desktop is just someone
+   dragging an edge. Losing the indicators that say WHY the radio is misbehaving is the last
+   thing that should go, and it was going first (Stuart: "no status row at all", 2026-08-01).
+   ★ Tighten instead. The row already wraps and the throughput truncates before the chips do,
+   so it costs one line at worst.
+   ★ The old rules here also targeted #mDrums, which no longer exists — it became #mMain when
+   the pads started flanking the pill. Dead selectors in a media query are invisible until the
+   day one of them is not. */
+@media (max-height: 520px) {
+  #mcard { gap: 0.3em; padding: 0.4em; font-size: clamp(10px, 1.2vw, 13px); }
+  #mStatus { font-size: 0.72em; }
 }
-/* ── A landscape phone has almost no height: drop the drums to one row and tighten,
-      or the card eats the waterfall it exists to control. ───────────────────────── */
-@media (max-height: 460px) {
-  #mcard { gap: 0.35em; padding: 0.45em; }
-  #mDrums { grid-template-columns: 1fr 1fr; }
-  #mStatus { display: none; }
-}
+@media (max-width: 620px) { #mFreq { font-size: 2.1em; } }
 
 #bar {
   flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
