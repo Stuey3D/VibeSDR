@@ -8,6 +8,7 @@
 
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode } from './spectrum';
 import { AudioPlayer } from './audio';
+import { initMobileControls } from './mobile';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken,
          type AuthState } from './auth';
@@ -1605,6 +1606,25 @@ function buildControls() {
   };
 
   initFreqEntry();
+
+  // ── Mobile control card ──────────────────────────────────────────────────
+  // ★ Wired unconditionally; CSS alone decides whether the card is on screen (≤1280px).
+  //   Gating the WIRING on width instead would mean a user who resizes the window gets a
+  //   dead card — and resizing is precisely how this layout is meant to be reached.
+  initMobileControls({
+    nudgeSteps: (n) => nudge(n * step),
+    zoomBy:     (f) => { spec?.zoomBy(f); updateViewOverlays(); },
+    freqHz:     () => spec?.frequency ?? null,
+    mode:       () => spec?.mode ?? '',
+    stepLabel:  () => formatStep(step),
+    cycleStep,
+    // sigSmooth is the same 0..1 the desktop meter fills to, so both readouts agree.
+    signal:     () => ({ level: sigSmooth, caption: `SNR ${snrSmooth.toFixed(0)} dB` }),
+    openFreqEntry: () => $('pill').click(),
+    openMenu:      () => togglePanel('menu'),
+    openAudio:     () => togglePanel('audioPanel'),
+    openDecoders:  () => togglePanel('decodersPanel'),
+  });
   initBw();
   initPanels();
   initRecorder();
