@@ -3979,9 +3979,13 @@ struct LocalSdrShim::Impl {
                             continue;
                         }
                         LOGE("stream restart failed: %s", rerr.c_str());
-                    } else {
-                        continue;      // still inside the back-off window — say nothing, wait
                     }
+                    // ★★★ FALL THROUGH TO THE REPORTING BELOW — do NOT `continue` while waiting
+                    // out the back-off. An earlier draft of this did, and it recreated the exact
+                    // bug this commit exists to kill: with the back-off widening to 30 s, a radio
+                    // that never recovers would sit un-reported indefinitely and the UI would show
+                    // a healthy receiver over silence. Retrying and telling the truth meanwhile
+                    // are not alternatives.
                 } else if (!silent) {
                     // Healthy again: the next stall gets a full set of tries from scratch.
                     srcRestarts = 0;
