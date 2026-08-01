@@ -103,6 +103,8 @@ public:
      *  false means the redraw ran past the end of what was actually decoded and the result must
      *  NOT be shown. See the slant-correction guard in videoThread(). */
     std::vector<uint8_t> redrawFromLuminance(double rate, int skip, bool* okOut = nullptr); // RGB w*h*3
+    /** How far the last redraw ran past the captured audio, in samples (0 = it fitted). */
+    int lastShortfallSamples = 0;
     const std::vector<uint8_t>& syncFlags() const { return hasSync; }
 
     std::vector<SstvPixel> pixelGrid(double rate, int skip);
