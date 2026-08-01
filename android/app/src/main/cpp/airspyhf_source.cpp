@@ -465,62 +465,20 @@ bool AirspyHfSource::setSampleRate(double hz) {
     }
     curRate_ = (double)r;      // provisional — the measurement below has the last word
 
-    // ★★★ MEASURE IT. DO NOT BELIEVE THE LIST, AND DO NOT BELIEVE `rc 0`.
-    //     This radio advertises seven rates and implements THREE. Measured on hardware
-    //     (2026-08-01, HF+ Discovery, every rate driven and counted):
-    //         912000 -> 912000     768000 -> 912000     650000 -> 912000
-    //         456000 -> 456000     384000 -> 456000
-    //         228000 -> 228000     192000 -> 228000
-    //     It silently rounds UP to its top rate halved, and reports success either way. The DSP
-    //     was then built for the number we asked for while the radio ran faster, and a rate
-    //     mismatch is heard as a PITCH SHIFT — Stuart: 912/456/228 fine, everything else "Barry
-    //     White", each one slow by exactly the ratio between what he picked and what it did.
-    //     ★ So the rate is settled by counting samples, not by asking. Whatever the radio decides
-    //     to do, the DSP is built for what it is ACTUALLY doing — which is also the only approach
-    //     that survives a different HF+ model, a firmware update, or the next radio to do this.
-    if (streaming_) {
-        // ★★★ LET THE OLD RATE DRAIN FIRST. Counting straight after the change measures the
-        //     buffers still in flight from the PREVIOUS rate — so asking for 912 while the radio
-        //     was at 456 measured ~456, "corrected" curRate_ to 456, and built the entire DSP for
-        //     half the real rate: no audio, no spectrum (Stuart, 2026-08-02, "broken completely").
-        //     A measurement that includes the transition is not a measurement of the new state.
-        impl_->mtx.unlock();                       // let the stream callback run
-        std::this_thread::sleep_for(std::chrono::milliseconds(400));   // drain the old rate
-        sampCount_.store(0, std::memory_order_relaxed);
-        const double t0 = nowSecsMono();
-        std::this_thread::sleep_for(std::chrono::milliseconds(600));
-        impl_->mtx.lock();
-        const double dt = nowSecsMono() - t0;
-        const long long n = sampCount_.load(std::memory_order_relaxed);
-        if (dt > 0.2 && n > 1000) {
-            const double measured = (double)n / dt;
-            const uint32_t snapped = nearestRate(measured);   // reject counting jitter
-            // ★★★ AND ONLY BELIEVE A MEASUREMENT THAT IS ACTUALLY CLOSE TO A REAL RATE. Snapping
-            //     alone is not enough: a count taken across a transition lands between two rates
-            //     and snaps confidently to the wrong one. Within 5% or the request stands — a
-            //     radio genuinely running something else misses by 19% (912 vs 768) at worst.
-            const bool trust = snapped && std::fabs(measured - (double)snapped) < 0.05 * snapped;
-            if (!trust) {
-                std::fprintf(stderr, "airspyhf: measured %.0f S/s does not match any rate closely "
-                                     "— keeping the requested %u\n", measured, (unsigned)r);
-            } else if (snapped && std::fabs((double)snapped - (double)r) > 1.0) {
-                std::fprintf(stderr, "airspyhf: asked %u but the radio is running %u "
-                                     "(measured %.0f S/s) — using the measured rate\n",
-                             (unsigned)r, (unsigned)snapped, measured);
-                curRate_ = (double)snapped;
-            } else {
-                std::fprintf(stderr, "airspyhf: rate %u confirmed (measured %.0f S/s)\n",
-                             (unsigned)r, measured);
-            }
-            // ★★★ AND WHICH IF ARCHITECTURE THIS RATE USES. It is a per-rate property and it
-            //     changes the TUNING MATHS: libairspyhf applies its 5 kHz DEFAULT_IF_SHIFT only in
-            //     ZERO-IF, and the LO floor differs too (180 kHz vs 84). 912 and 456 are correct
-            //     and 228 "shifts everything" (Stuart, 2026-08-01) — so the first thing to know is
-            //     whether 228 is the odd one out here. Logged rather than assumed.
-            std::fprintf(stderr, "airspyhf: rate %u is %s-IF\n", (unsigned)curRate_,
-                         airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero");
-        }
-    }
+    // ★★★ THE RUNTIME RATE MEASUREMENT HAS BEEN REMOVED. It was right about the radio — this
+    //     firmware advertises seven rates and delivers three — but wrong as a permanent mechanism,
+    //     and it caused two regressions in an hour (2026-08-02):
+    //       • counting began the instant the rate changed, so it measured the buffers still in
+    //         flight at the OLD rate, "corrected" 912 to 456 and built the whole DSP for half the
+    //         real rate — no audio, no spectrum;
+    //       • and it held the device for a full second on every change, which is a long time to
+    //         stall a stream to learn something we already know.
+    //     ★ What it was defending against is now handled where it belongs: the offered list only
+    //     contains rates this radio actually delivers (see finishOpen), and anything below them is
+    //     reached by software decimation, which cannot be substituted by firmware at all.
+    //     ★★ The measurement itself was still the right way to LEARN this — see the table in
+    //     chooseRate(). A probe and a feature are different things, and this is the second time
+    //     tonight that shipping the probe was the mistake (the other was the canonical-rate walk).
     return true;
 }
 
