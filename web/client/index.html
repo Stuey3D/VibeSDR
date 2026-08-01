@@ -261,10 +261,12 @@ html #bar { display: none; }
    in the same red the recording timer uses for "this state is why nothing is happening".
    ★ Both states live in the markup and CSS picks one, so switching cannot fail halfway or
    depend on a script having run. */
-#mAudio .mIcMute { display: none; }
-#mAudio.muted .mIcLive { display: none; }
-#mAudio.muted .mIcMute { display: inline; }
-#mAudio.muted { color: #ff3b30; border-color: #ff3b30; }
+/* ★ Keyed on a CLASS, not on #mAudio, because the audio button and the mute button in the
+   volume row show the same fact and must never disagree about it. */
+.mIcMute { display: none; }
+.muted .mIcLive { display: none; }
+.muted .mIcMute { display: inline-flex; }
+#mAudio.muted, #mPanelMute.muted { color: #ff3b30; border-color: #ff3b30; }
 
 /* ── "Back to the dial" button ────────────────────────────────────────────────── */
 #mCentreFloat {
@@ -1836,7 +1838,7 @@ select.btn { padding: 6px 8px; }
      bar, so hiding the bar on a narrow window left a listener with no way to turn it down.
      .mOnly keeps these to the widths where the bar is hidden, so desktop keeps ONE copy. -->
 <div class="mrow mOnly"><label>VOLUME</label>
-  <button class="mPanelBtn" id="mPanelMute" title="Mute" style="width:3.4em"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></button>
+  <button class="mPanelBtn mMuteBtn" id="mPanelMute" title="Mute" style="width:3.4em"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></span></button>
   <input type="range" id="mPanelVol" min="0" max="100" step="1" aria-label="Volume">
 </div>
 <div class="mrow mOnly mOnlyGrid">
