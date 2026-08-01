@@ -144,6 +144,18 @@ export function initMobileControls(deps: MobileDeps) {
   mirror('mPanelCentre', 'centreBtn');
   mirror('mPanelFit', 'zoomReset');
 
+  // ★★★ MOVE #linkStats INTO THE CARD. It holds the link bars and the SQL / SETTLING /
+  //     OVERLOAD chips — and #status, the throughput readout, is inside it too. All of them
+  //     live in the desktop bar, which is hidden at every width, so without this the whole
+  //     right-hand half of the status row is simply absent.
+  // ★★ THIS WAS DELETED BY ACCIDENT ONCE ALREADY: a later edit replaced a span of lines that
+  //    this block had been inserted into, and left behind a COMMENT further down still
+  //    asserting that the move happens. A comment describing behaviour that no longer exists
+  //    is worse than no comment — it stopped me looking here for two rounds (2026-08-01).
+  const stats = document.getElementById('linkStats');
+  const statsHost = document.getElementById('mLinkHost');
+  if (stats && statsHost && stats.parentElement !== statsHost) statsHost.appendChild(stats);
+
   // ★★★ MOVE THE SEARCH BOX, DO NOT COPY IT. #searchWrap lives in the desktop bar, and that
   //     bar is hidden at EVERY width now — an input inside it cannot be focused or typed into,
   //     so anything pointing at it is dead. Relocating the NODE keeps every listener (they bind
