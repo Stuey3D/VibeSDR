@@ -180,14 +180,33 @@ html #bar { display: none; }
 /* NARROW: the pads and stacks FLOW UNDER the frequency (Stuart). `order` keeps the pill on
    top even though the tune pad comes first in the markup — the markup order is the one that
    reads correctly when things flank, and layout should bend to that rather than the reverse. */
+/* ★★★ PLACED EXPLICITLY, NOT LEFT TO FLOW. The markup order is [tune][step/menu][pill]
+   [audio/dec][zoom] because that is what reads correctly when they FLANK. Let those five
+   auto-flow into a two-column grid and they interleave — tune ends up beside step/menu and
+   zoom beside audio/decoders, so the four buttons are split across two rows in two different
+   places and neither pair sits with its own kind (Stuart, 2026-08-01).
+   ★ The app's portrait is the target: frequency, then the four buttons in ONE row, then the
+   two dials side by side. Explicit row/column placement gets that from the same markup,
+   without a second copy of the DOM for narrow windows. */
 @media (max-width: 900px) {
   #mMain { grid-template-columns: 1fr 1fr; }
-  #mPill { grid-column: 1 / -1; order: -1; }
   #mMain .mDial { min-width: 0; }
+  #mPill    { grid-column: 1 / -1; grid-row: 1; }
+  #mStackL  { grid-column: 1;      grid-row: 2; }
+  #mStackR  { grid-column: 2;      grid-row: 2; }
+  #mVfoDial { grid-column: 1;      grid-row: 3; }
+  #mZoomDial{ grid-column: 2;      grid-row: 3; }
+  /* Side by side, so the two stacks together read as the app's single four-button row. */
   .mStack { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
   .mStack .mBtn { min-height: max(2.4em, 40px); }
 }
-@media (max-width: 440px) { #mMain { grid-template-columns: 1fr; } }
+/* Narrowest: one dial per row, but the four buttons STAY as one row of four — they are the
+   most-used controls and splitting them costs more height than it buys in width. */
+@media (max-width: 440px) {
+  #mMain { grid-template-columns: 1fr 1fr; }
+  #mVfoDial { grid-column: 1 / -1; grid-row: 3; }
+  #mZoomDial{ grid-column: 1 / -1; grid-row: 4; }
+}
 
 /* ── The pill: the signal meter is its BACKGROUND, not a separate row ────────── */
 #mPill {
