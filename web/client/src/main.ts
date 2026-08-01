@@ -1745,7 +1745,13 @@ function updateCentreBtn() {
       const lo = wf.displayCenterHz() - span / 2;
       // Which way did it go? We have already worked it out to decide `offscreen`, and
       // "your station is off to the left" is most of what the user wanted to know.
-      float.textContent = spec.frequency < lo ? '‹ BACK TO DIAL' : 'BACK TO DIAL ›';
+      // ★★ WRITE ONLY ON CHANGE. This runs on every view update, and replacing textContent
+      //    destroys the text node UNDER THE POINTER — if that happens between mousedown and
+      //    mouseup the mousedown target is detached, no click is generated, and the button
+      //    reads as unresponsive until a press happens to fall between two updates (Stuart:
+      //    "it did work but needed a few clicks"). Same bug the card's readouts had.
+      const label = spec.frequency < lo ? '‹ ⌖ CENTRE ON VFO' : '⌖ CENTRE ON VFO ›';
+      if (float.textContent !== label) float.textContent = label;
     }
   }
 }
@@ -2509,7 +2515,7 @@ function initPanels() {
     //     ★ The popups are exempt too: #stepMenu and #mModeMenu are anchored menus rather than
     //     PANELS members, so a click on one of their options counted as "outside".
     if (!PANELS.some(id => $(id).contains(t))
-        && !t.closest('#bar') && !t.closest('#mcard')
+        && !t.closest('#bar') && !t.closest('#mcard') && !t.closest('#mCentreFloat')
         && !t.closest('#stepMenu') && !t.closest('#mModeMenu')) closePanels();
   });
 }
