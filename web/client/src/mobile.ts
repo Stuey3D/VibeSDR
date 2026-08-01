@@ -317,20 +317,25 @@ export function initMobileControls(deps: MobileDeps) {
   // ★ The pill shows MHz or kHz on the same rule the app uses: below 10 MHz a kHz
   //   reading has more useful digits, above it MHz does. Switching unit is not cosmetic —
   //   it is what keeps the significant figures on screen at every band.
+  // ★ WRITE ONLY ON CHANGE. This runs 4×/s over elements the user is trying to click, and
+  //   replacing textContent destroys and rebuilds the text node under the pointer — churn
+  //   that costs nothing to avoid and can only help a mid-click update.
+  const put = (el: HTMLElement, v: string) => { if (el.textContent !== v) el.textContent = v; };
+
   function refresh() {
     const hz = deps.freqHz();
     const fEl = $('mFreq'), uEl = $('mUnit');
     if (hz == null) {
-      fEl.textContent = '—';
+      put(fEl, '—');
     } else if (hz < 10_000_000) {
-      fEl.textContent = (hz / 1e3).toFixed(3);
-      uEl.textContent = 'kHz';
+      put(fEl, (hz / 1e3).toFixed(3));
+      put(uEl, 'kHz');
     } else {
-      fEl.textContent = (hz / 1e6).toFixed(3);
-      uEl.textContent = 'MHz';
+      put(fEl, (hz / 1e6).toFixed(3));
+      put(uEl, 'MHz');
     }
-    $('mMode').textContent = deps.mode().toUpperCase();
-    $('mStep').textContent = deps.stepLabel();
+    put($('mMode'), deps.mode().toUpperCase());
+    put($('mStep'), deps.stepLabel());
 
     // ★★ MIRROR THE DESKTOP READOUTS, DO NOT RECOMPUTE THEM. Throughput, fps, rtt and link
     //    quality are all derived in updateStatus()/updateLink(); a second derivation here
@@ -338,13 +343,13 @@ export function initMobileControls(deps: MobileDeps) {
     //    status readouts is worse than one.
     const st = document.getElementById('status');
     const bars = document.getElementById('linkBars');
-    if (st) $('mNetTxt').textContent = st.textContent ?? '';
+    if (st) put($('mNetTxt'), st.textContent ?? '');
     if (bars) $('mBars').className = bars.className;
 
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
     $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
-    $('mSnr').textContent = meterText(sig);
+    put($('mSnr'), meterText(sig));
   }
 
   // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so
@@ -354,7 +359,7 @@ export function initMobileControls(deps: MobileDeps) {
     const p = (n: number) => String(n).padStart(2, '0');
     const utc = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
     const loc = `${p(d.getHours())}:${p(d.getMinutes())}`;
-    $('mClock').textContent = `${utc} · ${loc}`;
+    put($('mClock'), `${utc} · ${loc}`);
   }
 
   refresh();
