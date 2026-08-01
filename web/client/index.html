@@ -2352,7 +2352,7 @@ select.btn { padding: 6px 8px; }
     <!-- The HF+'s only AGC adjustment: a low or high threshold. HIGH lets the front end run
          hotter before it backs off — better sensitivity on a quiet band, worse on a crowded one. -->
     <div class="mrow" id="rowAhfThresh">
-      <label title="The signal level at which the AGC starts backing the front end off. HIGH tolerates a stronger signal before engaging, so more gain is kept — better on weak stations, less protection against overload. LOW engages earlier and stays conservative — better on a crowded band with strong locals.">AGC THRESHOLD</label>
+      <label title="Airspy: the threshold tells the AGC to tolerate an extra 3 dB of signal power before setting the next attenuation level. HIGH = the front end is MORE sensitive, and is what they recommend when chasing marginal signals in the presence of very strong blockers (~100 dB apart). LOW = less sensitive, engaging earlier.">AGC THRESHOLD</label>
       <div class="seg" id="ahfThreshSeg">
         <button class="btn on" data-th="0" title="Backs off earlier. Conservative — for a crowded band with strong local stations.">LOW</button>
         <button class="btn" data-th="1" title="Backs off later, keeping more gain. Better for weak stations; more overload risk.">HIGH</button>
@@ -2363,12 +2363,21 @@ select.btn { padding: 6px 8px; }
          strong broadcast band out of the mixer — that intent should be visible, not hidden
          behind a friendlier word. 0-48 dB in 6 dB steps is the hardware's own granularity. -->
     <div class="mrow" id="rowAhfAtt">
-      <label for="ahfAtt">ATTENUATION</label>
+      <label for="ahfAtt" title="Airspy's own rule of thumb with the AGC off: push the attenuation until the noise floor sits around -100 dBFS. Less attenuation than that does not necessarily improve SNR, but it definitely costs dynamic range. If in doubt, turn the AGC on and let it decide.">ATTENUATION</label>
       <input type="range" id="ahfAtt" min="0" max="8" value="0">
       <span class="val" id="ahfAttVal">0 dB</span>
     </div>
+    <!-- ★★★ IT IS NOT A PREAMP. Airspy's own documentation: "The preamp option might be
+         misleading, and should probably be renamed postamp. It has the same effect on the noise
+         figure and the linearity as a preamp, but acts on the BACK-END (ADC + Digital/DSP post
+         processing) of the receiver instead. Basically, turn the preamp option off to get an
+         extra 12 dB of dynamic range by scrapping the quantization noise margin."
+         ★ So the honest label is not "+6 dB of gain" — the trade is dynamic range, and OFF is the
+         better default on any decent antenna. Stuart's own measurement agrees: on VHF the preamp
+         HALVED the RDS constellation (see the gain findings note). The name stays because it is
+         the name on every other tool, but the description tells the truth. -->
     <div class="mrow">
-      <label>PREAMP (+6 dB)</label>
+      <label title="Airspy calls this misleading: it is really a POSTAMP, acting on the ADC and DSP back-end rather than the antenna. Turning it OFF buys about 12 dB of dynamic range by scrapping the quantisation-noise margin. Leave it off unless the band is genuinely quiet and the signal is weak.">PREAMP (really a postamp)</label>
       <div class="seg"><button class="btn" id="ahfLna">OFF</button></div>
     </div>
     <!-- ★ PARTS PER BILLION, not ppm. An HF+ reference is good enough that a ppm control would
