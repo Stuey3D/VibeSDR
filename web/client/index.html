@@ -220,8 +220,16 @@ html #bar { display: none; }
   /* Width is set from the live signal level; the unfilled part stays dark. */
   width: 0%; transition: width 0.12s linear;
 }
+/* ★ Drawn ON the gradient and above it, but BELOW the readout — the numbers must never be
+   crossed by it. Amber against a green/red scale so it cannot be mistaken for signal. */
+#mSqlLine {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; z-index: 1;
+  background: var(--amber, #ffa000); box-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+#mSqlLine[hidden] { display: none; }
+
 #mPillIn {
-  position: relative; z-index: 1; display: flex; align-items: baseline;
+  position: relative; z-index: 2; display: flex; align-items: baseline;
   justify-content: center; gap: 0.4em; width: 100%; padding: 0 0.7em;
   /* ★ The readout sits ON the gradient, so it needs its own contrast rather than
      trusting whichever colour happens to be behind it at that signal level. */
@@ -373,23 +381,12 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
 #mRecTime { color: #ff3b30; font-variant-numeric: tabular-nums; }
 #mRecTime:empty { display: none; }
 
-/* ── Link cluster in the card's status row ───────────────────────────────────── */
+/* ── Link cluster + chips in the card's status row ──────────────────────────── */
 #mNet { display: inline-flex; align-items: center; gap: 0.5em; }
-#mBars { display: inline-flex; align-items: flex-end; gap: 2px; height: 1em; }
-#mBars i { width: 3px; background: currentColor; border-radius: 1px; opacity: 0.28; }
-#mBars i:nth-child(1) { height: 40%; }
-#mBars i:nth-child(2) { height: 70%; }
-#mBars i:nth-child(3) { height: 100%; }
-/* ★ Lit bars = quality, and the COLOUR carries the same meaning as the desktop link bars:
-   green healthy, amber struggling, red stalled. Bars alone would be unreadable at this size. */
-#mBars.q3 { color: var(--phosphor); }
-#mBars.q3 i { opacity: 1; }
-#mBars.q2 { color: var(--phosphor); }
-#mBars.q2 i:nth-child(-n+2) { opacity: 1; }
-#mBars.q1 { color: #ffa000; }
-#mBars.q1 i:nth-child(1) { opacity: 1; }
-#mBars.q0 { color: #ff3b30; }
-#mBars.q0 i { opacity: 0.9; }/* ── Status line ─────────────────────────────────────────────────────────────── */
+/* The real #linkStats moves in here — see the markup. It brings its own styling with it. */
+#mLinkHost { display: inline-flex; align-items: center; }
+
+/* ── Status line ─────────────────────────────────────────────────────────────── */
 #mStatus {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 0.78em; color: var(--unit); padding: 0 0.2em;
@@ -1549,6 +1546,12 @@ select.btn { padding: 6px 8px; }
       </div>
       <div id="mPill">
         <div id="mSig"></div>
+      <!-- ★★ THE SQUELCH THRESHOLD, ON THE METER. Without it the gate is invisible: audio
+           stops and nothing on screen says the signal simply did not reach the level you set.
+           The line marks exactly where it would have to get to, so you can watch a signal
+           climbing towards it — which is the whole point of squelch. Hidden when squelch is
+           off, so a meter with no gate stays clean. -->
+      <div id="mSqlLine" hidden></div>
         <div id="mPillIn">
           <span id="mFreqBox"><span id="mFreq">—</span><span id="mUnit">MHz</span></span>
           <span id="mMode">NFM</span><span id="mSnr"></span>
@@ -1571,7 +1574,13 @@ select.btn { padding: 6px 8px; }
     <div id="mStatus">
       <span id="mClock">—</span>
       <span id="mRecTime"></span>
-      <span id="mNet"><span id="mNetTxt"></span><span id="mBars" class="q3"><i></i><i></i><i></i></span></span>
+      <!-- ★★★ THE REAL #linkStats IS MOVED IN HERE, not copied. It carries the link bars AND the
+           three chips — SQL (squelch), SETTLING (gain settling) and OVERLOAD — and every one of
+           those is a "this is why nothing is happening" indicator. They were stranded in the
+           hidden bar, so the card silently lost all three; a squelch gate closing looked
+           identical to a dead stream, which is the exact ambiguity this card is meant to
+           remove. Moving the node keeps their logic and leaves ONE copy. -->
+      <span id="mNet"><span id="mNetTxt"></span><span id="mLinkHost"></span></span>
     </div>
   </div>
 

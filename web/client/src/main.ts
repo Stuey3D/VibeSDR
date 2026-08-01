@@ -1634,7 +1634,16 @@ function buildControls() {
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the same 0..1 the desktop meter fills to, and the three readings come from
     // the same figures its status line prints — so the card can never contradict the bar.
-    signal:     () => ({ level: sigSmooth, snr: snrSmooth, dbfs: lastSigDb, sUnit: toSUnit(lastSigDb) }),
+    signal:     () => ({
+      level: sigSmooth, snr: snrSmooth, dbfs: lastSigDb, sUnit: toSUnit(lastSigDb),
+      // ★ The squelch threshold in the SAME normalisation the gradient is drawn in, so the
+      //   line lands exactly where the signal would have to reach to open the gate. −1 = off.
+      //   Computed here rather than in the card: this is the scale the meter itself uses, and
+      //   a second derivation would put the line somewhere subtly wrong.
+      sqlNorm: squelchDb > -100
+        ? Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / Math.max(1, sqlScaleMax - sqlScaleMin)))
+        : -1,
+    }),
     openFreqEntry: () => $('pill').click(),
     modes:      () => MODES as unknown as string[],
     setMode:    (m) => setMode(m as SDRMode, true),
