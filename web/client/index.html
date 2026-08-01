@@ -2563,19 +2563,15 @@ select.btn { padding: 6px 8px; }
     <input type="range" id="smooth" min="1" max="10" value="5">
     <span class="val" id="smoothVal">5</span>
   </div>
-  <!-- ★★★ FFT AVERAGING — the app has had this and the browser never did, which is why the two
-       looked different on the same server with the same settings (Stuart, 2026-08-01, comparing
-       side by side: "I bet its the FFT averaging that slowed down the waterfall but made it razor
-       sharp"). He was right, and it was not a missing algorithm: the web client already runs the
-       APP'S SignalProcessor — it simply had no control for this one setting, so it sat at 0.
-       ★ OWRX semantics, deliberately: the weight IS the control (0 = instant, 0.9 = heaviest).
-       Successive frames blend, so random noise averages down while a persistent weak signal
-       builds up — the trade is lag, which is exactly the "slower but sharper" he described. -->
-  <div class="mrow">
-    <label for="fftAvg" title="Blend successive FFTs: noise averages away and weak signals build up. Costs responsiveness.">FFT AVG</label>
-    <input type="range" id="fftAvg" min="0" max="90" step="5" value="0">
-    <span class="val" id="fftAvgVal">OFF</span>
-  </div>
+  <!-- ★★ NO FFT-AVERAGING CONTROL HERE, DELIBERATELY. The DSP supports it (SignalProcessor's
+       `avgFrames`, OWRX-style) and it is tempting to expose because the app's code still carries
+       the plumbing — but the app TRIED it, found it did little, removed the control and defaulted
+       it to 0 (Stuart, 2026-08-01: "doesn't really do much and I remember it not doing much on the
+       main app so we removed it"). I added it to the browser and it was no better, so it is out
+       again. ★ The decision is recorded here rather than just the deletion, because a setting that
+       exists in the engine and not in the UI invites exactly this rediscovery — this was the
+       second time. The app/web difference is the waterfall ROW BLENDING (waterfall.ts), not this. -->
+
   <div class="mrow">
     <label for="specFloor">FLOOR</label>
     <input type="range" id="specFloor" min="-20" max="20" value="0">

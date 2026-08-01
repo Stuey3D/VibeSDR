@@ -4479,10 +4479,6 @@ function buildMenu() {
 
   slider('smooth', 'smoothVal', (v) => String(v),
     (v) => wf!.applySettings({ smoothingFrames: v }), 'smoothingFrames');
-  // ★ Stored as the app stores it (0…0.9) but presented as a percentage, because "0.45" is not
-  //   a number anyone can reason about and the app's own slider reads the same way.
-  slider('fftAvg', 'fftAvgVal', (v) => (v ? `${v}%` : 'OFF'),
-    (v) => wf!.applySettings({ avgFrames: v / 100 }), 'fftAvg');
   slider('specFloor', 'specFloorVal', (v) => String(v),
     (v) => wf!.applySettings({ specFloor: v }), 'specFloor');
   slider('specPeak', 'specPeakVal', (v) => `${(v / 10).toFixed(1)}×`,
@@ -4497,7 +4493,7 @@ function buildMenu() {
   $('dispReset').onclick = () => {
     for (const k of ['autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast',
                      'wfSharpness', 'smoothingFrames', 'specFloor', 'specPeakScale',
-                     'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow', 'fftAvg',
+                     'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow',
                      'wfCoarse', 'palette']) {
       const p = prefs();
       delete p[k];
