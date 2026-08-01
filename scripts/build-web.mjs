@@ -50,10 +50,26 @@ async function bundle() {
   // gated on one is undefined there and throws at runtime, but works fine in dev
   // (localhost counts as secure), so it only ever fails on the real device.
   // Fail the build instead.
+  // ★★★ WebCodecs belongs on this list and was missing for a week of debugging: AudioDecoder is
+  // [SecureContext] too, so on http://vibeserver.local it is undefined — the client concluded the
+  // browser could not do Opus, asked for uncompressed, and the server refused it. Silence, on
+  // every real LAN listener, invisible from the dev Mac (loopback is a secure context AND exempt
+  // from the codec policy). It is allowed ONLY behind a typeof guard, which is how audio.ts uses
+  // it; the WASM decoder is the path that always works.
   const banned = [
     ['crypto.subtle', 'use src/services/vibeAuth.ts (pure-JS HMAC) instead'],
     ['randomUUID',    'use getRandomValues(); randomUUID is secure-context-only'],
   ];
+  const guardedOnly = [
+    ['AudioDecoder', 'WebCodecs is secure-context-only — guard with `typeof AudioDecoder === "undefined"` '
+                   + 'and fall back to the WASM decoder (opus-decoder)'],
+  ];
+  for (const [needle, hint] of guardedOnly) {
+    // Every mention must sit next to a typeof test. Minified or not, esbuild keeps both tokens.
+    if (js.includes(needle) && !js.includes(`typeof ${needle}`)) {
+      throw new Error(`unguarded secure-context-only API "${needle}" in the bundle — ${hint}`);
+    }
+  }
   for (const [needle, hint] of banned) {
     if (js.includes(needle)) {
       throw new Error(`secure-context-only API "${needle}" in the bundle — ${hint}`);

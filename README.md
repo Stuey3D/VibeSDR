@@ -379,6 +379,7 @@ cd modules/vibe-local-sdr && ./build_ios.sh
 | **Mark Borgerding (KissFFT)** | BSD-licensed FFT vendored in the VibeDSP engine |
 | **Karlis Goba (ft8_lib)** | FT8 / FT4 decoding |
 | **Xiph.Org Foundation** | Opus audio codec |
+| **Ethan Halsall** | [opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders) (MIT) — libopus in WebAssembly, which is how VibeServer's web client decodes Opus in any browser on a plain `http://` LAN address, where the browser's own WebCodecs decoder is not exposed |
 | **EiBi** | Shortwave broadcast schedules for live station bookmarks |
 | **Leaflet, OpenStreetMap & CARTO** | Map rendering and tiles |
 | **Braille Institute** | Atkinson Hyperlegible typeface |
