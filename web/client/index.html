@@ -20,6 +20,9 @@
 /* Design tokens — the same values as src/constants/theme.ts, which were
    themselves transcribed from the original CSS. Amber-on-black. */
 :root {
+  /* How far the control island sits off the bottom — and therefore the baseline that anything
+     stacked ABOVE it must start from. See #mcard. */
+  --mcard-bottom:  max(0.6em, env(safe-area-inset-bottom, 0px));
   --bg:            #080601;
   --bar-bg:        rgba(10,8,4,0.84);
   --bar-border:    rgba(255,160,0,0.22);
@@ -48,6 +51,24 @@ html, body {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  /* ★★★ SELECTION OFF FOR THE WHOLE SURFACE — this is a radio, not a document. Doing it per
+     element was not enough and could never be: a long press on a tune button starts a DRAG
+     SELECTION, and iOS anchors it to the nearest selectable text — the frequency readout, right
+     next to the button. The callout then swallows the pointer release, so the button stayed lit
+     and the radio kept stepping.
+     ★ This is what the reference skin does too (vibesdr_web_client_base_v6_3_1.html:407 —
+     `body.lsv-portrait-active { -webkit-touch-callout/user-select: none !important }`), which is
+     the confirmation that the surface, not the widget, is the right scope.
+     Selection is given BACK below to the few places where copying is the point. */
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* ★ Where text is meant to be TAKEN, not tapped: what the decoders produced, what a station is
+   saying, and anything typed. A selection has to START inside one of these, so re-enabling them
+   cannot resurrect the drag-from-a-button problem above. */
+input, textarea, [contenteditable],
+#decText, #decBody, #rdsPanel, #searchWrap, #freqPanel {
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
 }
 
 /* ── Splash / connect ─────────────────────────────────────────────────────── */
@@ -150,7 +171,13 @@ html #bar { display: none; }
   /* Floats over the waterfall rather than taking a band out of it — screen height is the
      scarce thing on a phone, and on a desktop the waterfall is the point. */
   position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: max(0.6em, env(safe-area-inset-bottom, 0px));
+  /* ★★★ ONE BASELINE, SHARED. The VTS and the "back to dial" button both sit above this card by
+     `--mcard-h + a gap`, but they measured from ZERO while the card measures from the safe-area
+     inset — so the real gap was `gap − inset`. In portrait that is still positive; in LANDSCAPE
+     the home-indicator inset (~21px) is larger than the gap (1.2em ≈ 15px) and the VTS dropped
+     BELOW the card's top edge and clipped it. Publishing the card's own bottom as a variable
+     makes the three agree by construction instead of by arithmetic that holds on one device. */
+  bottom: var(--mcard-bottom);
   /* ★★★ SIZED BY ITS CONTENTS, capped rather than fixed. At a flat 1100px the island was as
      wide as the cap on every desktop, so the readouts sat far apart and the controls were
      pushed out to the edges — width the layout was TAKING rather than needing. max-content
@@ -208,13 +235,32 @@ html #bar { display: none; }
   .mStack { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
   .mStack .mBtn { min-height: max(2.4em, 40px); }
 }
-/* Narrowest: one dial per row, but the four buttons STAY as one row of four — they are the
-   most-used controls and splitting them costs more height than it buys in width. */
-@media (max-width: 440px) {
-  #mMain { grid-template-columns: 1fr 1fr; }
-  #mVfoDial { grid-column: 1 / -1; grid-row: 3; }
-  #mZoomDial{ grid-column: 1 / -1; grid-row: 4; }
+/* ★★★ A PHONE IN LANDSCAPE TAKES THE WIDE LAYOUT. Width alone said "narrow" for both phone
+   orientations, so a landscape phone got the stacked layout it has plenty of room to avoid —
+   and landscape is where height is scarce, which is exactly when stacking rows is worst.
+   Short AND wide is the test: a narrow DESKTOP window is also landscape but tall, and must keep
+   the stacked layout, so `max-height` is what separates them rather than orientation alone. */
+@media (orientation: landscape) and (max-height: 560px) and (min-width: 700px) {
+  /* ★ WIDER HERE ON PURPOSE. Everything is on one row, so the island is short — and a phone in
+     landscape has width to spare and no height at all. Letting it stretch buys bigger touch
+     targets and a longer signal meter out of space that was otherwise wasted, which is the
+     opposite trade from the desktop, where the waterfall beside it is the thing worth keeping. */
+  #mcard { width: min(96vw, 1000px); }
+  #mMain { grid-template-columns: auto auto minmax(20em, 1fr) auto auto; }
+  #mMain .mDial { min-width: 12em; }
+  #mPill    { grid-column: 3; grid-row: 1; }
+  #mStackL  { grid-column: 2; grid-row: 1; }
+  #mStackR  { grid-column: 4; grid-row: 1; }
+  #mVfoDial { grid-column: 1; grid-row: 1; }
+  #mZoomDial{ grid-column: 5; grid-row: 1; }
+  .mStack { grid-template-rows: 1fr 1fr; grid-template-columns: none; }
+  .mStack .mBtn { min-height: 0; }
 }
+/* ★★ THE OLD `max-width: 440px` RULE IS GONE. It split the two dials onto a row each, which is
+   the one thing Stuart did NOT want in portrait: he pointed at the landscape screenshot and said
+   that is how portrait should look — pill, four buttons, then both dials side by side on one
+   row. Two rows of three buttons cost a whole row of height on the screen with least to spare,
+   and the buttons were already comfortably above the 44px floor at that width. */
 
 /* ── The pill: the signal meter is its BACKGROUND, not a separate row ────────── */
 #mPill {
@@ -296,6 +342,19 @@ html #bar { display: none; }
   background: var(--btn-bg); color: var(--btn-text);
   border: 1px solid var(--btn-border); border-radius: 9px;
   font: inherit; font-size: 1.05em; cursor: pointer;
+  /* ★★★ A TUNING BUTTON IS HELD DOWN ON PURPOSE — that is the repeat. iOS reads the same hold
+     as "select this text", pops the copy/paste callout, and the press that raised it never
+     completes: the button stays lit and the radio keeps stepping. So the whole card refuses
+     selection and the callout outright. `touch-action: manipulation` also drops the 300ms
+     double-tap-zoom wait, which made every tap feel late. */
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  touch-action: manipulation;
+}
+/* Same for the readouts in the pill — they are tap targets too (frequency entry, mode menu,
+   meter cycle), and a long press on a NUMBER is exactly what iOS most wants to select. */
+#mPillIn, #mFreqBox, #mMode, #mSnr, .mDialGlyph {
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  touch-action: manipulation;
 }
 .mBtn:active { background: rgba(255, 160, 0, 0.18); }
 .mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
@@ -318,7 +377,7 @@ html #bar { display: none; }
 #mCentreFloat {
   position: absolute; left: 50%; transform: translateX(-50%);
   /* Sits just above the card, measured — the card's height changes with the arrangement. */
-  bottom: calc(var(--mcard-h, 190px) + 3.4em);
+  bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 2.9em);
   z-index: 46;
   background: rgba(10,10,10,0.94); color: var(--phosphor);
   border: 1px solid var(--phosphor); border-radius: 999px;
@@ -422,7 +481,7 @@ html #bar { display: none; }
    order and the station strip draws over the card (it did, twice). The offset is MEASURED:
    the card's height changes with the arrangement and the font clamp, so any fixed number is
    wrong at most widths. mobile.ts keeps --mcard-h in step with a ResizeObserver. */
-html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
+html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 
 /* ── Tuning group: search + bookmarks travel with the dial ───────────────────── */
 #mTune { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
@@ -988,7 +1047,21 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border);
   border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   overflow: hidden;
+  /* ★★★ NEVER TALLER THAN THE ROOM ABOVE IT. The box is anchored by its BOTTOM edge and grew
+     upward with no ceiling, so on a short viewport — a phone in landscape, or any small desktop
+     window — the top simply ran off the screen, taking the panel's header and close button with
+     it. `dvh` rather than `vh` because mobile Safari's toolbars change the usable height as you
+     scroll, and vh keeps promising the taller figure. 24px covers the band bar above.
+     ★ This is why no orientation lock is needed: the fault is a box with no ceiling, not
+     landscape itself, and capping it fixes short DESKTOP windows at the same time. */
+  max-height: calc(100dvh - var(--decBoxBottom, 14px) - 24px);
 }
+/* Flex column so the cap above lands on the BODY, which scrolls, while the header — the title,
+   the size toggle and the close button — stays visible and reachable at any height. A cap that
+   hides the way out is worse than no cap. */
+#decBox.open { display: flex; flex-direction: column; }
+#decBoxHead { flex: 0 0 auto; }
+#decBox.open #decBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 #decBox.open { display: block; }
 #decBoxHead {
   display: flex; align-items: center; gap: 8px; padding: 7px 10px;
@@ -1292,6 +1365,23 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   background: rgba(8,6,2,0.92); border: 1px solid var(--btn-border);
   border-radius: 999px; box-shadow: 0 8px 26px rgba(0,0,0,0.55);
   font-size: 13px; letter-spacing: 1px; color: var(--btn-text); white-space: nowrap;
+  /* ★★ NOTHING ESCAPES THE PILL. Every child but the RadioText is `flex: 0 0 auto`, so once the
+     fixed items exceed the width the surplus simply overflowed — and with a 999px radius the
+     last word sat OUTSIDE the border, which is what "Band" was doing. The clip is the backstop;
+     the rules below are what stop it having to bite. */
+  overflow: hidden;
+}
+/* ★★★ ON A PHONE THE BAND LABEL GOES AND THE RADIOTEXT GETS THE ROOM. The fixed items (RDS mark,
+   flag, PI, station name, band) left the elastic one — the RadioText — with about ONE CHARACTER,
+   so the field carrying the actual message was the field being starved. The band name is not
+   lost: it is written across the top of the screen in the band bar, at all times, which the
+   station's message is not. ★ This is the one thing on the pill that IS duplicated elsewhere,
+   which is why it is the one thing that gives way. */
+@media (max-width: 620px) {
+  #vts { max-width: 94vw; padding: 6px 12px; gap: 7px; }
+  #vtsBand { display: none; }
+  /* Enough room to read a few words at a time; the marquee (fitRadioText) does the rest. */
+  #vtsRt { min-width: 9em; }
 }
 #vts.show { display: flex; }
 /* A STABLE width once there's RadioText to show. The bar is otherwise content-sized
@@ -1342,7 +1432,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #vtsRt { text-align: center; }
 #vtsRt:has(.scroll) {
   text-align: left;
-  mask-image: linear-gradient(90deg, #000 0, #000 92%, transparent 100%);
+  /* ★ Symmetric and NARROW. At 92% the fade swallowed the last few characters exactly as they
+     arrived — the tail of the message was dimmed out at the only moment it was on screen. */
+  mask-image: linear-gradient(90deg, transparent 0, #000 3%, #000 97%, transparent 100%);
 }
 #vtsRt.show { display: inline-block; }
 #vtsRtInner {
@@ -1350,9 +1442,13 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   will-change: transform;
 }
 #vtsRtInner.scroll { animation: rtScroll linear infinite; }
+/* ★★ NO DWELL AT EITHER END — the message CIRCLES now (fitRadioText doubles it and shifts by
+   exactly one copy), so the last frame is pixel-identical to the first and the loop is seamless.
+   A pause here would reintroduce the very stutter the doubling removes, and the old 8%/92% holds
+   were only ever there to give a slide-and-snap marquee time to be read at its extremes. */
 @keyframes rtScroll {
-  0%, 8%    { transform: translateX(0); }
-  92%, 100% { transform: translateX(var(--rtShift, 0)); }
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--rtShift, 0)); }
 }
 #vts.on { border-color: rgba(51,204,68,0.6); }
 #vts.on #vtsName { color: #33cc44; }

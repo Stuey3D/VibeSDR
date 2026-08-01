@@ -717,7 +717,7 @@ void RdsDecoder::reset() {
     ctOffCand_ = 0; ctOffSeen_ = false;
     taCand_ = msCand_ = -1;
     diCandBit_[0] = diCandBit_[1] = diCandBit_[2] = diCandBit_[3] = -1;
-    rtpGroup_ = -1; lpsSeen_ = 0; rtAb_ = 0; rtAbSeen_ = false;
+    rtpGroup_ = -1; lpsSeen_ = 0; rtAb_ = 0; rtAbSeen_ = false; rtAbCand_ = -1;
     ptynSeen_ = 0; lang_ = 0; pinHour_ = -1; eonN_ = 0; odaN_ = 0;
     for (int i = 0; i < kMaxOda; ++i) oda_[i] = Oda{};
     std::memset(ptyn_, 0, sizeof ptyn_);
@@ -1087,13 +1087,31 @@ void RdsDecoder::parseGroup() {
         // otherwise be "confirmed" against the new one and write a fragment of the old text
         // into the new — stale data laundered into looking verified.
         const int ab = (blk_[1] >> 4) & 1;
-        if (rtAbSeen_ && ab != rtAb_) {
+        // ★★★ A REPAIRED BLOCK B MUST NOT BE ALLOWED TO WIPE THE MESSAGE ON ITS OWN. This flag
+        //     lives in block B, and error correction can hand back a plausible block with the
+        //     A/B bit flipped — on which the code below throws away 64 characters and starts
+        //     again. On a weak station that happened repeatedly: the text assembled, filled,
+        //     and was wiped a second later, so the message never held still long enough to be
+        //     read and the VTS marquee restarted every time (Stuart, 2026-08-01: "it's weaker
+        //     stations that do it, Heart doesn't have that issue" — the observation that turned
+        //     this from a UI bug into a decoder one).
+        //     ★ The rule is this file's own, already applied to the CT offset above: a CLEAN
+        //     block is trusted at once; a REPAIRED one must agree with the previous reception
+        //     before it is allowed to change anything. Destroying data deserves it most.
+        // (trustedB_ is computed once per group at the top of parseGroup — same test, one home.)
+        const bool abChanged = rtAbSeen_ && ab != rtAb_;
+        const bool abConfirmed = trustedB_ || (rtAbCand_ == ab);
+        if (abChanged && abConfirmed) {
             std::memset(rt_, 0, sizeof rt_);
             for (int i = 0; i < 16; ++i) { rtCand_[i] = 0; rtSeen_[i] = false; }
             std::memset(rtpTitle_, 0, sizeof rtpTitle_);     // RT+ points INTO the old text
             std::memset(rtpArtist_, 0, sizeof rtpArtist_);
         }
-        rtAb_ = ab; rtAbSeen_ = true;
+        rtAbCand_ = ab;
+        // ★ Only ADOPT the new flag once it has been acted on (or when it never changed).
+        //   Adopting an unconfirmed flip would make the NEXT group look unchanged and quietly
+        //   lose the toggle a real message change depends on.
+        if (!abChanged || abConfirmed) { rtAb_ = ab; rtAbSeen_ = true; }
         if (ver == 0 && blkOk_[2] && blkOk_[3]) {       // 2A: 4 chars (C,D)
             const uint32_t seg = ((uint32_t)blk_[2] << 16) | blk_[3];
             if (trusted || (rtSeen_[addr] && rtCand_[addr] == seg)) {

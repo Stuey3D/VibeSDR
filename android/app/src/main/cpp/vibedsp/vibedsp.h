@@ -580,6 +580,9 @@ private:
     // parse them until that announcement arrives. -1 = not yet announced.
     int  rtpGroup_ = -1;
     int  rtAb_ = 0; bool rtAbSeen_ = false;   // RadioText A/B flag — see parseGroup
+    // ★ A REPAIRED block B may carry a WRONG A/B bit, and acting on it wipes the whole
+    //   RadioText buffer. Confirmation state, so a flipped bit has to be seen twice.
+    int  rtAbCand_ = -1;
     // UTF-8 renderings handed to callers — RDS G0 never escapes this class.
     std::string psU8_, rtU8_;
     char ptyn_[9] = {0};
