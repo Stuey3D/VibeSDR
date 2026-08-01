@@ -66,6 +66,7 @@
 #include <unordered_map>
 #include <string>
 #include <thread>
+#include <system_error>
 #include <vector>
 
 #if defined(__aarch64__)
@@ -4924,9 +4925,32 @@ void LocalSdrShim::stopLocked() {
     // explicit stop() here made that a DOUBLE close of the same fd, which after
     // the number was reused tripped fdsan → SIGABRT on teardown. Let ~Listener
     // close it exactly once.
-    if (impl->acceptThread.joinable()) impl->acceptThread.join();
+    // ★★★ NEVER JOIN THE THREAD YOU ARE ON. `joinable()` means "has an associated thread", NOT
+    //     "is not me" — so a CONNECTION THREAD that reaches this teardown (a client disconnecting
+    //     is exactly that) walked the list and joined ITSELF. std::thread::join() then throws
+    //     system_error(EDEADLK), nothing catches it, and the app aborts:
+    //         std::__throw_system_error -> __cxa_throw -> std::terminate -> abort
+    //     Seen on macOS 10.0.2 build 44 (2026-08-01), with a second caller already inside the
+    //     same teardown on the TurboModule queue — two joins racing, one of them fatal.
+    //     ★ Detach instead: the thread is finishing anyway (serverRunning is already clear), and a
+    //     detached thread that outlives this call is a far smaller problem than a crash.
+    //     ★★ AND CATCH. A join can also fail because another caller already joined the same
+    //     thread; a teardown path must never be the thing that kills the process — least of all a
+    //     teardown running because something ELSE already went wrong.
+    const auto self = std::this_thread::get_id();
+    auto joinSafely = [&](std::thread& t, const char* what) {
+        if (!t.joinable()) return;
+        if (t.get_id() == self) {
+            LOGI("shim: %s is the calling thread — detaching rather than joining itself", what);
+            t.detach();
+            return;
+        }
+        try { t.join(); }
+        catch (const std::system_error& e) { LOGI("shim: %s join failed (%s)", what, e.what()); }
+    };
+    joinSafely(impl->acceptThread, "accept thread");
     { std::lock_guard<std::mutex> lk(impl->connMtx);
-      for (auto& t : impl->connThreads) if (t.joinable()) t.join();
+      for (auto& t : impl->connThreads) joinSafely(t, "connection thread");
       impl->connThreads.clear(); }
 
     if (impl->dev) rtlsdr_close(impl->dev);

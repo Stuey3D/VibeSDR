@@ -398,6 +398,11 @@ async function connect(host: string, pin: string) {
   // ★ Safe for the fixed-ring waterfall: ensureRing() only reallocates when the
   // COLUMN count changes, and that is fixed at connect — a window resize still
   // just shows more/fewer rows, so history survives a drag exactly as before.
+  // ★★ 1024 BINS, THE SAME AS THE APP (UberSDRClient.VIBE_BINS). Asking for more was tried and
+  //    reverted: on an ultrawide it sharpened things only slightly, and it costs a byte per bin
+  //    per frame on someone else's uplink plus the FFT work on the serving device. The app is
+  //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
+  //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
   const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024', auth)}`;
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
@@ -4474,6 +4479,10 @@ function buildMenu() {
 
   slider('smooth', 'smoothVal', (v) => String(v),
     (v) => wf!.applySettings({ smoothingFrames: v }), 'smoothingFrames');
+  // ★ Stored as the app stores it (0…0.9) but presented as a percentage, because "0.45" is not
+  //   a number anyone can reason about and the app's own slider reads the same way.
+  slider('fftAvg', 'fftAvgVal', (v) => (v ? `${v}%` : 'OFF'),
+    (v) => wf!.applySettings({ avgFrames: v / 100 }), 'fftAvg');
   slider('specFloor', 'specFloorVal', (v) => String(v),
     (v) => wf!.applySettings({ specFloor: v }), 'specFloor');
   slider('specPeak', 'specPeakVal', (v) => `${(v / 10).toFixed(1)}×`,
@@ -4488,7 +4497,7 @@ function buildMenu() {
   $('dispReset').onclick = () => {
     for (const k of ['autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast',
                      'wfSharpness', 'smoothingFrames', 'specFloor', 'specPeakScale',
-                     'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow',
+                     'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow', 'fftAvg',
                      'wfCoarse', 'palette']) {
       const p = prefs();
       delete p[k];
