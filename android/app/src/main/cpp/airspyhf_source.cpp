@@ -404,6 +404,13 @@ bool AirspyHfSource::setSampleRate(double hz) {
                 std::fprintf(stderr, "airspyhf: rate %u confirmed (measured %.0f S/s)\n",
                              (unsigned)r, measured);
             }
+            // ★★★ AND WHICH IF ARCHITECTURE THIS RATE USES. It is a per-rate property and it
+            //     changes the TUNING MATHS: libairspyhf applies its 5 kHz DEFAULT_IF_SHIFT only in
+            //     ZERO-IF, and the LO floor differs too (180 kHz vs 84). 912 and 456 are correct
+            //     and 228 "shifts everything" (Stuart, 2026-08-01) — so the first thing to know is
+            //     whether 228 is the odd one out here. Logged rather than assumed.
+            std::fprintf(stderr, "airspyhf: rate %u is %s-IF\n", (unsigned)curRate_,
+                         airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero");
         }
     }
     return true;
