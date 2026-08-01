@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- Template for the vibesdr-apt landing page. publish-apt.sh substitutes __VERSION__/__ARCH__
+     and writes the result to the repository root. Edit it HERE, not there — the copy in the
+     artefact repo is generated and will be overwritten on the next publish. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VibeServer — downloads</title>
+<style>
+  :root { --bg:#080601; --fg:#ffb833; --dim:rgba(255,184,51,0.62); --line:rgba(255,160,0,0.22); }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); line-height:1.6;
+         font-family: ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  main { max-width: 760px; margin: 0 auto; padding: 2.5rem 1.2rem 4rem; }
+  h1 { letter-spacing: 4px; font-size: 1.6rem; margin: 0 0 .2rem; }
+  h2 { font-size: 1rem; letter-spacing: 2px; margin: 2.4rem 0 .6rem;
+       border-bottom: 1px solid var(--line); padding-bottom: .35rem; }
+  p, li { color: var(--dim); }
+  a { color: #ffe566; }
+  pre { background: rgba(255,160,0,0.06); border: 1px solid var(--line); border-radius: 8px;
+        padding: .9rem 1rem; overflow-x: auto; color: var(--fg); font-size: .86rem; }
+  code { color: #ffe566; }
+  .ver { color: var(--dim); font-size: .85rem; letter-spacing: 1px; }
+  footer { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem;
+           font-size: .8rem; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>VibeServer</h1>
+  <p>Turn an SDR into a network receiver for the VibeSDR apps and any browser.<br>
+     <span class="ver">Current package: __VERSION__ (__ARCH__)</span></p>
+
+  <h2>Debian / Raspberry Pi OS</h2>
+  <p>Add the repository once, then it updates with everything else on the machine.</p>
+<pre>curl -fsSL https://stuey3d.github.io/vibesdr-apt/KEY.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/vibesdr.gpg] \
+https://stuey3d.github.io/vibesdr-apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/vibesdr.list
+
+sudo apt update
+sudo apt install vibeserver</pre>
+  <p>Then run <code>vibeserver</code> to configure it (name, location, radio) and
+     <code>sudo systemctl start vibeserver</code> to serve. The service is enabled but not
+     started by the install, on purpose: an unconfigured server that starts itself and fails is
+     a worse first impression than one that waits to be asked.</p>
+  <p><strong>64-bit only, in practice.</strong> The DSP's NEON path is gated on
+     <code>__aarch64__</code>, and a 32-bit userland silently loses all of it — roughly
+     <strong>13× slower</strong> on the same hardware.</p>
+
+  <h2>macOS</h2>
+  <p>A signed, notarised build — download, open, and it runs without a Gatekeeper argument.</p>
+  <p><a href="https://github.com/Stuey3D/vibesdr-apt/releases/latest">Latest release →</a></p>
+
+  <h2>Source</h2>
+  <p>VibeServer is built from the VibeSDR tree — the same DSP engine, decoders and protocol the
+     apps use, which is why a fix in one reaches all of them.</p>
+  <p><a href="https://github.com/Stuey3D/VibeSDR">github.com/Stuey3D/VibeSDR</a> · GPL-3.0</p>
+
+  <footer>
+    Packages are signed with <code>ed25519/FC384096D89F0AE7</code>
+    (VibeSDR Package Signing &lt;packages@vibesdr.net&gt;).<br>
+    This repository holds build artefacts only; issues and source live in the
+    <a href="https://github.com/Stuey3D/VibeSDR">main repository</a>.
+  </footer>
+</main>
+</body>
+</html>

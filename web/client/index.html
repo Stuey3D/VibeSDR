@@ -313,6 +313,17 @@ html #bar { display: none; }
    bright green, and a dark amber on either end is unreadable even through the boxed backing.
    The frequency readout beside them is white and legible across the whole scale — so the unit
    and the signal figure take the same colour. They are readouts, not decoration. */
+/* ★★ THE SUB-kHz DIGITS, DIMMED. The step ladder goes down to 10 Hz but MHz at three decimals
+   resolves to 1 kHz, so a 500 Hz or 100 Hz step moved the radio and left the display unchanged —
+   which reads as a broken control. At full weight they would bury the digits people scan for, so
+   they sit smaller and dimmer: `14.229` at a glance, `50` when you look. Fixed at two characters,
+   so they cannot resize the island. */
+/* ★ Sized BETWEEN the two: larger than the `MHz` unit (0.8em) so the digits are easy to read,
+   clearly smaller than the main figure (1.85em) so they still read as the fine tail rather than
+   part of the number you scan. Nudged brighter for the same reason. */
+#mFreqFine { font-size: 0.95em; color: rgba(255,255,255,0.68); letter-spacing: 0.02em;
+             font-variant-numeric: tabular-nums; min-width: 2ch; display: inline-block;
+             text-align: left; }
 #mUnit { font-size: 0.8em; color: #fff; }
 /* ★ min-width in em, so the demod chip cannot shrink to a stub. It was the narrowest thing in
    the pill and the first to be squeezed — at the tightest width WFM had collapsed to a fraction
@@ -1838,7 +1849,7 @@ select.btn { padding: 6px 8px; }
            off, so a meter with no gate stays clean. -->
       <div id="mSqlLine" hidden></div>
         <div id="mPillIn">
-          <span id="mFreqBox"><span id="mFreq">—</span><span id="mUnit">MHz</span></span>
+          <span id="mFreqBox"><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span></span>
           <span id="mMode">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
              thing on a bar that runs to bright green, and the app already has a symbol for this

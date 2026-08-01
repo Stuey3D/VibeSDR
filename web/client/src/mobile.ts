@@ -23,6 +23,14 @@ export type MobileDeps = {
   zoomBy: (factor: number) => void;
   /** Current dial frequency in Hz, or null before the first tune. */
   freqHz: () => number | null;
+  /** ★★ THE UNIT THE USER CHOSE in the frequency panel, and the readout it produces. The card
+   *  used to decide for itself (kHz below 10 MHz, MHz above), so picking kHz in the entry popup
+   *  changed the popup and nothing else — main.ts's renderFreq() applied the choice to the OLD
+   *  desktop bar, which no longer exists. Its comment states the intent exactly: "the unit chosen
+   *  in the entry popup also drives the tuning block's readout, so the two always agree — a dial
+   *  reading MHz while you type kHz is how people mis-tune by a factor of a thousand." That rule
+   *  did not follow the readout when it moved into this card. */
+  freqText: () => { main: string; fine: string; unit: string } | null;
   mode: () => string;
   /** Formatted step label for the step button, e.g. "1k". */
   stepLabel: () => string;
@@ -292,16 +300,19 @@ export function initMobileControls(deps: MobileDeps) {
   };
 
   function refresh() {
-    const hz = deps.freqHz();
-    const fEl = $('mFreq'), uEl = $('mUnit');
-    if (hz == null) {
-      put(fEl, '—');
-    } else if (hz < 10_000_000) {
-      put(fEl, (hz / 1e3).toFixed(3));
-      put(uEl, 'kHz');
+    const ft = deps.freqText();
+    const fEl = $('mFreq'), uEl = $('mUnit'), fineEl = $('mFreqFine');
+    if (!ft) {
+      put(fEl, '\u2014'); put(fineEl, '');
     } else {
-      put(fEl, (hz / 1e6).toFixed(3));
-      put(uEl, 'MHz');
+      put(fEl, ft.main);
+      // ★★ THE FINE DIGITS ARE DIMMED, NOT DROPPED. The step ladder goes down to 10 Hz, and MHz
+      //    at three decimals resolves only to 1 kHz — so pressing a 500 Hz or 100 Hz step moved
+      //    the radio and the display sat there unchanged, which reads as a control that does not
+      //    work (Stuart). Showing them at full weight would bury the digits people actually scan
+      //    for; a dimmed tail keeps `14.229` legible at a glance with `50` there when you look.
+      put(fineEl, ft.fine);
+      put(uEl, ft.unit);
     }
     put($('mMode'), deps.mode().toUpperCase());
     // ★ MIRRORED from the real #stereo badge, exactly as the mute state below is — the RDS
