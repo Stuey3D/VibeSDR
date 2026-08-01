@@ -63,6 +63,18 @@ PKGVER="$(dpkg-deb -f "$DEB" Version)"
 [ "$PKGVER" = "$FULLVER" ] || { echo "version mismatch: package says $PKGVER, expected $FULLVER"; exit 1; }
 cp "$DEB" "$POOL/"
 
+# ── Prune ────────────────────────────────────────────────────────────────────
+# ★★ THE POOL IS NOT AN ARCHIVE. Every publish adds a .deb and nothing ever removed one, so the
+#    repository — and the clone on a build box with a 32 GB card (Stuart) — grows forever to hold
+#    versions nobody will install: apt only ever offers the newest. Keeping the last few is enough
+#    to roll back by hand if a release turns out bad, which is the only reason to keep any.
+KEEP=3
+mapfile -t OLD < <(ls -t "$POOL"/vibeserver_*_"$ARCH".deb 2>/dev/null | tail -n +$((KEEP+1)))
+if [ ${#OLD[@]} -gt 0 ]; then
+  printf '==> pruning %d old package(s), keeping the newest %d\n' "${#OLD[@]}" "$KEEP"
+  rm -f "${OLD[@]}"
+fi
+
 # ── Index ────────────────────────────────────────────────────────────────────
 # ★ Paths in Packages must be RELATIVE TO THE REPOSITORY ROOT, so scanpackages runs from there.
 ( cd "$APT_DIR" && dpkg-scanpackages --arch "$ARCH" pool /dev/null \
@@ -94,14 +106,19 @@ sed -e "s/__VERSION__/$FULLVER/g" -e "s/__ARCH__/$ARCH/g" \
     "$SRC_DIR/scripts/apt-index.html" > "$APT_DIR/index.html"
 touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with an underscore
 
-# ── Publish ──────────────────────────────────────────────────────────────────
+# ── Commit locally — the Mac does the pushing ────────────────────────────────
+# ★★★ THIS MACHINE HOLDS NO GITHUB CREDENTIAL, deliberately. Stuart: "I may clean down the Pi at
+#     any time and lose everything on it." A build box that can publish is a build box whose
+#     wipe-and-reinstall has to be planned around; one that only commits is disposable. So the
+#     work happens here (arm64, Debian tooling) and `scripts/publish-apt-push.sh` on the Mac
+#     fetches this commit over SSH and pushes it — the Mac already has the credential, the key
+#     backup and Time Machine, and its clone is the copy of the pool that must survive.
 cd "$APT_DIR"
 git add -A
 git -c user.name="VibeSDR release" -c user.email="packages@vibesdr.net" \
     commit -q -m "vibeserver $FULLVER ($ARCH)" || { echo "nothing to commit"; exit 0; }
-if [ "$DRY_RUN" = "1" ]; then
-  echo "==> dry run: committed locally, NOT pushed"
-else
-  git push -q origin HEAD
-  echo "==> published: https://stuey3d.github.io/vibesdr-apt/"
-fi
+echo "==> committed $FULLVER locally ($APT_DIR)"
+[ "$DRY_RUN" = "1" ] && { echo "==> dry run: stopping here"; exit 0; }
+echo "==> now run on the Mac:  scripts/publish-apt-push.sh"
+echo "    (it pushes, then reclaims this clone — nothing here needs to survive)"
+
