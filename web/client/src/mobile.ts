@@ -135,6 +135,7 @@ export function initMobileControls(deps: MobileDeps) {
     if (from && to) from.onclick = () => to.click();
   };
   mirror('mBookmarks', 'bookmarksBtn');
+  mirror('mCentreFloat', 'centreBtn');   // one implementation of "snap back to the dial"
   mirror('mPanelRec', 'recBtn');
   mirror('mPanelRecs', 'recordingsBtn');
   mirror('mPanelMute', 'muteBtn');
@@ -300,6 +301,14 @@ export function initMobileControls(deps: MobileDeps) {
     //   booleans for one setting is how a button ends up showing the opposite of the truth.
     const mb = document.getElementById('muteBtn');
     if (mb) $('mAudio').classList.toggle('muted', mb.classList.contains('on'));
+    // ★ Mirrored from the real control: 'on' there means followVfo, i.e. the view is LOCKED
+    //   to the dial. Tracking our own copy is how a state label ends up saying the opposite.
+    const lb = document.getElementById('lockBtn');
+    if (lb) {
+      const locked = lb.classList.contains('on');
+      put($('mPanelLock'), locked ? 'LOCKED' : 'FREE');
+      $('mPanelLock')?.classList.toggle('free', !locked);
+    }
 
     // ★ Throughput, fps, rtt and the link bars are not mirrored at all: #status and
     //   #linkStats are MOVED into the card, so the real elements are already here. There is
