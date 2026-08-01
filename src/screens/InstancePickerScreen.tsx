@@ -655,7 +655,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       });
     } catch (e: any) {
       setConnecting(false);
-      Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
+      // ★ Same rule as the connect prompt: three radios are supported, so do not name one.
+      Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is a radio plugged in via USB OTG?');
     }
   }, [navigation, viewMode]);
 
@@ -720,13 +721,36 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (!pending) return false;
     splashBridge.dismiss();
 
-    // Let the user pick how to use the just-plugged-in dongle: listen on this
+    // ★★★ ASK NOW, DO NOT WAIT FOR THE EFFECT. This prompt's whole trigger is a COLD LAUNCH
+    //   caused by plugging a radio in, and the `localSdrLabel` effect resolves asynchronously —
+    //   so the one moment we most need the name is the moment least likely to have it yet.
+    //   Reading the state alone would leave the Airspy owner on the generic wording almost
+    //   every time, which is most of the bug still unfixed.
+    let label = localSdrLabel;
+    if (!label) {
+      try {
+        const devs = await Local.listDevices?.();
+        if (devs?.length) label = devs.length === 1 ? (devs[0]?.label || 'USB SDR') : 'USB SDR';
+      } catch { /* stay with the neutral wording */ }
+    }
+
+    // Let the user pick how to use the just-plugged-in radio: listen on this
     // device, or share it over the network as an RTL-TCP server. (Falls straight
     // through to listen if the server path isn't available on this build.)
+    //
+    // ★★ NAME THE RADIO THAT WAS ACTUALLY PLUGGED IN. This said "RTL-SDR connected" /
+    //    "this dongle" unconditionally, so plugging in an Airspy HF+ — the very act that
+    //    raised this prompt — was greeted by the name of a different radio. The heading a few
+    //    hundred lines up was fixed for exactly this reason and THIS one was missed, which is
+    //    the [[else_means_dongle_trap]] surviving in the one place a user cannot avoid seeing
+    //    it (Stuart, 2026-08-01).
+    // ★ listDevices() has already given us `localSdrLabel` (the USB product name, or "USB SDR"
+    //   when it cannot be named). It is empty only if that lookup has not landed yet, so fall
+    //   back to the neutral wording rather than to a guess at the model.
     if (rtlTcpServerSupported) {
       Alert.alert(
-        'RTL-SDR connected',
-        'How would you like to use this dongle?',
+        label ? `${label} connected` : 'SDR connected',
+        `How would you like to use ${label ? `this ${label}` : 'this radio'}?`,
         [
           { text: 'Listen on this device', onPress: () => { connectLocal(modeArg); } },
           { text: 'Share over network', onPress: () => navigation.navigate('ServerMode', {}) },
@@ -738,7 +762,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       await connectLocal(modeArg);
     }
     return true;
-  }, [connectLocal, navigation]);
+    // ★ localSdrLabel IS A DEPENDENCY — without it this closure captures the empty first
+    //   render and every prompt falls back to the generic wording forever.
+  }, [connectLocal, navigation, localSdrLabel]);
   tryUsbLaunchRef.current = tryUsbLaunch;
 
   // RTL-TCP: connect to an rtl_tcp server (host:port) over the network and run the

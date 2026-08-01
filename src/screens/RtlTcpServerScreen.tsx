@@ -91,7 +91,8 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       } catch (e: any) {
         if (cancelled) return;
         setStarting(false);
-        setError(e?.message ?? 'Could not start the server. Is an RTL-SDR plugged in via USB OTG?');
+        // ★ An Airspy HF+ shares over rtl_tcp too — do not name the one radio this used to support.
+        setError(e?.message ?? 'Could not start the server. Is a radio plugged in via USB OTG?');
       }
     })();
     return () => { cancelled = true; };
