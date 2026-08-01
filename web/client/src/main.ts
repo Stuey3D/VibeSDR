@@ -628,6 +628,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBytes: (n) => { audioBytes += n; },
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
+  // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
+  //     server REFUSES a socket opened without `codec=opus`, so 'falling back' swapped a
+  //     struggling Opus stream for no stream at all — silently. The player keeps rebuilding
+  //     the decoder instead, and reports a fault naming who can fix it.
+  audio.allowUncompressed = srvUncompressed !== 'off' || srvLocal;
   // ★★★ RUNTIME FALLBACK TO UNCOMPRESSED. `AudioDecoder.isConfigSupported()` said yes and the
   // decoder then failed for real — Edge on Windows 11 played nothing until the user found the
   // uncompressed switch themselves (Stuart, 2026-07-31). A capability probe is a PREDICTION; only
@@ -1555,6 +1560,9 @@ function updateStatus() {
     case 'suspended': fault = 'AUDIO PAUSED — CLICK THE PAGE'; break;
     case 'no-stream': fault = 'AUDIO DISCONNECTED'; break;
     case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
+    // ★ The one fault the LISTENER cannot fix: only the server's owner can allow the
+    //   uncompressed fallback, so say who has to act rather than just what is wrong.
+    case 'opus-stuck': fault = 'OPUS FAILING — OWNER MUST ALLOW UNCOMPRESSED AUDIO'; break;
     // Squelch is NOT a fault and no longer takes an overlay — the message clipped inside the
     // meter and hid the very bar you watch while waiting for a signal. It shows as the breathing
     // SQL chip beside the link bars instead (below).
