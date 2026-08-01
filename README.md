@@ -2,16 +2,21 @@
 
 ## A live SDR waterfall on your Apple Watch — the radio spectrum on your wrist, tuned with the Digital Crown.
 
-### 📡 **[→ Join the free Apple Watch beta on TestFlight](https://testflight.apple.com/join/AnKTNhuZ)**
+### 📡 **[→ Get VibeSDR 10.0.1 on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** · £2.99
 
-*v9.0.1 · approved by Apple for external testing · installs like a normal app (no re-signing) · needs an iPhone + Apple Watch*
+*Live on the App Store · the Apple Watch app is included · needs an iPhone + Apple Watch*
+
+> **On the TestFlight beta?** It's finished — **VibeSDR 10.0.1 is now on the App Store**, and it's
+> newer than anything the beta ever had. **I'll be expiring the beta build next week**, after which
+> it will stop opening. Grab it from the App Store above, or [build it from this repository](#building)
+> free, forever.
 
 | ![Apple Watch — AM broadcast](screenshots/21-watch-wrist-am.jpeg) | ![Apple Watch — 40m waterfall](screenshots/22-watch-waterfall-40m.png) | ![Apple Watch — FM-DX](screenshots/23-watch-fmdx.png) |
 |:---:|:---:|:---:|
 
 The live radio spectrum, scrolling in real time, **drawn on the watch itself** — not a screenshot, not a two-button remote. Tune with the Digital Crown; switch demodulator, zoom, volume, band labels and a live signal readout, all on your wrist. Your **iPhone does the receiving and stays locked in your pocket** — the watch is the dial and the display, drawing the spectrum for about a third of one CPU core. *(A standalone, phone-free version is in the works.)*
 
-**I want as many people as possible wearing this** — [grab the beta](https://testflight.apple.com/join/AnKTNhuZ) and [tell me how it runs](https://github.com/Stuey3D/VibeSDR/issues).
+**I want as many people as possible wearing this** — [grab it](https://apps.apple.com/gb/app/vibesdr/id6786344049) and [tell me how it runs](https://github.com/Stuey3D/VibeSDR/issues).
 
 ---
 
@@ -131,8 +136,7 @@ And if it turns out a vibe-coded app can give you a waterfall on your wrist and 
 
 | | | |
 |---|---|---|
-| **iPhone / iPad** | **[TestFlight — v9.0.1 beta](https://testflight.apple.com/join/AnKTNhuZ)** — free | **The newest iOS build with the Apple Watch app**, installs like a normal app (no re-signing). Approved by Apple for external testing. |
-| **iPhone / iPad** | **[App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** — £2.99 | Currently **v6.1**; newer versions are working their way through review. For v9 today, use TestFlight above. |
+| **iPhone / iPad** | **[App Store — v10.0.1](https://apps.apple.com/gb/app/vibesdr/id6786344049)** — £2.99 | The newest build, with the **Apple Watch app included**. Installs like a normal app — no re-signing. |
 | **iPhone / iPad** | **[`.ipa` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version, but you must **re-sign it yourself** — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode). |
 | **Android** | **[`.apk` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version. Just install it. |
 | **Anyone** | **Build it from this repository** — free, forever | See [Building](#building). |
@@ -141,9 +145,11 @@ And if it turns out a vibe-coded app can give you a waterfall on your wrist and 
 
 The App Store build is the same source you see here. If you'd rather not pay, **build it yourself from this repository, free, forever** — same app, no crippled features, no nag screens, no catch. Paying is just the convenient route (and it keeps the certificate alive for everyone who takes it).
 
-> **📱 On iOS, the App Store is behind the releases here.** Apple review has been slow, so the store is still serving **v6.1** — which predates **VibeServer** (v8) and the **Apple Watch app** (v9). The easiest way to run v9 today is the **[TestFlight beta](https://testflight.apple.com/join/AnKTNhuZ)** — v9.0.1 with the Watch app, approved by Apple for external testing, installs with no re-signing. (Or sideload the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) if you prefer.)
+> **📱 iOS has caught up.** The App Store now serves **v10.0.1** — with **VibeServer** (v8) and the **Apple Watch app** (v9) both included. It had been stuck on v6.1 for a long stretch of slow reviews; that gap is closed. (You can still sideload the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) if you'd rather not pay — you'll just need to re-sign it yourself.)
+>
+> **The TestFlight beta is finished.** It never got past v10.0.0, the App Store build is newer, and **the beta build will be expired next week** — at which point it stops opening.
 
-**Latest release: [v9.0.1 — SSB was throwing away half the voice](https://github.com/Stuey3D/VibeSDR/releases/latest)** — set 2.7 kHz, get 2.7 kHz. The channel filter had been closing at half its stated width, quietly muffling every SSB signal. Also: the radio now uses **2–8× less CPU**, so FM stereo works on phones that could never manage it before. (v9.0.0 put the live waterfall on your wrist — see the [Apple Watch](#on-the-wrist-apple-watch--new-in-v9) section.)
+**Latest release: [v10.0.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — and **v10.0.1 is on the App Store**, adding the decoder-panel and spots-filter fixes on top. (v9.0.1 fixed SSB throwing away half the voice: the channel filter had been closing at half its stated width. v9.0.0 put the live waterfall on your wrist — see the [Apple Watch](#on-the-wrist-apple-watch--new-in-v9) section.)
 
 ![VibeSDR web client](docs/screenshots/v8-web-client.png)
 *The VibeServer web client — served by an Android phone with an RTL-SDR, open in Safari at `vibesdr-moto-g35.local`.*
