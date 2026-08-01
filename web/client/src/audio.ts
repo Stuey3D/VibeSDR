@@ -607,12 +607,31 @@ export class AudioPlayer {
 
   /** Build (or rebuild) the WASM decoder for `ch` channels. Decoding is synchronous once ready;
    *  the ~20 ms of packets that arrive during startup are dropped, which is inaudible. */
+  /** ★★ A decoder that will not BUILD must be built once, not once per packet. The first attempt
+   *  threw for every 20 ms frame — 50 identical stack traces a second, which buries the one line
+   *  that says why, and makes a startup failure look like a decode failure. Construction is
+   *  attempted once; per-packet decode errors are a separate thing and still counted in _failOpus. */
+  private wasmDead = false;
+
   private _ensureWasm(ch: number) {
+    if (this.wasmDead) return;
     if (this.wasmDec && this.wasmCh === ch) return;
     try { this.wasmDec?.free(); } catch {}
     this.wasmReady = false;
     this.wasmCh = ch;
-    const dec = new OpusDecoder({ channels: ch });
+    let dec: OpusDecoder;
+    try {
+      // ★ Construction itself can throw — the module's WASM payload is CRC-checked, and a page
+      //   that mangled it fails HERE, not at decode time. That distinction was invisible while
+      //   this ran unguarded once per packet.
+      dec = new OpusDecoder({ channels: ch });
+    } catch (e) {
+      console.error('[audio] the WASM Opus decoder would not build — audio cannot play', e);
+      this.wasmDead = true;
+      this.wasmDec = null;
+      this.opusStuck = true;
+      return;
+    }
     this.wasmDec = dec;
     dec.ready.then(() => {
       if (this.wasmDec === dec) this.wasmReady = true;
@@ -620,7 +639,7 @@ export class AudioPlayer {
       // Nothing left to try: WebCodecs is gone or broken and WASM will not start. Say so on the
       // meter rather than going quiet — see the `opus-stuck` note in _failOpus.
       console.error('[audio] the WASM Opus decoder failed to start', e);
-      if (this.wasmDec === dec) { this.wasmDec = null; this.opusStuck = true; }
+      if (this.wasmDec === dec) { this.wasmDec = null; this.wasmDead = true; this.opusStuck = true; }
     });
   }
 

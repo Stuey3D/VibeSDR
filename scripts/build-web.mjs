@@ -44,19 +44,14 @@ async function bundle() {
     write: false,
     legalComments: 'none',
   });
-  let js = res.outputFiles[0].text;
+  const js = res.outputFiles[0].text;
 
-  // ★★★ NO RAW NUL BYTES IN THE BUNDLE. The page is compiled into the shim as a C++ `const char*`
-  // and served via `std::string kPage(kVibeWebPage)` — strlen (local_sdr_shim.cpp:2990). One NUL
-  // truncates EVERYTHING after it, with no error anywhere: the Pi happily served 233,787 bytes of
-  // a 488,109-byte page. The WASM Opus decoder embeds its module as a binary string literal, which
-  // is where these come from. A raw NUL is only legal inside a JS string literal in the first
-  // place, and there `\x00` is exactly equivalent — so this is a safe, content-blind swap.
-  const nuls = (js.match(/\0/g) || []).length;
-  if (nuls) {
-    js = js.replace(/\0/g, '\\x00');
-    console.log(`escaped ${nuls} NUL byte${nuls === 1 ? '' : 's'} in the bundle (strlen-safe)`);
-  }
+  // ★★★ DO NOT REWRITE THE BUNDLE TEXT. The WASM Opus decoder embeds its module as a binary
+  // string literal (simple-yenc) with a CRC32 over the decoded bytes, precisely so tampering
+  // cannot pass silently — and it contains 206 raw NUL bytes. Escaping them to `\x00` looked
+  // equivalent, built clean, and broke the decoder in the browser with `Decode failed crc32
+  // validation`. The page must carry these bytes VERBATIM; the transport is what has to cope,
+  // which is why emitCppHeader now ships base64 with an explicit length instead of a C string.
 
   // A VibeServer is plain http:// on a LAN IP — NOT a secure context. Anything
   // gated on one is undefined there and throws at runtime, but works fine in dev
@@ -136,17 +131,21 @@ async function bundle() {
  * break it is the delimiter appearing in the page — we assert it doesn't.
  */
 async function emitCppHeader(html) {
-  const DELIM = 'VIBEWEB';
-  if (html.includes(`)${DELIM}"`)) {
-    throw new Error('raw-string delimiter collides with page content');
-  }
-  // ★★★ A NUL TRUNCATES THE WHOLE PAGE. The shim does `std::string kPage(kVibeWebPage)` — strlen —
-  // so one embedded NUL silently serves a prefix and nothing anywhere reports an error. This is
-  // how the WASM decoder first shipped: byte-perfect for 233 KB, then simply stopped.
-  const nul = Buffer.from(html, 'utf8').indexOf(0);
-  if (nul !== -1) {
-    throw new Error(`NUL byte at offset ${nul} — the shim serves this page with strlen(), so `
-      + `everything after it would be dropped. Keep the bundle ASCII (esbuild charset).`);
+  // ★★★ BASE64, NOT A C STRING. The page used to be emitted as a raw string literal and served
+  // with `std::string kPage(kVibeWebPage)` — i.e. strlen. The WASM Opus decoder's embedded module
+  // contains NUL bytes, so the Pi served exactly 233,787 bytes of a 488,109-byte page and stopped:
+  // no error at build time, none at run time, just a page that ends mid-script. Escaping the NULs
+  // in the JS was the wrong end to fix it (it fails the decoder's own CRC32 — see bundle()).
+  // Base64 is pure ASCII, cannot collide with a raw-string delimiter, and carries its own length,
+  // so the bytes reach the browser exactly as built whatever they contain.
+  const bytes = Buffer.from(html, 'utf8');
+  const b64 = bytes.toString('base64');
+  // Chunked: MSVC caps string literals at 64 KB and a single 650 KB line is unreadable in a diff.
+  // Adjacent string literals concatenate, so this is one literal to the compiler.
+  const B64_LINE = 120;
+  const b64Lines = [];
+  for (let i = 0; i < b64.length; i += B64_LINE) {
+    b64Lines.push(`  "${b64.slice(i, i + B64_LINE)}"`);
   }
   // Safari will NOT use a data: URI favicon — it silently falls back to its default
   // arrow. So the icon is also emitted as raw bytes and served from a real URL
@@ -177,9 +176,43 @@ async function emitCppHeader(html) {
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
 // Source: web/client/  (${(Buffer.byteLength(html) / 1024).toFixed(1)} KB)
+//
+// ★★★ Base64, because the page CONTAINS NUL BYTES (the WASM Opus decoder embeds its module as a
+// binary string). As a C string it was served with strlen() and silently truncated to the first
+// one — 233 KB of 488 KB, with no error anywhere. Decode it once with vibeWebPage().
 #pragma once
 
-static const char* const kVibeWebPage = R"${DELIM}(${html})${DELIM}";
+#include <string>
+
+static const char* const kVibeWebPageB64 =
+${b64Lines.join('\n')};
+static const unsigned int kVibeWebPageLen = ${bytes.length};
+
+/** The web client, decoded once on first use. Returns exactly ${bytes.length} bytes. */
+inline const std::string& vibeWebPage() {
+  static const std::string page = [] {
+    static const char kT[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    signed char rev[256];
+    for (int i = 0; i < 256; i++) rev[i] = -1;
+    for (int i = 0; i < 64; i++) rev[(unsigned char)kT[i]] = (signed char)i;
+    std::string out;
+    out.reserve(kVibeWebPageLen);
+    unsigned int acc = 0;
+    int bits = 0;
+    for (const char* p = kVibeWebPageB64; *p; ++p) {
+      const signed char v = rev[(unsigned char)*p];
+      if (v < 0) continue;                       // '=' padding and any stray whitespace
+      acc = (acc << 6) | (unsigned int)v;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out.push_back((char)((acc >> bits) & 0xFF));
+      }
+    }
+    return out;
+  }();
+  return page;
+}
 
 ${favCpp}
 ${iconCpp}

@@ -2987,7 +2987,11 @@ struct LocalSdrShim::Impl {
                 sock->close();
                 return;
             }
-            static const std::string kPage(kVibeWebPage);
+            // ★★★ NOT `std::string(kVibeWebPage)` — that is strlen, and the page contains NUL
+            //     bytes (the WASM Opus decoder embeds its module as a binary string). It served
+            //     233,787 bytes of a 488,109-byte page for exactly one deploy, with no error at
+            //     either end. vibeWebPage() decodes base64 and knows its own length.
+            const std::string& kPage = vibeWebPage();
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
