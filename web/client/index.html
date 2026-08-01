@@ -151,7 +151,12 @@ html #bar { display: none; }
      scarce thing on a phone, and on a desktop the waterfall is the point. */
   position: absolute; left: 50%; transform: translateX(-50%);
   bottom: max(0.6em, env(safe-area-inset-bottom, 0px));
-  width: min(96vw, 1100px); z-index: 40;
+  /* ★★★ SIZED BY ITS CONTENTS, capped rather than fixed. At a flat 1100px the island was as
+     wide as the cap on every desktop, so the readouts sat far apart and the controls were
+     pushed out to the edges — width the layout was TAKING rather than needing. max-content
+     lets the whole island close up around what is actually in it; the cap still stops it
+     sprawling on an ultrawide, and 96vw still governs a phone. */
+  width: max-content; max-width: min(96vw, 1100px); z-index: 40;
   padding: 0.45em; border-radius: 12px;
   background: rgba(10, 10, 10, 0.92);
   border: 1px solid var(--bar-border);
@@ -169,7 +174,10 @@ html #bar { display: none; }
    track, so the frequency stays the widest thing on the card at any window size. */
 #mMain {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  /* ★ The pill's track is the flexible one, but with a FLOOR: it is a signal meter as well as a
+     readout, and a bar that shrinks to fit three chips stops being readable as a level. 15em
+     keeps a usable scale while letting the island close up around it. */
+  grid-template-columns: auto auto minmax(15em, 1fr) auto auto;
   gap: 0.45em; align-items: stretch;
 }
 #mMain .mDial { min-width: 10.5em; }
@@ -235,10 +243,48 @@ html #bar { display: none; }
      trusting whichever colour happens to be behind it at that signal level. */
   text-shadow: 0 1px 3px #000, 0 0 6px #000;
 }
-#mFreq { font-size: 1.85em; font-variant-numeric: tabular-nums; color: #fff; letter-spacing: 0.02em; }
-#mUnit { font-size: 0.8em; color: var(--unit); }
-#mMode { margin-left: auto; font-size: 1.05em; color: #fff; }
-#mSnr  { font-size: 0.78em; color: var(--unit); }
+/* ★★★ WIDE ENOUGH FOR THE LONGEST READING THERE WILL EVER BE, not the one on screen. Now the
+   island is sized by its contents, anything that changes width MOVES THE WHOLE CARD — tuning
+   99.700 → 100.100 would nudge every control sideways, and that is far more distracting than a
+   little unused space. 8ch covers the widest possible: 4 digits, point, 3 decimals — `1090.000`
+   MHz (ADS-B, pre-planning) and equally `9999.999` kHz. tabular-nums makes every digit the same
+   width, so within that reservation nothing shifts either. */
+/* ★ `+ 0.4em` because LETTER-SPACING IS NOT PART OF `ch`. 8 characters at 0.02em of tracking add
+   another 0.16em that a bare `8ch` does not account for — the same near-miss that made the signal
+   figure twitch. The extra also leaves a little slack either side. */
+#mFreq { font-size: 1.85em; font-variant-numeric: tabular-nums; color: #fff; letter-spacing: 0.02em;
+         min-width: calc(8ch + 0.4em); text-align: center; }
+/* ★★ WHITE, LIKE THE DIGITS THEY BELONG TO. `--unit` is a dark amber (#886600) that works on
+   the flat bar but not HERE: these two sit on the meter gradient, which runs from deep red to
+   bright green, and a dark amber on either end is unreadable even through the boxed backing.
+   The frequency readout beside them is white and legible across the whole scale — so the unit
+   and the signal figure take the same colour. They are readouts, not decoration. */
+#mUnit { font-size: 0.8em; color: #fff; }
+/* ★ min-width in em, so the demod chip cannot shrink to a stub. It was the narrowest thing in
+   the pill and the first to be squeezed — at the tightest width WFM had collapsed to a fraction
+   of the frequency's height beside it, reading as a label rather than the button it is. */
+/* ★★ NO `margin-left: auto`. That pushed the demod chip and the signal figure to the far right
+   and left a lake of dead gradient in the middle of the bar — three readouts that are read
+   TOGETHER, spread as far apart as the widest screen allowed. They now sit as one centred
+   group (#mPillIn already centres), which is also what lets the bar itself come in. */
+#mMode { font-size: 1.05em; color: #fff; min-width: 3.2em; text-align: center; }
+#mSnr  { font-size: 0.78em; color: #fff; }
+/* ★★ THE STEREO BADGE, which the card never had. WFM stereo is the one thing on this radio you
+   can HEAR change and could not SEE — and it drops to mono on a weak signal, so its absence is
+   information, not decoration. Same green ST mark the app and the old bar use, mirrored from
+   #stereo rather than tracked separately (see refresh()). */
+/* ★★★ HIDDEN, NEVER REMOVED. `display:none` gave the slot back when the pilot dropped, so the
+   whole island grew and shrank as a station faded in and out of stereo — on a fringe signal that
+   is constant, and it moves every control under the user's pointer. `visibility` keeps the space
+   reserved, exactly as #mFreq and #mSnr reserve their widest reading. The icon is the same white
+   as the demod chip it sits beside: the green lettering it replaces was the least legible thing
+   on a bar that runs to bright green at S9+. */
+#mStereo {
+  display: inline-flex; align-items: center; visibility: hidden;
+  color: #fff; font-size: 1.05em; margin-left: 0.1em;
+}
+#mStereo svg { height: 0.72em; width: auto; display: block; }
+#mStereo.on { visibility: visible; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────────── */
 #mBtns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em; }
@@ -324,7 +370,21 @@ html #bar { display: none; }
 #mFreqBox:active, #mMode:active, #mSnr:active { background: rgba(255, 255, 255, 0.18); }
 /* ★ The SNR is a BUTTON now (it cycles the reading), so it gets the same boxed treatment as
    the other two — an unmarked readout beside two marked buttons reads as static text. */
-#mSnr { padding: 0.15em 0.4em; font-variant-numeric: tabular-nums; min-width: 4.6em; text-align: center; }
+/* ★★ SIZED FOR THE LONGEST OF THE THREE READINGS IT CYCLES, since they share one box and the
+   box now sets the island's width: `S9+60` (5), `-118 dBFS` (9), `SNR -12 dB` (10). At 4.6em the
+   longest overflowed its reservation and the card twitched every time the meter was tapped or a
+   signal crossed a rounding boundary. `SQL` sits inside the same width while the gate is shut. */
+/* ★★★ MEASURED IN `ch`, NOT GUESSED IN `em`. The card is monospace, so one character is exactly
+   1ch and the reservation can be derived instead of eyeballed — 6.4em was a guess and the longest
+   reading still overflowed it slightly, so the island twitched each time the meter was cycled.
+   The three readings this box rotates through:
+       S9+60        5   (S-units, the shortest)
+       -118 dBFS    9
+       SNR -99 dB  10   (the longest — a negative two-digit SNR)
+   10ch covers it exactly; 11ch leaves a character of slack either side for anything that grows
+   later (an "S9+60dB" style unit, a three-digit dBFS) without another round of this. */
+#mSnr { padding: 0.15em 0.4em; font-variant-numeric: tabular-nums; min-width: 11ch; text-align: center;
+        white-space: nowrap; }
 #mModeMenu {
   position: fixed; z-index: 9998;
   background: #0d0d0d; border: 1px solid var(--phosphor-dim); border-radius: 9px;
@@ -474,7 +534,10 @@ html #vts { bottom: calc(var(--mcard-h, 190px) + 1.2em); }
   #mcard { gap: 0.3em; padding: 0.4em; font-size: clamp(10px, 1.2vw, 13px); }
   #mStatus { font-size: 0.72em; }
 }
-@media (max-width: 620px) { #mFreq { font-size: 2.1em; } }
+/* ★ The demod chip scales WITH the frequency. Only #mFreq was bumped here, so at the narrowest
+   width the digits grew and WFM stayed put — which is what made it look shrunken. They are read
+   together; they should size together. */
+@media (max-width: 620px) { #mFreq { font-size: 2.1em; } #mMode { font-size: 1.2em; } }
 
 #bar {
   flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
@@ -908,7 +971,20 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      way the app positions its DecoderPanel above the pill. */
   position: absolute; left: 14px; bottom: var(--decBoxBottom, 14px); z-index: 45;
   transition: bottom .15s ease-out;
-  width: min(46vw, 560px); display: none;
+  /* ★★★ A QUERY CONTAINER. Everything inside this box — RDS, WEFAX, SSTV, RTTY, the spot list —
+     used to reflow on `@media (max-width: …)`, i.e. the VIEWPORT. But the box is 46vw, so its
+     contents get less than HALF the width the breakpoints were testing: at a 670px window the box
+     is ~308px while the "narrow" rules politely wait for a 560px viewport. The panels therefore
+     laid themselves out two-up in ~300px, values were squeezed to a few pixels, and
+     `overflow-wrap: anywhere` did as it was told — one character per line, straight down.
+     Nothing was wrong with the rules; they were asking the wrong element how much room there was.
+     `@container` asks THIS box, which is the width the contents actually have. */
+  container-type: inline-size; container-name: decbox;
+  /* ★ And do not let the box become pointlessly narrow in the first place. 46vw is right on a
+     desktop, where the waterfall beside it is the point; on a small window it just produced a
+     sliver. The floor takes over there — at which width there is no room to be beside anything
+     anyway, so the box may as well be usable. */
+  width: min(94vw, max(46vw, 380px), 560px); display: none;
   background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border);
   border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   overflow: hidden;
@@ -1042,14 +1118,34 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    field stays reachable, nothing is dropped to fit, and roughly two thirds of the screen
    stays radio (Stuart, 2026-07-26). */
 @media (max-width: 760px) {
-  /* The waterfall must stay visible for tuning, so on a phone the CAP binds and the data
-     scrolls — and the drag handle is pointless on touch, so it goes. */
+  /* ★ HEIGHT is genuinely a viewport question — how much screen is left for the waterfall — so
+     this one stays a @media rule. Only the WIDTH rules moved to @container below. */
   #rdsPanel { max-height: clamp(170px, 34vh, 300px); resize: none; }
+}
+/* ★★ WIDTH RULES ASK THE BOX, NOT THE WINDOW. Thresholds are in the box's own terms now, derived
+   from what the content needs rather than translated from old viewport numbers:
+     520px — fields (2 × ~160px) + plots (180px) + gaps no longer fit side by side
+     360px — two field columns stop being readable, so one
+     300px — even one column is tight: the label goes above its value rather than beside it */
+@container decbox (max-width: 520px) {
   /* The constellation and trace go under the fields rather than beside them, so neither
      ends up too narrow to read. */
-  #rdsConstWrap { margin: 0 auto; }
+  #rdsPanel { flex-wrap: wrap; }
+  #rdsConstWrap { flex: 1 1 100%; min-width: 0; margin: 0 auto; }
   #rdsConst { width: 150px; height: 150px; }
   #rdsEye   { width: 150px; height: 44px; }
+}
+@container decbox (max-width: 360px) {
+  #rdsGrid { grid-template-columns: 1fr; }
+}
+/* ★★★ THE BACKSTOP. `overflow-wrap: anywhere` on the values is right — an unbroken 32-character
+   Long PS has to go somewhere — but it means a value squeezed to near-zero width breaks EVERY
+   character onto its own line, which is what "shits the bed" looked like. Below this width the
+   label sits ABOVE its value, so the value always has the full column no matter how narrow the
+   box gets. A wrapping rule should never be the thing that decides the layout. */
+@container decbox (max-width: 300px) {
+  .rdsF { flex-wrap: wrap; gap: 0 8px; }
+  .rdsF label { flex: 0 0 100%; }
 }
 /* A landscape phone has almost no height at all — there, the cap is the binding constraint. */
 @media (max-height: 480px) {
@@ -1060,14 +1156,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* (The RAW/CONFIRMED label colouring lived here; removed with the RAW view, 2026-07-28.) */
 .rdsF { min-height: 2.1em; align-items: flex-start; line-height: 1.25; }
 .rdsF label { padding-top: 1px; }
-@media (max-width: 560px) {
-  /* ★ Narrow screens STACK on purpose — beside each other, neither column would be readable.
-     Wrapping is re-enabled here deliberately, and the plots take the full width rather than a
-     fixed 180px, so the stack is a layout choice rather than the accident it was on desktop. */
-  #rdsPanel { flex-wrap: wrap; }
-  #rdsGrid { grid-template-columns: 1fr; }
-  #rdsConstWrap { flex: 1 1 100%; min-width: 0; margin: 0 auto; }
-}
+/* (The old `@media (max-width: 560px)` stack rule lived here. It is now the @container rules
+   above — same intent, asked of the box instead of the window, which is why it never fired.) */
 /* ★ PINNED to the canvases' own width. `flex: 0 0 auto` sized it from content, so it drifted
    as the logo appeared and the verdict text changed length — and combined with wrapping, that
    is what stair-stepped the graphs. A fixed basis cannot be squeezed or displaced. */
@@ -1298,6 +1388,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #spotList .call { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ★★ THE SAME PROBLEM, THE SAME ANSWER. Six columns need ~250px of fixed track before the
+   flexible one gets anything, so in a narrow box the country was ellipsised to nothing and the
+   distance collided with it. The row becomes a WRAPPING FLEX line instead: every field is still
+   there, in the same order, and it takes two lines when it needs to. ★ Nothing is dropped —
+   hiding fields to fit is the one thing these panels must not do (the RDS rule, and it applies
+   just as much to a spot: the country is half of why anyone reads the list). */
+@container decbox (max-width: 400px) {
+  #spotList .sres.spot { display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: baseline; }
+  #spotList .sres.spot .cty { flex: 1 1 auto; min-width: 0; }
+  #spotList .sres.spot .km  { margin-left: auto; }
+  #spotList .sdetail { flex: 1 1 100%; }
+}
 #spotList .t { color: var(--unit); font-variant-numeric: tabular-nums; }
 #spotList .band { color: var(--text-dim); }
 #spotList .snr { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1633,7 +1735,16 @@ select.btn { padding: 6px 8px; }
       <div id="mSqlLine" hidden></div>
         <div id="mPillIn">
           <span id="mFreqBox"><span id="mFreq">—</span><span id="mUnit">MHz</span></span>
-          <span id="mMode">NFM</span><span id="mSnr"></span>
+          <span id="mMode">NFM</span><!--
+          ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
+             thing on a bar that runs to bright green, and the app already has a symbol for this
+             (ControlsBar.tsx:432, StereoIcon) — a shape reads at a glance where two small letters
+             do not, and the two surfaces should not invent separate vocabulary for one state.
+             Proportions taken from that component: rings of diameter `size`, the second offset
+             0.62×, stroke 0.13× — hence a 26×16 box with r=7 at cx 8 and 17.9. -->
+          <span id="mStereo" title="Stereo pilot locked" aria-label="Stereo"><svg viewBox="0 0 26 16" fill="none"
+            stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="8" r="7"/><circle
+            cx="17.9" cy="8" r="7"/></svg></span><span id="mSnr"></span>
         </div>
       </div>
 
