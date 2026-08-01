@@ -101,6 +101,14 @@ static int streamCb(airspyhf_transfer_t* t) {
     if (c->lastRx) c->lastRx->store(nowSecsMono(), std::memory_order_relaxed);
     // ★★ COUNTED BEFORE THE PAUSE DROP: this is what the RADIO is doing, not what we kept.
     if (c->samps) c->samps->fetch_add(t->sample_count, std::memory_order_relaxed);
+    // ★ THE BUFFER SIZE IS A FRAME-RATE CEILING. Both clients ask for 20 fps and get 14 — an odd,
+    //   specific number (Stuart, 2026-08-01) — and 912000/65536 = 13.9. If the DSP emits one frame
+    //   per callback, the radio's USB buffer decides the maximum and the request cannot beat it.
+    //   Logged once so the arithmetic is on the record rather than inferred.
+    { static bool once = false;
+      if (!once) { once = true;
+        std::fprintf(stderr, "airspyhf: USB buffer = %d samples -> %.1f callbacks/s at this rate\n",
+                     t->sample_count, 912000.0 / (double)t->sample_count); } }
     if (c->paused && *c->paused) return 0;   // idle: drop, never tear the device down
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming

@@ -2244,7 +2244,17 @@ struct LocalSdrShim::Impl {
         std::string type = jsonStr(msg, "type");
         double v;
         if (type == "ping") { sendText(sock, "{\"type\":\"pong\"}"); return; }
-        if (type == "set_rate") { if (jsonNum(msg,"divisor",v)) rateDivisor.store(std::max(1,(int)llround(v))); return; }
+        // ★ LOGGED alongside fftRate: these are the TWO ways a client can ask to be slowed, and
+        //   which one it uses depends on whether it has recognised this server as a VibeServer.
+        //   The app showed a POWER SAVE pill while sending NEITHER (Stuart, 2026-08-01), so the
+        //   question is not "was it honoured" but "which path did it take, if any".
+        if (type == "set_rate") {
+            if (jsonNum(msg,"divisor",v)) {
+                LOGI("client asked for divisor %d", (int)llround(v));
+                rateDivisor.store(std::max(1,(int)llround(v)));
+            }
+            return;
+        }
         // ★ RSP-specific controls. They belong HERE, on the spectrum socket, because that is
         // the connection the client's control messages travel on — the first attempt put them
         // in the audio/decoder loop, where nothing ever sent them, so every RSP control
