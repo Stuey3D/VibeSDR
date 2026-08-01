@@ -171,6 +171,40 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     // the older HF+ Dual Port's ceiling, not this one).
     if (rates_.empty()) rates_ = { 912000 };
 
+    // ★★★ OFFER ONLY WHAT THE RADIO ACTUALLY DOES. This one advertises seven rates and
+    //     implements THREE — its top rate halved. Driven and counted, 2026-08-01:
+    //         912000 -> 912000   768000 -> 912000   650000 -> 912000
+    //         456000 -> 456000   384000 -> 456000
+    //         228000 -> 228000   192000 -> 228000
+    //     and it reports success every time. The substituted rates are not merely useless, they
+    //     are WRONG IN TWO WAYS: the DSP is built for a rate the radio is not running (heard as a
+    //     pitch shift), and libairspyhf picks its IF architecture — zero-IF vs low-IF, which
+    //     decides the LO — from the index that was ASKED for, so the radio ends up listening
+    //     somewhere else entirely (Stuart, tuned to 104.7, hearing 104.2; and Horizon showing at
+    //     104.9 instead of 104.7. At 912 kHz everything is perfect).
+    //     ★★ A control that cannot work should not be offered — the project's own rule. Halving
+    //     from the top is exactly what the measurements show, and it generalises: an HF+ Dual
+    //     Port topping out at 768 kHz yields 768/384/192, which are ITS working rates.
+    //     ★ The measurement in setSampleRate stays as the backstop. This stops anyone choosing a
+    //     broken rate; that catches the radio doing something unexpected anyway.
+    if (rates_.size() > 1) {
+        const uint32_t top = rates_.back();          // sorted ascending
+        std::vector<uint32_t> keep;
+        for (uint32_t r : rates_) {
+            for (uint32_t t = top; t >= 1000; t /= 2)
+                if (r == t) { keep.push_back(r); break; }
+        }
+        if (keep.size() >= 2 && keep.size() < rates_.size()) {
+            std::string dropped;
+            for (uint32_t r : rates_)
+                if (std::find(keep.begin(), keep.end(), r) == keep.end())
+                    { dropped += " "; dropped += std::to_string(r); }
+            std::fprintf(stderr, "airspyhf: dropping rates the radio does not implement:%s\n",
+                         dropped.c_str());
+            rates_ = keep;
+        }
+    }
+
     // ★★★ ENABLE THE LIBRARY'S OWN DSP EXPLICITLY, never by inheriting a default. It does the
     // IQ correction AND — the part that matters — the IF SHIFT: an HF+ runs LOW-IF at some
     // sample rates (airspyhf_is_low_if reports which), and without this the tuned signal does
