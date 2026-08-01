@@ -274,7 +274,13 @@ export function initMobileControls(deps: MobileDeps) {
   // ★ WRITE ONLY ON CHANGE. This runs 4×/s over elements the user is trying to click, and
   //   replacing textContent destroys and rebuilds the text node under the pointer — churn
   //   that costs nothing to avoid and can only help a mid-click update.
-  const put = (el: HTMLElement, v: string) => { if (el.textContent !== v) el.textContent = v; };
+  // ★★ NULL-SAFE ON PURPOSE. refresh() runs 4x/s and touches a dozen elements by id; when one
+  //    was renamed out of the markup, put() threw and aborted the REST of the tick — the
+  //    frequency, meter, squelch line and mute state all stopped updating, with a console
+  //    error as the only clue. A missing element should cost that one readout, not all of them.
+  const put = (el: HTMLElement | null, v: string) => {
+    if (el && el.textContent !== v) el.textContent = v;
+  };
 
   function refresh() {
     const hz = deps.freqHz();
@@ -295,12 +301,9 @@ export function initMobileControls(deps: MobileDeps) {
     const mb = document.getElementById('muteBtn');
     if (mb) $('mAudio').classList.toggle('muted', mb.classList.contains('on'));
 
-    // ★★ MIRROR THE DESKTOP READOUTS, DO NOT RECOMPUTE THEM. Throughput, fps, rtt and link
-    //    quality are all derived in updateStatus()/updateLink(); a second derivation here
-    //    would disagree with the first the moment either changed, and two contradictory
-    //    status readouts is worse than one.
-    const st = document.getElementById('status');
-    if (st) put($('mNetTxt'), st.textContent ?? '');
+    // ★ Throughput, fps, rtt and the link bars are not mirrored at all: #status and
+    //   #linkStats are MOVED into the card, so the real elements are already here. There is
+    //   nothing to copy and nothing that can disagree.
     // ★ One timer, mirrored — a second countdown could drift from the recorder's own.
     const rt = document.getElementById('recTime');
     const rv = (rt?.textContent ?? '').trim();
