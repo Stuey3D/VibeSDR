@@ -1049,7 +1049,18 @@ struct LocalSdrShim::Impl {
         if (sampleRate <= 256001.0) return 40000.0;
         if (sampleRate <= 384001.0) return 50000.0;
         if (sampleRate <= 768001.0) return 60000.0;
-        return 80000.0;
+        // ★★ AT 912 kHz WE CROP TO 768, NOT TO BROWN'S 752. Three reasons, and they are Stuart's:
+        //    • 768 kHz is a rate AIRSPY THEMSELVES ADVERTISE for this radio, so the number on the
+        //      screen is one the manufacturer uses rather than one we invented;
+        //    • cropping to 752 removes the roll-off completely and leaves a hard vertical cliff at
+        //      each end, which reads as a fault. Stopping 8 kHz short leaves the SHOULDER visible —
+        //      the display drops away at the edges the way an SDRplay's does, which is what a
+        //      receiver honestly looks like;
+        //    • it still kills all the dead space: 72 kHz per side instead of 80, and the last
+        //      8 kHz is skirt you can see rolling off, not a flat floor of nothing.
+        //    ★ Brown's 80 kHz is the right figure for "where is it unusable"; this is the right
+        //    figure for "what should a person be shown". They are different questions.
+        return (sampleRate - 768000.0) / 2.0;   // 72 kHz per side at 912
     }
     /** The part of the capture that is actually receivable. */
     double usableSpan() const { return std::max(sampleRate * 0.5, sampleRate - 2.0 * edgeCutoffHz()); }
