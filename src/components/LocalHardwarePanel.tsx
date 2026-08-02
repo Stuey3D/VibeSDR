@@ -87,6 +87,23 @@ export interface LocalHardwarePanelProps {
   ahfAgcHigh?: boolean;  onAhfAgcThreshold?: (high: boolean) => void;
   ahfAtt?: number;       onAhfAtt?: (steps: number) => void;
   ahfLna?: boolean;      onAhfLna?: (on: boolean) => void;
+  /** ★★ SDRplay RSP live state + setters (only when radio.driver === 'sdrplay'). Mirrors the web
+   *  client's rspCtls, which is the reference implementation — the two should look the same, and
+   *  an RSP arriving on the phone with a DONGLE's single gain slider is the "else means dongle"
+   *  trap in its user-visible form: the panel said "RSP1B Controls" and then offered RF GAIN.
+   *  ★ The RSP's gain is TWO things — an LNA STATE (RF, where overload happens) and an IF gain
+   *  REDUCTION — and conflating them into one slider is what made a dongle-shaped control useless
+   *  here. On an RSP it is the front end that overloads, and RF overload is what destroys RDS. */
+  rspSysGain?: number;   // API's own total system gain, dB (0 = unknown)
+  rspOverload?: boolean; // the radio's OWN ADC-clipping event, not inferred from the spectrum
+  rspSettling?: boolean; // just after a gain change: the reading is not meaningful yet
+  rspLna?: number;       onRspLna?: (state: number) => void;
+  rspIfGr?: number;      onRspIfGr?: (db: number) => void;
+  rspIfAgc?: boolean;    onRspIfAgc?: (on: boolean) => void;
+  rspAgcSet?: number;    onRspAgcSet?: (dbfs: number) => void;
+  rspRfNotch?: boolean;  onRspRfNotch?: (on: boolean) => void;
+  rspDabNotch?: boolean; onRspDabNotch?: (on: boolean) => void;
+  rspBiasT?: boolean;    onRspBiasT?: (on: boolean) => void;
 }
 
 function Seg<T>({ options, value, onChange, fmt, slot }: {
@@ -127,6 +144,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const [adminPw, setAdminPw] = useState('');
   // ★ Decide from what the RADIO SAID, never from what else happens to be set.
   const isAhf = p.radio?.driver === 'airspyhf';
+  const isRsp = p.radio?.driver === 'sdrplay';
   // ★ Locked = the server has a password and this session has not cleared it.
   const locked = !!p.adminSet && !p.adminOk;
   const isRtl = !p.radio || p.radio.driver === 'rtl';
@@ -304,6 +322,96 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     Airspy call this one misleading: it acts on the ADC and DSP back end, not the
                     antenna. Leaving it OFF buys about 12 dB of dynamic range. Turn it on only on a
                     quiet band chasing something weak.
+                  </Text>
+                </>
+              )}
+            </>
+          ) : isRsp ? (
+            <>
+              {/* ★★★ AN RSP'S GAIN IS TWO CONTROLS, NOT ONE. LNA STATE sets the RF front end —
+                  where overload actually happens — and IF GAIN REDUCTION sets what follows it.
+                  A dongle's single gain slider cannot express that, which is why this panel
+                  said "RSP1B Controls" and then offered a control the radio does not have.
+                  Ported from the web client's rspCtls, which is the reference: the two clients
+                  should offer the same radio the same things. */}
+              <Text style={styles.section}>GAIN — {p.radio?.model || 'SDRplay RSP'}</Text>
+              {/* ★★ WHAT THE RADIO IS DOING, not what the sliders were last set to. The API
+                  computes total system gain itself, and under AGC the IF reduction is the AGC's
+                  to move — so a slider reading would be a lie while this is the truth. */}
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>System gain</Text>
+                <Text style={[styles.stepVal, p.rspOverload ? { color: '#ff8a7d' } : null]}>
+                  {p.rspOverload ? 'OVERLOAD'
+                    : p.rspSettling ? 'settling…'
+                    : (p.rspSysGain ?? 0) > 0 ? `${(p.rspSysGain ?? 0).toFixed(1)} dB` : '—'}
+                </Text>
+              </View>
+              {/* ★ The radio raises OVERLOAD itself when its ADC clips — no inference from the
+                  spectrum, unlike a dongle. It is also the thing that destroys RDS, so it is
+                  worth shouting about rather than burying. */}
+              <Text style={styles.note}>
+                RF overload is what kills RDS on this radio. If OVERLOAD shows, drop the LNA
+                state (more reduction) before touching anything else.
+              </Text>
+
+              <Text style={styles.section}>RF GAIN (LNA STATE)</Text>
+              <View style={styles.stepperRow}>
+                <TouchableOpacity style={styles.stepBtn}
+                  onPress={() => p.onRspLna?.(Math.max(0, (p.rspLna ?? 0) - 1))}>
+                  <Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+                <Text style={styles.stepVal}>
+                  {(p.rspLna ?? 0)} / {Math.max(0, (p.radio?.lnaStates ?? 10) - 1)}
+                </Text>
+                <TouchableOpacity style={styles.stepBtn}
+                  onPress={() => p.onRspLna?.(Math.min((p.radio?.lnaStates ?? 10) - 1, (p.rspLna ?? 0) + 1))}>
+                  <Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+              </View>
+              <Text style={styles.note}>0 = most RF gain. Higher states attenuate the front end.</Text>
+
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>IF AGC</Text>
+                <Switch value={p.rspIfAgc !== false} onValueChange={(v) => p.onRspIfAgc?.(v)}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspIfAgc !== false ? C.gold : '#ccc'} />
+              </View>
+
+              {/* ★ Hidden, not greyed, while the AGC owns it — a disabled slider still reads as
+                  an offer, and the same rule removed the HF+'s rate picker. */}
+              {p.rspIfAgc === false && (
+                <>
+                  <Text style={styles.section}>IF GAIN REDUCTION</Text>
+                  <View style={styles.stepperRow}>
+                    <Slider style={{ flex: 1 }}
+                            minimumValue={p.radio?.ifGrMin ?? 20} maximumValue={p.radio?.ifGrMax ?? 59}
+                            step={1} value={p.rspIfGr ?? 40}
+                            onSlidingComplete={(v: number) => p.onRspIfGr?.(Math.round(v))}
+                            minimumTrackTintColor={C.gold} maximumTrackTintColor="#555" thumbTintColor={C.gold} />
+                    <Text style={styles.stepVal}>{p.rspIfGr ?? 40} dB</Text>
+                  </View>
+                  <Text style={styles.note}>More reduction = less gain.</Text>
+                </>
+              )}
+
+              {(p.radio?.rfNotch || p.radio?.dabNotch || p.radio?.biasT) && (
+                <>
+                  <Text style={styles.section}>FILTERS</Text>
+                  {p.radio?.rfNotch && (
+                    <View style={styles.toggleRow}>
+                      <Text style={styles.toggleLabel}>FM notch</Text>
+                      <Switch value={!!p.rspRfNotch} onValueChange={(v) => p.onRspRfNotch?.(v)}
+                        trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspRfNotch ? C.gold : '#ccc'} />
+                    </View>
+                  )}
+                  {p.radio?.dabNotch && (
+                    <View style={styles.toggleRow}>
+                      <Text style={styles.toggleLabel}>DAB notch</Text>
+                      <Switch value={!!p.rspDabNotch} onValueChange={(v) => p.onRspDabNotch?.(v)}
+                        trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspDabNotch ? C.gold : '#ccc'} />
+                    </View>
+                  )}
+                  <Text style={styles.note}>
+                    A notch is wanted ON elsewhere in the spectrum, where a strong local
+                    transmitter is what overloads the front end — and OFF when that band is what
+                    you came to hear.
                   </Text>
                 </>
               )}

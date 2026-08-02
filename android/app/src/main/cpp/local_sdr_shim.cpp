@@ -4293,8 +4293,15 @@ struct LocalSdrShim::Impl {
                 // ★ "IS IT BACK?" IS PER-SOURCE. findOurDevice() enumerates DONGLES, so asking
                 // it about an Airspy or an RSP always answers no — which would report a
                 // perfectly present radio as gone the moment this line was ever reached.
-                const bool back = useAirspyHf() ? (vibe::AirspyHfSource::deviceCount() > 0)
-                                : useSdrplay()  ? (vibe::SdrplaySource::deviceCount() > 0)
+                // ★★★ DO NOT PROBE A RADIO WE ARE STILL HOLDING. On an SDRplay, deviceCount()
+                // calls sdrplay_api_Open(), GetDevices and then api_Close() — and this process
+                // already has a device SELECTED and streaming. That is at best a lie (our own
+                // device is in use, so it can report none) and at worst disturbs the live session,
+                // because Close() tears down this process's API handle. The honest signal for "is
+                // it back" on a source we still hold is IQ ARRIVING, which the branch above now
+                // acts on; probe only when there is no source object left to ask.
+                const bool back = useAirspyHf() ? (ahf  ? true : vibe::AirspyHfSource::deviceCount() > 0)
+                                : useSdrplay()  ? (sdrp ? true : vibe::SdrplaySource::deviceCount() > 0)
                                                 : (findOurDevice() >= 0);
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);

@@ -1826,6 +1826,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminRefused, setAdminRefused] = useState(false);
   // Airspy HF+ live state. Mirrors what we last SENT — the shim has no read-back message, and
   // it is single-occupant, so our own last write is the truth.
+  // ★★ SDRplay RSP live state + control. The panel had no RSP branch at all, so an RSP was
+  //    drawn with the DONGLE's single gain slider — see LocalHardwarePanel. The web client has
+  //    had these since the RSP landed; this is the app catching up to it.
+  const [rspSys,     setRspSys]     = useState(0);
+  const [rspOvl,     setRspOvl]     = useState(false);
+  const [rspSettling, setRspSettling] = useState(false);
+  const [rspLna,     setRspLna]     = useState(0);
+  const [rspIfGr,    setRspIfGr]    = useState(40);
+  const [rspIfAgc,   setRspIfAgc]   = useState(true);
+  const rspIfAgcRef = useRef(true); rspIfAgcRef.current = rspIfAgc;
+  const [rspRfNotch, setRspRfNotch] = useState(false);
+  const [rspDabNotch, setRspDabNotch] = useState(false);
   const [ahfAgc,     setAhfAgc]     = useState(true);
   const [ahfAgcHigh, setAhfAgcHigh] = useState(false);
   const [ahfAtt,     setAhfAtt]     = useState(0);
@@ -2540,6 +2552,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
       onRadioCaps:  (caps) => { if (!destroyed.current) setRadioCaps(caps); },
+      // ★ The RSP reports its own total system gain and its own ADC-overload event ~10/s. Neither
+      //   is inferred from the spectrum the way a dongle's would have to be, so it is shown as
+      //   fact rather than estimate — and OVERLOAD is what destroys RDS on this radio.
+      onRspStat:    (r) => {
+        if (destroyed.current) return;
+        setRspSys(r.sysGain); setRspOvl(r.overload); setRspSettling(r.settling);
+        setRspLna(r.lna);
+        // Under AGC the IF reduction is the AGC's to move — follow the radio, do not fight it.
+        if (rspIfAgcRef.current) setRspIfGr(r.ifgr);
+      },
       onAdminState: (st) => {
         if (destroyed.current) return;
         setAdminSet(st.set); setAdminOk(st.ok);
@@ -6226,6 +6248,17 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (!nonce || !token) { setAdminRefused(true); return; }
             (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
           }}
+          rspSysGain={rspSys} rspOverload={rspOvl} rspSettling={rspSettling}
+          rspLna={rspLna}
+          onRspLna={(v) => { setRspLna(v); (client.current as any)?.rspControl?.({ lna: v }); }}
+          rspIfGr={rspIfGr}
+          onRspIfGr={(v) => { setRspIfGr(v); (client.current as any)?.rspControl?.({ ifgr: v }); }}
+          rspIfAgc={rspIfAgc}
+          onRspIfAgc={(v) => { setRspIfAgc(v); (client.current as any)?.rspControl?.({ ifagc: v }); }}
+          rspRfNotch={rspRfNotch}
+          onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
+          rspDabNotch={rspDabNotch}
+          onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
           ahfAgc={ahfAgc}
           onAhfAgc={(v) => { setAhfAgc(v); (client.current as any)?.ahfControl?.({ agc: v }); }}
           ahfAgcHigh={ahfAgcHigh}

@@ -155,6 +155,12 @@ export interface SDRCallbacks {
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */
   onRadioCaps?: (caps: RadioCaps) => void;
+  /** ★ RSP live state, ~10/s while an SDRplay is serving. `sysGain` is the API's own computed
+   *  TOTAL system gain and `overload` is the radio's own ADC-clipping event — neither is inferred
+   *  from the spectrum the way a dongle's would have to be. `settling` covers the moment after a
+   *  gain change when the reading is not yet meaningful. */
+  onRspStat?: (s: { sysGain: number; lna: number; ifgr: number;
+                    overload: boolean; settling: boolean }) => void;
   /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
    *  `refused` fires when a protected control was rejected — the honest moment to say why. */
   onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean }) => void;
@@ -1654,6 +1660,16 @@ export class UberSDRClient {
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
         oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({
           aid: str(o?.aid), grp: num(o?.grp, 0) })) : [],
+      });
+      return;
+    }
+    if (msg.type === 'rspstat') {
+      this.callbacks.onRspStat?.({
+        sysGain:  Number(msg.sysGain) || 0,
+        lna:      Number(msg.lna) || 0,
+        ifgr:     Number(msg.ifgr) || 0,
+        overload: Number(msg.overload) === 1,
+        settling: Number(msg.settling) === 1,
       });
       return;
     }
