@@ -1854,8 +1854,52 @@ struct LocalSdrShim::Impl {
         vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
     }
 
+    // ── Audio fault audit (passive) ────────────────────────────────────────
+    // ★ MEASURE FIRST. The FM "mute" has now been mis-diagnosed twice from theory, so this
+    // reports what the audio ACTUALLY is at the point it leaves the DSP, and distinguishes the
+    // three ways it can go quiet — they have completely different causes:
+    //   • non-finite : a NaN/Inf has latched into recursive state (the stereo PLL and the FM DC
+    //                  blocker are both IIR) -> silence forever until a restart;
+    //   • railed     : clipped flat against the limit -> inaudible, but the DSP is fine;
+    //   • silent     : genuinely near zero -> the signal or an upstream stage has stopped.
+    // ★★ This must never PERTURB anything (a probe shipped as behaviour cost a working radio on
+    // 08-01), so it only reads, and it only speaks when something is wrong — no log spam, and
+    // nothing at all in normal listening.
+    struct AudioAudit {
+        long long n = 0, nonFinite = 0, railed = 0, quiet = 0;
+        double tMs = 0.0;
+        void note(float v) {
+            ++n;
+            if (!std::isfinite(v)) { ++nonFinite; return; }
+            const float a = std::fabs(v);
+            if (a > 0.995f)      ++railed;
+            else if (a < 1e-4f)  ++quiet;
+        }
+        // Returns true and fills `out` once a second IF the second was faulty.
+        bool tick(double nowMs, char* out, size_t cap) {
+            if (tMs == 0.0) { tMs = nowMs; return false; }
+            if (nowMs - tMs < 1000.0 || n == 0) return false;
+            const double nf = 100.0 * (double)nonFinite / (double)n;
+            const double rl = 100.0 * (double)railed    / (double)n;
+            const double qt = 100.0 * (double)quiet     / (double)n;
+            const bool bad = nonFinite > 0 || rl > 20.0 || qt > 95.0;
+            if (bad) snprintf(out, cap, "AUDIO AUDIT: nonfinite %.1f%% railed %.1f%% quiet %.1f%% (n=%lld)",
+                              nf, rl, qt, n);
+            n = nonFinite = railed = quiet = 0; tMs = nowMs;
+            return bad;
+        }
+    };
+    AudioAudit audit;
+
     void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
+        {
+            for (int i = 0; i < count; i++) { audit.note(data[i].l); if (ch == 2) audit.note(data[i].r); }
+            char line[160];
+            const double nowMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (audit.tick(nowMs, line, sizeof line)) LOGI("%s", line);
+        }
         // Feed the audio-extension decoder (mono int16) — runs even with no audio
         // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
         feedDecoder(data, count);
