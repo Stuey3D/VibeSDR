@@ -1436,6 +1436,7 @@ struct LocalSdrShim::Impl {
     std::atomic<uint64_t> frameCounter{0};
 
     std::mutex sendMtx; // serialises all WS writes (both directions are split, sends here)
+    double specAuditMs = 0.0; long long specAuditFrames = 0;   // see onSpectrum's rate audit
 
     // ── Spectrum callback (Stage 3) ────────────────────────────────────────
     // The V5 engine hands us a fftshifted dB row (bin 0 = -fs/2, bins/2 = DC),
@@ -1454,6 +1455,26 @@ struct LocalSdrShim::Impl {
             if (idx < 0) idx = 0; else if (idx >= bins) idx = bins - 1;
             return fftAccum[idx] * inv;
         };
+
+        // ── Spectrum rate audit (passive) ──────────────────────────────────
+        // ★ 20 fps is requested and ~14 arrives, on BOTH clients. The request is correct
+        // (the engine is set to 20*FFT_AVG) and the emit path has no throttle, so the loss
+        // is between the FFT and the wire — this counts what ACTUALLY leaves here, which is
+        // the one number nobody has measured. Speaks only when it deviates, once per 5 s.
+        {
+            const double tMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (specAuditMs == 0.0) specAuditMs = tMs;
+            ++specAuditFrames;
+            if (tMs - specAuditMs >= 5000.0) {
+                const double got = specAuditFrames * 1000.0 / (tMs - specAuditMs);
+                const double want = fftRate;
+                if (want > 0 && std::fabs(got - want) > want * 0.1)
+                    LOGI("SPEC RATE: emitting %.1f fps, asked %.1f (engine %.1f, %.0f%% of target)",
+                         got, want, want * FFT_AVG, 100.0 * got / want);
+                specAuditFrames = 0; specAuditMs = tMs;
+            }
+        }
 
         uint64_t n = frameCounter.fetch_add(1);
         int div = rateDivisor.load();
