@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 
 // VibeSDR V4 — local-hardware / RTL-TCP audio.
@@ -24,7 +24,15 @@ const Vibe = NativeModules.VibePowerModule as {
   setInstanceName?:   (name: string) => void;
 } | undefined;
 
-const USE_NATIVE_PUMP = Platform.OS === 'android';
+// ★★★ BOTH PLATFORMS NOW. iOS used to read /ws/audio in JAVASCRIPT and base64 every packet across
+// the bridge — ~50 crossings a second at Opus rates, and roughly 23x the bytes with uncompressed
+// audio. Android never did: its service opens the socket in Kotlin. iOS now has the same pump
+// (VibePowerModule.startLocalAudio), so on neither platform does an audio byte touch the JS thread.
+// ★ Stuart, on why: "every time we have any real issues it always seems to be JS being starved…
+//   gotta think of our users on ancient low end devices."
+// ★★ The JS reader below is KEPT, and is not dead code: `startLocalAudio` is optional-chained, so
+//   an older native side (or a future platform) still falls back to it rather than going silent.
+const USE_NATIVE_PUMP = Platform.OS === 'android' || Platform.OS === 'ios';
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 /** ★★ A 4096-entry table of the 64x64 TWO-character pairs, built once. Encoding then handles
@@ -147,7 +155,24 @@ export default function LocalAudioPlayer(
     if (USE_NATIVE_PUMP) {
       Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix);
       started.current = true;
-      return () => { if (started.current) { Vibe?.stopLocalAudio?.(); started.current = false; } };
+      // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
+      //    arrived; with the socket native, only native can count it — so the pump reports a tally
+      //    at ~2 Hz and we forward it. Without this the readout would show SPECTRUM ONLY, which is
+      //    the exact fault the note on onBytes describes: 12 KB/s displayed while the link carried
+      //    198, and it hid the real problem for months.
+      //    ★ iOS emits the event; Android's pump does not (yet), so there it stays spectrum-only
+      //      as it always has — one platform improving is not a reason to hold it back.
+      let sub: { remove: () => void } | null = null;
+      try {
+        const em = new NativeEventEmitter(NativeModules.VibePowerModule);
+        sub = em.addListener('VibeLocalAudioBytes', (e: { bytes?: number }) => {
+          if (typeof e?.bytes === 'number') onBytes?.(e.bytes);
+        });
+      } catch { sub = null; }
+      return () => {
+        try { sub?.remove(); } catch {}
+        if (started.current) { Vibe?.stopLocalAudio?.(); started.current = false; }
+      };
     }
 
     // iOS: read /ws/audio in JS, push PCM through the external-PCM engine. For a
@@ -202,8 +227,8 @@ export default function LocalAudioPlayer(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, raw]);
 
-  // Forward tune/mode/bandwidth changes (native sends on the WS for Android; iOS
-  // sends directly on the JS WS).
+  // Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
+  // JS branch remains for the fallback reader.
   useEffect(() => {
     if (!started.current) return;
     if (USE_NATIVE_PUMP) {

@@ -55,7 +55,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             // Hardware keyboard (see VibeKeyWindow in AppDelegate.swift). Key DOWN and UP
             // are separate events on purpose: the arrows reuse the tuner keys' press/hold
             // semantics, and a sweep needs to know when the key was released.
-            "VibeKeyDown", "VibeKeyUp", "VibeScroll"]
+            "VibeKeyDown", "VibeKeyUp", "VibeScroll",
+            // ★ The local audio pump's byte tally. The link meter has to include AUDIO or it is
+            //   worse than useless — it once read 12 KB/s while the link carried 198, and hid the
+            //   real problem for months. Now the socket is native, only native can count it.
+            "VibeLocalAudioBytes"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -310,11 +314,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   /// base64 of little-endian Int16 mono PCM at `sampleRate` → resample → play.
   /// Per-frame rate so type-2 (12 kHz) and type-4 HD/WFM (48 kHz) both work.
+  /// ★ The base64 hop exists ONLY because JS cannot hand raw bytes across the bridge. Anything
+  ///   already native should call feedExternalPcm directly — see the local audio pump below.
   @objc func pushExternalPcm(_ base64: String, sampleRate: NSNumber, channels: NSNumber) {
-    guard externalAudio, !isMuted,
-          let data = Data(base64Encoded: base64), data.count >= 2 else { return }
-    let rate = max(8000, sampleRate.doubleValue)
-    let ch2  = channels.intValue == 2   // interleaved L,R (local WFM stereo)
+    guard let data = Data(base64Encoded: base64) else { return }
+    feedExternalPcm(data, sampleRate: sampleRate.doubleValue, stereo: channels.intValue == 2)
+  }
+
+  func feedExternalPcm(_ data: Data, sampleRate: Double, stereo: Bool) {
+    guard externalAudio, !isMuted, data.count >= 2 else { return }
+    let rate = max(8000, sampleRate)
+    let ch2  = stereo                   // interleaved L,R (local WFM stereo)
     audioQ.async { [weak self] in
       guard let self else { return }
       let total = data.count / 2
@@ -386,10 +396,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var extOpusFails: Int = 0
 
   @objc func pushExternalOpus(_ base64: String, sampleRate: NSNumber, channels: NSNumber) {
-    guard externalAudio, !isMuted,
-          let pkt = Data(base64Encoded: base64), pkt.count >= 3 else { return }
-    let sr = Int32(max(8000, sampleRate.intValue))
-    let ch = Int32(channels.intValue == 2 ? 2 : 1)
+    guard let pkt = Data(base64Encoded: base64) else { return }
+    feedExternalOpus(pkt, sampleRate: sampleRate.intValue, channels: channels.intValue)
+  }
+
+  func feedExternalOpus(_ pkt: Data, sampleRate: Int, channels: Int) {
+    guard externalAudio, !isMuted, pkt.count >= 3 else { return }
+    let sr = Int32(max(8000, sampleRate))
+    let ch = Int32(channels == 2 ? 2 : 1)
     audioQ.async { [weak self] in
       guard let self else { return }
       if self.extOpusDec == nil || self.extOpusRate != sr || self.extOpusCh != ch {
@@ -1441,6 +1455,191 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       self.openAudioWs(baseUrl: self.currentBase, frequency: self.currentFreq,
                        mode: self.currentMode, uuid: self.currentUuid)
     }
+  }
+
+  // ══ LOCAL AUDIO PUMP (VibeServer / local hardware /ws/audio) ═══════════════
+  //
+  // ★★★ WHY THIS EXISTS: iOS used to read this socket in JAVASCRIPT. Every packet arrived in JS,
+  // was base64-encoded there and pushed across the bridge — about fifty crossings a second at Opus
+  // rates, and roughly twenty-three times the bytes with uncompressed audio (~187 KB/s against
+  // ~8). Android has never done that: VibeStreamService opens the socket in Kotlin and hands PCM
+  // straight to the engine. This is that, for iOS.
+  // ★★ It matters most where there is least headroom. Stuart: "every time we have any real issues
+  // it always seems to be JS being starved… gotta think of our users on ancient low end devices."
+  // ★ Same NWConnection + NWProtocolWebSocket transport as the UberSDR audio socket above, for the
+  //   same reason it was chosen there: URLSessionWebSocketTask regressed on the iOS 27 beta.
+  // ★ Frame layout, identical to Android's parser (they must not drift):
+  //     [0] channels · [1] format · [2..5] rate, LE · then payload
+  //     format 0 = raw int16 PCM · 1 = IMA-ADPCM mono · 2 = ADPCM mid/side · 3 = Opus
+  //   ★★ EVERY format is decoded, including ADPCM. Dropping the ones we do not expect would be
+  //   silent audio loss on an older server — and as the Android note puts it, silence is a bug you
+  //   go and look for, a buzz is one you blame on the radio.
+
+  private var laConn: NWConnection?
+  private var laGen  = 0
+  private var laTune: String = ""
+  private var laBytes = 0            // since the last report
+  private var laBytesAt = Date.distantPast
+  private static let adpcmStep: [Int] = [
+    7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
+    88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,
+    544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,
+    2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
+    10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767]
+  private static let adpcmIndex: [Int] = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8]
+
+  @objc func startLocalAudio(_ host: String, port: NSNumber, initialTune: String, authSuffix: String) {
+    let p = port.intValue
+    if p <= 0 { return }
+    let h = host.isEmpty ? "127.0.0.1" : host
+    // authSuffix arrives as "&a=b&c=d" (built to append to an existing query); /ws/audio has no
+    // query of its own, so the leading & becomes a ?.
+    var q = ""
+    if !authSuffix.isEmpty {
+      q = "?" + (authSuffix.hasPrefix("&") ? String(authSuffix.dropFirst()) : authSuffix)
+    }
+    guard let url = URL(string: "ws://\(h):\(p)/ws/audio\(q)") else { return }
+    laTune = initialTune
+    startExternalAudio(NSNumber(value: 48000), pauseMode: "resume")   // external PCM engine
+    stopLocalAudioConn()
+    laGen &+= 1
+    let gen = laGen
+    let params = NWParameters.tcp
+    let wsOpts = NWProtocolWebSocket.Options()
+    wsOpts.autoReplyPing = true
+    params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
+    let conn = NWConnection(to: .url(url), using: params)
+    laConn = conn
+    conn.stateUpdateHandler = { [weak self] state in
+      guard let self, self.laGen == gen else { return }
+      switch state {
+      case .ready:
+        NSLog("[VibePowerModule] local audio WS ready: %@", url.absoluteString)
+        if !self.laTune.isEmpty { self.sendLocalTune(self.laTune) }
+        self.laReceive(conn, gen: gen)
+      case .failed(let err):
+        NSLog("[VibePowerModule] local audio WS failed: %@", "\(err)")
+      default:
+        break
+      }
+    }
+    conn.start(queue: wsQueue)
+  }
+
+  @objc func sendLocalTune(_ json: String) {
+    laTune = json
+    guard let conn = laConn, let data = json.data(using: .utf8) else { return }
+    let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+    let ctx  = NWConnection.ContentContext(identifier: "tune", metadata: [meta])
+    conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+  }
+
+  @objc func stopLocalAudio() {
+    stopLocalAudioConn()
+    stopExternalAudio()
+  }
+
+  private func stopLocalAudioConn() {
+    laGen &+= 1              // supersede every in-flight callback
+    laConn?.cancel()
+    laConn = nil
+  }
+
+  private func laReceive(_ conn: NWConnection, gen: Int) {
+    conn.receiveMessage { [weak self] (data, context, _, error) in
+      guard let self, self.laGen == gen, self.laConn === conn else { return }
+      if error != nil { return }
+      let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                as? NWProtocolWebSocket.Metadata)?.opcode
+      if op == .binary, let data {
+        // ★ COUNT EVERY BYTE THAT CROSSED THE LINK, before anything can drop the frame — the JS
+        //   reader this replaces counted at exactly this point, and for the same reason.
+        //   Reported at ~2 Hz rather than per packet: the meter updates about once a second, and
+        //   fifty bridge events a second to feed it would reintroduce what the pump just removed.
+        self.laBytes += data.count
+        let now = Date()
+        if now.timeIntervalSince(self.laBytesAt) >= 0.5 {
+          let n = self.laBytes
+          self.laBytes = 0
+          self.laBytesAt = now
+          self.sendEvent(withName: "VibeLocalAudioBytes", body: ["bytes": n])
+        }
+        self.onLocalAudioFrame(data)
+      }
+      if op == .close { return }
+      self.laReceive(conn, gen: gen)
+    }
+  }
+
+  private func onLocalAudioFrame(_ raw: Data) {
+    // ★★ REBASE TO A 0-INDEXED BUFFER FIRST. A Data may be a SLICE whose startIndex is not zero,
+    //    and subscripting it as if it were reads the wrong bytes — which here would not crash, it
+    //    would just produce noise, and noise gets blamed on the radio. Copying a ~2-8 KB frame is
+    //    nothing beside the base64 round trip this whole pump exists to delete.
+    let b = [UInt8](raw)
+    guard b.count > 6 else { return }
+    let channels = Int(b[0]) == 2 ? 2 : 1
+    let format   = Int(b[1])
+    let rate = Int(b[2]) | (Int(b[3]) << 8) | (Int(b[4]) << 16) | (Int(b[5]) << 24)
+    guard rate > 0 else { return }
+
+    switch format {
+    case 3:
+      feedExternalOpus(Data(b[6...]), sampleRate: rate, channels: channels)
+    case 0:
+      feedExternalPcm(Data(b[6...]), sampleRate: Double(rate), stereo: channels == 2)
+    case 1, 2:
+      guard b.count > 8 else { return }
+      let count = Int(b[6]) | (Int(b[7]) << 8)
+      guard count > 0 else { return }
+      let nb = (count + 1) / 2
+      let mid = adpcmDecode(b, offset: 8, count: count)
+      var pcm: [Int16]
+      if format == 2 && b.count >= 8 + 4 + nb + 4 + nb {
+        let side = adpcmDecode(b, offset: 8 + 4 + nb, count: count)
+        pcm = [Int16](repeating: 0, count: count * 2)
+        for i in 0..<count {
+          let m = Int(mid[i]), sd = Int(side[i])
+          pcm[i*2]   = Int16(max(-32768, min(32767, m + sd)))
+          pcm[i*2+1] = Int16(max(-32768, min(32767, m - sd)))
+        }
+      } else {
+        pcm = mid
+      }
+      pcm.withUnsafeBufferPointer { buf in
+        feedExternalPcm(Data(buffer: buf), sampleRate: Double(rate), stereo: format == 2)
+      }
+    default:
+      break   // an unknown format is dropped, never guessed at — see the note above
+    }
+  }
+
+  /// IMA-ADPCM, ported from VibeStreamService.adpcmDecodeBlock. The two MUST stay identical.
+  private func adpcmDecode(_ b: [UInt8], offset off: Int, count: Int) -> [Int16] {
+    guard b.count >= off + 4 else { return [] }
+    var predictor = Int(Int16(truncatingIfNeeded: Int(b[off]) | (Int(b[off+1]) << 8)))
+    var index = max(0, min(88, Int(b[off+2])))
+    var out = [Int16](repeating: 0, count: count)
+    var bi = off + 4
+    var s = 0
+    while s < count && bi < b.count {
+      let byte = Int(b[bi]); bi += 1
+      var half = 0
+      while half < 2 && s < count {
+        let nib = (half == 0) ? (byte & 0x0F) : ((byte >> 4) & 0x0F)
+        let step = VibePowerModule.adpcmStep[index]
+        var diff = step >> 3
+        if nib & 1 != 0 { diff += step >> 2 }
+        if nib & 2 != 0 { diff += step >> 1 }
+        if nib & 4 != 0 { diff += step }
+        if nib & 8 != 0 { diff = -diff }
+        predictor = max(-32768, min(32767, predictor + diff))
+        index = max(0, min(88, index + VibePowerModule.adpcmIndex[nib]))
+        out[s] = Int16(predictor); s += 1
+        half += 1
+      }
+    }
+    return out
   }
 
   // ── Transport B: URLSessionWebSocketTask (legacy, iOS 26 path) ───────────
