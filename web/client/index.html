@@ -378,6 +378,11 @@ html #bar { display: none; }
 .mBtn:active { background: rgba(255, 160, 0, 0.18); }
 .mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
 
+/* ★★ The card's step button carries the SAME full label as the desktop one ("6.25kHz", not
+   "6.25k"), and this stack is content-sized — so without a reserved width, changing step
+   resized the stack and pushed the island wider. Fixed width, same reasoning as #stepBtn. */
+#mStep { width: 7.2em; box-sizing: border-box; }
+
 /* ★★ AUDIO SHOWS ITS STATE. Muting is the one setting on this card whose effect is total
    silence, and silence is indistinguishable from a broken stream — so the button must SAY
    which it is rather than leaving the user to guess. It keeps the glyph (the icon is
@@ -876,7 +881,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
   font-size: 1.55em; line-height: 1; padding: 0.5em 0; flex: 1 1 0;
   min-width: 4.6em;
 }
-#stepBtn { min-width: 6.6em; padding: 0.75em 0.6em; font-size: 1em; }
+/* ★★ FIXED WIDTH, NOT min-width — this button RESERVES ITS WIDEST READING. The label runs
+   "10Hz" → "6.25kHz" → "100kHz", and a min-width only holds the floor: stepping up from 1kHz
+   grew the button, which grew the stack, which grew the whole control island a few pixels
+   sideways (Stuart, 2026-08-02). Same rule as the recording timer and the IDLE marker — see
+   the island width notes above. 7.6em clears "6.25kHz", the longest label in the ladder. */
+#stepBtn { width: 7.6em; box-sizing: border-box; padding: 0.75em 0.6em; font-size: 1em; }
 
 /* Demodulator + the bandwidth that belongs to it. */
 #demod { display: flex; flex-direction: column; gap: 0.6em; }

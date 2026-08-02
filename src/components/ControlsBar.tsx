@@ -1118,6 +1118,22 @@ function ControlsBar({
   const PAD_TOP = s.r(8);
   const RADIUS  = s.r(18);
 
+  // ★★ MAX-WIDTH CAP — the Mac app IS the iPad app, so on a Mac window (and
+  // especially an ultrawide) the landscape bar's edge-to-edge thumb-reach
+  // layout becomes four enormous near-empty buttons spanning the glass. The
+  // web client fixes this with no detection at all: content-sized island,
+  // capped and centred. Same trick here.
+  // ★ Why no platform branch is needed: an iPad tops out at 1366 pt wide in
+  // landscape (13" Pro), so a cap ABOVE that can only ever be hit by a Mac
+  // window or a genuinely huge display — hand-held iPad ergonomics are
+  // untouched by construction. Deliberately NOT pointer detection
+  // (isiOSAppOnMac / GCMouse): both need native code, and with a Magic
+  // Keyboard the screen is still touchable, so auto-narrowing would be a
+  // guess about intent.
+  // ★ Bonus of being WINDOW-driven rather than device-driven: an iPad pushed
+  // onto an external display gets the same cap for free — no extra code.
+  const MAX_BAR_W = 1400;
+
   const shared = {
     freqStr, unit,
     // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
@@ -1143,6 +1159,9 @@ function ControlsBar({
         paddingHorizontal: PAD_H,
         paddingBottom: Math.max(bottomInset, s.r(10)),
         borderRadius: RADIUS,
+        maxWidth: MAX_BAR_W,
+        alignSelf: 'center',
+        width: '100%',
       },
     ]}>
       {/* ★★ THE TINT IS THE SAME ON BOTH PLATFORMS — only BlurView differs, so only BlurView is
