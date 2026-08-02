@@ -5199,9 +5199,10 @@ void LocalSdrShim::setSampleRate(double rate) {
         //   request and disagreed with reality, so the DSP was built for a rate the radio was not
         //   running: heard as Barry White, slow by exactly the ratio between the two (measured on
         //   hardware 2026-08-01 — see AirspyHfSource::setSampleRate for the full table).
-        //   currentRate() is what the samples say, counted after the change.
-        actual = (uint32_t)llround(impl->ahf->currentRate());
-        if (!actual) actual = (uint32_t)impl->ahf->nearestRate(rate);
+        //   ★ REVERTED to the pre-2026-08-02 form along with the rest of the Airspy path — see the
+        //   note in airspyhf_source.cpp. The measured-rate and decimation work is in git and will
+        //   come back with verification behind it.
+        actual = (uint32_t)impl->ahf->nearestRate(rate);
         // ★★★ RE-APPLY THE TUNED CENTRE. An HF+ runs LOW-IF at some sample rates and zero-IF at
         //   others (airspyhf_is_low_if reports which, and open() logs it), so the offset the
         //   library applies to reach baseband is RATE-DEPENDENT. Changing the rate could

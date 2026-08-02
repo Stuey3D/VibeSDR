@@ -12,11 +12,9 @@
 #endif
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
-#include <thread>
 
 namespace vibe {
 
@@ -29,11 +27,6 @@ struct CbCtx {
     bool* paused;
     /** ★ Stamped on EVERY buffer, before the idle-park drop — see lastRxSecs(). */
     std::atomic<double>* lastRx;
-    /** ★★ Samples delivered, for measuring the rate the radio is ACTUALLY running at. */
-    std::atomic<long long>* samps;
-    /** ★ Software decimation, applied before the sink — see setSampleRate. */
-    HalfBandChain* chain;
-    std::mutex* chainMtx;
 };
 }  // namespace
 
@@ -102,32 +95,7 @@ static int streamCb(airspyhf_transfer_t* t) {
     // keep it is our decision, not the hardware's. Stamping after the pause check made an
     // idle-parked radio indistinguishable from an unplugged one.
     if (c->lastRx) c->lastRx->store(nowSecsMono(), std::memory_order_relaxed);
-    // ★★ COUNTED BEFORE THE PAUSE DROP: this is what the RADIO is doing, not what we kept.
-    if (c->samps) c->samps->fetch_add(t->sample_count, std::memory_order_relaxed);
-    // ★ THE BUFFER SIZE IS A FRAME-RATE CEILING. Both clients ask for 20 fps and get 14 — an odd,
-    //   specific number (Stuart, 2026-08-01) — and 912000/65536 = 13.9. If the DSP emits one frame
-    //   per callback, the radio's USB buffer decides the maximum and the request cannot beat it.
-    //   Logged once so the arithmetic is on the record rather than inferred.
-    { static bool once = false;
-      if (!once) { once = true;
-        std::fprintf(stderr, "airspyhf: USB buffer = %d samples -> %.1f callbacks/s at this rate\n",
-                     t->sample_count, 912000.0 / (double)t->sample_count); } }
     if (c->paused && *c->paused) return 0;   // idle: drop, never tear the device down
-    // ★★★ SOFTWARE DECIMATION HAPPENS HERE, before anything downstream exists. The DSP, the FFT,
-    //     the waterfall calibration and the client's span all read currentRate(), which reports
-    //     the EFFECTIVE rate — so none of them need to know this is happening.
-    //     ★ try_lock, never lock: reconfiguration happens while the consumer is paused, and if the
-    //     two ever did meet, dropping one USB buffer is invisible while blocking the USB callback
-    //     would not be.
-    if (c->chain && c->chainMtx && c->chainMtx->try_lock()) {
-        int outN = 0;
-        const float* out = c->chain->process(reinterpret_cast<const float*>(t->samples),
-                                             t->sample_count, outN);
-        if (outN > 0) (*c->sink)(out, outN);
-        c->chainMtx->unlock();
-        return 0;
-    }
-    if (c->chain && c->chain->factor() > 1) return 0;   // mid-reconfigure: drop this buffer
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming
 }
@@ -185,72 +153,12 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
         rates_.assign(n, 0);
         if (airspyhf_get_samplerates(impl_->dev, rates_.data(), n) != AIRSPYHF_SUCCESS)
             rates_.clear();
-        // ★★★ KEEP THE RADIO'S OWN ORDER. libairspyhf turns a rate in Hz into an INDEX by
-        //   matching against this array and sends the INDEX to the device — so the order is not
-        //   cosmetic, it is the wire format. We sort a copy for display and must never let that
-        //   sorted order stand in for the device's.
-        rawRates_ = rates_;
         std::sort(rates_.begin(), rates_.end());
     }
     // ★ A LAST RESORT ONLY — the real list comes from the radio. 912 kHz is the Discovery's
     // top rate (measured on hardware 2026-07-27; earlier comments here said 768, which is
     // the older HF+ Dual Port's ceiling, not this one).
     if (rates_.empty()) rates_ = { 912000 };
-
-    // ★★★ OFFER ONLY WHAT THE RADIO ACTUALLY DOES. This one advertises seven rates and
-    //     implements THREE — its top rate halved. Driven and counted, 2026-08-01:
-    //         912000 -> 912000   768000 -> 912000   650000 -> 912000
-    //         456000 -> 456000   384000 -> 456000
-    //         228000 -> 228000   192000 -> 228000
-    //     and it reports success every time. The substituted rates are not merely useless, they
-    //     are WRONG IN TWO WAYS: the DSP is built for a rate the radio is not running (heard as a
-    //     pitch shift), and libairspyhf picks its IF architecture — zero-IF vs low-IF, which
-    //     decides the LO — from the index that was ASKED for, so the radio ends up listening
-    //     somewhere else entirely (Stuart, tuned to 104.7, hearing 104.2; and Horizon showing at
-    //     104.9 instead of 104.7. At 912 kHz everything is perfect).
-    //     ★★ A control that cannot work should not be offered — the project's own rule. Halving
-    //     from the top is exactly what the measurements show, and it generalises: an HF+ Dual
-    //     Port topping out at 768 kHz yields 768/384/192, which are ITS working rates.
-    //     ★ The measurement in setSampleRate stays as the backstop. This stops anyone choosing a
-    //     broken rate; that catches the radio doing something unexpected anyway.
-    if (rates_.size() > 1) {
-        const uint32_t top = rates_.back();          // sorted ascending
-        std::vector<uint32_t> keep;
-        for (uint32_t r : rates_) {
-            for (uint32_t t = top; t >= 1000; t /= 2)
-                if (r == t) { keep.push_back(r); break; }
-        }
-        if (keep.size() >= 2 && keep.size() < rates_.size()) {
-            std::string dropped;
-            for (uint32_t r : rates_)
-                if (std::find(keep.begin(), keep.end(), r) == keep.end())
-                    { dropped += " "; dropped += std::to_string(r); }
-            std::fprintf(stderr, "airspyhf: dropping rates the radio does not implement:%s\n",
-                         dropped.c_str());
-            rates_ = keep;
-        }
-    }
-
-    // ★★★ WHAT WE OFFER IS NOT WHAT THE RADIO OFFERS. Hardware rates down to the top halved, then
-    //     SOFTWARE DECIMATION for everything below — see chooseRate(). That buys three things at
-    //     once: rates the radio would otherwise get wrong (its own 228 tunes off-frequency),
-    //     ~3 dB of processing gain per halving on weak signals, and fewer bins to send.
-    //     ★ Stopping at 1/8 is deliberate: below about 50 kHz the span is narrower than much of
-    //     what people tune, and each stage costs CPU on the serving device for less benefit.
-    {
-        const uint32_t top = rates_.back();
-        const uint32_t floorHw = rates_.size() > 1 ? top / 2 : top;
-        offered_.clear();
-        for (uint32_t hw : rates_) {
-            if (hw < floorHw) continue;
-            offered_.push_back(hw);
-            if (hw == floorHw) for (int d = 2; d <= 8; d <<= 1) offered_.push_back(hw / d);
-        }
-        std::sort(offered_.begin(), offered_.end());
-        offered_.erase(std::unique(offered_.begin(), offered_.end()), offered_.end());
-        std::string l; for (uint32_t v : offered_) { l += " "; l += std::to_string(v); }
-        std::fprintf(stderr, "airspyhf: offering (hardware + decimated):%s\n", l.c_str());
-    }
 
     // ★★★ ENABLE THE LIBRARY'S OWN DSP EXPLICITLY, never by inheriting a default. It does the
     // IQ correction AND — the part that matters — the IF SHIFT: an HF+ runs LOW-IF at some
@@ -277,28 +185,6 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     std::fprintf(stderr, "airspyhf: open ok, rate %u Hz, %s-IF, %zu rates offered\n",
                  (unsigned)nearestRate(sampleRateHz),
                  airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero", rates_.size());
-    // ★ WHICH RADIO AND WHICH FIRMWARE. The rate table comes straight out of firmware, so when it
-    //   disagrees with the published set for this model that is the first thing anyone will ask.
-    { char ver[128] = {0};
-      if (airspyhf_version_string_read(impl_->dev, ver, sizeof(ver) - 1) == AIRSPYHF_SUCCESS)
-          std::fprintf(stderr, "airspyhf: firmware \"%s\"\n", ver); }
-
-    // ★★★ THE CANONICAL-RATE PROBE HAS BEEN REMOVED, and this note is why it must not come back
-    //     as a startup step. It walked the device through every candidate rate at EVERY open to
-    //     answer one question (does this firmware have 256? — no, it is rejected; the seven it
-    //     reports are genuine). Each step re-tunes the LO and flips the IF architecture, and 912
-    //     kHz — correct all evening — started tuning wrongly once it shipped (Stuart, 2026-08-02:
-    //     "456 is correct, 912 is now broken. It was correct before all this work").
-    //     ★ A diagnostic that perturbs the thing it measures is fine for one run and unacceptable
-    //     as a permanent cost. If the question ever needs re-asking, ask it in a throwaway build.
-    // ★ AND WHAT THEY ARE. "7 rates offered" is not enough to tell whether a rate the user picked
-    //   is one the radio actually has — which is the whole question when some rates play at the
-    //   wrong pitch.
-    { std::string l; for (uint32_t v : rates_) { l += " "; l += std::to_string(v); }
-      std::fprintf(stderr, "airspyhf: rates (sorted):%s\n", l.c_str());
-      std::string r; for (size_t i = 0; i < rawRates_.size(); i++)
-          r += " [" + std::to_string(i) + "]=" + std::to_string(rawRates_[i]);
-      std::fprintf(stderr, "airspyhf: rates (device order, index=wire value):%s\n", r.c_str()); }
     return true;
 }
 
@@ -306,7 +192,7 @@ bool AirspyHfSource::start(std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!open_ || !impl_->dev) { err = "device not open"; return false; }
     if (streaming_) return true;
-    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx, &sampCount_, &chain_, &chainMtx_ };
+    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx };
     if (airspyhf_start(impl_->dev, &streamCb, &impl_->ctx) != AIRSPYHF_SUCCESS) {
         err = "the Airspy HF+ would not start streaming";
         return false;
@@ -408,77 +294,13 @@ uint32_t AirspyHfSource::nearestRate(double hz) const {
     return best;
 }
 
-/** ★★★ PICK A HARDWARE RATE THE RADIO GETS RIGHT, AND DIVIDE FOR THE REST.
- *  Hardware rates are used down to the top rate HALVED; anything below that is reached by
- *  decimating one of those in software. Three reasons, in order of weight:
- *    1. This radio's low rates are the broken ones — 228 kHz tunes to the wrong frequency
- *       (measured 2026-08-02), while 912 and 456 are exact. Dividing a good rate cannot inherit
- *       a bad one's fault.
- *    2. Each halving is ~3 dB of processing gain on a weak signal: the noise bandwidth halves
- *       and the carrier does not.
- *    3. Fewer bins for the same resolution = less uplink on someone else's server.
- *  ★ The cost is honest and worth stating: the RADIO still streams at the hardware rate, so USB
- *    traffic, ADC load and front-end selectivity are unchanged. Only what we process and send
- *    narrows. A true hardware rate change would narrow before the ADC — when the hardware can be
- *    trusted to do it. */
-void AirspyHfSource::chooseRate(double wantHz, uint32_t& hwOut, int& decimOut) const {
-    hwOut = nearestRate(wantHz); decimOut = 1;
-    if (rates_.empty()) return;
-    const uint32_t top = rates_.back();                 // sorted ascending
-    const uint32_t floorHw = rates_.size() > 1 ? top / 2 : top;
-    uint32_t bestHw = top; int bestDec = 1; double bestErr = 1e18;
-    for (uint32_t hw : rates_) {
-        if (hw < floorHw) continue;                     // below this, decimate instead
-        for (int d = 1; d <= 16; d <<= 1) {
-            const double eff = (double)hw / d;
-            // Prefer the closest effective rate; on a tie prefer LESS decimation (less CPU).
-            const double err = std::fabs(eff - wantHz) + d * 0.001;
-            if (err < bestErr) { bestErr = err; bestHw = hw; bestDec = d; }
-        }
-    }
-    hwOut = bestHw; decimOut = bestDec;
-}
-
 bool AirspyHfSource::setSampleRate(double hz) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!impl_->dev) return false;
-    uint32_t r = 0; int wantDecim = 1;
-    chooseRate(hz, r, wantDecim);
+    const uint32_t r = nearestRate(hz);
     if (!r) return false;
-    if (wantDecim != decim_) {
-        std::lock_guard<std::mutex> cl(chainMtx_);
-        chain_.setFactor(wantDecim);
-        chain_.reset();
-        decim_ = wantDecim;
-    }
-    if (wantDecim > 1)
-        std::fprintf(stderr, "airspyhf: %.0f Hz asked -> hardware %u / %d in software\n",
-                     hz, (unsigned)r, wantDecim);
-    // ★★★ SAY WHAT HAPPENED. A rate the device REFUSES leaves it running at the old one while
-    //   everything downstream is rebuilt for the new figure — and a rate mismatch is heard as a
-    //   pitch shift, not as an error (Stuart, 2026-08-01: 912/456/228 fine, 768/650/384/192 all
-    //   slow). The failure was silent because this returned false and the caller ignored it.
-    const int rc = airspyhf_set_samplerate(impl_->dev, r);
-    if (rc != AIRSPYHF_SUCCESS) {
-        std::fprintf(stderr, "airspyhf: setSampleRate %u REFUSED (rc %d)\n", (unsigned)r, rc);
-        return false;
-    }
-    curRate_ = (double)r;      // provisional — the measurement below has the last word
-
-    // ★★★ THE RUNTIME RATE MEASUREMENT HAS BEEN REMOVED. It was right about the radio — this
-    //     firmware advertises seven rates and delivers three — but wrong as a permanent mechanism,
-    //     and it caused two regressions in an hour (2026-08-02):
-    //       • counting began the instant the rate changed, so it measured the buffers still in
-    //         flight at the OLD rate, "corrected" 912 to 456 and built the whole DSP for half the
-    //         real rate — no audio, no spectrum;
-    //       • and it held the device for a full second on every change, which is a long time to
-    //         stall a stream to learn something we already know.
-    //     ★ What it was defending against is now handled where it belongs: the offered list only
-    //     contains rates this radio actually delivers (see finishOpen), and anything below them is
-    //     reached by software decimation, which cannot be substituted by firmware at all.
-    //     ★★ The measurement itself was still the right way to LEARN this — see the table in
-    //     chooseRate(). A probe and a feature are different things, and this is the second time
-    //     tonight that shipping the probe was the mistake (the other was the canonical-rate walk).
+    if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
+    curRate_ = (double)r;      // remembered for restartStream(deep)
     return true;
 }
 
