@@ -72,6 +72,7 @@ struct Opts {
     double      lockFreq = 0;            // 0 = the centre follows the VFO, as it always has
     int         users    = 1;            // expected listeners; 1 = personal receiver
     std::string channels;                // "" = derive from `users`; else "direct" | "shared"
+    bool        zoomSpectrum = true;     // --no-zoom-spectrum restores the pre-2026-08-02 waterfall
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
 };
@@ -138,6 +139,7 @@ void usage() {
         "  --users N         how many listeners this receiver is for (default 1). This\n"
         "                    picks the channel method: 1 = direct, 2+ = shared.\n"
         "  --channels MODE   override that choice: direct | shared\n"
+        "  --no-zoom-spectrum  disable the high-zoom spectrum (restores the old waterfall)\n"
         "                      direct  cheapest for ONE listener; cost rises with each\n"
         "                              extra one and runs out of a core at about eight.\n"
         "                      shared  one FFT serves everybody, so the ninth listener\n"
@@ -208,6 +210,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--lock-freq") o.lockFreq = std::atof(need(i));
         else if (a == "--users")     o.users    = std::atoi(need(i));
         else if (a == "--channels")  o.channels = need(i);
+        else if (a == "--no-zoom-spectrum") o.zoomSpectrum = false;
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
@@ -295,6 +298,7 @@ int main(int argc, char** argv) {
                     o.lockFreq / 1e6, (o.lockFreq - o.rate / 2) / 1e6, (o.lockFreq + o.rate / 2) / 1e6);
     }
     LocalSdrShim::setVibeServerSharedChannels(shared);
+    LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum);
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
                 shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");
     LocalSdrShim::setVibeServerWebEnabled(o.web);

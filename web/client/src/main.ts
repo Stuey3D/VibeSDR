@@ -1862,8 +1862,14 @@ function updateCentreBtn() {
 function updateViewOverlays() {
   if (!wf || !spec) return;
   updateCentreBtn();
-  if (spec.followVfo) {
-    wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // locked: nothing to show
+  // ★★★ ON A SHARED RECEIVER THE RF CENTRE IS ALWAYS SHOWN, in either VFO mode. Hiding it in
+  //     LOCKED made sense when locked meant "the dongle follows the dial, so there is nothing to
+  //     see". When the OPERATOR has pinned the window it is the reverse: the centre and the band
+  //     edges are fixed context every listener needs — this is the window you are inside, and the
+  //     one thing you cannot move. UberSDR does the same, showing its RF centre (15 MHz) whatever
+  //     the listener's view mode (Stuart, 2026-08-02).
+  if (spec.followVfo && !hwLockedCentre) {
+    wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // free-running dongle: nothing fixed to show
     return;
   }
   const rf = spec.rfCenterHz();
