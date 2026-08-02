@@ -78,6 +78,10 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
 
     if (!sameShape) rebuild_();
     enabled_ = true;
+    // ★ Say what this thing ACTUALLY believes. Everything here is derived from sampleRate_, which
+    //   comes from the PIPELINE, not from the caller — so if the two ever disagree the offset maps
+    //   to the wrong place and nothing upstream can show it.
+    if (logCb_) logCb_(sampleRate_, offsetHz_, reqSpanHz_, spanHz_, decim_, centreBin_, chanBins_);
 }
 
 void ZoomSpectrum::rebuild_() {

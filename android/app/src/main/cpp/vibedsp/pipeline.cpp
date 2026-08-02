@@ -354,6 +354,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                         sharedChannels_ ? ZoomSpectrum::Method::Shared
                                         : ZoomSpectrum::Method::Direct,
                         zoomBins_.load(std::memory_order_relaxed));
+                if (zoomLog_) zoom_->setLog(zoomLog_);
                 zoom_->configure(zoomOffReq_.load(std::memory_order_relaxed), span, fftRate_);
                 zoomSpanOut_.store(zoom_->spanHz(), std::memory_order_relaxed);
             }
