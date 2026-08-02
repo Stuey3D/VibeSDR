@@ -181,8 +181,21 @@ struct InstancePickerView: View {
           if link.directories[dir.id] == nil {
             HStack(spacing: 6) { ProgressView().scaleEffect(0.6); Text("Loading…").font(.system(size: 12)).foregroundColor(Self.dim) }
           } else if (link.directories[dir.id] ?? []).isEmpty {
-            Text("Couldn't load — tap to retry").font(.system(size: 12)).foregroundColor(.orange)
-              .onTapGesture { link.browse(dir.id) }
+            // ★★ TWO DIFFERENT FAILURES, TWO DIFFERENT SENTENCES. A blocked directory host and a
+            // phone that is not running produce the identical empty list, but "tap to retry" only
+            // helps the first — for the second it sends someone round the same loop for ever. The
+            // watch is a REMOTE: it cannot fetch anything itself, so when the phone is silent the
+            // only action that works is on the phone.
+            if link.directoryPhoneSilent.contains(dir.id) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text("iPhone didn't answer").font(.system(size: 12)).foregroundColor(.orange)
+                Text("Open VibeSDR on your iPhone, then tap to retry")
+                  .font(.system(size: 10)).foregroundColor(Self.dim)
+              }.onTapGesture { link.browse(dir.id) }
+            } else {
+              Text("Couldn't load — tap to retry").font(.system(size: 12)).foregroundColor(.orange)
+                .onTapGesture { link.browse(dir.id) }
+            }
           }
           let servers = sortedServers(link.directories[dir.id] ?? [])
           // Small directories stay flat; big ones (KiwiSDR) collapse into country groups so the

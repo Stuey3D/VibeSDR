@@ -213,6 +213,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Directory listings MIRRORED from the phone (keyed by directory id). Buddy keeps no server list of
   /// its own — the phone fetches on `browse` and sends the rows; Buddy just displays and references them.
   @Published var directories: [String: [SDRServer]] = [:]
+  /// ★ Directories whose load ended because the PHONE never answered, as opposed to the phone
+  /// answering "I couldn't fetch it". Both used to render the same "tap to retry" row, but they
+  /// are different problems with different user actions — retrying achieves nothing if the phone
+  /// app simply is not running. Keyed by directory id; cleared when a real reply arrives.
+  @Published var directoryPhoneSilent: Set<String> = []
   private struct DirMsg: Codable {
     let dir: String; let servers: [DirRow]
     struct DirRow: Codable { let id: String; let name: String; let type: String
@@ -655,7 +660,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       Task { @MainActor in
         self.browseTimers[dir] = nil
         // Only if still unanswered — a reply that arrived first must not be wiped.
-        if self.directories[dir] == nil { self.directories[dir] = [] }
+        if self.directories[dir] == nil {
+          // ★ Record WHY it ended. If the phone is not reachable it was never going to answer, and
+          // telling someone to "tap to retry" sends them round the same loop; the useful sentence
+          // is "open VibeSDR on your iPhone". If it IS reachable, the phone answered by not
+          // answering — a genuinely failed fetch — and retrying is the right advice.
+          if !self.reachable { self.directoryPhoneSilent.insert(dir) }
+          self.directories[dir] = []
+        }
       }
     }
   }
@@ -1081,6 +1093,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
          let msg = try? JSONDecoder().decode(DirMsg.self, from: d) {
         // ★ The reply landed — cancel the watchdog so it cannot later blank a good list.
         browseTimers[msg.dir]?.invalidate(); browseTimers[msg.dir] = nil
+        directoryPhoneSilent.remove(msg.dir)   // a real reply: whatever we assumed, the phone spoke
         directories[msg.dir] = msg.servers.map { r in
           SDRServer(name: r.name, url: r.id, host: URL(string: r.id)?.host ?? r.id,
                     serverType: ServerType(rawValue: r.type) ?? .ubersdr,
