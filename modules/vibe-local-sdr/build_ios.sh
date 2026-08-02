@@ -47,7 +47,7 @@ cxx() { echo "  CXX $(basename "$1")"; "$CLANGXX" $ARCH $CXXFLAGS $INC ${2:-} -c
 cc()  { echo "  CC  $(basename "$1")"; "$CLANG"   $ARCH $CFLAGS   $INC ${2:-} -c "$1" -o "o$n.o"; objs+=("o$n.o"); n=$((n+1)); }
 
 echo "== vibedsp (vibe_* KissFFT) =="
-for f in fft ddc resampler stereo rds pipeline; do cxx "$CPP/vibedsp/$f.cpp" "$KISSPFX"; done
+for f in fft channelizer zoomspec ddc resampler stereo rds pipeline; do cxx "$CPP/vibedsp/$f.cpp" "$KISSPFX"; done
 cc "$CPP/vibedsp/third_party/kissfft/kiss_fft.c"  "$KISSPFX"
 cc "$CPP/vibedsp/third_party/kissfft/kiss_fftr.c" "$KISSPFX"
 
