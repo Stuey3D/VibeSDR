@@ -5141,8 +5141,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    squelch are the AUDIO sheet (the speaker button), BOOKMARKS are the frequency card, and the
     //    cog is display, controls, recordings and server settings. Verified against MenuSheet's sections and AudioSheet's,
     //    not from memory. (Stuart, 2026-07-30.)
+    // ★★ RE-VERIFIED 2026-08-02, because AudioSheet CHANGED: FM de-emphasis and WFM stereo moved
+    //    into it from LocalHardwarePanel, so the speaker list here grew. A card that enumerates
+    //    what lives where has to be re-read every time one of those places changes — the previous
+    //    breakage was this same card, and the half of the sentence nobody was editing.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog. Audio is separate — noise reduction, the auto notch and squelch are under the speaker button — and bookmarks live in the frequency card.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog. Audio is separate — noise reduction, the auto notch, squelch, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
@@ -6148,6 +6152,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        deemph={hwDeemph}   onDeemph={onHwDeemph}
+        stereo={hwStereo}   onStereo={onHwStereo}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
@@ -6211,10 +6217,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           onAgc={onHwAgc}
           directSampling={hwDirectSamp}
           onDirectSampling={onHwDirectSamp}
-          deemph={hwDeemph}
-          onDeemph={onHwDeemph}
-          stereo={hwStereo}
-          onStereo={onHwStereo}
         />
       ) : null}
 
