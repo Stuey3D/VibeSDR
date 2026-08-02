@@ -1201,7 +1201,24 @@ struct LocalSdrShim::Impl {
     //
     // `viewSpan` is the width of the crop being displayed; pass 0 when unknown.
     double dongleForView(double view, double viewSpan) {
-        const double lim = sampleRate / 2.0 - viewDongleMargin();
+        // ★★★ THE VFO IS NOT A POINT — IT HAS A BANDWIDTH, AND THE EDGES ARE WHERE IT DIES.
+        //     This margin used to protect the VFO's CENTRE only, so a WFM signal could sit within
+        //     91 kHz of the capture edge while its own sidebands hung over it. At 912 kHz on an
+        //     HF+ that put RDS (+57 kHz) and the stereo subcarrier (+38 kHz) into the roll-off:
+        //     RDS dropped and stereo turned hissy on a LOCAL, full-strength station (Stuart,
+        //     2026-08-02, unlocking the VFO and panning it off screen on Heart).
+        //     ★ Arithmetic at 912 kHz: half-span 456, margin 91.2, so the old limit let the VFO
+        //     reach 364.8 kHz off centre — but the HF+'s usable half-span is only ~376 kHz (its
+        //     dead lobe is ~80 kHz per side, sourced from SDR++ Brown's Fill-In figures). A
+        //     200 kHz-wide WFM channel there is half outside the usable band.
+        //     ★★ NOT AN AIRSPY QUIRK. Every radio rolls off at the edge of its capture; the HF+
+        //     just has unusually wide dead lobes so it shows up first. Stuart: "same would happen
+        //     with the sdrplay too, I've seen it before." So the clearance is taken from the
+        //     DEMODULATED BANDWIDTH, which is true of every source.
+        //     ★ Cheap for narrow modes: SSB takes 1.35 kHz off the limit, NFM 6 kHz — panning on
+        //     HF is unchanged. It is WFM's 200 kHz that needed saying out loud.
+        const double lim = std::max(sampleRate * 0.05,
+                                    sampleRate / 2.0 - viewDongleMargin() - rxBwHz * 0.5);
         const double vfo = audioFreq.load();
         const double cur = rtlCenter.load();
 
