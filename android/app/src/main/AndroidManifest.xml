@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <!-- ★★★ COARSE ONLY, DELIBERATELY. ACCESS_FINE_LOCATION was declared here and NEVER REQUESTED:
+       the only runtime request in the app is COARSE (instancesApi.ts), and getLocation() walks
+       whatever providers are enabled catching SecurityException per provider, so it simply skips
+       GPS when fine is not granted. Declaring a permission we never ask for is pure Play-review
+       liability — fine location needs its own declaration and justification — for a feature that
+       sorts a server list by distance and aligns a decode map.
+       ★ Notes claimed this went for build 86; no commit ever removed it (found 07-31, removed
+       08-02 before the 10.0.2 Play submission).
+       ★ iOS has the same intent expressed its own way: NSLocationDefaultAccuracyReduced = true. -->
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
   <!-- mDNS/NSD discovery of networked RTL-TCP servers -->
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
