@@ -4090,6 +4090,17 @@ struct LocalSdrShim::Impl {
     /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
     std::atomic<bool> idleDiscard{false};
     void pauseCaptureIdle() {
+        // ★★★ A SHARED RECEIVER NEVER IDLE-PARKS. Parking costs the AGC: the RSP's loop only
+        //     starts on a TRANSITION (see the sdrpAgcKick note), so every pause/resume cycle makes
+        //     it re-converge, and when it sticks the listener has NO GAIN CONTROLS to rescue it —
+        //     the operator locked them. On a personal receiver parking is right, because the
+        //     dongle is ~80% of the battery; on a shared one it breaks the one thing a listener
+        //     cannot fix (Stuart, 2026-08-02: "a stuck agc on a client with no user gain controls
+        //     is no good"). Idle power is the operator's problem to accept when they publish.
+        if (g_vsLockedCentre.load() > 0.0) {
+            LOGI("no listeners — capture STAYS RUNNING (shared receiver: keeps the AGC converged)");
+            return;
+        }
         if (captureIdle.exchange(true)) return;               // already paused
         // ★★ EVERY SOURCE NAMED EXPLICITLY. The final `else` used to mean "must be a dongle",
         // which was true with two sources and silently wrong with three — see resumeCaptureIdle
@@ -5593,6 +5604,11 @@ void LocalSdrShim::setFftRate(double fps) {
     // FFT_AVG frames into each one it sends (see start(): rx.start(..., fftRate *
     // FFT_AVG, ...)). Pass the raw fps here and everything comes out 4× too slow.
     p->rx.setFftRate(fps * FFT_AVG);
+    // ★★ THE ZOOM PATH HAS ITS OWN RATE, AND ONLY updateZoomView() SETS IT. Without this a live
+    //    data-rate change reached the wide path and not the zoom one, so the new rate did not take
+    //    effect until something else moved the view — i.e. it needed a PAGE REFRESH (Stuart,
+    //    2026-08-02). Any setting that exists in two paths has to be pushed to both.
+    p->updateZoomView();
     LOGI("fft rate: %.1f fps (engine %.1f)", fps, fps * FFT_AVG);
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }

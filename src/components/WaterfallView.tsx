@@ -182,7 +182,7 @@ export interface WaterfallViewProps {
   wfBrightness?:   number;
   wfContrast?:     number;
   wfSharpness?:    number;
-  frameRate?:      '10fps' | '20fps' | '30fps';   // TARGET scroll rate (minimum), interpolated up
+  frameRate?:      '10fps' | '20fps' | '30fps' | '60fps';   // TARGET scroll rate (minimum), interpolated up
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
@@ -324,8 +324,13 @@ function WaterfallView({
   // data rate (see handleFrame) so the chosen fps is a MINIMUM: at 5fps data '10fps' synthesises ×2 to
   // hold a 10fps scroll; at Kiwi's ~23fps it's already above target so no interpolation happens. The
   // static value here is just the nominal-at-10fps used for the interp-blur amount.
-  const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
-  const ROWS_PER_FRAME = frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
+  // ★ 60 is a TEST of the row-count path (2026-08-02): the scroll rate looked fixed regardless of
+  //   the setting OR the incoming data rate, which the interpolate-up design says should not
+  //   happen. If 60 visibly doubles 30, the mechanism works and 10/20 were merely quantised
+  //   (round(target/dataFps) collapses to 1 whenever the data is already that fast). If 60 changes
+  //   nothing, the rate is pinned somewhere else and the row count was never the lever.
+  const TARGET_FPS = frameRate === '60fps' ? 60 : frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
+  const ROWS_PER_FRAME = frameRate === '60fps' ? 6 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
   // touch; inside it the slide is boosted to native rate, outside it drops to
@@ -351,7 +356,7 @@ function WaterfallView({
     // unsharp base scales with the selected fps and the slider is a multiplier
     // of it (5 = 1×; 60fps base 5 keeps existing setups looking identical).
     const sharpBase =
-      frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
+      frameRate === '60fps' ? 4 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
     // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
     // maximum. The curve used to be quadratic, which made the BOTTOM half do
     // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point
@@ -497,6 +502,7 @@ function WaterfallView({
   const scrollFrac  = useSharedValue(1);
   const lastFrameTs = useRef(0);
   const avgFrameMs  = useRef(150);
+  const lastWfLog   = useRef(0);      // ★ temporary: see the [wf] log in the settled branch
 
   const wfUniforms = useDerivedValue(() => ({
     uHeadF:    uHead.value,
@@ -997,6 +1003,16 @@ function WaterfallView({
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
       const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
       const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
+      // ★ TEMPORARY (2026-08-02) — say what the stepper ACTUALLY computes. The scroll rate looked
+      //   fixed regardless of the setting or the data rate, which contradicts the interpolate-up
+      //   design, and three theories about why were all guesses. This turns the 60 fps experiment
+      //   into a diagnosis: rows x dataFps IS the scroll rate, so if that number does not move when
+      //   the setting does, the row count is not the lever and `dur` is. REMOVE once settled.
+      if (now - lastWfLog.current > 1000) {
+        lastWfLog.current = now;
+        console.log(`[wf] target=${cfg.targetFps} data=${dataFps.toFixed(1)}fps ` +
+                    `rows=${dynRows} dur=${dur.toFixed(0)}ms -> scroll=${(dynRows * dataFps).toFixed(1)}/s`);
+      }
       lastDynRows.current = dynRows;   // what a gesture will hold — see the boost branch
       uNSv.value = dynRows;
       startRevealStepper(dynRows, dur);
