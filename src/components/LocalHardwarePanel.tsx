@@ -302,7 +302,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               {p.radio?.hfLna && (
                 <>
                   <View style={styles.toggleRow}>
-                    <Text style={styles.toggleLabel}>Preamp (really a postamp)</Text>
+                    <Text style={styles.toggleLabel}>Preamp</Text>
                     <Switch value={!!p.ahfLna} onValueChange={(v) => p.onAhfLna?.(v)}
                       trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfLna ? C.gold : '#ccc'} />
                   </View>
