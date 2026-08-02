@@ -1139,12 +1139,17 @@ private:
     // Returns x unchanged; notes the first bad stage of this block.
     void trace_(const char* stage, const float* x, int n) {
         if (faultStage_ || n <= 0) return;              // already flagged this block
-        if (!blockFinite_(x, n)) { faultStage_ = stage; ++faultSeq_; }
+        if (!blockFinite_(x, n)) { faultStage_ = stage; lastFault_ = stage; ++faultSeq_; }
     }
+    const char* lastFault_ = nullptr;   // ★ STICKY — see faultStage()
 
 public:
-    /** Name of the pipeline stage that most recently went non-finite (nullptr = healthy). */
-    const char* faultStage() const { return inFault_ ? faultStage_ : nullptr; }
+    /** ★★ Name of the stage that most recently went non-finite, STICKY until the next one.
+     *  It must not be per-block: the guards heal the fault within a block or two, while the
+     *  reporter runs once a SECOND, so a live flag is always nullptr by the time anyone reads
+     *  it — which is exactly how the first version printed no origin at all for a real event.
+     *  A reporter that can only observe a state shorter than its own period sees nothing. */
+    const char* faultStage() const { return lastFault_; }
     /** Increments once per fault ONSET — a change means a new event, not a continuing one. */
     unsigned faultSeq() const { return faultSeq_; }
 private:
