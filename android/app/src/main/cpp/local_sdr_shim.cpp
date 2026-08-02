@@ -1470,7 +1470,13 @@ struct LocalSdrShim::Impl {
         //     is cheap: setZoomBins only rebuilds when the number actually changes.
         rx.setZoomBins(g_vsOutBins.load());
         const bool want = !useSpy() && step < 1.0 && shown > 0.0;
-        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load(), shown);
+        // ★★★ MINUS HW_OFFSET_HZ. The IQ the engine sees is baseband around the PHYSICAL DC,
+        //     which offset tuning puts HW_OFFSET_HZ ABOVE rtlCenter — so a view offset measured
+        //     from rtlCenter is wrong by exactly that much. The wide path has always subtracted
+        //     it (`- hwOffsetBin` in onSpectrum); the zoom path did not, and the whole spectrum
+        //     sat 15 kHz off (Stuart, 2026-08-02: "spectrum misaligned"). Same term, same
+        //     mistake, second place today — see the tuneHw note in startEngine.
+        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load() - HW_OFFSET_HZ, shown);
         else      rx.setZoomView(0.0, 0.0);
         // Speaks on the TRANSITION only. The wide path is suppressed while the zoom path owns the
         // waterfall, so "zoom engaged" and "no frames" together means a BLANK display — which is

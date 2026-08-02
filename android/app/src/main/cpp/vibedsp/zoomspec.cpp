@@ -16,18 +16,22 @@ namespace vibedsp {
 
 ZoomSpectrum::ZoomSpectrum(double sampleRate, Method m, int bins)
     : sampleRate_(sampleRate), method_(m), bins_(bins) {
-    fft_ = std::make_unique<ComplexFFT>(bins_);
-    win_.resize(bins_);
-    nuttallWindow(win_.data(), bins_);
-    db_.resize(bins_);
-    acc_.resize(bins_);
+    // 2x the output width — see the note on fft_ in the header. The crop back to the requested
+    // span then always has at least bins_ real bins to downsample from.
+    fftN_ = bins_ * 2;
+    fft_ = std::make_unique<ComplexFFT>(fftN_);
+    win_.resize(fftN_);
+    nuttallWindow(win_.data(), fftN_);
+    db_.resize(fftN_);
+    out_.resize(bins_);
+    acc_.resize(fftN_);
 }
 
 ZoomSpectrum::~ZoomSpectrum() = default;
 
 void ZoomSpectrum::disable() {
     enabled_ = false;
-    spanHz_ = 0.0;
+    spanHz_ = 0.0; reqSpanHz_ = 0.0;
     decs_.clear();
     chan_.reset();
     accN_ = 0;
@@ -53,6 +57,7 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
     }
 
     const double newSpan = sampleRate_ / (double)d;
+    reqSpanHz_ = spanHz;               // what the FRAME must cover — the client scales by this
     const bool sameShape = enabled_ && d == decim_;
     // Retuning within the same decimation is cheap for Direct (just the NCO) but for Shared the
     // centre bin moves, which is also just a number. Only a change of D rebuilds filters.
@@ -104,18 +109,37 @@ void ZoomSpectrum::rebuild_() {
     }
 }
 
-// Collect decimated samples until there are `bins_` of them, then FFT and emit — but only when
-// the rate gate allows, so a high zoom does not quietly raise the frame rate.
+// Collect decimated samples until there are `fftN_` of them, then FFT, crop and emit — but only
+// when the rate gate allows, so a high zoom does not quietly raise the frame rate.
 void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const float*, int)>& cb) {
     for (int i = 0; i < n; ++i) {
         acc_[accN_++] = x[i];
         ++sinceEmit_;
-        if (accN_ < bins_) continue;
+        if (accN_ < fftN_) continue;
         if (sinceEmit_ >= emitStride_) {
             sinceEmit_ = 0;
-            const float scale = 1.0f / (float)((long long)bins_ * bins_);
+            const float scale = 1.0f / (float)((long long)fftN_ * fftN_);
             fft_->powerDbShifted(acc_.data(), win_.data(), db_.data(), scale);
-            cb(db_.data(), bins_);
+
+            // ★★★ CROP TO THE SPAN THAT WAS ASKED FOR. db_ covers spanHz_ (a power-of-two
+            //     decimation, so >= the request); the frame must cover EXACTLY reqSpanHz_ or the
+            //     client's scale is wrong by the ratio between them, which reads as the spectrum
+            //     drifting sideways the further you zoom in.
+            int keep = (int)llround((double)fftN_ * (reqSpanHz_ / spanHz_));
+            if (keep > fftN_) keep = fftN_;
+            if (keep < bins_) keep = bins_;          // never stretch: downsample only
+            const int lo = (fftN_ - keep) / 2;
+            // Peak-hold down to the output width — the same rule the wide path uses, so a narrow
+            // carrier cannot fall between two output bins and vanish.
+            for (int o = 0; o < bins_; ++o) {
+                const int a = lo + (int)((long long)o * keep / bins_);
+                int b       = lo + (int)((long long)(o + 1) * keep / bins_);
+                if (b <= a) b = a + 1;
+                float best = -1e30f;
+                for (int k = a; k < b && k < fftN_; ++k) if (db_[k] > best) best = db_[k];
+                out_[o] = best;
+            }
+            cb(out_.data(), bins_);
         }
         accN_ = 0;      // non-overlapping windows: this is a display, not a detector
     }

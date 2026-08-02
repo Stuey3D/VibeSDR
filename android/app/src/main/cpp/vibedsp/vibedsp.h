@@ -239,8 +239,15 @@ public:
     void disable();
     bool enabled() const { return enabled_; }
 
-    /** The span actually being delivered, Hz. 0 when disabled. */
-    double spanHz()  const { return spanHz_; }
+    /** ★★★ The span the FRAME covers — exactly what configure() was asked for. Decimation is a
+     *  power of two, so the DSP works at a slightly wider span internally and the frame is
+     *  cropped back to the request. It has to be exact: the client scales the frame by the span
+     *  IT asked for, so delivering a wider one draws every signal progressively further from
+     *  centre the deeper you zoom (Stuart, 2026-08-02: "when zoomed out the spectrum is in the
+     *  correct spot, when zooming in it shifts"). 0 when disabled. */
+    double spanHz()  const { return reqSpanHz_; }
+    /** The wider span the DSP actually runs at, before the crop. Diagnostics only. */
+    double rawSpanHz() const { return spanHz_; }
     /** View centre actually being delivered, as an offset from band centre, Hz. */
     double offsetHz() const { return offsetHz_; }
     int    bins() const { return bins_; }
@@ -259,12 +266,17 @@ private:
     Method method_;
     int    bins_;
     bool   enabled_ = false;
-    double offsetHz_ = 0.0, spanHz_ = 0.0, rateHz_ = 15.0;
+    double offsetHz_ = 0.0, spanHz_ = 0.0, reqSpanHz_ = 0.0, rateHz_ = 15.0;
     int    decim_ = 1;
 
     // Output stage, shared by both methods: collect `bins_` decimated samples, FFT, emit.
+    // ★ The internal FFT is 2x the output width. Cropping to the requested span keeps between
+    //   bins_ and 2*bins_ of it (the ratio is always > 1/2, since decimation steps by two), so
+    //   the crop is then DOWNsampled to bins_ — never stretched. Downsampling cannot invent
+    //   detail; interpolating back up to width would have quietly undone the point of all this.
     std::unique_ptr<ComplexFFT> fft_;
-    std::vector<float> win_, db_;
+    int fftN_ = 0;
+    std::vector<float> win_, db_, out_;
     std::vector<cf32>  acc_;
     int    accN_ = 0;
     long long sinceEmit_ = 0, emitStride_ = 1;   // in DECIMATED samples
