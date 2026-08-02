@@ -32,6 +32,15 @@ const C = {
   //   so the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
   //   against it, which is what the control island has always done.
   bg:      'rgba(10,8,4,0.72)',
+  // ★★ BIG IS MORE TRANSPARENT THAN SMALL, and only now can be. It carries no blur, so its tint is
+  //   the ONLY thing between the reader and the spectrum — where SMALL's blur (iOS) is already
+  //   doing some of that work. And BIG is the mode that hides most of the band, so it is the one
+  //   that gains from being seen through. Stuart, once 49 fixed the stutter: "we could now make it
+  //   slightly more transparent to allow for the signals to be seen behind it slightly better."
+  //   ★ Free, unlike the blur that used to be here: alpha blending does not resample what is
+  //   underneath, which is the whole reason the panel could stop being frosted and start being
+  //   glass. See the panel body for that story.
+  bgTall:  'rgba(10,8,4,0.62)',
   // ★★★ BIG IS ANDROID'S LOOK, DELIBERATELY — the same tint, no blur. Android has never had the
   //   BlurView (it is gated on Platform.OS === 'ios') and Stuart's verdict on it is "the window is
   //   glass and the spectrum shines through". That is the effect BIG wants and it is FREE: alpha
@@ -563,7 +572,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
         {Platform.OS === 'ios' && !p.tall &&
           <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />}
         <View style={[StyleSheet.absoluteFill,
-                      { backgroundColor: C.bg }]} pointerEvents="none" />
+                      { backgroundColor: p.tall ? C.bgTall : C.bg }]} pointerEvents="none" />
         <View style={s.header}>
           {/* ★ Matches the button that opens it — an abbreviation in one place and the full
               name in the other reads as two different features. */}
