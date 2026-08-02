@@ -34,7 +34,10 @@ import {
   LinearGradient,
   RadialGradient,
   Group,
+  Mask,
+  type SkPath,
 } from '@shopify/react-native-skia';
+import { useSharedValue, useDerivedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 
@@ -99,8 +102,14 @@ export default function DrumWheel({
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
 
-  const [scroll, setScroll] = useState(0);
-
+  /** ★★★ THE DRUM'S POSITION IS A SHARED VALUE NOW, NOT REACT STATE.
+   *  It was `useState`, written on every rAF tick of a coast and on every gesture event of a drag
+   *  — so each one rebuilt the tick array and reconciled a <Group> with two <Line>s PER TICK,
+   *  about 100 Skia elements, on the JS thread. The notches are now four PATHS built in worklets
+   *  from this value, so a drag or a flick does no React work whatsoever.
+   *  ★ scrollRef stays: the JS side still needs the position for sendDelta, the detents and the
+   *  backlog brake. The two are written together, never separately. */
+  const scrollSv  = useSharedValue(0);
   const scrollRef = useRef(0);
   const vel       = useRef(0);
   const lastX     = useRef(0);
@@ -150,24 +159,6 @@ export default function DrumWheel({
     detentTick(dPx);
   }, [onDelta, detentTick]);
 
-  // ★★★ THE COAST REPAINTS AT ~30 fps, THE PHYSICS STILL RUN EVERY FRAME.
-  // A flick costs far more than it looks: setScroll() is a React state write, which rebuilds the
-  // `ticks` array and reconciles a <Group> with two <Line>s PER TICK — about 100 Skia elements and
-  // 200 vec() allocations, sixty times a second, on the JS thread everything else shares.
-  // ★ Integration is untouched: velocity, friction, the backlog brake and every sendDelta still
-  // happen on each rAF tick, so the TUNE is bit-for-bit what it was and the feel cannot change.
-  // Only the visual state write is coalesced — and 30 fps is the rate the spectrum trace tweens at,
-  // which nobody has ever called uneven.
-  // ★★ DRAGGING IS DELIBERATELY NOT THROTTLED. A finger on the drum is the most feel-critical
-  // thing in the app and a trackpad can deliver 120 Hz; coasting is the part where a repaint can
-  // be skipped without anyone being able to tell.
-  // ★ This is a THROTTLE, not a thread move. Getting the drum entirely off the JS thread means
-  // redesigning how the ticks are drawn — each carries its own alpha AND strokeWidth from the
-  // cosine fade, so they cannot collapse into one Path without changing the look, and that wants
-  // a side-by-side comparison before it is inflicted on the most-touched control in the app.
-  const DRUM_PAINT_MS = 32;
-  const lastPaint = useRef(0);
-
   // ── Inertia ──────────────────────────────────────────────────────────────────
   const inertia = useCallback((ts: number) => {
     const dt = Math.min(0.05, (ts - rafTS.current) / 1000);
@@ -180,7 +171,7 @@ export default function DrumWheel({
     const backlog = Math.abs(pending.current) / LSV_PX_STEP;
     if (backlog >= 1.5) {
       vel.current = 0; pending.current = 0; rafId.current = null;
-      setScroll(scrollRef.current);
+      scrollSv.value = scrollRef.current;
       return;
     }
     if (backlog > 0.1) vel.current *= Math.pow(Math.max(0.2, 1 - backlog), dt * 60);
@@ -194,8 +185,7 @@ export default function DrumWheel({
       // ★ PAINT THE LANDING. This branch used to rely on the PREVIOUS frame's write being current;
       //   with the coast repaint coalesced to ~30 fps that could leave the drum resting up to a
       //   frame behind where it actually stopped. The settle must always show its true position.
-      lastPaint.current = ts;
-      setScroll(scrollRef.current);
+      scrollSv.value = scrollRef.current;
       settleTick();  // soft thunk — the flick has landed
       return;
     }
@@ -206,12 +196,10 @@ export default function DrumWheel({
       sendDelta(pending.current);
       pending.current = 0;
     }
-    // Coalesced paint — see the note above. The settle paths below/above always paint, so the
-    // drum can never come to rest on a stale frame.
-    if (ts - lastPaint.current >= DRUM_PAINT_MS) {
-      lastPaint.current = ts;
-      setScroll(scrollRef.current);
-    }
+    // ★ NO THROTTLE ANY MORE. Publishing the position is a shared-value write — the notches
+    //   redraw on the UI thread from it — so there is nothing left worth coalescing. The 30 fps
+    //   cap existed only because this used to be a React render.
+    scrollSv.value = scrollRef.current;
     rafId.current = requestAnimationFrame(inertia);
   }, [type, sendDelta, settleTick]);
 
@@ -252,7 +240,7 @@ export default function DrumWheel({
       }
       lastX.current = e.absoluteX;
       lastT.current = now;
-      setScroll(scrollRef.current);
+      scrollSv.value = scrollRef.current;
     })
     .onEnd(() => {
       touching.current = false;
@@ -290,23 +278,81 @@ export default function DrumWheel({
   // compress and roll away at the edges, so motion reads as rotation instead
   // of a sliding strip. Centre spacing equals world spacing (sin′(0)=1), so
   // tuning landings look identical to before.
-  const ticks = useMemo(() => {
-    if (W <= 0) return [] as Array<{ x: number; major: boolean; med: boolean; fade: number }>;
-    const R   = W / 2 - 2;
-    const pxs = W > 120 ? 13 : W > 80 ? 11 : W > 55 ? 9 : 7;
+  // ── The notches, built on the UI thread ─────────────────────────────────────
+  // ★★★ FOUR PATHS, NOT ~50 ELEMENTS. Every notch is the same vertical line differing only in x,
+  // alpha and width, and the ONLY reason they were separate elements is that alpha and width
+  // varied per tick. Both varied with `fade`, and fade is cos(a) where x = W/2 + R·sin(a) — so it
+  // is a pure function of the tick's POSITION, not of the tick. That means it can come from a
+  // positional MASK over uniform paths instead of from per-element colour, which is what collapses
+  // fifty React children into four Skia paths that never re-render.
+  // ★ What is lost: the width taper (0.5..1x with fade). What is kept: the fade itself, and
+  // CONTINUOUSLY rather than in the bands a bucketed conversion would have given. At the edges,
+  // where the taper mattered, the mask has the notches down to 15% anyway.
+  // ★★ Double-buffered, exactly as the spectrum trace is and for the same reason: an SkPath holds
+  // native memory Hermes cannot see, so building a fresh one per frame in a worklet would leak.
+  // Two per class, reset() and rebuilt in place, handed over alternately so the identity still
+  // changes and Skia repaints.
+  const tickPx = W > 120 ? 13 : W > 80 ? 11 : W > 55 ? 9 : 7;
+  const tickR  = W / 2 - 2;
+  const bufs = useMemo(() => Array.from({ length: 8 }, () => Skia.Path.Make()), []);
+  useEffect(() => () => { const b = bufs; setTimeout(() => { for (const p of b) { try { p.dispose(); } catch {} } }, 300); }, [bufs]);
+
+  /** kind: 0 = minor, 1 = med, 2 = major, 3 = the shadow pair (major+med only). */
+  const buildTicks = (kind: number, path: SkPath, scroll: number, w: number, R: number, pxs: number,
+                      y0: number, y1: number) => {
+    'worklet';
+    path.reset();
+    if (w <= 0 || R <= 0) return path;
     const span = (R * Math.PI) / 2;
     const i0 = Math.floor((scroll - span) / pxs) - 1;
     const i1 = Math.ceil((scroll + span) / pxs) + 1;
-    const out: Array<{ x: number; major: boolean; med: boolean; fade: number }> = [];
+    const lim = Math.PI / 2 - 0.05;
     for (let i = i0; i <= i1; i++) {
-      const d = i * pxs - scroll;
-      const a = d / R;
-      if (a <= -Math.PI / 2 + 0.05 || a >= Math.PI / 2 - 0.05) continue;
-      const x = W / 2 + R * Math.sin(a);
-      out.push({ x, major: i % 8 === 0, med: i % 4 === 0, fade: Math.cos(a) });
+      const a = (i * pxs - scroll) / R;
+      if (a <= -lim || a >= lim) continue;
+      const major = i % 8 === 0;
+      const med   = i % 4 === 0;
+      // Each class draws ONLY its own notches, so the three can carry different alpha and width.
+      if (kind === 0 && (major || med)) continue;
+      if (kind === 1 && (major || !med)) continue;
+      if (kind === 2 && !major) continue;
+      if (kind === 3 && !(major || med)) continue;
+      const x = w / 2 + R * Math.sin(a) + (kind === 3 ? 0.9 : 0);
+      path.moveTo(x, y0);
+      path.lineTo(x, y1);
     }
-    return out;
-  }, [W, scroll]);
+    return path;
+  };
+
+  const y0 = drumTop + RIM_H + 2;
+  const y1 = H - 3;
+  // ★★ EACH BUILDER OWNS ITS OWN ALTERNATION, and that is deliberate rather than tidy. A single
+  //    shared `flip` toggled by a fifth derived value looked neater, but the execution order of
+  //    derived values within a frame is not specified — so some builders could read the flip
+  //    before it changed and some after, and one path could be rebuilt while it was the one on
+  //    screen. A counter each builder alone touches cannot get out of step with itself.
+  // ★ Written out four times rather than generated by a helper: these are HOOKS, and today has
+  //   already produced one "rendered more hooks than during the previous render" crash. Four
+  //   unconditional calls in fixed order are impossible to misread; a helper that happens to call
+  //   a hook is not.
+  const fMinor = useSharedValue(0), fMed = useSharedValue(0);
+  const fMajor = useSharedValue(0), fShad = useSharedValue(0);
+  const pathMinor = useDerivedValue(() => { 'worklet';
+    fMinor.value ^= 1;
+    return buildTicks(0, bufs[0 + fMinor.value], scrollSv.value, W, tickR, tickPx, y0, y1);
+  }, [W, tickR, tickPx, y0, y1]);
+  const pathMed = useDerivedValue(() => { 'worklet';
+    fMed.value ^= 1;
+    return buildTicks(1, bufs[2 + fMed.value], scrollSv.value, W, tickR, tickPx, y0, y1);
+  }, [W, tickR, tickPx, y0, y1]);
+  const pathMajor = useDerivedValue(() => { 'worklet';
+    fMajor.value ^= 1;
+    return buildTicks(2, bufs[4 + fMajor.value], scrollSv.value, W, tickR, tickPx, y0, y1);
+  }, [W, tickR, tickPx, y0, y1]);
+  const pathShadow = useDerivedValue(() => { 'worklet';
+    fShad.value ^= 1;
+    return buildTicks(3, bufs[6 + fShad.value], scrollSv.value, W, tickR, tickPx, y0, y1);
+  }, [W, tickR, tickPx, y0, y1]);
 
   // Knurl ridge Y positions (pairs: highlight + shadow)
   const ridges = useMemo(() => {
@@ -388,25 +434,27 @@ export default function DrumWheel({
           {/* Engraved notches — cosine-faded with the curvature; each line
               carries a shadow pair so the cuts read as depth, not paint */}
           <Group clip={Skia.XYWHRect(1, drumTop + RIM_H, W - 2, drumH - RIM_H - 1)}>
-            {ticks.map((t, i) => {
-              const base = t.major ? 0.55 : t.med ? 0.36 : 0.22;
-              const a    = base * (0.15 + 0.85 * t.fade);
-              const sw   = (t.major ? 1.5 : 0.8) * (0.5 + 0.5 * t.fade);
-              return (
-                <Group key={i}>
-                  {(t.major || t.med) && (
-                    <Line
-                      p1={vec(t.x + 0.9, drumTop + RIM_H + 2)} p2={vec(t.x + 0.9, H - 3)}
-                      color={`rgba(0,0,0,${(0.5 * t.fade).toFixed(3)})`}
-                      strokeWidth={sw} />
-                  )}
-                  <Line
-                    p1={vec(t.x, drumTop + RIM_H + 2)} p2={vec(t.x, H - 3)}
-                    color={`rgba(168,166,158,${a.toFixed(3)})`}
-                    strokeWidth={sw} />
-                </Group>
-              );
-            })}
+            {/* ★★ THE CURVATURE FADE IS A MASK, not per-notch alpha — see buildTicks. The stops
+                sample 0.15 + 0.85·cos(asin(u)) across the drum, which is exactly the falloff the
+                per-tick version computed, so the shading is unchanged and now continuous rather
+                than quantised by however many elements happened to be on screen.
+                ★ luminance: white = full strength, grey = faded, and the ends never reach black
+                because the original never faded below 0.15 either. */}
+            <Mask mode="luminance" mask={
+              <Rect x={1} y={drumTop + RIM_H} width={W - 2} height={drumH - RIM_H - 1}>
+                <LinearGradient
+                  start={vec(1, 0)} end={vec(W - 1, 0)}
+                  positions={[0, 0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.92, 1]}
+                  colors={['#262626', '#6b6b6b', '#a5a5a5', '#d6d6d6', '#ffffff',
+                           '#d6d6d6', '#a5a5a5', '#6b6b6b', '#262626']} />
+              </Rect>
+            }>
+              {/* Shadow pair first — the cut reads as depth only if it sits UNDER the highlight. */}
+              <Path path={pathShadow} style="stroke" strokeWidth={1.1} color="rgba(0,0,0,0.5)" />
+              <Path path={pathMinor}  style="stroke" strokeWidth={0.8} color="rgba(168,166,158,0.22)" />
+              <Path path={pathMed}    style="stroke" strokeWidth={0.8} color="rgba(168,166,158,0.36)" />
+              <Path path={pathMajor}  style="stroke" strokeWidth={1.5} color="rgba(168,166,158,0.55)" />
+            </Mask>
           </Group>
 
           {/* Specular sheen — studio light caught across the curvature */}
