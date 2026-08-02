@@ -1029,7 +1029,31 @@ struct LocalSdrShim::Impl {
 
     // The span the CLIENT thinks it is looking at. Everywhere except SpyServer the
     // display span is just the IQ rate; there it is the server's FFT span.
-    double displaySpan() const { return spyFftSpan > 0.0 ? spyFftSpan : sampleRate; }
+    /** ★★★ THE DEAD EDGES ARE NOT SPECTRUM — "FILL-IN BANDWIDTH", after SDR++ Brown.
+     *  An HF+'s outer bins are the skirt of its own anti-alias filter: attenuated, increasingly
+     *  aliased, and carrying nothing to receive. Left in, they do three kinds of harm — they look
+     *  like a signal-free cliff at each end, they drag the auto-range statistics down (we already
+     *  had to push EDGE_EXCLUDE_FRAC to 9% to keep them out of the noise-floor percentile), and
+     *  they invite the user to tune into a region where nothing can be heard.
+     *  ★ Values are Brown's, from `narrowSamplerate()` in his airspyhf_source — he calls them
+     *  "experimental", i.e. MEASURED, which is the only kind of figure available: no driver
+     *  reports a usable bandwidth. At 912 kHz that is 80 kHz per side, leaving 752 of 912 (82.5%).
+     *  ★★ Cheaper than his version, because of where we sit: SDR++ resamples the IQ to the reduced
+     *  rate (an arbitrary 752/912 ratio). We send FFT BINS, so cropping is just not sampling those
+     *  bins — no filter, no resampler, and the client's span shrinks to match.
+     *  ★ Stuart, on the alternative of hiding them behind a raised noise floor: "even artificially
+     *  raising the floor just shows a flat cutoff" — cosmetic, and the statistics stay poisoned. */
+    double edgeCutoffHz() const {
+        if (!ahf) return 0.0;                 // only the HF+ has lobes this wide
+        if (sampleRate <= 192001.0) return 30000.0;
+        if (sampleRate <= 256001.0) return 40000.0;
+        if (sampleRate <= 384001.0) return 50000.0;
+        if (sampleRate <= 768001.0) return 60000.0;
+        return 80000.0;
+    }
+    /** The part of the capture that is actually receivable. */
+    double usableSpan() const { return std::max(sampleRate * 0.5, sampleRate - 2.0 * edgeCutoffHz()); }
+    double displaySpan() const { return spyFftSpan > 0.0 ? spyFftSpan : usableSpan(); }
 
     int tcpTunerType = 0;
     std::vector<int> tcpGains;            // tuner gains (tenths dB) from the header
@@ -1217,8 +1241,10 @@ struct LocalSdrShim::Impl {
         //     DEMODULATED BANDWIDTH, which is true of every source.
         //     ★ Cheap for narrow modes: SSB takes 1.35 kHz off the limit, NFM 6 kHz — panning on
         //     HF is unchanged. It is WFM's 200 kHz that needed saying out loud.
+        // ★ usableSpan(), not sampleRate: on an HF+ the outer 80 kHz per side is filter skirt, so
+        //   "inside the capture" has to mean inside the part that can actually be received.
         const double lim = std::max(sampleRate * 0.05,
-                                    sampleRate / 2.0 - viewDongleMargin() - rxBwHz * 0.5);
+                                    usableSpan() / 2.0 - viewDongleMargin() - rxBwHz * 0.5);
         const double vfo = audioFreq.load();
         const double cur = rtlCenter.load();
 
