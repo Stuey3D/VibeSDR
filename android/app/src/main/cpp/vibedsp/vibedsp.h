@@ -18,6 +18,8 @@
 #include <cstddef>
 #include <complex>
 #include <memory>
+#include <map>
+#include <functional>
 #include <vector>
 #include <string>
 
@@ -62,7 +64,9 @@ private:
 // — is what the spectrum display uses. `size` is the bin count (power of two).
 class ComplexFFT {
 public:
-    explicit ComplexFFT(int size);
+    /** `inverse` builds an inverse transform instead — needed by the Channelizer, which
+     *  forward-transforms the wide band once and inverse-transforms each channel's slice. */
+    explicit ComplexFFT(int size, bool inverse = false);
     ~ComplexFFT();
     ComplexFFT(const ComplexFFT&) = delete;
     ComplexFFT& operator=(const ComplexFFT&) = delete;
@@ -78,6 +82,64 @@ private:
     int n_;
     void* cfg_ = nullptr;            // kiss_fft_cfg
     std::vector<cf32> in_, out_;     // working buffers (length n_)
+};
+
+// ── Channelizer (fast convolution / overlap-save) ────────────────────────--
+//
+// ★★★ ONE FORWARD FFT, MANY CHANNELS. The architecture ka9q-radio uses, and the reason it runs
+// dozens of receivers on modest hardware: the expensive full-rate work — the forward FFT — is
+// done ONCE for the whole band, and every channel is then just a slice of those bins, multiplied
+// by its own frequency-domain filter and inverse-transformed at its OWN (much lower) rate.
+//
+// The alternative, one DDC per channel, puts a complex multiply per INPUT sample on every
+// channel: at 8 MSPS that is 8 million multiplies per second per listener before any filtering.
+// Here, a listener costs one small inverse FFT at the channel rate. That is the difference
+// between a handful of listeners and a lot of them — and on a single-user LOCAL session it
+// removes the full-rate mixer the audio path currently runs alongside the spectrum FFT.
+//
+// ── How overlap-save works here ──
+// Blocks of `fftSize` input samples overlap by `fftSize/OVERLAP_DIV`. Each block is transformed
+// once. For a channel of `chanBins` bins (decimation D = fftSize/chanBins) we take the bins
+// covering it, apply the transfer function, inverse-transform to `chanBins` samples, and DISCARD
+// the first `chanBins/OVERLAP_DIV` — those are the ones circular convolution corrupted. What is
+// left is genuine linear filtering, and it costs one small FFT.
+//
+// ★ THE CONSTRAINT, and it is the number to design around: the channel filter's impulse response
+// must be SHORTER than the overlap. With OVERLAP_DIV = 4 that is fftSize/4 taps, which is
+// generous — but it is why the overlap cannot simply be made tiny to save work.
+class Channelizer {
+public:
+    /** Fraction of the block kept as overlap: 1/OVERLAP_DIV. Also the fraction of each
+     *  channel's output discarded per block, so 4 means 75% of the work is useful. */
+    static constexpr int OVERLAP_DIV = 4;
+
+    explicit Channelizer(int fftSize);
+
+    int fftSize() const { return n_; }
+    /** New samples consumed per block — the rest is carried over as overlap. */
+    int hop() const { return n_ - n_ / OVERLAP_DIV; }
+
+    /** Push input; calls back once per completed block with the transformed bins (DC at 0).
+     *  Bins stay valid only for the duration of the callback. */
+    void feed(const cf32* in, int n, const std::function<void(const cf32* bins, int nbins)>& onBlock);
+
+    /** One channel taken from a transformed block.
+     *  @param bins       the block handed to the feed() callback
+     *  @param centreBin  channel centre as a SIGNED offset from DC (may be negative; wraps)
+     *  @param chanBins   output size, a power of two dividing fftSize — decimation = fftSize/chanBins
+     *  @param out        receives (chanBins - chanBins/OVERLAP_DIV) samples
+     *  @return number of samples written */
+    int extract(const cf32* bins, int centreBin, int chanBins, cf32* out);
+
+private:
+    int n_;
+    ComplexFFT fwd_;
+    std::vector<cf32> hist_;                       // [overlap][hop] assembled block
+    int have_ = 0;                                 // samples currently in hist_ beyond the overlap
+    std::vector<cf32> block_, spec_, slice_;
+    // One inverse transform per channel SIZE (not per channel) — several channels of the same
+    // width share it, which is the common case.
+    std::map<int, std::unique_ptr<ComplexFFT>> inv_;
 };
 
 // ── Windows ──────────────────────────────────────────────────────────────--

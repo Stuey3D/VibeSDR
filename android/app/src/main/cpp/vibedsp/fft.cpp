@@ -11,8 +11,8 @@
 namespace vibedsp {
 
 // ── ComplexFFT (IQ waterfall) ────────────────────────────────────────────--
-ComplexFFT::ComplexFFT(int size) : n_(size) {
-    cfg_ = kiss_fft_alloc(n_, 0, nullptr, nullptr);  // forward
+ComplexFFT::ComplexFFT(int size, bool inverse) : n_(size) {
+    cfg_ = kiss_fft_alloc(n_, inverse ? 1 : 0, nullptr, nullptr);
     in_.resize(n_);
     out_.resize(n_);
 }
