@@ -12,7 +12,6 @@
 #endif
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -161,39 +160,6 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     // the older HF+ Dual Port's ceiling, not this one).
     if (rates_.empty()) rates_ = { 912000 };
 
-    // ★★★ OFFER ONLY WHAT THE RADIO ACTUALLY DELIVERS. This one advertises seven rates and
-    //     implements THREE — its top rate halved. Driven and counted on hardware 2026-08-01:
-    //         912000 -> 912000   768000 -> 912000   650000 -> 912000
-    //         456000 -> 456000   384000 -> 456000
-    //         228000 -> 228000   192000 -> 228000
-    //     and it returns success every time. The substituted rates leave the DSP built for a rate
-    //     the radio is not running, which is heard as a PITCH SHIFT — Stuart: "Barry White", each
-    //     one slow by exactly the ratio between what he picked and what it did.
-    //     ★ A control that cannot work should not be offered. Halving from the top is what the
-    //     measurements show and it generalises: an HF+ Dual Port topping out at 768 kHz yields
-    //     768/384/192, ITS working set.
-    //     ★★ The MEASUREMENT that established this is deliberately not here. It belonged in a
-    //     probe, not in the product: run continuously it stalled the device and misread rate
-    //     changes in flight (2026-08-02). The table above is the result; the code that produced it
-    //     is in git.
-    if (rates_.size() > 1) {
-        const uint32_t top = rates_.back();          // sorted ascending
-        std::vector<uint32_t> keep;
-        for (uint32_t r : rates_) {
-            for (uint32_t t = top; t >= 1000; t /= 2)
-                if (r == t) { keep.push_back(r); break; }
-        }
-        if (keep.size() >= 2 && keep.size() < rates_.size()) {
-            std::string dropped;
-            for (uint32_t r : rates_)
-                if (std::find(keep.begin(), keep.end(), r) == keep.end())
-                    { dropped += " "; dropped += std::to_string(r); }
-            std::fprintf(stderr, "airspyhf: dropping rates the radio does not implement:%s\n",
-                         dropped.c_str());
-            rates_ = keep;
-        }
-    }
-
     // ★★★ ENABLE THE LIBRARY'S OWN DSP EXPLICITLY, never by inheriting a default. It does the
     // IQ correction AND — the part that matters — the IF SHIFT: an HF+ runs LOW-IF at some
     // sample rates (airspyhf_is_low_if reports which), and without this the tuned signal does
@@ -313,13 +279,7 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
 void AirspyHfSource::setFrequency(double hz) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!impl_->dev) return;
-    const uint32_t f = (uint32_t)std::llround(hz);
-    // ★★ THE FIRST TUNE AFTER OPEN GETS THE SAME TREATMENT, for the same reason: the library's
-    //    cached LO is whatever its own start-up sequence left behind, and if that happens to round
-    //    to the same kHz as the frequency we want, our very first tune is skipped and the radio
-    //    starts up mis-tuned. It cost nothing to be sure once per connection.
-    if (curCentre_ <= 0.0) airspyhf_set_freq(impl_->dev, f + 1000);
-    airspyhf_set_freq(impl_->dev, f);
+    airspyhf_set_freq(impl_->dev, (uint32_t)std::llround(hz));
     curCentre_ = hz;           // remembered for restartStream(deep)
 }
 
@@ -341,25 +301,6 @@ bool AirspyHfSource::setSampleRate(double hz) {
     if (!r) return false;
     if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
     curRate_ = (double)r;      // remembered for restartStream(deep)
-
-    // ★★★ FORCE THE LO TO BE RE-SENT. libairspyhf CACHES the tuned frequency in kHz and skips the
-    //     USB write when it believes nothing changed:
-    //         if (device->freq_khz != freq_khz) { ...send...; device->freq_khz = freq_khz; }
-    //     A rate change writes that cache itself (the zero-IF branch sets it to MIN_ZERO_IF_LO),
-    //     so the library's idea of the LO and the hardware's can part company — and every retune
-    //     afterwards is silently a NO-OP. The radio then sits on a stale LO at EVERY sample rate
-    //     until something happens to compute a different kHz value.
-    //     ★ That is exactly what Stuart saw (2026-08-02): Radio Caroline reading 663 instead of
-    //     648 — a fixed 15 kHz — at every rate, and "tuning away then back reverted it back to
-    //     having caroline at 648". Tuning away IS this fix, done by hand.
-    //     ★★ So nudge the LO by a kHz and put it back: two control transfers, once per RATE
-    //     CHANGE (not per tune), which is nothing next to a stream restart. Cheaper and safer than
-    //     carrying a patched libairspyhf on every platform — the Pi links the system one.
-    if (curCentre_ > 0.0) {
-        const uint32_t f = (uint32_t)std::llround(curCentre_);
-        airspyhf_set_freq(impl_->dev, f + 1000);
-        airspyhf_set_freq(impl_->dev, f);
-    }
     return true;
 }
 
