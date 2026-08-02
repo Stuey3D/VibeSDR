@@ -2552,7 +2552,12 @@ select.btn { padding: 6px 8px; }
   <div class="mrow">
     <label for="wheelAction">MOUSE WHEEL</label>
     <div class="seg" id="wheelAction">
-      <button data-v="0">ZOOM</button><button data-v="1">TUNE</button>
+      <!-- ★★ `class="btn"` IS NOT DECORATION, IT IS THE STATE. segment() marks the chosen button
+           with `.on`, but the rule that draws it is `button.btn.on` — so these two, alone among
+           every seg group on the page, showed NO selection at all and the only way to find out
+           what the wheel did was to spin it (Stuart, 2026-08-02). A toggle that cannot be read
+           is worse than a toggle with a default, because it invites you to test it on the radio. -->
+      <button class="btn on" data-v="0">ZOOM</button><button class="btn" data-v="1">TUNE</button>
     </div>
   </div>
   <div class="mrow">
