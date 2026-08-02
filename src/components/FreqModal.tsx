@@ -138,6 +138,9 @@ function KeyCap({ letter, color, label, font, textStyle }: {
   );
 }
 
+/** Below this the "keyboard" is an accessory bar, not something to move out of the way. */
+const KB_ANCHOR_MIN = 140;
+
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit,
@@ -413,7 +416,17 @@ export default function FreqModal({
           // ★ The card should start where bookmarks starts and MOVE only in response to the
           //   keyboard — so the condition is about the keyboard alone, which is the only thing
           //   that has ever justified moving it.
-          justifyContent: kbHeight === 0 ? 'center' : 'flex-end',
+          // ★★★ A "Done" BAR IS NOT A KEYBOARD. On a Mac — and on an iPad with a hardware
+          //     keyboard — focusing the field raises no on-screen keyboard at all, only iOS's
+          //     accessory bar, and that still fires a keyboard-show event with a height of about
+          //     40-60 pt. Testing `kbHeight === 0` treated that as "keyboard up" and dropped the
+          //     card to the bottom, onto the controls, with nothing occupying the space it had
+          //     just vacated (Stuart, 2026-08-02: "no on screen keyboard to anchor to").
+          //     ★ So the test is whether the keyboard is BIG ENOUGH TO BE WORTH AVOIDING. A real
+          //     soft keyboard is 250 pt and up even on the smallest phone in landscape; an
+          //     accessory bar never approaches 140. Anything below that leaves the card centred,
+          //     which is where it belongs when nothing is covering the bottom of the screen.
+          justifyContent: kbHeight > KB_ANCHOR_MIN ? 'flex-end' : 'center',
           paddingBottom: isLandscape ? kbHeight + 8 : 16 + (Platform.OS === 'android' ? kbHeight : 0),
         }]} pointerEvents="box-none"
       >
