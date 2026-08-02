@@ -2234,6 +2234,9 @@ struct LocalSdrShim::Impl {
         // 2026-08-02). Shared (fast convolution) only makes sense with a LOCKED centre, since
         // every channel is a slice of one FFT of one captured band.
         rx.setSharedChannels(g_vsSharedChannels.load() && g_vsLockedCentre.load() > 0.0);
+        // A restart rebuilds the engine underneath the zoom channel, so its view has to be
+        // re-applied — otherwise it keeps filtering around the centre the OLD rate implied.
+        updateZoomView();
         cb.audio    = &Impl::audioCb;
         cb.rdsPs    = &Impl::rdsPsCb;
         cb.rdsPi    = &Impl::rdsPiCb;
@@ -2869,7 +2872,20 @@ struct LocalSdrShim::Impl {
           //     owner who wants 456 kHz sets it there and restarts the server — the same
           //     stop-and-start every other client requires, just expressed as configuration.
           if (useAirspyHf() && sampleRate > 0) lr = sampleRate;
+          // ★★★ A LOCKED CENTRE LOCKS THE RATE. The two together ARE the captured window, so
+          //     pinning one and leaving the other adjustable is incoherent — and it showed: with
+          //     the centre held at 6.5 MHz, changing the rate put the whole display out of
+          //     alignment (Stuart, 2026-08-02: "I broke it, you left all the controls
+          //     accessible"). Reporting it here is the whole client-side fix: the rate picker
+          //     already hides itself and says who set it whenever this is non-zero.
+          if (g_vsLockedCentre.load() > 0.0 && sampleRate > 0) lr = sampleRate;
           j += ",\"lockedRate\":" + std::to_string((long long)(lr > 0 ? lr : 0)); }
+        // ★★ THE LOCKED WINDOW, published for the same reason lockedRate is: a client that cannot
+        //    see the lock offers controls whose every use is a no-op, and the user concludes the
+        //    RADIO is broken rather than the control. On a locked receiver the listener gets a
+        //    view and a VFO inside the window and no hardware control at all.
+        { const double lc = g_vsLockedCentre.load();
+          j += ",\"lockedCentre\":" + std::to_string((long long)(lc > 0 ? lc : 0)); }
         // THE FRAME-RATE CEILING, for the same reason lockedRate is advertised: a client that
         // asks for more than the owner allows is SILENTLY CLAMPED (setFftRate, and the start
         // path), and silence is the worst possible answer for an ADAPTIVE client. A rate
@@ -5491,6 +5507,16 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
+    // ★★★ A LOCKED CENTRE LOCKS THE RATE TOO. The centre and the rate TOGETHER define the
+    //     captured window; pinning one and leaving the other client-changeable is incoherent,
+    //     and it showed: with the centre held at 6.5 MHz a listener changed the rate and the
+    //     whole display went misaligned (Stuart, 2026-08-02). Refused here, at the source, so
+    //     that every caller is covered rather than just the one message handler.
+    if (g_vsLockedCentre.load() > 0.0) {
+        LOGI("sampleRate ignored — this receiver's window is LOCKED (centre %.3f MHz)",
+             g_vsLockedCentre.load() / 1e6);
+        return;
+    }
     Impl* impl = p;
     const bool tcp = impl->useTcp();
     const bool rsp = impl->useSdrplay();
