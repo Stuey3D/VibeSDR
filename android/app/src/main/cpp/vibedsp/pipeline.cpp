@@ -323,6 +323,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
 
     // ── Audio (DDC -> demod -> resample) ─────────────────────────────────────
     if (cb_.audio) {
+        faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage
         baseBuf_.resize(n);
         nco_.mix(iq, baseBuf_.data(), n);
 
@@ -345,13 +346,19 @@ void RxPipeline::feed(const cf32* iq, int n) {
         demodBuf_.resize(nc);
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
+        else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
+        trace_("demod", demodBuf_.data(), nc);
 
         // ★★★ Strip the discriminator's DC before ANYTHING downstream sees it. That DC is
         // the tuning error, and left in place it eats the headroom and mutes an off-tune
         // station outright — see DcBlocker. It has to happen here, on the MPX, so that the
         // mono path, the stereo matrix and the resampler all inherit a centred signal.
+        // ★★ KEEP THIS AFTER THE WHOLE if/else DEMOD CHAIN. Placed in the middle of it (as it
+        // first was) `else if (ssb_)` binds to THIS if instead of the demod selection — which
+        // compiles, and happens to behave because useFmDc_ is false in SSB. An accident that
+        // works is still a trap for the next edit; it broke the moment a line was added.
         if (useFmDc_) fmDc_.process(demodBuf_.data(), nc);
-        else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
+        trace_("fmDc", demodBuf_.data(), nc);
 
         if (stereo_) {
             // ── WFM stereo MPX decode ────────────────────────────────────────
@@ -463,9 +470,12 @@ void RxPipeline::feed(const cf32* iq, int n) {
                                   bitClkBuf_.data(), nc);
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
+            trace_("pll_lmr", lmrBuf_.data(), nc);
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R
             const int n2 = lmrLpf_->process(lmrBuf_.data(),  nc, rightBuf_.data()); // L-R
             const int nm = std::min(n1, n2);
+            trace_("lpf_lpr", leftBuf_.data(), nm);
+            trace_("lpf_lmr", rightBuf_.data(), nm);
             // Stereo BLEND (anti-screech): fade the L-R in/out by a smoothed
             // pilot-lock confidence rather than hard-switching. forceMono or no
             // lock -> target 0 (clean mono); solid lock -> 1. The per-sample ramp
@@ -479,10 +489,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
             stereoBlend_ = stereoMatrixBlend(leftBuf_.data(), rightBuf_.data(),
                                              lprBuf_.data(), lmrBuf_.data(),
                                              nm, stereoBlend_, ramp, target);
+            // ★★★ stereoBlend_ IS RECURSIVE STATE — it is fed back into the next block. A NaN
+            // in it makes every subsequent sample NaN through `target - e`, which is one of the
+            // two ways the FM mute latched. Same treatment as the other IIR states.
+            if (!std::isfinite(stereoBlend_)) stereoBlend_ = 0.0f;
+            trace_("matrix_l", lprBuf_.data(), nm);
+            trace_("matrix_r", lmrBuf_.data(), nm);
             const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
             if (useDeemph_) {                  // off -> skip (tau=0)
                 deemph_.process(lprBuf_.data(), nm);
                 deemphR_.process(lmrBuf_.data(), nm);
+                trace_("deemph_l", lprBuf_.data(), nm);
+                trace_("deemph_r", lmrBuf_.data(), nm);
             }
             audioBuf_.resize(resamp_->maxOut(nm));
             rOutBuf_.resize(resampR_->maxOut(nm));
@@ -505,11 +523,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 nd = audioLpf_->process(demodBuf_.data(), nc, lpfBuf_.data());
                 audioIn = lpfBuf_.data();
             }
-            if (useAgc_) agc_.process(audioIn, nd);   // AM/SSB/CW level + anti-clip
+            if (useAgc_) { agc_.process(audioIn, nd); agc_.guard(); }  // AM/SSB/CW level + anti-clip
+            trace_("mono_out", audioIn, nd);
             audioBuf_.resize(resamp_->maxOut(nd));
             const int na = resamp_->process(audioIn, nd, audioBuf_.data());
             if (na > 0) cb_.audio(cb_.ctx, audioBuf_.data(), na, 1, outRate_);
         }
+        // A fault is "in progress" for as long as blocks keep arriving bad; faultSeq_ only
+        // moves on a fresh onset, so a reader can tell a new event from a continuing one.
+        inFault_ = (faultStage_ != nullptr);
     }
 }
 

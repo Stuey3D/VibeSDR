@@ -258,7 +258,14 @@ public:
         const double dt = 1.0 / rate;
         a_ = (tauSec > 0.0) ? (float)(dt / (tauSec + dt)) : 1.0f;
     }
-    void process(float* x, int n) { for (int i = 0; i < n; ++i) { y_ += a_ * (x[i] - y_); x[i] = y_; } }
+    void process(float* x, int n) {
+        for (int i = 0; i < n; ++i) { y_ += a_ * (x[i] - y_); x[i] = y_; }
+        // ★★★ RECURSIVE — a NaN here is FOREVER (see DcBlocker / stereo.cpp). This is one of
+        // the two states that latched the FM mute: y_ feeds itself every sample, so a single
+        // non-finite input silences the channel permanently and only a retune (which calls
+        // configure() -> reset()) clears it. One check per block; re-settling is inaudible.
+        if (!std::isfinite(y_)) y_ = 0.0f;
+    }
     void reset() { y_ = 0.0f; }
 private:
     float a_ = 1.0f, y_ = 0.0f;
@@ -403,6 +410,8 @@ public:
         }
     }
     void reset() { env_ = kTarget; }
+    /** Same latch risk as Deemphasis/DcBlocker: env_ is recursive. Checked per block. */
+    void guard() { if (!std::isfinite(env_)) env_ = kTarget; }
 private:
     float env_ = kTarget, atk_ = 0.05f, rel_ = 1e-4f;
     static constexpr float kTarget  = 0.25f;   // output setpoint
@@ -1110,6 +1119,35 @@ private:
     bool useAgc_ = false;
     DcBlocker fmDc_;                        // discriminator DC = tuning error (FM only)
     bool useFmDc_ = false;
+
+    // ── Non-finite stage tracer ────────────────────────────────────────────
+    // ★★★ A NaN anywhere in the audio chain latches into the first recursive stage it
+    // reaches and silences the radio until a retune. The guards make that self-healing, but
+    // healing a fault is not the same as knowing where it comes from — so this records WHICH
+    // STAGE first went non-finite, which is the only way to fix the source rather than the
+    // symptom. Summing a block is the cheapest complete test (NaN and Inf both propagate
+    // through addition) and costs a rounding error's worth of time next to the FIRs.
+    // Reported on the TRANSITION only, so it cannot spam.
+    const char* faultStage_ = nullptr;      // stage that first went bad, or nullptr
+    unsigned    faultSeq_   = 0;            // bumps on each new onset
+    bool        inFault_    = false;
+    bool blockFinite_(const float* x, int n) const {
+        float acc = 0.0f;
+        for (int i = 0; i < n; ++i) acc += x[i];
+        return std::isfinite(acc);
+    }
+    // Returns x unchanged; notes the first bad stage of this block.
+    void trace_(const char* stage, const float* x, int n) {
+        if (faultStage_ || n <= 0) return;              // already flagged this block
+        if (!blockFinite_(x, n)) { faultStage_ = stage; ++faultSeq_; }
+    }
+
+public:
+    /** Name of the pipeline stage that most recently went non-finite (nullptr = healthy). */
+    const char* faultStage() const { return inFault_ ? faultStage_ : nullptr; }
+    /** Increments once per fault ONSET — a change means a new event, not a continuing one. */
+    unsigned faultSeq() const { return faultSeq_; }
+private:
     std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz (L+R / mono) LPF
     Deemphasis deemph_;                     // mono / L+R de-emphasis
     bool useDeemph_ = false;
