@@ -79,7 +79,7 @@ import { DecoderClient, RTTY_PRESETS,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
-import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq }         from '../services/sdrTypes';
+import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy } from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { setDefaultInstance, getDefaultInstance,
@@ -1058,6 +1058,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c && 'linkMode' in c) c.linkMode = linkMode;
   }, [linkMode]);
   const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
+  /** ★★ THE OWNER'S uncompressed-audio POLICY, straight from /vibeserver.json. Three-way, and only
+   *  'choice' puts a switch in the audio sheet — 'compat' is an automatic fallback with no control
+   *  and 'off' never offers raw PCM at all. Null until fetched, and for every non-VibeServer
+   *  backend, which is the same as 'off' for our purposes: we must not spend an owner's uplink on
+   *  a setting they did not enable. */
+  const [rawAudioPolicy, setRawAudioPolicy] = useState<'off' | 'choice' | 'compat' | null>(null);
+  const [rawAudio, setRawAudio] = useState(false);
+
+  /** Ask the server what it permits, once per connection. A failure or an older server that
+   *  predates the field leaves the policy null, which HIDES the switch — the safe direction. */
+  useEffect(() => {
+    let dead = false;
+    setRawAudioPolicy(null);
+    if (!route.params.localPort && !route.params.localHost) return;
+    const h = route.params.localHost ?? '127.0.0.1';
+    fetchOccupancy(`http://${h}:${route.params.localPort}`)
+      .then((o) => { if (!dead) setRawAudioPolicy(o?.uncompressed ?? null); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [route.params.localHost, route.params.localPort]);
   // ★★★ HOW MUCH IS STACKED ABOVE THE CONTROLS RIGHT NOW. The decoder panel adds this to its
   // bottom offset, so notices are never covered by the box that they are often about.
   // ★★ Stuart, 2026-07-31: "the top stays, the box shrinks with how much it is pushed up by the
@@ -6154,6 +6174,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
         deemph={hwDeemph}   onDeemph={onHwDeemph}
         stereo={hwStereo}   onStereo={onHwStereo}
+        rawAudio={rawAudio}
+        onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
@@ -6368,6 +6390,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           authSuffix={route.params.authSuffix}
           sessionId={sessionUuid}
           onBytes={(n: number) => { audioBytes.current += n; }}
+          raw={rawAudio && rawAudioPolicy === 'choice'}
         />
       ) : null}
     </View>

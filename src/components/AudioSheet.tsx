@@ -281,6 +281,15 @@ export interface AudioSheetProps {
    *  with volume, uncompressed audio, NR and the auto-notch, and the app had them under the
    *  radio's cog; Stuart, 2026-08-02: "to better line up with the web client… in the web client
    *  these buttons are where they should be." Moved (from LocalHardwarePanel §FM DE-EMPHASIS). */
+  /** ★★ UNCOMPRESSED AUDIO — SHOWN ONLY WHEN THE SERVER SAYS THE LISTENER MAY CHOOSE.
+   *  The owner's policy is three-way ('off' / 'choice' / 'compat') and only 'choice' means a
+   *  switch belongs here; 'compat' is an automatic fallback with no control, and 'off' never
+   *  offers it at all. SDRScreen passes undefined for anything but 'choice', which HIDES the row
+   *  rather than disabling it — a greyed control still reads as an offer, and this one spends the
+   *  OWNER's uplink (~187 KB/s against Opus's ~8), not ours.
+   *  ★ Hans identified Opus by ear on first listen, which is why this exists at all. */
+  rawAudio?: boolean;
+  onRawAudio?: (on: boolean) => void;
   deemph?: number;             // FM de-emphasis tau, SECONDS (0 = off, 50e-6, 75e-6)
   onDeemph?: (tau: number) => void;
   stereo?: boolean;            // WFM stereo on, vs forced mono
@@ -313,6 +322,7 @@ export default function AudioSheet({
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
+  rawAudio = false, onRawAudio,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
@@ -493,6 +503,24 @@ export default function AudioSheet({
                 <Text style={{ color: notchOn ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {notchOn ? 'ON' : 'OFF'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ★ UNCOMPRESSED AUDIO — only when the owner allowed the choice. Changing it reopens
+              the audio socket, because the codec is a query parameter fixed at connect. */}
+          {onRawAudio && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>UNCOMP</Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity onPress={() => onRawAudio(!rawAudio)} hitSlop={8}
+                style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                         backgroundColor: rawAudio ? C.gold : 'transparent',
+                         borderWidth: 1, borderColor: rawAudio ? C.gold : C.muted }}>
+                <Text style={{ color: rawAudio ? '#000' : C.muted,
+                               fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                  {rawAudio ? 'ON' : 'OFF'}
                 </Text>
               </TouchableOpacity>
             </View>
