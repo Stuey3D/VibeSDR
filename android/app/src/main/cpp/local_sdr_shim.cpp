@@ -4200,9 +4200,19 @@ struct LocalSdrShim::Impl {
                         std::string rerr;
                         bool ok = false;
                         if (useSdrplay() && sdrp) {
-                            LOGE("no IQ for 3s on an RSP — re-initialising the stream (attempt %d)",
+                            // ★★★ ESCALATE, exactly as the Airspy does below. Re-Init cures a
+                            // STALL — the API quietly stopping the callback with every handle
+                            // still valid — and that is the commoner fault, so it goes first.
+                            // It cannot cure a NUDGED PLUG: a re-enumerated device invalidates
+                            // the selected handle, so Uninit + Init on it fails forever and the
+                            // operator is left stopping and starting the whole server (Stuart,
+                            // 2026-08-02). After two goes the handle itself is the suspect, so
+                            // release the device and select it again from a fresh enumeration.
+                            const bool deep = srcRestarts > 2;
+                            LOGE("no IQ for 3s on an RSP — %s (attempt %d)",
+                                 deep ? "reopening the device" : "re-initialising the stream",
                                  srcRestarts);
-                            ok = sdrp->restartStream(rerr);
+                            ok = deep ? sdrp->reopen(rerr) : sdrp->restartStream(rerr);
                         } else {
                             // ★ ESCALATE. The first two goes restart the stream on the handle we
                             // hold, which is all a stalled-but-present radio needs. After that the
@@ -4742,6 +4752,15 @@ int LocalSdrShim::startAirspyHfCommon(int index, int fd,
     impl->mode = mode.empty() ? "wfm" : mode;
     impl->lastGainTenthDb = gainTenthDb;
 
+    // ★★★ THE HF+ ALWAYS OPENS AT ITS OWN DEFAULT RATE — the caller does not get a say, and
+    // neither does the server's config. The picker went in 1c2c88e because re-rating a LIVE HF+
+    // wedges it; this closes the other half, where an owner sets an unusual rate in the config
+    // file and the radio comes up in a state nothing else is built for. Two things break at any
+    // other rate: the dead-lobe crop is a per-rate table only MEASURED at the top rate, and
+    // 228 kHz tunes ~7.8 kHz off frequency on the current firmware (open, unexplained).
+    // ★ Stuart: "I think we just offer the default on the server too otherwise that breaks all
+    // the dead space fix we added." 0 = "ask the radio" — see nearestRate().
+    sampleRate = 0.0;
     impl->ahf = std::make_unique<vibe::AirspyHfSource>();
     Impl* self = impl;
     impl->ahf->setSink([self](const float* iq, int n) {

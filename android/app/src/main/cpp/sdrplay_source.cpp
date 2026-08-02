@@ -283,6 +283,9 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         return false;
     }
     impl_->selected = true;
+    // ★ Remember WHICH radio this is, by serial. reopen() cannot trust the index — enumeration
+    //   order is not stable across a re-plug. Captured here, while the device struct is fresh.
+    curSerial_ = impl_->dev.SerNo[0] ? std::string(impl_->dev.SerNo) : std::string();
 
     if ((e = api().GetDeviceParams(impl_->dev.dev, &impl_->params))
             != sdrplay_api_Success || !impl_->params) {
@@ -335,6 +338,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     impl_->streaming = true;
     open_ = true;
     lost_ = false;
+    curRate_ = sampleRateHz; curCentre_ = centreHz; curGain_ = gainTenthDb;
 
     // ★★★ CYCLE THE AGC AFTER Init. Setting agc.enable in the params struct BEFORE Init does
     // not start the loop — only a transition does, applied through Update once the device is
@@ -369,6 +373,7 @@ void SdrplaySource::close() {
 
 void SdrplaySource::setFrequency(double hz) {
     if (!open_ || !impl_->params || !impl_->params->rxChannelA) return;
+    curCentre_ = hz;                      // remembered for reopen()
     impl_->params->rxChannelA->tunerParams.rfFreq.rfHz = hz;
     api().Update(impl_->dev.dev, impl_->dev.tuner,
                        sdrplay_api_Update_Tuner_Frf, sdrplay_api_Update_Ext1_None);
@@ -377,6 +382,7 @@ void SdrplaySource::setFrequency(double hz) {
 void SdrplaySource::setSampleRate(double hz) {
     if (!open_ || !impl_->params || !impl_->params->devParams) return;
     if (hz < 2000000.0) hz = 2000000.0;      // zero-IF minimum — see open()
+    curRate_ = hz;                           // remembered for reopen()
     impl_->params->devParams->fsFreq.fsHz = hz;
     // ★ The IF bandwidth must follow the rate, or a wider span arrives already filtered.
     if (impl_->params->rxChannelA)
@@ -439,8 +445,64 @@ bool SdrplaySource::restartStream(std::string& err) {
     return true;
 }
 
+// ★★★ See the header for why this exists, why it is safe here, and why it is the LAST resort.
+// The short version: a nudged USB plug re-enumerates the device, so the selected handle is dead
+// and no amount of Uninit + Init on it can ever work. Only a full teardown and a fresh
+// SelectDevice can, which is precisely what stopping and starting the server was doing by hand.
+bool SdrplaySource::reopen(std::string& err) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+
+    // Take the live settings BEFORE the teardown — close() drops the params struct they live in.
+    const std::string serial = curSerial_;
+    const double rate   = curRate_   > 0.0 ? curRate_   : 2000000.0;
+    const double centre = curCentre_;
+    const int    gain   = curGain_;
+
+    // ★ Unconditional, and it must not care whether any of it succeeds. We are here because the
+    //   device is already gone; a complaint from Uninit or ReleaseDevice about a handle that no
+    //   longer exists is the EXPECTED outcome, not a reason to leave the radio dead.
+    close();
+
+    // ★★ FIND IT AGAIN BY SERIAL, and accept that it may not be back yet. A device that is still
+    //    re-enumerating simply is not in the list — that is a failure this attempt, not a
+    //    permanent one, and nothing about our state is poisoned by it. This is exactly the
+    //    property the Airspy's deep restart lacked, which is what made ONE missed attempt there
+    //    permanent (2026-08-02).
+    if (!apiOpen(err)) return false;
+    sdrplay_api_DeviceT devs[SDRPLAY_MAX_DEVICES];
+    unsigned int n = 0;
+    api().Lock();
+    api().GetDevices(devs, &n, SDRPLAY_MAX_DEVICES);
+    api().Unlock();
+
+    int idx = -1;
+    for (unsigned int i = 0; i < n; i++) {
+        if (serial.empty()) { idx = (int)i; break; }              // only one radio, no serial read
+        if (devs[i].SerNo[0] && serial == devs[i].SerNo) { idx = (int)i; break; }
+    }
+    if (idx < 0) {
+        err = serial.empty() ? "no SDRplay device present"
+                             : "the RSP has not come back yet (serial " + serial + ")";
+        std::fprintf(stderr, "sdrplay reopen: %s\n", err.c_str());
+        return false;
+    }
+
+    // open() replays the whole sequence — params, bandwidth for the rate, the gRdB seed, the AGC
+    // dynamics and the post-Init AGC transition. Reusing it is the point: a hand-rolled subset
+    // here would drift out of step with open() the first time that sequence changed, and the AGC
+    // in particular fails SILENTLY when a step is missed (see open()).
+    if (!open(idx, rate, centre, gain, err)) {
+        std::fprintf(stderr, "sdrplay reopen FAILED: %s\n", err.c_str());
+        return false;
+    }
+    std::fprintf(stderr, "sdrplay: device reopened after a re-enumeration (serial %s)\n",
+                 serial.empty() ? "unknown" : serial.c_str());
+    return true;
+}
+
 void SdrplaySource::setGainTenthDb(int tenthDb) {
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    curGain_ = tenthDb;                   // remembered for reopen()
     if (!impl_->params || !impl_->params->rxChannelA) return;
     auto* ch = impl_->params->rxChannelA;
     // ★★ ON AN RSP THE SLIDER DRIVES THE LNA, NOT THE IF — the opposite of a dongle, and the
@@ -744,6 +806,7 @@ void SdrplaySource::close() {}
 void SdrplaySource::setFrequency(double) {}
 void SdrplaySource::setSampleRate(double) {}
 bool SdrplaySource::restartStream(std::string&) { return false; }
+bool SdrplaySource::reopen(std::string&) { return false; }
 void SdrplaySource::setGainTenthDb(int) {}
 void SdrplaySource::setBiasT(bool) {}
 void SdrplaySource::setLnaState(int) {}
