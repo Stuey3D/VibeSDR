@@ -150,7 +150,25 @@ export default function DrumWheel({
     detentTick(dPx);
   }, [onDelta, detentTick]);
 
-  // ── Inertia (unchanged) ──────────────────────────────────────────────────────
+  // ★★★ THE COAST REPAINTS AT ~30 fps, THE PHYSICS STILL RUN EVERY FRAME.
+  // A flick costs far more than it looks: setScroll() is a React state write, which rebuilds the
+  // `ticks` array and reconciles a <Group> with two <Line>s PER TICK — about 100 Skia elements and
+  // 200 vec() allocations, sixty times a second, on the JS thread everything else shares.
+  // ★ Integration is untouched: velocity, friction, the backlog brake and every sendDelta still
+  // happen on each rAF tick, so the TUNE is bit-for-bit what it was and the feel cannot change.
+  // Only the visual state write is coalesced — and 30 fps is the rate the spectrum trace tweens at,
+  // which nobody has ever called uneven.
+  // ★★ DRAGGING IS DELIBERATELY NOT THROTTLED. A finger on the drum is the most feel-critical
+  // thing in the app and a trackpad can deliver 120 Hz; coasting is the part where a repaint can
+  // be skipped without anyone being able to tell.
+  // ★ This is a THROTTLE, not a thread move. Getting the drum entirely off the JS thread means
+  // redesigning how the ticks are drawn — each carries its own alpha AND strokeWidth from the
+  // cosine fade, so they cannot collapse into one Path without changing the look, and that wants
+  // a side-by-side comparison before it is inflicted on the most-touched control in the app.
+  const DRUM_PAINT_MS = 32;
+  const lastPaint = useRef(0);
+
+  // ── Inertia ──────────────────────────────────────────────────────────────────
   const inertia = useCallback((ts: number) => {
     const dt = Math.min(0.05, (ts - rafTS.current) / 1000);
     rafTS.current = ts;
@@ -173,6 +191,11 @@ export default function DrumWheel({
       if (Math.abs(pending.current) >= LSV_PX_STEP * 0.6) sendDelta(pending.current);
       pending.current = 0;
       rafId.current = null;
+      // ★ PAINT THE LANDING. This branch used to rely on the PREVIOUS frame's write being current;
+      //   with the coast repaint coalesced to ~30 fps that could leave the drum resting up to a
+      //   frame behind where it actually stopped. The settle must always show its true position.
+      lastPaint.current = ts;
+      setScroll(scrollRef.current);
       settleTick();  // soft thunk — the flick has landed
       return;
     }
@@ -183,7 +206,12 @@ export default function DrumWheel({
       sendDelta(pending.current);
       pending.current = 0;
     }
-    setScroll(scrollRef.current);
+    // Coalesced paint — see the note above. The settle paths below/above always paint, so the
+    // drum can never come to rest on a stale frame.
+    if (ts - lastPaint.current >= DRUM_PAINT_MS) {
+      lastPaint.current = ts;
+      setScroll(scrollRef.current);
+    }
     rafId.current = requestAnimationFrame(inertia);
   }, [type, sendDelta, settleTick]);
 

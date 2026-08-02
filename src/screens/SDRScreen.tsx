@@ -4343,6 +4343,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [connected]);
   const [vtsNotif,        setVtsNotif]        = useState<VtsNotifData | null>(null);
   const [vtsBarH,         setVtsBarH]         = useState(0);   // measured VTS height → lift the decoder box above it
+  // ★ The bar is unmounted while Advanced RDS is open, and an unmounted child never reports a
+  //   height — so the LAST one would stand for ever and everything above it would keep a gap for
+  //   a bar that is not on screen. Clear it here rather than relying on the child to say goodbye.
+  useEffect(() => { if (advRdsOpen) setVtsBarH(0); }, [advRdsOpen]);
   const vtsKey            = useRef(0);
   const vtsLastStation    = useRef('');
   const vtsBandKey        = useRef<string | null>(null);
@@ -5836,11 +5840,25 @@ export default function SDRScreen({ route, navigation }: Props) {
           countryIso={liveStation.countryIso}
           raw={advRdsRaw} onRaw={setAdvRdsRaw}
           tall={advRdsTall} onTall={setAdvRdsTall}
-          bottomOffset={pillBottom + 8}
+          bottomOffset={pillBottom + 8 + noticeStackH}
           onClose={() => setAdvRdsOpen(false)}
         />
       )}
-      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH} />}
+      {/* ★ NB the panel itself still clears the NOTICE pills — it takes noticeStackH in its
+          bottomOffset. Hiding the VTS bar removes one thing under it, not all of them: a
+          POWER SAVE or idle-terms pill still has to be readable with the analyser open
+          (Stuart: "the box does need to move out of the way for warning pills"). */}
+      {/* ★★ NOT WHILE ADVANCED RDS IS OPEN. The analyser already shows the station, the PI and the
+          RadioText in full, so the strip is duplicating its own headline — and once the panel was
+          capped and centred (2026-08-02) the bar stopped being hidden behind it and started
+          poking out at both ends. Stuart: "VTS shouldn't be active when advanced RDS is on."
+          ★ vtsBarH is forced to 0 alongside, or everything that reserves space above the bar —
+          the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
+          that is not there. See the vtsBarH rule further up. */}
+      {!controlsHidden && !advRdsOpen && (
+        <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
+                serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH} />
+      )}
 
       {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
       <CenterVfoButton visible={vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
