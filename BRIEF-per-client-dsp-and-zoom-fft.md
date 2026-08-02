@@ -179,3 +179,28 @@ client and the app exists to configure it fully."*
 - ★ **No platform check needed**: the server advertises **"unconfigured"**, and only a headless
   build that was never given settings is ever in that state. The client shows the wizard when
   TOLD to, rather than inferring it — the same reason lockedCentre is published rather than guessed.
+
+### 7.7 ★★★ ANDROID'S SIMPLICITY IS A FEATURE — DO NOT SPEND IT
+Stuart, 2026-08-02: *"multiple people amazed at how easy android was to get working. Download
+VibeSDR — Plug in Radio — Listen Locally/Use as Server — Start server — connected."*
+
+**Five steps, no configuration, no password, no wizard.** That is a competitive advantage over
+every other SDR server (Kiwi, OWRX and UberSDR all want a config file and an install), and it is
+the kind of thing that erodes one justified step at a time. Nothing in §7 may add a step to it.
+
+✅ **VERIFIED 2026-08-02, and it must stay true**: `setVibeServerLockedCentre`,
+`setVibeServerSharedChannels` and `setVibeServerZoomSpectrum` are called from **`vibeserver/main.cpp`
+ONLY** — the headless Linux binary. Nothing in `src/`, the Android Java or the native module
+touches them, so the phone flow is unchanged:
+- `lockedCentre = 0` → not a shared receiver → admin still takes the session, LOCKED/FREE still
+  moves the dongle, and ★ **IDLE PARK STILL RUNS** (the never-park rule is gated on the lock —
+  a phone keeps its battery saving, and the dongle is ~80% of it).
+- `sharedChannels = false` → **Direct**, which is genuinely the CHEAPEST option for one listener
+  (11% of a Pi core vs 27%) — the right default for a phone, not a compromise.
+- `zoomSpectrum = false` → the wide path, waterfall exactly as before.
+
+★★ **THE RULE THAT MADE THIS FREE**: every shared-receiver behaviour branches on `lockedCentre`
+rather than being switched on globally. Keep doing that. A feature that a phone user must
+DECLINE has already cost them a step; one they never see costs nothing.
+★ The admin password becomes mandatory for the HEADLESS build only (§7.6) — the phone must never
+be asked for one to serve on its own LAN.
