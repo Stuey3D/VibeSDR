@@ -216,16 +216,31 @@ export default function TunerScreen({ route, navigation }: Props) {
   // a server limited to 100–108 should show 100–108, not 20 MHz it will refuse.
   // Evidence still wins if it is lower, because a stale declaration must not lock
   // out a frequency the radio has actually been seen to reach.
-  const fmLo = declared ? Math.min(declared.lo, evidenceFloor ?? declared.lo)
-                        : (evidenceFloor ?? FMDX_DIAL_VIEW_LO);
+  /** How far the radio can actually reach — declaration or evidence. NOT what the dial shows. */
+  const fmLoFull = declared ? Math.min(declared.lo, evidenceFloor ?? declared.lo)
+                            : (evidenceFloor ?? FMDX_DIAL_VIEW_LO);
   const fmHi = declared ? Math.max(declared.hi, FMDX_DIAL_VIEW_HI) : FM_HI;
+  /** Is there anything below 87.5 to offer at all? */
+  const extendedAvail = fmLoFull < FMDX_DIAL_VIEW_LO;
+  // ★★★ "TAP FOR 87.5" DID NOTHING ON A SERVER THAT DECLARES ITS RANGE (shipped in 10.0.1).
+  // The tap called resetReach(), which forgets the LEARNED floor — but a DECLARED range comes
+  // from the fm-dx directory's bwLimit and is not learned, so fmLo was recomputed straight back
+  // to declared.lo and the chip sat there promising something it could not do. Stuart's own
+  // screenshot shows it: "EXTENDED · 65.8–108 · TAP FOR 87.5", and 65.8 can only be a declaration.
+  // ★★ So the dial's VIEW is now its own state, separate from what the radio can REACH. Collapsing
+  // is a display choice; it must not forget evidence and must not clamp tuning — the note above
+  // records why tuning is deliberately not clamped at 87.5.
+  // ★ And it is a TOGGLE, not a one-way reset: a chip that hides the extension has to offer it
+  // back, or the only way to see 65.8 again would be to find the storage key.
+  const [dialCollapsed, setDialCollapsed] = useState(false);
+  const fmLo = dialCollapsed ? FMDX_DIAL_VIEW_LO : fmLoFull;
   const extended = fmLo < FMDX_DIAL_VIEW_LO;
   /** Clamp to what the RADIO can reach, not to what the dial happens to show —
    *  the dial can only learn to grow if we let the tune out of the band first.
    *  ★ With a declared range we clamp to THAT instead: there is no point letting
    *  the user tune into a region the owner has told us will be dropped. */
   const bandRef = useRef({ lo: FMDX_TUNE_LO, hi: FM_HI });
-  bandRef.current = { lo: declared ? fmLo : FMDX_TUNE_LO, hi: fmHi };
+  bandRef.current = { lo: declared ? fmLoFull : FMDX_TUNE_LO, hi: fmHi };
   const clampFm = useCallback((hz: number) =>
     Math.min(bandRef.current.hi, Math.max(bandRef.current.lo, hz)), []);
   const EXT_KEY = extKeyFor(baseUrl);
@@ -249,12 +264,10 @@ export default function TunerScreen({ route, navigation }: Props) {
     setConfirmedLo(lo);
     AsyncStorage.setItem(EXT_KEY, JSON.stringify({ confirmedLo: lo })).catch(() => {});
   }, [EXT_KEY]);
-  /** Forget what we learned — the dial goes back to a plain 87.5–108. */
-  const resetReach = useCallback(() => {
-    confirmedLoRef.current = FMDX_DIAL_VIEW_LO;
-    setConfirmedLo(FMDX_DIAL_VIEW_LO);
-    AsyncStorage.removeItem(EXT_KEY).catch(() => {});
-  }, [EXT_KEY]);
+  // ★ resetReach() lived here — "forget what we learned". Gone with the chip that called it:
+  //   collapsing the dial does the job the user actually wanted (see 87.5 again) and is
+  //   REVERSIBLE, where forgetting threw away evidence the radio had genuinely proven and could
+  //   only be re-earned by tuning back down there. Nothing else called it.
 
   const [dialView, setDialView] = useState({ lo: FMDX_DIAL_VIEW_LO, hi: FMDX_DIAL_VIEW_HI });
 
@@ -1015,16 +1028,20 @@ export default function TunerScreen({ route, navigation }: Props) {
         {/* Band extent. Absent entirely on a normal server — the dial reads
             87.5–108 as it always has. It appears only once the dial has GROWN,
             to say how far it grew and to offer the way back. */}
-        {(extended || !!bandNote) && (
+        {(extendedAvail || !!bandNote) && (
           <View style={styles.bandRow}>
-            {extended && (
+            {extendedAvail && (
               <TouchableOpacity
                 style={[styles.bandChip, styles.bandChipOn]}
-                onPress={() => { resetReach(); setBandNote(null); }}
+                onPress={() => { setDialCollapsed(v => !v); setBandNote(null); }}
                 activeOpacity={0.7}
               >
+                {/* ★ The chip states where the dial IS and offers the other option — so it is
+                    never a promise it cannot keep, whichever way round it is. */}
                 <Text style={[styles.bandChipText, styles.bandChipTextOn]}>
-                  {`EXTENDED · ${(fmLo / 1e6).toFixed(1)}–108 · TAP FOR 87.5`}
+                  {dialCollapsed
+                    ? `87.5–108 · TAP FOR ${(fmLoFull / 1e6).toFixed(1)}`
+                    : `EXTENDED · ${(fmLoFull / 1e6).toFixed(1)}–108 · TAP FOR 87.5`}
                 </Text>
               </TouchableOpacity>
             )}
@@ -1248,7 +1265,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         lockUnit
         // The numpad accepts the RECEIVER's range, not the dial's — typing 84.0
         // on a server nobody has proved yet must be allowed to try.
-        minHz={declared ? fmLo : FMDX_TUNE_LO}
+        minHz={declared ? fmLoFull : FMDX_TUNE_LO}
         maxHz={fmHi}
       />
 
