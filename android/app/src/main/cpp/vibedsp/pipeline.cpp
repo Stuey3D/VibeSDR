@@ -333,6 +333,37 @@ void RxPipeline::feed(const cf32* iq, int n) {
         }
     }
 
+    // ── Zoom spectrum ──────────────────────────────────────────────────────
+    // Runs only while a view is set (i.e. the user has zoomed past what the wide FFT can
+    // resolve), so it costs nothing in the common case. Configured HERE, on the DSP thread,
+    // rather than from whichever thread moved the view: it rebuilds filter state.
+    if (cb_.zoomSpectrum) {
+        if (zoomDirty_.exchange(false, std::memory_order_acq_rel)) {
+            const double span = zoomSpanReq_.load(std::memory_order_relaxed);
+            if (span <= 0.0) {
+                if (zoom_) zoom_->disable();
+                zoomSpanOut_.store(0.0, std::memory_order_relaxed);
+            } else {
+                // Rebuild on a width change too — and do it HERE, on the DSP thread. Destroying
+                // it from the caller's thread would free buffers a feed() in flight is reading.
+                const int wantBins = zoomBins_.load(std::memory_order_relaxed);
+                if (zoom_ && zoom_->bins() != wantBins) zoom_.reset();
+                if (!zoom_)
+                    zoom_ = std::make_unique<ZoomSpectrum>(
+                        sampleRate_,
+                        sharedChannels_ ? ZoomSpectrum::Method::Shared
+                                        : ZoomSpectrum::Method::Direct,
+                        zoomBins_.load(std::memory_order_relaxed));
+                zoom_->configure(zoomOffReq_.load(std::memory_order_relaxed), span, fftRate_);
+                zoomSpanOut_.store(zoom_->spanHz(), std::memory_order_relaxed);
+            }
+        }
+        if (zoom_ && zoom_->enabled())
+            zoom_->feed(iq, n, [&](const float* db, int nb) {
+                cb_.zoomSpectrum(cb_.ctx, db, nb);
+            });
+    }
+
     // ── Audio (DDC -> demod -> resample) ─────────────────────────────────────
     if (cb_.audio) {
         faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage
@@ -548,7 +579,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
 }
 
 void RxPipeline::stop() {
-    cfft_.reset(); decs_.clear(); am_.reset(); resamp_.reset();
+    cfft_.reset(); zoom_.reset(); decs_.clear(); am_.reset(); resamp_.reset();
+}
+
+/** Thread-safe request; the DSP thread applies it in feed(). Only a CHANGE marks dirty, so a
+ *  client that resends its view every frame does not rebuild filters 20 times a second. */
+void RxPipeline::setZoomView(double offsetHz, double spanHz) {
+    if (spanHz <= 0.0) {
+        if (zoomSpanReq_.exchange(0.0, std::memory_order_relaxed) != 0.0)
+            zoomDirty_.store(true, std::memory_order_release);
+        return;
+    }
+    const double oldOff  = zoomOffReq_.exchange(offsetHz, std::memory_order_relaxed);
+    const double oldSpan = zoomSpanReq_.exchange(spanHz,  std::memory_order_relaxed);
+    if (oldOff != offsetHz || oldSpan != spanHz)
+        zoomDirty_.store(true, std::memory_order_release);
 }
 
 } // namespace vibedsp

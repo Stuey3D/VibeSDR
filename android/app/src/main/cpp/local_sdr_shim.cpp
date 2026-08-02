@@ -390,6 +390,10 @@ static std::atomic<bool>   g_vsWebEnabled{true};
 // {"type":"sampleRate"} is IGNORED and the rate is advertised as locked, so the
 // client can hide a control it isn't allowed to use.
 static std::atomic<double> g_vsLockedRate{0.0};
+// ★★★ Locked hardware centre — see setVibeServerLockedCentre in the header for why. 0 = off.
+static std::atomic<double> g_vsLockedCentre{0.0};
+// Channel method: false = Direct (per-client DDC), true = Shared (fast convolution). Startup only.
+static std::atomic<bool>   g_vsSharedChannels{false};
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -1445,6 +1449,45 @@ struct LocalSdrShim::Impl {
     // kill shimmer, then crop/zoom to OUT_BINS and key squelch/SNR — all in the
     // fftshifted layout (DC at bins/2), unlike the old raw-order IQFrontEnd path.
     static void specCb(void* ctx, const float* db, int bins) { ((Impl*)ctx)->onSpectrum(db, bins); }
+    static void zoomSpecCb(void* ctx, const float* db, int bins) { ((Impl*)ctx)->onZoomSpectrum(db, bins); }
+
+    // ★★★ HAND OVER TO THE ZOOM SPECTRUM once the view is narrower than the wide FFT can resolve.
+    // `step` is source-bins-per-output-bin, so step < 1.0 IS "zoomed past real resolution" — below
+    // that the wide path is magnifying nothing, which is what made high zoom blocky. Above it the
+    // wide path is both correct and cheaper, so it keeps the job.
+    // ★ Not on SpyServer: there the waterfall is the SERVER's FFT and we have no IQ for the view.
+    void updateZoomView() {
+        const double shown    = displaySpan() / zoomFactor.load();
+        const double srcBinHz = sampleRate / (double)fftSize;
+        const double step     = (shown / (double)g_vsOutBins.load()) / srcBinHz;
+        if (!useSpy() && step < 1.0 && shown > 0.0)
+            rx.setZoomView(viewCenter.load() - rtlCenter.load(), shown);
+        else
+            rx.setZoomView(0.0, 0.0);
+    }
+
+    // A zoom frame, in the SAME wire format as onSpectrum's — same SPEC header, same bin count,
+    // same dB offset — so the client needs no new code path and simply sees a sharper picture.
+    void onZoomSpectrum(const float* db, int nb) {
+        std::shared_ptr<net::Socket> sock;
+        { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
+        if (!sock || !sock->isOpen()) return;
+        const int outBins = g_vsOutBins.load();
+        if (nb != outBins) return;          // width mismatch: setZoomBins keeps these equal
+        std::vector<uint8_t> frame(22 + outBins);
+        frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
+        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::memcpy(&frame[6], &ts, 8);
+        uint64_t f = (uint64_t)llround(viewCenter.load());
+        std::memcpy(&frame[14], &f, 8);
+        for (int i = 0; i < outBins; i++) {
+            int v = (int)lround(db[i] + 256.0);
+            frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+        }
+        sendWs(sock, 0x2, frame.data(), frame.size());
+        vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+    }
     void onSpectrum(const float* db, int bins) {
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
         for (int i = 0; i < bins; i++) fftAccum[i] += db[i];
@@ -1495,6 +1538,9 @@ struct LocalSdrShim::Impl {
         // suppressed every frame — a blank waterfall on the paths that have no
         // server FFT to fall back on.
         if (emit && useSpy() && shownHz > sampleRate * 0.95) emit = false;
+        // ★ While the zoom path is delivering, it owns the waterfall — emitting both would double
+        //   the frame rate and make the two fight over the same texture rows.
+        if (emit && rx.zoomSpanHz() > 0.0) emit = false;
 
         if (emit && sock && sock->isOpen()) {
             // Emit a FIXED OUT_BINS bins (GPU-safe waterfall texture width — a
@@ -2181,6 +2227,13 @@ struct LocalSdrShim::Impl {
         vibedsp::RxPipeline::Callbacks cb;
         cb.ctx      = this;
         cb.spectrum = &Impl::specCb;
+        cb.zoomSpectrum = &Impl::zoomSpecCb;
+        // The zoom FFT emits straight to the wire, so its width must BE the wire width.
+        rx.setZoomBins(g_vsOutBins.load());
+        // ★★★ Method is fixed for the life of the engine — never switched live (Stuart,
+        // 2026-08-02). Shared (fast convolution) only makes sense with a LOCKED centre, since
+        // every channel is a slice of one FFT of one captured band.
+        rx.setSharedChannels(g_vsSharedChannels.load() && g_vsLockedCentre.load() > 0.0);
         cb.audio    = &Impl::audioCb;
         cb.rdsPs    = &Impl::rdsPsCb;
         cb.rdsPi    = &Impl::rdsPiCb;
@@ -2253,11 +2306,32 @@ struct LocalSdrShim::Impl {
         // whichever handler runs second re-reads the other's committed audioFreq/
         // rtlCenter and there is never a concurrent hardware tune.
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        audioFreq.store(freq);
         // Guard band before we recentre the capture. The fixed 50 kHz was fine at
         // 2.4 MSPS but goes NEGATIVE once decimation makes the IQ narrow (SpyServer),
         // which would retune on every tiny nudge.
         double limit = sampleRate / 2.0 - std::min(50000.0, sampleRate * 0.15);
+
+        // ★★★ LOCKED CENTRE: the capture window is the fixed thing, so CLAMP the VFO into it
+        // rather than moving the radio. On a shared receiver a retune past the edge would slide
+        // the band under every other listener mid-sentence; inside the window everyone tunes
+        // freely, which is the whole point of capturing 8 MHz. Clamped, not refused — a client
+        // that asks for 14 MHz on a 2.5-10.5 window gets the edge, not silence.
+        const double lockC = g_vsLockedCentre.load();
+        if (lockC > 0.0) {
+            const double lo = lockC - limit, hi = lockC + limit;
+            if (freq < lo || freq > hi) {
+                LOGI("retune %.3f MHz is outside the LOCKED window %.3f-%.3f MHz — clamped",
+                     freq / 1e6, lo / 1e6, hi / 1e6);
+                freq = freq < lo ? lo : hi;
+            }
+            audioFreq.store(freq);
+            rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+            { std::lock_guard<std::mutex> rl(rdsMtx); rdsPsName.clear(); rdsText.clear(); rdsPi = -1; }
+            stereoDetected.store(false);
+            return;
+        }
+
+        audioFreq.store(freq);
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             // The VFO has tuned outside the captured window — recentre the capture
             // on it so we don't end up showing dead air.
@@ -2372,6 +2446,7 @@ struct LocalSdrShim::Impl {
         if (want < 1.0) want = 1.0;
         if (want > maxZoom) want = maxZoom;
         zoomFactor.store(want);
+        updateZoomView();
     }
 
     static bool recvN(const std::shared_ptr<net::Socket>& s, uint8_t* buf, size_t n) {
@@ -2507,7 +2582,7 @@ struct LocalSdrShim::Impl {
                 LocalSdrShim::instance().setBiasT(v != 0);
             return;
         }
-        if (type == "reset") { zoomFactor.store(1.0); sendConfig(sock); return; }
+        if (type == "reset") { zoomFactor.store(1.0); updateZoomView(); sendConfig(sock); return; }
         if (type == "zoom") { // spectrum view-centre move (+ span via binBandwidth)
             if (jsonNum(msg,"frequency",v) && v > 0) {
                 // The requested frequency is the DISPLAY centre. Park the dongle
@@ -2560,6 +2635,9 @@ struct LocalSdrShim::Impl {
             }
             double bb;
             if (jsonNum(msg,"binBandwidth",bb) && bb > 0) setSpan(bb);
+            // A PAN with no span change never reaches setSpan(), but it moves the view centre —
+            // and the zoom channel is tuned to that centre, so it has to follow.
+            else updateZoomView();
             sendConfig(sock);
             return;
         }
@@ -4578,6 +4656,8 @@ int LocalSdrShim::occupantSecsLeft() const {
 
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
+void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }
+void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
 
