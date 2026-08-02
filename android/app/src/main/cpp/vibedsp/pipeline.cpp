@@ -1,5 +1,6 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
 #include "vibedsp.h"
+#include <cstring>
 #include "simd_internal.h"   // stereoMatrixBlend / interleave2 (NEON)
 #include <cmath>
 #include <algorithm>
@@ -307,17 +308,28 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // remaining (specStride - fftSize) samples to honour the frame rate. This is
         // O(n) — never the per-sample buffer shift (O(n*fftSize)) that can't keep up
         // at MS/s. `sinceFrame_` doubles as the inter-frame drop countdown.
-        cf32* sb = reinterpret_cast<cf32*>(specBuf_.data());
+        if ((int)specRing_.size() != fftSize_ * 2) {
+            specRing_.assign((size_t)fftSize_ * 2, 0.0f);
+            specRingW_ = 0; specRingFill_ = 0; sinceEmit_ = 0;
+        }
+        cf32* ring = reinterpret_cast<cf32*>(specRing_.data());
+        cf32* sb   = reinterpret_cast<cf32*>(specBuf_.data());
+        const long long stride = std::max(1, specStride_.load(std::memory_order_relaxed));
         for (int i = 0; i < n; ++i) {
-            if (sinceFrame_ > 0) { --sinceFrame_; continue; }
-            sb[specFill_++] = iq[i];
-            if (specFill_ >= fftSize_) {
-                const float scale = 1.0f / (float)(fftSize_ * fftSize_);
-                cfft_->powerDbShifted(sb, win_.data(), specDb_.data(), scale);
-                cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
-                specFill_   = 0;
-                sinceFrame_ = std::max(0LL, (long long)specStride_ - fftSize_);
-            }
+            ring[specRingW_] = iq[i];
+            if (++specRingW_ >= fftSize_) specRingW_ = 0;
+            ++specRingFill_;
+            if (++sinceEmit_ < stride) continue;
+            sinceEmit_ = 0;
+            if (specRingFill_ < fftSize_) continue;      // warm-up: not a full window yet
+            // Unwrap oldest-first so the window is time-ordered; specRingW_ is the oldest
+            // sample now that it has advanced past the newest.
+            const int tail = fftSize_ - specRingW_;
+            std::memcpy(sb,        ring + specRingW_, (size_t)tail       * sizeof(cf32));
+            std::memcpy(sb + tail, ring,              (size_t)specRingW_ * sizeof(cf32));
+            const float scale = 1.0f / (float)(fftSize_ * fftSize_);
+            cfft_->powerDbShifted(sb, win_.data(), specDb_.data(), scale);
+            cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
         }
     }
 
