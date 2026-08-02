@@ -1500,7 +1500,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     guard let url = URL(string: "ws://\(h):\(p)/ws/audio\(q)") else { return }
     laTune = initialTune
-    startExternalAudio(NSNumber(value: 48000), pauseMode: "resume")   // external PCM engine
+    // ★★ THE ENGINE STARTS ON THE FIRST PACKET, NOT HERE — see onLocalAudioFrame. Starting it at
+    //    connect left it running and pulling with nothing arriving yet, and that window is audible:
+    //    a stutter on connect that settles once the stream catches up (Stuart, build 58).
+    //    ★ This is also what iOS did BEFORE this pump existed — the JS reader called
+    //      startExternalAudio on its first packet — so the AV session, remote commands, Now Playing
+    //      and the volume observer are all set up at exactly the moment they always were. Deferring
+    //      restores the arrangement background media controls were verified against; it does not
+    //      invent a new one. (Android starts it upfront, which is why I copied that first.)
     stopLocalAudioConn()
     laGen &+= 1
     let gen = laGen
@@ -1582,6 +1589,13 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let format   = Int(b[1])
     let rate = Int(b[2]) | (Int(b[3]) << 8) | (Int(b[4]) << 16) | (Int(b[5]) << 24)
     guard rate > 0 else { return }
+
+    // ★ First audio starts the engine, at the rate the STREAM is actually using rather than an
+    //   assumed 48k. feedExternalPcm/Opus both refuse while externalAudio is false, so this must
+    //   happen before the feed below, not after it.
+    if !externalAudio {
+      startExternalAudio(NSNumber(value: rate), pauseMode: "resume")
+    }
 
     switch format {
     case 3:
