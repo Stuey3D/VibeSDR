@@ -160,8 +160,9 @@ export default function LocalAudioPlayer(
       //    at ~2 Hz and we forward it. Without this the readout would show SPECTRUM ONLY, which is
       //    the exact fault the note on onBytes describes: 12 KB/s displayed while the link carried
       //    198, and it hid the real problem for months.
-      //    ★ iOS emits the event; Android's pump does not (yet), so there it stays spectrum-only
-      //      as it always has — one platform improving is not a reason to hold it back.
+      //    ★ BOTH platforms emit it now. Android's pump never had it — the JS reader that did the
+      //      counting was always the iOS path — so its meter had been spectrum-only since the pump
+      //      was written. Moving iOS native exposed that, and Android caught up the same day.
       let sub: { remove: () => void } | null = null;
       try {
         const em = new NativeEventEmitter(NativeModules.VibePowerModule);
