@@ -200,6 +200,86 @@ private:
     int decim_, phase_, K_;
 };
 
+// ── Zoom spectrum ────────────────────────────────────────────────────────--
+//
+// ★★★ WHY THIS EXISTS. Cropping a wide FFT cannot add resolution. At 8 MSPS a 32768-point FFT
+// has 244 Hz bins, so a 16 kHz view is ~65 real bins stretched across 1024 output ones — 16x
+// interpolation, which is the blocky zoom. The fix is NARROWER BINS, not more of them: shift the
+// view centre to DC, decimate to the view span, and FFT *that*. 1024 points of a 16 kHz stream is
+// ~16 Hz per bin. Cost barely moves with zoom depth, because the FFT never grows.
+//
+// ★★ TWO METHODS, SAME OUTPUT, DIFFERENT COST CURVE. Both hand back a narrow decimated stream, so
+// they give the SAME detail — the choice is entirely about how the cost scales with listeners:
+//
+//   Direct  — NCO + decimating FIR cascade. Cheapest for one listener (measured ~2.4x lighter
+//             than Shared on a Pi 500 at 8 MSPS), but the NCO runs at the FULL input rate, so
+//             every extra listener pays it again: +13% of a core each, out of road at ~8.
+//   Shared  — a slice of the Channelizer's shared forward FFT. High fixed cost, then ~FLAT:
+//             +0.02% per extra listener. Pays from about three listeners upward.
+//
+// ★★★ THE METHOD IS CHOSEN AT SETUP AND HELD FOR THE PROCESS (Stuart, 2026-08-02: *"never switch
+// methods live, it is in the setup"*). It is not adaptive and must not become adaptive: switching
+// mid-stream means swapping filter state under a running demodulator, which is the same
+// discontinuity that leaves RDS half-dead after an idle resume.
+class ZoomSpectrum {
+public:
+    enum class Method { Direct, Shared };
+
+    /** @param sampleRate input IQ rate  @param bins output FFT size (waterfall width) */
+    ZoomSpectrum(double sampleRate, Method m, int bins = 1024);
+    ~ZoomSpectrum();
+
+    Method method() const { return method_; }
+
+    /** Ask for a view: `offsetHz` from band centre, `spanHz` wide, at `rateHz` frames/sec.
+     *  The delivered span is the next achievable one at or above `spanHz` (decimation is a
+     *  power of two), so read it back with spanHz() — a caller that assumes it got exactly
+     *  what it asked for will draw the frequency scale wrong. */
+    void configure(double offsetHz, double spanHz, double rateHz);
+    void disable();
+    bool enabled() const { return enabled_; }
+
+    /** The span actually being delivered, Hz. 0 when disabled. */
+    double spanHz()  const { return spanHz_; }
+    /** View centre actually being delivered, as an offset from band centre, Hz. */
+    double offsetHz() const { return offsetHz_; }
+    int    bins() const { return bins_; }
+
+    /** Feed the same IQ the wide path sees. Calls back at ~the configured rate with a
+     *  fftshifted dB row of `bins()` entries covering `offsetHz() +/- spanHz()/2`.
+     *  Cheap and allocation-free when disabled. */
+    void feed(const cf32* iq, int n,
+              const std::function<void(const float* db, int bins)>& onFrame);
+
+private:
+    void rebuild_();
+    void push_(const cf32* x, int n, const std::function<void(const float*, int)>& cb);
+
+    double sampleRate_;
+    Method method_;
+    int    bins_;
+    bool   enabled_ = false;
+    double offsetHz_ = 0.0, spanHz_ = 0.0, rateHz_ = 15.0;
+    int    decim_ = 1;
+
+    // Output stage, shared by both methods: collect `bins_` decimated samples, FFT, emit.
+    std::unique_ptr<ComplexFFT> fft_;
+    std::vector<float> win_, db_;
+    std::vector<cf32>  acc_;
+    int    accN_ = 0;
+    long long sinceEmit_ = 0, emitStride_ = 1;   // in DECIMATED samples
+
+    // Direct
+    NCO nco_;
+    std::vector<std::unique_ptr<FirDecimator>> decs_;
+    std::vector<cf32> mixBuf_, aBuf_, bBuf_;
+
+    // Shared
+    std::unique_ptr<Channelizer> chan_;
+    int chanBins_ = 0, centreBin_ = 0;
+    std::vector<cf32> chanOut_;
+};
+
 // ── Rational resampler (real/mono) ───────────────────────────────────────--
 // Polyphase up-by-L / down-by-M resampler giving an output rate of exactly
 // inRate*L/M, with L/M = outRate/inRate reduced. Used to land demod audio on an

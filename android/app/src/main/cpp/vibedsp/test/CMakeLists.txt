@@ -11,6 +11,7 @@ set(DSP ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(DSP_SRC
     ${DSP}/fft.cpp
     ${DSP}/channelizer.cpp
+    ${DSP}/zoomspec.cpp
     ${DSP}/ddc.cpp
     ${DSP}/resampler.cpp
     ${DSP}/stereo.cpp
@@ -27,6 +28,12 @@ target_compile_options(vibedsp_tests PRIVATE -O2 -Wall)
 # ★★★ Fast convolution (ka9q's architecture): one forward FFT, channels by slice + inverse FFT.
 # A wrong slice layout does not fail loudly — it tunes you somewhere else — so the test asserts
 # the recovered tone's FREQUENCY and amplitude, not merely its presence.
+# Both zoom methods must put the same tone in the same bin — that claim is what the VibeServer
+# setup copy tells the operator, so a failure here means the COPY is wrong too.
+add_executable(vibedsp_zoomspec_tests test_zoomspec.cpp ${DSP_SRC})
+target_include_directories(vibedsp_zoomspec_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_zoomspec_tests PRIVATE -O2 -Wall)
+
 add_executable(vibedsp_channelizer_tests test_channelizer.cpp ${DSP_SRC})
 target_include_directories(vibedsp_channelizer_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_channelizer_tests PRIVATE -O2 -Wall)
