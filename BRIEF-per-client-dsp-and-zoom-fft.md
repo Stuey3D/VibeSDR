@@ -101,3 +101,61 @@ span.
 - **Raising `fftSize`** — see §1, it does not scale.
 - **Touching the waterfall pan** — Stuart: *"took us ages to get it to the state its in, its
   responsive enough and works and is accurate."* Its lag is round-trip latency, not resolution.
+
+---
+
+## 7. THE SHARED-RECEIVER MODEL — decided 2026-08-02, mostly NOT built
+
+Settled in conversation while the Pi demo ran. The DSP half is done (§4, and the
+channelizer is measured); this is the product half.
+
+### 7.1 Two receiver modes, one flag
+`lockedCentre > 0` IS "shared receiver", and every behaviour below branches on it. It is already
+the gate for the shared channel method, so the paths cannot drift apart.
+
+| | Unlocked (personal) | Locked (shared) |
+|---|---|---|
+| Hardware control | the listener's | the OPERATOR's, nobody else's |
+| Admin arriving | **takes the session** (built) | **never evicts** — becomes slot N+1 |
+| Idle park | yes (the dongle is ~80% of battery) | **NO** — keeps the AGC converged (built) |
+| LOCKED/FREE VFO | moves the dongle | purely a view preference, as on Uber/Kiwi |
+
+### 7.2 Admin is an EXEMPTION, not an eviction
+Stuart: *"the admin simply becomes a hidden number 21 with elevated privileges."* On a
+one-at-a-time receiver taking the session is right — someone must yield. On a shared one there is
+nothing to yield, so admin is exempt from the CAP and the SESSION TIMER rather than entitled to
+displace anyone. ★ Hidden from the public count (it answers "can I get in", and the operator is
+not competing for a slot) but visible to the admin themselves.
+
+### 7.3 `--users N` becomes the actual cap
+It currently only picks the channel method. Stuart describes it as slots, so: N visitor slots,
+admin is N+1, and N > 1 implies the shared method. One number an operator understands.
+- ★★ **N IS A GUESS UNTIL THE UPLINK IS MEASURED.** The channelizer means DSP will not stop us
+  (+0.02%/listener) but the Pi's ceiling is BANDWIDTH ([[vibeserver_pi500_headless_tui]]). At
+  ~25-50 KB/s per listener, 20 listeners is 0.5-1 MB/s sustained UP. Measure 2-3 real clients
+  first — the sharing features have never run with two ([[vibeserver_sharing_limits]]).
+- ★ Count REMOTE listeners: an admin on loopback/LAN uses none of the uplink the cap protects.
+- ★ Lowering the cap must NOT evict — it applies to new joins; occupancy drains.
+
+### 7.4 The GUI moves into the clients; the TUI becomes bootstrap only
+Stuart: *"rather than a pretty unintuitive TUI, use that to set up basic settings then the GUI for
+the server could be in the client and app behind the admin password."* One admin UI instead of two
+that drift, and it matches how Kiwi and OpenWebRX work.
+- **TUI keeps only**: radio, centre + rate, port, admin password. ★★ AND A PASSWORD RESET — once
+  the password is the only way in, losing it locks the operator out of their own receiver. The
+  local console is the escape hatch.
+- **Clients gain** a RADIO section (centre, rate, gain, filters — changes what every listener sees
+  RIGHT NOW) and a SERVER section (slots, session limit, fps cap, uncompressed policy).
+- ★★ A radio change RESTARTS the engine and moves the band under everyone. Say so before doing it
+  — "this will move the band for 14 listeners". An unexplained transient reads as a fault.
+- ★★★ **PERSISTENCE IS THE TRAP**: every setting is a startup flag today. An operator lowers a
+  limit from their phone, the Pi reboots, and it silently reverts to what systemd passes. Either
+  write back to the config the service reads, or SAY it lasts until restart.
+- ✅ Safe to expose: admin unlock is already **HMAC(adminSecret, nonce)** — the same
+  challenge-response as the PIN, so the secret never crosses the wire even on plain HTTP.
+- ★★★ **SET AN ADMIN PASSWORD ON THE PI BEFORE ANY PUBLIC LINK.** It currently has none and says
+  so at startup; bias-T, direct sampling and calibration are open to anyone who can reach it.
+
+### 7.5 Landing screen
+A live listener count (and capacity — "3 listening" means nothing without knowing if that is full).
+The identity endpoint already carries `isBusy` / `occupantSecsLeft`; both need to become counts.
