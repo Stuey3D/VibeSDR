@@ -771,26 +771,50 @@ function WaterfallView({
   // (one shared-value write per line, display idles between); boost = vsync
   // withTiming for the continuous glide. All the old lerp buffers, row pools
   // and per-line texture pushes are GONE.
-  const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopRevealStepper = useCallback(() => {
-    if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; }
+  // ★★ THE SAME MOVE AS THE SPECTRUM TWEEN: this advanced `scrollFrac` from a JS `setInterval`,
+  // so the waterfall's reveal was as hostage to a busy JS thread as the trace was. It never
+  // SHOWED the fault the way the trace did, because it writes DISCRETE whole-line steps — a late
+  // step lands a line early or late, where a late interpolation tick is visibly uneven motion.
+  // Latent rather than harmless, so it moves for the same reason.
+  // ★ Same two properties as the tween, and for the same reasons: it holds its own step cadence
+  // rather than running at the display rate, and it DEACTIVATES when the reveal completes so an
+  // idle waterfall never pins a ProMotion panel's refresh rate.
+  const revN     = useSharedValue(0);
+  const revStep  = useSharedValue(16);   // ms per line
+  const revK     = useSharedValue(0);
+  const revAcc   = useSharedValue(0);
+  const revealRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
+  const setRevealActive = useCallback((on: boolean) => {
+    const t = revealRef.current;
+    if (t && t.isActive !== on) t.setActive(on);
   }, []);
+  const stopRevealStepper = useCallback(() => { setRevealActive(false); }, [setRevealActive]);
+
+  const revealCb = useFrameCallback((fi) => {
+    'worklet';
+    revAcc.value += fi.timeSincePreviousFrame ?? 16;
+    if (revAcc.value < revStep.value) return;
+    revAcc.value = 0;
+    const n = revN.value;
+    if (n <= 0) { runOnJS(setRevealActive)(false); return; }
+    revK.value += 1;
+    scrollFrac.value = Math.min(1, revK.value / n);
+    if (revK.value >= n) runOnJS(setRevealActive)(false);
+  }, false);
+  revealRef.current = revealCb;
 
   const startRevealStepper = useCallback((n: number, intervalMs: number) => {
-    stopRevealStepper();
     scrollFrac.value = 0;
-    if (n <= 1) { scrollFrac.value = 1; return; } // native: one whole-line step
-    let k = 0;
-    revealTimer.current = setInterval(() => {
-      k++;
-      scrollFrac.value = Math.min(1, k / n);
-      if (k >= n) stopRevealStepper();
-    }, Math.max(16, intervalMs / n));
+    if (n <= 1) { scrollFrac.value = 1; setRevealActive(false); return; } // one whole-line step
+    revN.value = n;
+    revStep.value = Math.max(16, intervalMs / n);
+    revK.value = 0;
+    revAcc.value = 0;
+    setRevealActive(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stopRevealStepper]);
+  }, [setRevealActive]);
 
-  useEffect(() => stopRevealStepper, [stopRevealStepper]); // clear on unmount
+  useEffect(() => stopRevealStepper, [stopRevealStepper]); // stop on unmount
 
   // ── Background gate ────────────────────────────────────────────────────────
   // On background/inactive: cancel any in-flight scroll glide and kill the
