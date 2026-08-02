@@ -63,6 +63,7 @@ import {
 import {
   useSharedValue,
   useDerivedValue,
+  useFrameCallback,
   withTiming,
   cancelAnimation,
   Easing,
@@ -516,64 +517,141 @@ function WaterfallView({
   // path per frame would make the trace a slideshow. Instead the displayed
   // trace eases toward the latest frame on 33ms ticks and the timer STOPS once
   // converged, so between frames the display idles.
-  const specToRef   = useRef<Float32Array | null>(null);
-  const specDispRef = useRef<Float32Array | null>(null);
-  const tweenTimer  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // ★★★ THE TWEEN RUNS ON THE UI THREAD. It was a `setInterval`, which runs on the JS thread —
+  // so the trace's smoothness was hostage to whatever else JavaScript was doing, and any big panel
+  // re-rendering jerked it. Stuart's measurement is what identified it: with a panel open "it is
+  // only the trace, waterfall is perfect" (2026-08-02). The waterfall is a shader whose uniforms
+  // are driven from the UI thread and it never stuttered; this was the one piece of the display
+  // still depending on JS being free 30 times a second.
+  // ★ It was NOT that the drawing was on the CPU — Skia rasterises the trace on the GPU either
+  // way. What sat on the JS thread was building the geometry: interpolating every bin and
+  // constructing the SkPath. That is what moves here.
+  // ★★ These are shared values, not refs: a worklet cannot reach a React ref.
+  const specToSv   = useSharedValue<number[]>([]);
+  const specDispSv = useSharedValue<number[]>([]);
+  // Layout the worklet needs, mirrored where it can read them.
+  const uSpecW    = useSharedValue(0);   // float width (the sampling ratio uses it)
+  const uSpecTop  = useSharedValue(0);   // baseline = wfTop
+  const uSpecHt   = useSharedValue(0);   // trace height
+  const uAvgMs    = useSharedValue(150); // measured data-frame interval
+  /** ★★ POINT POOL, mutated in place — the same reasoning as the JS version it replaces:
+   *  allocating fresh {x,y}s per build fed the GC ~12k objects/s. It just lives on the UI
+   *  thread now. */
+  const specPoolSv = useSharedValue<{ x: number; y: number }[]>([]);
 
-  // Path builder in a ref so the tween tick never closes over stale layout.
-  // addPoly = ONE JSI call for the whole polyline. Points come from a POOL of
-  // mutated-in-place objects: allocating fresh {x,y}s per build (×30Hz tween)
-  // fed the Hermes GC ~12k objects/s — profiling showed HadesGC at ~18% of all
-  // CPU samples. Trace sampled every 2px — the data is smoothed, identical look.
+  // addPoly = ONE JSI call for the whole polyline, and the points come from a POOL of
+  // mutated-in-place objects: allocating fresh {x,y}s per build (×30Hz) fed the Hermes GC ~12k
+  // objects/s — profiling showed HadesGC at ~18% of all CPU samples. Both still hold; the spectrum
+  // pool simply lives on the UI thread now (specPoolSv). Trace sampled every 2px — the data is
+  // smoothed, so the look is identical.
+  // ★ THE PEAK TRACE STAYS ON JS DELIBERATELY. It is rebuilt once per DATA frame, not per display
+  //   frame, so it was never part of the smoothness problem — and it is only drawn at all when
+  //   peak hold is on. Moving it too would be churn for no measured gain.
   const SPEC_PX_STEP = 2;
-  const specPtsPool = useRef<{ x: number; y: number }[]>([]);
   const peakPtsPool = useRef<{ x: number; y: number }[]>([]);
-  const buildSpecPathRef = useRef<(spec: Float32Array) => SkPath>(null as never);
-  buildSpecPathRef.current = (spec: Float32Array) => {
-    const sLen = spec.length;
-    const baseline = wfTop;
-    const w = Math.floor(width);
-    const count = Math.ceil(w / SPEC_PX_STEP) + 2;
-    const pool = specPtsPool.current;
-    while (pool.length < count) pool.push({ x: 0, y: 0 });
-    if (pool.length > count) pool.length = count;
-    let k = 0;
-    pool[k].x = 0; pool[k].y = baseline; k++;
-    for (let px = 0; px < w; px += SPEC_PX_STEP) {
-      const v = spec[Math.floor((px / width) * sLen)];
-      pool[k].x = px; pool[k].y = baseline - v * specH; k++;
-    }
-    pool[k].x = w; pool[k].y = baseline;
-    const sp = Skia.Path.Make();
-    sp.addPoly(pool, true); // addPoly copies synchronously — pool reuse is safe
-    return sp;
-  };
 
-  const stopSpecTween = useCallback(() => {
-    if (tweenTimer.current) { clearInterval(tweenTimer.current); tweenTimer.current = null; }
+
+  // Keep the worklet's view of the layout current.
+  useEffect(() => {
+    uSpecW.value = width; uSpecTop.value = wfTop; uSpecHt.value = specH;
+  }, [width, wfTop, specH, uSpecW, uSpecTop, uSpecHt]);
+
+  // ★★★ TWO PERSISTENT PATHS, ALTERNATED — NOT ONE ALLOCATED PER TICK.
+  // An SkPath holds native memory Hermes cannot see, which is why the JS path swap disposes on a
+  // 300 ms grace (see swapPath). A worklet has no setTimeout and cannot schedule that, so
+  // allocating a fresh path 60 times a second on the UI thread would leak exactly the way this
+  // file already warns about. Instead: two paths made once, reset() and rebuilt in place, and
+  // handed to the shared value alternately. Nothing is allocated, nothing needs disposing, and
+  // the object IDENTITY still changes every tick, which is what makes Skia repaint.
+  const specPathA = useMemo(() => Skia.Path.Make(), []);
+  const specPathB = useMemo(() => Skia.Path.Make(), []);
+  const specFlip  = useSharedValue(false);
+  useEffect(() => () => { try { specPathA.dispose(); specPathB.dispose(); } catch {} },
+            [specPathA, specPathB]);
+
+  /** Accumulated display time since the last rebuild — see the cadence note in the callback. */
+  const specAccSv = useSharedValue(0);
+
+  /** ★ Declared BEFORE the worklet on purpose. A Reanimated worklet captures its closure when it
+   *  is CREATED, so a `const` defined further down would be captured in the temporal dead zone.
+   *  The handle itself only exists after useFrameCallback returns, hence the ref. */
+  const specTweenRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
+  const setSpecTweenActive = useCallback((on: boolean) => {
+    const t = specTweenRef.current;
+    if (t && t.isActive !== on) t.setActive(on);   // checked so a 20/s data frame cannot thrash it
   }, []);
+  const stopSpecTween = useCallback(() => { setSpecTweenActive(false); }, [setSpecTweenActive]);
 
-  const startSpecTween = useCallback(() => {
-    if (tweenTimer.current) return;
-    tweenTimer.current = setInterval(() => {
-      const to = specToRef.current, disp = specDispRef.current;
-      if (!to || !disp || to.length !== disp.length) { stopSpecTween(); return; }
-      // Time-constant ≈ ⅓ of the measured frame interval — the trace settles
-      // comfortably before the next frame at any poll divisor.
-      const k = 1 - Math.exp(-SPEC_TWEEN_MS / Math.max(40, avgFrameMs.current * 0.35));
-      let maxDelta = 0;
-      for (let i = 0; i < disp.length; i++) {
-        const d = to[i] - disp[i];
-        disp[i] += d * k;
-        const a = Math.abs(d);
-        if (a > maxDelta) maxDelta = a;
-      }
-      swapPath(specPath, buildSpecPathRef.current(disp)); // UI-thread — no React render
-      if (maxDelta < 0.002) stopSpecTween(); // converged — let the display idle
-    }, SPEC_TWEEN_MS);
-  }, [stopSpecTween]);
+  const specTween = useFrameCallback((fi) => {
+    'worklet';
+    // No busy flag needed: the callback is DEACTIVATED when settled (see below), so it is not
+    // running at all rather than running and returning.
+    // ★★★ HOLD THE OLD 33 ms CADENCE, do not run at the display rate. useFrameCallback fires on
+    // EVERY display frame — 120 of them a second on ProMotion, against the 30 the interval gave.
+    // Rebuilding the path four times as often would swap a JS-thread problem for a UI-thread one,
+    // which is the version of this bug that would be much harder to see coming. The interpolation
+    // is time-based, so ticking at the same rate reproduces the previous motion exactly.
+    specAccSv.value += fi.timeSincePreviousFrame ?? SPEC_TWEEN_MS;
+    if (specAccSv.value < SPEC_TWEEN_MS) return;
+    const dtAcc = specAccSv.value;
+    specAccSv.value = 0;
+    const to = specToSv.value, disp = specDispSv.value;
+    const n = to.length;
+    if (!n || disp.length !== n) return;
+    const w = uSpecW.value, baseline = uSpecTop.value, sh = uSpecHt.value;
+    if (w <= 0 || sh <= 0) return;
 
-  useEffect(() => stopSpecTween, [stopSpecTween]); // clear on unmount
+    // Same control law as the interval version, but against the REAL elapsed time rather than a
+    // nominal 33 ms: a dropped frame then eases by the right amount instead of falling behind,
+    // which a fixed interval could not know about.
+    const k = 1 - Math.exp(-dtAcc / Math.max(40, uAvgMs.value * 0.35));
+    let maxDelta = 0;
+    for (let i = 0; i < n; i++) {
+      const d = to[i] - disp[i];
+      disp[i] += d * k;
+      const a = d < 0 ? -d : d;
+      if (a > maxDelta) maxDelta = a;
+    }
+    // ★★ WRITE IT BACK. Whether `.value` hands out the stored array or a copy of it is an
+    // implementation detail of the shared-value plumbing, and the failure mode if it is a copy is
+    // silent: the interpolation would be thrown away every tick and the trace would never settle.
+    // Reassigning is correct under either behaviour, and this runs on the UI thread where the
+    // whole point is that spending a little is free.
+    specDispSv.value = disp;
+
+    const wi = Math.floor(w);
+    const count = Math.ceil(wi / SPEC_PX_STEP) + 2;
+    let pool = specPoolSv.value;
+    if (pool.length !== count) {
+      const fresh: { x: number; y: number }[] = [];
+      for (let i = 0; i < count; i++) fresh.push({ x: 0, y: 0 });
+      specPoolSv.value = fresh; pool = fresh;
+    }
+    let j = 0;
+    pool[j].x = 0; pool[j].y = baseline; j++;
+    for (let px = 0; px < wi; px += SPEC_PX_STEP) {
+      const v = disp[Math.floor((px / w) * n)];
+      pool[j].x = px; pool[j].y = baseline - v * sh; j++;
+    }
+    pool[j].x = wi; pool[j].y = baseline;
+
+    const path = specFlip.value ? specPathA : specPathB;
+    path.reset();
+    path.addPoly(pool, true);
+    specFlip.value = !specFlip.value;
+    specPath.value = path;
+
+    // ★★★ CONVERGED — STOP THE CALLBACK, do not merely return early from it.
+    // An ACTIVE useFrameCallback drives a CADisplayLink every display frame, and that PINS a
+    // ProMotion panel's refresh rate: the display can no longer drop to its low idle rate, which
+    // costs battery for nothing while the trace is settled and unchanging. The interval version
+    // got this right by stopping itself, and losing it would have been an invisible regression —
+    // Stuart: "if we can maintain the VRR on promotion screens that is a big win for battery
+    // life." So the whole callback goes inactive and the display is free to idle down again.
+    // ★ runOnJS is fine here: it fires ONCE per convergence, not per frame.
+    if (maxDelta < 0.002) { specAccSv.value = 0; runOnJS(setSpecTweenActive)(false); }
+  }, false);   // autostart OFF — started on the first data frame
+  specTweenRef.current = specTween;
 
   // pushRow reads the view from a ref, so keep it current.
   useEffect(() => { viewRef.current = { centerHz, bwHz }; }, [centerHz, bwHz]);
@@ -825,6 +903,7 @@ function WaterfallView({
       // slowdown. The jitter buffer's prefill/hold covers the pause; the estimate re-converges after.
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
+      uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
     }
     lastFrameTs.current = now;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
@@ -890,16 +969,13 @@ function WaterfallView({
       // shifts and the small easing lag is invisible; on release the tween eases to the new view.
       {
         // Retarget the tween at the latest frame.
-        if (!specToRef.current || specToRef.current.length !== frame.spec.length) {
-          specToRef.current = Float32Array.from(frame.spec);
-        } else {
-          specToRef.current.set(frame.spec);
-        }
-        if (!specDispRef.current || specDispRef.current.length !== frame.spec.length) {
-          specDispRef.current = Float32Array.from(frame.spec);
-          swapPath(specPath, buildSpecPathRef.current(specDispRef.current));
-        }
-        startSpecTween();
+        // ★ Array.from, because a worklet cannot be handed a Float32Array — the shared value has to
+        //   carry a plain array. This is once per DATA frame (~20/s), replacing thirty path builds
+        //   a second on this thread, so the JS thread is left far quieter than before.
+        const next = Array.from(frame.spec);
+        specToSv.value = next;
+        if (specDispSv.value.length !== next.length) specDispSv.value = Array.from(next);
+        setSpecTweenActive(true);   // idle → running; a no-op while it already is
       }
 
       if (cfg.peakHold && !boost) {
@@ -931,7 +1007,13 @@ function WaterfallView({
       // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
       // fall all the way to the data rate.
       stopSpecTween();
-      swapPath(specPath, Skia.Path.Make());
+      // ★★★ CLEAR IT, DO NOT swapPath IT. swapPath DISPOSES the outgoing path, and since the tween
+      // moved to the UI thread the outgoing path is one of the two PERSISTENT buffers the worklet
+      // resets and reuses every tick — disposing it would hand the worklet a dead native object
+      // the next time the spectrum came back. Emptying in place is what "draw nothing" needs
+      // anyway, and it leaves both buffers valid.
+      specPathA.reset(); specPathB.reset();
+      specPath.value = specPathA;
       swapPath(peakPath, Skia.Path.Make());
     }
 
