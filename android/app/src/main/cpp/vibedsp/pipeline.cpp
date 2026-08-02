@@ -355,7 +355,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                                         : ZoomSpectrum::Method::Direct,
                         zoomBins_.load(std::memory_order_relaxed));
                 if (zoomLog_) zoom_->setLog(zoomLog_);
-                zoom_->configure(zoomOffReq_.load(std::memory_order_relaxed), span, fftRate_);
+                zoom_->configure(zoomOffReq_.load(std::memory_order_relaxed), span,
+                                 zoomRateReq_.load(std::memory_order_relaxed));
                 zoomSpanOut_.store(zoom_->spanHz(), std::memory_order_relaxed);
             }
         }
@@ -585,7 +586,11 @@ void RxPipeline::stop() {
 
 /** Thread-safe request; the DSP thread applies it in feed(). Only a CHANGE marks dirty, so a
  *  client that resends its view every frame does not rebuild filters 20 times a second. */
-void RxPipeline::setZoomView(double offsetHz, double spanHz) {
+void RxPipeline::setZoomView(double offsetHz, double spanHz, double rateHz) {
+    if (rateHz > 0.0) {
+        const double old = zoomRateReq_.exchange(rateHz, std::memory_order_relaxed);
+        if (old != rateHz) zoomDirty_.store(true, std::memory_order_release);
+    }
     if (spanHz <= 0.0) {
         if (zoomSpanReq_.exchange(0.0, std::memory_order_relaxed) != 0.0)
             zoomDirty_.store(true, std::memory_order_release);

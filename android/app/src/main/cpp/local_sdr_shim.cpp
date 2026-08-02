@@ -1490,8 +1490,11 @@ struct LocalSdrShim::Impl {
         //     it (`- hwOffsetBin` in onSpectrum); the zoom path did not, and the whole spectrum
         //     sat 15 kHz off (Stuart, 2026-08-02: "spectrum misaligned"). Same term, same
         //     mistake, second place today — see the tuneHw note in startEngine.
-        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load() - HW_OFFSET_HZ, shown);
-        else      rx.setZoomView(0.0, 0.0);
+        // ★★ `fftRate` is the CLIENT-facing rate. rx's own fftRate_ is FFT_AVG times higher —
+        //    the wide path averages that back down, the zoom path does not, so passing the engine
+        //    rate here emitted FFT_AVG frames for every one asked for.
+        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load() - HW_OFFSET_HZ, shown, fftRate);
+        else      rx.setZoomView(0.0, 0.0, fftRate);
         // Speaks on the TRANSITION only. The wide path is suppressed while the zoom path owns the
         // waterfall, so "zoom engaged" and "no frames" together means a BLANK display — which is
         // exactly the failure worth being able to see in a log rather than deduce.
