@@ -394,6 +394,8 @@ static std::atomic<double> g_vsLockedRate{0.0};
 static std::atomic<double> g_vsLockedCentre{0.0};
 // Channel method: false = Direct (per-client DDC), true = Shared (fast convolution). Startup only.
 static std::atomic<bool>   g_vsSharedChannels{false};
+// Zoom spectrum on/off. It SUPPRESSES the wide path while active, so it needs an off switch.
+static std::atomic<bool>   g_vsZoomSpectrum{true};
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -1263,6 +1265,16 @@ struct LocalSdrShim::Impl {
         const double vfo = audioFreq.load();
         const double cur = rtlCenter.load();
 
+        // ★★★ A LOCKED CENTRE NEVER MOVES — AND THIS IS THE PATH THAT WAS STILL MOVING IT.
+        //     retune() honours the lock, but a PAN or ZOOM does not go through retune(): it comes
+        //     here and retunes the hardware itself. So with the client's VFO CENTRE set to LOCKED
+        //     — where every tune sends a zoom — tuning still dragged the radio, and rtlCenter with
+        //     it. Every frequency in the zoom spectrum is measured FROM rtlCenter, which is why
+        //     the display drifted while the audio (which re-derives its offset each time) stayed
+        //     right (Stuart, 2026-08-02). Half a lock is not a lock: guard every path that tunes.
+        const double lockC = g_vsLockedCentre.load();
+        if (lockC > 0.0) return lockC;
+
         // The VFO must stay inside the usable capture.
         double lo = vfo - lim;
         double hi = vfo + lim;
@@ -1469,7 +1481,9 @@ struct LocalSdrShim::Impl {
         //     (Stuart, 2026-08-02: "it worked and then froze as i zoomed in"). Re-applying it here
         //     is cheap: setZoomBins only rebuilds when the number actually changes.
         rx.setZoomBins(g_vsOutBins.load());
-        const bool want = !useSpy() && step < 1.0 && shown > 0.0;
+        // ★ A KILL SWITCH. The zoom path SUPPRESSES the wide one, so any fault in it takes the
+        //   waterfall with it. Off = the server behaves exactly as it did before any of this.
+        const bool want = !useSpy() && g_vsZoomSpectrum.load() && step < 1.0 && shown > 0.0;
         // ★★★ MINUS HW_OFFSET_HZ. The IQ the engine sees is baseband around the PHYSICAL DC,
         //     which offset tuning puts HW_OFFSET_HZ ABOVE rtlCenter — so a view offset measured
         //     from rtlCenter is wrong by exactly that much. The wide path has always subtracted
@@ -1483,8 +1497,13 @@ struct LocalSdrShim::Impl {
         // exactly the failure worth being able to see in a log rather than deduce.
         if (want != zoomWasOn_) {
             zoomWasOn_ = want;
-            LOGI("zoom spectrum %s (view %.1f kHz, step %.3f, delivered %.1f kHz)",
-                 want ? "ENGAGED" : "released", shown / 1e3, step, rx.zoomSpanHz() / 1e3);
+            LOGI("zoom spectrum %s: view %.6f MHz, span %.3f kHz, step %.3f | "
+                 "rtlCentre %.6f MHz, offset %.3f kHz, hwOff %.1f kHz",
+                 want ? "ENGAGED" : "released",
+                 viewCenter.load() / 1e6, shown / 1e3, step,
+                 rtlCenter.load() / 1e6,
+                 (viewCenter.load() - rtlCenter.load() - HW_OFFSET_HZ) / 1e3,
+                 HW_OFFSET_HZ / 1e3);
             zoomFrames_ = 0;
         }
     }
@@ -4717,6 +4736,7 @@ void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); 
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }
 void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
+void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
 
