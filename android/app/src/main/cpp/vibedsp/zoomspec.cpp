@@ -145,7 +145,18 @@ void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const fl
             }
             cb(out_.data(), bins_);
         }
-        accN_ = 0;      // non-overlapping windows: this is a display, not a detector
+        // ★★★ OVERLAPPING WINDOWS — SLIDE, DO NOT RESET. Resolution needs a LONG window, but a
+        //     non-overlapping one also sets the frame rate: at deep zoom the decimated rate is low,
+        //     so one window takes ages and the waterfall crawls no matter what rate was asked for
+        //     (Stuart, 2026-08-02: 7.9 fps against a requested 20, and the app's speed buttons
+        //     doing nothing because the frames were not there to pace). Sliding by hopOut decouples
+        //     the two: the window stays 8192 samples long, so the BINS ARE UNCHANGED, while frames
+        //     arrive every hopOut samples. That is how a waterfall scrolls fast AND stays sharp.
+        //     ★ The FFT is small and rare enough that the extra transforms are noise next to the
+        //       forward FFT — but hopOut is floored at fftN_/16 so this cannot run away.
+        const int hopOut = std::max(fftN_ / 16, std::min((int)emitStride_, fftN_));
+        std::memmove(acc_.data(), acc_.data() + hopOut, (size_t)(fftN_ - hopOut) * sizeof(cf32));
+        accN_ = fftN_ - hopOut;
     }
 }
 
