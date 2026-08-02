@@ -566,8 +566,26 @@ function WaterfallView({
   const specPathA = useMemo(() => Skia.Path.Make(), []);
   const specPathB = useMemo(() => Skia.Path.Make(), []);
   const specFlip  = useSharedValue(false);
-  useEffect(() => () => { try { specPathA.dispose(); specPathB.dispose(); } catch {} },
-            [specPathA, specPathB]);
+  /** ★★★ SET ON UNMOUNT, CHECKED BY BOTH WORKLETS FIRST. A frame callback runs on the UI thread
+   *  and does NOT stop just because React tore the component down: one more tick can land after
+   *  the cleanup has run, and the first thing the tween does is reset() and rebuild one of the two
+   *  paths. If those had already been disposed that is a use-after-free on a native object — from
+   *  the UI thread, with the JS side already gone. */
+  const specDead = useSharedValue(false);
+  useEffect(() => () => {
+    // ★ ORDER MATTERS AND SO DOES THE DELAY.
+    //   1. tell the worklets to do nothing more — they check this before touching anything;
+    //   2. deactivate the callbacks so they stop being scheduled at all;
+    //   3. dispose LATER. A frame may already be executing on the UI thread at this instant, and
+    //      freeing the paths underneath it is precisely the race being closed. 300 ms is the same
+    //      grace swapPath() has always used for exactly this reason — see it above.
+    specDead.value = true;
+    try { specTweenRef.current?.setActive(false); } catch {}
+    try { revealRef.current?.setActive(false); } catch {}
+    const a = specPathA, b = specPathB;
+    setTimeout(() => { try { a.dispose(); b.dispose(); } catch {} }, 300);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specPathA, specPathB]);
 
   /** Accumulated display time since the last rebuild — see the cadence note in the callback. */
   const specAccSv = useSharedValue(0);
@@ -584,6 +602,7 @@ function WaterfallView({
 
   const specTween = useFrameCallback((fi) => {
     'worklet';
+    if (specDead.value) return;   // component is gone — see specDead
     // No busy flag needed: the callback is DEACTIVATED when settled (see below), so it is not
     // running at all rather than running and returning.
     // ★★★ HOLD THE OLD 33 ms CADENCE, do not run at the display rate. useFrameCallback fires on
@@ -792,6 +811,7 @@ function WaterfallView({
 
   const revealCb = useFrameCallback((fi) => {
     'worklet';
+    if (specDead.value) return;   // component is gone — see specDead
     revAcc.value += fi.timeSincePreviousFrame ?? 16;
     if (revAcc.value < revStep.value) return;
     revAcc.value = 0;
