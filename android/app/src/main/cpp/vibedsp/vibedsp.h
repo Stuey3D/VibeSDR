@@ -1099,6 +1099,21 @@ private:
     std::unique_ptr<ComplexFFT> cfft_;
     std::vector<float> win_, specBuf_, specDb_;
     int specFill_ = 0;          // samples gathered toward the next frame
+    // ── Overlapping spectrum window ────────────────────────────────────────
+    // ★★★ WHY THIS IS A RING AND NOT A GATHER. Disjoint blocks cap the frame rate at
+    // sampleRate/fftSize, because each frame consumes fftSize fresh samples and there are
+    // only so many per second. At 912 kHz with a 16384-point FFT that ceiling is 55.7
+    // FFTs/s, which after FFT_AVG=4 emits 13.9 fps — and it is exactly why 20 fps was asked
+    // for and ~14 arrived on every client, for months, looking like a throttle. Nothing was
+    // throttling: we were asking for 1.31 M samples/s from a radio that supplies 912 k.
+    // Overlapping decouples the two — a frame every `stride` samples, each one FFT-ing the
+    // most recent fftSize, so the rate is limited by CPU rather than by arithmetic.
+    // ★ The cost is one copy per FRAME (not per sample — that is the O(n*fftSize) trap the
+    // original comment rightly avoided): ~2.6 MB/s at 20 fps, next to nothing.
+    std::vector<float> specRing_;   // fftSize complex samples, most-recent-wins
+    int       specRingW_    = 0;    // write cursor (in complex samples)
+    long long specRingFill_ = 0;    // samples seen since reset — warm-up guard
+    long long sinceEmit_    = 0;    // samples since the last frame
     // Input samples between emitted frames. Atomic: setFftRate() writes it from
     // the control thread while feed() reads it on the DSP thread.
     std::atomic<int> specStride_{0};
