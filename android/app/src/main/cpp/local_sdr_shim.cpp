@@ -1876,15 +1876,16 @@ struct LocalSdrShim::Impl {
             else if (a < 1e-4f)  ++quiet;
         }
         // Returns true and fills `out` once a second IF the second was faulty.
-        bool tick(double nowMs, char* out, size_t cap) {
+        bool tick(double nowMs, char* out, size_t cap, const char* stage) {
             if (tMs == 0.0) { tMs = nowMs; return false; }
             if (nowMs - tMs < 1000.0 || n == 0) return false;
             const double nf = 100.0 * (double)nonFinite / (double)n;
             const double rl = 100.0 * (double)railed    / (double)n;
             const double qt = 100.0 * (double)quiet     / (double)n;
             const bool bad = nonFinite > 0 || rl > 20.0 || qt > 95.0;
-            if (bad) snprintf(out, cap, "AUDIO AUDIT: nonfinite %.1f%% railed %.1f%% quiet %.1f%% (n=%lld)",
-                              nf, rl, qt, n);
+            if (bad) snprintf(out, cap, "AUDIO AUDIT: nonfinite %.1f%% railed %.1f%% quiet %.1f%% (n=%lld)%s%s",
+                              nf, rl, qt, n,
+                              stage ? " ORIGIN=" : "", stage ? stage : "");
             n = nonFinite = railed = quiet = 0; tMs = nowMs;
             return bad;
         }
@@ -1898,7 +1899,10 @@ struct LocalSdrShim::Impl {
             char line[160];
             const double nowMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
-            if (audit.tick(nowMs, line, sizeof line)) LOGI("%s", line);
+            // ★ ORIGIN= names the pipeline stage that first went non-finite. Guards make the
+            // fault self-healing, but healing is not diagnosis — this is what identifies the
+            // stage that actually PRODUCES the NaN, so it can be fixed at source.
+            if (audit.tick(nowMs, line, sizeof line, rx.faultStage())) LOGI("%s", line);
         }
         // Feed the audio-extension decoder (mono int16) — runs even with no audio
         // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
