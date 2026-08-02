@@ -552,7 +552,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 
   return (
     <View style={[s.wrap, { bottom: p.bottomOffset }]}>
-      <View style={[s.inner, { maxHeight: maxH }]}>
+      {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
+          column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
+          stacked where only the fields and the 310-wide symbol trace have to fit. */}
+      <View style={[s.inner, { maxHeight: maxH, maxWidth: wideCols ? 760 : 560 }]}>
         {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
             it. The control island next to it has used BlurView since it was built, which is
             exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
@@ -724,10 +727,15 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 }
 
 const s = StyleSheet.create({
-  wrap:  { position: 'absolute', left: 8, right: 8, zIndex: 200 },
+  // ★★ CENTRED, AND CAPPED BY ITS CONTENT — the panel used to stretch to whatever was available,
+  //   so on a Mac it was a column of text against a metre of empty box (Stuart: "needs to be
+  //   centre justified so the box doesn't end up huge like this"). Same rule as the control
+  //   island: content decides the width, the window only decides whether it fits.
+  wrap:  { position: 'absolute', left: 8, right: 8, zIndex: 200, alignItems: 'center' },
   inner: {
     // ★ NO backgroundColor here — the BlurView is the first child and an opaque parent would
     //   sit behind it doing the very blanking the blur exists to avoid.
+    width: '100%',
     borderWidth: 1, borderColor: C.border, borderRadius: 14,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.80, shadowRadius: 14, elevation: 16,
@@ -745,10 +753,18 @@ const s = StyleSheet.create({
   hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: 'rgba(255,160,0,0.60)' },
   hbtnTxtActive: { color: C.gold },
   body:  { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
-  // Wide: fields on the left at their natural width, plots beside them taking the rest.
+  // Wide: fields on the left at a FIXED width, plots beside them taking the rest.
+  // ★★ EXPLICIT WIDTH, NOT flexBasis + flexShrink. The first attempt used
+  // `flexBasis: 340, flexShrink: 1` for the fields and `flexGrow: 1` for the plots, and in build
+  // 51 the fields column collapsed to ~130 pt — every value wrapped onto three lines — while both
+  // columns still left dead space to the right, so neither the basis nor the grow resolved as
+  // intended. A definite width cannot be shrunk out from under the text, and `flex: 1` on the
+  // other column has one obvious meaning: take what is left.
+  // ★ 340 is the width the field rows were designed at, so the label/value columns keep the
+  // proportions they have in the stacked layout rather than being re-tuned for this one.
   bodyWide:  { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },
-  colFields: { flexGrow: 0, flexShrink: 1, flexBasis: 340, gap: 3 },
-  colPlots:  { flexGrow: 1, flexShrink: 1, flexBasis: 330 },
+  colFields: { width: 340, gap: 3 },
+  colPlots:  { flex: 1, minWidth: 320 },
   rawNote: { fontFamily: FONT, fontSize: 10, color: C.warn, marginBottom: 6, lineHeight: 14 },
   row:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   // ★ The label column is FIXED and the value WRAPS. Letting the label wrap instead was what

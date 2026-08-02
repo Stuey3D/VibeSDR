@@ -27,15 +27,48 @@ const Vibe = NativeModules.VibePowerModule as {
 const USE_NATIVE_PUMP = Platform.OS === 'android';
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+/** ★★ A 4096-entry table of the 64x64 TWO-character pairs, built once. Encoding then handles
+ *  12 bits per lookup instead of 6, which halves the indexing and the concatenations. */
+const B64_PAIRS: string[] = (() => {
+  const t = new Array<string>(4096);
+  for (let i = 0; i < 64; i++) for (let j = 0; j < 64; j++) t[(i << 6) | j] = B64[i] + B64[j];
+  return t;
+})();
+/**
+ * ★★★ THIS IS ON THE AUDIO HOT PATH, AND UNCOMPRESSED AUDIO MADE IT ~23x BUSIER.
+ * iOS reads /ws/audio in JS and hands each packet to native as base64 (Android never comes
+ * through here — its native pump reads the socket in Kotlin). With Opus that is ~8 KB/s and the
+ * cost is irrelevant; with raw PCM it is ~187 KB/s, so the encoder went from a rounding error to
+ * a per-packet cost on the same JS thread everything else contends for.
+ * ★ Two changes, both about the ALLOCATION rather than the arithmetic:
+ *   • a 12-bit pair table, so each step emits two characters from one lookup;
+ *   • chunked into an array joined at the end, so a long packet never builds one ever-growing
+ *     string — the failure mode that turns an O(n) encode into something much worse.
+ * ★★ The real fix is a NATIVE iOS audio pump, as Android has, so the bytes never reach JS at all.
+ * That is a bigger piece of work and it cannot be compile-checked on this Mac; this is the safe
+ * part of it. Measure before assuming this is enough for raw PCM.
+ */
 function bytesToBase64(b: Uint8Array): string {
-  let out = '';
-  for (let i = 0; i < b.length; i += 3) {
-    const n = (b[i] << 16) | ((i + 1 < b.length ? b[i + 1] : 0) << 8) | (i + 2 < b.length ? b[i + 2] : 0);
-    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] +
-           (i + 1 < b.length ? B64[(n >> 6) & 63] : '=') +
-           (i + 2 < b.length ? B64[n & 63] : '=');
+  const n = b.length;
+  const parts: string[] = [];
+  const CHUNK = 3 * 2048;                 // a multiple of 3, so padding only ever occurs at the end
+  for (let off = 0; off < n; off += CHUNK) {
+    const end = Math.min(off + CHUNK, n);
+    let out = '';
+    let i = off;
+    for (; i + 2 < end; i += 3) {
+      const v = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2];
+      out += B64_PAIRS[v >> 12] + B64_PAIRS[v & 4095];
+    }
+    // Tail: 1 or 2 bytes left over — only ever at the very end of the packet.
+    if (i < end) {
+      const rem = end - i;
+      const v = (b[i] << 16) | ((rem > 1 ? b[i + 1] : 0) << 8);
+      out += B64_PAIRS[v >> 12] + (rem > 1 ? B64[(v >> 6) & 63] + '=' : '==');
+    }
+    parts.push(out);
   }
-  return out;
+  return parts.join('');
 }
 
 export interface LocalAudioPlayerProps {
