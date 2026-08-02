@@ -275,6 +275,17 @@ export interface AudioSheetProps {
   notchOn?: boolean;
   onNotch?: (on: boolean) => void;
 
+  /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
+   *  properties of the radio — they act on OUR demodulator, which is why they applied to a
+   *  SpyServer too where most of that panel does not. The web client has always grouped them
+   *  with volume, uncompressed audio, NR and the auto-notch, and the app had them under the
+   *  radio's cog; Stuart, 2026-08-02: "to better line up with the web client… in the web client
+   *  these buttons are where they should be." Moved (from LocalHardwarePanel §FM DE-EMPHASIS). */
+  deemph?: number;             // FM de-emphasis tau, SECONDS (0 = off, 50e-6, 75e-6)
+  onDeemph?: (tau: number) => void;
+  stereo?: boolean;            // WFM stereo on, vs forced mono
+  onStereo?: (on: boolean) => void;
+
   // OWRX server-side squelch (dB) + NR (threshold dB)
   onOwrxSquelch?: (db: number) => void;
   onOwrxNr?:      (threshold: number) => void;
@@ -301,6 +312,7 @@ export default function AudioSheet({
   kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
+  deemph = 50e-6, onDeemph, stereo = true, onStereo,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
@@ -481,6 +493,44 @@ export default function AudioSheet({
                 <Text style={{ color: notchOn ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {notchOn ? 'ON' : 'OFF'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ★ FM DE-EMPHASIS — ours, not the radio's. Order matches the web client: NR, notch,
+              de-emphasis, stereo. 50µs Europe/UK, 75µs Americas/Korea. Tau is in SECONDS on the
+              wire, which is easy to get wrong — see the wire-units note. */}
+          {onDeemph && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>DE-EMPH</Text>
+              <View style={{ flex: 1 }} />
+              {([{ l: 'OFF', v: 0 }, { l: '50µs', v: 50e-6 }, { l: '75µs', v: 75e-6 }]).map((o) => (
+                <TouchableOpacity key={o.l} onPress={() => onDeemph(o.v)} hitSlop={6}
+                  style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, marginLeft: 6,
+                           backgroundColor: deemph === o.v ? C.gold : 'transparent',
+                           borderWidth: 1, borderColor: deemph === o.v ? C.gold : C.muted }}>
+                  <Text style={{ color: deemph === o.v ? '#000' : C.muted,
+                                 fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                    {o.l}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* ★ WFM STEREO — off forces mono, which is cleaner on a weak or noisy signal. */}
+          {onStereo && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>WFM STEREO</Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity onPress={() => onStereo(!stereo)} hitSlop={8}
+                style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                         backgroundColor: stereo ? C.gold : 'transparent',
+                         borderWidth: 1, borderColor: stereo ? C.gold : C.muted }}>
+                <Text style={{ color: stereo ? '#000' : C.muted,
+                               fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                  {stereo ? 'ON' : 'OFF'}
                 </Text>
               </TouchableOpacity>
             </View>

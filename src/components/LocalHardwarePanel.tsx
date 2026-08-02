@@ -56,8 +56,10 @@ export interface LocalHardwarePanelProps {
   /** SpyServer: the server owns the radio, so most RTL-specific controls do not
    *  apply. Gain does (it is in the protocol); sample rate, PPM, bias-T, digital
    *  AGC and direct sampling do not — some have no wire representation at all,
-   *  and the rest belong to whoever runs the server. De-emphasis and stereo are
-   *  ours (they act on our own demodulator), so they stay. */
+   *  and the rest belong to whoever runs the server.
+   *  ★ De-emphasis and stereo used to be the exception here — ours, not the radio's, so they
+   *  stayed on a SpyServer. They now live in the AUDIO sheet, which is where being "ours"
+   *  always pointed. */
   isSpy?: boolean;
   biasTee: boolean;
   onBiasTee: (on: boolean) => void;
@@ -65,10 +67,6 @@ export interface LocalHardwarePanelProps {
   onAgc: (on: boolean) => void;
   directSampling: number;
   onDirectSampling: (mode: number) => void;
-  deemph: number;            // FM de-emphasis tau (0=off, 50e-6, 75e-6)
-  onDeemph: (tau: number) => void;
-  stereo: boolean;           // WFM stereo on (true) vs forced mono
-  onStereo: (on: boolean) => void;
   /** ★★ WHAT THE CONNECTED RADIO ACTUALLY IS, from the server. Null = unknown, in which case
    *  we fall back to the dongle layout, which is what every VibeServer was before there were
    *  other radios. ★ Never INFER the driver from what else is present: an Airspy HF+ was drawn
@@ -90,10 +88,6 @@ export interface LocalHardwarePanelProps {
   ahfAtt?: number;       onAhfAtt?: (steps: number) => void;
   ahfLna?: boolean;      onAhfLna?: (on: boolean) => void;
 }
-
-const DEEMPH_OPTS: { label: string; value: number }[] = [
-  { label: 'Off', value: 0 }, { label: '50µs', value: 50e-6 }, { label: '75µs', value: 75e-6 },
-];
 
 function Seg<T>({ options, value, onChange, fmt, slot }: {
   options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
@@ -371,16 +365,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             mobile data.
           </Text>}
 
-          <Text style={styles.section}>FM DE-EMPHASIS</Text>
-          <Seg slot={slot} options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
-               fmt={(v) => DEEMPH_OPTS.find(d => d.value === v)?.label ?? String(v)} />
-          <Text style={styles.note}>50µs Europe/UK, 75µs Americas/Korea.</Text>
-
-          <View style={styles.toggleRow}>
-            <Text style={styles.toggleLabel}>FM Stereo</Text>
-            <Switch value={p.stereo} onValueChange={p.onStereo} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.stereo ? C.gold : '#ccc'} />
-          </View>
-          <Text style={styles.note}>Off forces mono — cleaner on weak/noisy signals.</Text>
+          {/* ★★ FM DE-EMPHASIS AND FM STEREO HAVE MOVED TO THE AUDIO SHEET (the speaker button),
+              2026-08-02. They were never properties of the RADIO — they act on our own
+              demodulator, which is exactly why the SpyServer note above had to carve out an
+              exception for them while the rest of this panel did not apply. The web client has
+              always grouped them with volume, NR and the auto-notch; the app is now the same.
+              ★ If you are looking for them here, that is the point: this panel is the hardware. */}
 
           {/* ★ DONGLE-ONLY from here: PPM (the HF+ calibrates in parts per BILLION, and that
               control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling
