@@ -32,6 +32,10 @@ const C = {
   //   so the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
   //   against it, which is what the control island has always done.
   bg:      'rgba(10,8,4,0.72)',
+  // ★ BIG carries no blur (see the panel), so the tint alone has to hold the text against a
+  //   moving waterfall. Not fully opaque: the band edges and a strong carrier still read faintly
+  //   through it, which is what stops the panel feeling like a separate screen.
+  bgTall:  'rgba(10,8,4,0.93)',
   border:  'rgba(255,160,0,0.28)',
   gold:    '#ffb833',
   goldDim: 'rgba(255,160,0,0.70)',
@@ -513,9 +517,32 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             it. The control island next to it has used BlurView since it was built, which is
             exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
             plus a light tint: the spectrum reads through it, the text still reads on top. */}
-        {Platform.OS === 'ios' &&
+        {/* ★★★ NO BLUR IN BIG — A BACKDROP BLUR OVER THE SPECTRUM IS THE EXPENSIVE CASE, AND IT
+            IS THE SPECTRUM SPECIFICALLY, NOT THE AREA. Stuart pinned it exactly: "it's only when
+            it covers the spectrum part; in small mode when it's over the waterfall only, no
+            issues" (2026-08-02). The two are drawn by completely different means and the blur
+            costs accordingly:
+              • the WATERFALL is a Shader/ImageShader — a GPU texture blit, nearly free to resample;
+              • the SPECTRUM is a Skia vector Path REBUILT EVERY FRAME (buildSpecPathRef →
+                Skia.Path.Make) and filled.
+            A backdrop blur forces whatever sits beneath it into an offscreen buffer to sample. Over
+            a texture that is cheap; over a live per-frame vector path it is not, and at 20 fps it
+            stutters — on an M4, which is the tell that this is a compositing cost and not raw GPU
+            power. Stuart: "I'd like to hope that the glass effect of the box isn't causing a GPU
+            issue on an M4 MacBook."
+            ★★ AND IT IS WHY SLOWING THE RDS PAYLOAD DID NOT FIX THIS. The blur redraws because the
+            content BENEATH it moved, not because the analyser updated — so the analyser's rate was
+            never the lever. That rate was genuinely wrong and worth fixing on its own; it was not
+            this bug, and I said it was.
+            ★ BIG is exactly the mode that reaches up over the spectrum; SMALL sits over the
+            waterfall alone and has never stuttered. So SMALL keeps its blur — the original
+            complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
+            and BIG, where you are reading an instrument rather than watching through it, takes a
+            near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
+        {Platform.OS === 'ios' && !p.tall &&
           <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />}
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: C.bg }]} pointerEvents="none" />
+        <View style={[StyleSheet.absoluteFill,
+                      { backgroundColor: p.tall ? C.bgTall : C.bg }]} pointerEvents="none" />
         <View style={s.header}>
           {/* ★ Matches the button that opens it — an abbreviation in one place and the full
               name in the other reads as two different features. */}
