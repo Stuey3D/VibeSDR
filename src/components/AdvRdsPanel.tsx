@@ -564,7 +564,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
       {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
           column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
           stacked where only the fields and the 310-wide symbol trace have to fit. */}
-      <View style={[s.inner, { maxHeight: maxH, maxWidth: wideCols ? 760 : 560 }]}>
+      <View style={[s.inner, { maxHeight: maxH, maxWidth: wideCols ? 800 : 600 }]}>
         {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
             it. The control island next to it has used BlurView since it was built, which is
             exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
@@ -755,7 +755,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.hdrBdr,
   },
-  title: { fontSize: 10, letterSpacing: 2, color: C.goldDim, fontFamily: FONT },
+  title: { fontSize: 11, letterSpacing: 2, color: C.goldDim, fontFamily: FONT },
   hbtn:  { borderWidth: 1, borderColor: C.btnBdr, borderRadius: 4,
            paddingHorizontal: 8, paddingVertical: 3 },
   hbtnActive:    { backgroundColor: C.btnAct, borderColor: 'rgba(255,160,0,0.55)' },
@@ -769,26 +769,28 @@ const s = StyleSheet.create({
   // columns still left dead space to the right, so neither the basis nor the grow resolved as
   // intended. A definite width cannot be shrunk out from under the text, and `flex: 1` on the
   // other column has one obvious meaning: take what is left.
-  // ★ 340 is the width the field rows were designed at, so the label/value columns keep the
-  // proportions they have in the stacked layout rather than being re-tuned for this one.
+  // ★ Grew 340 → 372 with the type. A column sized for the OLD font would have wrapped the long
+  //   values ("Other networks", the AF list) onto extra lines, which costs more height than the
+  //   larger text gains in legibility — and the label column went 96 → 108 for the same reason,
+  //   so "Other networks" still fits on one line.
   bodyWide:  { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },
-  colFields: { width: 340, gap: 3 },
+  colFields: { width: 372, gap: 3 },
   colPlots:  { flex: 1, minWidth: 320 },
-  rawNote: { fontFamily: FONT, fontSize: 10, color: C.warn, marginBottom: 6, lineHeight: 14 },
+  rawNote: { fontFamily: FONT, fontSize: 11, color: C.warn, marginBottom: 6, lineHeight: 15 },
   row:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   // ★ The label column is FIXED and the value WRAPS. Letting the label wrap instead was what
   // pushed text off the panel in the browser and made the whole thing scroll sideways.
-  lbl:   { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, width: 96 },
-  val:   { fontFamily: FONT, fontSize: 11, color: C.value, flex: 1 },
-  section: { fontFamily: FONT, fontSize: 9, letterSpacing: 2, color: C.goldDim,
+  lbl:   { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, width: 108 },
+  val:   { fontFamily: FONT, fontSize: 12, color: C.value, flex: 1 },
+  section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
-  plotLbl: { fontFamily: FONT, fontSize: 8, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
-  verdict: { fontFamily: FONT, fontSize: 10, marginTop: 3 },
+  plotLbl: { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
+  verdict: { fontFamily: FONT, fontSize: 11, marginTop: 3 },
   // ★ BRIGHTER THAN THE LABELS, deliberately. This is the sentence that TEACHES the plot — "two
   //   clear bands = every bit decided with margin" — so it is prose to be read, not a caption to
   //   be glanced at, and it is the longest run of small text sitting over a live waterfall.
   //   Stuart asked for the titles and then "including the text about the constellation etc".
-  plotNote: { fontFamily: FONT, fontSize: 10, color: 'rgba(255,190,90,0.80)', marginTop: 4, lineHeight: 14 },
+  plotNote: { fontFamily: FONT, fontSize: 11, color: 'rgba(255,190,90,0.80)', marginTop: 4, lineHeight: 15 },
   logoWrap: { alignItems: 'center', marginTop: 10 },
 });
