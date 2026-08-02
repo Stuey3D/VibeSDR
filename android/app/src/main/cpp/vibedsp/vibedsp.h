@@ -1210,7 +1210,11 @@ public:
 
     /** Ask for a narrow spectrum view: `offsetHz` from band centre, `spanHz` wide. spanHz <= 0
      *  turns it off (and costs nothing when off). Thread-safe: applied on the DSP thread. */
-    void setZoomView(double offsetHz, double spanHz);
+    /** @param rateHz frames/sec WANTED ON THE WIRE. Pass the CLIENT-facing rate, not the engine's
+     *  FFT rate: the engine runs at FFT_AVG x the client rate and the wide path averages that back
+     *  down, so handing the engine rate to a path that does NOT average emits FFT_AVG times too
+     *  many frames (Stuart, 2026-08-02: 40 fps for a requested 20). 0 keeps the previous rate. */
+    void setZoomView(double offsetHz, double spanHz, double rateHz = 0.0);
     /** Output width of the zoom FFT. MUST match the bin count the client is sent, or the frame
      *  would be resampled on the way out — reintroducing the interpolation this exists to remove.
      *  Takes effect on the next view change. */
@@ -1308,6 +1312,7 @@ private:
     bool sharedChannels_ = false;
     std::atomic<double> zoomOffReq_{0.0}, zoomSpanReq_{0.0};
     std::atomic<double> zoomSpanOut_{0.0};
+    std::atomic<double> zoomRateReq_{15.0};
     std::atomic<bool>   zoomDirty_{false};
     std::atomic<int>    zoomBins_{1024};
     ZoomSpectrum::LogFn zoomLog_;
