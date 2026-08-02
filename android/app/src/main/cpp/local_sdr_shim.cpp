@@ -2341,7 +2341,21 @@ struct LocalSdrShim::Impl {
         // ★ It agreed by accident for years because only Jr used the bins lever
         // and its zoom is driven differently. Both sides must use the SAME bin
         // count: the one actually being sent.
-        double want = sampleRate / (binBw * (double)g_vsOutBins.load());
+        // ★★★ displaySpan(), NOT sampleRate — THE SAME SPAN sendConfig USED TO DERIVE binBw.
+        // sendConfig sends the client `displaySpan() / zoom / bins`; if this reverses it with
+        // sampleRate instead, the two directions disagree by exactly the dead-lobe crop and every
+        // round trip multiplies the zoom by 912/768 = 1.1875. The client re-asserts its view while
+        // you hold the tune button, so it RATCHETS IN ~19% a time — Stuart, 2026-08-02: "when
+        // tuning on fm using 100KHz steps as the tuning happens by holding the tune button it also
+        // zooms in too", and then, correctly, "our dead space crop?".
+        // ★★ It was right by ACCIDENT until this morning: displaySpan() simply RETURNED sampleRate
+        // on every path that reaches here, so the mismatch had no effect and nothing marked the two
+        // as a pair that must agree. The crop (23868d1) separated them and the latent bug woke up.
+        // The note ten lines above warns about precisely this shape for the BIN COUNT — "Both sides
+        // must use the SAME bin count". Same bug, one field along.
+        // ★ NOT filter-related: it reproduces on NFM, which is what ruled out the demod-bandwidth
+        // clearance and pointed here.
+        double want = displaySpan() / (binBw * (double)g_vsOutBins.load());
         // ★★ ZOOM IS CAPPED BY REAL RESOLUTION, not by an arbitrary fraction.
         // The old /16 left just 16 SOURCE bins spread across ~1024 output bins —
         // a ~9 kHz span on a 2.4 MHz capture, which is 64x interpolation and
