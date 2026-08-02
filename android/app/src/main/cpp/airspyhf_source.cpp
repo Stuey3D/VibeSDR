@@ -301,25 +301,6 @@ bool AirspyHfSource::setSampleRate(double hz) {
     if (!r) return false;
     if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
     curRate_ = (double)r;      // remembered for restartStream(deep)
-
-    // ★★★ FORCE THE LO TO BE RE-SENT AFTER A RATE CHANGE. libairspyhf caches the tuned frequency
-    //     in kHz and skips the USB write when it believes nothing changed:
-    //         if (device->freq_khz != freq_khz) { ...send...; device->freq_khz = freq_khz; }
-    //     A rate change writes that cache itself (the zero-IF branch sets it to MIN_ZERO_IF_LO),
-    //     so the library's idea of the LO and the hardware's part company — and the retune that
-    //     follows is silently a NO-OP, leaving the radio on a stale LO.
-    //     ★ Stuart described the symptom from the outside before I found the cause: "changing
-    //     sample rate requires a full tune up and down again to get it all aligned", and earlier,
-    //     Caroline reading 663 instead of 648 until he tuned away and back. Tuning away IS this
-    //     fix, performed by hand.
-    //     ★★ Nudge a kHz and put it back: two control transfers per RATE CHANGE (not per tune),
-    //     which is nothing beside the stream restart that surrounds it. Done here rather than by
-    //     patching libairspyhf, because the Pi links the system copy.
-    if (curCentre_ > 0.0) {
-        const uint32_t f = (uint32_t)std::llround(curCentre_);
-        airspyhf_set_freq(impl_->dev, f + 1000);
-        airspyhf_set_freq(impl_->dev, f);
-    }
     return true;
 }
 
