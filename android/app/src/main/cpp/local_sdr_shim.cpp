@@ -1339,6 +1339,7 @@ struct LocalSdrShim::Impl {
     int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
     float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
+    double rdsxLastAt = 0.0;                 // wall clock of the last rdsx — see the emit site
     // ★★ ADMIN UNLOCK, per connected client. Cleared whenever the spectrum client changes, so
     // an unlock cannot outlive the session that earned it and be inherited by the next visitor.
     std::atomic<bool> adminOk{false};
@@ -1588,9 +1589,25 @@ struct LocalSdrShim::Impl {
             }
             // ★ The Advanced RDS payload runs FASTER than the metadata — a constellation
             // updated once a second reads as a still image, and its whole value is watching
-            // the cloud tighten or spread as you tune. ~5 Hz, and only while the decoder is
+            // the cloud tighten or spread as you tune. ~6 Hz, and only while the decoder is
             // open, so an ordinary listener never pays for it.
-            if (rdsxOn.load() && n % 2 == 0) sendRdsExt(sock);
+            // ★★★ A RATE, NOT A DIVISOR OF SOMEBODY ELSE'S RATE. This was `n % 2 == 0`, and the
+            // comment above it has always said "~5 Hz" — true when the spectrum ran at 10 fps.
+            // It is not a constant, it is a SHADOW of the spectrum rate, and that rate has since
+            // moved twice: at the 14 fps we were really delivering it was 7 Hz, and this morning's
+            // overlap fix took it to 11. Nobody touched the analyser, but it began re-rendering
+            // 57% more often — a big panel with a constellation, an MPX spectrum and a symbol
+            // trace — and the waterfall went jerky underneath it (Stuart, 2026-08-02: "I'm sure
+            // it never used to do that", with the wire showing a healthy 31k/s · 22fps, so the
+            // cost was in the RENDER, not the link).
+            // ★★ It failed in the other direction too, and that was already known and written
+            // down in SDRScreen's idle-saver: dropping the spectrum to 5 fps halved the analyser
+            // to ~2.5 Hz, so the saver had to be suppressed entirely whenever the panel was open.
+            // A quantity that is meant to be steady must not be derived from one that is not.
+            if (rdsxOn.load()) {
+                const double now = nowSecs();
+                if (now - rdsxLastAt >= 1.0 / 6.0) { rdsxLastAt = now; sendRdsExt(sock); }
+            }
             if (n % 2 == 0) enforceSessionLimit();
         }
         // Tuned-channel power for squelch (peak dB in the demod passband).
