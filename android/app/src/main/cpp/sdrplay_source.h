@@ -140,6 +140,23 @@ public:
      *  is a WATCHDOG THREAD and the control sockets keep taking gain changes throughout.
      *  @return true if the stream was re-initialised; `err` describes any failure. */
     bool restartStream(std::string& err);
+    /** ★★★ THROW THE DEVICE AWAY AND OPEN IT AGAIN — the recovery restartStream() cannot be.
+     *  A NUDGED USB PLUG IS NOT A STALL. The device leaves the bus and comes back, usually at a
+     *  new address, so the selected handle is dead for good: Uninit + Init on it can only ever
+     *  fail, however many times it is tried. That is why a nudge needed the whole server stopped
+     *  and started (Stuart, 2026-08-02) — process exit is what finally released the device.
+     *  ★★ Yes, this unwinds device selection, which the setPaused notes warn about: ReleaseDevice
+     *  from a CONNECTION thread, with a client arriving, crashed inside the API's own shared
+     *  mutex (2026-07-26). Two things make it safe here and neither is optional — it runs under
+     *  api_mtx, which every API-touching call on this object now takes, and it runs ONLY after
+     *  the stream is already dead, so there is no live callback to unwind underneath.
+     *  ★ LAST RESORT, NOT FIRST. The watchdog tries restartStream() twice first: a genuine stall
+     *  is far commoner than a re-enumeration and re-Init fixes it without the listener noticing.
+     *  ★ REOPENS BY SERIAL. Enumeration order is not stable across a re-plug, and a box may have
+     *  more than one RSP — "device 0" could hand back a different radio than the one being
+     *  listened to. Restores the live rate, frequency and gain, not the ones it first opened with.
+     *  @return true if the device was reopened and streaming; `err` describes any failure. */
+    bool reopen(std::string& err);
     /** ★★ THE RADIO'S OWN OVERLOAD FLAG. The API raises a PowerOverloadChange event when the
      *  ADC is being driven into clipping — so we do not have to INFER overload from the
      *  spectrum, as the auto-gain brief proposes for a dongle: on an RSP the hardware simply
@@ -154,6 +171,12 @@ private:
     IqSink sink_;
     bool open_ = false;
     bool lost_ = false;
+    // ★ What the radio is doing RIGHT NOW, not what it was opened with — reopen() has to put the
+    //   listener back where they were, and they will have tuned and changed gain since.
+    std::string curSerial_;
+    double curRate_   = 0.0;
+    double curCentre_ = 0.0;
+    int    curGain_   = -1;
     bool paused_ = false;
     bool overload_ = false;
 };

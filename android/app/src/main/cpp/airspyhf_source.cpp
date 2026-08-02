@@ -218,7 +218,17 @@ void AirspyHfSource::close() {
 // ★★★ See the header for why this is safe here and deliberately absent on the RTL path.
 bool AirspyHfSource::restartStream(bool deep, std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
-    if (!open_ || !impl_->dev) { err = "device not open"; return false; }
+    // ★★★ A DEEP RESTART MUST BE ALLOWED WITH NO HANDLE — that is the ONLY state it can help in.
+    // This guard used to cover both paths, and it turned one failed attempt into a permanently
+    // dead radio: a nudged USB plug re-enumerates the device, attempts 1-2 (shallow) fail because
+    // the handle is stale, attempt 3 goes deep, closes the handle and sets dev=nullptr — and if the
+    // reopen misses by a second, because the device has not finished re-enumerating, EVERY later
+    // attempt returns "device not open" here without going near the radio. The back-off kept
+    // ticking and the log kept saying it was retrying; nothing ever did. Only killing the process
+    // cured it (Stuart, 2026-08-02: "a little nudge of the USB port is enough to kill it").
+    // ★★ The serial survives in impl_->serial, which is what a deep restart reopens by, so a
+    // handle-less device is recoverable — it just has to be ALLOWED to try.
+    if (!deep && (!open_ || !impl_->dev)) { err = "device not open"; return false; }
 
     if (!deep) {
         // ── Shallow: the handle is still good, the stream just stopped delivering. ──
@@ -285,6 +295,14 @@ void AirspyHfSource::setFrequency(double hz) {
 
 uint32_t AirspyHfSource::nearestRate(double hz) const {
     if (rates_.empty()) return 0;
+    // ★★★ 0 MEANS "THE RATE THIS RADIO SHOULD RUN AT" — its highest, which is its default.
+    // The HF+ is now opened at exactly one rate and never re-rated (see the header), so this is
+    // the only rate that ever reaches the hardware in normal use. Two things depend on it and
+    // BOTH break at any other rate: the dead-lobe crop is a per-rate table whose numbers are
+    // measured at 912 and merely inherited from SDR++ Brown elsewhere, and 228 kHz tunes some
+    // 7.8 kHz off frequency on this firmware (2026-08-02, open). Stuart: "I think we just offer
+    // the default on the server too otherwise that breaks all the dead space fix we added."
+    if (hz <= 0.0) return *std::max_element(rates_.begin(), rates_.end());
     uint32_t best = rates_.front();
     double bestErr = std::fabs((double)best - hz);
     for (uint32_t r : rates_) {
