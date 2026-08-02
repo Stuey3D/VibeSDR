@@ -23,6 +23,7 @@
 #include <fstream>
 #include <unistd.h>
 #include "airspyhf_source.h"
+#include "sdrplay_source.h"
 
 #include <atomic>
 #include <chrono>
@@ -348,6 +349,19 @@ int main(int argc, char** argv) {
         std::printf("VibeServer: Airspy HF+ detected\n");
         port = shim.startAirspyHf(0, o.freq, o.rate, o.gain,
                                   o.fftSize, o.fftRate, o.mode, err);
+    } else if (!o.deviceGiven && vibe::SdrplaySource::deviceCount() > 0) {
+        // ★★★ AND THE RSP, WHICH THIS CHAIN STILL DID NOT ASK FOR. Exactly the fault the note
+        // above describes for the Airspy, one radio later: an RSP1B on the bus — named correctly
+        // by lsusb, and sdrplay_api_GetDevices returning it with a serial — fell through to the
+        // RTL branch, found no dongle, and was reported as "no SDR found — is it plugged in?"
+        // (Raspberry Pi, 2026-08-02). The shim has had startSdrplay() all along; nothing called it
+        // on a headless box, because until today that box had no SDRplay API installed to build
+        // against, so the gap could not show.
+        // ★ A three-radio project needs the discovery chain to know about three radios. If a
+        //   fourth is ever added, this is the list that has to grow with it.
+        std::printf("VibeServer: SDRplay RSP detected\n");
+        port = shim.startSdrplay(0, o.freq, o.rate, o.gain,
+                                 o.fftSize, o.fftRate, o.mode, err);
     } else {
         port = shim.start(-(o.device + 1), 0, 0, o.freq, o.rate, o.gain,
                           o.fftSize, o.fftRate, o.mode, err);
