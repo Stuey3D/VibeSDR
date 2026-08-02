@@ -18,12 +18,18 @@ ZoomSpectrum::ZoomSpectrum(double sampleRate, Method m, int bins)
     : sampleRate_(sampleRate), method_(m), bins_(bins) {
     // 2x the output width — see the note on fft_ in the header. The crop back to the requested
     // span then always has at least bins_ real bins to downsample from.
-    fftN_ = bins_ * 2;
+    // ★★ 2x the output width normally — the crop ratio is always > 1/2, so the crop keeps at least
+    //    bins_ REAL bins to downsample from and never has to stretch. The SHARED path takes a
+    //    channel twice as wide as the view (so extract()'s band-edge roll-off lands outside it),
+    //    which halves the ratio again, so it needs 4x. Cheap: the transform is small, and the
+    //    channel rate doubles alongside the window, so the frame rate is unchanged.
+    fftN_ = bins_ * (m == Method::Shared ? 4 : 2);
     fft_ = std::make_unique<ComplexFFT>(fftN_);
     win_.resize(fftN_);
     nuttallWindow(win_.data(), fftN_);
     db_.resize(fftN_);
     out_.resize(bins_);
+    acc2_.assign(bins_, 0.0f);
     acc_.resize(fftN_);
 }
 
@@ -52,7 +58,12 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
     // anything, and chanBins = fftSize/D, so D is capped by the forward FFT size.
     const int kSharedFft = 32768;
     if (method_ == Method::Shared) {
-        const int minChanBins = 16;
+        // ★★ TAKE A CHANNEL TWICE AS WIDE AS THE VIEW. extract() rolls its band edges off to keep
+        //    the impulse response inside the overlap (see channelizer.cpp); halving the decimation
+        //    puts that roll-off OUTSIDE the requested span, where the crop in push_() throws it
+        //    away. So the user sees a flat passband and the block joins are still clean.
+        if (d > 1) d /= 2;
+        const int minChanBins = 32;
         while (d > 1 && kSharedFft / d < minChanBins) d /= 2;
     }
 
@@ -120,8 +131,8 @@ void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const fl
         acc_[accN_++] = x[i];
         ++sinceEmit_;
         if (accN_ < fftN_) continue;
-        if (sinceEmit_ >= emitStride_) {
-            sinceEmit_ = 0;
+        // Transform EVERY window; the rate gate decides when to SEND, not whether to compute.
+        {
             const float scale = 1.0f / (float)((long long)fftN_ * fftN_);
             fft_->powerDbShifted(acc_.data(), win_.data(), db_.data(), scale);
 
@@ -141,20 +152,40 @@ void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const fl
                 if (b <= a) b = a + 1;
                 float best = -1e30f;
                 for (int k = a; k < b && k < fftN_; ++k) if (db_[k] > best) best = db_[k];
-                out_[o] = best;
+                acc2_[o] += best;                    // ★ ACCUMULATE, never discard
             }
+            ++avgN_;
+        }
+
+        // ★★★ AVERAGE THE WINDOWS BETWEEN EMITS — DO NOT THROW THEM AWAY. The rate gate used to
+        //     drop whole windows at low frame rates, so anything brief that happened between two
+        //     emitted frames simply never appeared: "the dropoff at the lower data rates is vastly
+        //     more noticeable" (Stuart, 2026-08-02). The wide path never had this because it
+        //     block-averages FFT_AVG frames. Averaging costs nothing extra, keeps every sample
+        //     represented, and quietens the noise floor at exactly the rates where it looked worst.
+        if (sinceEmit_ >= emitStride_ && avgN_ > 0) {
+            sinceEmit_ = 0;
+            const float inv = 1.0f / (float)avgN_;
+            for (int o = 0; o < bins_; ++o) out_[o] = acc2_[o] * inv;
+            std::fill(acc2_.begin(), acc2_.end(), 0.0f);
+            avgN_ = 0;
             cb(out_.data(), bins_);
         }
-        // ★★★ OVERLAPPING WINDOWS — SLIDE, DO NOT RESET. Resolution needs a LONG window, but a
-        //     non-overlapping one also sets the frame rate: at deep zoom the decimated rate is low,
-        //     so one window takes ages and the waterfall crawls no matter what rate was asked for
-        //     (Stuart, 2026-08-02: 7.9 fps against a requested 20, and the app's speed buttons
-        //     doing nothing because the frames were not there to pace). Sliding by hopOut decouples
-        //     the two: the window stays 8192 samples long, so the BINS ARE UNCHANGED, while frames
-        //     arrive every hopOut samples. That is how a waterfall scrolls fast AND stays sharp.
-        //     ★ The FFT is small and rare enough that the extra transforms are noise next to the
-        //       forward FFT — but hopOut is floored at fftN_/16 so this cannot run away.
-        const int hopOut = std::max(fftN_ / 16, std::min((int)emitStride_, fftN_));
+
+        // ★★ OVERLAPPING WINDOWS — SLIDE, DO NOT RESET. Window LENGTH sets resolution; window RATE
+        //    sets how often we have something to show. Emitting one frame per non-overlapping
+        //    window tied them together, so deep zoom crawled whatever rate was asked for. The hop
+        //    is FIXED (not rate-derived): dense windows feed the averaging above, and the gate
+        //    alone decides the wire rate. Bins are unchanged either way.
+        // ★★★ AS BIG A HOP AS THE FRAME RATE ALLOWS. Overlapping windows buy FRAMES, but heavily
+        //     overlapped windows are nearly IDENTICAL, so averaging them buys almost no noise
+        //     reduction — 24 windows at 94% overlap is worth about one and a half independent ones,
+        //     which looks like integration and is not. It showed as speckle against UberSDR's
+        //     smooth traces (Stuart, 2026-08-02). So: hop as large as the requested rate permits,
+        //     capped at half a window (enough overlap to lose nothing between frames) and floored
+        //     at 1/16th (so deep zoom still has frames to send). Fewer, more independent windows —
+        //     genuinely quieter, and fewer transforms into the bargain.
+        const int hopOut = std::max(fftN_ / 16, std::min((int)emitStride_, fftN_ / 2));
         std::memmove(acc_.data(), acc_.data() + hopOut, (size_t)(fftN_ - hopOut) * sizeof(cf32));
         accN_ = fftN_ - hopOut;
     }

@@ -270,8 +270,8 @@ export interface MenuSheetProps {
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
   onPeakHold?:        (v: boolean) => void;
-  frameRate?:         '10fps' | '20fps' | '30fps';
-  onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
+  frameRate?:         '10fps' | '20fps' | '30fps' | '60fps';
+  onFrameRate?:       (v: '10fps' | '20fps' | '30fps' | '60fps') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
@@ -1214,6 +1214,7 @@ export default function MenuSheet({
                   <Btn label="10 FPS" active={frameRate==='10fps'} onPress={() => onFrameRate?.('10fps')} />
                   <Btn label="20 FPS" active={frameRate==='20fps'} onPress={() => onFrameRate?.('20fps')} />
                   <Btn label="30 FPS" active={frameRate==='30fps'} onPress={() => onFrameRate?.('30fps')} />
+                  <Btn label="60 FPS" active={frameRate==='60fps'} onPress={() => onFrameRate?.('60fps')} />
                 </BtnRow>
                 <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
                                fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>

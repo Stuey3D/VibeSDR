@@ -72,7 +72,12 @@ struct Opts {
     double      lockFreq = 0;            // 0 = the centre follows the VFO, as it always has
     int         users    = 1;            // expected listeners; 1 = personal receiver
     std::string channels;                // "" = derive from `users`; else "direct" | "shared"
-    bool        zoomSpectrum = true;     // --no-zoom-spectrum restores the pre-2026-08-02 waterfall
+    // ★★★ OFF BY DEFAULT. It gives real bins at deep zoom, but the WIDE path is a tuned, known-good
+    // waterfall and the zoom path SUPPRESSES it — so switching it on replaces something already
+    // good with something still being tuned (Stuart, 2026-08-02: "the web client's view was
+    // already perfect before this"). Sharper bins are not worth a worse picture. Opt in with
+    // --zoom-spectrum until it can beat the wide path on LOOK as well as resolution.
+    bool        zoomSpectrum = false;
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
 };
@@ -139,7 +144,8 @@ void usage() {
         "  --users N         how many listeners this receiver is for (default 1). This\n"
         "                    picks the channel method: 1 = direct, 2+ = shared.\n"
         "  --channels MODE   override that choice: direct | shared\n"
-        "  --no-zoom-spectrum  disable the high-zoom spectrum (restores the old waterfall)\n"
+        "  --zoom-spectrum   EXPERIMENTAL: real bins at deep zoom instead of interpolation.\n"
+        "                    Off by default — it replaces the tuned wide-path waterfall.\n"
         "                      direct  cheapest for ONE listener; cost rises with each\n"
         "                              extra one and runs out of a core at about eight.\n"
         "                      shared  one FFT serves everybody, so the ninth listener\n"
@@ -211,6 +217,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--users")     o.users    = std::atoi(need(i));
         else if (a == "--channels")  o.channels = need(i);
         else if (a == "--no-zoom-spectrum") o.zoomSpectrum = false;
+        else if (a == "--zoom-spectrum")    o.zoomSpectrum = true;
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));

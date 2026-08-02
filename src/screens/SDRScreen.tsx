@@ -1037,7 +1037,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
-  const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
+  const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'|'60fps'>('20fps');
   // Smooth tune: 120Hz interpolated scroll while interacting; discrete row
   // steps + ~30fps spectrum tween once settled (ProMotion idles → battery).
   const [smoothTune,    setSmoothTune]    = useState(true);
@@ -1222,7 +1222,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
     AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
       if (v === 'native' || v === '10fps') setFrameRate('10fps');   // 'native' migrated → 10 FPS
-      else if (v === '20fps' || v === '30fps') setFrameRate(v);
+      else if (v === '20fps' || v === '30fps' || v === '60fps') setFrameRate(v);
     }).catch(() => {});
     AsyncStorage.getItem('lsv_link_mode').then((v: string | null) => {
       if (v === 'full' || v === 'adaptive' || v === 'lowData') setLinkMode(v);
@@ -3397,7 +3397,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
 
-  const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
+  const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps'|'60fps') => {
     setFrameRate(v);
     AsyncStorage.setItem('lsv_frame_rate', v).catch(() => {});
   }, []);

@@ -282,6 +282,8 @@ private:
     std::unique_ptr<ComplexFFT> fft_;
     int fftN_ = 0;
     std::vector<float> win_, db_, out_;
+    std::vector<float> acc2_;      // dB accumulator between emits — see push_()
+    int    avgN_ = 0;              // windows summed into acc2_
     std::vector<cf32>  acc_;
     int    accN_ = 0;
     long long sinceEmit_ = 0, emitStride_ = 1;   // in DECIMATED samples
