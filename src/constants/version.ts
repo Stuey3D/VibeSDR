@@ -7,10 +7,17 @@
 //     by Stuart minutes after submission; the submission was cancelled and the build replaced.
 // ★★ The pre-release suffix belongs on the GITHUB release (which is correctly tagged
 //     v10.0.0-beta.1 and flagged pre-release), NOT in the app's own version string.
+// ★★ AND IT HAS TO BE BUMPED WITH app.json, WHICH 10.0.2 FORGOT. The whole of 10.0.2 was built,
+//     installed and tested announcing itself as "10.0.1" — in the About overlay, the menu footer,
+//     the instance picker header AND the diagnostics dump. Stuart spotted it from a diagnostics
+//     file: "you never changed the version numbers in the app itself." It also sent the wrong
+//     User-Agent to every third-party receiver, and it very nearly cost a crash diagnosis: the
+//     dump said 10.0.1, so the crash looked like a SHIPPING bug rather than one in the build under
+//     test. A version string that lies is not cosmetic — it misroutes the next investigation.
 // ★ Now matches app.json's expo.version exactly, as the note below has always asked.
 //   NOTE: USER_AGENT derives from this, so it moves 'VibeSDR/10.0' -> 'VibeSDR/10.0.0'. That is
 //   "only the version moves", which is what operators' filter rules are written to tolerate.
-export const APP_VERSION = '10.0.1';
+export const APP_VERSION = '10.0.2';
 
 /**
  * How we introduce ourselves to SOMEBODY ELSE'S receiver.
