@@ -204,3 +204,29 @@ rather than being switched on globally. Keep doing that. A feature that a phone 
 DECLINE has already cost them a step; one they never see costs nothing.
 ★ The admin password becomes mandatory for the HEADLESS build only (§7.6) — the phone must never
 be asked for one to serve on its own LAN.
+
+### 7.8 ★★★ POWER OUTRANKS THE AGC — the never-park rule must be ORDERED, not absolute
+Caught 2026-08-02 the same evening it was written, from Stuart's use case: *"the old android up the
+allotment with a solar panel."*
+
+§7.1 says a shared receiver NEVER idle-parks, because parking makes the AGC re-converge and a
+listener on a locked receiver has no gain controls to rescue it. That reasoning holds on a
+MAINS-powered Pi and **inverts on solar**: the dongle is ~80% of the draw, and a flat battery costs
+the whole receiver, not one listener's AGC.
+
+★★ `--force-idle-saver` ALREADY EXISTS for exactly this — *"a solar/cellular host where power
+outranks a listener's preference"*. So the rule is:
+> Do not idle-park on a shared receiver **UNLESS the operator has said power comes first**, in
+> which case parking wins and the AGC re-converges on arrival.
+
+★ The current code overrides that switch for every locked receiver. **Fix before anyone runs a
+shared receiver on battery.** The general shape: a new rule that quietly overrides an existing
+OPERATOR CHOICE is a bug, however good its own reasoning.
+
+### 7.9 What a remote/solar host needs from the admin panel
+- **It must work over a BAD link.** An allotment host is on 4G or a long Wi-Fi bridge, and the
+  panel is the one thing that has to stay usable while the spectrum stream is struggling — it is
+  how you would FIX the struggling link. Do not build it on top of the spectrum socket's health.
+- **It must REPORT, not just accept.** Battery, draw, whether it is parking, uptime. Managing a
+  solar box blind is how you discover it died yesterday. Most of this already exists in
+  diagnostics ([[vibeserver_battery_measured]], the power meter) — it needs surfacing remotely.
