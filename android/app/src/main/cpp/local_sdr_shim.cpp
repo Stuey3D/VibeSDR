@@ -3330,7 +3330,25 @@ struct LocalSdrShim::Impl {
         sock->close();
         // No listeners → idle the dongle so an unattended server stops burning power. OUTSIDE the lock:
         // pauseCaptureIdle() joins the capture thread, which must never happen under clientMtx.
-        if (bothGone) pauseCaptureIdle();
+        // ★★★ BUT RE-CHECK FIRST — A NEW CLIENT MAY HAVE ARRIVED WHILE THIS SOCKET WAS CLOSING.
+        //     resumeCaptureIdle() runs EARLY in the connect path, before the new client's pointers
+        //     are stored, so the sequence
+        //         [new] resume  →  [old] teardown sees no client  →  pause
+        //     leaves the capture PARKED with a listener connected. The client then sits there with
+        //     a socket that is open and silent: `audio 0 KB/s`, no waterfall, and a page refresh
+        //     "fixes" it only because the next connect calls resume again (Stuart, 2026-08-02,
+        //     switching from the app back to the web client).
+        //     ★ Cheap and narrow: look again, under the lock, at the moment of pausing rather than
+        //     acting on a decision taken a few microseconds earlier. Idling is never urgent — the
+        //     next disconnect will park it if this one should not.
+        if (bothGone) {
+            bool stillEmpty;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              stillEmpty = (!specClient  || !specClient->isOpen())
+                        && (!audioClient || !audioClient->isOpen()); }
+            if (stillEmpty) pauseCaptureIdle();
+            else LOGI("not parking — a new listener arrived while this socket was closing");
+        }
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
     }
 
