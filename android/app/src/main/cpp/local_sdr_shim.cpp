@@ -1530,8 +1530,21 @@ struct LocalSdrShim::Impl {
         std::memcpy(&frame[6], &ts, 8);
         uint64_t f = (uint64_t)llround(viewCenter.load());
         std::memcpy(&frame[14], &f, 8);
+        // ★★★ THE WIRE PUTS DC AT BIN 0 — IT IS NOT FFTSHIFTED. onSpectrum builds every frame as
+        //     `signedOut = (i <= outBins/2) ? i : i - outBins`: bin 0 is the VIEW CENTRE, positive
+        //     offsets ascend, negatives live in the top half. ZoomSpectrum hands back a SHIFTED
+        //     row (DC in the middle, the layout a waterfall usually wants), so sending it straight
+        //     out rotated every zoom frame by half a span against the format the client has always
+        //     been given: a signal at the view centre landed at the frame EDGE, at every zoom
+        //     level (Stuart, 2026-08-02: "the buzzer is on the left edge of the screen on both").
+        //     Un-shift here rather than changing ZoomSpectrum, because shifted is the sane thing
+        //     for a spectrum class to return and this is the one place that knows the wire format.
+        const int half = outBins / 2;
         for (int i = 0; i < outBins; i++) {
-            int v = (int)lround(db[i] + 256.0);
+            const int signedOut = (i <= half) ? i : i - outBins;   // same rule as onSpectrum
+            int src = half + signedOut;                            // -> index into the SHIFTED row
+            if (src < 0) src = 0; else if (src >= outBins) src = outBins - 1;
+            int v = (int)lround(db[src] + 256.0);
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         sendWs(sock, 0x2, frame.data(), frame.size());
@@ -2284,7 +2297,20 @@ struct LocalSdrShim::Impl {
         // ★★★ Method is fixed for the life of the engine — never switched live (Stuart,
         // 2026-08-02). Shared (fast convolution) only makes sense with a LOCKED centre, since
         // every channel is a slice of one FFT of one captured band.
-        rx.setSharedChannels(g_vsSharedChannels.load() && g_vsLockedCentre.load() > 0.0);
+        const bool useShared = g_vsSharedChannels.load() && g_vsLockedCentre.load() > 0.0;
+        rx.setSharedChannels(useShared);
+        LOGI("channel method: %s (asked %s, centre %s)",
+             useShared ? "SHARED / ka9q fast convolution" : "DIRECT / per-client DDC",
+             g_vsSharedChannels.load() ? "shared" : "direct",
+             g_vsLockedCentre.load() > 0.0 ? "locked" : "free");
+        // ★ Make the zoom DSP say what it actually derived. Everything it does hangs off the
+        //   PIPELINE's sample rate, not the shim's, and nothing upstream could show a disagreement.
+        rx.setZoomLog([](double fs, double offHz, double reqSpan, double rawSpan,
+                         int decim, int centreBin, int chanBins) {
+            LOGI("zoom DSP: fs %.3f MHz, offset %.3f kHz, span %.3f kHz (raw %.3f), "
+                 "decim %d, centreBin %d, chanBins %d",
+                 fs / 1e6, offHz / 1e3, reqSpan / 1e3, rawSpan / 1e3, decim, centreBin, chanBins);
+        });
         // A restart rebuilds the engine underneath the zoom channel, so its view has to be
         // re-applied — otherwise it keeps filtering around the centre the OLD rate implied.
         updateZoomView();

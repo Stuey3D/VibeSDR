@@ -1872,7 +1872,13 @@ function updateViewOverlays() {
     wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // free-running dongle: nothing fixed to show
     return;
   }
-  const rf = spec.rfCenterHz();
+  // ★★★ THE RF CENTRE IS THE RADIO'S, NOT THE VIEW'S. spec.rfCenterHz() is derived from the
+  //     config's centerFreq, which the server sends as the VIEW centre — so it tracked the dial
+  //     and read 4.625 MHz on a receiver actually centred on 6.5 (Stuart, 2026-08-02). That was
+  //     invisible while the dongle followed the VFO, because the two were the same number. Once
+  //     the operator pins the window they are different things, and the fixed one is the whole
+  //     point of showing it: this is the window you are inside.
+  const rf = hwLockedCentre > 0 ? hwLockedCentre : spec.rfCenterHz();
   const fs = spec.captureBandwidth();
   wf.rfCenterHz = rf;
 

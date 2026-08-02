@@ -38,6 +38,7 @@ void Channelizer::feed(const cf32* in, int n,
         //   `ov/D` output samples of each channel are thrown away.
         fwd_.forward(hist_.data(), spec_.data());
         onBlock(spec_.data(), n_);
+        ++blocks_;
 
         // Carry the LAST `ov` samples of this block forward as the next block's history.
         std::memmove(hist_.data(), &hist_[n_ - ov], (size_t)ov * sizeof(cf32));
@@ -75,6 +76,27 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
     //   out at unit amplitude, which is what every caller expects and what the test asserts.
     const float g = 1.0f / (float)n_;
     for (int k = 0; k < chanBins; ++k) slice_[k] *= g;
+
+    // ★★★ PHASE-CONTINUE THE CHANNEL ACROSS BLOCKS. Each block is transformed independently, so
+    //     the extracted channel's phase reference RESTARTS every block. The true signal at
+    //     `centreBin` advances by 2*pi*centreBin*hop/n_ between blocks, and unless that is put
+    //     back, every block boundary is a phase DISCONTINUITY. Repeating at the block rate, that
+    //     radiates a COMB OF SPURS either side of any strong signal — which is what it looked
+    //     like on air: a picket fence spreading +/-10 kHz around DDK (Stuart, 2026-08-02, "the
+    //     detail is terrible"). It also puts a small error on the recovered frequency, and THAT
+    //     is how it was first caught — by sweeping centreBin in the tests. Judging it by the
+    //     frequency error alone badly understated it: the audible/visible damage is the comb.
+    //     ★ Zero whenever centreBin is a multiple of OVERLAP_DIV, which is why the original
+    //       test — centre bin 512 — never saw it. Sweep, do not sample.
+    {
+        const double turns = std::fmod((double)centreBin * (double)blocks_
+                                       * (double)hop() / (double)n_, 1.0);
+        if (turns != 0.0) {
+            const double a = -2.0 * M_PI * turns;
+            const cf32 rot((float)std::cos(a), (float)std::sin(a));
+            for (int k = 0; k < chanBins; ++k) slice_[k] *= rot;
+        }
+    }
 
     inv.forward(slice_.data(), out);       // cfg was built inverse — this IS the inverse transform
 

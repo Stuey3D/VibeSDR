@@ -136,6 +136,7 @@ private:
     ComplexFFT fwd_;
     std::vector<cf32> hist_;                       // [overlap][hop] assembled block
     int have_ = 0;                                 // samples currently in hist_ beyond the overlap
+    long long blocks_ = 0;                         // blocks transformed — the channel phase reference
     std::vector<cf32> block_, spec_, slice_;
     // One inverse transform per channel SIZE (not per channel) — several channels of the same
     // width share it, which is the common case.
@@ -236,6 +237,10 @@ public:
      *  power of two), so read it back with spanHz() — a caller that assumes it got exactly
      *  what it asked for will draw the frequency scale wrong. */
     void configure(double offsetHz, double spanHz, double rateHz);
+    /** Diagnostics: called on each (re)configure with what this object actually derived. */
+    using LogFn = std::function<void(double fs, double offHz, double reqSpan, double rawSpan,
+                                     int decim, int centreBin, int chanBins)>;
+    void setLog(LogFn f) { logCb_ = std::move(f); }
     void disable();
     bool enabled() const { return enabled_; }
 
@@ -287,6 +292,7 @@ private:
     std::vector<cf32> mixBuf_, aBuf_, bBuf_;
 
     // Shared
+    LogFn logCb_;
     std::unique_ptr<Channelizer> chan_;
     int chanBins_ = 0, centreBin_ = 0;
     std::vector<cf32> chanOut_;
@@ -1208,6 +1214,7 @@ public:
     /** Output width of the zoom FFT. MUST match the bin count the client is sent, or the frame
      *  would be resampled on the way out — reintroducing the interpolation this exists to remove.
      *  Takes effect on the next view change. */
+    void setZoomLog(ZoomSpectrum::LogFn f) { zoomLog_ = std::move(f); }
     void setZoomBins(int n) { if (n >= 64) { zoomBins_.store(n, std::memory_order_relaxed);
                                              zoomDirty_.store(true, std::memory_order_release); } }
     /** The span actually delivered — decimation is a power of two, so it is the next achievable
@@ -1303,6 +1310,7 @@ private:
     std::atomic<double> zoomSpanOut_{0.0};
     std::atomic<bool>   zoomDirty_{false};
     std::atomic<int>    zoomBins_{1024};
+    ZoomSpectrum::LogFn zoomLog_;
 
     NCO nco_;
     // Decimation CASCADE, not one filter. Filter cost scales with the rate it runs
