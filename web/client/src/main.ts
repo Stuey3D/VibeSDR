@@ -532,8 +532,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         nEl.textContent = notch ? 'ON' : 'OFF';
       }
     },
-    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio) => {
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      hwLockedCentre = lockedCentre ?? 0;
       applyRadioCaps(radio ?? null);
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
       // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
@@ -707,6 +708,8 @@ let hwGains: number[] = [];
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
+// The operator pinned the captured window (see onHwInfo). A real lock, not a ceiling.
+let hwLockedCentre = 0;
 /** The resolved PIN credentials, kept so bookmark WRITES can carry them. */
 let authState: AuthState | null = null;
 
@@ -4585,8 +4588,22 @@ function populateHw() {
   // ★ An HF+ has no picker at all (see applyRadioCaps) — do not let the generic cap logic put it
   //   back the moment hwinfo arrives.
   const ahfPinned = radioCaps?.driver === 'airspyhf';
-  if (rateRow)  rateRow.hidden = ahfPinned;
-  if (rateLock) rateLock.hidden = true;
+  // ★★★ A LOCKED CENTRE LOCKS THE RATE. The centre and the rate together ARE the captured
+  //     window, so on a shared receiver the operator pins both and the listener gets a view and
+  //     a VFO inside it — no hardware control at all. Unlike lockedRate (an up-to ceiling, where
+  //     keeping the picker is right), there is nothing to choose here, and a picker the server
+  //     refuses outright is worse than none: the user concludes the RADIO is broken rather than
+  //     the control (Stuart, 2026-08-02: "still have all the controls though").
+  const windowLocked = hwLockedCentre > 0;
+  if (rateRow)  rateRow.hidden = ahfPinned || windowLocked;
+  if (rateLock) rateLock.hidden = !windowLocked || ahfPinned;
+  if (rateLock && windowLocked) {
+    const v = rateLock.querySelector('.val');
+    const shown = hwRates.length && cap !== Infinity ? cap : 0;
+    if (v) v.textContent = shown > 0
+      ? `${(shown / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s — set by the server.`
+      : 'Set by the server.';
+  }
 
   if (hwRates.length) {
     const r = $<HTMLSelectElement>('rate');

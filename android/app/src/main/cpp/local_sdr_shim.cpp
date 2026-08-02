@@ -1456,14 +1456,31 @@ struct LocalSdrShim::Impl {
     // that the wide path is magnifying nothing, which is what made high zoom blocky. Above it the
     // wide path is both correct and cheaper, so it keeps the job.
     // ★ Not on SpyServer: there the waterfall is the SERVER's FFT and we have no IQ for the view.
+    bool zoomWasOn_ = false;
+    long long zoomFrames_ = 0;
     void updateZoomView() {
         const double shown    = displaySpan() / zoomFactor.load();
         const double srcBinHz = sampleRate / (double)fftSize;
         const double step     = (shown / (double)g_vsOutBins.load()) / srcBinHz;
-        if (!useSpy() && step < 1.0 && shown > 0.0)
-            rx.setZoomView(viewCenter.load() - rtlCenter.load(), shown);
-        else
-            rx.setZoomView(0.0, 0.0);
+        // ★★★ TRACK THE WIRE WIDTH. The client picks its bin count when the SPECTRUM SOCKET
+        //     CONNECTS, which is after startEngine() has already built the zoom FFT — so the two
+        //     disagreed, every zoom frame was dropped by the width check below, and because the
+        //     wide path is suppressed while zoom owns the waterfall the display simply FROZE
+        //     (Stuart, 2026-08-02: "it worked and then froze as i zoomed in"). Re-applying it here
+        //     is cheap: setZoomBins only rebuilds when the number actually changes.
+        rx.setZoomBins(g_vsOutBins.load());
+        const bool want = !useSpy() && step < 1.0 && shown > 0.0;
+        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load(), shown);
+        else      rx.setZoomView(0.0, 0.0);
+        // Speaks on the TRANSITION only. The wide path is suppressed while the zoom path owns the
+        // waterfall, so "zoom engaged" and "no frames" together means a BLANK display — which is
+        // exactly the failure worth being able to see in a log rather than deduce.
+        if (want != zoomWasOn_) {
+            zoomWasOn_ = want;
+            LOGI("zoom spectrum %s (view %.1f kHz, step %.3f, delivered %.1f kHz)",
+                 want ? "ENGAGED" : "released", shown / 1e3, step, rx.zoomSpanHz() / 1e3);
+            zoomFrames_ = 0;
+        }
     }
 
     // A zoom frame, in the SAME wire format as onSpectrum's — same SPEC header, same bin count,
@@ -1473,7 +1490,14 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
         if (!sock || !sock->isOpen()) return;
         const int outBins = g_vsOutBins.load();
-        if (nb != outBins) return;          // width mismatch: setZoomBins keeps these equal
+        if (nb != outBins) {
+            // Must never happen now updateZoomView() tracks the wire width — but SAY SO if it
+            // does. Dropping frames silently here is precisely what turned a width mismatch into
+            // an unexplained frozen waterfall.
+            if (zoomFrames_ >= 0) { zoomFrames_ = -1;
+                LOGI("zoom spectrum DROPPED: %d bins but the wire wants %d", nb, outBins); }
+            return;
+        }
         std::vector<uint8_t> frame(22 + outBins);
         frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
         uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1487,6 +1511,8 @@ struct LocalSdrShim::Impl {
         }
         sendWs(sock, 0x2, frame.data(), frame.size());
         vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+        if (++zoomFrames_ == 1 || zoomFrames_ % 100 == 0)
+            LOGI("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
     void onSpectrum(const float* db, int bins) {
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
@@ -2237,6 +2263,17 @@ struct LocalSdrShim::Impl {
         // A restart rebuilds the engine underneath the zoom channel, so its view has to be
         // re-applied — otherwise it keeps filtering around the centre the OLD rate implied.
         updateZoomView();
+        // ★★★ OFFSET TUNING STILL HAS TO BE APPLIED WHEN THE CENTRE IS LOCKED. Every source
+        //     opens at EXACTLY the centre it is given, and tuneHw() is the ONLY thing that adds
+        //     HW_OFFSET_HZ — while vfoOffsetNow() subtracts it unconditionally. Unlocked, the
+        //     first retune calls tuneHw() and the two agree; LOCKED, retune() returns early and
+        //     never does, so the compensation was applied to a radio that had never been offset
+        //     and every demod landed 15 kHz low (Stuart, 2026-08-02: tuned to the Buzzer on 4625,
+        //     hearing Northwood fax on 4609). Apply it once here, where the source is already open.
+        if (g_vsLockedCentre.load() > 0.0 && !useSpy()) {
+            rtlCenter.store(g_vsLockedCentre.load());
+            tuneHw(g_vsLockedCentre.load());
+        }
         cb.audio    = &Impl::audioCb;
         cb.rdsPs    = &Impl::rdsPsCb;
         cb.rdsPi    = &Impl::rdsPiCb;

@@ -124,8 +124,12 @@ export interface SpectrumCallbacks {
   onDevice?: (present: boolean) => void;
   /** The person at the server is looking for this window. */
   onSummon?: () => void;
+  /** ★★ lockedRate is an UP-TO CEILING (offer rates at or below it). lockedCentre is a real
+   *  LOCK — the operator pinned the captured window, so the rate is fixed too and the picker
+   *  must go entirely. Two different meanings, deliberately two different fields: reusing the
+   *  ceiling as a lock hid the picker in the app and merely filtered it here. */
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
-              forceIdleSaver?: boolean, radio?: RadioCaps | null) => void;
+              forceIdleSaver?: boolean, radio?: RadioCaps | null, lockedCentre?: number) => void;
   /** ★ Global server-side DSP state (NR, notch). These SURVIVE a listener leaving,
    *  so the next listener inherits them — the client must render what the server
    *  says rather than its own saved prefs, or the control lies about the radio. */
@@ -341,7 +345,8 @@ export class SpectrumClient {
       case 'hwinfo':
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
-                           (msg.radio ?? null) as RadioCaps | null);
+                           (msg.radio ?? null) as RadioCaps | null,
+                           Number(msg.lockedCentre) || 0);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.(msg.nr === true, msg.notch === true);
         }
