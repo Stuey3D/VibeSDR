@@ -229,11 +229,10 @@ export default function FreqModal({
       // field brings the keyboard up, and the card moves to meet it — which is also how the
       // search and bookmark-name fields have always behaved, so the card is now consistent with
       // itself whichever of its three jobs you came for.
-      // ★ EXCEPT WHEN THE USER IS DRIVING BY KEYBOARD, where focusing raises nothing (a Mac, or an
-      //   iPad with a hardware keyboard) and NOT focusing would mean reaching for the mouse to
-      //   type a frequency. useKeyboardMode is the global "right now" answer to that, and it is
-      //   the honest test — better than asking the platform, because an iPad is both.
-      if (kbSeenRef.current) setTimeout(() => { inputRef.current?.focus(); }, 80);
+      // ★★ NO EXCEPTION, INCLUDING FOR HARDWARE KEYBOARDS. I had this focus automatically when the
+      //   user was driving by keyboard, on the grounds that focusing raises nothing on a Mac.
+      //   Stuart, twice: "we want to click the field." The card opens inert and every route into
+      //   it is the same one — which is also the only version that cannot surprise anybody.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, currentHz]);
@@ -301,8 +300,6 @@ export default function FreqModal({
   // flag was always one keypress behind and the caps only appeared after an arrow — exactly
   // what Stuart reported. Asking the app-wide flag means they are there the moment it opens.
   const kbSeen = useKeyboardMode();
-  /** Read by the open effect, which is declared above this line. */
-  const kbSeenRef = useRef(false); kbSeenRef.current = kbSeen;
   const lettersArmed = visible && cardMode === 'tune';
   const showKeyCaps = kbSeen && lettersArmed && !lockUnit;
   useEffect(() => {
