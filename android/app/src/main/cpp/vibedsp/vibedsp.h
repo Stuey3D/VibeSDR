@@ -228,12 +228,18 @@ public:
         reset();
     }
     void process(float* x, int n) {
+        // ★★★ THIS FILTER IS RECURSIVE, SO A NaN HERE WOULD BE FOREVER — the same trap the
+        // stereo PLL documents (stereo.cpp): one non-finite sample from anywhere upstream
+        // multiplies through every subsequent one and never leaves, and the audible result is
+        // permanent silence that only a restart clears. Checking once per BLOCK (not per sample)
+        // keeps it free, and re-seeding costs nothing: a DC blocker re-settles in ~a second.
         for (int i = 0; i < n; ++i) {
             const float in = x[i];
             y_ = in - x1_ + r_ * y_;
             x1_ = in;
             x[i] = y_;
         }
+        if (!std::isfinite(y_) || !std::isfinite(x1_)) reset();
     }
     void reset() { x1_ = 0.0f; y_ = 0.0f; }
     /** The removed offset, in units of full-scale deviation — i.e. the tuning error. */
