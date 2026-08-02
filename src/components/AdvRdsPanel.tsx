@@ -528,7 +528,17 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // (Stuart, 2026-07-27). ★ The `as any` needed to force that string past the type checker was
   // the tell; RN's own types say maxHeight here should be a number.
   // Measure the window and work in pixels, minus the space the panel is anchored above.
-  const { height: winH } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
+  /** ★★ TWO COLUMNS WHEN THERE IS ROOM FOR TWO — a REFLOW, keyed on the width available, never on
+   *  the device. Rotate an iPad and it reflows; a phone and a portrait iPad simply never qualify,
+   *  so they keep the stacked layout they already had. Same rule the web client's decoder panels
+   *  use, and the reason BIG on a Mac was a ~300 pt column of text beside a metre of empty panel
+   *  (Stuart, 2026-08-02: "put the graphs on the side like it does on the web client so no
+   *  scrolling needed… and then when pushed to portrait the graphs move underneath like they are
+   *  on the phone, a proper reflow").
+   *  ★ 820 = the fields column (~340) plus the plots (~330) plus padding and the gap. Below that
+   *  they would be squeezed rather than placed, which is worse than stacking. */
+  const wideCols = p.tall && winW >= 820;
   // ★★ LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
   // straight up past the notch, covering the clock and battery (Stuart's screenshot,
   // 2026-07-27). The available height has to stop at the safe area, not at the window edge.
@@ -596,7 +606,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={s.body}>
+        <ScrollView contentContainerStyle={[s.body, wideCols && s.bodyWide]}>
+          <View style={wideCols ? s.colFields : undefined}>
           {/* ★ RAW mode needs saying, not just showing — a panel full of red labels with no
               explanation reads as breakage rather than as "arriving but not yet trusted". */}
           {raw && (
@@ -667,6 +678,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             ? afs.map(a => (a / 1000).toFixed(1)).join('  ') : DASH} />
           <Row raw={raw} label="Group share" value={groupShareTxt} />
 
+          </>}
+          </View>
+
+          {/* ★ The plots are their own column when wide, and simply the next thing down the page
+              when not. Splitting them out of the BIG-only fragment above is what makes both
+              layouts expressible without duplicating the field list. */}
+          {p.tall && (
+          <View style={wideCols ? s.colPlots : undefined}>
           <Text style={s.section}>PLOTS</Text>
           <View style={s.plots}>
             <View>
@@ -696,7 +715,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <StationLogo name={p.ps} itu={p.countryIso} size={72} />
             </View>
           )}
-          </>}
+          </View>
+          )}
         </ScrollView>
       </View>
     </View>
@@ -725,6 +745,10 @@ const s = StyleSheet.create({
   hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: 'rgba(255,160,0,0.60)' },
   hbtnTxtActive: { color: C.gold },
   body:  { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
+  // Wide: fields on the left at their natural width, plots beside them taking the rest.
+  bodyWide:  { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },
+  colFields: { flexGrow: 0, flexShrink: 1, flexBasis: 340, gap: 3 },
+  colPlots:  { flexGrow: 1, flexShrink: 1, flexBasis: 330 },
   rawNote: { fontFamily: FONT, fontSize: 10, color: C.warn, marginBottom: 6, lineHeight: 14 },
   row:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   // ★ The label column is FIXED and the value WRAPS. Letting the label wrap instead was what
