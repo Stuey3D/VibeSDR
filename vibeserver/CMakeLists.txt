@@ -38,6 +38,7 @@ endif()
 # ── vibedsp: the clean-room DSP engine ────────────────────────────────────────
 add_library(vibedsp STATIC
     "${CPP_DIR}/vibedsp/fft.cpp"        "${CPP_DIR}/vibedsp/ddc.cpp"
+    "${CPP_DIR}/vibedsp/channelizer.cpp" "${CPP_DIR}/vibedsp/zoomspec.cpp"
     "${CPP_DIR}/vibedsp/resampler.cpp"  "${CPP_DIR}/vibedsp/stereo.cpp"
     "${CPP_DIR}/vibedsp/rds.cpp"        "${CPP_DIR}/vibedsp/pipeline.cpp"
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
