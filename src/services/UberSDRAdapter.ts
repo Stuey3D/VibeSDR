@@ -134,6 +134,16 @@ export class UberSDRAdapter implements SDRBackend {
   adminUnlock(nonce: string, token: string) { this.client.adminUnlock(nonce, token); }
   /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
   setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
+  /** ★★★ THE MISSING HALF OF POWERSAVE, and its absence made the saver SPEED THE SPECTRUM UP.
+   *  Idle powersave does two things: pause the link controller so it stops re-asserting its rung,
+   *  then drop to an absolute 5 fps. Only the FIRST was forwarded. So the controller let go of
+   *  whatever rung it was holding, nothing replaced it with the idle rate, and the waterfall ran
+   *  at the FULL rate under a pill reading "POWER SAVE · spectrum slowed" — measured by Stuart at
+   *  10 fps before the saver engaged and 20 fps after (2026-08-02, two screenshots).
+   *  ★ Note WHICH way this failed. The two calls are adjacent in SDRScreen and adjacent here; the
+   *  one that got forwarded was the one that REMOVES a brake. A half-applied change is worse than
+   *  an unapplied one — "not slowing" would merely have been the feature missing. */
+  setPowersaveRate() { this.client.setPowersaveRate(); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }
   resumeSpectrum()         { this.client.resumeSpectrum(); }
   forceResubscribe(reason: string) { this.client.forceResubscribe(reason); }
