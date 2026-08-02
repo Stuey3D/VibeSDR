@@ -10,6 +10,7 @@ set(DSP ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 set(DSP_SRC
     ${DSP}/fft.cpp
+    ${DSP}/channelizer.cpp
     ${DSP}/ddc.cpp
     ${DSP}/resampler.cpp
     ${DSP}/stereo.cpp
@@ -22,6 +23,13 @@ set(DSP_SRC
 add_executable(vibedsp_tests test_fft.cpp ${DSP_SRC})
 target_include_directories(vibedsp_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_tests PRIVATE -O2 -Wall)
+
+# ★★★ Fast convolution (ka9q's architecture): one forward FFT, channels by slice + inverse FFT.
+# A wrong slice layout does not fail loudly — it tunes you somewhere else — so the test asserts
+# the recovered tone's FREQUENCY and amplitude, not merely its presence.
+add_executable(vibedsp_channelizer_tests test_channelizer.cpp ${DSP_SRC})
+target_include_directories(vibedsp_channelizer_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_channelizer_tests PRIVATE -O2 -Wall)
 
 add_executable(vibedsp_demod_tests test_demod.cpp ${DSP_SRC})
 target_include_directories(vibedsp_demod_tests PRIVATE ${DSP})
@@ -57,6 +65,12 @@ target_compile_options(vibedsp_passband_tests PRIVATE -O2 -Wall)
 
 # WFM stereo CPU bench. The MPX chain is the engine's most expensive path and it
 # runs on the phone (local hardware) and on VibeServer, so keep it measurable.
+# Fast convolution vs per-client DDC. The multi-listener demo lives or dies on the SLOPE
+# (cost per extra listener), so measure it rather than trusting the brief.
+add_executable(vibedsp_bench_channelizer bench_channelizer.cpp ${DSP_SRC})
+target_include_directories(vibedsp_bench_channelizer PRIVATE ${DSP})
+target_compile_options(vibedsp_bench_channelizer PRIVATE -O2 -Wall)
+
 add_executable(vibedsp_bench_wfm bench_wfm.cpp ${DSP_SRC})
 target_include_directories(vibedsp_bench_wfm PRIVATE ${DSP})
 target_compile_options(vibedsp_bench_wfm PRIVATE -O2 -Wall)
