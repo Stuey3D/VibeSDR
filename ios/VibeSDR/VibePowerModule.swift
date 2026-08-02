@@ -83,6 +83,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     VibePowerModule.shared = self
     startVoiceObserver()
     VibeCrashLog.install()      // record uncaught ObjC exceptions — see VibeCrashLog
+    VibeCrashLog.announce()     // ...and SAY what the last one was, or recording it achieves nothing
   }
 
   // MARK: - State
@@ -2644,6 +2645,28 @@ enum VibeCrashLog {
     return withUnsafePointer(to: &sysinfo.machine) {
       $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(validatingUTF8: $0) ?? "?" }
     }
+  }
+
+  /// ★★★ WRITE-ONLY DIAGNOSTICS ARE NOT DIAGNOSTICS. This handler has been faithfully recording
+  /// the name and reason of every uncaught ObjC exception, and NOTHING has ever read it — the JS
+  /// `getLastCrash()` is likewise never called, so the record has only ever existed on disk.
+  /// It cost us a real crash: VibeSDR 10.0.2 build 45 aborted on macOS with the reason already
+  /// captured, and the crash REPORT does not carry it (a rethrow off the throwing queue loses the
+  /// Application Specific Information), so there was no way to read the one fact that identifies
+  /// the fault. Now it goes to the unified log at launch, where `log show --predicate 'process ==
+  /// "VibeSDR"'` finds it on any machine — including a TestFlight build we cannot attach a
+  /// debugger to.
+  /// ★ Deliberately NOT cleared here: the diagnostics screen is still entitled to show it. This
+  /// only makes the record visible, and adds nothing to what is stored.
+  /// ★ Local only, unchanged: os_log stays on the device like the UserDefaults entry it prints.
+  static func announce() {
+    guard let c = take() else { return }
+    NSLog("VIBE LAST NATIVE CRASH — %@: %@\nos %@ model %@\n%@",
+          (c["name"]   as? String) ?? "?",
+          (c["reason"] as? String) ?? "?",
+          (c["os"]     as? String) ?? "?",
+          (c["model"]  as? String) ?? "?",
+          (c["stack"]  as? String) ?? "")
   }
 
   static func take() -> [String: Any]? {

@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Image, ScrollView, StyleSheet, Text } from 'react-native';
+import { Animated, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 // Official RDS mark — shown in place of the text badge when the live data is
 // genuine RDS (black logo sits in a white pill against the dark bar).
@@ -137,8 +137,17 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   const overflow = textW > areaW && areaW > 0;
 
   return (
-    <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none"
-      onLayout={(e) => onHeight?.(e.nativeEvent.layout.height)}>
+    // ★★ TWO VIEWS, NOT ONE, PURELY SO THE BAR CAN BE CAPPED AND CENTRED. The outer one does the
+    // positioning (absolute, inset 14, pinned to `bottom`); the inner one is the bar itself and
+    // takes the same max-width cap as the control island, so on a Mac window or an iPad on an
+    // external display the two line up instead of the station strip running the full width of the
+    // glass under a centred island (Stuart, 2026-08-02, with a screenshot of exactly that).
+    // ★ It cannot be done on a single view: this is `position: absolute` with BOTH left and right
+    // set, and in that case Yoga resolves the position from `left` — a maxWidth alone would just
+    // shrink the bar towards the left-hand edge rather than centring it.
+    <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none">
+    <View style={styles.bar}
+      onLayout={(e: { nativeEvent: { layout: { height: number } } }) => onHeight?.(e.nativeEvent.layout.height)}>
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
       {/* Source mark: live-data badge (RDS logo / text) wins; otherwise the
           bookmark-origin icon — backend logo, EiBi mark, or phone glyph. */}
@@ -180,15 +189,25 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
       </ScrollView>
       {!!shown.offset && shown.tuneDir === 'right' && <Text style={styles.offset}>{shown.offset}</Text>}
       <Text style={[styles.arrow, { color: rightCol }]}>►</Text>
+    </View>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
+  // Positioning only — see the render for why the bar is a separate child.
   wrap: {
     position: 'absolute',
     left: 14,
     right: 14,
+    alignItems: 'center',
+  },
+  bar: {
+    // ★ THE SAME CAP AS ControlsBar, and it must STAY the same: these two sit one above the other
+    //   and a mismatch is more obvious than either being wrong on its own.
+    maxWidth: 1400,
+    width: '100%',
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 11,

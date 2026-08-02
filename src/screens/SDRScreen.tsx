@@ -3204,12 +3204,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
-        // Pause the controller so it stops re-asserting its rung, THEN drop to the idle rate — else
-        // adaptive/Low Data would win the tick and hold the full rate under the powersave pill.
-        (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(true);
+        // ★★★ BOTH CALLS OR NEITHER. Pausing the controller REMOVES a brake; the powersave rate is
+        // what replaces it. When only the pause went through — setPowersaveRate was not forwarded
+        // by UberSDRAdapter — the saver made the spectrum run FASTER, under a pill announcing that
+        // it had been slowed (Stuart, 2026-08-02: 10 fps before, 20 fps after).
+        // ★ And a backend that cannot do the rate at all (OWRX, Kiwi, FM-DX implement neither)
+        // must not get the pause OR the pill: a notice explaining a throttle that is not running
+        // is the same fault as a control whose every use is a no-op.
+        const pc = client.current as unknown as {
+          setLinkPaused?: (p: boolean) => void; setPowersaveRate?: () => void };
+        if (typeof pc?.setPowersaveRate !== 'function') { idleActiveRef.current = false; return; }
+        pc.setLinkPaused?.(true);
         // Absolute 5 fps, not a divisor — see setPowersaveRate(). A divisor
         // compounded with the controller's rung and bottomed out at ~1 fps.
-        (client.current as unknown as { setPowersaveRate?: () => void })?.setPowersaveRate?.();
+        pc.setPowersaveRate();
         watchProvider.setPowersave(true);   // → Buddy 'powersave' pill
         setPowersaveUi(true);               // → phone pill
       }
