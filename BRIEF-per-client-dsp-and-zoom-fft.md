@@ -230,3 +230,37 @@ OPERATOR CHOICE is a bug, however good its own reasoning.
 - **It must REPORT, not just accept.** Battery, draw, whether it is parking, uptime. Managing a
   solar box blind is how you discover it died yesterday. Most of this already exists in
   diagnostics ([[vibeserver_battery_measured]], the power meter) — it needs surfacing remotely.
+
+### 7.10 ★★★ ANDROID: TWO CHANGES ONLY, AND LOCAL ACCESS *IS* THE PASSWORD RESET
+Stuart's resolution of the tension in §7.7 — keeping Android simple vs. the e-waste argument that
+an old phone is *more than capable* of running a shared receiver, so limiting it artificially is
+the wrong answer. Don't limit it: put the depth behind a tab.
+
+**Exactly two changes to the Android flow:**
+1. First time a user taps **Start server**, prompt for an **admin password**. ★ Say what it is FOR
+   — *"this protects the server from remote changes; you will never need it on this device"* —
+   or it reads as one more hoop, which is the very thing being protected against.
+   Alongside it, a toggle: are the advanced RADIO controls locked behind that password, or open?
+   (On a private LAN the owner may not care.)
+2. A new **ADVANCED tab** — every shared-profile / multi-user setting lives there. The basic flow
+   never sees it.
+
+**First run:** Download → Plug in SDR → Use as Server → set admin password + lock toggle → Start.
+**Every run after:** Plug in SDR → Use as Server → Start. Password and settings remembered.
+
+★★★ **THE ADMIN PASSWORD IS FOR REMOTE CHANGES ONLY.** Someone interacting with the device or the
+app DIRECTLY is the owner by definition and needs no password. This is not a convenience — **it
+DELETES the password-reset feature**: local access IS the reset, so there is no recovery flow to
+design, no reset token, and no way to be locked out of your own radio. (§7.6 called for a TUI
+reset; on Android none is needed, and headless Linux gets the same property through console access.)
+
+★★ **LOOPBACK IS NOT LAN — AND THIS IS THE WHOLE SECURITY OF IT.** "Local" must mean ON-DEVICE
+(127.0.0.1 / ::1), NOT the local network: on shared Wi-Fi — a coffee shop, a housemate, the
+allotment's bridge — another device is not the owner. ✅ `isLoopback()` already exists
+(`local_sdr_shim.cpp:885`, handling IPv4, IPv6 and the v4-mapped form) and is already used for the
+session-limit and busy exemptions. **Reuse it; do not invent a looser test.**
+
+★ **Rate-limit the wrong-password path**, don't only hint. After a few failures, remind the admin
+it can be reset by direct access to the app — but back off as well, or the hint is the only thing
+between an attacker and an unlimited grind. Auth is HMAC challenge-response over a server-issued
+nonce, so the attacker must keep interacting and a backoff genuinely bites.
