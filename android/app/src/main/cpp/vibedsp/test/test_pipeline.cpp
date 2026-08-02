@@ -261,6 +261,47 @@ static void testWFMStereo() {
     check(R_at_Rf - R_at_Lf > 20.0f, "right channel dominated by its own tone");
 }
 
+// ★★★ REGRESSION: THE OFF-TUNE MUTE (Stuart, 2026-08-02).
+// An FM discriminator's DC output is the tuning error, scaled so 75 kHz = full
+// scale, halved again by the 0.5 stereo matrix — so this stereo fixture, tuned
+// 60 kHz off, carries a constant 0.40 under the audio (a mono listener would get
+// the full 0.80). The int16 conversion clips that against the rail, and a rail is
+// silence, not distortion. On air: 50 kHz off played with a little hiss, 100 kHz
+// off was dead silent.
+// This asserts the property that actually matters: the audio stays CENTRED, so
+// the full dynamic range remains available to the programme.
+static void testWFMOffTune() {
+    std::printf("-- RxPipeline (WFM tuned 60 kHz off) --\n");
+    const double fs = 1920000.0, fc = 250000.0, fm = 1000.0;
+    const double dev = 25000.0;                 // ordinary programme level, not peak
+    const double err = 60000.0;                 // how far off centre we tune
+    const int Ni = 1 << 21;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        ph += 2.0 * M_PI * (fc + dev * std::cos(2.0 * M_PI * fm * t)) / fs;
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+    auto audio = runPipe(iq, fs, fc - err, RxPipeline::Mode::WFM, 200000.0);
+    if ((int)audio.size() < 30000) { check(false, "enough off-tune audio"); return; }
+    // Last quarter-second only: the blocker's corner is ~1 Hz (tau ~0.16 s), so this
+    // sits five time constants past the start and measures the settled state.
+    const int kWin = 12000;
+    const int n0 = (int)audio.size() - kWin;
+    double mean = 0.0; float peak = 0.0f;
+    for (int i = n0; i < (int)audio.size(); ++i) {
+        mean += audio[i];
+        peak = std::max(peak, std::fabs(audio[i]));
+    }
+    mean /= kWin;
+    std::printf("  DC = %+.3f (unblocked measures %+.2f), peak = %.3f\n",
+                mean, err / 150000.0, peak);
+    check(std::fabs(mean) < 0.05, "off-tune DC removed (no headroom lost)");
+    check(peak < 0.99f, "audio not pinned against the rail");
+    checkTone(audio, fm, "off-tune WFM tone still recovered");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
@@ -269,6 +310,7 @@ int main() {
     testSSB();
     testWFM();
     testWFMStereo();
+    testWFMOffTune();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

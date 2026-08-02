@@ -190,6 +190,58 @@ private:
     float gain_;
 };
 
+// ── FM discriminator DC blocker ──────────────────────────────────────────--
+// ★★★ THE OFF-TUNE MUTE (Stuart, 2026-08-02: "100 kHz off mutes"). An FM
+// discriminator's DC output IS the tuning error — it is the very quantity a
+// receiver's centre-tune meter displays. FmDemod is scaled so 75 kHz of deviation
+// reaches full scale, which puts a CONSTANT offset of (error / 75 kHz) underneath
+// the programme. The int16 conversion clamps, the waveform pins flat against the
+// limit, and a rail is INAUDIBLE: you do not hear distortion, you hear silence.
+//
+// ★ MONO IS TWICE AS BAD AS STEREO, which is worth knowing before reading the
+// numbers: stereoMatrixBlend() applies the 0.5 matrix gain, so a stereo listener
+// sees error/150 kHz and a mono one the full error/75 kHz. 100 kHz off centre is
+// therefore 0.67 in stereo — which programme peaks (+/-0.5 at full deviation)
+// then push to 1.17, clipping hard — and a hopeless 1.33 in mono, past the rail
+// before any audio is added at all. Measured on a full-strength station: 50 kHz
+// off played with a little hiss, 100 kHz off was dead silent (Stuart).
+//
+// ★ Weak signals mute at SMALLER offsets, which is what made this look like a
+// weak-signal bug for so long: a carrier that has lost capture slews across the
+// full +/-pi, so its peaks rail once DC has eaten most of the headroom, and it
+// comes and goes as the signal fades. Weakness was never the cause; it only
+// lowers the offset that triggers it.
+//
+// Removing DC costs nothing real: FM programme audio starts around 30 Hz, the
+// pilot is at 19 kHz and RDS at 57 kHz, so nothing we want lives at DC. The
+// corner is set very low (~1 Hz) so bass is untouched — the price is that it
+// GLIDES to a new offset over a second or so rather than stepping, which is the
+// right trade: a fast blocker would thin the audio to fix a rare case.
+//
+// ★★ Do NOT "fix" this by clamping harder or by scaling the audio down. Both
+// preserve the fault — the wanted audio is still riding on an offset that has
+// consumed the dynamic range. The offset has to go.
+class DcBlocker {
+public:
+    void configure(double rate, double cornerHz = 1.0) {
+        r_ = (float)std::max(0.0, 1.0 - 2.0 * M_PI * cornerHz / std::max(1.0, rate));
+        reset();
+    }
+    void process(float* x, int n) {
+        for (int i = 0; i < n; ++i) {
+            const float in = x[i];
+            y_ = in - x1_ + r_ * y_;
+            x1_ = in;
+            x[i] = y_;
+        }
+    }
+    void reset() { x1_ = 0.0f; y_ = 0.0f; }
+    /** The removed offset, in units of full-scale deviation — i.e. the tuning error. */
+    float offset() const { return x1_ - y_; }
+private:
+    float r_ = 0.99998f, x1_ = 0.0f, y_ = 0.0f;
+};
+
 // ── De-emphasis (one-pole, real) ─────────────────────────────────────────--
 // FM de-emphasis: y[n] = y[n-1] + a*(x[n]-y[n-1]), a = dt/(tau+dt). 50 us (EU)
 // or 75 us (US). Reconstructs the audio's HF balance after FM and helps reject
@@ -1050,6 +1102,8 @@ private:
     std::unique_ptr<SsbDemod> ssb_;
     Agc  agc_;                              // audio AGC (AM/SSB/CW)
     bool useAgc_ = false;
+    DcBlocker fmDc_;                        // discriminator DC = tuning error (FM only)
+    bool useFmDc_ = false;
     std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz (L+R / mono) LPF
     Deemphasis deemph_;                     // mono / L+R de-emphasis
     bool useDeemph_ = false;
