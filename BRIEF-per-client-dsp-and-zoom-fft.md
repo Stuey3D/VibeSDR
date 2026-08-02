@@ -159,3 +159,23 @@ that drift, and it matches how Kiwi and OpenWebRX work.
 ### 7.5 Landing screen
 A live listener count (and capacity — "3 listening" means nothing without knowing if that is full).
 The identity endpoint already carries `isBusy` / `occupantSecsLeft`; both need to become counts.
+
+### 7.6 First-run: the TUI gets it ONLINE AND PROTECTED, the client configures it
+Stuart, 2026-08-02: *"the TUI exists to get vibeserver online and protected, the admin GUI in the
+client and the app exists to configure it fully."*
+
+- **TUI (headless Linux only)**: radio detection, PORT, mDNS name, and the **admin password**.
+  ★★★ The password stops being optional — "protected" is half the job. A headless box heading for
+  a network with no admin secret is the exact hole the Pi has tonight (it warns and starts anyway).
+  Require it, or generate one and show it ONCE. Keep a TUI **password reset**: once it is the only
+  way in, losing it locks the operator out of their own receiver.
+- **First connection** then demands the admin password and runs a **setup wizard** in the client —
+  a headless server has no GUI of its own, so the first client to connect IS its configuration
+  surface.
+- ★★ **TWO DIFFERENT THINGS, DO NOT CONFLATE**: the **first-run wizard** is headless-only, but the
+  **ongoing admin panel** is useful anywhere — administering a Mac-hosted server from a phone is
+  the same problem. Mac and Android have full local GUIs and must never see the WIZARD, or there
+  are two configuration paths that can disagree about one server.
+- ★ **No platform check needed**: the server advertises **"unconfigured"**, and only a headless
+  build that was never given settings is ever in that state. The client shows the wizard when
+  TOLD to, rather than inferring it — the same reason lockedCentre is published rather than guessed.
