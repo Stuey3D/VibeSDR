@@ -974,7 +974,8 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP }}>
         <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
-          <Text style={[lnd.lsTxt, { color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }]}
+          <Text style={[lnd.lsTxt, { color: t.btnText, fontFamily: t.font,
+                                     fontSize: s.f(11), lineHeight: s.f(14) }]}
                 numberOfLines={2} adjustsFontSizeToFit>
             {stepLabel}
           </Text>
@@ -1042,7 +1043,13 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 const lnd = StyleSheet.create({
   sigFrame: { borderRadius: 7, overflow: 'hidden', backgroundColor: 'rgba(105,98,82,0.30)', justifyContent: 'center', alignSelf: 'stretch' },
   lsBtn:    { flex: 1, backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  lsTxt:    { letterSpacing: 0.5, textAlign: 'center', lineHeight: 14 },
+  // ★★ NO FIXED lineHeight HERE — it is set at the use site, SCALED, alongside fontSize.
+  // A constant 14 lived here while the font is s.f(11), which scales: on a Mac window (and any
+  // iPad wide enough to clamp the scale at 1.45) the text renders at ~16pt inside a 14pt line
+  // box, and the tops of the glyphs are sliced off — "500Hz" and "100k" both showed it. The
+  // portrait button next door has never had the fault because it sets no lineHeight at all.
+  // ★ A length that must track fontSize cannot be a constant when fontSize is not one.
+  lsTxt:    { letterSpacing: 0.5, textAlign: 'center' },
   clock:    { letterSpacing: 1, marginTop: 3, textAlign: 'center' },
   recRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, marginTop: 1 },
   recDot:   { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#e05050' },
