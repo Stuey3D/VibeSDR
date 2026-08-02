@@ -2435,6 +2435,14 @@ struct LocalSdrShim::Impl {
         // span, less CPU) but never widen ABOVE the host's max. This is the enforcement (clamp),
         // not the UI — an old or hand-rolled client that asks for more is clamped down, not obeyed.
         if (type == "sampleRate") {
+            // ★★★ REFUSED ON AN HF+. See the lockedRate note in hwinfo: changing an HF+'s rate on a
+            //     live stream is a path no other SDR client takes, and ours could leave the device
+            //     needing a power cycle. The client hides the picker; this is the enforcement, for
+            //     an old or hand-rolled client that asks anyway.
+            if (LocalSdrShim::instance().isAirspyHf()) {
+                LOGI("sampleRate ignored — the Airspy HF+ is pinned to the rate it opened at");
+                return;
+            }
             if (jsonNum(msg,"value",v) && v > 0) {
                 const double maxR = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
                 if (maxR > 0 && v > maxR) v = maxR;   // clamp to the ceiling; lower is allowed
@@ -2587,6 +2595,25 @@ struct LocalSdrShim::Impl {
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).
         { double lr = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
+          // ★★★ THE AIRSPY HF+ IS PINNED TO THE RATE IT OPENED AT, and it advertises that here so
+          //     the picker disappears rather than offering a control that can wedge the radio.
+          //     ★ NOBODY CHANGES AN HF+'s RATE ON A LIVE STREAM. Checked against the field:
+          //       • SDR++ (mainline AND Brown) DISABLE the rate combo while running — you stop the
+          //         device, choose, and start; start() re-applies rate -> freq -> gains -> start.
+          //       • gr-osmosdr sets it once at flowgraph construction and THROWS on an unsupported
+          //         rate rather than snapping to a neighbour.
+          //       • OpenWebRX is profile-based and does not change rate on the fly at all (Stuart).
+          //     Our live-reconfigure path was therefore one nobody else exercises, and it showed:
+          //     mis-tuning that only a manual retune cleared, audio a full span off with an image
+          //     beside it, and on one occasion a USB endpoint wedged hard enough to need a reboot
+          //     of the host (2026-08-01/02).
+          //     ★★ Stuart's call, and the right one: "we cannot have users wedge a device that
+          //     shouldn't really have its sample rate changed on the fly." A control that can
+          //     brick the receiver until it is power-cycled is not a feature.
+          //     ★ The rate is still the RADIO'S choice at open (the config file sets it), so an
+          //     owner who wants 456 kHz sets it there and restarts the server — the same
+          //     stop-and-start every other client requires, just expressed as configuration.
+          if (useAirspyHf() && sampleRate > 0) lr = sampleRate;
           j += ",\"lockedRate\":" + std::to_string((long long)(lr > 0 ? lr : 0)); }
         // THE FRAME-RATE CEILING, for the same reason lockedRate is advertised: a client that
         // asks for more than the owner allows is SILENTLY CLAMPED (setFftRate, and the start
@@ -5140,6 +5167,8 @@ void LocalSdrShim::setFftRate(double fps) {
     p->rx.setFftRate(fps * FFT_AVG);
     LOGI("fft rate: %.1f fps (engine %.1f)", fps, fps * FFT_AVG);
 }
+bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
+
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
     Impl* impl = p;
