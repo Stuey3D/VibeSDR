@@ -32,10 +32,18 @@ const C = {
   //   so the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
   //   against it, which is what the control island has always done.
   bg:      'rgba(10,8,4,0.72)',
-  // ★ BIG carries no blur (see the panel), so the tint alone has to hold the text against a
-  //   moving waterfall. Not fully opaque: the band edges and a strong carrier still read faintly
-  //   through it, which is what stops the panel feeling like a separate screen.
-  bgTall:  'rgba(10,8,4,0.93)',
+  // ★★★ BIG IS ANDROID'S LOOK, DELIBERATELY — the same tint, no blur. Android has never had the
+  //   BlurView (it is gated on Platform.OS === 'ios') and Stuart's verdict on it is "the window is
+  //   glass and the spectrum shines through". That is the effect BIG wants and it is FREE: alpha
+  //   blending does not force the offscreen resample a backdrop blur does, so the see-through
+  //   costs nothing and the blur was the whole bill.
+  //   ★ THE POINT OF SEEING THROUGH IT IS TUNING — Stuart: "so that the user could still see a
+  //   little spectrum underneath the window so that they can see to tune". An earlier pass at this
+  //   raised BIG to 0.93 to protect legibility once the blur was gone, which traded away the one
+  //   thing the transparency existed for. Same value as SMALL, so the two modes match.
+  //   ★★ Same rule as ControlsBar's blur note (2026-07-28): "ANDROID IS THE TARGET, NOT THE THING
+  //   TO CHANGE… iOS just needs to get to android level." It applied to the island then and it
+  //   applies to this panel now.
   border:  'rgba(255,160,0,0.28)',
   gold:    '#ffb833',
   goldDim: 'rgba(255,160,0,0.70)',
@@ -542,7 +550,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
         {Platform.OS === 'ios' && !p.tall &&
           <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />}
         <View style={[StyleSheet.absoluteFill,
-                      { backgroundColor: p.tall ? C.bgTall : C.bg }]} pointerEvents="none" />
+                      { backgroundColor: C.bg }]} pointerEvents="none" />
         <View style={s.header}>
           {/* ★ Matches the button that opens it — an abbreviation in one place and the full
               name in the other reads as two different features. */}
