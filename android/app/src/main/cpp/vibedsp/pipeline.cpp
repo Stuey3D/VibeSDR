@@ -192,6 +192,7 @@ void RxPipeline::rebuildAudio() {
     // Only WFM decimates inside its audio filters; every other mode's post-chain
     // runs at the channel rate, which is already as low as that mode needs.
     audioDecim_ = 1; audFs_ = chFs_;
+    useFmDc_ = false;   // FM-only; must not survive a switch to AM/SSB
     switch (mode_) {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>();
                                                 useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
@@ -203,6 +204,7 @@ void RxPipeline::rebuildAudio() {
             useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
         case Mode::NFM:
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
+            fmDc_.configure(chFs_); useFmDc_ = true;
             if (deempTau_.load() > 0.0) { deemph_.configure(deempTau_.load(), chFs_); deemph_.reset(); useDeemph_ = true; }
             break;
         case Mode::WFM: {
@@ -210,6 +212,7 @@ void RxPipeline::rebuildAudio() {
             // de-emphasis. Stereo path adds a 19 kHz pilot PLL, 38 kHz coherent
             // L-R recovery, a second 15 kHz LPF, and per-channel de-emphasis.
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * 75000.0)));
+            fmDc_.configure(chFs_); useFmDc_ = true;
             // ── DECIMATE INSIDE THE 15 kHz FILTERS ────────────────────────────
             // These two FIRs were the single most expensive thing in WFM: ~176
             // taps each, computed for every one of the ~320k channel samples a
@@ -342,6 +345,12 @@ void RxPipeline::feed(const cf32* iq, int n) {
         demodBuf_.resize(nc);
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
+
+        // ★★★ Strip the discriminator's DC before ANYTHING downstream sees it. That DC is
+        // the tuning error, and left in place it eats the headroom and mutes an off-tune
+        // station outright — see DcBlocker. It has to happen here, on the MPX, so that the
+        // mono path, the stereo matrix and the resampler all inherit a centred signal.
+        if (useFmDc_) fmDc_.process(demodBuf_.data(), nc);
         else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
 
         if (stereo_) {
