@@ -221,7 +221,19 @@ export default function FreqModal({
       setValue(toDisplay(currentHz, unit));
       setDraftVts(null);   // start from the tuned station; typing takes over
       setCardMode('tune'); setSearchQuery(''); setBmImportOpen(false); setBmImportMsg('');
-      setTimeout(() => { inputRef.current?.focus(); }, 80);
+      // ★★★ DO NOT RAISE THE KEYBOARD ON OPEN. This card is not a frequency box any more — it
+      // houses frequency entry, the VTS bookmarks AND the bookmark search, so it is TALL, and a
+      // soft keyboard arriving with it pushed the top of the card off the screen in landscape.
+      // It read as broken when it was only the compromise for screen height (Stuart, 2026-08-02:
+      // "makes the app look broken when it is simply the compromise for screen size"). Tapping a
+      // field brings the keyboard up, and the card moves to meet it — which is also how the
+      // search and bookmark-name fields have always behaved, so the card is now consistent with
+      // itself whichever of its three jobs you came for.
+      // ★ EXCEPT WHEN THE USER IS DRIVING BY KEYBOARD, where focusing raises nothing (a Mac, or an
+      //   iPad with a hardware keyboard) and NOT focusing would mean reaching for the mouse to
+      //   type a frequency. useKeyboardMode is the global "right now" answer to that, and it is
+      //   the honest test — better than asking the platform, because an iPad is both.
+      if (kbSeenRef.current) setTimeout(() => { inputRef.current?.focus(); }, 80);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, currentHz]);
@@ -289,6 +301,8 @@ export default function FreqModal({
   // flag was always one keypress behind and the caps only appeared after an arrow — exactly
   // what Stuart reported. Asking the app-wide flag means they are there the moment it opens.
   const kbSeen = useKeyboardMode();
+  /** Read by the open effect, which is declared above this line. */
+  const kbSeenRef = useRef(false); kbSeenRef.current = kbSeen;
   const lettersArmed = visible && cardMode === 'tune';
   const showKeyCaps = kbSeen && lettersArmed && !lockUnit;
   useEffect(() => {
@@ -394,7 +408,15 @@ export default function FreqModal({
           // Two rest states (§6.4): with NO keyboard (e.g. Bookmarks tab before you tap a field)
           // CENTRE the card so a tall list isn't shoved off the bottom; with the keyboard up,
           // anchor it just above the keyboard.
-          justifyContent: kbHeight === 0 && cardMode === 'bookmarks' ? 'center' : 'flex-end',
+          // ★★ CENTRED WHENEVER THERE IS NO KEYBOARD — not just on the bookmarks tab.
+          // This read `kbHeight === 0 && cardMode === 'bookmarks'`, so with no keyboard up the TUNE
+          // card fell to flex-end and sat at the bottom over the controls; switching to bookmarks
+          // centred it and switching back dropped it again. On a Mac or Android, where no soft
+          // keyboard ever appears, that was its permanent resting place (Stuart, 2026-08-02).
+          // ★ The card should start where bookmarks starts and MOVE only in response to the
+          //   keyboard — so the condition is about the keyboard alone, which is the only thing
+          //   that has ever justified moving it.
+          justifyContent: kbHeight === 0 ? 'center' : 'flex-end',
           paddingBottom: isLandscape ? kbHeight + 8 : 16 + (Platform.OS === 'android' ? kbHeight : 0),
         }]} pointerEvents="box-none"
       >
