@@ -672,6 +672,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var localAudioWs: WebSocket? = null
     @Volatile private var lastLocalTune: String? = null
 
+    private var laBytes = 0            // bytes since the last report (see onMessage)
+    private var laBytesAt = 0L
+
     fun startLocalAudio(host: String, port: Int, initialTune: String, authSuffix: String) {
         Log.i(TAG, "startLocalAudio $host:$port")
         if (port <= 0) return
@@ -692,6 +695,24 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     lastLocalTune?.let { webSocket.send(it) }
                 }
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    // ★★ COUNT EVERY BYTE THAT CROSSED THE LINK — BEFORE any early return, because
+                    //    a frame we drop still cost bandwidth. Without this the connection readout
+                    //    is SPECTRUM ONLY: it once showed 12 KB/s while the link carried 198, and
+                    //    that hid the real problem for months (see LocalAudioPlayer.onBytes).
+                    //    Android has never reported this — the JS reader that used to do the
+                    //    counting is the iOS path, and Android has always used this native pump.
+                    //    iOS gained it 2026-08-02 when its socket went native too; this is Android
+                    //    catching up so both platforms tell the truth.
+                    // ★ ~2 Hz, not per packet: the readout updates about once a second, and fifty
+                    //   bridge events a second to feed it would cost more than it reports.
+                    laBytes += bytes.size
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - laBytesAt >= 500) {
+                        val n = laBytes
+                        laBytes = 0
+                        laBytesAt = nowMs
+                        emitEvent("VibeLocalAudioBytes") { it.putInt("bytes", n) }
+                    }
                     if (!externalAudio || muted) return
                     val b = bytes.toByteArray()
                     if (b.size <= 6) return
