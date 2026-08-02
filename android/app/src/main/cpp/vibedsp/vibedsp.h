@@ -1110,6 +1110,9 @@ public:
         void* ctx = nullptr;
         // fftshifted dB row, length == fftSize (bin 0 = -fs/2, fftSize/2 = DC).
         void (*spectrum)(void* ctx, const float* dbRow, int bins) = nullptr;
+        /** ★★ THE ZOOM SPECTRUM — honest bins once the view is narrower than the wide FFT can
+         *  resolve. Only fires while setZoomView() has a span set; see ZoomSpectrum. */
+        void (*zoomSpectrum)(void* ctx, const float* dbRow, int bins) = nullptr;
         // float audio at exactly outRate Hz. channels=1 -> mono (length frames);
         // channels=2 -> interleaved L,R (length 2*frames). WFM stereo uses 2.
         void (*audio)(void* ctx, const float* pcm, int frames, int channels, int outRate) = nullptr;
@@ -1179,6 +1182,25 @@ public:
     // Tune the demod channel: offsetHz from band centre, mode, channel bandwidth.
     void setTune(double offsetHz, Mode mode, double bwHz);
     void feed(const cf32* iq, int n);   // raw IQ from the source
+
+    /** ★★★ Channel extraction method. MUST be called before start() and never changed after:
+     *  switching live swaps filter state under a running demodulator. false = Direct (per-client
+     *  DDC, cheapest for one listener), true = Shared (fast convolution, flat cost per listener,
+     *  and only meaningful when the hardware centre is LOCKED). */
+    void setSharedChannels(bool shared) { sharedChannels_ = shared; }
+    bool sharedChannels() const { return sharedChannels_; }
+
+    /** Ask for a narrow spectrum view: `offsetHz` from band centre, `spanHz` wide. spanHz <= 0
+     *  turns it off (and costs nothing when off). Thread-safe: applied on the DSP thread. */
+    void setZoomView(double offsetHz, double spanHz);
+    /** Output width of the zoom FFT. MUST match the bin count the client is sent, or the frame
+     *  would be resampled on the way out — reintroducing the interpolation this exists to remove.
+     *  Takes effect on the next view change. */
+    void setZoomBins(int n) { if (n >= 64) { zoomBins_.store(n, std::memory_order_relaxed);
+                                             zoomDirty_.store(true, std::memory_order_release); } }
+    /** The span actually delivered — decimation is a power of two, so it is the next achievable
+     *  span AT OR ABOVE what was asked for. A caller that assumes otherwise draws the scale wrong. */
+    double zoomSpanHz() const { return zoomSpanOut_.load(std::memory_order_relaxed); }
     void stop();
     int outRate() const { return outRate_; }
     // WFM: force mono (off) vs allow stereo (on, default). When on, the L-R is
@@ -1262,6 +1284,14 @@ private:
     long long sinceFrame_ = 0;
 
     // audio DDC chain
+    // ── Zoom spectrum ──────────────────────────────────────────────────────
+    std::unique_ptr<ZoomSpectrum> zoom_;
+    bool sharedChannels_ = false;
+    std::atomic<double> zoomOffReq_{0.0}, zoomSpanReq_{0.0};
+    std::atomic<double> zoomSpanOut_{0.0};
+    std::atomic<bool>   zoomDirty_{false};
+    std::atomic<int>    zoomBins_{1024};
+
     NCO nco_;
     // Decimation CASCADE, not one filter. Filter cost scales with the rate it runs
     // at, so decimating 50:1 in one step needs ~750 taps at the full input rate;

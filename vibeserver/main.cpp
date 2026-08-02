@@ -67,6 +67,11 @@ struct Opts {
     double      maxBw   = 0;             // 0 = no cap  ─┐ link-management ceilings
     double      maxFps  = 0;             // 0 = default ─┘
     double      lockRate = 0;            // 0 = client-controlled
+    // ★★★ THE SHARED-RADIO SETTINGS. The model: the OWNER sets the radio up and locks it, and a
+    // listener gets a view and a VFO inside it — no hardware control at all (Stuart, 2026-08-02).
+    double      lockFreq = 0;            // 0 = the centre follows the VFO, as it always has
+    int         users    = 1;            // expected listeners; 1 = personal receiver
+    std::string channels;                // "" = derive from `users`; else "direct" | "shared"
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
 };
@@ -127,6 +132,18 @@ void usage() {
         "  --max-bw HZ       server-enforced bandwidth ceiling\n"
         "  --max-fps N       server-enforced spectrum-rate ceiling\n"
         "  --lock-rate HZ    pin the capture rate (clients cannot change it)\n"
+        "  --lock-freq HZ    pin the CENTRE frequency. Listeners tune freely inside the\n"
+        "                    captured window but cannot move the radio for everybody.\n"
+        "                    Required by --channels shared.\n"
+        "  --users N         how many listeners this receiver is for (default 1). This\n"
+        "                    picks the channel method: 1 = direct, 2+ = shared.\n"
+        "  --channels MODE   override that choice: direct | shared\n"
+        "                      direct  cheapest for ONE listener; cost rises with each\n"
+        "                              extra one and runs out of a core at about eight.\n"
+        "                      shared  one FFT serves everybody, so the ninth listener\n"
+        "                              costs about as much as the first. Higher fixed\n"
+        "                              cost, so it pays from about three listeners up.\n"
+        "                    Both give the same detail at high zoom.\n"
         "  --no-web          do not serve the browser client at GET /\n"
         "  -h, --help\n\n"
         "By default the dongle is driven DIRECTLY over libusb — nothing else to install or run.\n"
@@ -188,6 +205,9 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--max-bw")    o.maxBw    = std::atof(need(i));
         else if (a == "--max-fps")   o.maxFps   = std::atof(need(i));
         else if (a == "--lock-rate") o.lockRate = std::atof(need(i));
+        else if (a == "--lock-freq") o.lockFreq = std::atof(need(i));
+        else if (a == "--users")     o.users    = std::atoi(need(i));
+        else if (a == "--channels")  o.channels = need(i);
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
@@ -247,6 +267,36 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open; loopback is always exempt
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
+
+    // ── Channel method: decided ONCE, here, and never again while the process runs ──────────
+    // Stuart, 2026-08-02: "never switch methods live, it is in the setup". Switching mid-stream
+    // would swap filter state under a running demodulator — the same discontinuity that leaves
+    // RDS half-dead after an idle resume.
+    bool shared = o.channels.empty() ? (o.users > 1) : (o.channels == "shared");
+    if (!o.channels.empty() && o.channels != "shared" && o.channels != "direct") {
+        std::fprintf(stderr, "VibeServer: --channels must be 'direct' or 'shared'\n");
+        return 2;
+    }
+    // ★★★ Shared channels are slices of ONE FFT of ONE captured band. If a listener can move the
+    // hardware centre, that band moves under everybody and the slices stop meaning anything — so
+    // this is a precondition, not a preference. Refused loudly rather than quietly downgraded: an
+    // operator who asked for a multi-user receiver should not discover at showtime that it built
+    // a single-user one.
+    if (shared && o.lockFreq <= 0.0) {
+        std::fprintf(stderr,
+            "VibeServer: a shared receiver needs a locked centre — add --lock-freq HZ\n"
+            "            (e.g. --lock-freq 6500000 --rate 8000000 covers 2.5-10.5 MHz)\n");
+        return 2;
+    }
+    if (o.lockFreq > 0.0) {
+        LocalSdrShim::setVibeServerLockedCentre(o.lockFreq);
+        o.freq = o.lockFreq;              // the locked centre IS the capture centre
+        std::printf("VibeServer: centre LOCKED at %.3f MHz — listeners tune inside %.3f-%.3f MHz\n",
+                    o.lockFreq / 1e6, (o.lockFreq - o.rate / 2) / 1e6, (o.lockFreq + o.rate / 2) / 1e6);
+    }
+    LocalSdrShim::setVibeServerSharedChannels(shared);
+    std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
+                shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");
     LocalSdrShim::setVibeServerWebEnabled(o.web);
     // ★★★ THE OPERATOR SETTINGS — every one of these setters already existed and the CLI simply
     // never called any of them. So a headless VibeServer had no admin password, no per-listener

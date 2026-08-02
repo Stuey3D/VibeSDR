@@ -88,6 +88,20 @@ public:
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
     static void setVibeServerLockedRate(double rate);
+    /** ★★★ PIN THE HARDWARE CENTRE (Hz). 0 = follows the VFO, as it always has.
+     *
+     *  The radio has ONE centre frequency, so on a SHARED receiver whoever tunes past the edge
+     *  of the captured band moves it FOR EVERYBODY — the band slides under every other listener
+     *  mid-sentence. Locking it makes the captured window the fixed thing and lets listeners
+     *  tune freely INSIDE it, which at 8 MSPS is a genuinely useful window (2.5-10.5 MHz covers
+     *  80m through 30m). Tuning past the edge is then clamped rather than obeyed.
+     *
+     *  ★ It is also the PRECONDITION for the shared-channel (fast convolution) DSP method: every
+     *  channel is a slice of one FFT of one captured band, which only means anything while that
+     *  band stays put. --channels shared therefore requires this. */
+    static void setVibeServerLockedCentre(double hz);
+    /** Channel extraction method — see ZoomSpectrum. Set once at startup, never live. */
+    static void setVibeServerSharedChannels(bool shared);
     /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */
     static void setBookmarksJson(const std::string& json);
     /** File the shim persists bookmarks to. It owns them, so it saves them — the app's
