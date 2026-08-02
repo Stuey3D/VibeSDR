@@ -326,7 +326,17 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             this receiver's nearest published gains. There is no auto-gain over the wire.
           </Text>}
 
-          {!p.isSpy && <>
+          {/* ★★★ NO SAMPLE-RATE CONTROL ON AN AIRSPY HF+. Its rate is fixed when the radio opens,
+              because changing it on a LIVE stream is a path no other SDR client takes — SDR++
+              (mainline and Brown) grey the control out while running, gr-osmosdr sets it once at
+              construction, OpenWebRX is profile-based and never changes it on the fly. Ours could,
+              and it mis-tuned the receiver, put audio a full span off with an image beside it, and
+              once wedged the USB endpoint hard enough that the host needed a reboot (2026-08-02).
+              ★ Stuart: "we cannot have users wedge a device that shouldn't really have its sample
+              rate changed on the fly." The owner still picks the rate — in the server's config,
+              applied at startup, which is the stop-and-start every other client already requires.
+              ★★ Hidden rather than disabled: a greyed control still reads as an offer. */}
+          {!p.isSpy && p.radio?.driver !== 'airspyhf' && <>
           <Text style={styles.section}>SAMPLE RATE</Text>
           {p.lockedRate && p.lockedRate > 0 ? (
             // The SERVER pinned the rate — it IGNORES a sampleRate message outright.

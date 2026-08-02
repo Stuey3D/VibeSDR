@@ -4582,7 +4582,10 @@ function populateHw() {
   const cap = hwLockedRate > 0 ? hwLockedRate : Infinity;
   const rateRow = document.getElementById('rowRate');
   const rateLock = document.getElementById('rateLocked');
-  if (rateRow)  rateRow.hidden = false;
+  // ★ An HF+ has no picker at all (see applyRadioCaps) — do not let the generic cap logic put it
+  //   back the moment hwinfo arrives.
+  const ahfPinned = radioCaps?.driver === 'airspyhf';
+  if (rateRow)  rateRow.hidden = ahfPinned;
   if (rateLock) rateLock.hidden = true;
 
   if (hwRates.length) {
@@ -5365,6 +5368,19 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   const isAhf = caps?.driver === 'airspyhf';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
   $<HTMLElement>('ahfCtls').hidden = !isAhf;
+  // ★★★ NO SAMPLE-RATE PICKER ON AN HF+. Its rate is fixed at open, because changing it on a
+  //     LIVE radio is a path no other SDR client takes: SDR++ (mainline and Brown) grey the
+  //     control out while running, gr-osmosdr sets it once at construction, and OpenWebRX is
+  //     profile-based and never changes it on the fly. Ours could — and it mis-tuned the radio,
+  //     put audio a full span off with an image beside it, and once wedged the USB endpoint hard
+  //     enough that the host needed rebooting (2026-08-01/02).
+  //     ★ Stuart: "we cannot have users wedge a device that shouldn't really have its sample rate
+  //     changed on the fly." The owner still chooses the rate — in the server's config, applied at
+  //     startup, which is the same stop-and-start every other client requires.
+  //     ★★ HIDDEN, not disabled: a greyed control still reads as an offer, and there is nothing
+  //     here for a listener to unlock. The server enforces it too (see the sampleRate handler).
+  { const rr = document.getElementById('rowRate'); if (rr) rr.hidden = isAhf;
+    const rl = document.getElementById('rateLocked'); if (rl && isAhf) rl.hidden = true; }
   // Dongle-only controls: hidden on anything that is not a dongle, so no inert switches.
   // ★ PPM lives in here, and an HF+ must not show it — it has its own calibration in PARTS
   // PER BILLION, and two frequency-correction controls disagreeing about units is exactly the

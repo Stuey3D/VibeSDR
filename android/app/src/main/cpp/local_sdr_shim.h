@@ -182,7 +182,11 @@ public:
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC
     void setDirectSampling(int mode);     // 0=off, 1=I, 2=Q (not needed on Blog V4)
-    void setSampleRate(double rate);      // cancels + restarts the IQ stream (auto FFT size)
+    void setSampleRate(double rate);
+    /** ★ True when the serving radio is an Airspy HF+, whose sample rate is PINNED at open —
+     *  changing it on a live stream is a path no other SDR client takes and ours could leave the
+     *  device needing a power cycle. See the lockedRate note in hwinfo. */
+    bool isAirspyHf() const;      // cancels + restarts the IQ stream (auto FFT size)
     void setFftRate(double fps);          // LIVE spectrum frame rate (power saving); audio unaffected
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     void setSquelch(bool on, float db);   // power-based audio squelch (dBFS)
