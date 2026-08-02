@@ -264,3 +264,20 @@ session-limit and busy exemptions. **Reuse it; do not invent a looser test.**
 it can be reset by direct access to the app — but back off as well, or the hint is the only thing
 between an attacker and an unlimited grind. Auth is HMAC challenge-response over a server-issued
 nonce, so the attacker must keep interacting and a backoff genuinely bites.
+
+### 7.11 "Same machine" — one gotcha: mDNS is NOT loopback
+Stuart confirmed the bypass is the client on the machine the SERVER runs on — `localhost:48000` on
+a MacBook, the app's own shim on a phone. ✅ Consistent with three existing loopback exemptions
+(session limit, never-told-busy, always-raw-PCM), all via `isLoopback()`.
+
+★★ **BUT `vibeserver.local:48000` IS NOT LOOPBACK.** Reach your own server by its mDNS name and the
+connection arrives from the machine's **LAN address**, so the owner gets asked for the admin
+password ON THE MACHINE RUNNING THE SERVER — same box, different answer, depending on the URL. And
+mDNS is what we advertise, so this is the likely path, not the obscure one.
+Two options; the second is preferred:
+1. Document "use localhost". People will still hit it.
+2. **Treat "peer IP is one of OUR OWN interface addresses" as same-host.** Not a loosening — a TCP
+   connection from one of our own addresses did originate on this machine — and a housemate's
+   laptop still has a different address, so the security property is unchanged.
+★ CHECK FIRST: what does the Mac app dial when it connects to its own server? If it uses the mDNS
+name rather than loopback, option 2 is REQUIRED, not a nicety.
