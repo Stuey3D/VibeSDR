@@ -61,6 +61,10 @@ export interface LocalAudioPlayerProps {
    *  measurement, it is a misleading one: it gave false confidence exactly where
    *  the problem was, and hid it for months. */
   onBytes?:      (n: number) => void;
+  /** ★ Ask for uncompressed 16-bit PCM instead of Opus. Only ever true when the SERVER's policy
+   *  says 'choice' — see ServerOccupancy.uncompressed. ~187 KB/s against Opus's ~8, so it is the
+   *  listener's deliberate choice on a link that can carry it, never a default. */
+  raw?:          boolean;
 }
 
 function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwidthHigh: number) {
@@ -69,7 +73,7 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
-    host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes }: LocalAudioPlayerProps,
+    host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -95,8 +99,17 @@ export default function LocalAudioPlayer(
     // emitter down to ~58% of its configured frame rate. Opus is ~4x lighter
     // again than the ADPCM it replaced, and the decoder is already on the native
     // side (pushExternalOpus).
+    // ★★★ UNCOMPRESSED IS THE ABSENCE OF `codec=opus`, not a codec name of its own. That is the
+    // server's contract and the web client's too — and it means the choice is fixed at CONNECT,
+    // because it is a query parameter on the socket URL. Hence `raw` is in this effect's deps:
+    // toggling it tears the socket down and opens a new one, which is the app's equivalent of the
+    // web client reloading the page.
+    // ★ Both decode paths below already handle raw PCM — format 0 in the iOS reader's `else`, and
+    // the same format byte in Android's native pump. Nothing had to be built to receive it; the
+    // request was simply hardcoded (Hans identified Opus by ear on first listen, 2026-07-27, and
+    // this is the setting that was built for him everywhere except the phone).
     const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
-      + '&codec=opus' + authSuffix;
+      + (raw ? '' : '&codec=opus') + authSuffix;
 
     if (USE_NATIVE_PUMP) {
       Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix);
@@ -154,7 +167,7 @@ export default function LocalAudioPlayer(
       started.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port]);
+  }, [port, raw]);
 
   // Forward tune/mode/bandwidth changes (native sends on the WS for Android; iOS
   // sends directly on the JS WS).

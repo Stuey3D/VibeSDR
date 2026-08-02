@@ -221,6 +221,14 @@ export interface ServerOccupancy {
   limitMin: number;
   /** Does this server have an admin password? Only then is an override box worth offering. */
   admin: boolean;
+  /** ★★ THE OWNER'S UNCOMPRESSED-AUDIO POLICY, and it is THREE-way for a reason — see
+   *  the note in VibeServer: 'off' never offers raw PCM to a networked listener, 'compat'
+   *  falls back automatically with no control shown, and only 'choice' means the listener
+   *  may pick. A bool could not express it, because compatibility and quality want opposite
+   *  defaults. ★ Show the switch ONLY for 'choice': raw PCM is ~187 KB/s off the owner's
+   *  uplink, and offering it where they said no is spending someone else's bandwidth.
+   *  ★ Undefined = an older server that predates the field: treat as 'off'. */
+  uncompressed?: 'off' | 'choice' | 'compat';
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -242,6 +250,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       freeInSec: typeof j.freeInSec === 'number' ? j.freeInSec : -1,
       limitMin:  typeof j.limitMin === 'number' ? j.limitMin : 0,
       admin:     j.admin === true,
+      uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
+                    || j.uncompressed === 'off' ? j.uncompressed : undefined,
     };
   } catch { return null; }
   finally { clearTimeout(t); }
