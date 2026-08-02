@@ -108,7 +108,20 @@ export interface AdvRdsPanelProps {
 
 /** One label/value row. `conf` drives the RAW-mode confirmation colouring: in RAW a label is
  *  red until the field has earned its confirmation, so the panel visibly resolves. */
-function Row({ label, value, colour, conf, raw, reserve }: {
+/** ★★★ MEMOISED, AND IT IS NOT A MICRO-OPTIMISATION — IT IS THE FRAME RATE.
+ *  The spectrum trace is tweened by a `setInterval` in WaterfallView (startSpecTween), which runs
+ *  on the JS THREAD. Its comment says "UI-thread — no React render", which means it does not
+ *  trigger a React render; the callback itself is JS-thread work. So the trace stays smooth only
+ *  while the JS thread is free every tick.
+ *  ★★ In BIG this panel is ~25 of these rows plus three Skia canvases, and WITHOUT memo every one
+ *  of them re-renders on every rdsx — six times a second — even though most of these values change
+ *  once a minute or never (PI, Station, Country, PI detail, Language, ODA). That is the burst of
+ *  JS work that starves the tween, and it is why the spectrum jerks with a big panel open.
+ *  ★ THE TELL THAT IT IS THE JS THREAD AND NOT COMPOSITING: it happens with the MAIN MENU open too,
+ *  which does not cover the spectrum at all (Stuart, 2026-08-02) — and removing the panel's blur
+ *  changed nothing. Overlap is not the variable; the size of the React tree being re-rendered is.
+ *  ★ Props are all primitives, so the default shallow compare is exactly right here. */
+const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }: {
   label: string; value: string; colour?: string; conf?: boolean; raw: boolean;
   /** ★ The LONGEST string this row can ever show. Rendered invisibly underneath to
    *  reserve the height, so the row cannot change size when the value does. */
@@ -135,7 +148,7 @@ function Row({ label, value, colour, conf, raw, reserve }: {
       )}
     </View>
   );
-}
+});
 
 /** ★ Scale that fits the MEAN LOBE DISTANCE to a fixed fraction of the box.
  *  ★★ NEVER SCALE TO A CONSTANT. A constellation's meaning is its SHAPE — how tight the lobes
@@ -209,7 +222,7 @@ function constellationVerdict(xy: number[], phaseCoh: number, ber: number):
 /** ★★ The constellation. Two tight lobes = a clean BPSK subcarrier; a RING means the encoder
  *  is sweeping against the pilot, which is a diagnosis and not a fault of ours. Points arrive
  *  pre-scaled x100 and clipped to +/-127 by the server. */
-function Constellation({ xy, size }: { xy: number[]; size: number }) {
+const Constellation = React.memo(function Constellation({ xy, size }: { xy: number[]; size: number }) {
   const pts = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     const half = size / 2;
@@ -233,14 +246,14 @@ function Constellation({ xy, size }: { xy: number[]; size: number }) {
       ))}
     </Canvas>
   );
-}
+});
 
 /** ★★ THE SYMBOL TRACE — the "two lines" read, and the one most people find easier than the
  *  constellation. Symbol value against time: two clean bands with a clear gap means every bit
  *  is being decided with margin; a filled gap means bits are landing near the threshold, and
  *  the block errors follow. Same de-rotation and scale as the constellation — |x| after
  *  de-rotation is the wanted component. */
-function SymbolTrace({ xy, width, height }: { xy: number[]; width: number; height: number }) {
+const SymbolTrace = React.memo(function SymbolTrace({ xy, width, height }: { xy: number[]; width: number; height: number }) {
   const pts = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     if (xy.length < 4) return out;
@@ -265,7 +278,7 @@ function SymbolTrace({ xy, width, height }: { xy: number[]; width: number; heigh
       ))}
     </Canvas>
   );
-}
+});
 
 /** ★ THE MPX SPECTRUM — everything the FM demodulator produces, DC to 100 kHz.
  *  ★★ LABELLED AT THE LANDMARKS, because a spectrum of a signal most listeners have never seen
@@ -276,7 +289,7 @@ const MPX_SPAN = 100000;
 const MPX_MARKS: [number, string][] = [[19000, 'PILOT'], [38000, 'L−R'], [57000, 'RDS']];
 const mpxFont = matchFont({ fontFamily: 'monospace', fontSize: 8 });
 
-function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: number }) {
+const Mpx = React.memo(function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: number }) {
   const path = useMemo(() => {
     const p = Skia.Path.Make();
     if (!mpx.length) return p;
@@ -312,7 +325,7 @@ function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: num
       <Path path={path} color={C.good} style="stroke" strokeWidth={1.2} />
     </Canvas>
   );
-}
+});
 
 export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const { x, raw } = p;
