@@ -27,9 +27,6 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include <atomic>
-#include <mutex>
-#include "halfband.h"
 
 namespace vibe {
 
@@ -71,35 +68,11 @@ public:
     /** The sample rates THIS radio offers, ascending. Enumerated from the device rather than
      *  assumed: an HF+ Discovery tops out around 912 kHz where a dongle does 2.4 MSPS, so a
      *  hard-coded list would offer rates it cannot do. Empty until open(). */
-    /** ★ The rates a CLIENT may choose: hardware rates plus the ones software decimation reaches.
-     *  `rates_` stays the hardware truth (nearestRate and the delivered-rate measurement use it);
-     *  this is what the picker should show. */
-    const std::vector<uint32_t>& sampleRates() const { return offered_.empty() ? rates_ : offered_; }
-    const std::vector<uint32_t>& hardwareRates() const { return rates_; }
-    /** The list in the RADIO'S OWN ORDER — libairspyhf indexes into this to build the USB
-     *  command, so it is the wire format, not a display detail. */
-    const std::vector<uint32_t>& rawSampleRates() const { return rawRates_; }
-    /** ★★★ SOFTWARE DECIMATION. The radio's own low rates are the untrustworthy ones on this
-     *  firmware (228 kHz tunes to the wrong frequency, measured 2026-08-02), and decimating a rate
-     *  it gets right is strictly better: same span, correct tuning, ~3 dB of processing gain per
-     *  halving, and FEWER bins to send. So hardware rates are used down to the top rate halved,
-     *  and everything below that is reached by dividing one of those in software.
-     *  ★ Returns the EFFECTIVE rate — what the DSP must be built for. */
-    int decimation() const { return decim_; }
-
-    /** ★★★ THE RATE THE RADIO IS ACTUALLY RUNNING AT, measured after the last change — not the
-     *  one that was asked for. This device advertises rates it does not implement and reports
-     *  success anyway; everything downstream (DSP decimation, FFT span, waterfall calibration)
-     *  must be built on this number or the audio comes out pitch-shifted. */
-    double currentRate() const { return decim_ > 1 ? curRate_ / decim_ : curRate_; }
-    /** The rate the RADIO is running, before software decimation. */
-    double hardwareRate() const { return curRate_; }
+    const std::vector<uint32_t>& sampleRates() const { return rates_; }
     /** Nearest supported rate to `hz` — the picker offers only real ones, but a saved
      *  preference from a different radio can still ask for something impossible. */
     uint32_t nearestRate(double hz) const;
     bool setSampleRate(double hz);
-    /** Split a wanted EFFECTIVE rate into a hardware rate plus a software decimation factor. */
-    void chooseRate(double wantHz, uint32_t& hwOut, int& decimOut) const;
 
     /** ★ The single gain slider every client already has, mapped onto this radio's controls.
      *  See the note in the .cpp: it drives the ATTENUATOR, because on an HF+ the useful range
@@ -182,15 +155,6 @@ private:
     Impl* impl_ = nullptr;
     IqSink sink_;
     std::vector<uint32_t> rates_;
-    std::vector<uint32_t> rawRates_;
-    /** Effective rates offered = hardware rates (down to top/2) plus software-decimated ones. */
-    std::vector<uint32_t> offered_;
-    int decim_ = 1;
-    HalfBandChain chain_;
-    std::mutex chainMtx_;
-    /** Samples the radio has delivered — the basis for measuring its REAL rate. See
-     *  setSampleRate: this device advertises rates it does not implement, and says rc 0. */
-    std::atomic<long long> sampCount_{0};
     bool open_ = false, streaming_ = false, lost_ = false, paused_ = false;
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;
