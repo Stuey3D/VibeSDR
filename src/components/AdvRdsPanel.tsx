@@ -55,8 +55,17 @@ const C = {
   //   applies to this panel now.
   border:  'rgba(255,160,0,0.28)',
   gold:    '#ffb833',
-  goldDim: 'rgba(255,160,0,0.70)',
-  muted:   'rgba(255,160,0,0.38)',
+  goldDim: 'rgba(255,160,0,0.86)',
+  // ★★ LIFTED FROM 0.38. These are the field TITLES ("PI", "Station", "RDS↔pilot") and the plot
+  //   captions, and 0.38 was chosen when the panel sat over a near-opaque slab. The panel is glass
+  //   now — deliberately, so the spectrum reads through it — which means the background behind a
+  //   label is no longer black but whatever the waterfall is doing, and a bright band swallowed
+  //   them (Stuart, 2026-08-02: "with the waterfall behind they are a little hard to see depending
+  //   on whats on the waterfall behind").
+  //   ★ Still clearly SUBORDINATE to the values, which are full-strength gold — the hierarchy is
+  //   the point of dimming them, and 0.60 keeps it while staying legible over a lit waterfall.
+  //   Raising the tint instead would have undone the transparency that was just asked for.
+  muted:   'rgba(255,160,0,0.60)',
   hdrBdr:  'rgba(255,160,0,0.12)',
   btnBdr:  'rgba(255,160,0,0.28)',
   btnAct:  'rgba(255,160,0,0.12)',
@@ -776,6 +785,10 @@ const s = StyleSheet.create({
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
   plotLbl: { fontFamily: FONT, fontSize: 8, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
   verdict: { fontFamily: FONT, fontSize: 10, marginTop: 3 },
-  plotNote: { fontFamily: FONT, fontSize: 10, color: C.muted, marginTop: 4, lineHeight: 14 },
+  // ★ BRIGHTER THAN THE LABELS, deliberately. This is the sentence that TEACHES the plot — "two
+  //   clear bands = every bit decided with margin" — so it is prose to be read, not a caption to
+  //   be glanced at, and it is the longest run of small text sitting over a live waterfall.
+  //   Stuart asked for the titles and then "including the text about the constellation etc".
+  plotNote: { fontFamily: FONT, fontSize: 10, color: 'rgba(255,190,90,0.80)', marginTop: 4, lineHeight: 14 },
   logoWrap: { alignItems: 'center', marginTop: 10 },
 });
