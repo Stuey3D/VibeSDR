@@ -1048,6 +1048,10 @@ struct LocalSdrShim::Impl {
     // Last hardware retune caused by a view move (ms). See the zoom handler: a
     // PLL relock per pan message breaks the audio.
     long long lastDongleMoveMs = 0;
+    /** ★★★ A HARDWARE MOVE THAT THE COOLDOWN POSTPONED, waiting to be applied. 0 = none.
+     *  The cooldown below exists because a PLL relock on every pan message audibly breaks the
+     *  audio — but it used to DROP the move rather than defer it, and nothing ever retried. */
+    double pendingDongle = 0.0;
     std::atomic<double> viewCenter{100000000.0};// DISPLAY centre — may sit off the dongle centre so
                                                 // the user can pan the view across the captured band
                                                 // while a station stays tuned (RF-centre marker = dongle).
@@ -2374,11 +2378,30 @@ struct LocalSdrShim::Impl {
                 // honest in between, so skipping a retune costs nothing visible.
                 auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
-                if (moved && nowMs - lastDongleMoveMs >= 120) {
-                    lastDongleMoveMs = nowMs;
-                    rtlCenter.store(dongle);
-                    tuneHw(dongle);
-                    rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                // ★★★ DEFER, DO NOT DROP. This used to skip the retune entirely when the
+                //     cooldown was still running, and NOTHING RETRIED IT — so `viewCenter` (stored
+                //     unconditionally, just above) moved while the radio stayed put, and the crop
+                //     `viewCenter − rtlCenter` was computed against an rtlCenter that never caught
+                //     up. Every station then drew in the wrong place.
+                //     ★ It bites hardest exactly where it is least acceptable: ON CONNECT. The
+                //     client restores its zoom and its tune milliseconds apart, so the first move
+                //     is allowed and STARTS the cooldown, and the second is discarded — no panning
+                //     required, VFO locked or not (Stuart, 2026-08-02: "I never moved the view
+                //     centre, I always keep the vfo locked", and stations offset on every fresh
+                //     connect until he "tuned just a little" and they "snapped back").
+                //     ★★ The cooldown itself is right. What was wrong was throwing the request
+                //     away instead of remembering it — flushed by the DSP loop the moment the
+                //     window expires (see flushPendingDongle).
+                if (moved) {
+                    if (nowMs - lastDongleMoveMs >= 120) {
+                        lastDongleMoveMs = nowMs;
+                        pendingDongle = 0.0;
+                        rtlCenter.store(dongle);
+                        tuneHw(dongle);
+                        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                    } else {
+                        pendingDongle = dongle;   // the newest request wins; applied shortly
+                    }
                 }
             }
             double bb;
@@ -3609,6 +3632,24 @@ struct LocalSdrShim::Impl {
     // ── DSP consumer (dedicated thread, OFF the libusb path) ────────────────
     // Drains the IQ queue and runs the engine. modeMtx serialises rx.feed against
     // setTune / buildAudio / setSampleRate (feed runs rebuildAudio inline).
+    /** ★ Apply a dongle move the cooldown postponed, once the window has passed. Called from the
+     *  DSP loop, which already holds modeMtx — the same lock the pan handler takes, so there is
+     *  exactly one hardware tune in flight at a time. Cheap: a comparison per buffer. */
+    void flushPendingDongle() {
+        if (pendingDongle <= 0.0) return;
+        const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (nowMs - lastDongleMoveMs < 120) return;
+        const double dongle = pendingDongle;
+        pendingDongle = 0.0;
+        if (std::fabs(dongle - rtlCenter.load()) <= 1.0) return;   // already there
+        lastDongleMoveMs = nowMs;
+        rtlCenter.store(dongle);
+        tuneHw(dongle);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        LOGI("deferred retune applied: dongle -> %.0f Hz", dongle);
+    }
+
     void dspLoop() {
         // This thread runs the whole demod chain (WFM stereo MPX + RDS + FIR
         // filters) and must keep up in real time or the audio it produces
@@ -3644,6 +3685,7 @@ struct LocalSdrShim::Impl {
             }
             iqSpaceCv.notify_one();
             std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+            flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
             rx.feed(buf.data(), (int)buf.size());
         }
     }
