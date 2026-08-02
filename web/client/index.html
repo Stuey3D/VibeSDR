@@ -2373,11 +2373,14 @@ select.btn { padding: 6px 8px; }
          processing) of the receiver instead. Basically, turn the preamp option off to get an
          extra 12 dB of dynamic range by scrapping the quantization noise margin."
          ★ So the honest label is not "+6 dB of gain" — the trade is dynamic range, and OFF is the
-         better default on any decent antenna. Stuart's own measurement agrees: on VHF the preamp
+         better default on any decent antenna. ★★ The LABEL stays plain "PREAMP" though: it is the
+         word every other tool uses, and "(really a postamp)" on screen is a footnote pretending to
+         be a control name (Stuart: "it's too much, just call it preamp and have done with it").
+         The correction lives in the tooltip, where someone who wonders will find it. Stuart's own measurement agrees: on VHF the preamp
          HALVED the RDS constellation (see the gain findings note). The name stays because it is
          the name on every other tool, but the description tells the truth. -->
     <div class="mrow">
-      <label title="Airspy calls this misleading: it is really a POSTAMP, acting on the ADC and DSP back-end rather than the antenna. Turning it OFF buys about 12 dB of dynamic range by scrapping the quantisation-noise margin. Leave it off unless the band is genuinely quiet and the signal is weak.">PREAMP (really a postamp)</label>
+      <label title="Airspy calls this misleading: it is really a POSTAMP, acting on the ADC and DSP back-end rather than the antenna. Turning it OFF buys about 12 dB of dynamic range by scrapping the quantisation-noise margin. Leave it off unless the band is genuinely quiet and the signal is weak.">PREAMP</label>
       <div class="seg"><button class="btn" id="ahfLna">OFF</button></div>
     </div>
     <!-- ★ PARTS PER BILLION, not ppm. An HF+ reference is good enough that a ppm control would
