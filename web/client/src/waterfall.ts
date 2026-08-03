@@ -547,12 +547,14 @@ export class Waterfall {
     //     Synthesised lines used to be a per-pixel average of the two frames either side, so at
     //     14 fps in and 20 rows/sec out MOST of the rows on screen were averages of two moments.
     //     Vertically that is a blur, and it is the "brighter and softer" in Stuart's side-by-side.
-    //     ★★ The app faces the identical problem and solves it in its shader with `uQuant`: whole
-    //     LINE steps when the view is settled, continuous blending only while a boost/tune is in
-    //     flight (WaterfallView.tsx, WF_SKSL). Settled is nearly all the time, so what the app
-    //     actually shows is raw frames — no blend. Repeating the newest row here gives the same
-    //     result: the scroll rate is unchanged (so idle power saving still costs nothing visually)
-    //     and every row on screen is a real measurement rather than an average of two.
+    //     ★★ CORRECTED 2026-08-03: this used to say the app already showed raw frames because its
+    //     shader's `uQuant` gives "whole LINE steps when settled". It does not follow. uQuant
+    //     quantises the line POSITION; the frame MIX is separate, and with lines-per-frame at 5 or
+    //     6 most of the app's rows were averages of two source frames — the same blur described
+    //     here, which is why the app looked softer too. The app now snaps that blend to the nearest
+    //     source frame (WaterfallView.tsx, WF_SKSL) to match this line.
+    //     ★ Repeating the newest row here costs nothing: the scroll rate is unchanged (so idle
+    //     power saving is still free visually) and every row on screen is a real measurement.
     //     ★ `prev` is kept: it is what a future in-shader interpolation would need, and the app's
     //     continuous mode is worth porting if a tune ever looks steppy.
     blend.set(t >= 0.5 ? cur : prev);
