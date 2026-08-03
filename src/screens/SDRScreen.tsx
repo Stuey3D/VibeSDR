@@ -5324,6 +5324,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}
         frameRate={frameRate}
         wfScroll={wfScroll}
+        /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
+           server, so the frame-generation multiplier stays constant for the whole session. */
+        feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
         needleColor={vfoNeedle}
         needleIntensity={vfoIntensity}
         needleFrost={vfoFrost}
