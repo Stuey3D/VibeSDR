@@ -1687,19 +1687,35 @@ struct LocalSdrShim::Impl {
             const double viewOffsetBin = (viewCenter.load() - rtlCenter.load()) * (double)bins / sampleRate;
             uint64_t f = (uint64_t)llround(viewCenter.load());   // display centre = view centre
             std::memcpy(&frame[14], &f, 8);
+            // ★★★ NOTHING IS RENDERED OUTSIDE THE CAPTURED BAND — u8 0 MEANS "NO DATA".
+            //     The comment above used to claim dbAt "clamps past the capture edge → floor".
+            //     It does not: it clamps the INDEX, so every position beyond the edge returns the
+            //     EDGE BIN'S VALUE, over and over. Panning past the band therefore painted a wide
+            //     smear of whatever happened to sit on the boundary — and, because it is real
+            //     signal-level data as far as anything downstream can tell, it was dragged into
+            //     the trace's AUTO-CONTRAST and squashed the part of the band that is actually
+            //     there (Stuart, 2026-08-03: "it seems to think waterfall should be there when
+            //     its not").
+            //     ★ 0 is free as a sentinel: it means -256 dBFS, and the engine's floor is
+            //       around -125. A real bin can never reach it.
+            const int loValid = -bins / 2, hiValid = bins / 2;
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
                 double center = signedOut * step - hwOffsetBin + viewOffsetBin;  // signed src offset from DC
                 int lo = (int)std::floor(center - step / 2.0);
                 int hi = (int)std::ceil(center + step / 2.0);
                 if (hi <= lo) hi = lo + 1;
+                if (hi <= loValid || lo >= hiValid) { frame[22+i] = 0; continue; }  // wholly outside
+                if (lo < loValid) lo = loValid;      // partly outside: peak-hold the REAL part only
+                if (hi > hiValid) hi = hiValid;
                 float best = -1e9f;
                 for (int s = lo; s < hi; s++) {
                     float val = dbAt(s);                    // averaged dB
                     if (val > best) best = val;             // peak-hold
                 }
                 int v = (int)lround(best + 256.0);
-                frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                // Clamp to 1, not 0 — 0 is the no-data sentinel and must stay unambiguous.
+                frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
             for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size());
             vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
@@ -1855,6 +1871,32 @@ struct LocalSdrShim::Impl {
                 if (v > peak) peak = v;
             }
             channelDb.store(peak);
+
+            // ══ THE SIGNAL METER'S NUMBERS, MEASURED HERE AND SENT ═══════════════════════
+            // ★★★ THE CLIENT USED TO DERIVE THESE FROM THE SPECTRUM FRAME IT HAD BEEN SENT, AND
+            //     THAT IS WHY THE BAR TRACKED THE ZOOM. A frame's bins are whatever the current
+            //     view is: zoom in and each bin is narrower, so a carrier's power lands in fewer
+            //     of them while the per-bin noise floor drops — the meter climbed towards full
+            //     scale purely because the user had zoomed (Stuart, 2026-08-03: "zoomed out the
+            //     bar is lower, when zoomed in the bar is almost maxed out... the bar is relative
+            //     to the zoom not the S meter").
+            //     ★ These two are computed from the FULL-RATE FFT at a FIXED resolution, so they
+            //       do not move when the view does. `peak` is the same quantity the SQUELCH uses
+            //       — the one meter Stuart confirmed reads correctly — so the S meter now agrees
+            //       with the squelch by construction instead of by coincidence.
+            //     ★ OUTSIDE the emit gate, deliberately: see the RSP GAIN SERVICE note above.
+            //       Putting a meter behind that gate is what froze the SNR bar in the first place.
+            // ★ EVERY FRAME, not every other one. The client re-draws the meter once per spectrum
+            //   frame, so at half that rate every second draw repeated the previous value and the
+            //   bar STEPPED — read as "slow to react" and jerky (Stuart, 2026-08-03). Matching the
+            //   frame rate lets the meter's own smoothing do its job. ~90 bytes at ~20 fps is
+            //   1.8 KB/s beside a 30 KB/s spectrum.
+            if (!peers.empty()) {
+                char sb[128];
+                snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
+                         peak, iqFloorDb.load());
+                for (auto& pc : peers) sendText(pc, sb);
+            }
         }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
         accumCount = 0;

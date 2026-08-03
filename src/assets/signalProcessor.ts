@@ -66,6 +66,11 @@ const NOISE_PERCENTILE     = 0.10;  // 10th percentile = noise floor estimate
 // data, which for us is a bandwidth saving too. That is the "Fill-In bandwidth" button, and it
 // belongs server-side in the Airspy backend, not here.
 const EDGE_EXCLUDE_FRAC    = 0.09;  // per side, from the auto-range statistics only
+/** ★★ "THERE IS NO RADIO HERE." The server sends u8 0 (= -256 dBFS) for display bins that fall
+ *  outside the captured band, so panning past the edge draws nothing instead of smearing the
+ *  edge bin across the screen. Anything at or below this is a marker, not a measurement, and
+ *  must be kept out of the auto-range statistics. The engine's real floor is around -125. */
+const NO_DATA_DBFS         = -200;
 // ★★ The ceiling ignores the very top of the distribution rather than taking the single
 // strongest bin. A retune puts a brief DC/LO spike at the centre bin — one or two bins
 // tens of dB above anything real — and a single-bin maximum hands the whole palette to it,
@@ -359,6 +364,16 @@ export class SignalProcessor {
       for (let i = edge; i < n - edge; i++) {
         const db = src[i];
         if (!isFinite(db)) continue;
+        // ★★★ BINS OUTSIDE THE CAPTURED BAND ARE NOT MEASUREMENTS — EXCLUDE THEM FROM THE SCALE.
+        //     The server marks them (u8 0 → NO_DATA_DBFS); they exist so the panned-past region
+        //     renders as nothing rather than as a smear of the edge bin. Letting them into the
+        //     histogram drags the noise percentile far below anything real, and since that
+        //     percentile IS the bottom of the range, the whole display re-contrasts around a
+        //     region that has no signal in it at all (Stuart, 2026-08-03: panning past the band
+        //     edge "effecting the auto contrast").
+        //   ★ Tested against the RAW bin, not `src` — `src` is the EMA-smoothed copy, and a bin
+        //     that has just gone out of band is somewhere mid-slide between the two.
+        if (bins[i] <= NO_DATA_DBFS) continue;
         count++;
         if (db > absoluteMax) absoluteMax = db;
         let b = (db + 280) | 0; // -280..+19 dB → bucket 0..299
