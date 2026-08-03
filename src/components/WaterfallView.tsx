@@ -183,12 +183,6 @@ export interface WaterfallViewProps {
   wfContrast?:     number;
   wfSharpness?:    number;
   frameRate?:      '10fps' | '20fps' | '30fps';   // TARGET scroll rate (minimum), interpolated up
-  /** ★★★ WHICH WATERFALL. 'sharp' = ONE ROW PER RECEIVED FRAME: every row is a whole frame's
-   *  integration, nothing invented, and the scroll speed IS the data rate — the most detail, and
-   *  what the app has always done. 'smooth' = interpolate extra rows up to `frameRate` — motion
-   *  you can set, at the cost of rows that are partly made up (what the web client has done).
-   *  Named by the TRADE, not the mechanism: they are the same stepper at two granularities. */
-  wfScroll?:       'sharp' | 'smooth';
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
@@ -295,7 +289,7 @@ function WaterfallView({
   autoContrast = 5, specSmoothing = 5, avgFrames = 0, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
-  frameRate = '20fps', wfScroll = 'sharp', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
+  frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   bgImageUrl = null, bgOpacity = 0, stationId = null,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -330,21 +324,8 @@ function WaterfallView({
   // data rate (see handleFrame) so the chosen fps is a MINIMUM: at 5fps data '10fps' synthesises ×2 to
   // hold a 10fps scroll; at Kiwi's ~23fps it's already above target so no interpolation happens. The
   // static value here is just the nominal-at-10fps used for the interp-blur amount.
-  // ★ 60 is a TEST of the row-count path (2026-08-02): the scroll rate looked fixed regardless of
-  //   the setting OR the incoming data rate, which the interpolate-up design says should not
-  //   happen. If 60 visibly doubles 30, the mechanism works and 10/20 were merely quantised
-  //   (round(target/dataFps) collapses to 1 whenever the data is already that fast). If 60 changes
-  //   nothing, the rate is pinned somewhere else and the row count was never the lever.
-  // ★ SHARP pins the target to the data rate (dynRows resolves to 1 below), so the number here is
-  //   only ever used by SMOOTH. It stays at the 20 fps value in SHARP so the unsharp base — which
-  //   is derived from the same setting — keeps the look the app has always had.
-  // ★★ 60 was added on 2026-08-02 to TEST whether the row-count path worked at all. It did its job
-  //    — it proved the setting was dead below 15 fps — and is gone: overkill in use (Stuart), and
-  //    well above the data rate the reveal lurches on uneven arrivals.
-  const TARGET_FPS = wfScroll === 'sharp' ? 20
-      : frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
-  const ROWS_PER_FRAME = wfScroll === 'sharp' ? 1
-      : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
+  const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
+  const ROWS_PER_FRAME = frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
   // touch; inside it the slide is boosted to native rate, outside it drops to
@@ -370,9 +351,7 @@ function WaterfallView({
     // unsharp base scales with the selected fps and the slider is a multiplier
     // of it (5 = 1×; 60fps base 5 keeps existing setups looking identical).
     const sharpBase =
-      wfScroll === 'sharp' ? 2   // ★ SHARP has no interpolation blur to correct, and 2 is the look
-                                 //   the app has always shipped (Stuart's "happy medium").
-      : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5;
+      frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
     // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
     // maximum. The curve used to be quadratic, which made the BOTTOM half do
     // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point
@@ -403,7 +382,7 @@ function WaterfallView({
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
       specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
-      wfSharpness, frameRate, wfScroll]);
+      wfSharpness, frameRate]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
@@ -518,13 +497,6 @@ function WaterfallView({
   const scrollFrac  = useSharedValue(1);
   const lastFrameTs = useRef(0);
   const avgFrameMs  = useRef(150);
-  const lastWfLog   = useRef(0);      // ★ temporary: see the [wf] log in the settled branch
-  // Lines-per-frame ladder — see the note where these are set. uNRaw is the UNquantised ratio that
-  // produced the committed step, so the deadband is measured against what we actually decided on.
-  const uNRaw       = useRef(0);
-  const uNStep      = useRef(1);
-  const uNHold      = useRef(0);      // consecutive frames the rate has sat outside the band
-  const slowFrameMs = useRef(150);    // worst-case recent frame interval — see where it is updated
 
   const wfUniforms = useDerivedValue(() => ({
     uHeadF:    uHead.value,
@@ -911,11 +883,9 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS,
-                            sharpScroll: wfScroll === 'sharp' });
+                            smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS,
-                       sharpScroll: wfScroll === 'sharp' };
+                       smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
   const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
@@ -977,16 +947,6 @@ function WaterfallView({
       // slowdown. The jitter buffer's prefill/hold covers the pause; the estimate re-converges after.
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
-      // ★★★ THE SLOW-SIDE ESTIMATE — the one the multiplier must be sized against. A nominal 5 fps
-      //     link is observed dipping to 4, and a multiplier sized on the MEAN runs dry exactly on
-      //     those slow frames: fewer lines stretched across a longer gap, which is the judder
-      //     (Stuart, 2026-08-03). Jumps straight to any slower interval and decays back gently, so
-      //     it tracks the worst case rather than the average. Frames that then arrive on time
-      //     simply have lines to spare — headroom, which is the point.
-      // ★ Decays SLOWLY (0.998, several seconds). At 0.97 this was a sawtooth by construction —
-      //   it leapt up on every slow frame and fell back within a few frames — and the multiplier
-      //   derived from it chased the teeth, rescaling the waterfall each time.
-      slowFrameMs.current = Math.max(dt, slowFrameMs.current * 0.998);
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
     }
     lastFrameTs.current = now;
@@ -1009,21 +969,6 @@ function WaterfallView({
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
     const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
-
-    // ★★★ LINES PER FRAME — COMPUTED FOR EVERY PATH, not just the settled one. It used to be worked
-    //     out only in the settled branch below, and `lastDynRows` (which the glide uses) was only
-    //     written there — but the glide is FORCED on whenever the data is under ~15 fps, so on a
-    //     10 fps server the settled branch NEVER RAN and the multiplier stayed at its initial value
-    //     forever. That is why the scroll rate ignored the setting entirely on UberSDR: 10, 20, 30
-    //     and 60 all did the same nothing (Stuart, 2026-08-03).
-    // ★★ CEIL, NOT ROUND — over-generate, the way frame generation does. The data rate estimate
-    //    wobbles (a nominal 5 fps reports as 4), and round() flips the multiplier as it crosses .5,
-    //    which is a visible lurch. Ceil only ever errs on the side of MORE lines, which matches
-    //    what the setting means: hold AT LEAST this scroll rate (Stuart: "a 5x multiplier then
-    //    locked to 20 with the additional frames discarded").
-    const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
-    const wantRows = cfg.sharpScroll ? 1
-      : Math.max(1, Math.min(8, Math.ceil(cfg.targetFps / dataFps)));
     if (wfBoost) {
       // Interaction / native rate: the 120Hz vsync glide already handles smoothness, so keep uN on the
       // STABLE static multiplier. ★ Deriving it from the LIVE data rate here (which spikes and
@@ -1043,34 +988,15 @@ function WaterfallView({
       // the LIVE data rate during a gesture made it jump every frame. Holding
       // the last settled value satisfies both — stable during the gesture, and
       // identical to what settles afterwards, so nothing rescales.
-      // ★ The static hold is for a GESTURE, where a live-derived value jumps every frame and
-      //   squashes/pops the waterfall. At LOW FPS while settled there is no gesture and no jumping,
-      //   so the target applies here as it does anywhere else — which is what the note above
-      //   ("for the SETTLED low-fps path") always intended.
-      if (!boost) lastDynRows.current = wantRows;
-      uNSv.value = boost ? lastDynRows.current : wantRows;
+      uNSv.value = lastDynRows.current;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
     } else {
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
-      // ★ SHARP: exactly ONE row per received frame — no interpolation, so the scroll rate is the
-      //   data rate and every row carries a whole frame's integration. SMOOTH: interpolate up
-      //   toward the target. Both come from wantRows above, so this path and the glide can no
-      //   longer disagree — the disagreement was what squashed the waterfall on every gesture.
-      const dynRows = wantRows;
-      // ★ TEMPORARY (2026-08-02) — say what the stepper ACTUALLY computes. The scroll rate looked
-      //   fixed regardless of the setting or the data rate, which contradicts the interpolate-up
-      //   design, and three theories about why were all guesses. This turns the 60 fps experiment
-      //   into a diagnosis: rows x dataFps IS the scroll rate, so if that number does not move when
-      //   the setting does, the row count is not the lever and `dur` is. REMOVE once settled.
-      if (now - lastWfLog.current > 1000) {
-        lastWfLog.current = now;
-        console.log(`[wf] target=${cfg.targetFps} data=${dataFps.toFixed(1)}fps ` +
-                    `slow=${(1000 / slowFrameMs.current).toFixed(1)}fps rows=${dynRows} ` +
-                    `dur=${dur.toFixed(0)}ms -> scroll=${(dynRows * dataFps).toFixed(1)}/s`);
-      }
+      const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
+      const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
       lastDynRows.current = dynRows;   // what a gesture will hold — see the boost branch
       uNSv.value = dynRows;
       startRevealStepper(dynRows, dur);
