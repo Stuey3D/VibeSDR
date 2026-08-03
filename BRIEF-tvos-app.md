@@ -91,6 +91,19 @@ again."*** The rule is simple and it falls out of §6.2: **if it needs a WebView
 | **In-app browser** | `BrowserOverlay.tsx`, used twice by `SDRScreen` | Same. |
 | **UberSDR admin** | web-based admin surface | Already greyed out in keyboard mode, so nothing is lost that a keyboard user has today. |
 | **Kiwi compatibility mode** | `compatUrl` — *"Kiwi web UI in a WebView"* (`SDRScreen.tsx:779`), behind a "leaving VibeSDR" warning | Needs a webview AND free-form web navigation. Even given a browser, driving a Kiwi's own UI from a remote is not navigable — **the controls are the blocker, exactly as with the other TV platforms (§6.2b)**. |
+| **Recordings** | audio/IQ capture written to app storage | **tvOS has no user-facing persistent storage.** An app's local data is a purgeable cache Apple may reclaim at any time — anything a user expects to keep must live in iCloud. A recordings feature that silently loses recordings is worse than none. |
+| **Share** | share sheet | `UIActivityViewController` **does not exist on tvOS**. There is nowhere to share *to*. |
+
+★★ **AND THE STORAGE RULE IS WHY ICLOUD CARRIES THE REST** (Stuart, 2026-08-03: *"the same iCloud
+sync applies like the watch gets"*). Bookmarks and favourites are exactly the case tvOS is built
+for: small, user-owned state that must survive, so it syncs rather than being stored locally.
+- The app already has this — [[icloud_sync_shipped]] — and the **watch consumes it the same way**,
+  which makes tvOS a third consumer of an existing mechanism rather than new work.
+- ★ Carry over the rule that came with it: **MERGE, never last-writer-wins**
+  (`BRIEF-icloud-sync.md`). A TV that quietly clobbers the bookmarks you set on your phone would be
+  a far worse bug than anything on this page.
+- ★ Watch for [[icloud_stale_tombstone_immortal]] — the zombie-favourite bug was diagnosed from
+  source twice and shipped wrong twice; a third consumer is a third chance to meet it.
 
 ★★★ **THE CONSEQUENCE THAT MUST NOT BE MISSED: THE INSTANCE PICKER HAS TO SAY SO.** Dropping
 compatibility mode is not just removing a screen — it removes the ONLY way to use a Kiwi whose owner
