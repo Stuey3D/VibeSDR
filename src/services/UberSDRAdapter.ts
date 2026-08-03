@@ -164,7 +164,10 @@ export function createBackend(
   switch (kind) {
     case 'ubersdr': return new UberSDRAdapter(baseUrl, uuid, callbacks, password, local);
     case 'owrx':    return new OwrxAdapter(baseUrl, uuid, callbacks);
-    case 'kiwi':    return new KiwiAdapter(baseUrl, uuid, callbacks, password);
+    // Same adapter for both Kiwi dialects — only the WebSocket path differs, and it self-corrects
+    // if the guess was wrong (KiwiAdapter.tryOtherWsPrefix).
+    case 'kiwi':    return new KiwiAdapter(baseUrl, uuid, callbacks, password, 'kiwi');
+    case 'web888':  return new KiwiAdapter(baseUrl, uuid, callbacks, password, 'web888');
     case 'fmdx':    return new FmdxAdapter(baseUrl, uuid, callbacks);
     default: throw new Error(`backend '${kind}' not implemented`);
   }

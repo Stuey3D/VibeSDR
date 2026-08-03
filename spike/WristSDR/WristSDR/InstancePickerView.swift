@@ -401,7 +401,7 @@ struct InstancePickerView: View {
   // Same server-type logos as the phone picker (bundled PNGs in Logos/). SpyServer + RTL-TCP
   // reuse the rtl_tcp mark. Falls back to a monogram if an image is missing.
   private static let logoName: [ServerType: String] = [
-    .ubersdr: "logo_ubersdr", .kiwi: "logo_kiwi", .owrx: "logo_owrx",
+    .ubersdr: "logo_ubersdr", .kiwi: "logo_kiwi", .web888: "logo_kiwi", .owrx: "logo_owrx",
     .fmdx: "logo_fmdx", .spyserver: "rtltcp", .rtltcp: "rtltcp",
   ]
   @ViewBuilder private func typeBadge(_ t: ServerType) -> some View {

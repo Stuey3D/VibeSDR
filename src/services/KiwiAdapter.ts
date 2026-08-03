@@ -1,5 +1,7 @@
 // KiwiAdapter — native KiwiSDR backend (v3b3). Two WebSockets to
-// ws(s)://host:port/ws/kiwi/<ts>/{SND,W/F}. Mirrors the shipped OWRX approach:
+// ws(s)://host:port/<prefix>/<ts>/{SND,W/F}, where <prefix> is `ws/kiwi` on a real KiwiSDR and
+// `kiwi` on a Web-888 / RaspSDR — see KIWI_WS_PREFIX and isKiwiProtocol() in sdrTypes for why
+// the same protocol lives at two URLs. Mirrors the shipped OWRX approach:
 // everything (control, waterfall, audio decode) lives in TS, and decoded PCM is
 // pushed to the native player via pushExternalPcm so background audio works the
 // same as OWRX. No native Kiwi engine, no Kiwi server-side extensions (deferred —
@@ -84,6 +86,16 @@ const KIWI_MODE: Record<SDRMode, { mod: string; lo: number; hi: number }> = {
   wfm: { mod: 'nbfm', lo: -6000, hi:  6000 }, // unused (Kiwi has no WFM) — local-only mode
 };
 
+/** Which dialect of the Kiwi URL a receiver wants. Same wire protocol either way — the ONLY
+ *  difference is this string, and getting it wrong means the server closes the socket without
+ *  sending a byte. `no_wf` (waterfall-less) exists on both and is deliberately not offered:
+ *  the app always wants a waterfall. */
+export type KiwiVariant = 'kiwi' | 'web888';
+export const KIWI_WS_PREFIX: Record<KiwiVariant, string> = {
+  kiwi:   'ws/kiwi',   // upstream KiwiSDR (jks-prv), mongoose-7 API — needs the `ws/` marker
+  web888: 'kiwi',      // Web-888 / RaspSDR fork — predates it, rejects `ws/` outright
+};
+
 const KIWI_CAPS: Omit<BackendCapabilities, 'freqRange'> = {
   profiles: false,
   serverSideZoom: true,
@@ -95,7 +107,10 @@ const KIWI_CAPS: Omit<BackendCapabilities, 'freqRange'> = {
 };
 
 export class KiwiAdapter implements SDRBackend {
-  readonly kind: BackendKind = 'kiwi';
+  /** A getter, not a field: the variant can flip mid-handshake (tryOtherWsPrefix), and after it
+   *  does, `kind` must report what we are actually talking to — but only once a receiver has
+   *  CONFIRMED it by answering. An unconfirmed swap is a guess; see label(). */
+  get kind(): BackendKind { return this.variantConfirmed ? this.variant : this.askedVariant; }
   readonly caps: BackendCapabilities = { ...KIWI_CAPS, freqRange: [0, KIWI_FULL_BW] };
   readonly uuid: string;
 
@@ -103,6 +118,44 @@ export class KiwiAdapter implements SDRBackend {
   private wsBase: string;
   private password: string;
   private ts = Date.now();
+
+  /** Kiwi dialect — from the caller's server type, then self-corrected once if we guessed wrong. */
+  private variant: KiwiVariant;
+  private get wsPrefix(): string { return KIWI_WS_PREFIX[this.variant]; }
+  /** What the CALLER said this receiver is, never overwritten. The dialect probe is a guess until
+   *  something answers, and an unanswered guess must not be reported to the user as fact — see
+   *  label(). */
+  private readonly askedVariant: KiwiVariant;
+  /** The URL-dialect probe fires at most once per adapter. See tryOtherWsPrefix(). */
+  private prefixSwapped = false;
+  /** Has the server said ANYTHING on this attempt? The one signal that separates a wrong URL
+   *  (closed with zero bytes) from a receiver that answered and then refused us. Reset per
+   *  attempt, because it gates the swap — use variantConfirmed for anything durable. */
+  private sawServerMsg = false;
+  /** ★★★ HAS A RECEIVER ACTUALLY ANSWERED ON THE CURRENT PREFIX? Only that is evidence of which
+   *  dialect it really speaks. Unlike sawServerMsg this is never reset: a reconnect does not
+   *  un-learn what the receiver already told us. */
+  private variantConfirmed = false;
+
+  /** How to name this receiver to the user — "KiwiSDR" or "Web-888".
+   *
+   *  ★★★ A FAILED PROBE MUST NOT RENAME SOMEONE'S RADIO. This used to read `this.variant`, which
+   *  the retry mutates. A receiver that refuses us with ZERO bytes is indistinguishable from a
+   *  wrong URL, so the swap fires, the second attempt fails too, and every message then described
+   *  a KiwiSDR — picked from the KiwiSDR directory — as "This Web-888…". Reported 2026-08-03
+   *  against a Kiwi that blocks app clients (it fails on the shipped build too, so the refusal is
+   *  real; only the NAME was ours).
+   *
+   *  ★ That is the same class of fault as the bug this whole change exists to fix: the app stating
+   *    something false about the user's own hardware. It is worse than saying nothing, because it
+   *    sends someone looking for a Web-888 problem they do not have.
+   *
+   *  ★★ So: report the confirmed dialect if a receiver has spoken to us, otherwise report what the
+   *     caller asked for. Never the untested half of a swap. */
+  private label(): string {
+    const v = this.variantConfirmed ? this.variant : this.askedVariant;
+    return v === 'web888' ? 'Web-888' : 'KiwiSDR';
+  }
 
   private sndWs: WebSocket | null = null;
   private wfWs: WebSocket | null = null;
@@ -159,10 +212,13 @@ export class KiwiAdapter implements SDRBackend {
    *  round-trip later), so it's always ready in time. */
   private ident = 'VibeSDR';
 
-  constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string) {
+  constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string,
+              variant: KiwiVariant = 'kiwi') {
     this.uuid = uuid;
     this.cb = callbacks;
     this.password = password ?? '';
+    this.variant = variant;
+    this.askedVariant = variant;
     this.wsBase = KiwiAdapter.toWsBase(baseUrl);
     getKiwiIdent().then((v) => { const s = sanitizeIdent(v); if (s) this.ident = s; }).catch(() => {});
   }
@@ -193,7 +249,7 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   private url(stream: 'SND' | 'W/F'): string {
-    return `${this.wsBase}/ws/kiwi/${this.ts}/${stream}`;
+    return `${this.wsBase}/${this.wsPrefix}/${this.ts}/${stream}`;
   }
 
   /** Receiver location from the Kiwi /status text endpoint (`gps=(lat, lon)`)
@@ -246,88 +302,176 @@ export class KiwiAdapter implements SDRBackend {
     this.gapHist = []; this.lastFrameAt = 0; this.lastLink = -1;
     this.verMaj = null; this.verMin = null; this.serverInfoSent = false;
     this.everConnected = false; this.errorShown = false;
+    this.prefixSwapped = false;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const done = () => { if (!settled) { settled = true; resolve(); } };
-      const fail = (e: any) => { if (!settled) { settled = true; reject(e); } };
-
-      // Open the SND socket FIRST. The reference client only opens W/F *after*
-      // the SND auth succeeds (kiwi.js: "repeat the auth for the second
-      // websocket … we only get here if the first auth has worked"). Opening
-      // both at once makes the Kiwi drop the SND connection after a few seconds.
-      try {
-        this.sndWs = new (WebSocket as any)(this.url('SND'), null, { headers: { 'User-Agent': KIWI_UA } }) as WebSocket;
-      } catch (e) { fail(e); return; }
-      this.sndWs.binaryType = 'arraybuffer';
-
-      this.sndWs.onopen = () => {
-        this.dbg('SND open');
-        // ★★ '#' MEANS "NO PASSWORD", NOT AN EMPTY STRING. Kiwi's own client:
-        //      pwd = (pwd != '') ? pwd : '#';
-        //      ext_send('SET auth t=' + conn_type + ' p=' + pwd + ipl + reset_s, ws);
-        // We sent `p=` with nothing after it. Verified 2026-07-31 that this alone does NOT fix the
-        // receivers that refuse us after ~10 s — so it is not the cause of that — but behaving
-        // identically to the reference client on someone else's hardware is the whole point of
-        // memory/third_party_receiver_etiquette.md, and an empty field is the sort of thing a
-        // stricter server is entitled to reject.
-        this.sndSend(`SET auth t=kiwi p=${this.password || '#'}`);
-        // Ident goes EARLY, right after auth — a "require name/callsign" server checks it at
-        // connect time, so sending it late (buried in the RX params) means the refusal has
-        // already happened. See kiwiIdent / IdentModal.
-        this.sndSend(`SET ident_user=${this.ident}`);
-        this.sndSend('SERVER DE CLIENT openwebrx.js SND');
-        // RX params (which START the audio stream) — a short tick lets the
-        // server process auth first; also re-asserted on the audio_rate MSG.
-        setTimeout(() => { if (this.started) this.sendRxParams(); }, 150);
-      };
-      this.sndWs.onmessage = (e) => {
-        try {
-          if (typeof e.data === 'string') this.onText(e.data, 'SND');
-          else {
-            const u8 = new Uint8Array(e.data as ArrayBuffer);
-            this.rxBytes += u8.length;
-            this.startRateMeter();
-            this.onBinaryFrame(u8, 'SND');
-          }
-          this.openWf();
-        } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
-      };
-      this.sndWs.onerror = () => { this.dbg('SND error'); fail(new Error('KiwiSDR SND socket error')); };
-      this.sndWs.onclose = (ev: any) => { this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(ev?.reason ?? ''); fail(new Error('KiwiSDR SND closed')); };
-
-      // Open W/F right away too (both share this.ts). The first-SND-MSG gate
-      // (openWf in onmessage) is kept as a no-op fallback via the wfOpened guard.
-      this.openWf();
-
-      // Keepalive on BOTH sockets — Kiwi kicks a client that stops sending it.
-      //
-      // ★★★ 5 SECONDS, MATCHING KIWI'S OWN CLIENT. We sent this at 1 Hz, five times more often
-      // than the browser does for no benefit. Verified against the receiver's own
-      // `kiwisdr.min.js` (2026-07-31):
-      //     window.setInterval(send_keepalive, 5000);                       // main
-      //     setInterval(function(){ ext_send("SET keepalive"); }, 5000);    // extensions
-      //     setInterval(function(){ msg_send('SET keepalive'); … }, 2500);  // queue/monitor
-      //
-      // ★★★ AND IT CORRECTS memory/third_party_receiver_etiquette.md, which claimed our keepalive
-      // "DEFEATS the server's own 'are you still there' kick". IT DOES NOT — the official client
-      // sends it unconditionally on a timer as well, so this is transport liveness, not presence.
-      // Kiwi's inactivity timeout is driven by something else (user commands, and the rn/rt
-      // counter its client watches). That claim was the entire reason the app grew its own
-      // 30-minute hand-back; the premise was false.
-      // ★ Do NOT make this activity-driven. Stopping it gets us kicked, and it would make us
-      // behave UNLIKE the reference client on somebody else's receiver — the opposite of the
-      // etiquette we are trying to keep.
-      this.keepalive = setInterval(() => {
-        this.sndSend('SET keepalive');
-        this.wfSend('SET keepalive');
-      }, 5000);
-
+      this._done = () => { if (!settled) { settled = true; resolve(); } };
+      this._fail = (e: any) => { if (!settled) { settled = true; reject(e); } };
       // Resolve once audio params are away (we're effectively connected); guard
-      // with a timeout so a silent server still rejects.
-      const t = setTimeout(() => fail(new Error('KiwiSDR handshake timed out')), 12000);
-      this._onConnected = () => { clearTimeout(t); this.cb.onConnect(); done(); };
+      // with a timeout so a silent server still rejects. Re-armed if the URL-dialect
+      // probe restarts the handshake, so the retry gets a full budget of its own.
+      this.armHandshakeTimeout();
+      this._onConnected = () => {
+        if (this.handshakeTimer) { clearTimeout(this.handshakeTimer); this.handshakeTimer = null; }
+        this.cb.onConnect(); this._done?.();
+      };
+      this.openSockets();
     });
+  }
+
+  private _done: (() => void) | null = null;
+  private _fail: ((e: any) => void) | null = null;
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private armHandshakeTimeout(): void {
+    if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = null;
+      this._fail?.(new Error(`${this.label()} handshake timed out`));
+    }, 12000);
+  }
+
+  /** Open (or re-open, after a dialect swap) both sockets and start the keepalive. */
+  private openSockets(): void {
+    const fail = (e: any) => this._fail?.(e);
+    this.wfOpened = false;
+    this.sawServerMsg = false;
+    // Open the SND socket FIRST. The reference client only opens W/F *after*
+    // the SND auth succeeds (kiwi.js: "repeat the auth for the second
+    // websocket … we only get here if the first auth has worked"). Opening
+    // both at once makes the Kiwi drop the SND connection after a few seconds.
+    try {
+      this.sndWs = new (WebSocket as any)(this.url('SND'), null, { headers: { 'User-Agent': KIWI_UA } }) as WebSocket;
+    } catch (e) { fail(e); return; }
+    this.sndWs.binaryType = 'arraybuffer';
+
+    this.sndWs.onopen = () => {
+      this.dbg('SND open');
+      // ★★ '#' MEANS "NO PASSWORD", NOT AN EMPTY STRING. Kiwi's own client:
+      //      pwd = (pwd != '') ? pwd : '#';
+      //      ext_send('SET auth t=' + conn_type + ' p=' + pwd + ipl + reset_s, ws);
+      // We sent `p=` with nothing after it. Verified 2026-07-31 that this alone does NOT fix the
+      // receivers that refuse us after ~10 s — so it is not the cause of that — but behaving
+      // identically to the reference client on someone else's hardware is the whole point of
+      // memory/third_party_receiver_etiquette.md, and an empty field is the sort of thing a
+      // stricter server is entitled to reject.
+      this.sndSend(`SET auth t=kiwi p=${this.password || '#'}`);
+      // Ident goes EARLY, right after auth — a "require name/callsign" server checks it at
+      // connect time, so sending it late (buried in the RX params) means the refusal has
+      // already happened. See kiwiIdent / IdentModal.
+      this.sndSend(`SET ident_user=${this.ident}`);
+      this.sndSend('SERVER DE CLIENT openwebrx.js SND');
+      // RX params (which START the audio stream) — a short tick lets the
+      // server process auth first; also re-asserted on the audio_rate MSG.
+      setTimeout(() => { if (this.started) this.sendRxParams(); }, 150);
+    };
+    this.sndWs.onmessage = (e) => {
+      try {
+        if (typeof e.data === 'string') this.onText(e.data, 'SND');
+        else {
+          const u8 = new Uint8Array(e.data as ArrayBuffer);
+          this.rxBytes += u8.length;
+          this.startRateMeter();
+          this.onBinaryFrame(u8, 'SND');
+        }
+        this.openWf();
+      } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
+    };
+    // ★ Both of these DEFER to the URL-dialect probe. A wrong prefix surfaces as an error
+    // immediately followed by a close, and failing the promise from either one would reject the
+    // connect before the retry ever ran. canSwapWsPrefix() only holds while the server has said
+    // nothing at all, so a genuine refusal still reports on the first attempt.
+    this.sndWs.onerror = () => {
+      this.dbg('SND error');
+      if (this.canSwapWsPrefix()) return;      // the close that follows drives the retry
+      fail(new Error(`${this.label()} SND socket error`));
+    };
+    this.sndWs.onclose = (ev: any) => {
+      this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason);
+      if (this.tryOtherWsPrefix()) return;
+      this.onSocketDrop(ev?.reason ?? '');
+      fail(new Error(`${this.label()} SND closed`));
+    };
+
+    // Open W/F right away too (both share this.ts). The first-SND-MSG gate
+    // (openWf in onmessage) is kept as a no-op fallback via the wfOpened guard.
+    this.openWf();
+
+    // Keepalive on BOTH sockets — Kiwi kicks a client that stops sending it.
+    //
+    // ★★★ 5 SECONDS, MATCHING KIWI'S OWN CLIENT. We sent this at 1 Hz, five times more often
+    // than the browser does for no benefit. Verified against the receiver's own
+    // `kiwisdr.min.js` (2026-07-31):
+    //     window.setInterval(send_keepalive, 5000);                       // main
+    //     setInterval(function(){ ext_send("SET keepalive"); }, 5000);    // extensions
+    //     setInterval(function(){ msg_send('SET keepalive'); … }, 2500);  // queue/monitor
+    //
+    // ★★★ AND IT CORRECTS memory/third_party_receiver_etiquette.md, which claimed our keepalive
+    // "DEFEATS the server's own 'are you still there' kick". IT DOES NOT — the official client
+    // sends it unconditionally on a timer as well, so this is transport liveness, not presence.
+    // Kiwi's inactivity timeout is driven by something else (user commands, and the rn/rt
+    // counter its client watches). That claim was the entire reason the app grew its own
+    // 30-minute hand-back; the premise was false.
+    // ★ Do NOT make this activity-driven. Stopping it gets us kicked, and it would make us
+    // behave UNLIKE the reference client on somebody else's receiver — the opposite of the
+    // etiquette we are trying to keep.
+    this.stopKeepalive();          // a dialect retry must not stack a second one
+    this.keepalive = setInterval(() => {
+      this.sndSend('SET keepalive');
+      this.wfSend('SET keepalive');
+    }, 5000);
+  }
+
+  /** ★★★ NO DIRECTORY HAS A WEB-888 TYPE, so detecting the fork from its landing page fixes the
+   *  ADD-SERVER path and nothing else. Checked 2026-08-03: Receiverbook's feed emits exactly
+   *  three receiver types (`KiwiSDR`, `OpenWebRX`, `WebSDR`) and kiwisdr.com's list is Kiwis by
+   *  definition — so a Web-888 listed anywhere is listed as a KiwiSDR, and rightly, because that
+   *  is what it is compatible with. fetchKiwiList() now reads each row's `sw_version` and tags
+   *  `Web888_*` correctly, but Receiverbook publishes no such field and older/renamed firmware
+   *  will slip through. This probe is what catches the remainder.
+   *
+   *  A wrong prefix fails in ONE unmistakable way: the server closes having sent NOTHING. RaspSDR
+   *  returns NULL from rx_server_websocket before a byte goes out (rx_server.cpp:280). Every real
+   *  rejection — badp, too_busy, ip_limit, owner block — arrives AFTER a MSG or two, because the
+   *  server has to admit us before it can refuse us. So `sawServerMsg` is the discriminator, and
+   *  it is the reason this cannot swallow a genuine refusal.
+   *
+   *  ★★ THE ASYMMETRY IS REAL, AND IT IS NOT WHAT THE SOURCE SUGGESTS. Reading upstream, the
+   *  non-`ws/` branch looks like a failure path — it sets `isWebSocket = false`. It is not:
+   *  grep the file and that variable is only ever PRINTED, never branched on. Measured 2026-08-03
+   *  against two v1.902 receivers (kiwisdr.areg.org.au, sdr.ironstonerange.com): both stream
+   *  perfectly over the bare `kiwi/<ts>/…` path, so `kiwi/` is in fact the MORE compatible of the
+   *  two and the web888→kiwi direction of this swap is close to dead code.
+   *  ★ DO NOT therefore collapse the two and send `kiwi/` to everything. `ws/kiwi/` is what the
+   *    reference client sends and what upstream documents, and looking exactly like the reference
+   *    client on someone else's receiver is the standing rule in this file (see KIWI_UA, the `p=#`
+   *    note, the 5 s keepalive). Two hosts out of 839 is not a mandate to diverge from it — and
+   *    the retry below already costs a wrong guess only one socket.
+   *
+   *  ★ ONCE per connect, and only before the first MSG. Retrying a receiver in a loop is exactly
+   *    what gets an address blacklisted — see memory/third_party_receiver_etiquette.md.
+   *  ★ A FRESH `ts`. The tstamp keys the connection server-side; reusing the one the dying socket
+   *    owns risks matching that half-closed conn instead of allocating a new channel.
+   */
+  private canSwapWsPrefix(): boolean {
+    return this.started && !this.prefixSwapped && !this.sawServerMsg;
+  }
+  private tryOtherWsPrefix(): boolean {
+    if (!this.canSwapWsPrefix()) return false;
+    const was = this.wsPrefix;
+    this.prefixSwapped = true;
+    this.variant = this.variant === 'web888' ? 'kiwi' : 'web888';
+    // ★ Name the PREFIX, not a product. label() deliberately refuses to report an unconfirmed
+    //   swap, so calling it here printed "retrying as KiwiSDR (/kiwi/)" — the old name against the
+    //   new path. The prefix is the only fact at this point.
+    this.dbg(`closed with no reply on /${was}/ — retrying at /${this.wsPrefix}/`);
+    this.stopKeepalive();
+    this.closeSocket('sndWs');
+    this.closeSocket('wfWs');
+    this.ts = Date.now();
+    this.armHandshakeTimeout();     // the retry gets a full handshake budget
+    this.openSockets();
+    return true;
   }
 
   /** When audio actually started flowing this session — for the short-session test in
@@ -368,7 +512,15 @@ export class KiwiAdapter implements SDRBackend {
       } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
-    this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(ev?.reason ?? ''); };
+    this.wfWs.onclose = (ev: any) => {
+      this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason);
+      // ★ Both sockets carry the same wrong prefix, so W/F is closed by the server too — and it
+      // often loses the race. Tearing down here would set started=false and kill the retry before
+      // SND's close ever reached tryOtherWsPrefix(). Let SND drive it; this close means nothing
+      // until the server has actually spoken to us.
+      if (this.canSwapWsPrefix()) return;
+      this.onSocketDrop(ev?.reason ?? '');
+    };
   }
 
   // ── binary frame dispatch ───────────────────────────────────────────────
@@ -376,6 +528,10 @@ export class KiwiAdapter implements SDRBackend {
   // 3-char ASCII tag ('MSG'/'SND'/'W/F'/'EXT'). MSG carries the text control
   // plane (audio_rate, sample_rate, badp, too_busy …) — it is NOT a text frame.
   private onBinaryFrame(buf: Uint8Array, stream: 'SND' | 'W/F'): void {
+    // The server has spoken → the URL dialect was right, so stop second-guessing it. From here a
+    // close is a real event and must be reported as one, never retried at a different URL.
+    this.sawServerMsg = true;
+    this.variantConfirmed = true;      // it answered on this prefix — the dialect is now a fact
     if (buf.length < 3) return;
     const tag = String.fromCharCode(buf[0], buf[1], buf[2]);
     if (tag === 'MSG') {
@@ -392,6 +548,7 @@ export class KiwiAdapter implements SDRBackend {
 
   // ── text (MSG) ───────────────────────────────────────────────────────────
   private onText(data: string, stream: 'SND' | 'W/F'): void {
+    this.sawServerMsg = true; this.variantConfirmed = true;   // see onBinaryFrame
     this.dbg(stream + ' rx: ' + data.slice(0, 120));
     if (!data.startsWith('MSG')) return;            // CLI / other — ignore
     const body = data.slice(4);                     // skip "MSG "
@@ -902,6 +1059,9 @@ export class KiwiAdapter implements SDRBackend {
   destroy(): void {
     this.started = false;
     this.stopKeepalive();
+    // The handshake timeout is a field now (the dialect retry re-arms it), so it has to be
+    // cleared here or a torn-down adapter still rejects its dead promise 12 s later.
+    if (this.handshakeTimer) { clearTimeout(this.handshakeTimer); this.handshakeTimer = null; }
     if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
     this.closeSocket('sndWs');
     this.closeSocket('wfWs');
@@ -970,12 +1130,19 @@ export class KiwiAdapter implements SDRBackend {
         // "only allows its own web interface" block, and compatibility mode is exactly the fix,
         // so say so in plain English rather than dumping the raw protocol string on the user.
         const handshakeBlock = /sec-websocket|websocket|handshake|redirect|30[12]|\b40[13]\b|forbidden|moved/i.test(reason);
+        // ★★ NAME THE RADIO IN FRONT OF THEM. Every one of these read "This KiwiSDR…", which is
+        // wrong on a Web-888 — and worse than wrong when the receiver is the user's own, because
+        // the reasonless-close branch below accuses its owner of blocking us. That branch is
+        // exactly what a mismatched URL dialect used to look like (see tryOtherWsPrefix); now
+        // that we retry the other dialect first, reaching here really does mean the receiver hung
+        // up on us — but it still has to say WHICH receiver.
+        const what = this.label();
         this.cb.onError(
           handshakeBlock
-            ? 'This KiwiSDR wouldn’t open a data connection for the app — it sent us to its own web page instead. Many owners only allow their own web interface. Use “Open in compatibility mode” below to listen via the receiver’s web page, or try another KiwiSDR.'
+            ? `This ${what} wouldn’t open a data connection for the app — it sent us to its own web page instead. Many owners only allow their own web interface. Use “Open in compatibility mode” below to listen via the receiver’s web page, or try another receiver.`
           : reason
-            ? `This KiwiSDR closed the connection: “${reason}”. Try another KiwiSDR, or use UberSDR or OpenWebRX.`
-            : 'This KiwiSDR closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another KiwiSDR, or use UberSDR or OpenWebRX.');
+            ? `This ${what} closed the connection: “${reason}”. Try another receiver, or use UberSDR or OpenWebRX.`
+            : `This ${what} closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another receiver, or use UberSDR or OpenWebRX.`);
       }
     } else if (this.streamedFor() < 20000 && !this.errorShown) {
       // ★ ADMITTED, STREAMED, THEN CUT IN SECONDS — a receiver enforcing a limit, not a lost link.
@@ -1000,10 +1167,10 @@ export class KiwiAdapter implements SDRBackend {
       // happened to be 0. An unexplained boot is what made this maddening to diagnose; an explained
       // one is just a busy receiver.
       if (this._tooBusyClose()) {
-        this.cb.onError('This KiwiSDR reported that it is too busy and closed the session. Its channels are in use, or the owner reserves them — it is the receiver’s decision, not a problem with your connection. Try another, or come back later.');
+        this.cb.onError(`This ${this.label()} reported that it is too busy and closed the session. Its channels are in use, or the owner reserves them — it is the receiver’s decision, not a problem with your connection. Try another, or come back later.`);
         return;
       }
-      this.cb.onError('This KiwiSDR accepted us and then closed the session after a few seconds, without saying why. That is the receiver’s decision, not a problem with your connection — owners variously cap daily listening time per address, allow only their own web page, or reserve slots. Try another KiwiSDR; this one may let you back in later.');
+      this.cb.onError(`This ${this.label()} accepted us and then closed the session after a few seconds, without saying why. That is the receiver’s decision, not a problem with your connection — owners variously cap daily listening time per address, allow only their own web page, or reserve slots. Try another receiver; this one may let you back in later.`);
     } else {
       // Was streaming for a while, then dropped — a genuine mid-session loss.
       this.cb.onServerLost?.();
