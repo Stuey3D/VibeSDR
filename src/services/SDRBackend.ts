@@ -14,7 +14,9 @@
 
 import type { SDRStatus, SDRMode, SDRCallbacks } from './UberSDRClient';
 
-export type BackendKind = 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx';
+// 'web888' is KiwiAdapter too — a Web-888 / RaspSDR speaks the Kiwi protocol at a different URL,
+// nothing more. See isKiwiProtocol() in sdrTypes; anything gating Kiwi behaviour must accept both.
+export type BackendKind = 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'fmdx';
 
 /** FM-DX transmitter identification (from the server's maps.fmdx.org lookup).
  *  Distances/azimuths are relative to the SERVER's QTH, not the listener. */

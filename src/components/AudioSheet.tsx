@@ -9,6 +9,7 @@ import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
+import { isKiwiProtocol } from '../services/sdrTypes';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -234,7 +235,7 @@ export interface AudioSheetProps {
    *  it to present the recording share sheet only once no RN modal is up (else
    *  the native share VC presents over this Modal and wedges touch handling). */
   onDismiss?: () => void;
-  serverType?: string;         // 'ubersdr' | 'owrx' | 'kiwi'
+  serverType?: string;         // 'ubersdr' | 'owrx' | 'kiwi' | 'web888'
   /** Meter display mode — squelch readouts follow it (S-units when 'smeter'), while the value SENT
    *  to the backend stays in its native unit. */
   signalMode?: 'snr' | 'smeter' | 'dbfs';
@@ -330,7 +331,7 @@ export default function AudioSheet({
   const { theme: t } = useTheme();
   const insets = useSafeAreaInsets();
   const isOwrx = serverType === 'owrx';
-  const isKiwi = serverType === 'kiwi';
+  const isKiwi = isKiwiProtocol(serverType);   // Web-888 has the same DSP surface
   const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi;
 
   // Live signal reading — this sheet covers the signal bar, so show the CURRENT level next to the

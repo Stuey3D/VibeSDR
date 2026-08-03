@@ -37,7 +37,7 @@ import {
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
 import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
-         fetchOccupancy, type ServerOccupancy,
+         fetchOccupancy, type ServerOccupancy, isKiwiProtocol,
          type BackendType, type ServerType } from '../services/sdrTypes';
 import { vibeServerNeedsPin } from '../services/vibeAuth';
 
@@ -52,7 +52,8 @@ import { vibeServerNeedsPin } from '../services/vibeAuth';
 /** How each backend is named in the UI. 'auto' = let the probe decide. */
 const PROTO_LABEL: Record<BackendType, string> = {
   vibeserver: 'VibeServer', ubersdr: 'UberSDR', owrx: 'OpenWebRX',
-  kiwi: 'KiwiSDR', fmdx: 'FM-DX', rtltcp: 'rtl_tcp', spyserver: 'SpyServer',
+  kiwi: 'KiwiSDR', web888: 'Web-888', fmdx: 'FM-DX', rtltcp: 'rtl_tcp',
+  spyserver: 'SpyServer',
 };
 /** Offered in the add-server modal. AUTO first — it's right almost always; the
  *  explicit choices exist for raw-TCP servers on non-standard ports, which cannot
@@ -60,6 +61,12 @@ const PROTO_LABEL: Record<BackendType, string> = {
 const PROTO_CHOICES: Array<[BackendType | 'auto', string]> = [
   ['auto', 'Auto'], ['vibeserver', 'VibeServer'], ['rtltcp', 'rtl_tcp'],
   ['spyserver', 'SpyServer'], ['owrx', 'OpenWebRX'], ['kiwi', 'KiwiSDR'],
+  // ★ Web-888 sits NEXT TO KiwiSDR, and it has to be its own choice rather than a footnote to it:
+  // it is a Kiwi FORK whose WebSocket URL never gained the `ws/` prefix upstream added, so picking
+  // "KiwiSDR" for one is an instant, silent failure. Auto detects it from the page branding, and
+  // the adapter retries the other dialect by itself — but somebody who knows what they own should
+  // be able to just say so. (Also covers RaspSDR/RX-888 boxes, which are the same firmware.)
+  ['web888', 'Web-888'],
   ['ubersdr', 'UberSDR'], ['fmdx', 'FM-DX'],
 ];
 
@@ -116,6 +123,10 @@ const TYPE_LOGOS: Record<string, any> = {
   ubersdr: require('../../assets/logo_ubersdr.png'),
   owrx:    require('../../assets/logo_owrx.png'),
   kiwi:    require('../../assets/logo_kiwi.png'),
+  // ★ Web-888 borrows the Kiwi mark — no Web-888 asset ships, and it runs Kiwi firmware. Without
+  //   an entry a saved Web-888 favourite falls through to the 📻 glyph, alone in a list where
+  //   every other row is branded (the same complaint that added the VibeServer logo below).
+  web888:  require('../../assets/logo_kiwi.png'),
   // ★ VibeServer had no logo, so our OWN server fell back to a generic radio glyph
   //   in the very list where every other backend is branded (Stuart, 2026-07-29).
   vibeserver: require('../../assets/logo_vibeserver.png'),
@@ -186,10 +197,12 @@ function favSnr(f: Favourite, meta: FavMeta): number | null {
   return meta[normUrl(f.url)]?.snr ?? f.bestSnr ?? null;
 }
 // Grouping order + display names for the by-type sort.
-const TYPE_ORDER: Record<string, number> = { ubersdr: 0, kiwi: 1, owrx: 2, fmdx: 3, vibeserver: 4, spyserver: 5, rtltcp: 6 };
+// ★ web888 sits immediately after kiwi so the two Kiwi-protocol groups are adjacent under the
+//   by-type sort, rather than a lone 'Web-888' group stranded after RTL-TCP.
+const TYPE_ORDER: Record<string, number> = { ubersdr: 0, kiwi: 1, web888: 2, owrx: 3, fmdx: 4, vibeserver: 5, spyserver: 6, rtltcp: 7 };
 const TYPE_NAME: Record<string, string> = {
-  ubersdr: 'UberSDR', kiwi: 'KiwiSDR', owrx: 'OpenWebRX', fmdx: 'FM-DX', vibeserver: 'VibeServer',
-  spyserver: 'SpyServer', rtltcp: 'RTL-TCP',
+  ubersdr: 'UberSDR', kiwi: 'KiwiSDR', web888: 'Web-888', owrx: 'OpenWebRX', fmdx: 'FM-DX',
+  vibeserver: 'VibeServer', spyserver: 'SpyServer', rtltcp: 'RTL-TCP',
 };
 const favType = (f: Favourite) => (f.serverType ?? 'ubersdr') as string;
 function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null, meta: FavMeta): Favourite[] {
@@ -292,7 +305,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // KiwiSDR name/callsign identity. `identModal` open = the entry box is up; its optional
   // `connect` holds a pending connection to resume after saving (from a connect), or is absent
   // (editing via the prefill box). `kiwiIdentValue` is the saved value shown in the box.
-  const [identModal,  setIdentModal]    = useState<null | { connect?: { url: string; name: string; password?: string; lon?: number | null; type?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' } }>(null);
+  const [identModal,  setIdentModal]    = useState<null | { connect?: { url: string; name: string; password?: string; lon?: number | null; type?: 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'fmdx' } }>(null);
   const [identPrefill, setIdentPrefill] = useState('');
   const [kiwiIdentValue, setKiwiIdentValue] = useState('');
   useEffect(() => { getKiwiIdent().then(setKiwiIdentValue).catch(() => {}); }, []);
@@ -322,7 +335,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     { id: 'welcome', title: 'Welcome to VibeSDR',
       body: 'Browse public SDR servers below, or set a favourite as your default to skip straight in next time.' },
     { id: 'custom', title: 'Your own server',
-      body: 'Got a private UberSDR, OpenWebRX or KiwiSDR? Enter its address here to connect to it directly.',
+      body: 'Got a private UberSDR, OpenWebRX, KiwiSDR or Web-888? Enter its address here to connect to it directly.',
       target: tourRef('customUrl') },
   ], { storageKey: 'lsv_tour_picker_v1' });
   useEffect(() => {
@@ -559,7 +572,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     })();
   }, [mergeMeta]);
 
-  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx') => {
+  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'fmdx') => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
     // Most-Used tally: connecting to a favourite (server or custom URL) bumps its visit count so
@@ -574,7 +587,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // KiwiSDR: capture a name/callsign once (saved like the VibeServer PIN). Many Kiwis refuse
     // anonymous or require an ident — so ensure one exists before connecting. Prompt only when
     // it's empty; thereafter the adapter loads and sends it silently.
-    if (serverType === 'kiwi') {
+    // ★ Web-888 too — same server code, same `SET ident_user`, same owner restrictions.
+    if (isKiwiProtocol(serverType)) {
       const id = await getKiwiIdent();
       if (!id) {
         setIdentPrefill('');
@@ -887,16 +901,25 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       proto = 'spyserver';
       if (tcpProto !== 'spyserver') setTcpProto('spyserver');   // flip the toggle for feedback
     }
-    // The port field is a fallback — a port typed into the HOST field wins, since
-    // that's the natural way to paste "host:8073".
-    let p = parseInt(tcpPort.trim(), 10);
+    // ★★★ THE PORT FIELD HAS TO REACH THE URL, NOT JUST THE PORT NUMBER. This used to parse the
+    // host WITHOUT the typed port, then patch `port` afterwards and return `u.url` untouched — so
+    // "web-888.local" + "8073" produced port 8073 and the url `http://web-888.local`, which is
+    // port 80. Detection still found the receiver (probeServer also tries host:port directly) and
+    // saved a correctly-typed favourite, but the connect used the portless url and was REFUSED.
+    // Reported 2026-08-03; it affected every backend, not just Web-888, and the saved favourite
+    // working on the second tap is what disguised it.
+    //
+    // ★ Feed the port in as the parser's default instead. parseServerAddress already prefers a
+    //   port written into the host text over the default, so "a port typed into the HOST field
+    //   wins" still holds — and now `port` and `url` cannot disagree, because both come out of the
+    //   same parse. Do not reintroduce a separate `p`.
+    const typed = parseInt(tcpPort.trim(), 10);
+    const portField = Number.isFinite(typed) && typed > 0 && typed < 65536 ? typed : undefined;
     // ★ Same parser as the paste box: a named server may equally live behind TLS or in a
     // subfolder, and the two entry points must not disagree about what an address IS.
-    const u = parseServerAddress(h, proto === 'auto' ? undefined : DEFAULT_PORT[proto]);
+    const u = parseServerAddress(h, portField ?? (proto === 'auto' ? undefined : DEFAULT_PORT[proto]));
     if (!u) return null;
-    h = u.host;
-    if (/:\d+$/.test(tcpHost.trim()) || !Number.isFinite(p) || p <= 0 || p > 65535) p = u.port;
-    return { host: h, port: p, proto, url: u.url };
+    return { host: u.host, port: u.port, proto, url: u.url };
   }, [tcpHost, tcpPort, tcpProto]);
 
   const tcpModalConnect = useCallback(async (save: boolean) => {
@@ -907,15 +930,18 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // On AUTO, probe before saving — so the favourite remembers what it actually is
     // and reconnects straight to the right backend next time, with no second probe.
     let type: BackendType | null = parsed.proto === 'auto' ? null : parsed.proto;
+    // ★ Connect to the address that ANSWERED, not the one typed — see ProbeResult.url.
+    let url = parsed.url;
     if (!type) {
       setConnecting(true);
-      type = await probeServer(parsed.host, parsed.port, null, parsed.url);
+      const probed = await probeServer(parsed.host, parsed.port, null, parsed.url);
       setConnecting(false);
-      if (!type) {
+      if (!probed) {
         Alert.alert('Custom server',
           `Nothing answered at ${parsed.host}:${parsed.port}.\n\nIf it's an rtl_tcp or SpyServer on a non-standard port, pick the type instead of Auto — raw TCP can't be detected.`);
         return;
       }
+      type = probed.type; url = probed.url;
     }
     if (save) {
       const next = [...tcpFavs.filter(f => !(f.host === parsed.host && f.port === parsed.port)),
@@ -923,7 +949,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
     setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('');
-    connectDetected(type, parsed.host, parsed.port, name, parsed.url);
+    connectDetected(type, parsed.host, parsed.port, name, url);
   }, [parseTcpEntry, tcpName, tcpFavs, connectDetected]);
 
   const removeTcpFav = useCallback((fav: TcpFav) => {
@@ -1038,9 +1064,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them.
     setConnecting(true);
-    const type = await probeServer(u.host, u.port, null, u.url);
+    const probed = await probeServer(u.host, u.port, null, u.url);
     setConnecting(false);
-    if (!type) {
+    if (!probed) {
       // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
       // never where a VibeServer lives. Sweep its range before giving up, so
       // "just type the IP" works however the server numbered itself today.
@@ -1054,7 +1080,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         `Nothing answered at ${u.host}:${u.port}.\n\nIf this is an rtl_tcp or SpyServer on a non-standard port, add it with the + button and pick the type — raw TCP servers can't be auto-detected.`);
       return;
     }
-    connectDetected(type, u.host, u.port, raw, u.url);
+    connectDetected(probed.type, u.host, u.port, raw, probed.url);
   }, [customUrl, connectSpy, connectDetected]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {
@@ -1857,11 +1883,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         const urlFocused = chooserSlot(() => customInputRef.current?.focus());
         return (
         <View ref={tourRef('customUrl')} collapsable={false} style={styles.customRow}>
+          {/* ★ THE EXAMPLE MUST SHOW A PORT. Without one it reads as "hostname only", and a bare
+              hostname resolves to port 80 — where essentially no receiver listens. KiwiSDR,
+              Web-888, OpenWebRX and UberSDR all default to 8073. Reported 2026-08-03: this box
+              gave no clue what belonged in it, so the + modal got used instead — and that path
+              then hit the port-dropped-from-the-URL bug in parseTcpEntry. */}
           <TextInput
             ref={customInputRef}
             style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: urlFocused ? NAV_FOCUS : C.border },
                     urlFocused && { borderWidth: 2 }]}
-            placeholder="Custom URL  e.g. sdr.example.com"
+            placeholder="Custom URL  e.g. sdr.example.com:8073"
             placeholderTextColor={C.textDim}
             value={customUrl}
             onChangeText={setCustomUrl}

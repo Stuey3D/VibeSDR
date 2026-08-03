@@ -47,6 +47,7 @@ import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
+import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -199,7 +200,7 @@ export interface MenuSheetProps {
   onSelectDab?:     (id: number) => void;
   dabSpeed?:        number;            // DAB speed-correction factor (1 = off)
   onDabSpeed?:      (scale: number) => void;
-  serverType?:      string;   // 'ubersdr' | 'owrx' | 'kiwi' — picks the footer logo
+  serverType?:      string;   // 'ubersdr' | 'owrx' | 'kiwi' | 'web888' — picks the footer logo
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
   onSearchTune?:    (hz: number, mode?: string | null, isBand?: boolean) => void;
@@ -289,6 +290,10 @@ const SERVER_LOGOS: Record<string, any> = {
   ubersdr: require('../../assets/logo_ubersdr.png'),
   owrx:    require('../../assets/logo_owrx.png'),
   kiwi:    require('../../assets/logo_kiwi.png'),
+  // ★ No Web-888 asset ships, so it borrows the Kiwi mark — it runs Kiwi firmware, so this is
+  //   nearly right. The ?? fallback below is the UBERSDR logo, which would be plainly wrong:
+  //   an unmapped backend must never be branded as a different vendor's product.
+  web888:  require('../../assets/logo_kiwi.png'),
   // ★ VibeServer had no logo, so our OWN server fell back to a generic radio glyph
   //   in the very list where every other backend is branded (Stuart, 2026-07-29).
   vibeserver: require('../../assets/logo_vibeserver.png'),
@@ -738,7 +743,7 @@ export default function MenuSheet({
   const [profileOpen, setProfileOpen] = useState(false);   // OWRX profile dropdown
   const [dabOpen, setDabOpen] = useState(false);           // OWRX DAB programme dropdown
   const isOwrx = serverType === 'owrx';
-  const isKiwi = serverType === 'kiwi';
+  const isKiwi = isKiwiProtocol(serverType);   // Web-888 is a Kiwi for every purpose here
   // Local hardware: no server-side maps/admin/CW-skimmer/STT (those are network
   // server features). FT8/FT4 digital spots are decoded locally, so they stay.
   const isLocal = !!onLocalHardware;
@@ -1418,7 +1423,7 @@ export default function MenuSheet({
                 )}
                 <View>
                   <Text style={styles.footerServerName}>{isTcp ? 'RTL-TCP' : isLocal ? 'Local Hardware'
-                    : serverLabel ?? (serverType === 'kiwi' ? 'KiwiSDR' : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
+                    : serverLabel ?? (isKiwi ? kiwiFamilyLabel(serverType) : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
                   {isLocal ? (
                     <Text style={styles.footerServerVer}>via VibeDSP (native)</Text>
                   ) : serverVersion ? (
