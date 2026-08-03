@@ -772,7 +772,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
   const [kiwiRefused, setKiwiRefused] = useState<string | null>(null);  // Kiwi refusal card (msg)
   const [compatWarn,  setCompatWarn]  = useState(false); // "leaving VibeSDR" warning before web view
-  const [compatUrl,   setCompatUrl]   = useState<string | null>(null);  // Kiwi web UI in a WebView
+  // ★★★ RESTRICTED RECEIVER: skip the doomed connection entirely. The picker already knows from
+  //     the directory that this owner does not allow third-party apps, so connecting would take a
+  //     slot on their radio, stream for ten seconds and end with a silent close. Open the page they
+  //     DO publish, immediately. Initialiser, not an effect, so no socket is ever opened.
+  const [compatUrl,   setCompatUrl]   = useState<string | null>(() => {
+    if (!route.params?.compatOnly) return null;
+    let u = (route.params.baseUrl || '').trim().replace(/\/+$/, '')
+      .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+    if (!/^https?:\/\//.test(u)) u = 'http://' + u;
+    return u + '/';
+  });  // Kiwi web UI in a WebView
   // A definitive Kiwi refusal terminates the session — an auto-reconnect/zombie watchdog must NOT
   // then stack a "serverLost / Reconnect" card on top of the refusal card. Ref (not state) so the
   // callbacks below read it without stale closures.
@@ -2331,6 +2341,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Connect ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // ★★★ NEVER OPEN A SOCKET TO A RECEIVER WHOSE OWNER HAS SAID NO. The directory told us before
+    //     we left the picker, so connecting would take a slot on someone's radio, stream for ten
+    //     seconds and end in a silent close — arriving at compatibility mode anyway, ten seconds
+    //     later and one wasted seat poorer. The overlay is already up (see compatUrl's initialiser).
+    if (route.params?.compatOnly) return;
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)

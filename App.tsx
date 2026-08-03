@@ -78,6 +78,12 @@ export type RootStackParamList = {
     // maxSessionDuration; other directories expose the same idea). 0/undefined =
     // unlimited. Drives the on-connect warning and the countdown by the clock.
     sessionLimitMins?: number;
+    /** ★★★ The owner does not permit third-party apps (`ext_api === 0` in the kiwisdr.com
+     *  directory). Go STRAIGHT to compatibility mode — the receiver's own web page, which is
+     *  public — instead of connecting, being admitted, streaming audio and being dropped at ~10 s
+     *  with no explanation. Trying first costs the owner a slot and the user ten seconds to reach
+     *  the same place. See memory/kiwi_ext_api_10s_kick.md. */
+    compatOnly?:     boolean;
     isTcp?:          boolean;
     tcpHost?:        string;
     tcpPort?:        number;

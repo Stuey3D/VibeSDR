@@ -577,9 +577,18 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     })();
   }, [mergeMeta]);
 
-  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'fmdx') => {
+  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'fmdx', compatOnly?: boolean) => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
+    // ★★★ THE OWNER DOES NOT ALLOW THIRD-PARTY APPS — go straight to their web page. No ident
+    //     prompt, no checkConnection, no socket: trying would take a slot on someone's radio and
+    //     end in a silent close ten seconds later, arriving here anyway. Also skips the KiwiSDR
+    //     ident prompt below, which would be asking for a callsign to use a path we are not taking.
+    if (compatOnly) {
+      registerFavouriteVisit(cleaned).then(setFavourites).catch(() => {});
+      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, viewMode, serverType, compatOnly: true });
+      return;
+    }
     // Most-Used tally: connecting to a favourite (server or custom URL) bumps its visit count so
     // it floats to the top under the default sort. No-op if this isn't a favourite.
     registerFavouriteVisit(cleaned).then(setFavourites).catch(() => {});
@@ -1672,7 +1681,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               if (m) connectSpy(m[1], parseInt(m[2], 10), inst.name, inst.sessionLimitMins);
               return;
             }
-            connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType);
+            connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType, blocksApps(inst));
           }}
           disabled={connecting || isFull}
         >
