@@ -381,7 +381,8 @@ html #bar { display: none; }
 /* ★★ The card's step button carries the SAME full label as the desktop one ("6.25kHz", not
    "6.25k"), and this stack is content-sized — so without a reserved width, changing step
    resized the stack and pushed the island wider. Fixed width, same reasoning as #stepBtn. */
-#mStep { width: 7.2em; box-sizing: border-box; }
+#mStep { width: 7.2em; max-width: 30vw; box-sizing: border-box;
+         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ★★ AUDIO SHOWS ITS STATE. Muting is the one setting on this card whose effect is total
    silence, and silence is indistinguishable from a broken stream — so the button must SAY
@@ -886,7 +887,13 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    grew the button, which grew the stack, which grew the whole control island a few pixels
    sideways (Stuart, 2026-08-02). Same rule as the recording timer and the IDLE marker — see
    the island width notes above. 7.6em clears "6.25kHz", the longest label in the ladder. */
-#stepBtn { width: 7.6em; box-sizing: border-box; padding: 0.75em 0.6em; font-size: 1em; }
+/* ★★ RESERVED WIDTH SO CHANGING STEP DOES NOT RESIZE THE BAR — but it must YIELD when the window
+   is genuinely narrow. A hard `width` cannot shrink, so on a narrow window the bar ran out of room
+   and WRAPPED TO TWO ROWS (Stuart, 2026-08-03). max-width lets it give way at the point where
+   holding a constant width costs more than it buys: a slightly narrower button is invisible, a
+   control bar folding in half is not. */
+#stepBtn { width: 7.6em; max-width: 17vw; box-sizing: border-box; padding: 0.75em 0.6em;
+           font-size: 1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Demodulator + the bandwidth that belongs to it. */
 #demod { display: flex; flex-direction: column; gap: 0.6em; }
@@ -2336,7 +2343,12 @@ select.btn { padding: 6px 8px; }
     <div class="mrow" id="rowRspNotch">
       <label>FILTERS</label>
       <div class="seg">
-        <button class="btn" id="rspRfNotch" title="Broadcast FM notch — wanted ON elsewhere in the spectrum, where a strong local FM transmitter is what overloads the front end, and OFF when FM is what you came to hear">FM NOTCH</button>
+        <!-- ★★ "RF NOTCH", NOT "FM NOTCH". The RSP's broadcast notch covers MW AND FM, and the API call
+             behind it has always been setRfNotch — only the LABEL said FM. Someone fighting MW
+             breakthrough read the button and concluded there was nothing here for them (Stuart,
+             2026-08-03). Name the filter for what it does, not for the half of it we happened to
+             think of first. -->
+        <button class="btn" id="rspRfNotch" title="Broadcast notch — covers MW and FM. Wanted ON elsewhere in the spectrum, where a strong local broadcast transmitter is what overloads the front end, and OFF when MW or FM is what you came to hear">RF NOTCH</button>
         <button class="btn" id="rspDabNotch" title="DAB band notch, same reasoning as the FM notch">DAB NOTCH</button>
         <button class="btn" id="rspBiasT" title="Bias-T — powers an active antenna or a mast-head amplifier">BIAS-T</button>
       </div>
@@ -2506,7 +2518,7 @@ select.btn { padding: 6px 8px; }
   <div class="mrow">
     <label>WATERFALL</label>
     <div class="seg" id="wfScrollSeg">
-      <button class="btn" data-wfscroll="detailed">DETAILED</button>
+      <button class="btn" data-wfscroll="sharp">SHARP</button>
       <button class="btn on" data-wfscroll="default">DEFAULT</button>
       <button class="btn" data-wfscroll="smooth">SMOOTH</button>
     </div>

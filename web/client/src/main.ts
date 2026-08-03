@@ -2010,12 +2010,15 @@ let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
 //    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
 //    and worse, they trade detail against motion (Stuart: "they both have their merits").
-let wfScroll: 'detailed' | 'default' | 'smooth' = 'default';
+let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
 // Rows synthesised per received frame for each preset. DETAILED is 1 = no interpolation at all.
-const WF_PRESET: Record<string, { rows: number; note: string }> = {
-  detailed: { rows: 1, note: 'One row per received frame — nothing invented, and it scrolls at the data rate.' },
-  default:  { rows: 2, note: 'A little interpolation to even out a jittery link.' },
-  smooth:   { rows: 4, note: 'Heavier interpolation — continuous motion on a slow feed, less real detail.' },
+// ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
+//   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
+//   one scroll at the same speed. SHARP opts out entirely — one row per received frame.
+const WF_PRESET: Record<string, { rate: number; note: string }> = {
+  sharp:   { rate: 0,  note: 'One row per received frame — nothing invented, and it scrolls at the data rate.' },
+  default: { rate: 20, note: 'A steady 20 rows/sec whatever the feed — a little interpolation on a slow one.' },
+  smooth:  { rate: 30, note: 'A steady 30 rows/sec — continuous motion on a slow feed, less real detail.' },
 };
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 
@@ -2032,8 +2035,8 @@ function computeActiveFps(): number {
 function applyWaterfallRates() {
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
-  wf?.setSharpRows(wfScroll === 'detailed');
-  wf?.setRowsPerFrame(WF_PRESET[wfScroll]?.rows ?? 2);
+  wf?.setSharpRows(wfScroll === 'sharp');
+  if (WF_PRESET[wfScroll]?.rate) wf?.setSpeed(WF_PRESET[wfScroll].rate);
   // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
   // a control whose every use is a no-op.
   // ★ The old 10/20/30 SPEED row is gone from the UI: the preset decides it. Kept hidden rather
@@ -4404,7 +4407,7 @@ function buildMenu() {
   }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
-  { const v = prefs().wfScroll;   if (v === 'detailed' || v === 'default' || v === 'smooth') wfScroll = v; }
+  { const v = prefs().wfScroll;   if (v === 'sharp' || v === 'default' || v === 'smooth') wfScroll = v; }
   { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
   if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
   applyWaterfallRates();

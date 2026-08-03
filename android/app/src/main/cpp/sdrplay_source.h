@@ -19,6 +19,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <atomic>
 #include <string>
 
 namespace vibe {
@@ -179,6 +180,15 @@ private:
     int    curGain_   = -1;
     bool paused_ = false;
     bool overload_ = false;
+    // ★★★ THE AGC'S OWN NUMBERS, from the gain-change EVENT. The API reports what the loop has
+    //     actually done here; our copy of tunerParams.gain is only what WE last wrote, so with the
+    //     AGC running it never moves — the readouts sat still and the IF slider never tracked
+    //     (Stuart, 2026-08-03). Written from the event callback thread, read from the DSP/HTTP
+    //     threads, so they are atomic: torn reads of a gain figure are not worth a lock.
+    std::atomic<int>   liveGr_{0};      // IF gain reduction the AGC has settled on, dB
+    std::atomic<int>   liveLna_{0};     // LNA gain reduction, dB (not the LNA *state*)
+    std::atomic<float> liveGain_{0.0f}; // total system gain, dB
+    std::atomic<bool>  liveValid_{false};
 };
 
 }  // namespace vibe

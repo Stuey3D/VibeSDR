@@ -306,6 +306,8 @@ int main(int argc, char** argv) {
     }
     LocalSdrShim::setVibeServerSharedChannels(shared);
     LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum);
+    // ★ --users is now the real listener cap, not just the channel-method hint.
+    LocalSdrShim::setVibeServerMaxUsers(o.users);
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
                 shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");
     LocalSdrShim::setVibeServerWebEnabled(o.web);
