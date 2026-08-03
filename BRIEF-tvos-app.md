@@ -114,12 +114,18 @@ Check Apple's current tvOS docs for `WKWebView` before committing either way.
 
 ### 6.2c ★★★ THE MAPS — AND WHY THIS IS WORTH DOING WHATEVER HAPPENS TO tvOS
 `MapOverlay.tsx` is 978 lines wrapping **Leaflet 1.9.4 pulled from unpkg at runtime**, drawing OSM
-tiles, used for the FT8 / HFDL spot maps. That is the only genuinely hard part of a tvOS port —
-but look at what it implies **on the platforms we already ship**:
-- the map needs the **INTERNET** to draw at all (CDN for the library, tile server for the imagery),
-  so it is dead on an offline or field setup — the exact situation an SDR is often used in;
-- it puts a **third-party CDN in the runtime path** of a shipping app;
-- and it costs a whole WebView per map.
+tiles, used for the FT8 / HFDL spot maps. That is the only genuinely hard part of a tvOS port.
+
+★★ **BE PRECISE ABOUT WHY, BECAUSE THE REASONS DIFFER PER PLATFORM** — an earlier draft of this
+section led with "it needs the internet", and Stuart correctly pushed back: *"apple tv is going to
+be online all the time anyway."* It is mains-powered on a home network. **Offline is not a tvOS
+argument and should not be used as one.**
+- **On tvOS the reason is absolute and has nothing to do with connectivity: there is no webview to
+  run Leaflet in at all.** Being online does not conjure a `WKWebView`. Native or nothing.
+- **On iOS/Android the offline + CDN points do stand**, but as a secondary benefit, not the driver:
+  the map needs the internet to draw (CDN for the library, tile server for the imagery), so it is
+  dead in a field setup — the exact situation a portable SDR is often used in — and it puts a
+  third-party CDN in a shipping app's runtime path, at the cost of a WebView per map.
 
 ★★ **What these maps actually show is dots and great-circle paths on a world outline.** They do not
 need street-level tiles. So the strongest option is to **draw them in Skia**, which the app already
@@ -129,23 +135,51 @@ depends on for the waterfall:
   *better* for HF than a Mercator tile map, because it shows true bearing and distance,
 - spots and paths drawn as Skia primitives, which is what the waterfall already does at 60 fps.
 
-**That removes the webview, removes the CDN, works offline, is faster, and makes tvOS possible —
-one change paying four ways.** It is the option I would take even if Apple TV never happens.
+**On tvOS this is the only way to have maps at all.** That it also removes a webview and a runtime
+CDN dependency, and works offline, is a bonus that lands on **phones** — the devices that actually
+go out of signal. An Apple TV is the most reliably-online device we target, so do not sell this
+change to that platform on offline behaviour; sell it on "there is no webview".
+
+### ✅ 6.2d THE DECISION: NO MAPS ON tvOS v1 — AND THAT UNBLOCKS THE WHOLE PORT
+**Stuart, 2026-08-03: *"we could even drop the maps on the apple tv."*** Take it. It is the right
+call and it changes the shape of the work completely:
+- The map views were **the only genuinely hard part** of the port (§6.2). Omitting them means tvOS
+  v1 is *the control scheme plus the screens we already have* — no new rendering, no native module,
+  no webview replacement.
+- ★★ **The Skia map is therefore DECOUPLED, not cancelled.** It stops being a tvOS prerequisite and
+  becomes an independent improvement justified on its own terms — for phones, where offline and the
+  CDN-in-the-runtime-path actually bite. Do it when it earns its place, not to unblock a TV.
+- ★ And it may be the better product anyway: a map of small dots read from a sofa is not obviously
+  the right 10-foot UI. If spots are wanted on tvOS later, a **large, legible spot LIST** is cheaper
+  and probably more readable than a map — decide that on its merits, once the app exists.
 
 Alternatives, for completeness: **MapKit** exists on tvOS but `react-native-maps` support there is
 doubtful and it would be a native module either way; or **omit maps on tvOS v1** and show spots as a
 list, which is honest and cheap but leaves the offline/CDN problem in place everywhere else.
 
-### 6.2b ★★ THE WEB-CLIENT ROUTE IS STILL RIGHT — JUST NOT FOR APPLE TV.
-**Android TV, Fire TV and smart TVs all have browsers or real webviews.** There the web client runs
-essentially as-is, and Stuart's whole control scheme maps onto it almost for free:
-- the D-pad already arrives as **arrow keys**, and the web client already has a keyboard layer
-  ([[keyboard_layer_shipped]]);
-- the layout is already landscape with the frequency bar and status rows;
-- the waterfall is the reference implementation, so it looks right on day one.
+### 6.2b ★★★ WHY APPLE TV AND NOT THE "EASIER" TV PLATFORMS — THE REMOTE HAS TWO D-PADS
+**Stuart, 2026-08-03: *"apple tv essentially has 2 D-Pads which is the exact navigation method
+needed."*** That is the reason this design works, and it is worth stating before anyone proposes a
+cheaper platform.
 
-So the honest split is: **Apple TV = native app** (this brief), **every other TV = the web client**,
-and the second is a fraction of the work. Worth doing first if reach matters more than the platform.
+A Siri Remote gives **two directional inputs simultaneously**: the clickpad **ring PRESSES** like a
+D-pad, and the touch surface **SWIPES** as a second one. This app needs exactly two — one to
+tune/zoom, one to move the highlight — so it gets both **with no mode switch at all**.
+
+★★ **Android TV / Fire TV remotes have ONE D-pad.** They are the easier platforms technically (real
+browsers, so the web client would run), but the control scheme is the hard part, and there it breaks:
+one D-pad cannot both tune and navigate without a **mode**, and modes are the thing this design
+deliberately avoids. So "easier to reach" and "easier to control" point at different platforms, and
+**the control scheme is what decides it.** Apple TV first.
+
+★ *If* a single-D-pad platform is ever wanted, the sleep/wake behaviour in §3 already contains an
+implicit mode that could carry it — highlight hidden ⇒ arrows tune, highlight visible ⇒ arrows
+navigate, with a button to summon it. That is a real fallback, not a good one: it makes explicit and
+constant something that on Apple TV is invisible and free.
+
+★ The web client would still be the right vehicle **there**, since it is landscape-first, its
+keyboard layer already turns a D-pad into arrow keys ([[keyboard_layer_shipped]]), and its waterfall
+is the reference implementation. The blocker is the remote, not the rendering.
 
 ### 6.3 ★ The build path needs checking, not assuming.
 React Native's tvOS support lives in the `react-native-tvos` fork, and Expo's tvOS story has its own
