@@ -1049,6 +1049,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
   const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
+  // ★ SHARP by default: one row per received frame, exactly what the app has always drawn.
+  const [wfScroll,      setWfScroll]      = useState<'sharp'|'default'|'smooth'>('sharp');
   // Smooth tune: 120Hz interpolated scroll while interacting; discrete row
   // steps + ~30fps spectrum tween once settled (ProMotion idles → battery).
   const [smoothTune,    setSmoothTune]    = useState(true);
@@ -3418,6 +3420,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
 
+  const onWfScroll = useCallback((v: 'sharp'|'default'|'smooth') => {
+    setWfScroll(v);
+    AsyncStorage.setItem('lsv_wf_scroll', v).catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_wf_scroll').then((v: string | null) => {
+      if (v === 'sharp' || v === 'default' || v === 'smooth') setWfScroll(v);
+    }).catch(() => {});
+  }, []);
   const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
     setFrameRate(v);
     AsyncStorage.setItem('lsv_frame_rate', v).catch(() => {});
@@ -5312,6 +5323,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfContrast={wfContrast}
         wfSharpness={wfSharpness}
         frameRate={frameRate}
+        wfScroll={wfScroll}
         needleColor={vfoNeedle}
         needleIntensity={vfoIntensity}
         needleFrost={vfoFrost}
@@ -6039,6 +6051,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
         frameRate={frameRate}           onFrameRate={onFrameRate}
+        wfScroll={wfScroll}             onWfScroll={onWfScroll}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         linkMode={linkMode}             onLinkMode={onLinkMode}

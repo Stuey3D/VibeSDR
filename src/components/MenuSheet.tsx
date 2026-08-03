@@ -273,6 +273,8 @@ export interface MenuSheetProps {
   onPeakHold?:        (v: boolean) => void;
   frameRate?:         '10fps' | '20fps' | '30fps';
   onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
+  wfScroll?:          'sharp' | 'default' | 'smooth';
+  onWfScroll?:        (v: 'sharp' | 'default' | 'smooth') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
@@ -707,7 +709,7 @@ export default function MenuSheet({
   specFloor = 0, onSpecFloor,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
-  frameRate = '20fps', onFrameRate,
+  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll,
   smoothTune = true, onSmoothTune, idleSlow = true, onIdleSlow,
   onSpecRatio,
 }: MenuSheetProps) {
@@ -1210,19 +1212,24 @@ export default function MenuSheet({
                   <Btn label="PEAK HOLD" active={peakHold} onPress={() => onPeakHold?.(!peakHold)} />
                 </BtnRow>
 
-                {/* Scroll Smoothness — a TARGET (minimum) scroll rate. The waterfall interpolates the
-                    live data rate UP to this, so 10fps holds a smooth 10fps scroll even when the data
-                    is only 5fps (Low Data); 20/30 are progressively smoother. The extra lines are
-                    interpolated between real frames, not new detail. */}
-                <SubLabel label="Scroll Smoothness" />
+                {/* ★★★ SCROLL SPEED AS A FIXED FRAME-GENERATION MULTIPLIER. Not a frame rate: the
+                    number of rows drawn per RECEIVED frame, held CONSTANT. It maps all waterfall
+                    history, so anything that changes it rescales the picture — deriving it from the
+                    live data rate is what made the waterfall compress and expand. A constant cannot
+                    do that. Speed therefore follows the data rate, which is what SHARP always did. */}
+                <SubLabel label="Waterfall Speed" />
                 <BtnRow>
-                  <Btn label="10 FPS" active={frameRate==='10fps'} onPress={() => onFrameRate?.('10fps')} />
-                  <Btn label="20 FPS" active={frameRate==='20fps'} onPress={() => onFrameRate?.('20fps')} />
-                  <Btn label="30 FPS" active={frameRate==='30fps'} onPress={() => onFrameRate?.('30fps')} />
+                  <Btn label="SHARP"   active={wfScroll==='sharp'}   onPress={() => onWfScroll?.('sharp')} />
+                  <Btn label="DEFAULT" active={wfScroll==='default'} onPress={() => onWfScroll?.('default')} />
+                  <Btn label="SMOOTH"  active={wfScroll==='smooth'}  onPress={() => onWfScroll?.('smooth')} />
                 </BtnRow>
                 <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
                                fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>
-                  Higher = smoother scrolling; the extra lines are interpolated, not new detail.
+                  {wfScroll === 'sharp'
+                    ? 'One row per received frame — most detail, scrolls at the data rate.'
+                    : wfScroll === 'default'
+                    ? 'Two rows per frame — a little interpolation, twice the scroll speed.'
+                    : 'Four rows per frame — continuous motion on a slow feed, less real detail.'}
                 </Text>
 
                 {/* Power saving — IDLE SAVER: ⅓ server frame rate after 30s
