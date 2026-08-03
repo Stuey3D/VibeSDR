@@ -852,6 +852,7 @@ function WaterfallView({
   const revN     = useSharedValue(0);
   const revStep  = useSharedValue(16);   // ms per line
   const revK     = useSharedValue(0);
+  const revFrameMs = useSharedValue(0);   // smoothed display frame time — see revealCb
   const revAcc   = useSharedValue(0);
   const revealRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
   const setRevealActive = useCallback((on: boolean) => {
@@ -863,8 +864,19 @@ function WaterfallView({
   const revealCb = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;   // component is gone — see specDead
-    revAcc.value += fi.timeSincePreviousFrame ?? 16;
-    if (revAcc.value < revStep.value) return;
+    // ★★★ COUNT FRAMES, NOT MILLISECONDS — the model proven in the web client (see
+    //     memory/waterfall_refresh_locked_model.md). A waterfall line is a whole pixel, so a line
+    //     rate that is not commensurate with the refresh emits 1,1,0,1,1,0… however carefully the
+    //     time is accumulated: at 20 lines/s on 60 Hz the due-time drifts across a frame boundary
+    //     and the cadence becomes 3,3,4,3,4. Quantising to a whole number of display frames is
+    //     even by construction, and adapts to a 120 Hz panel for free.
+    //     ★ revStep is still the WANTED interval in ms; it is converted to frames here, against a
+    //       SMOOTHED frame time so one long frame (a GC pause) cannot change the cadence.
+    const dt = fi.timeSincePreviousFrame ?? 16;
+    revFrameMs.value = revFrameMs.value > 0 ? revFrameMs.value * 0.9 + Math.min(dt, 100) * 0.1 : dt;
+    const framesPerLine = Math.max(1, Math.round(revStep.value / revFrameMs.value));
+    revAcc.value += 1;                       // frames, not ms
+    if (revAcc.value < framesPerLine) return;
     revAcc.value = 0;
     const n = revN.value;
     if (n <= 0) { runOnJS(setRevealActive)(false); return; }
@@ -881,6 +893,8 @@ function WaterfallView({
     revStep.value = Math.max(16, intervalMs / n);
     revK.value = 0;
     revAcc.value = 0;
+    // Keep the measured frame time across restarts — it is a property of the DISPLAY, not of this
+    // reveal, and re-learning it every frame interval would leave the first lines mistimed.
     setRevealActive(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setRevealActive]);
