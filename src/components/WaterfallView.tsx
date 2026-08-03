@@ -520,6 +520,7 @@ function WaterfallView({
   // produced the committed step, so the deadband is measured against what we actually decided on.
   const uNRaw       = useRef(0);
   const uNStep      = useRef(1);
+  const slowFrameMs = useRef(150);    // worst-case recent frame interval — see where it is updated
 
   const wfUniforms = useDerivedValue(() => ({
     uHeadF:    uHead.value,
@@ -972,6 +973,13 @@ function WaterfallView({
       // slowdown. The jitter buffer's prefill/hold covers the pause; the estimate re-converges after.
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
+      // ★★★ THE SLOW-SIDE ESTIMATE — the one the multiplier must be sized against. A nominal 5 fps
+      //     link is observed dipping to 4, and a multiplier sized on the MEAN runs dry exactly on
+      //     those slow frames: fewer lines stretched across a longer gap, which is the judder
+      //     (Stuart, 2026-08-03). Jumps straight to any slower interval and decays back gently, so
+      //     it tracks the worst case rather than the average. Frames that then arrive on time
+      //     simply have lines to spare — headroom, which is the point.
+      slowFrameMs.current = Math.max(dt, slowFrameMs.current * 0.97);
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
     }
     lastFrameTs.current = now;
@@ -1053,7 +1061,8 @@ function WaterfallView({
       if (now - lastWfLog.current > 1000) {
         lastWfLog.current = now;
         console.log(`[wf] target=${cfg.targetFps} data=${dataFps.toFixed(1)}fps ` +
-                    `rows=${dynRows} dur=${dur.toFixed(0)}ms -> scroll=${(dynRows * dataFps).toFixed(1)}/s`);
+                    `slow=${(1000 / slowFrameMs.current).toFixed(1)}fps rows=${dynRows} ` +
+                    `dur=${dur.toFixed(0)}ms -> scroll=${(dynRows * dataFps).toFixed(1)}/s`);
       }
       lastDynRows.current = dynRows;   // what a gesture will hold — see the boost branch
       uNSv.value = dynRows;
