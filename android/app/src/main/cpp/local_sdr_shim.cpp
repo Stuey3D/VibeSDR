@@ -396,6 +396,20 @@ static std::atomic<double> g_vsLockedCentre{0.0};
 static std::atomic<bool>   g_vsSharedChannels{false};
 // Zoom spectrum on/off. It SUPPRESSES the wide path while active, so it needs an off switch.
 static std::atomic<bool>   g_vsZoomSpectrum{true};
+// ★ Operator-declared RSP front-end filters. OFF by default: the RF notch covers broadcast FM
+//   and would destroy an FM receiver's signal, so it is never assumed. See the apply site.
+// ★★★ GRACE PERIOD BEFORE THE RADIO IDLE-PARKS, in seconds. NOT a power feature — a HARDWARE
+//     PROTECTION one. Parking and waking is the single most dangerous thing we do to a radio:
+//     it is what re-enumerates an RSP into a permanent stall, what crashed libusb on the first
+//     connect after an idle, and what leaves RDS half-dead on resume. A listener reloading their
+//     page, or hopping app->web, used to drive a full park/wake cycle every time.
+//     ★ It costs almost nothing to wait: idle-parking does not stop the dongle, it only discards
+//       its samples (see pauseCaptureIdle), so an idle receiver already draws what a busy one does.
+//     ★ It also guarantees the AGC settle finishes — see the kick, which must not be abandoned
+//       half-done by someone who connected and left (Stuart, 2026-08-03).
+static std::atomic<double> g_vsIdleGraceSec{300.0};
+static std::atomic<bool>   g_vsRfNotch{false};
+static std::atomic<bool>   g_vsDabNotch{false};
 // ★ How many spectrum listeners may attach at once. 1 = the old single-occupant behaviour.
 static std::atomic<int>    g_vsMaxUsers{1};
 
@@ -965,6 +979,13 @@ struct LocalSdrShim::Impl {
     // connecting — a fix for one person's problem becoming another's bug (Stuart).
     bool sdrpAgcWanted = true;
     bool sdrpSettling = true;      // true while the AGC is being kicked and settling
+    /** ★★ THE RF GAIN THE KICK STARTS FROM, expressed the way the UI expresses it: a slider
+     *  POSITION out of (lnaStateCount-1), where higher = more RF gain. 7/9 on an RSP1B is the
+     *  working point Stuart runs the demo at, and it maps to LNA STATE 2 (state counts the other
+     *  way — 0 is maximum RF gain). Derived rather than hard-coded to 2 so a model with a
+     *  different ladder (an RSP1 has 4 states, a dx has 28) lands somewhere sane instead of
+     *  wherever the literal happened to point. */
+    static constexpr int kRspInitRfGainPos = 7;
     bool useSdrplay() const { return (bool)sdrp; }
     bool useAirspyHf() const { return (bool)ahf; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
@@ -1680,92 +1701,13 @@ struct LocalSdrShim::Impl {
                 int v = (int)lround(best + 256.0);
                 frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
-            // Station presence (full-span, zoom-independent): a station is a broad
-            // hump at centre, static is flat. Compare centre band (±100 kHz, less
-            // the ±3 kHz DC spike) to the band edges.
-            {
-                double binHz = sampleRate / (double)bins;
-                int half = std::min(bins / 4, (int)(100000.0 / binHz));
-                int skip = std::min(half - 1, std::max(1, (int)(3000.0 / binHz)));
-                double cSum = 0; int cN = 0;
-                for (int i = skip; i <= half; i++)           { cSum += dbAt(i); cSum += dbAt(-i); cN += 2; }
-                double eSum = 0; int eN = 0;
-                for (int i = 0; i <= half / 2; i++)          { eSum += dbAt(-(bins/2) + i); eSum += dbAt((bins/2 - 1) - i); eN += 2; }
-                spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
-                // Band-edge average = our own noise floor, in the engine's dBFS.
-                // emitServerFft() aligns the server's differently-scaled dB onto
-                // this, so the two waterfall sources agree and the colour map is
-                // fed the values it was designed for.
-                if (eN) iqFloorDb.store((float)(eSum / eN));
-            }
             for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size());
             vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
-            // ★★★ RUNS ON THE CLIENT-EMIT PATH, DELIBERATELY. Moving it onto the DSP thread so it
-            //     would run with nobody connected SEGFAULTED the server in a restart loop (2026-08-03):
-            //     these are sdrplay_api Update calls, and issuing them from the DSP thread races the
-            //     stream callback. The cost is that the kick needs a listener attached to fire, which
-            //     is a real limitation and NOT the right long-term answer — but a crash-looping
-    //     receiver is worse than one that settles its AGC when someone arrives.
-            if (useSdrplay()) sdrpSettling = (n < 100);  // covers the spaced 4-step AGC kick above
-            // ★★★ OFF → WIGGLE THE GAIN → ON. Toggling the AGC alone was not reliable: the API
-            //     starts its loop on a TRANSITION, and a transition with no parameter write behind
-            //     it can leave the loop inert — which is the "AGC gets stuck" the RSP shows on a
-            //     fresh connect. The fix that worked on macOS is the one a person does by hand:
-            //     disable AGC, NUDGE THE IF GAIN REDUCTION (which is only writable while the AGC is
-            //     off — see setIfGainReduction), then re-enable so the loop starts from a register
-            //     that has definitely been written (Stuart, 2026-08-03).
-            //     ★ Spread across frames: each step is an API Update and must land before the next.
-            //     ★ `sdrpSettling` already covers this window, so the client explains the bounce
-            //       rather than showing it as a fault.
-            //     ★ SPACED, NOT BACK-TO-BACK. Each step is an sdrplay_api Update and the next must
-            //       not be issued until it has landed; on consecutive frames (~12 ms apart at
-            //       8 MSPS) they were being issued far faster than the API settles, which is why
-            //       the wiggle did nothing (Stuart, 2026-08-03). One step every ~20 frames.
-            //     ★ AND IT SAYS WHAT IT DID. A silent fix cannot be told apart from one that never
-            //       ran, which is exactly the position this was in.
-            if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 4 && n > 10 && (n % 20) == 0) {
-                switch (++sdrpAgcKick) {
-                    case 1: sdrp->setIfAgc(false);
-                            LOGI("AGC kick 1/4: AGC off (ifgr now %d)", sdrp->currentIfGr()); break;
-                    case 2: { int g = sdrp->currentIfGr(); sdrp->setIfGainReduction(g + 4);
-                            LOGI("AGC kick 2/4: ifgr %d -> %d", g, sdrp->currentIfGr()); } break;
-                    // ★★★ END AT THE LOWEST GAIN, NOT BACK WHERE IT STARTED. The AGC ramps UP from
-                    //     whatever the register holds when it is handed over, so leaving it at high
-                    //     gain risks overloading the front end during the handover — and coming
-                    //     UP into place is how the loop is meant to converge (Stuart, 2026-08-03).
-                    //     gRdB is a REDUCTION, so 59 is the least gain, 20 the most: my previous
-                    //     step went 24 -> 20, i.e. the wrong way entirely.
-                    case 3: sdrp->setIfGainReduction(59);
-                            LOGI("AGC kick 3/4: ifgr -> %d (lowest gain, ready to hand over)",
-                                 sdrp->currentIfGr()); break;
-                    default: sdrp->setIfAgc(true);
-                            LOGI("AGC kick 4/4: AGC on (ifgr %d, sysGain %.1f dB)",
-                                 sdrp->currentIfGr(), sdrp->systemGainDb()); break;
-                }
-            // ★ The RSP's live gain state, once a second. The AGC moves the IF reduction on
-            // its own, so a slider position is NOT the truth — and the total system gain is
-            // the one figure that makes two independent controls readable.
-            // ★ 5 Hz, not 1. The IF slider follows the AGC live, and a thumb that jumps once
-            // a second reads as broken rather than as tracking. A ~90 byte message at 5 Hz is
-            // nothing next to the spectrum.
-            // ★ ~1 s after the stream starts, cycle the AGC once. Off, then on: the API only
-            // starts the loop on a TRANSITION, and assignment before Init is not one.
-            // ★ Settling window: the AGC kick plus a few frames either side, reported to the
-            // client so the waterfall's bounce is EXPLAINED rather than looking like a fault.
-            // ★ An unexplained transient reads as a defect; a labelled one reads as a radio
-            // settling, and the difference is entirely in whether we said so (Stuart).
-
-            }
-            if (n % 2 == 0 && useSdrplay()) {
-                char gb[160];
-                snprintf(gb, sizeof gb,
-                    "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
-                    "\"settling\":%d}",
-                    sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
-                    sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
-                sendText(sock, gb);
-            }
+            // ★ The RSP's AGC kick and its gain telemetry USED TO LIVE HERE, and that was the bug:
+            //   this block is skipped whenever the zoom spectrum owns the waterfall (see `emit`
+            //   above), so on a --zoom-spectrum server neither ever ran. They are now hoisted out
+            //   of the emit gate — see "RSP GAIN SERVICE" below the block.
             // ★ The Advanced RDS payload runs FASTER than the metadata — a constellation
             // updated once a second reads as a still image, and its whole value is watching
             // the cloud tighten or spread as you tune. ~6 Hz, and only while the decoder is
@@ -1789,6 +1731,119 @@ struct LocalSdrShim::Impl {
             }
             if (n % 2 == 0) enforceSessionLimit();
         }
+
+        // ★★★ STATION PRESENCE / NOISE FLOOR — HOISTED OUT OF THE `emit` BLOCK (2026-08-03).
+        //     It is labelled "full-span, zoom-independent" and it genuinely is, but it was
+        //     computed INSIDE the emit gate, so it stopped updating entirely whenever the zoom
+        //     spectrum owned the waterfall. That is the "SNR bar seems laggy" — it was not lagging,
+        //     it was FROZEN at its last wide-path value (Stuart, 2026-08-03).
+        //     ★ The tell was that the SQUELCH meter was fine: `channelDb` below has always been
+        //       outside the gate. Two meters fed by the same FFT, one stale and one live, and the
+        //       only difference between them was which side of this brace they sat on.
+        {
+            double binHz = sampleRate / (double)bins;
+            int half = std::min(bins / 4, (int)(100000.0 / binHz));
+            int skip = std::min(half - 1, std::max(1, (int)(3000.0 / binHz)));
+            double cSum = 0; int cN = 0;
+            for (int i = skip; i <= half; i++)           { cSum += dbAt(i); cSum += dbAt(-i); cN += 2; }
+            double eSum = 0; int eN = 0;
+            for (int i = 0; i <= half / 2; i++)          { eSum += dbAt(-(bins/2) + i); eSum += dbAt((bins/2 - 1) - i); eN += 2; }
+            spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
+            // Band-edge average = our own noise floor, in the engine's dBFS. emitServerFft()
+            // aligns the server's differently-scaled dB onto this, so the two waterfall sources
+            // agree and the colour map is fed the values it was designed for.
+            if (eN) iqFloorDb.store((float)(eSum / eN));
+        }
+
+        // ══ RSP GAIN SERVICE ═════════════════════════════════════════════════════════════
+        // ★★★ DELIBERATELY OUTSIDE THE `emit` BLOCK ABOVE, AND THAT IS THE WHOLE POINT.
+        //     It used to live inside it, which meant BOTH the AGC kick and the gain telemetry
+        //     were suppressed whenever the zoom spectrum owned the waterfall (`emit = false`).
+        //     On a --zoom-spectrum server — which is what the Pi demo runs — the AGC was
+        //     therefore never kicked and no client ever heard the gain state at all: system
+        //     gain read "—", the IF thumb never moved, and because the client only ever clears
+        //     its read-only styling when a stat ARRIVES, the IF slider could never be unlocked
+        //     even by an admin who had just turned the AGC off (Stuart, 2026-08-03).
+        //     ★ Gain has nothing to do with which spectrum path is drawing. Never gate it on one.
+        //
+        // ★★ THREAD: this is onSpectrum, which runs on the dspThread (rx.feed). That has ALWAYS
+        //    been true — an older comment here claimed this ran on a separate "client-emit path"
+        //    and that moving it to the DSP thread caused the SEGV. It did not; the thread never
+        //    changed. What actually crashed was running these sdrplay_api Update calls with no
+        //    stream up. The property to preserve is therefore NOT a thread and NOT a listener,
+        //    it is: THE STREAM MUST BE RUNNING. Being inside onSpectrum already proves that —
+        //    it is only reached from rx.feed(), i.e. with real samples flowing — and `n > 10`
+        //    below keeps it clear of the first frames after init, which is what actually crashed.
+        //
+        // ★★★ SO THE KICK NO LONGER NEEDS A LISTENER, AND MUST NOT. If someone connects, wakes
+        //     the radio and disconnects two seconds later, the settle has to RUN TO COMPLETION
+        //     rather than freezing half-done and leaving the next arrival on a stuck AGC
+        //     (Stuart, 2026-08-03). When capture really does park, onSpectrum stops being called
+        //     at all, so this needs no guard of its own for that case.
+        if (useSdrplay() && sdrp) {
+            // ★★★ THE INIT SEQUENCE, as performed by hand on the Mac where it works
+            //     (Stuart, 2026-08-03). The API starts its loop on a TRANSITION, and a
+            //     transition with no register write behind it can leave the loop inert —
+            //     which is the "RSP auto gain gets stuck" this exists to cure.
+            //       0. RF gain to its working point (LNA state), if it is not there already.
+            //       1. AGC OFF, and stay off for ~a second.
+            //       2. IF gain to MAXIMUM ATTENUATION / minimum gain (gRdB 59).
+            //       3. Nudge a couple of dB toward more gain (59 -> 55) — a real register write.
+            //       4. Back down to minimum gain (59), so the loop is handed a written register
+            //          AND converges UPWARDS into place rather than starting overloaded.
+            //       5. AGC ON.
+            //     ★ SPACED, NOT BACK-TO-BACK: each step is an sdrplay_api Update and the next
+            //       must not be issued until it has landed. On consecutive frames (~12 ms at
+            //       8 MSPS) they outran the API and the wiggle did nothing. One step per ~20
+            //       frames ≈ 1 s, which is also what "disables for a second" asks for.
+            //     ★ AND IT SAYS WHAT IT DID — a silent fix cannot be told apart from one that
+            //       never ran, which is precisely the position this was in.
+            if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
+                switch (++sdrpAgcKick) {
+                    case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
+                            LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
+                                 sdrp->currentLnaState(),
+                                 sdrp->lnaStateCount() - 1 - sdrp->currentLnaState(),
+                                 sdrp->lnaStateCount() - 1); break;
+                    case 2: sdrp->setIfAgc(false);
+                            LOGI("AGC kick 2/6: AGC off (ifgr now %d)", sdrp->currentIfGr()); break;
+                    case 3: sdrp->setIfGainReduction(59);
+                            LOGI("AGC kick 3/6: ifgr -> %d (max attenuation)", sdrp->currentIfGr()); break;
+                    case 4: sdrp->setIfGainReduction(55);
+                            LOGI("AGC kick 4/6: ifgr -> %d (up a couple of dB)", sdrp->currentIfGr()); break;
+                    case 5: sdrp->setIfGainReduction(59);
+                            LOGI("AGC kick 5/6: ifgr -> %d (back down, ready to hand over)",
+                                 sdrp->currentIfGr()); break;
+                    default: sdrp->setIfAgc(true);
+                            LOGI("AGC kick 6/6: AGC on (ifgr %d, sysGain %.1f dB)",
+                                 sdrp->currentIfGr(), sdrp->systemGainDb()); break;
+                }
+            }
+            // Settling window: the whole kick plus a margin, reported to the client so the
+            // waterfall's bounce is EXPLAINED rather than looking like a fault. An unexplained
+            // transient reads as a defect; a labelled one reads as a radio settling.
+            sdrpSettling = (sdrpAgcKick < 6);
+
+            // ★ The RSP's live gain state. The AGC moves the IF reduction on its own, so a
+            //   slider position is NOT the truth — and total system gain is the one figure that
+            //   makes two independent controls readable.
+            // ★ ~10 Hz, not 1. The IF slider follows the AGC live, and a thumb that jumps once a
+            //   second reads as broken rather than as tracking. ~90 bytes is nothing next to the
+            //   spectrum.
+            // ★★ TO EVERY LISTENER, NOT JUST peers.front(). This went to `sock` alone, so on a
+            //    shared receiver only the FIRST listener could see the gain or watch the AGC
+            //    work — and on this demo every listener is shown that read-only IF slider.
+            if (n % 2 == 0) {
+                char gb[160];
+                snprintf(gb, sizeof gb,
+                    "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
+                    "\"settling\":%d}",
+                    sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
+                    sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
+                for (auto& pc : peers) sendText(pc, gb);
+            }
+        }
+
         // Tuned-channel power for squelch (peak dB in the demod passband).
         {
             double binHz = sampleRate / (double)bins;
@@ -3799,7 +3854,7 @@ struct LocalSdrShim::Impl {
             { std::lock_guard<std::mutex> lk(clientMtx);
               stillEmpty = (!specClient  || !specClient->isOpen())
                         && (!audioClient || !audioClient->isOpen()); }
-            if (stillEmpty) pauseCaptureIdle();
+            if (stillEmpty) armIdlePark();
             else LOGI("not parking — a new listener arrived while this socket was closing");
         }
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
@@ -4218,6 +4273,9 @@ struct LocalSdrShim::Impl {
     // set `restarting` for the whole paused period so the capture watchdog treats the stopped stream as
     // deliberate (it `continue`s on `restarting`) and never false-alarms "dongle gone" or relaunches.
     std::atomic<bool> captureIdle{false};
+    /** When the idle park becomes due (nowSecs()), or 0 if no park is pending. Armed when the
+     *  LAST listener leaves and cleared the moment one returns — see g_vsIdleGraceSec. */
+    std::atomic<double> idleParkDueAt{0.0};
     /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
     std::atomic<bool> idleDiscard{false};
     void pauseCaptureIdle() {
@@ -4274,7 +4332,20 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(iqMtx); iqQueue.clear(); iqQueuedSamples = 0; iqPrefilled = false; }
         LOGI("no listeners — dongle capture paused (idle)");
     }
+    /** Arm the deferred park. The wait itself happens on the hotplug tick, which already runs
+     *  every 2 s — no new thread, and nothing to join on shutdown. */
+    void armIdlePark() {
+        const double g = g_vsIdleGraceSec.load();
+        if (g <= 0.0) { pauseCaptureIdle(); return; }         // grace disabled: old behaviour
+        idleParkDueAt.store(nowSecs() + g);
+        LOGI("no listeners — idle park in %.0fs (grace period)", g);
+    }
     void resumeCaptureIdle() {
+        // ★ A listener is back, so any pending park is off. This runs EARLY in the connect path,
+        //   which is exactly what makes the grace period work for a page reload: the park was
+        //   only ever scheduled, so it is cancelled before it can happen.
+        if (idleParkDueAt.exchange(0.0) > 0.0)
+            LOGI("listener returned within the grace period — idle park cancelled");
         if (!captureIdle.exchange(false)) return;             // wasn't paused
         // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
         // is null, so the dongle branch called launchCapture() anyway — rtlsdr_read_async(NULL)
@@ -4514,6 +4585,24 @@ struct LocalSdrShim::Impl {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 if (!hotplugRun.load()) break;
                 if (stopping.load() || restarting.load()) continue;
+
+                // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
+                // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
+                //   happened during the grace period, so the decision is taken against the state
+                //   NOW: a listener may have returned, and the AGC settle may still be running.
+                if (const double due = idleParkDueAt.load(); due > 0.0 && nowSecs() >= due) {
+                    bool empty;
+                    { std::lock_guard<std::mutex> lk(clientMtx);
+                      empty = (!specClient  || !specClient->isOpen())
+                           && (!audioClient || !audioClient->isOpen()); }
+                    // ★★ NEVER PARK MID-SETTLE. Parking costs the AGC its convergence, so cutting
+                    //    the kick short would hand the next listener exactly the stuck AGC this
+                    //    whole sequence exists to prevent. Wait for it; it takes ~6 s.
+                    const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6;
+                    if (!empty) { idleParkDueAt.store(0.0); }
+                    else if (settling) { /* hold the deadline open and re-check next tick */ }
+                    else { idleParkDueAt.store(0.0); pauseCaptureIdle(); }
+                }
 
                 // ★ SILENCE = GONE. 3s is far longer than any legitimate gap (a rate change is
                 // flagged by `restarting`, and normal delivery is continuous), and short enough
@@ -4908,6 +4997,9 @@ void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(r
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }
 void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
 void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
+void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
+void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
+void LocalSdrShim::setVibeServerDabNotch(bool on) { g_vsDabNotch.store(on); }
 void LocalSdrShim::setVibeServerMaxUsers(int n) { g_vsMaxUsers.store(n > 1 ? n : 1); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
@@ -5212,6 +5304,17 @@ int LocalSdrShim::startSdrplay(int index,
     if (!impl->sdrp->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
         delete impl; return -1;
     }
+    // ★★★ THE OPERATOR'S FRONT-END FILTERS, APPLIED BY THE SERVER ITSELF.
+    //     These used to arrive only because the first client pushed its saved preferences at
+    //     us — which stopped happening the moment listeners on a LOCKED receiver were correctly
+    //     barred from setting shared gain. A receiver's own filter settings must not depend on
+    //     a listener turning up and volunteering them (2026-08-03).
+    //     ★★ AND THEY ARE OPT-IN, NOT A DEFAULT-ON. The RF notch covers BROADCAST FM, so
+    //        forcing it on every locked receiver would gut an FM-DXer's signal — Hans runs a
+    //        public one, on the FM band, and would have had it silently notched out. What is
+    //        right for a 2.5-10.5 MHz HF demo is catastrophic one band up. The operator says.
+    if (g_vsRfNotch.load())  { impl->sdrp->setRfNotch(true);  LOGI("RSP: RF notch ON (operator)"); }
+    if (g_vsDabNotch.load()) { impl->sdrp->setDabNotch(true); LOGI("RSP: DAB notch ON (operator)"); }
 
     impl->fftSize = fftSizeForRate(impl->sampleRate);
     impl->startEngine();

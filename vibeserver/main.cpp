@@ -78,6 +78,10 @@ struct Opts {
     // already perfect before this"). Sharper bins are not worth a worse picture. Opt in with
     // --zoom-spectrum until it can beat the wide path on LOOK as well as resolution.
     bool        zoomSpectrum = false;
+    // ★ RSP front-end notches. OFF unless the operator asks: the RF notch covers broadcast FM.
+    double      idleGrace = 300.0;   // seconds before an unattended radio idle-parks
+    bool        rfNotch  = false;
+    bool        dabNotch = false;
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
 };
@@ -145,6 +149,13 @@ void usage() {
         "                    picks the channel method: 1 = direct, 2+ = shared.\n"
         "  --channels MODE   override that choice: direct | shared\n"
         "  --zoom-spectrum   EXPERIMENTAL: real bins at deep zoom instead of interpolation.\n"
+        "  --idle-grace SEC  wait SEC after the last listener leaves before idling the radio\n"
+        "                    (default 300). Stops a page reload driving a park/wake cycle,\n"
+                    "                    which is what wedges an RSP. 0 = idle immediately.\n"
+        "  --rf-notch        SDRplay only: broadcast NOTCH (covers MW AND FM). Use on HF or\n"
+        "                    airband where a local FM transmitter overloads the front end.\n"
+                    "                    NEVER use it to receive the FM band — it removes it.\n"
+        "  --dab-notch       SDRplay only: DAB band notch, same reasoning as --rf-notch.\n"
         "                    Off by default — it replaces the tuned wide-path waterfall.\n"
         "                      direct  cheapest for ONE listener; cost rises with each\n"
         "                              extra one and runs out of a core at about eight.\n"
@@ -218,6 +229,9 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--channels")  o.channels = need(i);
         else if (a == "--no-zoom-spectrum") o.zoomSpectrum = false;
         else if (a == "--zoom-spectrum")    o.zoomSpectrum = true;
+        else if (a == "--idle-grace") o.idleGrace = std::atof(need(i));
+        else if (a == "--rf-notch")   o.rfNotch  = true;
+        else if (a == "--dab-notch")  o.dabNotch = true;
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
@@ -306,6 +320,15 @@ int main(int argc, char** argv) {
     }
     LocalSdrShim::setVibeServerSharedChannels(shared);
     LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum);
+    LocalSdrShim::setVibeServerIdleGrace(o.idleGrace);
+    LocalSdrShim::setVibeServerRfNotch(o.rfNotch);
+    LocalSdrShim::setVibeServerDabNotch(o.dabNotch);
+    // ★ SAY WHAT THE FRONT END WILL DO. These are set once at startup and a listener cannot
+    //   change them on a locked receiver, so if the operator's intent and the radio disagree
+    //   there is otherwise NOTHING on screen or in the log to reveal it — which is exactly the
+    //   position the notches were in (2026-08-03).
+    std::printf("VibeServer: front end — RF notch %s, DAB notch %s, idle grace %.0fs\n",
+                o.rfNotch ? "ON" : "off", o.dabNotch ? "ON" : "off", o.idleGrace);
     // ★ --users is now the real listener cap, not just the channel-method hint.
     LocalSdrShim::setVibeServerMaxUsers(o.users);
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
