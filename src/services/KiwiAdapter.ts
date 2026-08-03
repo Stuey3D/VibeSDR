@@ -108,8 +108,9 @@ const KIWI_CAPS: Omit<BackendCapabilities, 'freqRange'> = {
 
 export class KiwiAdapter implements SDRBackend {
   /** A getter, not a field: the variant can flip mid-handshake (tryOtherWsPrefix), and after it
-   *  does, `kind` must report what we are actually talking to. */
-  get kind(): BackendKind { return this.variant; }
+   *  does, `kind` must report what we are actually talking to — but only once a receiver has
+   *  CONFIRMED it by answering. An unconfirmed swap is a guess; see label(). */
+  get kind(): BackendKind { return this.variantConfirmed ? this.variant : this.askedVariant; }
   readonly caps: BackendCapabilities = { ...KIWI_CAPS, freqRange: [0, KIWI_FULL_BW] };
   readonly uuid: string;
 
@@ -121,13 +122,40 @@ export class KiwiAdapter implements SDRBackend {
   /** Kiwi dialect — from the caller's server type, then self-corrected once if we guessed wrong. */
   private variant: KiwiVariant;
   private get wsPrefix(): string { return KIWI_WS_PREFIX[this.variant]; }
+  /** What the CALLER said this receiver is, never overwritten. The dialect probe is a guess until
+   *  something answers, and an unanswered guess must not be reported to the user as fact — see
+   *  label(). */
+  private readonly askedVariant: KiwiVariant;
   /** The URL-dialect probe fires at most once per adapter. See tryOtherWsPrefix(). */
   private prefixSwapped = false;
-  /** Has the server said ANYTHING on this socket? The one signal that separates a wrong URL
-   *  (closed with zero bytes) from a receiver that answered and then refused us. */
+  /** Has the server said ANYTHING on this attempt? The one signal that separates a wrong URL
+   *  (closed with zero bytes) from a receiver that answered and then refused us. Reset per
+   *  attempt, because it gates the swap — use variantConfirmed for anything durable. */
   private sawServerMsg = false;
-  /** How to name this receiver to the user — "KiwiSDR" or "Web-888". */
-  private label(): string { return this.variant === 'web888' ? 'Web-888' : 'KiwiSDR'; }
+  /** ★★★ HAS A RECEIVER ACTUALLY ANSWERED ON THE CURRENT PREFIX? Only that is evidence of which
+   *  dialect it really speaks. Unlike sawServerMsg this is never reset: a reconnect does not
+   *  un-learn what the receiver already told us. */
+  private variantConfirmed = false;
+
+  /** How to name this receiver to the user — "KiwiSDR" or "Web-888".
+   *
+   *  ★★★ A FAILED PROBE MUST NOT RENAME SOMEONE'S RADIO. This used to read `this.variant`, which
+   *  the retry mutates. A receiver that refuses us with ZERO bytes is indistinguishable from a
+   *  wrong URL, so the swap fires, the second attempt fails too, and every message then described
+   *  a KiwiSDR — picked from the KiwiSDR directory — as "This Web-888…". Reported 2026-08-03
+   *  against a Kiwi that blocks app clients (it fails on the shipped build too, so the refusal is
+   *  real; only the NAME was ours).
+   *
+   *  ★ That is the same class of fault as the bug this whole change exists to fix: the app stating
+   *    something false about the user's own hardware. It is worse than saying nothing, because it
+   *    sends someone looking for a Web-888 problem they do not have.
+   *
+   *  ★★ So: report the confirmed dialect if a receiver has spoken to us, otherwise report what the
+   *     caller asked for. Never the untested half of a swap. */
+  private label(): string {
+    const v = this.variantConfirmed ? this.variant : this.askedVariant;
+    return v === 'web888' ? 'Web-888' : 'KiwiSDR';
+  }
 
   private sndWs: WebSocket | null = null;
   private wfWs: WebSocket | null = null;
@@ -190,6 +218,7 @@ export class KiwiAdapter implements SDRBackend {
     this.cb = callbacks;
     this.password = password ?? '';
     this.variant = variant;
+    this.askedVariant = variant;
     this.wsBase = KiwiAdapter.toWsBase(baseUrl);
     getKiwiIdent().then((v) => { const s = sanitizeIdent(v); if (s) this.ident = s; }).catch(() => {});
   }
@@ -432,7 +461,10 @@ export class KiwiAdapter implements SDRBackend {
     const was = this.wsPrefix;
     this.prefixSwapped = true;
     this.variant = this.variant === 'web888' ? 'kiwi' : 'web888';
-    this.dbg(`closed with no reply on /${was}/ — retrying as ${this.label()} (/${this.wsPrefix}/)`);
+    // ★ Name the PREFIX, not a product. label() deliberately refuses to report an unconfirmed
+    //   swap, so calling it here printed "retrying as KiwiSDR (/kiwi/)" — the old name against the
+    //   new path. The prefix is the only fact at this point.
+    this.dbg(`closed with no reply on /${was}/ — retrying at /${this.wsPrefix}/`);
     this.stopKeepalive();
     this.closeSocket('sndWs');
     this.closeSocket('wfWs');
@@ -499,6 +531,7 @@ export class KiwiAdapter implements SDRBackend {
     // The server has spoken → the URL dialect was right, so stop second-guessing it. From here a
     // close is a real event and must be reported as one, never retried at a different URL.
     this.sawServerMsg = true;
+    this.variantConfirmed = true;      // it answered on this prefix — the dialect is now a fact
     if (buf.length < 3) return;
     const tag = String.fromCharCode(buf[0], buf[1], buf[2]);
     if (tag === 'MSG') {
@@ -515,7 +548,7 @@ export class KiwiAdapter implements SDRBackend {
 
   // ── text (MSG) ───────────────────────────────────────────────────────────
   private onText(data: string, stream: 'SND' | 'W/F'): void {
-    this.sawServerMsg = true;                      // see onBinaryFrame
+    this.sawServerMsg = true; this.variantConfirmed = true;   // see onBinaryFrame
     this.dbg(stream + ' rx: ' + data.slice(0, 120));
     if (!data.startsWith('MSG')) return;            // CLI / other — ignore
     const body = data.slice(4);                     // skip "MSG "
