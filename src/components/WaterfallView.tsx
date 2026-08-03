@@ -523,6 +523,7 @@ function WaterfallView({
   // produced the committed step, so the deadband is measured against what we actually decided on.
   const uNRaw       = useRef(0);
   const uNStep      = useRef(1);
+  const uNHold      = useRef(0);      // consecutive frames the rate has sat outside the band
   const slowFrameMs = useRef(150);    // worst-case recent frame interval — see where it is updated
 
   const wfUniforms = useDerivedValue(() => ({
@@ -982,7 +983,10 @@ function WaterfallView({
       //     (Stuart, 2026-08-03). Jumps straight to any slower interval and decays back gently, so
       //     it tracks the worst case rather than the average. Frames that then arrive on time
       //     simply have lines to spare — headroom, which is the point.
-      slowFrameMs.current = Math.max(dt, slowFrameMs.current * 0.97);
+      // ★ Decays SLOWLY (0.998, several seconds). At 0.97 this was a sawtooth by construction —
+      //   it leapt up on every slow frame and fell back within a few frames — and the multiplier
+      //   derived from it chased the teeth, rescaling the waterfall each time.
+      slowFrameMs.current = Math.max(dt, slowFrameMs.current * 0.998);
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
     }
     lastFrameTs.current = now;
