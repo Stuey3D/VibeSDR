@@ -105,6 +105,16 @@ public:
     /** Zoom spectrum on/off. It SUPPRESSES the wide path while active, so a fault in it takes
      *  the waterfall with it — hence a switch that restores the previous behaviour outright. */
     static void setVibeServerZoomSpectrum(bool on);
+    /** ★★ RSP front-end notches, declared by the OPERATOR and applied by the server at open.
+     *  Never defaulted on: the RF notch covers broadcast FM, so assuming it would silently gut
+     *  an FM receiver. A listener cannot set these on a locked receiver, so the server must. */
+    /** ★★ Seconds to wait after the LAST listener leaves before idle-parking the radio.
+     *  Default 300. Protects the hardware from park/wake churn (the RSP re-enumeration stall,
+     *  the libusb crash on resume, RDS dying on resume) and guarantees the AGC settle finishes.
+     *  0 parks immediately, i.e. the old behaviour. */
+    static void setVibeServerIdleGrace(double sec);
+    static void setVibeServerRfNotch(bool on);
+    static void setVibeServerDabNotch(bool on);
     /** ★★★ How many spectrum listeners may attach at once (default 1 = the old single-occupant
      *  server). The DSP cost of an extra listener is ~nothing now the channelizer shares one
      *  forward FFT (+0.02% of a Pi core each, measured); the real ceiling is UPLINK. */

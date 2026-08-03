@@ -302,6 +302,10 @@ function refreshAdminRow() {
     const rowEl = el.closest('.mrow') as HTMLElement | null;
     if (rowEl) rowEl.style.opacity = locked ? '0.45' : '1';
   }
+  // ★ The RSP's gain controls follow a DIFFERENT rule to the list above — they are gated on the
+  //   receiver being LOCKED (shared front end), not merely on a password existing. Unlocking is
+  //   the moment they should appear, so re-apply it here.
+  if (radioCaps?.driver === 'sdrplay') applyRspLock();
 }
 
 /** ★★ WIRED UP AT LAST. `doAdminUnlock` existed and NOTHING EVER CALLED IT — the UNLOCK button
@@ -562,10 +566,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ Under AGC the slider is the AGC's, so it is greyed and unclickable — but it keeps
       // MOVING, because watching the loop work is how you tell it is doing its job. Tweened
       // between updates so it glides rather than hopping.
-      const gr = $<HTMLInputElement>('rspIfGr');
       const agcOn = $<HTMLButtonElement>('rspIfAgc').classList.contains('on');
-      gr.classList.toggle('agc', agcOn);
+      applyRspLock();          // ★ who OWNS the slider — never decided by this message alone
       if (agcOn) {
+        // ★ Telemetry MOVES the thumb; it does not decide who owns it. Watching the reduction
+        //   ride up and down is the only evidence a listener has that the AGC is alive.
         tweenIfGr(ifgr);
         $('rspIfGrVal').textContent = `${ifgr} dB · AGC`;
       }
@@ -5479,13 +5484,60 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   $<HTMLButtonElement>('rspDabNotch').hidden = !caps?.dabNotch;
   $<HTMLButtonElement>('rspBiasT').hidden    = !caps?.biasT;
   renderRspVals();
+  applyRspLock();   // the panel has only just been built; nothing has applied the lock to it yet
   // ★ The radio has just told us what it is — which is also the moment to tell it what the
   // user last chose. Covers a server restart, a reconnect, and a fresh page load alike.
-  pushAllRspSettings();
+  // ★ ...unless we are not allowed to: on a locked receiver a listener pushing their saved
+  //   gains would be refused by the server anyway, and on a SHARED one it would be rude —
+  //   every other listener's front end moved to suit whoever reconnected last.
+  if (!rspRestricted()) pushAllRspSettings();
 }
 
 function rspSend(msg: Record<string, unknown>) {
   spec?.send({ type: 'rsp_control', ...msg });
+}
+
+/** ★★★ WHO MAY TOUCH THE FRONT END — and this MIRRORS THE SERVER'S RULE EXACTLY (`sharedGate`
+ *  in local_sdr_shim.cpp). Gain is SHARED hardware: one listener moving the LNA moves it for
+ *  everyone, so on a receiver with a LOCKED CENTRE it lives behind the admin password. On a
+ *  personal receiver it is the owner's own radio and stays free.
+ *  ★ If these two rules ever drift apart the controls lie: either they refuse something the
+ *    server would have allowed, or they offer something it will silently reject. */
+function rspRestricted(): boolean {
+  return hwLockedCentre > 0 && srvAdminProtected && !adminUnlocked;
+}
+
+/** ★★★ THE IF SLIDER'S READ-ONLY STATE, IN ONE PLACE, CALLED FROM EVERYWHERE THAT CHANGES IT.
+ *
+ *  It is read-only when the AGC owns the register (the hardware refuses a manual write then —
+ *  see setIfGainReduction) or when this listener may not touch the front end at all.
+ *
+ *  ★★ IT USED TO BE APPLIED ONLY WHEN AN `rspstat` ARRIVED, and that was the bug Stuart hit:
+ *  on a --zoom-spectrum server no stat was ever sent, so the class that had been added by the
+ *  one stat received before zooming was never removed — an admin could turn the AGC off and the
+ *  slider STILL could not be dragged (2026-08-03). UI state must never depend on a telemetry
+ *  message arriving; telemetry moves the thumb, it does not decide who owns it. */
+function applyRspLock() {
+  const restricted = rspRestricted();
+  const agcOn = $('rspIfAgc').classList.contains('on');
+  const gr = $<HTMLInputElement>('rspIfGr');
+  gr.classList.toggle('agc', agcOn || restricted);
+
+  // ★ HIDDEN, not greyed, for a listener who cannot use them — a disabled control still reads
+  //   as an offer, and there is nothing here for them to unlock without the password.
+  //   ★ THE TWO EXCEPTIONS ARE DELIBERATE AND ARE THE WHOLE POINT OF THE PANEL FOR A LISTENER:
+  //     SYSTEM GAIN (what the radio actually has) stays visible, and the IF slider stays visible
+  //     but read-only BECAUSE IT MOVES — watching the AGC work is how you can tell it is working
+  //     at all. A hidden slider and a frozen one look identical: broken.
+  const rowOf = (id: string) => document.getElementById(id)?.closest('.mrow') as HTMLElement | null;
+  for (const id of ['rspLna', 'rspIfAgc']) {
+    const r = rowOf(id); if (r) r.hidden = restricted;
+  }
+  for (const id of ['rowAgcSet', 'rowRspNotch']) {
+    const r = document.getElementById(id); if (r) r.hidden = restricted;
+  }
+  const bias = document.getElementById('rspBiasT')?.closest('.mrow') as HTMLElement | null;
+  if (bias) bias.hidden = restricted;
 }
 
 function renderRspVals() {
@@ -5606,6 +5658,10 @@ function initRspControls() {
       savePref(`rsp_${key}`, on);
       // Turning AGC OFF hands the IF reduction back, so send the slider's value with it.
       if (key === 'ifagc' && !on) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+      // ★ AND UNLOCK THE SLIDER RIGHT NOW, rather than waiting for an rspstat to say so. That
+      //   wait was the bug: on a server whose stats never arrive, the AGC could be turned off
+      //   and the slider stayed read-only for ever (Stuart, 2026-08-03).
+      if (key === 'ifagc') applyRspLock();
     };
   };
   for (const [key, id] of Object.entries(RSP_TOGGLES)) toggle(id, key);
