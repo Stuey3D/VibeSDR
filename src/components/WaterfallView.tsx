@@ -887,9 +887,27 @@ function WaterfallView({
     //     even by construction, and adapts to a 120 Hz panel for free.
     //     ★ revStep is still the WANTED interval in ms; it is converted to frames here, against a
     //       SMOOTHED frame time so one long frame (a GC pause) cannot change the cadence.
-    const dt = fi.timeSincePreviousFrame ?? 16;
-    revFrameMs.value = revFrameMs.value > 0 ? revFrameMs.value * 0.9 + Math.min(dt, 100) * 0.1 : dt;
-    const framesPerLine = Math.max(1, Math.round(revStep.value / revFrameMs.value));
+    // ★★★ REJECT ANYTHING THAT IS NOT A DISPLAY INTERVAL — DO NOT CLAMP IT IN.
+    //     This stepper DEACTIVATES at the end of every pair (so an idle waterfall never pins a
+    //     ProMotion panel) and restarts on the next data frame. On that first callback,
+    //     timeSincePreviousFrame is the gap since the callback last RAN — ~250 ms — not a frame
+    //     time. The first version clamped it to 100 ms and fed it to the average, which pulled
+    //     revFrameMs from ~16.7 to ~25, flipped framesPerLine from 3 to 2, and let it decay back
+    //     over the next few frames. So the cadence oscillated ONCE PER PAIR, which is precisely
+    //     the judder Stuart saw on build 71 ("a juddery mess, no smoothness at all").
+    //     ★ SHARP was unaffected and that is what identified it: n<=1 returns early in
+    //       startRevealStepper, so SHARP never runs this callback at all.
+    //     ★ A display frame is 8.3 ms (120 Hz) or 16.7 ms (60 Hz). Anything outside a sane band is
+    //       a restart, a stall or a GC pause — it carries NO information about the refresh rate, so
+    //       it must be DISCARDED rather than averaged in. Clamping was the bug; the clamp made a
+    //       nonsense value look plausible instead of throwing it away.
+    const dt = fi.timeSincePreviousFrame ?? 16.7;
+    if (dt > 3 && dt < 40) {
+      revFrameMs.value = revFrameMs.value > 0 ? revFrameMs.value * 0.9 + dt * 0.1 : dt;
+    }
+    // Until a real frame time has been measured, assume 60 Hz rather than dividing by zero.
+    const frameMs = revFrameMs.value > 0 ? revFrameMs.value : 16.7;
+    const framesPerLine = Math.max(1, Math.round(revStep.value / frameMs));
     revAcc.value += 1;                       // frames, not ms
     if (revAcc.value < framesPerLine) return;
     revAcc.value = 0;
