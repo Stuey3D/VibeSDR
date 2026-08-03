@@ -990,6 +990,21 @@ function WaterfallView({
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
     const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
+
+    // ★★★ LINES PER FRAME — COMPUTED FOR EVERY PATH, not just the settled one. It used to be worked
+    //     out only in the settled branch below, and `lastDynRows` (which the glide uses) was only
+    //     written there — but the glide is FORCED on whenever the data is under ~15 fps, so on a
+    //     10 fps server the settled branch NEVER RAN and the multiplier stayed at its initial value
+    //     forever. That is why the scroll rate ignored the setting entirely on UberSDR: 10, 20, 30
+    //     and 60 all did the same nothing (Stuart, 2026-08-03).
+    // ★★ CEIL, NOT ROUND — over-generate, the way frame generation does. The data rate estimate
+    //    wobbles (a nominal 5 fps reports as 4), and round() flips the multiplier as it crosses .5,
+    //    which is a visible lurch. Ceil only ever errs on the side of MORE lines, which matches
+    //    what the setting means: hold AT LEAST this scroll rate (Stuart: "a 5x multiplier then
+    //    locked to 20 with the additional frames discarded").
+    const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
+    const wantRows = cfg.sharpScroll ? 1
+      : Math.max(1, Math.min(8, Math.ceil(cfg.targetFps / dataFps)));
     if (wfBoost) {
       // Interaction / native rate: the 120Hz vsync glide already handles smoothness, so keep uN on the
       // STABLE static multiplier. ★ Deriving it from the LIVE data rate here (which spikes and
@@ -1009,21 +1024,23 @@ function WaterfallView({
       // the LIVE data rate during a gesture made it jump every frame. Holding
       // the last settled value satisfies both — stable during the gesture, and
       // identical to what settles afterwards, so nothing rescales.
-      uNSv.value = lastDynRows.current;
+      // ★ The static hold is for a GESTURE, where a live-derived value jumps every frame and
+      //   squashes/pops the waterfall. At LOW FPS while settled there is no gesture and no jumping,
+      //   so the target applies here as it does anywhere else — which is what the note above
+      //   ("for the SETTLED low-fps path") always intended.
+      if (!boost) lastDynRows.current = wantRows;
+      uNSv.value = boost ? lastDynRows.current : wantRows;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
     } else {
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
-      const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
-      // ★★★ SHARP: exactly ONE row per received frame. No interpolation, so the scroll rate is the
-      //     data rate and every row carries a whole frame's integration. SMOOTH: interpolate up
-      //     toward the chosen target. Well above the data rate SMOOTH can judder — the rows are
-      //     revealed across one frame interval, so uneven arrivals lurch (Stuart measured this at
-      //     60 fps against 20 fps data).
-      const dynRows = cfg.sharpScroll ? 1
-        : Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
+      // ★ SHARP: exactly ONE row per received frame — no interpolation, so the scroll rate is the
+      //   data rate and every row carries a whole frame's integration. SMOOTH: interpolate up
+      //   toward the target. Both come from wantRows above, so this path and the glide can no
+      //   longer disagree — the disagreement was what squashed the waterfall on every gesture.
+      const dynRows = wantRows;
       // ★ TEMPORARY (2026-08-02) — say what the stepper ACTUALLY computes. The scroll rate looked
       //   fixed regardless of the setting or the data rate, which contradicts the interpolate-up
       //   design, and three theories about why were all guesses. This turns the 60 fps experiment
