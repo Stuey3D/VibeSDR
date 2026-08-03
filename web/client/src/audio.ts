@@ -26,6 +26,24 @@ import { decodeVibeAdpcmFrame } from '../../../src/services/imaAdpcm';
 // to disagree with. The wasm is inlined in the module, so the single-file page stays self-contained.
 import { OpusDecoder } from 'opus-decoder';
 
+/** How much audio to hold before playout starts, in seconds. This is also very nearly
+ *  how far the audio LAGS THE WATERFALL, so it is the A/V sync knob.
+ *
+ *  ★★★ 150 ms IS NOW SAFE, AND IT WAS NOT BEFORE. The first attempt at 150 broke tuning:
+ *  a retune tore down and rebuilt the whole DSP audio chain, clearing its buffers, and
+ *  the thinner cushion drained during that gap — silence and a re-arm on every dial step.
+ *  That break has since been removed at the source: a retune inside the same mode and
+ *  bandwidth now just re-points the NCO and rebuilds nothing (RxPipeline::setTune), so
+ *  there is no deliberate gap left for the buffer to have to cover.
+ *  ★ Which means the ORDER MATTERS if this is ever revisited: this number is only safe
+ *    while that holds. If retunes start breaking the audio again, look for a rebuild that
+ *    has crept back into the tune path before you reach for this constant.
+ *  ★ IF THE PUBLIC LINK STUTTERS, PUT IT BACK TO 0.25. This is tuned for a LAN; a receiver
+ *    reached over the internet has a longer jitter tail. An underrun is handled (silence +
+ *    re-arm) rather than being a glitch, so being slightly wrong here is cheap.
+ */
+const JITTER_SEC = 0.15;
+
 /** Playout worklet: a ring buffer drained at the device rate. Kept tiny — it
  *  runs on the audio thread. Late frames are dropped, not queued, so a stalled
  *  link never accumulates lag. */
@@ -37,22 +55,9 @@ class VibeSink extends AudioWorkletProcessor {
     this.buf = [new Float32Array(this.cap), new Float32Array(this.cap)];
     this.w = 0; this.r = 0; this.filled = 0;
     this.started = false;
-    // ★★★ BACK TO 250 ms. It was cut to 150 to close the audio-lags-waterfall gap, and that broke
-    //     TUNING: a retune stops the audio while the DSP chain rebuilds, and with less cushion the
-    //     buffer DRAINS during the gap — silence and a re-arm instead of riding through it
-    //     (Stuart, 2026-08-03: "when tuning the audio is muting"). The buffer is not only there for
-    //     network jitter; it is what covers a deliberate break in the stream.
-    //     ★ So the lag needs a different mechanism, not a smaller buffer: either refill faster after
-    //       a retune, or hold a larger target only across one. Left as it was until that exists.
-    // ★★ (ORIGINAL NOTE) The buffer is what makes the audio lag the waterfall, and it became
-    //    obvious once the waterfall was tied to the display refresh and stopped hitching — the
-    //    delay had always been there, the eye just had nothing steady to compare it against
-    //    (Stuart, 2026-08-03). 150 ms still covers ordinary arrival jitter; an underrun is handled
-    //    (silence + re-arm) rather than being a glitch, so the cost of being slightly wrong here is
-    //    small and audible only on a bad link.
-    //    ★ IF THE PUBLIC LINK STUTTERS, PUT IT BACK. This is tuned for a LAN; a receiver reached
-    //      over the internet has a longer jitter tail and may want the original 250.
-    this.target = 48000 * 0.25;        // 250ms jitter buffer before playout
+    // See JITTER_SEC — the buffer is what makes the audio lag the waterfall, and it became
+    // obvious once the waterfall was tied to the display refresh and stopped hitching.
+    this.target = 48000 * ${JITTER_SEC};
     this.port.onmessage = (e) => {
       const { l, r } = e.data;
       const n = l.length;
@@ -437,7 +442,8 @@ export class AudioPlayer {
     }
     this.wPos = (this.wPos + n) % this.cap;
     this.filled += n;
-    if (!this.playing && this.filled >= 48000 * 0.25) this.playing = true;
+    // Same cushion as the worklet — this is the fallback path, not a different policy.
+    if (!this.playing && this.filled >= 48000 * JITTER_SEC) this.playing = true;
   }
 
   private _openWs() {

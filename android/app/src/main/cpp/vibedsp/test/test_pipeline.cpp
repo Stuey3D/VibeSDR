@@ -302,6 +302,89 @@ static void testWFMOffTune() {
     checkTone(audio, fm, "off-tune WFM tone still recovered");
 }
 
+// ★★★ TUNING MUST NOT ATTENUATE THE AUDIO (Stuart, 2026-08-03, Pi demo: "when tuning the
+// audio is muting… or attenuating lots").
+//
+// A retune inside the same mode and bandwidth used to rebuild the entire audio chain,
+// which (a) cleared every buffer, putting a real GAP in the stream that the client's
+// jitter buffer then had to cover, and (b) called agc_.reset(), dropping the gain to
+// exactly 1.0 so a weak signal was attenuated hard and crawled back over the 400 ms
+// release. This test is what stops either creeping back in.
+//
+// Deliberately uses a WEAK carrier: at full scale the AGC's converged gain is near 1.0
+// and a reset would be invisible. The bug is only measurable when the AGC is doing work.
+static void testRetuneLevel() {
+    std::printf("-- RxPipeline (retune must not attenuate) --\n");
+    const double fs = 1200000.0;
+    const double fA = 200000.0, fB = 260000.0;   // two carriers, one band, same mode/bw
+    const double fm = 1200.0, m = 0.6;
+    const double amp = 0.02;                     // WEAK — forces a high AGC gain
+    const int    Ni = 1 << 20;
+
+    // Both carriers present throughout, so the retune is the ONLY thing that changes.
+    std::vector<cf32> iq(Ni);
+    for (int i = 0; i < Ni; ++i) {
+        const double t   = i / fs;
+        const double env = amp * (1.0 + m * std::cos(2.0 * M_PI * fm * t));
+        const double pa  = 2.0 * M_PI * fA * t, pb = 2.0 * M_PI * fB * t;
+        iq[i] = cf32((float)(env * (std::cos(pa) + std::cos(pb))),
+                     (float)(env * (std::sin(pa) + std::sin(pb))));
+    }
+
+    Cap cap;
+    RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+    pipe.start(fs, 1024, 20.0, 48000, cb);
+    pipe.setTune(fA, RxPipeline::Mode::AM, 10000.0);
+
+    const int blk = 65536;
+    const int half = Ni / 2;
+    for (int o = 0; o < half; o += blk) pipe.feed(iq.data() + o, std::min(blk, half - o));
+
+    // Level the AGC settled on BEFORE the retune, measured over the last ~100 ms.
+    const size_t markAudio = cap.audio.size();
+    auto rms = [&](size_t from, size_t to) {
+        if (to > cap.audio.size()) to = cap.audio.size();
+        if (from >= to) return 0.0;
+        double s = 0.0;
+        for (size_t i = from; i < to; ++i) s += (double)cap.audio[i] * cap.audio[i];
+        return std::sqrt(s / (double)(to - from));
+    };
+    const double before = rms(markAudio > 4800 ? markAudio - 4800 : 0, markAudio);
+
+    // ── THE RETUNE ── same mode, same bandwidth, different frequency.
+    const unsigned rebuildsBefore = pipe.rebuildCount();
+    pipe.setTune(fB, RxPipeline::Mode::AM, 10000.0);
+    for (int o = half; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+
+    // ★★★ THE ASSERTION THAT MATTERS, and it is on the REBUILD, not on the audio level.
+    // A level test was tried first and is NOT a witness: through the full chain the
+    // recovered level after a retune depends on where the AGC happened to have converged,
+    // and on a synthetic carrier that can sit close enough to unity that wiping the AGC
+    // barely moves it (measured: ratio 0.86 on the buggy code — it passed). The rebuild
+    // itself is the defect, it is binary, and it does not depend on the signal.
+    const unsigned rebuildsAfter = pipe.rebuildCount();
+    std::printf("  rebuilds: %u before the retune, %u after\n", rebuildsBefore, rebuildsAfter);
+    check(rebuildsAfter == rebuildsBefore,
+          "a same-mode, same-bandwidth retune rebuilds NOTHING");
+
+    const double after = rms(markAudio, markAudio + 2400);
+    std::printf("  audio rms before = %.4f, first 50 ms after = %.4f (diagnostic only)\n",
+                before, after);
+    check(before > 1e-5, "audio present before the retune");
+
+    // And it must still be listening — to the NEW carrier, at the right pitch. This is
+    // what stops "rebuild nothing" being satisfied by simply ignoring the retune.
+    checkTone(cap.audio, fm, "tone still recovered after retune");
+
+    // A mode change is a DIFFERENT chain and must still rebuild — the optimisation is
+    // "same chain", not "never rebuild", and skipping this one would leave stale filters.
+    pipe.setTune(fB, RxPipeline::Mode::SSB_USB, 3000.0);
+    pipe.feed(iq.data(), blk);
+    std::printf("  rebuilds after a MODE change = %u\n", pipe.rebuildCount());
+    check(pipe.rebuildCount() > rebuildsAfter, "a mode change still rebuilds the chain");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
@@ -311,6 +394,7 @@ int main() {
     testWFM();
     testWFMStereo();
     testWFMOffTune();
+    testRetuneLevel();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

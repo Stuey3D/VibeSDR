@@ -1286,6 +1286,10 @@ public:
      *  discipline as `dirty_`.
      */
     void requestReset() { resetReq_.store(true, std::memory_order_relaxed); }
+    /** How many times the audio chain has been rebuilt. Diagnostics only — but it is what
+     *  the retune test asserts on, because "did tuning tear the chain down?" is otherwise
+     *  only observable as a level/continuity artefact that varies with the signal. */
+    unsigned rebuildCount() const { return rebuilds_; }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     float stereoBlend()  const { return stereoBlend_; }
@@ -1298,6 +1302,7 @@ private:
     Mode mode_ = Mode::AM;
     Callbacks cb_{};
     bool dirty_ = true;
+    unsigned rebuilds_ = 0;                  // see rebuildCount()
 
     // spectrum
     std::unique_ptr<ComplexFFT> cfft_;
@@ -1398,6 +1403,7 @@ private:
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()
+    std::atomic<bool> tuneReq_{false};       // same-chain retune: move the NCO, rebuild nothing
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;
