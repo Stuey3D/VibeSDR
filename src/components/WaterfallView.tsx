@@ -274,6 +274,21 @@ half4 main(float2 xy) {
   float A  = (uHeadF - 2.0) * uN + R - L;
   float fI = floor(A / uN);
   float t  = A / uN - fI;
+  // ★★★ WHOLE ROWS WHEN SETTLED — NEVER AN AVERAGE OF TWO MOMENTS.
+  //     uQuant already snapped the LINE position (L and R above), but NOT this blend: A is an
+  //     integer while A/uN is not, so every synthesised line between two source frames was a
+  //     per-pixel MIX of both. At uN=5 or 6 (the DEFAULT and SMOOTH scroll settings) that means
+  //     most rows on screen were averages — which is vertical blur, and it is exactly the
+  //     "brighter and softer" the app showed beside the web client.
+  //     Snapping t to the NEAREST source frame is precisely what the web client does on the CPU
+  //     (blend.set(t >= 0.5 ? cur : prev) in waterfall.ts), so every settled row is a real
+  //     measurement. The scroll RATE is untouched — only what each row contains.
+  //   ★ A NOTE IN THE WEB CLIENT CLAIMS THE APP ALREADY DID THIS ("what the app actually shows is
+  //     raw frames — no blend"). It did not: uQuant quantises position, not the frame mix. That
+  //     comment is wrong and has been corrected there.
+  //   ★ Boost (uQuant=0) keeps the continuous blend — during a tune/zoom the glide is the point,
+  //     and a stepped one would read as judder.
+  if (uQuant > 0.5) { t = step(0.5, t); }
   float r1 = mod(fI, uRows) + 0.5;
   float r2 = mod(fI + 1.0, uRows) + 0.5;
   float tx = clamp(xy.x / uDrawW * uTexW, 0.5, uTexW - 0.5);
