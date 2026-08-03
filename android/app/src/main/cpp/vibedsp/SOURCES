@@ -1,0 +1,34 @@
+# vibedsp — THE ONE SOURCE LIST. Every build reads this file; none of them keeps its own copy.
+#
+# ★★★ WHY THIS EXISTS. There are FOUR builds of vibedsp and each used to list its sources by hand:
+#
+#     android/app/src/main/cpp/CMakeLists.txt        the Android app
+#     android/app/src/main/cpp/vibedsp/test/...      the host test harness
+#     vibeserver/CMakeLists.txt                      the Linux server
+#     modules/vibe-local-sdr/build_ios.sh            the prebuilt iOS .a
+#
+# On 2026-08-02 two new files (channelizer.cpp, zoomspec.cpp) were added and reached ONE of them.
+# The Linux server failed to link, then the iOS CLOUD build failed to link ten minutes and a push
+# after the mistake, and the Android app would have failed next. Four hand-maintained lists agree
+# only by luck, and the failure is always the same shape: the code compiles, and the linker
+# complains about symbols that were never built.
+#
+# ★ Add a .cpp here and every build picks it up. That is the whole point — do not re-list it
+#   anywhere else.
+# ★ HOW IT IS PARSED: every reader takes ONLY lines that look like a filename — no spaces, ending
+#   in .cpp. So blank lines and comments are ignored WHATEVER they contain, and you may write
+#   freely here. That rule replaced "skip lines starting with #", which broke the moment a comment
+#   contained a SEMICOLON: CMake lists are semicolon-separated, so the line split in two and the
+#   tail was read as a source file (2026-08-02, found immediately by the tests failing to link).
+#   One filename per line, relative to this directory.
+# ★ NOT listed here: third_party/kissfft/*.c. Each build compiles those its own way — iOS and
+#   Android rename the symbols to vibe_* so they cannot clash with ft8_lib's own copy of KissFFT.
+
+fft.cpp
+channelizer.cpp
+zoomspec.cpp
+ddc.cpp
+resampler.cpp
+stereo.cpp
+rds.cpp
+pipeline.cpp

@@ -8,18 +8,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(DSP ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
-set(DSP_SRC
-    ${DSP}/fft.cpp
-    ${DSP}/channelizer.cpp
-    ${DSP}/zoomspec.cpp
-    ${DSP}/ddc.cpp
-    ${DSP}/resampler.cpp
-    ${DSP}/stereo.cpp
-    ${DSP}/rds.cpp
-    ${DSP}/pipeline.cpp
+# ★ ONE SOURCE LIST — see vibedsp/SOURCES. Do not list .cpp files here; add them there and every
+# build (app, tests, server, iOS) picks them up together.
+# ★ Match only lines that LOOK LIKE FILENAMES (no spaces, ending .cpp). Comments and blanks
+#   are therefore ignored WHATEVER they contain — a `;` in a comment used to split the line
+#   in two (CMake lists are semicolon-separated) and the tail was read as a source file.
+file(STRINGS ${DSP}/SOURCES DSP_NAMES REGEX "^[A-Za-z0-9_./-]+\\.cpp$")
+set(DSP_SRC "")
+foreach(f ${DSP_NAMES})
+    list(APPEND DSP_SRC ${DSP}/${f})
+endforeach()
+list(APPEND DSP_SRC
     ${DSP}/third_party/kissfft/kiss_fft.c
-    ${DSP}/third_party/kissfft/kiss_fftr.c
-)
+    ${DSP}/third_party/kissfft/kiss_fftr.c)
 
 add_executable(vibedsp_tests test_fft.cpp ${DSP_SRC})
 target_include_directories(vibedsp_tests PRIVATE ${DSP})
