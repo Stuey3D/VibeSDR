@@ -273,8 +273,6 @@ export interface MenuSheetProps {
   onPeakHold?:        (v: boolean) => void;
   frameRate?:         '10fps' | '20fps' | '30fps';
   onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
-  wfScroll?:          'sharp' | 'smooth';
-  onWfScroll?:        (v: 'sharp' | 'smooth') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
@@ -709,7 +707,7 @@ export default function MenuSheet({
   specFloor = 0, onSpecFloor,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
-  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll,
+  frameRate = '20fps', onFrameRate,
   smoothTune = true, onSmoothTune, idleSlow = true, onIdleSlow,
   onSpecRatio,
 }: MenuSheetProps) {
@@ -1212,26 +1210,10 @@ export default function MenuSheet({
                   <Btn label="PEAK HOLD" active={peakHold} onPress={() => onPeakHold?.(!peakHold)} />
                 </BtnRow>
 
-                {/* ★★★ THE TWO WATERFALLS, NAMED BY WHAT THEY TRADE — not by how they work.
-                    SHARP draws one row per RECEIVED FRAME: every row is a whole frame's
-                    integration, nothing is invented, and the scroll speed IS the data rate.
-                    SMOOTH interpolates extra rows between real frames to hit a chosen speed —
-                    motion you can set, at the cost of rows that are partly made up.
-                    ★ The speed buttons only exist under SMOOTH. Under SHARP the data rate decides,
-                    so offering them would be a control whose every use is a no-op. */}
-                <SubLabel label="Waterfall" />
-                <BtnRow>
-                  <Btn label="SHARP"  active={wfScroll==='sharp'}  onPress={() => onWfScroll?.('sharp')} />
-                  <Btn label="SMOOTH" active={wfScroll==='smooth'} onPress={() => onWfScroll?.('smooth')} />
-                </BtnRow>
-                <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
-                               fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>
-                  {wfScroll === 'sharp'
-                    ? 'One row per received frame — most detail, and it scrolls at the data rate.'
-                    : 'Extra rows are interpolated between frames — set the speed below. Smoother motion, less real detail.'}
-                </Text>
-
-                {wfScroll === 'smooth' && <>
+                {/* Scroll Smoothness — a TARGET (minimum) scroll rate. The waterfall interpolates the
+                    live data rate UP to this, so 10fps holds a smooth 10fps scroll even when the data
+                    is only 5fps (Low Data); 20/30 are progressively smoother. The extra lines are
+                    interpolated between real frames, not new detail. */}
                 <SubLabel label="Scroll Smoothness" />
                 <BtnRow>
                   <Btn label="10 FPS" active={frameRate==='10fps'} onPress={() => onFrameRate?.('10fps')} />
@@ -1242,7 +1224,6 @@ export default function MenuSheet({
                                fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>
                   Higher = smoother scrolling; the extra lines are interpolated, not new detail.
                 </Text>
-                </>}
 
                 {/* Power saving — IDLE SAVER: ⅓ server frame rate after 30s
                     without touch. (Smooth tune is always on — the 120 Hz boost
