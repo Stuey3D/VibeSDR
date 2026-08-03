@@ -25,6 +25,18 @@ Siri Remote the clickpad both *presses* like a D-pad and *senses touch*. Tuning 
 moving the highlight is a SWIPE ACROSS THE SURFACE. Conflating them gives a remote that tunes when
 you meant to move the highlight, which is the single most likely way this design fails in the hand.
 
+★★★ **THE RING IS ALWAYS LIVE FOR TUNE AND ZOOM** (Stuart, 2026-08-03) — highlight showing or
+hidden, menu open or closed. **That is what makes the scheme modeless**, and it is the property the
+whole design rests on: the two inputs never trade places, so there is never a state to remember or
+a mode to escape.
+- It also gives something no phone layout can: **you can tune while a menu or panel is open**, since
+  the surface is busy with the highlight and the ring is still yours.
+- ★ It is the reason a one-D-pad remote cannot run this design (§6.2b) — there, tune and navigate
+  would have to share, and sharing means a mode.
+- ★ Watch the one collision: while a **slider is grabbed** the SURFACE is captured for adjustment
+  (§5), but the ring keeps tuning. That is consistent, and probably desirable — but it is the spot
+  to check first if the remote ever feels ambiguous in the hand.
+
 ## 2. The waterfall screen
 
 - **No drums, no buttons.** Those are dead controls on a TV — nothing points at them, so nothing
@@ -65,6 +77,29 @@ swipe right highlights the bookmarks pane; click switches to it.
 - **Sliders**: highlight → **click to grab** → **swipe left/right to adjust** → **click to set**, or
   **back to cancel**. ★ Note the grab/release model matches the gamepad brief's *clutch*: a
   continuous control needs an explicit engage, or every stray touch is an edit.
+
+---
+
+## 5b. ✅ WHAT IS NOT IN tvOS v1 — THE SCOPE, DECIDED
+**Stuart, 2026-08-03: *"drop the maps and any webview stuff, so no UberSDR admin stuff (we grey
+these out anyway in keyboard mode) no kiwi compatibility mode as it wont work due to navigation
+again."*** The rule is simple and it falls out of §6.2: **if it needs a WebView, it is not in v1.**
+
+| Cut | What it is today | Why |
+|---|---|---|
+| **Spot maps** | `MapOverlay.tsx` — Leaflet in a WebView | No webview on tvOS. See §6.2c/§6.2d. |
+| **In-app browser** | `BrowserOverlay.tsx`, used twice by `SDRScreen` | Same. |
+| **UberSDR admin** | web-based admin surface | Already greyed out in keyboard mode, so nothing is lost that a keyboard user has today. |
+| **Kiwi compatibility mode** | `compatUrl` — *"Kiwi web UI in a WebView"* (`SDRScreen.tsx:779`), behind a "leaving VibeSDR" warning | Needs a webview AND free-form web navigation. Even given a browser, driving a Kiwi's own UI from a remote is not navigable — **the controls are the blocker, exactly as with the other TV platforms (§6.2b)**. |
+
+★★★ **THE CONSEQUENCE THAT MUST NOT BE MISSED: THE INSTANCE PICKER HAS TO SAY SO.** Dropping
+compatibility mode is not just removing a screen — it removes the ONLY way to use a Kiwi whose owner
+set `ext_api=0`, which is **120 of 847 public Kiwis** ([[kiwi_ext_api_10s_kick]]). Those servers
+would otherwise be listed, connect, stream for ten seconds and die, with nothing on screen to
+explain it. We already identify them **before connecting**, so on tvOS they must be marked
+unusable — or hidden — in the picker.
+★ This is the AGENTS.md rule verbatim: *never offer a control whose every use is a no-op*, and *a
+tour that misdirects is worse than no tour*. A dead-ending server list is the same fault.
 
 ---
 
@@ -202,8 +237,12 @@ Add the tvOS tour to that list the day it is written, not afterwards.
 
 1. **The timeouts need numbers**: highlight hide (~"a few seconds"), the remember-my-position window
    ("within a certain time"), and the fall-back-to-waterfall idle.
-2. **When the highlight is hidden, do ring presses still tune?** Assumed yes — that is the resting
-   state and the reason the highlight hides at all.
+2. ✅ **ANSWERED — the ring is always live for tune/zoom**, highlight or no highlight. See §1.
 3. **Is the tvOS app a separate App Store record or the same one?** Same record is normal for a
    universal app, but tvOS is a separate binary and platform either way.
-4. **What happens to the decoders panel** (FT8/WEFAX/SSTV) on a TV — present, or out of scope for v1?
+4. **The decoders panel** (FT8/WEFAX/SSTV) — in or out for v1? Note the decoders themselves are
+   native and fine; it is only their **spot MAP** that is cut (§5b), so a decoder panel without a
+   map is a real option.
+5. ★★ **Does `react-native-tvos` support Expo 57 / RN 0.86 with the New Architecture?** This is the
+   one that can invalidate the plan — it decides whether tvOS is a target in this app or a separate
+   one. Check before promising a build (§6.3).
