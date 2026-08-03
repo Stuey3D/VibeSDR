@@ -195,6 +195,12 @@ export interface WaterfallViewProps {
    *  ★ Scroll SPEED therefore follows the data rate (rows/s = multiplier x fps), which is what
    *    SHARP has always done and what nobody has ever objected to. */
   wfScroll?:       'sharp' | 'default' | 'smooth';
+  /** ★★ THE SLOWEST FRAME RATE THIS BACKEND EVER DELIVERS — what the fixed multiplier is sized
+   *  against. It is a property of the SERVER, not a measurement, so it is known at connect and
+   *  never moves: UberSDR bottoms out at 3.3 fps (→ 6x for a 20 rows/s scroll), VibeServer at
+   *  4-5 (→ 5x). Sizing off the floor rather than the live rate is what keeps uN constant, and a
+   *  constant uN is the only thing that stops the waterfall rescaling (Stuart, 2026-08-03). */
+  feedFloorFps?:   number;
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
@@ -301,7 +307,7 @@ function WaterfallView({
   autoContrast = 5, specSmoothing = 5, avgFrames = 0, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
-  frameRate = '20fps', wfScroll = 'sharp', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
+  frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   bgImageUrl = null, bgOpacity = 0, stationId = null,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -336,10 +342,25 @@ function WaterfallView({
   // data rate (see handleFrame) so the chosen fps is a MINIMUM: at 5fps data '10fps' synthesises ×2 to
   // hold a 10fps scroll; at Kiwi's ~23fps it's already above target so no interpolation happens. The
   // static value here is just the nominal-at-10fps used for the interp-blur amount.
-  // ★★★ THE TARGET SCROLL RATE, in rows/sec. SHARP has none — it draws one row per received
-  //     frame, whatever the feed. DEFAULT and SMOOTH aim for a rate, so a 3.3 fps UberSDR gets a
-  //     6x multiplier and a 20 fps VibeServer gets 1x, and BOTH scroll at the same speed.
+  // ★★★ FIXED FRAME GENERATION, SIZED FOR THE WORST CASE — then the excess is DISCARDED.
+  //     This is the games model and it settles the argument that has run all day:
+  //       • rows/sec = uN x frames/sec, and uN maps ALL waterfall history, so ANY change to it
+  //         rescales the picture. That is the compressing and expanding, and it was in the
+  //         original code too.
+  //       • So uN must be a CONSTANT. Sized for the slowest feed we care about — UberSDR's
+  //         3.3 fps — a 20 rows/sec scroll needs 6x. That constant is used on every feed.
+  //       • Holding rows/sec constant with uN fixed therefore means using FEWER SOURCE FRAMES on
+  //         a faster feed: exactly Stuart's "discard the excess". A 20 fps server contributes a
+  //         waterfall row-set every 300 ms; the frames in between are skipped FOR THE WATERFALL.
+  //     ★ The SPECTRUM TRACE is not gated and still follows every frame — the trade is time
+  //       resolution in the waterfall, which is the thing being bought, not liveness elsewhere.
   const WF_TARGET_ROWS = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
+  // Sized off the BACKEND'S FLOOR, so it is a constant for the session: UberSDR 20/3.3 -> 6x,
+  // VibeServer 20/4 -> 5x. Never recomputed from what is arriving right now.
+  const WF_ROWS = WF_TARGET_ROWS <= 0 ? 1
+    : Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps))));
+  /** ms between waterfall row-sets to hold the target: uN rows every (uN/target) seconds. */
+  const WF_MIN_GAP_MS = WF_TARGET_ROWS > 0 ? (WF_ROWS / WF_TARGET_ROWS) * 1000 : 0;
   const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
@@ -399,7 +420,7 @@ function WaterfallView({
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
       specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
-      wfSharpness, frameRate, wfScroll]);
+      wfSharpness, frameRate, wfScroll, feedFloorFps]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
@@ -450,11 +471,8 @@ function WaterfallView({
    *  are watching; correct for the server you are watching.
    *  ★ Re-latched only on a real event — a new session, or the user picking a different preset —
    *    never on measurement drift, which is what every previous attempt got wrong. */
-  const latchedRows = useRef(0);       // 0 = not yet decided this session
-  const latchFrames = useRef(0);       // frames observed while deciding
-  // The two events that legitimately re-decide it: the user picks a different preset, or this
-  // view is mounted against a different server. Nothing else — drift must never re-latch.
-  useEffect(() => { latchedRows.current = 0; latchFrames.current = 0; }, [wfScroll]);
+  /** When the waterfall last took a frame — see the discard gate in handleFrame. */
+  const lastWfPushAt = useRef(0);
   const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
   const frameCount  = useRef(0);
 
@@ -916,11 +934,11 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: 1, targetFps: TARGET_FPS,
-                            targetRows: WF_TARGET_ROWS });
+                            smoothTune, rowsPerFrame: WF_ROWS, targetFps: TARGET_FPS,
+                            minGapMs: WF_MIN_GAP_MS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: 1, targetFps: TARGET_FPS,
-                       targetRows: WF_TARGET_ROWS };
+                       smoothTune, rowsPerFrame: WF_ROWS, targetFps: TARGET_FPS,
+                       minGapMs: WF_MIN_GAP_MS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
   const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
@@ -998,6 +1016,17 @@ function WaterfallView({
     //    adjacent frames) and the reveal. JS just advances the fraction.
     // ★ trueCenterHz = the frame's REAL bin centre; passing the PREDICTED centre is
     // what asserted the prediction had already come true.
+    // ★★★ DISCARD THE EXCESS. The multiplier is fixed for the worst-case feed, so on a FASTER one
+    //     the waterfall would run that many times too quick. Holding the target means taking fewer
+    //     SOURCE frames: one row-set every (uN / targetRows) seconds — 300 ms for 6x at 20 rows/s.
+    //     On UberSDR at 3.3 fps nothing is ever skipped (the frames are already further apart than
+    //     the gap); on a 20 fps VibeServer five of every six are.
+    //     ★ ONLY the waterfall is gated. The spectrum trace, audio, RDS and the rate meters above
+    //       have already run for this frame and still see every one — the trade being bought here
+    //       is waterfall TIME RESOLUTION, nothing else.
+    if (cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs) return;
+    lastWfPushAt.current = now;
+
     pushRow(frame.row,
             fstatus.trueCenterHz ?? fstatus.centerHz,
             fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0);
@@ -1025,23 +1054,15 @@ function WaterfallView({
       // identical to what settles afterwards, so nothing rescales.
       // ★ The same constant as the settled path. The old static hold existed only because that
       //   path derived a LIVE value that jumped during a gesture — there is nothing live left.
-      uNSv.value = latchedRows.current || 1;
+      uNSv.value = cfg.rowsPerFrame;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
     } else {
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
-      // LATCH. SHARP is always 1. Otherwise wait ~2 s for the rate estimate to settle, choose the
-      // multiplier that lands nearest the target, and never revisit it this session.
-      if (latchedRows.current === 0) {
-        if (cfg.targetRows <= 0) latchedRows.current = 1;                    // SHARP
-        else if (++latchFrames.current >= 20) {
-          const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
-          latchedRows.current = Math.max(1, Math.min(8, Math.round(cfg.targetRows / dataFps)));
-        }
-      }
-      const dynRows = latchedRows.current || 1;
+      // A CONSTANT — never derived from the measured rate, so it can never rescale the picture.
+      const dynRows = cfg.rowsPerFrame;
       lastDynRows.current = dynRows;   // the gesture branch holds the same number now
       uNSv.value = dynRows;
       startRevealStepper(dynRows, dur);
