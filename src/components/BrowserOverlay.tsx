@@ -27,9 +27,17 @@ export interface BrowserOverlayProps {
   injectCSS?: string;
   /** Back-bar label (default "← SDR"; compatibility mode uses "← VibeSDR"). */
   backLabel?: string;
+  /** Top safe-area inset, MEASURED BY THE PARENT — see the note above the component. */
+  topInset?: number;
 }
 
-export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel }: BrowserOverlayProps) {
+/** ★★★ MEASURED BY THE PARENT, because the insets HOOK RETURNS 0 INSIDE A MODAL — which is why
+ *  this file uses a native SafeAreaView at all. That works only once the modal's own window has
+ *  been measured, so opening the overlay in the SAME RENDER as its screen drew the bar UNDER the
+ *  status bar and the clock (build 70). The parent is not in a modal and always knows the real
+ *  inset, so passing it in removes the timing dependence entirely rather than hoping a frame is
+ *  enough. Falls back to the SafeAreaView behaviour when not supplied. */
+export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel, topInset }: BrowserOverlayProps) {
   // ★★ THIS IS SOMEONE ELSE'S PAGE. Every VibeSDR keyboard and controller shortcut is
   // switched off for as long as it is SHOWING — see PanelNav. Firing our own actions under a
   // page we did not write is worse than doing nothing, because the user is looking at that
@@ -77,7 +85,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
       {/* SafeAreaView (native, measures the modal's own window) — the
           useSafeAreaInsets hook returns 0 inside an RN Modal, which clipped
           the bar under the Dynamic Island. */}
-      <SafeAreaView style={styles.root} edges={['top']}
+      <SafeAreaView style={styles.root} edges={topInset != null ? [] : ['top']}
                     onTouchStart={() => setKeyNote(false)}>
         {/* ★ Only when a key is pressed — see keyNote. Sits under the bar so it reads as
             part of this page's chrome rather than an alert over the receiver's own UI. */}
@@ -90,7 +98,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
             </Text>
           </View>
         )}
-        <View style={styles.bar}>
+        <View style={[styles.bar, topInset != null && { paddingTop: topInset + 6 }]}>
           <TouchableOpacity onPress={onClose} hitSlop={12} activeOpacity={0.7}>
             <Text style={styles.back}>{backLabel ?? '← SDR'}</Text>
           </TouchableOpacity>

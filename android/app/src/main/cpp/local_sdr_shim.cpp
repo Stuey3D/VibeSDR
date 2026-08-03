@@ -1686,10 +1686,24 @@ struct LocalSdrShim::Impl {
             // client so the waterfall's bounce is EXPLAINED rather than looking like a fault.
             // ★ An unexplained transient reads as a defect; a labelled one reads as a radio
             // settling, and the difference is entirely in whether we said so (Stuart).
-            if (useSdrplay()) sdrpSettling = (n < 40);
-            if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 2 && n > 10) {
-                if (++sdrpAgcKick == 1) sdrp->setIfAgc(false);
-                else                    sdrp->setIfAgc(true);
+            if (useSdrplay()) sdrpSettling = (n < 60);   // covers the 4-step AGC kick above
+            // ★★★ OFF → WIGGLE THE GAIN → ON. Toggling the AGC alone was not reliable: the API
+            //     starts its loop on a TRANSITION, and a transition with no parameter write behind
+            //     it can leave the loop inert — which is the "AGC gets stuck" the RSP shows on a
+            //     fresh connect. The fix that worked on macOS is the one a person does by hand:
+            //     disable AGC, NUDGE THE IF GAIN REDUCTION (which is only writable while the AGC is
+            //     off — see setIfGainReduction), then re-enable so the loop starts from a register
+            //     that has definitely been written (Stuart, 2026-08-03).
+            //     ★ Spread across frames: each step is an API Update and must land before the next.
+            //     ★ `sdrpSettling` already covers this window, so the client explains the bounce
+            //       rather than showing it as a fault.
+            if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 4 && n > 10) {
+                switch (++sdrpAgcKick) {
+                    case 1: sdrp->setIfAgc(false); break;
+                    case 2: sdrp->setIfGainReduction(sdrp->currentIfGr() + 4); break;
+                    case 3: sdrp->setIfGainReduction(sdrp->currentIfGr() - 4); break;
+                    default: sdrp->setIfAgc(true); break;
+                }
             }
             if (n % 2 == 0 && useSdrplay()) {
                 char gb[160];
@@ -2644,7 +2658,21 @@ struct LocalSdrShim::Impl {
                                     : "{\"type\":\"admin\",\"ok\":false}");
             return;
         }
+        // ★★★ ON A SHARED RECEIVER, NOTHING SHARED IS UNLOCKED. The radio's front end and the
+        //     server-side DSP are ONE set of settings serving everybody: a listener changing the
+        //     gain, the squelch, NR, the notch, de-emphasis or stereo changes them for every other
+        //     listener, not for themselves (Stuart, 2026-08-03: "no controls unlocked at all in
+        //     shared user mode"). Behind the admin password with bias-T and calibration.
+        //     ★ Gated on the LOCK, not always: on a personal receiver these are the owner's own
+        //       radio and must stay free — a phone user unlocking a password to touch their own
+        //       dongle would be an obstacle, not protection.
+        //     ★ What stays FREE even here, because it is genuinely per-listener: tune (clamped to
+        //       the window), mode, bandwidth, zoom/pan and the frame rate.
+        auto sharedGate = [&](const char* what) -> bool {
+            return g_vsLockedCentre.load() <= 0.0 || adminGate(what);
+        };
         if (type == "ahf_control") {
+            if (!sharedGate("Airspy HF+ controls")) return;
             if (jsonNum(msg, "att", v))    LocalSdrShim::instance().setAhfAttenuation((int)v);
             if (jsonNum(msg, "lna", v))    LocalSdrShim::instance().setAhfLna(v != 0);
             if (jsonNum(msg, "thresh", v)) LocalSdrShim::instance().setAhfAgcThreshold(v != 0);
@@ -2658,6 +2686,14 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "rsp_control") {
+            // ★★★ GAIN IS SHARED HARDWARE ON A SHARED RECEIVER. One listener moving the LNA or the
+            //     IF reduction moves it for EVERYONE — it is the front end, not a per-listener
+            //     preference — so on a LOCKED receiver it belongs behind the admin password with
+            //     bias-T and calibration (Stuart, 2026-08-03). On a personal receiver it is the
+            //     owner's own radio and stays freely adjustable, which is why this is gated on the
+            //     lock rather than always: a control that a phone user must unlock to use their
+            //     own dongle would be an obstacle, not protection.
+            if (!sharedGate("gain")) return;
             if (jsonNum(msg, "lna", v))      LocalSdrShim::instance().setLnaState((int)v);
             if (jsonNum(msg, "ifgr", v))     LocalSdrShim::instance().setIfGainReduction((int)v);
             if (jsonNum(msg, "ifagc", v))    LocalSdrShim::instance().setIfAgc(v != 0);
@@ -2761,6 +2797,9 @@ struct LocalSdrShim::Impl {
         // The serving phone exposes no HW UI; a remote client sends these and the
         // server applies them via the same setters the on-device JS path uses.
         if (type == "gain") {
+            // Same rule as rsp_control above: the front end is shared, so a locked receiver puts it
+            // behind the admin password; a personal one leaves it alone.
+            if (!sharedGate("gain")) return;
             if (msg.find("\"auto\":true") != std::string::npos) LocalSdrShim::instance().setGain(-1);
             else if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setGain((int)v);
             return;
@@ -2770,6 +2809,8 @@ struct LocalSdrShim::Impl {
             LocalSdrShim::instance().setBiasTee(msg.find("\"on\":true") != std::string::npos); return;
         }
         if (type == "agc") {
+            // The AGC owns the gain, so it is the same shared front-end control by another name.
+            if (!sharedGate("AGC")) return;
             LocalSdrShim::instance().setAgc(msg.find("\"on\":true") != std::string::npos); return;
         }
         if (type == "ppm") {
@@ -2810,18 +2851,21 @@ struct LocalSdrShim::Impl {
         // audio controls the local app has — and keeps the DSP server-side, so
         // the client stays a thin renderer (no duplicate DSP to drift).
         if (type == "squelch") {
+            if (!sharedGate("squelch")) return;
             // db <= -100 means "off", matching the app's own convention.
             if (jsonNum(msg, "db", v))
                 LocalSdrShim::instance().setSquelch(v > -100.0, (float)v);
             return;
         }
         if (type == "nr") {
+            if (!sharedGate("noise reduction")) return;
             LocalSdrShim::instance().setNR(msg.find("\"on\":true") != std::string::npos);
             if (jsonNum(msg, "strength", v))
                 LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.0, v)));
             return;
         }
         if (type == "notch") {
+            if (!sharedGate("the notch filter")) return;
             LocalSdrShim::instance().setNotch(msg.find("\"on\":true") != std::string::npos); return;
         }
         // ★★ THE ANALYSER SWITCH, ON THE CONTROL SOCKET. The web client turns the extended
@@ -2838,11 +2882,13 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "deemph") {
+            if (!sharedGate("de-emphasis")) return;
             // tau in SECONDS (0 = off, 50e-6 or 75e-6).
             if (jsonNum(msg, "tau", v)) LocalSdrShim::instance().setDeemphasis(v);
             return;
         }
         if (type == "stereo") {
+            if (!sharedGate("stereo")) return;
             LocalSdrShim::instance().setStereoEnabled(msg.find("\"on\":true") != std::string::npos); return;
         }
         // Live spectrum frame rate — the client throttles this when the user goes
