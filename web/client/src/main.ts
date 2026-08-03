@@ -2006,6 +2006,11 @@ const IDLE_FPS = 5;
 // Two separate axes. SPEED is the interpolated scroll rate (screen rows/sec); DATA RATE is how many
 // real frames/sec the server sends. AUTO data = bring in as much as we'll display, capped at server.
 let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
+// ★ SHARP = one row per received frame (the app's waterfall). SMOOTH = interpolate up to wfSpeed.
+// ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
+//    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
+//    and worse, they trade detail against motion (Stuart: "they both have their merits").
+let wfScroll: 'sharp' | 'smooth' = 'smooth';
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 
 /** The server's fps ceiling (its advertised max, else the built-in 20). */
@@ -2021,6 +2026,17 @@ function computeActiveFps(): number {
 function applyWaterfallRates() {
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
+  wf?.setSharpRows(wfScroll === 'sharp');
+  // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
+  // a control whose every use is a no-op.
+  { const r = document.getElementById('rowWfSpeed');    if (r) r.hidden = wfScroll === 'sharp';
+    const n = document.getElementById('wfSpeedNote');   if (n) n.hidden = wfScroll === 'sharp';
+    const t = document.getElementById('wfScrollNote');
+    if (t) t.textContent = wfScroll === 'sharp'
+      ? 'One row per received frame — most detail, and it scrolls at the data rate.'
+      : 'Extra rows are interpolated between frames — set the speed below. Smoother motion, less real detail.';
+    for (const b of Array.from(document.getElementById('wfScrollSeg')?.children ?? []) as HTMLButtonElement[])
+      b.classList.toggle('on', b.dataset.wfscroll === wfScroll); }
   spec?.setFftRate(wantedFps());
   refreshSpeedSeg();
   refreshDataRateSeg();
@@ -4355,6 +4371,13 @@ function buildMenu() {
   // wondering whether the switch did anything.
   // Waterfall SPEED — on-screen scroll rate (10/20/30). Screen-relative (× dpr inside the waterfall),
   // so render resolution no longer changes the speed.
+  for (const b of Array.from($('wfScrollSeg').children) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      wfScroll = (b.dataset.wfscroll === 'smooth') ? 'smooth' : 'sharp';
+      savePref('wfScroll', wfScroll);
+      applyWaterfallRates();
+    };
+  }
   for (const b of Array.from($('wfSpeedSeg').children) as HTMLButtonElement[]) {
     b.onclick = () => {
       wfSpeed = Number(b.dataset.wfspeed);
@@ -4374,6 +4397,7 @@ function buildMenu() {
   }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
+  { const v = prefs().wfScroll;   if (v === 'sharp' || v === 'smooth') wfScroll = v; }
   { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
   if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
   applyWaterfallRates();

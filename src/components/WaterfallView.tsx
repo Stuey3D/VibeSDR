@@ -183,6 +183,12 @@ export interface WaterfallViewProps {
   wfContrast?:     number;
   wfSharpness?:    number;
   frameRate?:      '10fps' | '20fps' | '30fps' | '60fps';   // TARGET scroll rate (minimum), interpolated up
+  /** ★★★ WHICH WATERFALL. 'sharp' = ONE ROW PER RECEIVED FRAME: every row is a whole frame's
+   *  integration, nothing invented, and the scroll speed IS the data rate — the most detail, and
+   *  what the app has always done. 'smooth' = interpolate extra rows up to `frameRate` — motion
+   *  you can set, at the cost of rows that are partly made up (what the web client has done).
+   *  Named by the TRADE, not the mechanism: they are the same stepper at two granularities. */
+  wfScroll?:       'sharp' | 'smooth';
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
@@ -289,7 +295,7 @@ function WaterfallView({
   autoContrast = 5, specSmoothing = 5, avgFrames = 0, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
-  frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
+  frameRate = '20fps', wfScroll = 'sharp', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   bgImageUrl = null, bgOpacity = 0, stationId = null,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -329,8 +335,13 @@ function WaterfallView({
   //   happen. If 60 visibly doubles 30, the mechanism works and 10/20 were merely quantised
   //   (round(target/dataFps) collapses to 1 whenever the data is already that fast). If 60 changes
   //   nothing, the rate is pinned somewhere else and the row count was never the lever.
-  const TARGET_FPS = frameRate === '60fps' ? 60 : frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
-  const ROWS_PER_FRAME = frameRate === '60fps' ? 6 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
+  // ★ SHARP pins the target to the data rate (dynRows resolves to 1 below), so the number here is
+  //   only ever used by SMOOTH. It stays at the 20 fps value in SHARP so the unsharp base — which
+  //   is derived from the same setting — keeps the look the app has always had.
+  const TARGET_FPS = wfScroll === 'sharp' ? 20
+      : frameRate === '60fps' ? 60 : frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
+  const ROWS_PER_FRAME = wfScroll === 'sharp' ? 1
+      : frameRate === '60fps' ? 6 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
   // touch; inside it the slide is boosted to native rate, outside it drops to
@@ -356,7 +367,9 @@ function WaterfallView({
     // unsharp base scales with the selected fps and the slider is a multiplier
     // of it (5 = 1×; 60fps base 5 keeps existing setups looking identical).
     const sharpBase =
-      frameRate === '60fps' ? 4 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
+      wfScroll === 'sharp' ? 2   // ★ SHARP has no interpolation blur to correct, and 2 is the look
+                                 //   the app has always shipped (Stuart's "happy medium").
+      : frameRate === '60fps' ? 4 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5;
     // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
     // maximum. The curve used to be quadratic, which made the BOTTOM half do
     // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point
@@ -387,7 +400,7 @@ function WaterfallView({
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
       specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
-      wfSharpness, frameRate]);
+      wfSharpness, frameRate, wfScroll]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
@@ -889,9 +902,11 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS });
+                            smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS,
+                            sharpScroll: wfScroll === 'sharp' });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS };
+                       smoothTune, rowsPerFrame: ROWS_PER_FRAME, targetFps: TARGET_FPS,
+                       sharpScroll: wfScroll === 'sharp' };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
   const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
@@ -1002,7 +1017,13 @@ function WaterfallView({
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
       const dataFps = avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 10;
-      const dynRows = Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
+      // ★★★ SHARP: exactly ONE row per received frame. No interpolation, so the scroll rate is the
+      //     data rate and every row carries a whole frame's integration. SMOOTH: interpolate up
+      //     toward the chosen target. Well above the data rate SMOOTH can judder — the rows are
+      //     revealed across one frame interval, so uneven arrivals lurch (Stuart measured this at
+      //     60 fps against 20 fps data).
+      const dynRows = cfg.sharpScroll ? 1
+        : Math.max(1, Math.min(8, Math.round(cfg.targetFps / dataFps)));
       // ★ TEMPORARY (2026-08-02) — say what the stepper ACTUALLY computes. The scroll rate looked
       //   fixed regardless of the setting or the data rate, which contradicts the interpolate-up
       //   design, and three theories about why were all guesses. This turns the 60 fps experiment
