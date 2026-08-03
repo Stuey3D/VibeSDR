@@ -163,6 +163,16 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
         //      signal in the feed, and Receiverbook does not publish even that, which is why
         //      KiwiAdapter still needs its own fallback probe.
         serverType: /web[_-]?888/i.test(String(r.sw_version ?? '')) ? 'web888' : 'kiwi',
+        // ★★★ THE OWNER'S THIRD-PARTY ALLOWANCE — see SDRInstance.extApi. 0 = apps not permitted,
+        //     which is the receiver that admits you and drops you at ~10 s saying nothing.
+        //     Reading it here means we can WARN BEFORE CONNECTING rather than burn an attempt on
+        //     someone's radio to discover a policy they already published.
+        extApi: Number.isFinite(Number(r.ext_api)) ? Number(r.ext_api) : undefined,
+        // ★ `sdr_hw` is "KiwiSDR 2 v1.902 ⁣ 📡 GPS ⁣ ⏳ Limits ⁣ 📻 DRM ⁣⁣ 🌀D11.9" — the product and
+        //   firmware, then feature badges separated by an INVISIBLE SEPARATOR (U+2063). Keep the
+        //   leading product + version and drop the badges; it names the hardware where sw_version
+        //   only gives a number.
+        hardware: (String(r.sdr_hw ?? '').split('\u2063')[0] || '').trim().slice(0, 40) || undefined,
       });
     });
 }

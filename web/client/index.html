@@ -2492,24 +2492,26 @@ select.btn { padding: 6px 8px; }
        so this is independent of the data rate; a high speed with a low data rate scrolls smoothly but
        fills the gaps by interpolation (blurrier). Scroll rate is screen-relative (× dpr internally) so
        Detail below never changes the speed. -->
-  <!-- ★★★ THE TWO WATERFALLS, NAMED BY WHAT THEY TRADE. SHARP draws one row per RECEIVED FRAME:
-       every row is a whole frame's integration, nothing invented, and the scroll speed IS the data
-       rate — what the APP has always done, and why its waterfall looks better at the same rate.
-       SMOOTH interpolates rows between real frames up to the chosen speed.
-       ★ Neither changes how a row is RENDERED — both paths already existed; this only chooses
-         whether extra rows are invented. The SPECTRUM TRACE is untouched by either and stays
-         smooth at all times.
-       ★★ WATERFALL SPEED below applies to SMOOTH ONLY and is hidden under SHARP, where the data
-         rate decides — a speed control that cannot move the speed is worse than no control. -->
+  <!-- ★★★ ONE CONTROL, THREE PRESETS — named by what you GET, not by a frame rate. The rate was
+       never the thing anyone wanted to choose; the trade is detail against motion, and these are
+       the three useful points on it (Stuart, 2026-08-03: "it doesn't need to be an actual rate,
+       just a Detailed / Default / Smooth option").
+         DETAILED  one row per RECEIVED frame — nothing invented, every row a whole frame's
+                   integration, and it scrolls at the data rate.
+         DEFAULT   a little interpolation to even out a jittery link.
+         SMOOTH    heavier interpolation — continuous motion on a slow feed, at the cost of rows
+                   that are largely made up.
+       ★ Neither the renderer nor the SPECTRUM TRACE changes; this only decides how many rows are
+         synthesised between real frames. -->
   <div class="mrow">
     <label>WATERFALL</label>
     <div class="seg" id="wfScrollSeg">
-      <button class="btn" data-wfscroll="sharp">SHARP</button>
-      <button class="btn on" data-wfscroll="smooth">SMOOTH</button>
+      <button class="btn" data-wfscroll="detailed">DETAILED</button>
+      <button class="btn on" data-wfscroll="default">DEFAULT</button>
+      <button class="btn" data-wfscroll="smooth">SMOOTH</button>
     </div>
   </div>
-  <div class="rowNote" id="wfScrollNote">Extra rows are interpolated between frames — set the speed
-    below. Smoother motion, less real detail.</div>
+  <div class="rowNote" id="wfScrollNote">A little interpolation to even out a jittery link.</div>
   <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
     <div class="seg" id="wfSpeedSeg">

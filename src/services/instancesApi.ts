@@ -22,6 +22,20 @@ export interface SDRInstance {
   deviceType?:   string;   // 'RTL-SDR' | 'AirspyHF+' | 'AirspyOne'
   full?:         boolean;  // every client slot taken right now
   sessionLimitMins?: number;  // 0/undefined = no limit; else the server kicks you after this
+  /** ★★★ KiwiSDR only: the OWNER'S ALLOWANCE FOR THIRD-PARTY CLIENTS, straight from the
+   *  kiwisdr.com directory's `ext_api` field. **0 means apps like ours are not permitted** — and
+   *  the server does not refuse us at connect, it ADMITS us, streams config and audio, then closes
+   *  at ~10 s with no message. That is the "connects then kicks us" bug, chased for months and
+   *  solved 2026-08-03 by probing seven receivers: 4 with ext_api=0 all dropped at 9.5-10.6 s,
+   *  3 with ext_api=4 all streamed happily. 120 of 847 public Kiwis are set to 0.
+   *  ★ It is the owner's decision, not a fault. Their WEB PAGE is still public, so the honest
+   *    offer is compatibility mode (the Kiwi UI in a WebView), never a retry.
+   *  See memory/kiwi_ext_api_10s_kick.md. undefined = unknown (not from this directory). */
+  extApi?: number;
+  /** KiwiSDR family: the hardware AND firmware as the receiver reports it — "KiwiSDR 1 v1.902",
+   *  "KiwiSDR 2 v1.902", "Web-888 v…". From the directory's `sdr_hw`, which names the product
+   *  properly where `sw_version` only carries a version string. Shown as the row's sub-label. */
+  hardware?: string;
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';

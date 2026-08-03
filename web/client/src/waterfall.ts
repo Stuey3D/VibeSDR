@@ -132,6 +132,16 @@ export class Waterfall {
   setSharpRows(on: boolean) { this.sharpRows = on; }
   private sharpRows = false;
 
+  /** ★★★ ROWS SYNTHESISED PER RECEIVED FRAME — A CONSTANT, not a rate. Deriving it from the live
+   *  data rate is what makes a waterfall BREATHE: the multiplier maps the whole history, so every
+   *  time it changes the picture rescales, and an estimate that wobbles rescales it continuously.
+   *  Fixing it removes that failure mode entirely — the scroll speed then simply follows the data
+   *  rate, which is what DETAILED already does at 1 and nobody objects to.
+   *  ★ This is the frame-generation model: a fixed multiplier, paced by the display clock, rather
+   *    than a rate the renderer keeps trying to hit (Stuart, 2026-08-03). */
+  setRowsPerFrame(n: number) { this.rowsPerFrame = Math.max(1, Math.min(8, Math.round(n))); }
+  private rowsPerFrame = 2;
+
   setSpeed(screenRowsPerSec: number) {
     this.screenSpeed = Math.max(1, screenRowsPerSec);
     this.recomputeRate();
@@ -422,8 +432,9 @@ export class Waterfall {
 
     // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
     const clamped = Math.max(20, Math.min(1000, gap));
-    this.emitTotal = this.sharpRows ? 1
-                   : Math.max(1, Math.round(clamped / (1000 / this.rowsPerSec)));
+    // ★ CONSTANT. Was `clamped / (1000/rowsPerSec)` — i.e. derived from the observed gap, so it
+    //   moved whenever the link jittered. See setRowsPerFrame.
+    this.emitTotal = this.sharpRows ? 1 : this.rowsPerFrame;
     this.emitInterval = clamped / this.emitTotal;
     this.emitStart = now;
     this.emitted = 0;
