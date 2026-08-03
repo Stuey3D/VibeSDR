@@ -868,6 +868,10 @@ function WaterfallView({
   const revStep  = useSharedValue(16);   // ms per line
   const revK     = useSharedValue(0);
   const revFrameMs = useSharedValue(0);   // smoothed display frame time — see revealCb
+  /** Frames with nothing to reveal. The stepper now stays ACTIVE between pairs (stopping there is
+   *  what caused the halting scroll), so this is what still releases the display when the stream
+   *  genuinely stops rather than merely pausing between pairs. */
+  const revIdle = useSharedValue(0);
   const revAcc   = useSharedValue(0);
   const revealRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
   const setRevealActive = useCallback((on: boolean) => {
@@ -909,13 +913,37 @@ function WaterfallView({
     const frameMs = revFrameMs.value > 0 ? revFrameMs.value : 16.7;
     const framesPerLine = Math.max(1, Math.round(revStep.value / frameMs));
     revAcc.value += 1;                       // frames, not ms
-    if (revAcc.value < framesPerLine) return;
-    revAcc.value = 0;
+
+    // ★★★ DO NOT STOP BETWEEN PAIRS — THAT GAP IS THE "SMOOTH AND HALTING".
+    //     This used to call setRevealActive(false) the moment a pair finished, and the next data
+    //     frame turned it back on. BOTH hops go through runOnJS to the JS thread, so every pair
+    //     boundary — four or five times a SECOND — paid an activation latency during which no line
+    //     was emitted. Within a pair the cadence was even; between pairs it stalled. That is
+    //     exactly the rhythm Stuart described: "smooth and halting smooth and halting".
+    //     ★ The web client never has this because its tick() runs on EVERY animation frame and
+    //       never stops (waterfall.ts). Idling is the special case there, not the normal one.
+    //     ★ So: stay active and simply do nothing when there is no line due. The callback is cheap
+    //       — a compare and an add — and the panel is already awake while data is arriving.
     const n = revN.value;
-    if (n <= 0) { runOnJS(setRevealActive)(false); return; }
+    if (n <= 0 || revK.value >= n) {
+      // Nothing to reveal. Hold the accumulator (see below) and count idle frames so a stream that
+      // genuinely STOPS still releases the display — the original power intent, just moved from
+      // "every pair" (where it cost smoothness) to "the data has actually stopped" (where it does
+      // not). ~1 s at any refresh rate.
+      revAcc.value = Math.min(revAcc.value, framesPerLine);
+      revIdle.value += 1;
+      if (revIdle.value > 90) { revIdle.value = 0; runOnJS(setRevealActive)(false); }
+      return;
+    }
+    revIdle.value = 0;
+    if (revAcc.value < framesPerLine) return;
+    // ★★ SUBTRACT, DO NOT ZERO — keep the carry. With the callback now running continuously the
+    //    remainder is meaningful again, and it is what keeps the cadence even ACROSS a pair
+    //    boundary rather than re-phasing to each arrival (the web client's rule, waterfall.ts:
+    //    "DO NOT ZERO THE CARRY WHEN A PAIR COMPLETES — that is what an accumulator is FOR").
+    revAcc.value -= framesPerLine;
     revK.value += 1;
     scrollFrac.value = Math.min(1, revK.value / n);
-    if (revK.value >= n) runOnJS(setRevealActive)(false);
   }, false);
   revealRef.current = revealCb;
 
@@ -925,7 +953,10 @@ function WaterfallView({
     revN.value = n;
     revStep.value = Math.max(16, intervalMs / n);
     revK.value = 0;
-    revAcc.value = 0;
+    revIdle.value = 0;
+    // ★ revAcc is NOT reset — the leftover frames from the last pair carry into this one, which is
+    //   what keeps the cadence even across arrivals instead of re-phasing to arrival jitter. It is
+    //   bounded to framesPerLine in the callback, so it cannot accumulate.
     // Keep the measured frame time across restarts — it is a property of the DISPLAY, not of this
     // reveal, and re-learning it every frame interval would leave the first lines mistimed.
     setRevealActive(true);
