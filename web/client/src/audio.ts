@@ -37,7 +37,15 @@ class VibeSink extends AudioWorkletProcessor {
     this.buf = [new Float32Array(this.cap), new Float32Array(this.cap)];
     this.w = 0; this.r = 0; this.filled = 0;
     this.started = false;
-    this.target = 48000 * 0.25;        // 250ms jitter buffer before playout
+    // ★★ 150 ms, WAS 250. The buffer is what makes the audio lag the waterfall, and it became
+    //    obvious once the waterfall was tied to the display refresh and stopped hitching — the
+    //    delay had always been there, the eye just had nothing steady to compare it against
+    //    (Stuart, 2026-08-03). 150 ms still covers ordinary arrival jitter; an underrun is handled
+    //    (silence + re-arm) rather than being a glitch, so the cost of being slightly wrong here is
+    //    small and audible only on a bad link.
+    //    ★ IF THE PUBLIC LINK STUTTERS, PUT IT BACK. This is tuned for a LAN; a receiver reached
+    //      over the internet has a longer jitter tail and may want the original 250.
+    this.target = 48000 * 0.15;        // 150ms jitter buffer before playout
     this.port.onmessage = (e) => {
       const { l, r } = e.data;
       const n = l.length;

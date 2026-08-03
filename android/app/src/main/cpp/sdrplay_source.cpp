@@ -256,7 +256,10 @@ namespace {
 // Deliberately holds only what the callbacks touch — a raw device handle rather than the
 // private Impl, so this needs no access to the class's internals.
 struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* lost; bool* paused;
-               bool* overload; HANDLE dev; };
+               bool* overload; HANDLE dev;
+               // The AGC's live figures — see the note on liveGr_ in the header.
+               std::atomic<int>* gr; std::atomic<int>* lnaGr; std::atomic<float>* gain;
+               std::atomic<bool>* valid; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -325,7 +328,8 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     setGainTenthDb(gainTenthDb);
 
     static CbCtx ctx;
-    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev };
+    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
+                 &liveGr_, &liveLna_, &liveGain_, &liveValid_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -415,7 +419,8 @@ bool SdrplaySource::restartStream(std::string& err) {
     }
 
     static CbCtx ctx;
-    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev };
+    ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
+                 &liveGr_, &liveLna_, &liveGain_, &liveValid_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -598,10 +603,15 @@ std::string SdrplaySource::model() const {
 }
 
 float SdrplaySource::systemGainDb() const {
+    // Prefer what the AGC last REPORTED; fall back to the struct only before the first event.
+    if (liveValid_.load(std::memory_order_relaxed))
+        return liveGain_.load(std::memory_order_relaxed);
     if (!open_ || !impl_->params || !impl_->params->rxChannelA) return 0.0f;
     return impl_->params->rxChannelA->tunerParams.gain.gainVals.curr;
 }
 int SdrplaySource::currentIfGr() const {
+    if (liveValid_.load(std::memory_order_relaxed))
+        return liveGr_.load(std::memory_order_relaxed);
     if (!impl_->params || !impl_->params->rxChannelA) return 0;
     return impl_->params->rxChannelA->tunerParams.gain.gRdB;
 }
@@ -779,6 +789,17 @@ static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT tuner,
             api().Update(c->dev, tuner,
                          sdrplay_api_Update_Ctrl_OverloadMsgAck,
                          sdrplay_api_Update_Ext1_None);
+        return;
+    }
+    // ★★★ THE AGC TELLS US WHAT IT DID, HERE AND NOWHERE ELSE. Without this the readouts show only
+    //     what WE last wrote — so with the AGC in charge the IF slider never moved and the system
+    //     gain never changed, while the loop was in fact working (Stuart, 2026-08-03: "auto gain is
+    //     working but not reporting its figures").
+    if (id == sdrplay_api_GainChange && prm) {
+        if (c->gr)    c->gr->store((int)prm->gainParams.gRdB, std::memory_order_relaxed);
+        if (c->lnaGr) c->lnaGr->store((int)prm->gainParams.lnaGRdB, std::memory_order_relaxed);
+        if (c->gain)  c->gain->store((float)prm->gainParams.currGain, std::memory_order_relaxed);
+        if (c->valid) c->valid->store(true, std::memory_order_relaxed);
         return;
     }
     // ★ A device removal is the one event the shim genuinely has to know about: its watchdog

@@ -396,6 +396,8 @@ static std::atomic<double> g_vsLockedCentre{0.0};
 static std::atomic<bool>   g_vsSharedChannels{false};
 // Zoom spectrum on/off. It SUPPRESSES the wide path while active, so it needs an off switch.
 static std::atomic<bool>   g_vsZoomSpectrum{true};
+// ★ How many spectrum listeners may attach at once. 1 = the old single-occupant behaviour.
+static std::atomic<int>    g_vsMaxUsers{1};
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -1436,6 +1438,29 @@ struct LocalSdrShim::Impl {
     // clients
     std::mutex clientMtx;
     std::shared_ptr<net::Socket> specClient;
+    /** ★★★ ADDITIONAL SPECTRUM LISTENERS. `specClient` stays the FIRST one so every existing path
+     *  keeps working untouched; these are the rest. They receive the same frames, config and state
+     *  — one radio, one VFO, one view — which is the shared-receiver model, and the channelizer is
+     *  what makes serving them nearly free (+0.02% of a core each, measured).
+     *  ★ Guarded by clientMtx, like specClient. Copy the list under the lock and send OUTSIDE it:
+     *    sendWs takes sendMtx, and holding clientMtx across a send inverts the lock order the
+     *    spectrum path already uses. */
+    std::vector<std::shared_ptr<net::Socket>> specExtra;
+    /** Everyone receiving spectrum right now — primary first. Call WITHOUT clientMtx held. */
+    std::vector<std::shared_ptr<net::Socket>> allSpecClients() {
+        std::vector<std::shared_ptr<net::Socket>> out;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (specClient && specClient->isOpen()) out.push_back(specClient);
+        for (auto& s : specExtra) if (s && s->isOpen()) out.push_back(s);
+        return out;
+    }
+    /** How many listeners are attached (spectrum). The landing page and the cap both want this. */
+    int specListenerCount() {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        int n = (specClient && specClient->isOpen()) ? 1 : 0;
+        for (auto& s : specExtra) if (s && s->isOpen()) ++n;
+        return n;
+    }
     std::shared_ptr<net::Socket> audioClient;
     // The single occupant's session id (empty = free). Guarded by clientMtx. A client's spectrum +
     // audio sockets share this id; a second client is refused while it is held. See acceptWs.
@@ -1514,9 +1539,9 @@ struct LocalSdrShim::Impl {
     // A zoom frame, in the SAME wire format as onSpectrum's — same SPEC header, same bin count,
     // same dB offset — so the client needs no new code path and simply sees a sharper picture.
     void onZoomSpectrum(const float* db, int nb) {
-        std::shared_ptr<net::Socket> sock;
-        { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
-        if (!sock || !sock->isOpen()) return;
+        // ★ Every listener gets the same frame — one radio, one view. Built ONCE, sent to all.
+        auto peers = allSpecClients();
+        if (peers.empty()) return;
         const int outBins = g_vsOutBins.load();
         if (nb != outBins) {
             // Must never happen now updateZoomView() tracks the wire width — but SAY SO if it
@@ -1550,8 +1575,8 @@ struct LocalSdrShim::Impl {
             int v = (int)lround(db[src] + 256.0);
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
-        sendWs(sock, 0x2, frame.data(), frame.size());
-        vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+        for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size());
+        vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
         if (++zoomFrames_ == 1 || zoomFrames_ % 100 == 0)
             LOGI("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
@@ -1588,10 +1613,12 @@ struct LocalSdrShim::Impl {
         }
 
         uint64_t n = frameCounter.fetch_add(1);
+
+
         int div = rateDivisor.load();
         bool emit = !(div > 1 && (n % (uint64_t)div) != 0);
-        std::shared_ptr<net::Socket> sock;
-        { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
+        auto peers = allSpecClients();          // ★ one frame, every listener
+        std::shared_ptr<net::Socket> sock = peers.empty() ? nullptr : peers.front();
 
         // Hybrid waterfall: the IQ FFT only covers `sampleRate` of spectrum. When the
         // user is zoomed out past that (SpyServer only, where displaySpan is wider),
@@ -1671,9 +1698,51 @@ struct LocalSdrShim::Impl {
                 // fed the values it was designed for.
                 if (eN) iqFloorDb.store((float)(eSum / eN));
             }
-            sendWs(sock, 0x2, frame.data(), frame.size());
-            vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+            for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size());
+            vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
+            // ★★★ RUNS ON THE CLIENT-EMIT PATH, DELIBERATELY. Moving it onto the DSP thread so it
+            //     would run with nobody connected SEGFAULTED the server in a restart loop (2026-08-03):
+            //     these are sdrplay_api Update calls, and issuing them from the DSP thread races the
+            //     stream callback. The cost is that the kick needs a listener attached to fire, which
+            //     is a real limitation and NOT the right long-term answer — but a crash-looping
+    //     receiver is worse than one that settles its AGC when someone arrives.
+            if (useSdrplay()) sdrpSettling = (n < 100);  // covers the spaced 4-step AGC kick above
+            // ★★★ OFF → WIGGLE THE GAIN → ON. Toggling the AGC alone was not reliable: the API
+            //     starts its loop on a TRANSITION, and a transition with no parameter write behind
+            //     it can leave the loop inert — which is the "AGC gets stuck" the RSP shows on a
+            //     fresh connect. The fix that worked on macOS is the one a person does by hand:
+            //     disable AGC, NUDGE THE IF GAIN REDUCTION (which is only writable while the AGC is
+            //     off — see setIfGainReduction), then re-enable so the loop starts from a register
+            //     that has definitely been written (Stuart, 2026-08-03).
+            //     ★ Spread across frames: each step is an API Update and must land before the next.
+            //     ★ `sdrpSettling` already covers this window, so the client explains the bounce
+            //       rather than showing it as a fault.
+            //     ★ SPACED, NOT BACK-TO-BACK. Each step is an sdrplay_api Update and the next must
+            //       not be issued until it has landed; on consecutive frames (~12 ms apart at
+            //       8 MSPS) they were being issued far faster than the API settles, which is why
+            //       the wiggle did nothing (Stuart, 2026-08-03). One step every ~20 frames.
+            //     ★ AND IT SAYS WHAT IT DID. A silent fix cannot be told apart from one that never
+            //       ran, which is exactly the position this was in.
+            if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 4 && n > 10 && (n % 20) == 0) {
+                switch (++sdrpAgcKick) {
+                    case 1: sdrp->setIfAgc(false);
+                            LOGI("AGC kick 1/4: AGC off (ifgr now %d)", sdrp->currentIfGr()); break;
+                    case 2: { int g = sdrp->currentIfGr(); sdrp->setIfGainReduction(g + 4);
+                            LOGI("AGC kick 2/4: ifgr %d -> %d", g, sdrp->currentIfGr()); } break;
+                    // ★★★ END AT THE LOWEST GAIN, NOT BACK WHERE IT STARTED. The AGC ramps UP from
+                    //     whatever the register holds when it is handed over, so leaving it at high
+                    //     gain risks overloading the front end during the handover — and coming
+                    //     UP into place is how the loop is meant to converge (Stuart, 2026-08-03).
+                    //     gRdB is a REDUCTION, so 59 is the least gain, 20 the most: my previous
+                    //     step went 24 -> 20, i.e. the wrong way entirely.
+                    case 3: sdrp->setIfGainReduction(59);
+                            LOGI("AGC kick 3/4: ifgr -> %d (lowest gain, ready to hand over)",
+                                 sdrp->currentIfGr()); break;
+                    default: sdrp->setIfAgc(true);
+                            LOGI("AGC kick 4/4: AGC on (ifgr %d, sysGain %.1f dB)",
+                                 sdrp->currentIfGr(), sdrp->systemGainDb()); break;
+                }
             // ★ The RSP's live gain state, once a second. The AGC moves the IF reduction on
             // its own, so a slider position is NOT the truth — and the total system gain is
             // the one figure that makes two independent controls readable.
@@ -1686,24 +1755,7 @@ struct LocalSdrShim::Impl {
             // client so the waterfall's bounce is EXPLAINED rather than looking like a fault.
             // ★ An unexplained transient reads as a defect; a labelled one reads as a radio
             // settling, and the difference is entirely in whether we said so (Stuart).
-            if (useSdrplay()) sdrpSettling = (n < 60);   // covers the 4-step AGC kick above
-            // ★★★ OFF → WIGGLE THE GAIN → ON. Toggling the AGC alone was not reliable: the API
-            //     starts its loop on a TRANSITION, and a transition with no parameter write behind
-            //     it can leave the loop inert — which is the "AGC gets stuck" the RSP shows on a
-            //     fresh connect. The fix that worked on macOS is the one a person does by hand:
-            //     disable AGC, NUDGE THE IF GAIN REDUCTION (which is only writable while the AGC is
-            //     off — see setIfGainReduction), then re-enable so the loop starts from a register
-            //     that has definitely been written (Stuart, 2026-08-03).
-            //     ★ Spread across frames: each step is an API Update and must land before the next.
-            //     ★ `sdrpSettling` already covers this window, so the client explains the bounce
-            //       rather than showing it as a fault.
-            if (useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 4 && n > 10) {
-                switch (++sdrpAgcKick) {
-                    case 1: sdrp->setIfAgc(false); break;
-                    case 2: sdrp->setIfGainReduction(sdrp->currentIfGr() + 4); break;
-                    case 3: sdrp->setIfGainReduction(sdrp->currentIfGr() - 4); break;
-                    default: sdrp->setIfAgc(true); break;
-                }
+
             }
             if (n % 2 == 0 && useSdrplay()) {
                 char gb[160];
@@ -3505,9 +3557,14 @@ struct LocalSdrShim::Impl {
                 }
             }
 
+            // ★★★ FULL, not merely OCCUPIED. With a cap above 1 a second listener is welcome —
+            //     that is the whole point of the shared receiver — so the refusal only applies once
+            //     every slot is taken. At --users 1 this is exactly the old behaviour.
+            const int maxUsers = g_vsMaxUsers.load();
             const bool occupied = !occupantSession.empty()
                 && occupantSession != me
-                && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()));
+                && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()))
+                && (maxUsers <= 1 || specListenerCount() >= maxUsers);
 
             // ★★★ ADMIN OVERRIDE — the ONE case where takeover is allowed, and it must not
             // restart the reconnect war that made takeover the wrong default everywhere else.
@@ -3637,9 +3694,28 @@ struct LocalSdrShim::Impl {
             LOGI("audio WS connected (pcm, channels=%s)", forceMono ? "mono" : "native");
 #endif
         } else {
+            // ★★★ FIRST LISTENER IS THE PRIMARY; the rest join the list. Every existing path uses
+            //     `specClient`, so the primary keeps them all working unchanged, and the extras get
+            //     the frames and the config in the broadcast loops.
+            bool asExtra = false;
             { std::lock_guard<std::mutex> lk(clientMtx);
-              stale = specClient;
-              specClient = sock; }
+              // prune anything that has gone away since
+              specExtra.erase(std::remove_if(specExtra.begin(), specExtra.end(),
+                  [](const std::shared_ptr<net::Socket>& c){ return !c || !c->isOpen(); }),
+                  specExtra.end());
+              if (specClient && specClient->isOpen() && g_vsMaxUsers.load() > 1) {
+                  specExtra.push_back(sock); asExtra = true;
+              } else {
+                  stale = specClient;
+                  specClient = sock;
+              } }
+            if (asExtra) {
+                sendConfig(sock); sendHwInfo(sock);
+                LOGI("spectrum WS connected — listener %d of %d",
+                     specListenerCount(), g_vsMaxUsers.load());
+                if (deviceLost.load()) sendText(sock, "{\"type\":\"device\",\"present\":false}");
+                return;
+            }
             sendConfig(sock); sendHwInfo(sock);
             LOGI("spectrum WS connected");
             // ★ TELL A NEW CLIENT THE CURRENT STATE. The device message is otherwise only sent when
@@ -3686,7 +3762,16 @@ struct LocalSdrShim::Impl {
         }
         bool bothGone = false;
         { std::lock_guard<std::mutex> lk(clientMtx);
-          if (specClient == sock) specClient = nullptr;
+          if (specClient == sock) {
+              // Promote the next listener so the survivors keep their stream — every path that
+              // uses `specClient` would otherwise go dark for everyone when the first one leaves.
+              specClient = nullptr;
+              for (auto& c : specExtra)
+                  if (c && c->isOpen()) { specClient = c; c = nullptr; break; }
+          }
+          specExtra.erase(std::remove_if(specExtra.begin(), specExtra.end(),
+              [&](const std::shared_ptr<net::Socket>& c){ return !c || c == sock || !c->isOpen(); }),
+              specExtra.end());
           if (audioClient == sock) audioClient = nullptr;
           // Free the slot once BOTH of the occupant's sockets are gone (a browser closing one tab
           // drops both). Until then a momentary spectrum reconnect must not surrender the slot to a
@@ -4823,6 +4908,7 @@ void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(r
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }
 void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
 void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
+void LocalSdrShim::setVibeServerMaxUsers(int n) { g_vsMaxUsers.store(n > 1 ? n : 1); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
 

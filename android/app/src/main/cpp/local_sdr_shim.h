@@ -105,6 +105,10 @@ public:
     /** Zoom spectrum on/off. It SUPPRESSES the wide path while active, so a fault in it takes
      *  the waterfall with it — hence a switch that restores the previous behaviour outright. */
     static void setVibeServerZoomSpectrum(bool on);
+    /** ★★★ How many spectrum listeners may attach at once (default 1 = the old single-occupant
+     *  server). The DSP cost of an extra listener is ~nothing now the channelizer shares one
+     *  forward FFT (+0.02% of a Pi core each, measured); the real ceiling is UPLINK. */
+    static void setVibeServerMaxUsers(int n);
     /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */
     static void setBookmarksJson(const std::string& json);
     /** File the shim persists bookmarks to. It owns them, so it saves them — the app's

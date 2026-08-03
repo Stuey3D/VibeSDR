@@ -132,15 +132,7 @@ export class Waterfall {
   setSharpRows(on: boolean) { this.sharpRows = on; }
   private sharpRows = false;
 
-  /** ★★★ ROWS SYNTHESISED PER RECEIVED FRAME — A CONSTANT, not a rate. Deriving it from the live
-   *  data rate is what makes a waterfall BREATHE: the multiplier maps the whole history, so every
-   *  time it changes the picture rescales, and an estimate that wobbles rescales it continuously.
-   *  Fixing it removes that failure mode entirely — the scroll speed then simply follows the data
-   *  rate, which is what DETAILED already does at 1 and nobody objects to.
-   *  ★ This is the frame-generation model: a fixed multiplier, paced by the display clock, rather
-   *    than a rate the renderer keeps trying to hit (Stuart, 2026-08-03). */
-  setRowsPerFrame(n: number) { this.rowsPerFrame = Math.max(1, Math.min(8, Math.round(n))); }
-  private rowsPerFrame = 2;
+
 
   setSpeed(screenRowsPerSec: number) {
     this.screenSpeed = Math.max(1, screenRowsPerSec);
@@ -151,6 +143,12 @@ export class Waterfall {
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
   private lastArrival = 0;
+  private slowGap = 0;        // worst recent arrival gap — see the sizing note
+  private avgGap = 0;         // SMOOTHED arrival gap — what the row pacing follows
+  private lastTickAt = 0;     // vsync pacing — see tick()
+  private frameMs = 0;        // smoothed display frame interval
+  private frameTick = 0;      // display frames counted toward the next row — see tick()
+  private framesPerRow = 1;   // display frames per waterfall row — snapped to the refresh rate
   private emitStart = 0;
   private emitInterval = 0;   // ms between synthesised rows for this pair
   private emitTotal = 0;      // rows to synthesise between prev and cur
@@ -410,9 +408,16 @@ export class Waterfall {
     const now = performance.now();
     const row = frame.row;
 
-    // Finish the previous pair before starting a new one, or a frame that arrives
-    // slightly early silently eats its own lines and the waterfall stops scrolling.
-    this.flushPending();
+    // ★★★ DROP THE UNEMITTED REMAINDER — DO NOT FLUSH IT. This used to dump up to EIGHT leftover
+    //     rows in one go so that "every pair contributes exactly emitTotal lines", and that burst
+    //     IS the judder: a frame arriving a little early emptied the queue in a single animation
+    //     frame, so the waterfall lurched forward and then resumed. Over-generating and DISCARDING
+    //     the excess is the point (Stuart, 2026-08-03) — the rows we drop were synthetic anyway,
+    //     and dropping them costs nothing real.
+    //     ★ The original worry that motivated the flush — an early frame "eating its own lines" so
+    //       the waterfall stalls — is handled instead by SIZING for the worst gap below, which
+    //       guarantees there are always enough rows to reach the next arrival.
+    this.emitted = this.emitTotal;
 
     // Roll cur -> prev, and copy in the new row (frame.row is a reused buffer).
     if (!this.curRow || this.curRow.length !== row.length) {
@@ -429,13 +434,48 @@ export class Waterfall {
     // no need to be told, and it self-corrects across a throttle change.
     const gap = this.lastArrival ? now - this.lastArrival : 1000 / this.rowsPerSec;
     this.lastArrival = now;
+    // ★★ HEADROOM: size against the WORST recent gap, not this one. Server frames do not arrive
+    //    evenly, and a pair sized for an average gap runs out of rows on a long one — the scroll
+    //    stops dead until the next frame. Jumps straight to any slower gap and decays back gently,
+    //    so it tracks the worst case rather than the mean; the surplus on a normal gap is simply
+    //    discarded above.
+    this.slowGap = Math.max(gap, this.slowGap * 0.98);
+    // ★★★ PACE OFF THE SMOOTHED GAP, NOT THIS ONE. The row interval was derived from the
+    //     INSTANTANEOUS arrival gap, so a server frame arriving 10 ms early or late changed the
+    //     scroll rate for that whole pair — visible as the waterfall speeding up and slowing down
+    //     again, which is exactly the band Stuart photographed. The feed genuinely varies ("the
+    //     server dropping or increasing the odd frame here or there"), so the renderer must not
+    //     follow it frame by frame: it follows the AVERAGE and lets the row accumulator carry the
+    //     difference. That is what a jitter buffer does, without the added latency of one.
+    this.avgGap = this.avgGap ? this.avgGap * 0.85 + gap * 0.15 : gap;
 
     // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
     const clamped = Math.max(20, Math.min(1000, gap));
-    // ★ CONSTANT. Was `clamped / (1000/rowsPerSec)` — i.e. derived from the observed gap, so it
-    //   moved whenever the link jittered. See setRowsPerFrame.
-    this.emitTotal = this.sharpRows ? 1 : this.rowsPerFrame;
-    this.emitInterval = clamped / this.emitTotal;
+    // ★★★ ROWS TO SYNTHESISE FOR THIS PAIR, TO HIT THE TARGET ROW RATE. Derived from the OBSERVED
+    //     gap, and that is correct HERE: this renderer draws rows as they are produced and keeps no
+    //     history mapping, so the count may vary per pair without rescaling anything.
+    //     ★ The APP is the opposite — its shader maps ALL history through lines-per-frame, so there
+    //       the number must be a CONSTANT or the picture rescales. Same feature, opposite rule,
+    //       because the renderers are not the same. Do not "unify" these two without re-reading
+    //       this: giving the web client the app's fixed count made it draw 80 rows/s on a 20 fps
+    //       feed and judder (2026-08-03).
+    // ★★★ THE ROW COUNT AND THE FRAME CADENCE MUST COME FROM THE SAME NUMBER. They used to be
+    //     worked out independently: the cadence quantises to one row every N display frames
+    //     (refresh/N rows per second), while the count per pair was computed from the RAW target.
+    //     At 40 device rows/s on 60 Hz the cadence rounds to N=2, i.e. 30 rows/s — but each pair
+    //     still queued rows for 40/s, so a quarter of them were dropped at every arrival, and
+    //     unevenly. That is the DEFAULT-only hitch (Stuart, 2026-08-03: "all rates need to be tied
+    //     to the screen refresh rate"). Snap the rate to what the display can actually deliver
+    //     FIRST, then size the pair from that. SHARP is exempt: one row per frame, no cadence.
+    const refreshHz = this.frameMs > 0 ? 1000 / this.frameMs : 60;
+    const framesPerRow = Math.max(1, Math.round(refreshHz / Math.max(1, this.rowsPerSec)));
+    const trueRowsPerSec = refreshHz / framesPerRow;
+    this.framesPerRow = framesPerRow;
+    this.emitTotal = this.sharpRows ? 1
+                   : Math.max(1, Math.round(Math.max(clamped, this.slowGap) / (1000 / trueRowsPerSec)));
+    // Smoothed, so arrival jitter does not become scroll-rate jitter. Falls back to the observed
+    // gap until the average has anything in it.
+    this.emitInterval = (this.avgGap || clamped) / this.emitTotal;
     this.emitStart = now;
     this.emitted = 0;
   }
@@ -446,29 +486,52 @@ export class Waterfall {
   tick() {
     if (!this.curRow || !this.prevRow) return;
     const now = performance.now();
-    let guard = 0;
-    while (
-      this.emitted < this.emitTotal &&
-      // Row k is due at emitStart + k*interval, k starting at 0 — so the FIRST row
-      // lands the moment the frame arrives. (Anchoring it a full interval later
-      // meant that at 20fps the row became due exactly as the next frame reset the
-      // counter, so it was never drawn and the waterfall crawled.)
-      now >= this.emitStart + this.emitted * this.emitInterval &&
-      guard++ < 8                       // never spend a whole frame catching up
-    ) {
-      this.emitted++;
-      this.drawRow(this.emitted / this.emitTotal);
-    }
-  }
 
-  /** Draw any rows still owed for the current pair. Called when a new frame
-   *  arrives, so every pair contributes exactly emitTotal lines. */
-  private flushPending() {
+    // ★★★ PACED BY VSYNC, NOT BY THE CLOCK. tick() is already called from requestAnimationFrame,
+    //     but the EMISSION used to ask "is row k due yet?" against wall-clock times. At 20 rows/s
+    //     on a 60 Hz display that wants a row every 3 frames — and whenever a due-time drifted
+    //     across a frame boundary it became 3, 3, 4, 3, 4… That beat between the row rate and the
+    //     refresh rate is the residual hitching (Stuart, 2026-08-03: "can we not tie it to device
+    //     Vsync?").
+    //     Now: accumulate rows-per-FRAME and emit whole rows as they come due. The cadence is
+    //     locked to the display, so it is even by construction and adapts to 120 Hz for free.
+    const dt = this.lastTickAt ? now - this.lastTickAt : 16.7;
+    this.lastTickAt = now;
+    // Smoothed refresh interval — one long frame (a GC pause, a tab switch) must not spike the
+    // row rate, which would look exactly like the burst this replaces.
+    this.frameMs = this.frameMs ? this.frameMs * 0.9 + Math.min(dt, 100) * 0.1 : dt;
+
+    // ★★★ ONE ROW EVERY N DISPLAY FRAMES — N A WHOLE NUMBER. This is the crux, and it is why every
+    //     pacing scheme before it failed. A waterfall row is a whole DEVICE pixel, and the row rate
+    //     is screenSpeed x devicePixelRatio: 20 rows/s on a Retina panel is 40 device rows/s, which
+    //     against a 60 Hz refresh is 0.667 rows per frame — so the emission pattern is 1, 1, 0,
+    //     1, 1, 0… No amount of smoothing fixes that, because the QUANTITY is not commensurate with
+    //     the display. Quantising the cadence to a whole number of frames makes the motion even by
+    //     construction, at the cost of the rate landing on 60/N (30, 20, 15, 12…) instead of
+    //     exactly what was asked for — a difference nobody can see, unlike the stutter.
+    //     ★ Recomputed from the SMOOTHED frame interval, so a 120 Hz panel simply gets N twice as
+    //       large and the same even result.
+    // Decided at arrival, from the SAME refresh measurement that sized emitTotal — see there.
+    const framesPerRow = this.sharpRows ? 1 : this.framesPerRow;
     let guard = 0;
-    while (this.emitted < this.emitTotal && guard++ < 8) {
-      this.emitted++;
-      this.drawRow(this.emitted / this.emitTotal);
+    if (framesPerRow > 0) {
+      this.frameTick++;
+      while (this.emitted < this.emitTotal && this.frameTick >= framesPerRow && guard++ < 4) {
+        this.frameTick -= framesPerRow;
+        this.emitted++;
+        this.drawRow(this.emitted / this.emitTotal);
+      }
+      // Do not bank more than one row's worth of credit: a stall must not repay as a burst.
+      if (this.frameTick > framesPerRow) this.frameTick = framesPerRow;
     }
+
+
+    // ★★★ DO NOT ZERO THE CARRY WHEN A PAIR COMPLETES. That is what an accumulator is FOR: the
+    //     fraction left over is what keeps the cadence even across arrivals. Clearing it made every
+    //     row wait a fresh interval measured from the NEXT arrival, so the arrival jitter came
+    //     straight back through — which is the residual hitch, and it was mine (2026-08-03).
+    //     At 20 rows/s on a 20 fps feed emitTotal is 1, so this fired on EVERY frame: the pacing
+    //     did nothing at all in exactly the case being complained about.
   }
 
   /** Scroll down one line and draw the row blended t of the way from prev to cur. */

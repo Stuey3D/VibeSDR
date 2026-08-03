@@ -396,7 +396,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.section}>FILTERS</Text>
                   {p.radio?.rfNotch && (
                     <View style={styles.toggleRow}>
-                      <Text style={styles.toggleLabel}>FM notch</Text>
+                      {/* ★★ RF, not FM: the RSP's broadcast notch covers MW AND FM (the call has
+                          always been setRfNotch). Labelling it FM told anyone with MW breakthrough
+                          there was nothing here for them. */}
+                      <Text style={styles.toggleLabel}>RF notch (MW/FM)</Text>
                       <Switch value={!!p.rspRfNotch} onValueChange={(v) => p.onRspRfNotch?.(v)}
                         trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspRfNotch ? C.gold : '#ccc'} />
                     </View>
