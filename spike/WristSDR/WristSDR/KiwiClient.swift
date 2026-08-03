@@ -295,8 +295,19 @@ final class KiwiClient: ObservableObject, SDRClient {
   private var rateTimer: Timer?
   private var frameCount = 0
 
-  init(url: String, waterfall: WaterfallBuffer) {
+  /// Which Kiwi dialect this receiver wants. `.kiwi` (upstream) takes the `ws/` marker the newer
+  /// mongoose API needs; `.web888` (Web-888 / RaspSDR, a fork from before that change) rejects it
+  /// outright — `bad URI_TS format`, socket closed with nothing sent. Anything else is treated as
+  /// upstream. See isKiwiProtocol() in src/services/sdrTypes.ts for the full account.
+  private let wsPrefix: String
+  /// "KiwiSDR" or "Web-888", for the refusal messages — they are the only explanation a stuck
+  /// user gets, so they must name the radio actually in front of them.
+  private let rxLabel: String
+
+  init(url: String, waterfall: WaterfallBuffer, variant: ServerType = .kiwi) {
     self.waterfall = waterfall
+    self.wsPrefix = (variant == .web888) ? "kiwi" : "ws/kiwi"
+    self.rxLabel  = (variant == .web888) ? "Web-888" : "KiwiSDR"
     // http(s)/ws(s)://host:port[/…] → ws(s)://host:port
     var u = url
     for p in ["https://", "http://", "wss://", "ws://"] { if u.hasPrefix(p) { u.removeFirst(p.count) } }
@@ -308,7 +319,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     proc.autoContrast = 5
   }
 
-  private func wsURL(_ stream: String) -> URL { URL(string: "\(wsBase)/ws/kiwi/\(ts)/\(stream)")! }
+  private func wsURL(_ stream: String) -> URL { URL(string: "\(wsBase)/\(wsPrefix)/\(ts)/\(stream)")! }
 
   // ── Lifecycle ──
   func start() {
@@ -361,7 +372,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         // ★ RELEASE: the raw socket state (`POSIXErrorCode(rawValue: 53)…`) is crumbed, not shown.
         Vitals.crumb("KIWI connect timeout — state: \(self.sockState)")
         self.fail(self.ownerBlockAdvice(self.sockState)
-                  ?? "No data from this KiwiSDR after 12s.")
+                  ?? "No data from this \(self.rxLabel) after 12s.")
       }
     }
     RunLoop.main.add(ct, forMode: .common); connectTimer = ct
@@ -387,7 +398,7 @@ final class KiwiClient: ObservableObject, SDRClient {
   private func ownerBlockAdvice(_ state: String) -> String? {
     let s = state.lowercased()
     guard s.contains("connection abort") || s.contains("rawvalue: 53") else { return nil }
-    return "This KiwiSDR closed the connection straight away.\n"
+    return "This \(rxLabel) closed the connection straight away.\n"
          + "Its owner has most likely restricted it to their own web page, which blocks apps like "
          + "Jr. Nothing you can change at this end — try another server."
   }
@@ -446,9 +457,9 @@ final class KiwiClient: ObservableObject, SDRClient {
       if shortSessions >= Self.shortSessionLimit {
         gaveUp = true
         sndSock.cancel(); wfSock.cancel()
-        fail("This KiwiSDR keeps ending the session after a few seconds — usually a listening-time "
+        fail("This \(rxLabel) keeps ending the session after a few seconds — usually a listening-time "
            + "limit, a full slot, or one-connection-per-listener. We\u{2019}ve stopped retrying so we "
-           + "don\u{2019}t hammer the owner\u{2019}s receiver. Try another KiwiSDR.")
+           + "don\u{2019}t hammer the owner\u{2019}s receiver. Try another receiver.")
         return
       }
     } else {
@@ -533,7 +544,7 @@ final class KiwiClient: ObservableObject, SDRClient {
             self.retrySnd(reason: st)
           } else {
             Vitals.crumb("KIWI socket failed — state: \(st)")
-            self.fail(self.ownerBlockAdvice(st) ?? "This KiwiSDR wouldn’t open a connection.")
+            self.fail(self.ownerBlockAdvice(st) ?? "This \(self.rxLabel) wouldn’t open a connection.")
           }
         }
       }
@@ -626,7 +637,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     case "too_busy":
       // too_busy=0 is a NORMAL "you are not too busy" broadcast — only non-zero means full.
       if val != "0" && val != "" {
-        fail("This KiwiSDR is full — every listening slot is in use. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+        fail("This \(rxLabel) is full — every listening slot is in use. Try another receiver, or use UberSDR or OpenWebRX.")
       }
     case "ip_limit":
       // ★ THE DAILY PER-IP TIME LIMIT — the real reason behind "it lets us in and then kicks us".
@@ -634,14 +645,14 @@ final class KiwiClient: ObservableObject, SDRClient {
       // allowance for the day, the server still ACCEPTS the connection and then ends it seconds
       // later. Identical on the wire to a flaky link, which is why we used to blame Bluetooth and
       // reconnect forever. It is a rule, not a fault — say so and stop.
-      fail("You\u{2019}ve used this KiwiSDR\u{2019}s daily time allowance for your connection"
+      fail("You\u{2019}ve used this \(rxLabel)\u{2019}s daily time allowance for your connection"
          + " — the owner limits how long each listener gets per day. It\u{2019}ll let you back in"
-         + " tomorrow. Try another KiwiSDR in the meantime.", midSession: true)
+         + " tomorrow. Try another receiver in the meantime.", midSession: true)
     case "badp":
       // Non-zero = the sign-in was rejected: a private listen PASSWORD we don't have, or the owner
       // only allows their own web page. Owner setting, not an app fault.
       if val != "0" {
-        fail("This KiwiSDR is password-protected — the owner requires a listen password, which VibeSDR doesn’t have. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+        fail("This \(rxLabel) is password-protected — the owner requires a listen password, which VibeSDR doesn’t have. Try another receiver, or use UberSDR or OpenWebRX.")
       }
     default: break
     }

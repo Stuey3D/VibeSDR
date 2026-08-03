@@ -7,6 +7,63 @@ Source: https://github.com/Stuey3D/VibeSDR
 
 ## Unreleased
 
+### Added — Web-888 receivers, which could not be connected to at all
+
+A **Web-888** is a KiwiSDR-compatible receiver, and VibeSDR could not talk to one on either
+existing setting. Picking **KiwiSDR** failed instantly; picking **OpenWebRX** was never going
+to work. Worse, the app then blamed the receiver's owner: the failure looks exactly like a Kiwi
+that only allows its own web page, so VibeSDR told people their own radio was blocking them.
+
+The cause is one string. A Web-888 runs a fork of the KiwiSDR server (RaspSDR) taken before
+upstream moved to a newer web-server API, and that move added a `ws/` marker to the WebSocket
+address so the server could tell a socket from an ordinary page request. The fork never gained
+it, and rejects the address outright — `bad URI_TS format`, and the connection is closed without
+a single byte sent back.
+
+- **Web-888 is now its own choice** in the custom-server box, next to KiwiSDR.
+- **Auto-detect recognises one** from its own branding, so you rarely need to pick it — and the
+  public KiwiSDR directory is read more carefully, so a listed Web-888 is tagged as one.
+- **And it corrects itself anyway.** A receiver that closes the connection having said *nothing*
+  is retried once at the other address. That is the one thing a wrong address looks like and a
+  refusal never does — a receiver has to let you in before it can throw you out — so a genuine
+  refusal is still reported as a refusal, on the first attempt.
+- Every "This KiwiSDR…" message now names the receiver you actually connected to.
+- **And auto-detect works on KiwiSDRs at all now.** Identifying a typed-in address made two
+  requests on one shared five-second budget, and the first — the VibeServer identity check — never
+  returns on a Kiwi: that server does not refuse an unknown address, it simply never answers. The
+  budget was spent before the request that actually identifies the receiver was allowed to start,
+  so every KiwiSDR-family address reported "nothing there" while answering `GET /` in half a
+  second. Each request now has its own timeout.
+
+### Fixed — adding a server by name and port connected to the wrong port
+
+Typing a host into the **+** add-server box and its port into the separate **Port** field found the
+receiver and then refused to connect to it: *"Couldn't connect — connection refused"*. The address
+was parsed without the port, so the port number was right everywhere except in the address actually
+dialled, which fell back to port 80. What disguised it is that everything *else* worked — the
+receiver was correctly identified and saved, and tapping the saved entry connected first time,
+because that path rebuilds the address from the saved host and port.
+
+This was never specific to Web-888; it applied to any receiver added that way. Two changes:
+
+- The address and the port now come out of a single parse, so they cannot disagree. A port written
+  into the host field still wins over the Port box, as before.
+- Probing now reports **which** address answered, and that is the one connected to. Previously the
+  app could identify a receiver at one address and then connect to another — the same latent fault
+  would have sent an https-only receiver on a custom port a plain-http connection.
+
+Also: the Custom URL box on the server list now shows a port in its example
+(`sdr.example.com:8073`). Without one it read as hostname-only, which resolves to port 80 — where
+no receiver listens.
+
+VibeSDR Jr (the watch) gets the same receiver support. It needed it for a reason beyond the new
+hardware: favourites sync between devices, and Jr turned any server type it did not recognise into
+an UberSDR — so a Web-888 saved on the phone would have arrived on the wrist as the wrong kind of
+radio entirely.
+
+Verified against a live Web-888 (`Web888_v2026.609`): audio and waterfall both stream. Checked
+against real KiwiSDRs too, which still connect on the first attempt with no retry.
+
 ### Fixed — the RDS analyser, calibrated against a professional broadcast analyser
 
 With thanks again to **Hans van Eijsden (Zwolle, NL)** of [FMDX.org](https://fmdx.org), who

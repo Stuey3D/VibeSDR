@@ -11,13 +11,19 @@ import SwiftUI
 // ── Model ──────────────────────────────────────────────────────────────────────
 
 enum ServerType: String, Codable, CaseIterable {
-  case ubersdr, kiwi, owrx, fmdx, spyserver, rtltcp, vibeserver
+  // ★ web888 = a Web-888 / RaspSDR: KiwiSDR's protocol at a different WebSocket path, so it is
+  //   KiwiClient with one string changed. It MUST exist as its own case even though Jr shows no
+  //   picker for it: CloudSyncEngine maps an unknown serverType to `.ubersdr`, so a Web-888
+  //   favourite synced from the phone would arrive here as an UberSDR and fail on a protocol it
+  //   has never spoken. See isKiwiProtocol() in src/services/sdrTypes.ts.
+  case ubersdr, kiwi, web888, owrx, fmdx, spyserver, rtltcp, vibeserver
 
   /// Display name for the by-type sort + row badge.
   var display: String {
     switch self {
     case .ubersdr:   return "UberSDR"
     case .kiwi:      return "KiwiSDR"
+    case .web888:    return "Web-888"
     case .owrx:      return "OpenWebRX"
     case .fmdx:      return "FM-DX"
     case .spyserver: return "SpyServer"
@@ -28,12 +34,12 @@ enum ServerType: String, Codable, CaseIterable {
   /// Grouping order for the by-type sort (mirrors the phone's TYPE_ORDER).
   var order: Int {
     switch self {
-    case .ubersdr: return 0; case .kiwi: return 1; case .owrx: return 2
-    case .fmdx: return 3; case .vibeserver: return 4; case .spyserver: return 5; case .rtltcp: return 6
+    case .ubersdr: return 0; case .kiwi: return 1; case .web888: return 2; case .owrx: return 3
+    case .fmdx: return 4; case .vibeserver: return 5; case .spyserver: return 6; case .rtltcp: return 7
     }
   }
   /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
-  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx || self == .fmdx || self == .vibeserver }
+  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .web888 || self == .owrx || self == .fmdx || self == .vibeserver }
 }
 
 /// A server row — from a directory or a saved favourite. `url` is the connect key.
@@ -250,7 +256,9 @@ enum Directories {
         name: (r["name"] as? String) ?? "KiwiSDR",
         url: u,
         host: URL(string: u)?.host ?? u,
-        serverType: .kiwi,
+        // ★ The row names the firmware: `Web888_v2026.609` vs `KiwiSDR_v1.902`. They want
+        //   different WebSocket paths, so read it rather than assuming the parent product.
+        serverType: ((r["sw_version"] as? String) ?? "").lowercased().contains("888") ? .web888 : .kiwi,
         location: (r["loc"] as? String) ?? "",
         latitude: parseCoord(r["gps"], 0),
         longitude: parseCoord(r["gps"], 1),

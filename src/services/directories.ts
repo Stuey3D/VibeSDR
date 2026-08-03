@@ -17,7 +17,7 @@ export interface DirectoryMeta {
   name:  string;
   desc:  string;
   /** which backends this directory yields — drives the footer logo/labels. */
-  kinds: ('ubersdr' | 'owrx' | 'kiwi' | 'fmdx' | 'spyserver')[];
+  kinds: ('ubersdr' | 'owrx' | 'kiwi' | 'web888' | 'fmdx' | 'spyserver')[];
 }
 
 export const DIRECTORIES: DirectoryMeta[] = [
@@ -155,7 +155,14 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
         distance: (lat != null && lon != null && glat != null && glon != null)
           ? haversineKm(lat, lon, glat, glon) : null,
         bestSnr: snr.length ? Math.max(...snr) : null,
-        serverType: 'kiwi',
+        // ★ The row NAMES the firmware, so use it rather than assuming the parent product: a
+        //   Web-888 reports `sw_version: "Web888_v2026.609"` where a Kiwi reports
+        //   `"KiwiSDR_v1.902"`. The two want different WebSocket URLs (see isKiwiProtocol), and
+        //   getting it right here saves the adapter a failed socket and a retry round-trip.
+        //   ★★ This directory has no `type` field to tell them apart — sw_version is the only
+        //      signal in the feed, and Receiverbook does not publish even that, which is why
+        //      KiwiAdapter still needs its own fallback probe.
+        serverType: /web[_-]?888/i.test(String(r.sw_version ?? '')) ? 'web888' : 'kiwi',
       });
     });
 }

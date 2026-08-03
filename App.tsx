@@ -60,7 +60,7 @@ export type RootStackParamList = {
     instanceName?:   string;
     viewMode:        ViewMode;
     serverLongitude?: number | null;
-    serverType?:     'ubersdr' | 'kiwi' | 'owrx';   // v3 multi-backend; default ubersdr
+    serverType?:     'ubersdr' | 'kiwi' | 'web888' | 'owrx';   // v3 multi-backend; default ubersdr
     // NB FM-DX servers route to the 'Tuner' screen instead (see below), not here.
     // V4 local hardware (Android): connect to the on-device shim on localhost.
     // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.
@@ -265,7 +265,7 @@ export default function App() {
         ? { name: 'Tuner', params: { baseUrl: f.url, instanceName: f.name, viewMode } }
         : { name: 'SDR', params: {
               baseUrl: f.url, instanceName: f.name, viewMode,
-              serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'kiwi' | 'owrx',
+              serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'kiwi' | 'web888' | 'owrx',
               ...(extra ?? {}),
             } };
       // RESET, never navigate() — navigate PUSHES and leaves the old screen mounted
