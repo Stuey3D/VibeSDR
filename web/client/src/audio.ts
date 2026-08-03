@@ -37,7 +37,14 @@ class VibeSink extends AudioWorkletProcessor {
     this.buf = [new Float32Array(this.cap), new Float32Array(this.cap)];
     this.w = 0; this.r = 0; this.filled = 0;
     this.started = false;
-    // ★★ 150 ms, WAS 250. The buffer is what makes the audio lag the waterfall, and it became
+    // ★★★ BACK TO 250 ms. It was cut to 150 to close the audio-lags-waterfall gap, and that broke
+    //     TUNING: a retune stops the audio while the DSP chain rebuilds, and with less cushion the
+    //     buffer DRAINS during the gap — silence and a re-arm instead of riding through it
+    //     (Stuart, 2026-08-03: "when tuning the audio is muting"). The buffer is not only there for
+    //     network jitter; it is what covers a deliberate break in the stream.
+    //     ★ So the lag needs a different mechanism, not a smaller buffer: either refill faster after
+    //       a retune, or hold a larger target only across one. Left as it was until that exists.
+    // ★★ (ORIGINAL NOTE) The buffer is what makes the audio lag the waterfall, and it became
     //    obvious once the waterfall was tied to the display refresh and stopped hitching — the
     //    delay had always been there, the eye just had nothing steady to compare it against
     //    (Stuart, 2026-08-03). 150 ms still covers ordinary arrival jitter; an underrun is handled
@@ -45,7 +52,7 @@ class VibeSink extends AudioWorkletProcessor {
     //    small and audible only on a bad link.
     //    ★ IF THE PUBLIC LINK STUTTERS, PUT IT BACK. This is tuned for a LAN; a receiver reached
     //      over the internet has a longer jitter tail and may want the original 250.
-    this.target = 48000 * 0.15;        // 150ms jitter buffer before playout
+    this.target = 48000 * 0.25;        // 250ms jitter buffer before playout
     this.port.onmessage = (e) => {
       const { l, r } = e.data;
       const n = l.length;

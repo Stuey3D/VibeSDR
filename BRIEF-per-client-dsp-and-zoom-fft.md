@@ -281,3 +281,32 @@ Two options; the second is preferred:
    laptop still has a different address, so the security property is unchanged.
 ★ CHECK FIRST: what does the Mac app dial when it connects to its own server? If it uses the mDNS
 name rather than loopback, option 2 is REQUIRED, not a nicety.
+
+---
+
+## 8. A/V SYNC — DELAY THE WATERFALL, DO NOT SHRINK THE AUDIO BUFFER
+**Decided 2026-08-03, not built.**
+
+The audio lags the waterfall by roughly the audio jitter buffer (250 ms). It became obvious only
+once the waterfall stopped hitching — the delay was always there, the eye just had nothing steady
+to compare it against.
+
+★★★ **CUTTING THE AUDIO BUFFER IS THE WRONG FIX, AND WAS TRIED.** 250 → 150 ms broke TUNING: a
+retune stops the audio while the DSP chain rebuilds, and with less cushion the buffer DRAINS during
+that gap — silence and a re-arm instead of riding through (Stuart: *"when tuning the audio is
+muting… or attenuating lots"*). **The buffer is not only for network jitter; it is what covers a
+DELIBERATE break in the stream.** Reverted to 250 ms.
+
+★★ **THE RIGHT FIX (Stuart): DELAY THE WATERFALL TO MATCH.** Video-follows-audio is how A/V sync is
+done everywhere; a waterfall arriving 150 ms later is invisible, a thin audio buffer breaks every
+retune.
+- Queue incoming rows with their arrival time in `Waterfall.push()`; in `tick()`, only begin a pair
+  once it is older than the delay.
+- Delay ≈ audio buffer − the waterfall's existing latency, so ~150–180 ms.
+- ★ The **spectrum trace stays live** — it is cheap, and nobody syncs a trace by ear.
+- ★ Watch the interaction with the existing `slowGap` sizing and the drop-the-remainder rule: the
+  queue must not become a second place where rows are dropped.
+
+★ NOT attempted on 2026-08-03 on purpose: it touches `push()`, the path in the newly-good waterfall
+([[waterfall_refresh_locked_model]]), at the end of a session where four of five edits regressed
+something. Worth doing first with a clear head, not last with a tired one.
