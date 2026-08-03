@@ -115,6 +115,7 @@ import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
+import { IS_TV } from '../utils/tv';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { tidyStationName } from '../services/stationLogo';
@@ -5672,7 +5673,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Compatibility mode — the Kiwi's own web page full-screen; ← VibeSDR returns to the list. */}
-      {compatUrl && (
+      {/* ★ `&& !IS_TV`: compatibility mode is a WebView, and there is none on tvOS. The picker
+          hides restricted receivers there so this should never be reachable — this is the belt to
+          that braces, and it keeps react-native-webview out of the tvOS render path entirely. */}
+      {compatUrl && !IS_TV && (
         <BrowserOverlay
           url={compatUrl}
           topInset={insets.top}
@@ -6341,17 +6345,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       ) : null}
 
       {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
-      <MapOverlay
+      {/* ★ NOT ON tvOS — MapOverlay is Leaflet in a WebView and there is no WKWebView on the
+          platform. Gated at the RENDER so the component (and react-native-webview with it) is
+          never mounted there. See src/utils/tv.ts and BRIEF-tvos-app.md §5b. */}
+      {!IS_TV && <MapOverlay
         visible={mapKind !== null}
         kind={mapKind}
         baseUrl={baseUrl}
         sessionUuid={sessionUuid}
         onClose={() => setMapKind(null)}
-      />
+      />}
 
       {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
           receiver position from device GPS / Kiwi gps / a picked city. */}
-      <MapOverlay
+      {!IS_TV && <MapOverlay
         visible={localMapOpen}
         kind="digi"
         local
@@ -6366,7 +6373,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         disconnected={serverLost || serverBusy || connTimedOut}
         onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
         onRetry={() => fullReconnect()}
-      />
+      />}
 
       <CityPickerModal
         visible={cityPickerOpen}
@@ -6379,7 +6386,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       />
 
       {/* Admin pages — in-app browser with ← SDR bar */}
-      <BrowserOverlay
+      {/* ★ NOT ON tvOS — no WKWebView. Also the route Kiwi compatibility mode uses, which is why
+          restricted receivers are hidden entirely in the picker on that platform. */}
+      {!IS_TV && <BrowserOverlay
         url={adminPage?.url ?? null}
         title={adminPage?.title}
         allowSave={!!adminPage?.url?.includes('/files')}
@@ -6387,7 +6396,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ? '.webrx-top-container{display:none!important}'   // OWRX map: hide header → full-screen map
           : undefined}
         onClose={() => setAdminPage(null)}
-      />
+      />}
 
       {/* Frequency modal */}
       <FreqModal
