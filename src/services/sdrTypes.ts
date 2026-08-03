@@ -51,7 +51,52 @@ export async function checkConnection(_url: string, _password?: string): Promise
   return { allowed: true, passwordRequired: false };
 }
 
-export type ServerType = 'ubersdr' | 'kiwi' | 'owrx';
+export type ServerType = 'ubersdr' | 'kiwi' | 'web888' | 'owrx';
+
+/** ★★★ WEB-888 SPEAKS KIWI, BUT NOT AT THE SAME URL — and that one difference is the whole
+ *  reason a Web-888 could not be connected to at all, on either the KiwiSDR or the OpenWebRX
+ *  setting, until 2026-08-03.
+ *
+ *  A Web-888 (and anything else built on RaspSDR/server, e.g. the RX-888 boxes) runs a FORK of
+ *  the KiwiSDR server taken before jks-prv moved to the mongoose 7 API. Upstream Kiwi now needs
+ *  a `ws/` marker on the URL so its web server can tell a WebSocket upgrade from a plain GET —
+ *  its own source says so (Beagle_SDR_GPS/rx/rx_server.cpp):
+ *
+ *      // The new mongoose API requires something in the URL to distinguish web socket
+ *      // connections from normal HTTP transfers. … We prefix web socket URLs with "ws/".
+ *      if ((n=sscanf(uri_ts, "ws/%8m[^/]/%lld/%256m[^\?]", …)) == 3) isWebSocket = true;
+ *
+ *  The fork never gained that branch. RaspSDR/server/rx/rx_server.cpp accepts ONLY:
+ *
+ *      kiwi/<ts>/<stream>      no_wf/<ts>/<stream>      <ts>/<stream>   (kiwirecorder)
+ *      else printf("bad URI_TS format\n"); return NULL;      // ← line 280, and our fate
+ *
+ *  So `/ws/kiwi/<ts>/SND` hit that else, the server returned NULL, and the socket was closed
+ *  with code 1006 and ZERO bytes sent. VERIFIED against a live Web-888 (sw_version
+ *  Web888_v2026.609) on 2026-08-03: `/ws/kiwi/…` closes instantly; `/kiwi/…` completes the
+ *  handshake and streams both audio and waterfall.
+ *
+ *  ★★ AND THE ERROR MESSAGE BLAMED THE OWNER. A reasonless close is what a Kiwi that only
+ *  allows its own web page looks like, so onSocketDrop told the user this receiver "blocks apps
+ *  like VibeSDR" — about their OWN radio, sitting on their own desk. A wrong diagnosis is worse
+ *  than none: it sends someone to argue with a restriction that does not exist.
+ *
+ *  ★ 'openwebrx' IS NOT THE ANSWER EITHER, however much the lineage suggests it. Kiwi's *web UI*
+ *  was forked from OpenWebRX years ago — that is why our own client string is
+ *  `SERVER DE CLIENT openwebrx.js` and why the landing page still says "openwebrx". The modern
+ *  OpenWebRX+ WIRE protocol shares nothing with it: one socket at `/ws/`, JSON control plane.
+ *  OwrxAdapter cannot talk to a Web-888 and never could.
+ */
+export function isKiwiProtocol(t?: string | null): boolean {
+  return t === 'kiwi' || t === 'web888';
+}
+
+/** How each Kiwi-protocol dialect names itself to the user. Keep these in step with
+ *  PROTO_LABEL in InstancePickerScreen — a Web-888 owner told "KiwiSDR closed the
+ *  connection" has to guess that the app means their radio. */
+export function kiwiFamilyLabel(t?: string | null): string {
+  return t === 'web888' ? 'Web-888' : 'KiwiSDR';
+}
 
 /** Everything the "Custom server" box can reach. The HTTP kinds are what
  *  detectServerType() can sniff; the raw-TCP kinds (rtl_tcp, SpyServer) speak no
@@ -61,7 +106,7 @@ export type BackendType = ServerType | 'fmdx' | 'vibeserver' | 'rtltcp' | 'spyse
 
 /** Default port per backend, used to guess a bare host and to prefill the form. */
 export const DEFAULT_PORT: Record<BackendType, number> = {
-  ubersdr: 8073, kiwi: 8073, owrx: 8073, fmdx: 8080,
+  ubersdr: 8073, kiwi: 8073, web888: 8073, owrx: 8073, fmdx: 8080,
   vibeserver: 48000, rtltcp: 1234, spyserver: 5555,
 };
 
@@ -74,8 +119,23 @@ export async function detectServerType(url: string): Promise<BackendType | null>
   // Manual AbortController + setTimeout — AbortSignal.timeout() isn't reliably
   // available in Android's Hermes runtime and throws before the fetch even runs,
   // which used to make detection fail → default to ubersdr → 404 on OWRX servers.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);
+  //
+  // ★★★ ONE BUDGET PER REQUEST, NOT ONE FOR THE WHOLE FUNCTION. A single shared controller meant
+  // the VibeServer identity probe could spend the ENTIRE 5 s and then abort the landing-page fetch
+  // — the one that actually identifies the server — before it had sent a byte. Detection then
+  // returned null: "nothing there", for a receiver answering in half a second.
+  //
+  // ★★ And it is not hypothetical. Measured 2026-08-03: a KiwiSDR does not 404 an unknown path,
+  // it simply NEVER ANSWERS. `GET /vibeserver.json` against kiwisdr.areg.org.au:8073 and
+  // sdr.ironstonerange.com:8073 hangs open indefinitely, while `GET /` on both returns in ~0.6 s.
+  // So the shared timer made the sniff unreachable on the whole KiwiSDR family — including
+  // Web-888, whose auto-detection this fix is what makes reliable.
+  const withTimeout = async (u: string): Promise<Response> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try { return await fetch(u, { signal: ctrl.signal }); }
+    finally { clearTimeout(timer); }
+  };
   try {
     // ★★ ASK, DON'T SNIFF — VibeServer is the one protocol we own both ends of,
     // so it identifies itself instead of being guessed at from page prose.
@@ -87,14 +147,14 @@ export async function detectServerType(url: string): Promise<BackendType | null>
     // ubersdr default every single time. /vibeserver.json is served regardless
     // of that toggle.
     try {
-      const idr = await fetch(base + '/vibeserver.json', { signal: ctrl.signal });
+      const idr = await withTimeout(base + '/vibeserver.json');
       if (idr.ok) {
         const id = await idr.json();
         if (id && id.server === 'vibeserver') return 'vibeserver';
       }
     } catch { /* not a VibeServer, or older than this endpoint — fall through */ }
 
-    const r = await fetch(base + '/', { signal: ctrl.signal });
+    const r = await withTimeout(base + '/');
     const body = (await r.text()).toLowerCase();
     // ORDER MATTERS, and every rule here exists because a later backend's page
     // contains an earlier one's marker:
@@ -118,14 +178,22 @@ export async function detectServerType(url: string): Promise<BackendType | null>
     // no reason to appear on anyone else's.
     if (body.includes('vibeserver')) return 'vibeserver';
     if (body.includes('ubersdr')) return 'ubersdr';
+    // Web-888 / RaspSDR BEFORE Kiwi, for the same reason UberSDR goes before Kiwi above: it IS a
+    // Kiwi fork, so its page carries every Kiwi marker (`kiwi_util`, `data-type=kiwi`, and
+    // "openwebrx" too) and matched as plain 'kiwi' — which then used the upstream `ws/` URL and
+    // could not connect at all. See isKiwiProtocol() for why the URL differs.
+    // ★ Match the BRANDING, which is the only thing that separates the fork from its parent: the
+    //   firmware serves its own logo (`gfx/web-888.51x60.png`) and links rx-888.com. Verified on a
+    //   live Web-888, 2026-08-03. `raspsdr` covers the upstream project's own builds.
+    // ★★ These are hyphen-optional on purpose — the product is written "Web-888" and "web888"
+    //    (its own sw_version is `Web888_v2026.609`) about equally often.
+    if (/web-?888|rx-?888|raspsdr/.test(body)) return 'web888';
     if (/kiwisdr|kiwi sdr|\/kiwi\/|kiwi_util|owrx_ws_open/.test(body)) return 'kiwi';
     if (body.includes('openwebrx')) return 'owrx';
     if (/fm-dx|fmdx/.test(body)) return 'fmdx';
     return 'ubersdr';            // reachable but unidentifiable → assume ubersdr
   } catch {
     return null;                // couldn't reach — caller keeps any known type
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -257,26 +325,49 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
   finally { clearTimeout(t); }
 }
 
+/** What answered, and WHERE. */
+export interface ProbeResult {
+  type: BackendType;
+  /** ★★★ THE ADDRESS THAT ACTUALLY ANSWERED — connect to THIS, not to what the user typed.
+   *  probeServer tries several candidate URLs and used to throw away which one worked, returning
+   *  only the type. Every caller then connected to its own guess instead, so detection succeeding
+   *  on one address and the connection being made to another was a silent, routine outcome:
+   *
+   *    - typed `web-888.local` + `8073` in the separate Port box → detection found it at
+   *      `http://web-888.local:8073`, the connect went to `http://web-888.local` (port 80) and
+   *      died with "connection refused". Reported 2026-08-03 against a Web-888; the favourite it
+   *      saved was typed CORRECTLY, which is what made it look like a Web-888 bug rather than an
+   *      address bug — tapping the saved row worked, because that path rebuilds the URL.
+   *    - an https-only receiver on a custom port: detected over https, connected over http.
+   *
+   *  Returning the winning URL makes "what we probed" and "what we connect to" the same string
+   *  by construction, which is the only way this class of bug stays fixed. */
+  url: string;
+}
+
 export async function probeServer(
   host: string, port: number, hint?: BackendType | null, baseUrl?: string,
-): Promise<BackendType | null> {
-  if (hint) return hint;
+): Promise<ProbeResult | null> {
+  const fallbackUrl = baseUrl || `http://${host}:${port}`;
+  // An explicit choice is not probed at all, so the caller's address is all we know.
+  if (hint) return { type: hint, url: fallbackUrl };
 
   // ★ A URL WINS WHEN WE HAVE ONE. A receiver in a subfolder does not answer at the root, so
   // probing `host:port` alone reports "nothing there" for a server that is plainly running.
   if (baseUrl) {
     const t = await detectServerType(baseUrl);
-    if (t) return t;
+    if (t) return { type: t, url: baseUrl };
   }
 
   const authority = `${host}:${port}`;
   for (const scheme of ['https', 'http'] as const) {
-    const t = await detectServerType(`${scheme}://${authority}`);
-    if (t) return t;
+    const url = `${scheme}://${authority}`;
+    const t = await detectServerType(url);
+    if (t) return { type: t, url };
   }
 
   // No HTTP answered. Raw-TCP backends can only be inferred from the port.
-  if (port === DEFAULT_PORT.rtltcp) return 'rtltcp';
-  if (port === DEFAULT_PORT.spyserver) return 'spyserver';
+  if (port === DEFAULT_PORT.rtltcp) return { type: 'rtltcp', url: fallbackUrl };
+  if (port === DEFAULT_PORT.spyserver) return { type: 'spyserver', url: fallbackUrl };
   return null;                  // unreachable, or raw TCP on a port we can't name
 }

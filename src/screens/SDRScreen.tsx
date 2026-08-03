@@ -79,7 +79,8 @@ import { DecoderClient, RTTY_PRESETS,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
-import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy } from '../services/sdrTypes';
+import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy,
+         isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { setDefaultInstance, getDefaultInstance,
@@ -1505,7 +1506,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     raw.replace(/[^A-Za-z0-9\-_\/]/g, '').replace(/^[-_\/]+|[-_\/]+$/g, '').slice(0, 15), []);
 
   const isOwrx = route.params.serverType === 'owrx';
-  const isKiwi = route.params.serverType === 'kiwi';
+  // Web-888 included: same server, same DSP descriptors, same everything but the URL.
+  const isKiwi = isKiwiProtocol(route.params.serverType);
+  // What to CALL this receiver in every card below. Hard-coded "KiwiSDR" in five places was
+  // wrong the moment Web-888 became its own server type — and these cards are the only
+  // explanation a stuck user gets, so naming the wrong radio sends them hunting the wrong fault.
+  const rxLabel = kiwiFamilyLabel(route.params.serverType);
   // Kiwi exposes its noise filters/blanker as DSP descriptors → reuse the
   // UberSDR server-DSP menu UI (filter selector + param sliders).
   useEffect(() => {
@@ -2759,7 +2765,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Back to Instances / Try Again / Compatibility Mode. Owner restrictions (app-block,
         // private password, slot limits) can't be fixed by the UberSDR bypass-password box, so
         // it's never offered here — that route is UberSDR-only, for per-IP RATE limits.
-        if (route.params.serverType === 'kiwi') { kiwiRefusedRef.current = true; setKiwiRefused(msg); return; }
+        if (isKiwiProtocol(route.params.serverType)) { kiwiRefusedRef.current = true; setKiwiRefused(msg); return; }
         if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
           setPwPrompt(true);
         } else {
@@ -5487,15 +5493,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
           tell the user to wait before reconnecting (the server's still booting). */}
       {!kiwiRefused && serverLost && (() => {
-        const lostLabel = route.params.serverType === 'kiwi' ? 'KiwiSDR'
+        const lostLabel = isKiwiProtocol(route.params.serverType) ? kiwiFamilyLabel(route.params.serverType)
                         : route.params.serverType === 'owrx' ? 'OpenWebRX'
                         : 'SDR';
         return (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
-            <Text style={styles.serverLostBody}>{route.params.serverType === 'kiwi'
-              ? "The receiver dropped the connection. KiwiSDR owners with few slots often restrict access: some allow only their own web page, so apps like VibeSDR are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect."
+            <Text style={styles.serverLostBody}>{isKiwiProtocol(route.params.serverType)
+              ? `The receiver dropped the connection. ${lostLabel} owners with few slots often restrict access: some allow only their own web page, so apps like VibeSDR are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect.`
               : `The receiver dropped the connection — ${lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.`}</Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
@@ -5509,7 +5515,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             </View>
             {/* A Kiwi that keeps kicking a connected user still lets them reach compatibility mode —
                 otherwise unreachable, since the initial-refusal card never shows once it connects. */}
-            {route.params.serverType === 'kiwi' && (
+            {isKiwiProtocol(route.params.serverType) && (
               <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
                 onPress={() => { setServerLost(false); setCompatWarn(true); }} activeOpacity={0.85}>
                 <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
@@ -5543,7 +5549,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
-            <Text style={styles.serverLostBody}>This KiwiSDR has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
+            <Text style={styles.serverLostBody}>This {rxLabel} has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
@@ -5591,7 +5597,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Open in compatibility mode?</Text>
-            <Text style={styles.serverLostBody}>This opens the KiwiSDR’s OWN web interface inside VibeSDR — you’ll use Kiwi’s native controls and layout, not VibeSDR’s. The advanced VibeSDR features won’t apply here: no background audio, no recording, no lock-screen or Apple Watch playback, and none of VibeSDR’s waterfall or audio controls. Tap “← VibeSDR” at the top to come back.</Text>
+            <Text style={styles.serverLostBody}>This opens the {rxLabel}’s OWN web interface inside VibeSDR — you’ll use the receiver’s native controls and layout, not VibeSDR’s. The advanced VibeSDR features won’t apply here: no background audio, no recording, no lock-screen or Apple Watch playback, and none of VibeSDR’s waterfall or audio controls. Tap “← VibeSDR” at the top to come back.</Text>
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
                 onPress={() => { setCompatWarn(false); navigation.goBack(); }} activeOpacity={0.85}>
@@ -5643,7 +5649,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {compatUrl && (
         <BrowserOverlay
           url={compatUrl}
-          title={(instanceName ?? 'KiwiSDR') + ' — web'}
+          title={(instanceName ?? rxLabel) + ' — web'}
           backLabel="← VibeSDR"
           onClose={() => { setCompatUrl(null); navigation.goBack(); }}
         />
@@ -5721,7 +5727,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               No response from {instanceName || 'the receiver'}. {route.params.isLocal
                 ? 'Check the SDR is plugged in and try again, or pick another server.'
                 : isKiwi
-                  ? "It may be offline or a temporary network issue — but if a retry also fails, this KiwiSDR's owner likely only allows their own web page and blocks apps like VibeSDR. Try another, or use UberSDR / OpenWebRX."
+                  ? `It may be offline or a temporary network issue — but if a retry also fails, this ${rxLabel}'s owner likely only allows their own web page and blocks apps like VibeSDR. Try another, or use UberSDR / OpenWebRX.`
                   : 'It may be offline or unreachable — try again or pick another server.'}
             </Text>
             <View style={styles.serverLostBtnRow}>

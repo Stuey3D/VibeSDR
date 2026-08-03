@@ -14,10 +14,10 @@
 import { fetchInstances } from '../services/instancesApi';
 import type { SDRMode } from '../services/UberSDRClient';
 
-export type LinkBackend = 'ubersdr' | 'kiwi' | 'owrx' | 'rtltcp';
+export type LinkBackend = 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'rtltcp';
 // Route serverType is a subset — rtltcp isn't a plain URL backend (needs the
 // on-device shim + host:port), so it's rejected in Phase 1.
-export type RouteServerType = 'ubersdr' | 'kiwi' | 'owrx';
+export type RouteServerType = 'ubersdr' | 'kiwi' | 'web888' | 'owrx';
 
 export interface DeepLinkRequest {
   uuid?:    string;
@@ -94,7 +94,8 @@ export function parseVibeSdrUrl(raw: string): DeepLinkRequest | null {
     // https/wss only — reject plaintext and anything exotic (brief §6).
     if (!/^(https|wss):\/\//i.test(u)) return null;
     const backend = (p.backend || '').toLowerCase();
-    if (backend !== 'ubersdr' && backend !== 'kiwi' && backend !== 'owrx' && backend !== 'rtltcp') return null;
+    if (backend !== 'ubersdr' && backend !== 'kiwi' && backend !== 'web888'
+        && backend !== 'owrx' && backend !== 'rtltcp') return null;
     req.url = u.replace(/\/+$/, '');
     req.backend = backend as LinkBackend;
   } else {
