@@ -253,7 +253,38 @@ constant something that on Apple TV is invisible and free.
 keyboard layer already turns a D-pad into arrow keys ([[keyboard_layer_shipped]]), and its waterfall
 is the reference implementation. The blocker is the remote, not the rendering.
 
-### 6.3 ★ The build path needs checking, not assuming.
+### 6.3 ✅ MEASURED: `expo prebuild` DESTROYS 65 OF 82 FILES IN `ios/`. NEVER RUN IT HERE.
+**Tested on the `tvos-app` branch, 2026-08-04, because everything is committed and therefore
+revertable — an assertion was not good enough.** `EXPO_TV=1 npx expo prebuild --platform ios`
+announces *"Clearing ios / Cleared ios code"* and then:
+
+| Destroyed | Count |
+|---|---|
+| Total files in `ios/` | **65 of 82** |
+| **`VibeSDRWatch` (the Buddy watch app)** | **30 files, and all 23 project references** |
+| Native modules (`VibeDSP.swift`, `VibePowerModule`, `FmdxMp3Decoder`, …) | 24 |
+| **`ci_scripts/ci_post_clone.sh`** (Xcode Cloud's whole bootstrap) | 1 |
+| `ExportOptions*.plist`, `Podfile.lock`, the Xcode Cloud manifest, bundled `libopus.a`, image assets | the rest |
+
+★★★ **So the Expo tvOS route is CLOSED for this project.** `@react-native-tvos/config-tv` only acts
+during prebuild, and prebuild cannot be run without losing the watch app and the CI bootstrap. The
+tvOS target must be added to `ios/VibeSDR.xcodeproj` **by hand**.
+★ Reverting was clean (`git checkout -- ios/ && git clean -fd ios/`): every TRACKED file came back
+byte-for-byte. The only losses were untracked local files — `.DS_Store`, Xcode `xcuserdata`, and
+`.xcode.env.local` (regenerate with `export NODE_BINARY=$(command -v node)`).
+
+### 6.3b ★ The JS/dependency side, which DOES work
+- `react-native` aliased to `npm:react-native-tvos@0.86.2-0` — the fork's version matches RN 0.86
+  exactly.
+- ★★ **`--legacy-peer-deps` is mandatory and permanent**: the fork's versions are semver
+  PRERELEASES (`0.86.2-0`), and peer ranges like `>=0.65 <1.0` never match a prerelease, so every
+  consumer of `react-native` in the tree rejects it. Xcode Cloud's `ci_post_clone.sh` needs the
+  same flag for a tvOS workflow.
+- ★ Let ONLY `react-native` move when installing. Re-resolving the tree pulled `expo-modules-jsi`
+  57.0.0 → 57.0.4, which broke `patches/expo-modules-jsi+57.0.0.patch` (patch-package matches the
+  version in the filename) and would have failed `postinstall` — and so the Cloud build.
+
+### 6.3c ★ The old note, kept for the record
 React Native's tvOS support lives in the `react-native-tvos` fork, and Expo's tvOS story has its own
 config-plugin requirements. This project is Expo SDK 57 / RN 0.86 with the New Architecture locked
 in. **Confirm the fork/plugin actually supports that combination before promising a build** — the
