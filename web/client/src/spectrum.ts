@@ -140,6 +140,10 @@ export interface SpectrumCallbacks {
   /** Admin unlock result, or a refusal of a protected control. */
   onAdmin?:  (ok: boolean, refused: boolean) => void;
   /** Live RSP gain state — the AGC moves the IF reduction, so slider positions are not it. */
+  /** Channel power and noise floor in the engine's dBFS, measured on the FULL-RATE FFT and so
+   *  independent of zoom, view and bin width. The meter must prefer these over anything it
+   *  derives from a spectrum frame — a frame's resolution is whatever the user zoomed to. */
+  onSigStat?: (chanDb: number, floorDb: number) => void;
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
                settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
@@ -400,6 +404,11 @@ export class SpectrumClient {
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });
+        break;
+      case 'sig':
+        // Channel power and noise floor, both measured server-side on the full-rate FFT so
+        // they do NOT move with the view. See onSpectrum's signal-meter note.
+        this.cb.onSigStat?.(Number(msg.chan), Number(msg.floor));
         break;
       case 'rspstat':
         this.cb.onRspStat?.(Number(msg.sysGain) || 0, Number(msg.lna) || 0, Number(msg.ifgr) || 0,

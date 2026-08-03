@@ -584,6 +584,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         renderRspVals();
       }
     },
+    onSigStat: (chan, floor) => {
+      if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
+      srvChanDb = chan; srvFloorDb = floor; srvSigValid = true;
+    },
     onRdsX: (x) => {
       const now = Date.now();
       if (grpPrev.at && x.gtot >= grpPrev.tot) {
@@ -1415,6 +1419,12 @@ let lastSigDb = -160;
 
 let snrSmooth = 0;
 
+/** ★ The server's own channel power / noise floor, off the full-rate FFT (see the 'sig' message).
+ *  `srvSigValid` stays false until the first one arrives, so a server too old to send them keeps
+ *  the frame-derived fallback. (This client only ever talks to a VibeServer — the multi-backend
+ *  Kiwi/OpenWebRX/SpyServer world is the APP's, not this one's.) */
+let srvChanDb = -160, srvFloorDb = -120, srvSigValid = false;
+
 function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   if (!spec) return;
   const n = bins.length;
@@ -1433,14 +1443,36 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   const sample: number[] = [];
   for (let i = 0; i < n; i += 8) sample.push(bins[i]);
   sample.sort((a, b) => a - b);
-  const noiseDb = sample[Math.floor(sample.length * 0.25)] ?? -120;
+  let noiseDb = sample[Math.floor(sample.length * 0.25)] ?? -120;
+
+  // ★★★ PREFER THE SERVER'S MEASUREMENT, BECAUSE EVERYTHING ABOVE IS MEASURED IN WHATEVER
+  //     RESOLUTION THE USER HAPPENS TO BE ZOOMED TO. A frame's bins narrow as you zoom in, so a
+  //     carrier's power concentrates into fewer of them while the per-bin noise floor falls —
+  //     and the meter climbed toward full scale for no reason but the zoom (Stuart, 2026-08-03:
+  //     "the bar is relative to the zoom not the S meter").
+  //     The server measures both on the FULL-RATE FFT at a fixed resolution, so they hold still.
+  //     `chan` is the same quantity the SQUELCH uses — the one meter that was always right.
+  //   ★ The frame-derived figures above remain the fallback for a server too old to send `sig`,
+  //     so a client on an older VibeServer still gets a meter rather than a dead one.
+  if (srvSigValid) { sigDb = srvChanDb; noiseDb = srvFloorDb; }
 
   const snr = Math.max(0, sigDb - noiseDb);
   snrSmooth += (snr - snrSmooth) * 0.2;
   lastSigDb = sigDb;
 
-  const { dbMin, dbMax } = wf!.getRange();
-  const norm = Math.max(0, Math.min(1, (sigDb - dbMin) / Math.max(1, dbMax - dbMin)));
+  // ★★★ THE METER HAS ITS OWN FIXED SCALE, AND MUST — IT USED TO BORROW THE WATERFALL'S.
+  //     `wf.getRange()` is the AUTO-CONTRAST range: it re-fits itself to whatever is on screen,
+  //     so zooming into a signal raises the floor and BOTH the fill and the squelch needle
+  //     climbed towards full scale. Fixing the signal measurement was necessary but not
+  //     sufficient — a correct reading divided by a moving range still moves (Stuart,
+  //     2026-08-03: "if I zoom all the way in both max out nearly, which for setting squelch
+  //     is no good"). A signal meter must never depend on a DISPLAY setting.
+  //   ★ The endpoints are the S-unit ladder in toSUnit(): S1 = -115 dBFS, S9+60 = -13. So the
+  //     bar and the S-unit text beside it now describe the same scale instead of two different
+  //     ones, and a given signal always lands in the same place — which is what makes it
+  //     possible to SET A SQUELCH THRESHOLD and have it still mean that later.
+  const dbMin = METER_MIN_DBFS, dbMax = METER_MAX_DBFS;
+  const norm = Math.max(0, Math.min(1, (sigDb - dbMin) / (dbMax - dbMin)));
 
   // Asymmetric smoothing: fast attack, slow decay (same feel as the app's meter).
   sigSmooth += (norm - sigSmooth) * (norm > sigSmooth ? 0.55 : 0.18);
@@ -1550,6 +1582,12 @@ let sqlSigNorm = 0;
 const SQL_OFF = -100;
 
 /** dBFS -> S-unit, 6 dB per unit (lifted from the skin's _toSUnit ladder). */
+/** ★ The signal meter's FIXED scale, in dBFS — deliberately the same span as the S-unit ladder
+ *  below (S1 = -115, S9+60 = -13), with a little room under S1. It is NOT the waterfall's
+ *  auto-contrast range: that one re-fits to whatever is on screen, which made the meter and the
+ *  squelch needle drift with zoom. See updateSignal(). */
+const METER_MIN_DBFS = -121, METER_MAX_DBFS = -13;
+
 function toSUnit(dbfs: number): string {
   if (dbfs >= -73) return `S9+${Math.min(60, Math.round((dbfs + 73) / 6) * 6)}`;
   const ladder = [-79, -85, -91, -97, -103, -109, -115];
