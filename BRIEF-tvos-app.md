@@ -47,12 +47,22 @@ a mode to escape.
 
 ## 3. The highlight, and how it sleeps
 
-- After **a few seconds with no touch**, the highlight disappears. The screen is then just a
-  waterfall — which is what a TV should look like from the sofa.
-- **Touch the pad to wake it.** By default the wake lands on the **frequency box**.
-- ★ **It remembers where it was, but only briefly.** If the pad is touched again within a short
-  window, the highlight returns to where it was; after that it defaults back to the frequency bar.
-- **A longer idle timeout returns the screen** to the waterfall / FM-DX screen as appropriate.
+**The numbers (Stuart, 2026-08-03):**
+
+| Timer | Value | Behaviour |
+|---|---|---|
+| **Hide the highlight** | **15 s** with no touch | The screen becomes just a waterfall — which is what a TV should look like from the sofa. |
+| **Remember the position** | **30 s** after hiding | Touch within this window and the highlight comes back **where it was**. After it, a wake lands on the **frequency box**. |
+| **Fall back to the waterfall / FM-DX screen** | *still to decide* | See the constraint below. |
+
+- **Touch the pad to wake it.** The default wake target is the **frequency box**.
+- ★★ **THE FALLBACK TIMEOUT MUST BE AT LEAST THE 45 s THOSE TWO ADD UP TO** (15 + 30). If the screen
+  changed back while the position was still being remembered, "remember where I was" would be a
+  promise about a screen that no longer exists — the highlight would return to something the user
+  is no longer looking at. Whatever number is chosen, it cannot be shorter than the memory window.
+- ★ Note the highlight timeout is *long* by phone standards, and deliberately so: nothing is being
+  held up while it sits there, the ring still tunes (§1), and on a TV a control surface that
+  vanishes in three seconds reads as broken rather than tidy.
 
 ## 4. The tuning flow, end to end
 
@@ -258,8 +268,9 @@ Add the tvOS tour to that list the day it is written, not afterwards.
 
 ## 7. Open questions for Stuart
 
-1. **The timeouts need numbers**: highlight hide (~"a few seconds"), the remember-my-position window
-   ("within a certain time"), and the fall-back-to-waterfall idle.
+1. ✅ **ANSWERED for two of three — 15 s to hide the highlight, 30 s to remember its position** (§3).
+   ★ Still open: **the fall-back-to-waterfall idle**, which must be **≥ 45 s** so the screen cannot
+   change while the position is still being remembered. See the constraint in §3.
 2. ✅ **ANSWERED — the ring is always live for tune/zoom**, highlight or no highlight. See §1.
 3. ✅ **ANSWERED — the SAME record, via UNIVERSAL PURCHASE.** Stuart, 2026-08-03: *"I thought you
    could add a tv app to an iOS app as I've purchased apps on the phone and theyve popped up on the
