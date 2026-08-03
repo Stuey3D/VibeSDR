@@ -867,12 +867,13 @@ function WaterfallView({
   const revN     = useSharedValue(0);
   const revStep  = useSharedValue(16);   // ms per line
   const revK     = useSharedValue(0);
-  const revFrameMs = useSharedValue(0);   // smoothed display frame time — see revealCb
+  /** UI-thread timestamp at which the current pair started revealing, or -1 = "capture on the next
+   *  frame". Absolute due-times are measured from this — see revealCb. */
+  const revStartTs = useSharedValue(-1);
   /** Frames with nothing to reveal. The stepper now stays ACTIVE between pairs (stopping there is
    *  what caused the halting scroll), so this is what still releases the display when the stream
    *  genuinely stops rather than merely pausing between pairs. */
   const revIdle = useSharedValue(0);
-  const revAcc   = useSharedValue(0);
   const revealRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
   const setRevealActive = useCallback((on: boolean) => {
     const t = revealRef.current;
@@ -905,44 +906,48 @@ function WaterfallView({
     //       a restart, a stall or a GC pause — it carries NO information about the refresh rate, so
     //       it must be DISCARDED rather than averaged in. Clamping was the bug; the clamp made a
     //       nonsense value look plausible instead of throwing it away.
-    const dt = fi.timeSincePreviousFrame ?? 16.7;
-    if (dt > 3 && dt < 40) {
-      revFrameMs.value = revFrameMs.value > 0 ? revFrameMs.value * 0.9 + dt * 0.1 : dt;
-    }
-    // Until a real frame time has been measured, assume 60 Hz rather than dividing by zero.
-    const frameMs = revFrameMs.value > 0 ? revFrameMs.value : 16.7;
-    const framesPerLine = Math.max(1, Math.round(revStep.value / frameMs));
-    revAcc.value += 1;                       // frames, not ms
-
-    // ★★★ DO NOT STOP BETWEEN PAIRS — THAT GAP IS THE "SMOOTH AND HALTING".
-    //     This used to call setRevealActive(false) the moment a pair finished, and the next data
-    //     frame turned it back on. BOTH hops go through runOnJS to the JS thread, so every pair
-    //     boundary — four or five times a SECOND — paid an activation latency during which no line
-    //     was emitted. Within a pair the cadence was even; between pairs it stalled. That is
-    //     exactly the rhythm Stuart described: "smooth and halting smooth and halting".
-    //     ★ The web client never has this because its tick() runs on EVERY animation frame and
-    //       never stops (waterfall.ts). Idling is the special case there, not the normal one.
-    //     ★ So: stay active and simply do nothing when there is no line due. The callback is cheap
-    //       — a compare and an add — and the panel is already awake while data is arriving.
+    // ★★★ ABSOLUTE DUE-TIMES, NOT A ROUNDED FRAME COUNT. This is the third attempt and the
+    //     reasoning that finally explains all three symptoms, so it is worth stating properly.
+    //
+    //     The web client quantises the cadence to a whole number of display frames — one row every
+    //     N frames — and that works THERE because it then SIZES THE PAIR FROM THE SAME ROUNDED
+    //     NUMBER (memory/waterfall_refresh_locked_model.md §2). Both halves are load-bearing.
+    //     ★★ THIS RENDERER CANNOT DO THE SECOND HALF. `uN` maps ALL waterfall history through the
+    //     shader, so the lines per pair is a CONSTANT and cannot be resized to match a rounded
+    //     rate (§"the app needs the opposite rule"). So rounding the cadence here GUARANTEES the
+    //     pair finishes early or late against the arrival interval — and that mistiming IS the
+    //     start-stop, at every boundary, no matter how accurately the refresh rate is measured.
+    //     Build 71 rounded against a corrupted average, 72 against a clean one, 73 kept the
+    //     callback alive — all three still rounded, so all three still halted.
+    //
+    //     With n fixed, exactly ONE cadence fills the interval: interval/n, in TIME.
+    //     ★ So each line k is due at pairStart + k*revStep, computed ABSOLUTELY. Absolute due-times
+    //       cannot drift (an incremental accumulator loses its remainder on every reset, which is
+    //       what the ORIGINAL pre-da29ac0 code did), and they are self-correcting under a VARIABLE
+    //       refresh rate — which is the other thing that was wrong: a ProMotion panel moves between
+    //       120 Hz and 60 Hz on its own, so an averaged frame time lands on ~12 ms, a value that is
+    //       not a frame interval on ANY display (Stuart, 2026-08-04: "I wonder if we are mistiming
+    //       it due to VRR"). Timing against the clock does not care what the panel is doing.
+    //     ★ The residual quantisation is ONE FRAME — 8 ms on ProMotion, 17 ms at 60 Hz — because an
+    //       emission can only land on a frame. That is inherent to any display and is far smaller
+    //       than the interval-length halt it replaces.
     const n = revN.value;
     if (n <= 0 || revK.value >= n) {
-      // Nothing to reveal. Hold the accumulator (see below) and count idle frames so a stream that
-      // genuinely STOPS still releases the display — the original power intent, just moved from
-      // "every pair" (where it cost smoothness) to "the data has actually stopped" (where it does
-      // not). ~1 s at any refresh rate.
-      revAcc.value = Math.min(revAcc.value, framesPerLine);
+      // Nothing due. Keep the callback ALIVE between pairs — stopping and restarting it cost a
+      // runOnJS round trip at every boundary, which was its own halt (build 73). Release the
+      // display only when the data has genuinely stopped, ~1 s.
       revIdle.value += 1;
       if (revIdle.value > 90) { revIdle.value = 0; runOnJS(setRevealActive)(false); }
       return;
     }
     revIdle.value = 0;
-    if (revAcc.value < framesPerLine) return;
-    // ★★ SUBTRACT, DO NOT ZERO — keep the carry. With the callback now running continuously the
-    //    remainder is meaningful again, and it is what keeps the cadence even ACROSS a pair
-    //    boundary rather than re-phasing to each arrival (the web client's rule, waterfall.ts:
-    //    "DO NOT ZERO THE CARRY WHEN A PAIR COMPLETES — that is what an accumulator is FOR").
-    revAcc.value -= framesPerLine;
-    revK.value += 1;
+    // First frame of a pair: start the clock here rather than in startRevealStepper, so the
+    // interval is measured on the UI thread's own timebase and never includes a JS-thread hop.
+    if (revStartTs.value < 0) revStartTs.value = fi.timestamp;
+    const elapsed = fi.timestamp - revStartTs.value;
+    const due = Math.min(n, Math.floor(elapsed / Math.max(1, revStep.value)));
+    if (due <= revK.value) return;
+    revK.value = due;                        // catch up in one step if a frame was missed
     scrollFrac.value = Math.min(1, revK.value / n);
   }, false);
   revealRef.current = revealCb;
@@ -954,9 +959,10 @@ function WaterfallView({
     revStep.value = Math.max(16, intervalMs / n);
     revK.value = 0;
     revIdle.value = 0;
-    // ★ revAcc is NOT reset — the leftover frames from the last pair carry into this one, which is
-    //   what keeps the cadence even across arrivals instead of re-phasing to arrival jitter. It is
-    //   bounded to framesPerLine in the callback, so it cannot accumulate.
+    // ★ -1 = "start the clock on the next UI frame". Taking the timestamp HERE would bake in the
+    //   JS-thread hop that got us to this function, which is exactly the latency that made the old
+    //   stop/start cadence uneven.
+    revStartTs.value = -1;
     // Keep the measured frame time across restarts — it is a property of the DISPLAY, not of this
     // reveal, and re-learning it every frame interval would leave the first lines mistimed.
     setRevealActive(true);
