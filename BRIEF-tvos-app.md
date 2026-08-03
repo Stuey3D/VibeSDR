@@ -261,8 +261,21 @@ Add the tvOS tour to that list the day it is written, not afterwards.
 1. **The timeouts need numbers**: highlight hide (~"a few seconds"), the remember-my-position window
    ("within a certain time"), and the fall-back-to-waterfall idle.
 2. ✅ **ANSWERED — the ring is always live for tune/zoom**, highlight or no highlight. See §1.
-3. **Is the tvOS app a separate App Store record or the same one?** Same record is normal for a
-   universal app, but tvOS is a separate binary and platform either way.
+3. ✅ **ANSWERED — the SAME record, via UNIVERSAL PURCHASE.** Stuart, 2026-08-03: *"I thought you
+   could add a tv app to an iOS app as I've purchased apps on the phone and theyve popped up on the
+   TV too."* That is exactly it. Apple's Universal Purchase lets iOS / iPadOS / macOS / tvOS /
+   watchOS share **one App Store record and one bundle ID**, so a single purchase covers every
+   platform — which is why bought-on-phone apps appear on the TV.
+   - ★★ **VibeSDR is a PAID app, so this is worth real money to the decision**: every existing
+     customer gets the TV app at no extra cost, and there is no second listing, no second price, no
+     second set of reviews to maintain. Use the same record.
+   - ★ **The bundle ID must MATCH** (`com.vibesdr.app`) — that is the mechanism, not a nicety. A
+     tvOS target given its own bundle ID silently forfeits Universal Purchase.
+   - ★ **It links the ENTITLEMENT, not the code.** tvOS is still a separate target, a separate
+     binary, a separate build and a separate submission — nothing about this makes the phone build
+     run on a TV. It removes the STORE work, not the ENGINEERING work.
+   - ★ Same for TestFlight: a tvOS build is tested through the Apple TV TestFlight app, and it must
+     be an actual tvOS build — the iOS one will not appear there.
 4. **The decoders panel** (FT8/WEFAX/SSTV) — in or out for v1? Note the decoders themselves are
    native and fine; it is only their **spot MAP** that is cut (§5b), so a decoder panel without a
    map is a real option.
