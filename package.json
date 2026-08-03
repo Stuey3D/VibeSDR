@@ -21,7 +21,7 @@
     "opus-decoder": "^0.7.11",
     "pako": "^2.1.0",
     "react": "19.2.3",
-    "react-native": "0.86.0",
+    "react-native": "npm:react-native-tvos@0.86.2-0",
     "react-native-draggable-flatlist": "^4.0.3",
     "react-native-gesture-handler": "~2.32.0",
     "react-native-get-random-values": "~1.11.0",
@@ -39,7 +39,8 @@
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "patch-package": "^8.0.1",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "@react-native-tvos/config-tv": "^0.1.6"
   },
   "scripts": {
     "start": "expo start",
