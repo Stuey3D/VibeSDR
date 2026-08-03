@@ -105,14 +105,24 @@ for: small, user-owned state that must survive, so it syncs rather than being st
 - ★ Watch for [[icloud_stale_tombstone_immortal]] — the zombie-favourite bug was diagnosed from
   source twice and shipped wrong twice; a third consumer is a third chance to meet it.
 
-★★★ **THE CONSEQUENCE THAT MUST NOT BE MISSED: THE INSTANCE PICKER HAS TO SAY SO.** Dropping
-compatibility mode is not just removing a screen — it removes the ONLY way to use a Kiwi whose owner
-set `ext_api=0`, which is **120 of 847 public Kiwis** ([[kiwi_ext_api_10s_kick]]). Those servers
-would otherwise be listed, connect, stream for ten seconds and die, with nothing on screen to
-explain it. We already identify them **before connecting**, so on tvOS they must be marked
-unusable — or hidden — in the picker.
-★ This is the AGENTS.md rule verbatim: *never offer a control whose every use is a no-op*, and *a
-tour that misdirects is worse than no tour*. A dead-ending server list is the same fault.
+### ✅ The restricted-Kiwi consequence is ALREADY HANDLED — it is one flag, not a feature
+Dropping compatibility mode removes the only way to use a Kiwi whose owner set `ext_api=0` — **120
+of 847 public Kiwis** ([[kiwi_ext_api_10s_kick]]). Left alone they would be listed, connect, stream
+for ten seconds and die with nothing on screen to explain it.
+
+★ **But the picker already does the right thing** (Stuart, 2026-08-03: *"those kiwis are not shown
+the same as we do with Jr now"*). In `InstancePickerScreen.tsx`:
+- `blocksApps(i) => i.extApi === 0` (`:1193`) — and `undefined` deliberately means *unknown*, never
+  *allowed*, so nothing is painted red on a guess;
+- they are **hidden by default**: `.filter(i => showRestricted || !blocksApps(i))` (`:1219`);
+- a SHOW/HIDE banner off `restrictedCount` (`:1343`) is the way back;
+- `connect(..., blocksApps(inst))` (`:1689`) routes a revealed one straight to compatibility mode.
+
+**So tvOS needs exactly one thing: `showRestricted` can never become true** — no SHOW toggle, no
+compatibility route. The default behaviour is already correct, and it matches Jr, which hides them
+for the same reason (no webview on a watch either).
+★ Which is the AGENTS.md rule holding on a third platform: *never offer a control whose every use is
+a no-op*. A dead-ending server list is that same fault.
 
 ---
 
