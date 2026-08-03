@@ -286,7 +286,13 @@ private:
     int    avgN_ = 0;              // windows summed into acc2_
     std::vector<cf32>  acc_;
     int    accN_ = 0;
-    long long sinceEmit_ = 0, emitStride_ = 1;   // in DECIMATED samples
+    // ★ Frames leave every `winPerFrame_` windows, and each window advances by `hop_` samples.
+    //   COUNTING WINDOWS, not samples: a sample-count gate has to be compared against a stride that
+    //   integer division cannot express exactly, and the gate then waits one whole extra hop.
+    long long emitStride_ = 1;      // decimated samples per frame — the TARGET, used to derive both
+    int  hop_ = 1;                  // samples the window slides between transforms
+    int  winPerFrame_ = 1;          // windows averaged into each emitted frame
+    int  winCount_ = 0;             // windows since the last frame left
 
     // Direct
     NCO nco_;

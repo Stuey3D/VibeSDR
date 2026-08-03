@@ -78,6 +78,17 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
     rateHz_   = rateHz > 0 ? rateHz : 15.0;
     // Emit gate counts DECIMATED samples, so it is independent of the input block size.
     emitStride_ = std::max<long long>(1, (long long)llround((sampleRate_ / (double)decim_) / rateHz_));
+    // ★★★ DERIVE THE HOP AND THE WINDOW COUNT TOGETHER, then drive the emit off the COUNT.
+    //     Frames per second is chanRate/(winPerFrame_*hop_), so both have to come from the same
+    //     division or the rate is wrong by whatever integer truncation threw away — with a stride
+    //     of 6250 and 2 windows, hop_ = 3125 is exact, but a SAMPLE gate comparing against 6250
+    //     when 2 hops give 6250 is fine and 3 hops is not, and any remainder costs a whole extra
+    //     hop: 20 fps becomes 13 (Stuart, 2026-08-03, measured at 2/3 of target).
+    //     ★ winPerFrame_ is also how many windows get AVERAGED into each frame, so a wider hop cap
+    //       buys quieter frames rather than being wasted.
+    winPerFrame_ = std::max(1, (int)((emitStride_ + (fftN_ / 2) - 1) / (fftN_ / 2)));
+    hop_         = std::max(1, (int)(emitStride_ / winPerFrame_));
+    winCount_    = 0;
 
     if (method_ == Method::Direct) {
         nco_.setFreq(offsetHz_ / sampleRate_);   // mix the view centre down to DC
@@ -96,7 +107,7 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
 }
 
 void ZoomSpectrum::rebuild_() {
-    accN_ = 0; sinceEmit_ = 0;
+    accN_ = 0; winCount_ = 0;
 
     if (method_ == Method::Direct) {
         chan_.reset();
@@ -129,7 +140,6 @@ void ZoomSpectrum::rebuild_() {
 void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const float*, int)>& cb) {
     for (int i = 0; i < n; ++i) {
         acc_[accN_++] = x[i];
-        ++sinceEmit_;
         if (accN_ < fftN_) continue;
         // Transform EVERY window; the rate gate decides when to SEND, not whether to compute.
         {
@@ -157,14 +167,15 @@ void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const fl
             ++avgN_;
         }
 
+        ++winCount_;
         // ★★★ AVERAGE THE WINDOWS BETWEEN EMITS — DO NOT THROW THEM AWAY. The rate gate used to
         //     drop whole windows at low frame rates, so anything brief that happened between two
         //     emitted frames simply never appeared: "the dropoff at the lower data rates is vastly
         //     more noticeable" (Stuart, 2026-08-02). The wide path never had this because it
         //     block-averages FFT_AVG frames. Averaging costs nothing extra, keeps every sample
         //     represented, and quietens the noise floor at exactly the rates where it looked worst.
-        if (sinceEmit_ >= emitStride_ && avgN_ > 0) {
-            sinceEmit_ = 0;
+        if (winCount_ >= winPerFrame_ && avgN_ > 0) {
+            winCount_ = 0;
             const float inv = 1.0f / (float)avgN_;
             for (int o = 0; o < bins_; ++o) out_[o] = acc2_[o] * inv;
             std::fill(acc2_.begin(), acc2_.end(), 0.0f);
@@ -182,10 +193,15 @@ void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const fl
         //     reduction — 24 windows at 94% overlap is worth about one and a half independent ones,
         //     which looks like integration and is not. It showed as speckle against UberSDR's
         //     smooth traces (Stuart, 2026-08-02). So: hop as large as the requested rate permits,
-        //     capped at half a window (enough overlap to lose nothing between frames) and floored
-        //     at 1/16th (so deep zoom still has frames to send). Fewer, more independent windows —
-        //     genuinely quieter, and fewer transforms into the bargain.
-        const int hopOut = std::max(fftN_ / 16, std::min((int)emitStride_, fftN_ / 2));
+        //     capped at half a window so nothing is missed between frames.
+        // ★★★ NO LOWER FLOOR — IT WAS THROTTLING THE FRAME RATE AT HIGH ZOOM. A floor of fftN_/16
+        //     was added "so this cannot run away", but the arithmetic says it never could: frames
+        //     per second is chanRate/hop, and with hop following the emit interval that is
+        //     chanRate/(chanRate/rate) = THE REQUESTED RATE, at every zoom level. The FFT count is
+        //     self-limiting. What the floor actually did was cap the hop as chanRate fell with
+        //     zoom depth, so the frame rate fell with it — 20 fps asked for, 15 at a 7.8 kHz span
+        //     and 7.6 deeper still (Stuart, 2026-08-03: "it seems to slow down as you zoom in").
+        const int hopOut = hop_;
         std::memmove(acc_.data(), acc_.data() + hopOut, (size_t)(fftN_ - hopOut) * sizeof(cf32));
         accN_ = fftN_ - hopOut;
     }
