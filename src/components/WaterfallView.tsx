@@ -516,6 +516,10 @@ function WaterfallView({
   const lastFrameTs = useRef(0);
   const avgFrameMs  = useRef(150);
   const lastWfLog   = useRef(0);      // ★ temporary: see the [wf] log in the settled branch
+  // Lines-per-frame ladder — see the note where these are set. uNRaw is the UNquantised ratio that
+  // produced the committed step, so the deadband is measured against what we actually decided on.
+  const uNRaw       = useRef(0);
+  const uNStep      = useRef(1);
 
   const wfUniforms = useDerivedValue(() => ({
     uHeadF:    uHead.value,
