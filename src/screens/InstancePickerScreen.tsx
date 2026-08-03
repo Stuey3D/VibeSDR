@@ -260,6 +260,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const customInputRef = useRef<TextInput | null>(null);
   const [connecting,  setConnecting]    = useState(false);
   const [filter,      setFilter]        = useState('');
+  /** ★★★ Show the receivers whose owner does not permit third-party apps (`ext_api === 0`). They
+   *  do not refuse at connect — they admit you, stream audio, then close at ~10 s saying nothing,
+   *  which is the "connects then kicks us" bug. Shown by default, flagged in red, and hideable.
+   *  See memory/kiwi_ext_api_10s_kick.md. */
+  const [showRestricted, setShowRestricted] = useState(true);
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
   // Tell native the default-instance name (or '' = none) so the Siri "open and
   // tune" intent can auto-connect, or prompt the user to set a default.
@@ -1168,6 +1173,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // (never collapsible), then the directory grouped by the current sort mode. In 'country'
   // mode each country is its own collapsible group (user's country open, rest collapsed);
   // 'nearest'/'snr' remain a single flat "OTHER SERVERS" section for now.
+  /** The owner has switched third-party API access off — apps like ours get ~10 s and a silent
+   *  close. Only the kiwisdr.com directory publishes this, so `undefined` means "not known", never
+   *  "allowed": we must not paint a receiver red on a guess. */
+  const blocksApps = (i: SDRInstance) => i.extApi === 0;
+
   const listData = useMemo((): ListItem[] => {
     const q = filter.toLowerCase().trim();
     const mFav  = (f: Favourite) => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q);
@@ -1191,7 +1201,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     ] : [];
     // In a directory, a favourited server still shows in its OWN group (don't vanish it) —
     // we only pull favourites out of `rest` when they're shown separately (on the chooser).
-    let rest = instances.filter(i => showFavs ? !isFav(i.url) : true).filter(mInst);
+    let rest = instances.filter(i => showFavs ? !isFav(i.url) : true).filter(mInst)
+      .filter(i => showRestricted || !blocksApps(i));
 
     const out: ListItem[] = [];
     if (customFavItems.length) {
@@ -1312,6 +1323,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   //
   // Scrolling uses the FlatList's own scrollToIndex, which sidesteps the measurement
   // problem the panels hit entirely — the list already knows where its rows are.
+  /** How many of the CURRENTLY LISTED receivers the owner has closed to third-party apps. Counted
+   *  off `instances` rather than the filtered list, so the banner does not vanish the moment you
+   *  hide them — which would take away the only way back. */
+  const restrictedCount = useMemo(() => instances.filter(blocksApps).length, [instances]);
+
   const listRef = useRef<FlatList<ListItem> | null>(null);
   // ★★ The DEFAULT screen is the DraggableFlatList, with the whole chooser (custom URL,
   // discovered, directories) as its ListHeaderComponent — so `listData` is the server rows
@@ -1667,7 +1683,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   ? <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
                   : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.amber }}>📻</Text>}
               </View>
-              <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
+              <Text style={{ fontFamily: F, fontSize: fs(16), color: blocksApps(inst) ? C.red : C.amber, flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
               </Text>
               {inst.version ? (
@@ -1681,6 +1697,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 ⚠ Older than v{MIN_RECOMMENDED_VERSION} — may have visual glitches
               </Text>
             )}
+            {/* ★★★ THE OWNER DOES NOT PERMIT THIRD-PARTY APPS (ext_api = 0). Say so HERE, before
+                anyone spends a connection on it: the receiver admits you, streams audio, then closes
+                at ~10 s without a word, which for months read as our bug. It is a policy, not a
+                fault — so name it plainly, do not offer a retry, and point at the one thing that
+                DOES work: the owner's own web page, which is public. */}
+            {blocksApps(inst) && (
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.red, marginTop: 2 }}>
+                ⚠ Owner does not allow third-party apps — opens in compatibility mode
+              </Text>
+            )}
+            {/* The hardware as the receiver itself reports it — "KiwiSDR 2 v1.902", "Web-888 …". */}
+            {inst.hardware ? (
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                {inst.hardware}
+              </Text>
+            ) : null}
             <View style={styles.metaRow}>
               {inst.location ? (
                 <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.gold }} numberOfLines={1}>{inst.location}</Text>
@@ -2045,8 +2077,34 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               // rows when `data` or `extraData` changes, and the focused index is external
               // state — so focus was moving correctly and invisibly, which is exactly what
               // Stuart saw, and why an Enter could connect to a server he could not see.
-              extraData={navFocus}
+              extraData={[navFocus, showRestricted]}
               style={{ flex: 1 }}
+              /* ★★★ THE RED-ROW EXPLANATION, WITH ITS OWN SHOW/HIDE. Only appears when this
+                 directory actually lists receivers whose owner has switched third-party access off
+                 — a banner about a situation you are not in is just noise. The button is IN the
+                 banner because that is where the question arises (Stuart). */
+              ListHeaderComponent={
+                restrictedCount > 0 ? (
+                  <View style={{ borderWidth: 1, borderColor: C.red, borderRadius: 8,
+                                 paddingHorizontal: 10, paddingVertical: 8, marginBottom: 8,
+                                 flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.red, flex: 1, lineHeight: fs(16) }}>
+                      {restrictedCount} receiver{restrictedCount === 1 ? '' : 's'} shown in red do not allow
+                      third-party apps like VibeSDR — their owner has turned that off. They need
+                      compatibility mode, which opens the receiver's own web page.
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setShowRestricted(v => !v)}
+                      style={{ borderWidth: 1, borderColor: C.red, borderRadius: 6,
+                               paddingHorizontal: 10, paddingVertical: 6 }}
+                    >
+                      <Text style={{ fontFamily: F, fontSize: fs(11), color: C.red }}>
+                        {showRestricted ? 'HIDE' : 'SHOW'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null
+              }
               keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 + insets.bottom }}

@@ -2010,7 +2010,13 @@ let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
 //    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
 //    and worse, they trade detail against motion (Stuart: "they both have their merits").
-let wfScroll: 'sharp' | 'smooth' = 'smooth';
+let wfScroll: 'detailed' | 'default' | 'smooth' = 'default';
+// Rows synthesised per received frame for each preset. DETAILED is 1 = no interpolation at all.
+const WF_PRESET: Record<string, { rows: number; note: string }> = {
+  detailed: { rows: 1, note: 'One row per received frame — nothing invented, and it scrolls at the data rate.' },
+  default:  { rows: 2, note: 'A little interpolation to even out a jittery link.' },
+  smooth:   { rows: 4, note: 'Heavier interpolation — continuous motion on a slow feed, less real detail.' },
+};
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 
 /** The server's fps ceiling (its advertised max, else the built-in 20). */
@@ -2026,15 +2032,16 @@ function computeActiveFps(): number {
 function applyWaterfallRates() {
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
-  wf?.setSharpRows(wfScroll === 'sharp');
+  wf?.setSharpRows(wfScroll === 'detailed');
+  wf?.setRowsPerFrame(WF_PRESET[wfScroll]?.rows ?? 2);
   // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
   // a control whose every use is a no-op.
-  { const r = document.getElementById('rowWfSpeed');    if (r) r.hidden = wfScroll === 'sharp';
-    const n = document.getElementById('wfSpeedNote');   if (n) n.hidden = wfScroll === 'sharp';
+  // ★ The old 10/20/30 SPEED row is gone from the UI: the preset decides it. Kept hidden rather
+  //   than deleted so a saved wfSpeed still loads without a migration.
+  { const r = document.getElementById('rowWfSpeed');    if (r) r.hidden = true;
+    const n = document.getElementById('wfSpeedNote');   if (n) n.hidden = true;
     const t = document.getElementById('wfScrollNote');
-    if (t) t.textContent = wfScroll === 'sharp'
-      ? 'One row per received frame — most detail, and it scrolls at the data rate.'
-      : 'Extra rows are interpolated between frames — set the speed below. Smoother motion, less real detail.';
+    if (t) t.textContent = WF_PRESET[wfScroll]?.note ?? '';
     for (const b of Array.from(document.getElementById('wfScrollSeg')?.children ?? []) as HTMLButtonElement[])
       b.classList.toggle('on', b.dataset.wfscroll === wfScroll); }
   spec?.setFftRate(wantedFps());
@@ -4373,7 +4380,7 @@ function buildMenu() {
   // so render resolution no longer changes the speed.
   for (const b of Array.from($('wfScrollSeg').children) as HTMLButtonElement[]) {
     b.onclick = () => {
-      wfScroll = (b.dataset.wfscroll === 'smooth') ? 'smooth' : 'sharp';
+      wfScroll = (b.dataset.wfscroll as typeof wfScroll) || 'default';
       savePref('wfScroll', wfScroll);
       applyWaterfallRates();
     };
@@ -4397,7 +4404,7 @@ function buildMenu() {
   }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
-  { const v = prefs().wfScroll;   if (v === 'sharp' || v === 'smooth') wfScroll = v; }
+  { const v = prefs().wfScroll;   if (v === 'detailed' || v === 'default' || v === 'smooth') wfScroll = v; }
   { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
   if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
   applyWaterfallRates();
