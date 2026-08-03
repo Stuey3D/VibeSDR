@@ -30,10 +30,28 @@ void RxPipeline::start(double sampleRate, int fftSize, double fftRate,
 }
 
 void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
+    // ★★★ A RETUNE INSIDE THE SAME MODE AND BANDWIDTH MOVES ONE THING: THE NCO.
+    // Everything rebuildAudio() does is a function of mode/bw/sampleRate — filter
+    // design, the pilot PLL, the resampler tables, the AGC rate. None of them move
+    // when the dial does. Rebuilding anyway cost a full audio BREAK on every step:
+    //   - baseBuf_/chBuf_/demodBuf_/audioBuf_ are cleared, so the stream stops for as
+    //     long as the chain takes to refill — the gap the jitter buffer has to cover,
+    //     and why thinning it to 150 ms produced silence and a re-arm on every tune.
+    //   - agc_.reset() puts env_ back to kTarget, i.e. gain EXACTLY 1.0. On a weak HF
+    //     signal the converged gain is far higher, so the audio drops hard and crawls
+    //     back over the 400 ms release. That is "tuning attenuates the audio" (Stuart,
+    //     2026-08-03, Pi demo). FM was never affected because it has no audio AGC.
+    // So: same chain -> just re-point the oscillator. The NCO is a recursive rotator,
+    // so its phase stays continuous across the change and there is no click.
+    //
+    // ★ A REQUEST, not a retune: this is called from a socket/control thread and the
+    // NCO is owned by the DSP thread. Same discipline as `dirty_` and `resetReq_`.
+    const bool sameChain = (mode == mode_ && bwHz == bwHz_);
     offsetHz_ = offsetHz;
     mode_     = mode;
     bwHz_     = bwHz;
-    dirty_    = true;
+    if (sameChain) tuneReq_.store(true, std::memory_order_relaxed);
+    else           dirty_ = true;
 }
 
 void RxPipeline::rebuildAudio() {
@@ -189,6 +207,13 @@ void RxPipeline::rebuildAudio() {
     // Construct the demod for the active mode. FM gain maps radians/sample to a
     // unit-ish audio level at the channel rate.
     am_.reset(); fm_.reset(); ssb_.reset(); audioLpf_.reset(); lmrLpf_.reset();
+    // ★ Was the audio AGC already running and converged? If so its envelope is still a
+    // good estimate of the signal we are listening to, and wiping it costs a full
+    // re-acquisition (gain 1.0, then a 400 ms climb) — audible as a hard attenuation.
+    // Only re-acquire when arriving from a mode that had NO audio AGC, where env_ is
+    // genuinely stale. A bandwidth change inside AM/SSB is not a new signal.
+    // env_ is a level, not a rate, so it stays valid across a configure() to a new chFs_.
+    const bool hadAgc = useAgc_;
     useDeemph_ = false; stereo_ = false; useAgc_ = false;
     // Only WFM decimates inside its audio filters; every other mode's post-chain
     // runs at the channel rate, which is already as low as that mode needs.
@@ -196,13 +221,17 @@ void RxPipeline::rebuildAudio() {
     useFmDc_ = false;   // FM-only; must not survive a switch to AM/SSB
     switch (mode_) {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>();
-                                                useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
+                                                useAgc_ = true; agc_.configure(chFs_);
+                                                if (!hadAgc) agc_.reset();
+                                                agc_.guard(); break;
         case Mode::SSB_USB: case Mode::SSB_LSB:
         case Mode::CW:
             ssb_ = std::make_unique<SsbDemod>();
             ssb_->configure(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
                             bwHz_, chFs_);
-            useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
+            useAgc_ = true; agc_.configure(chFs_);
+            if (!hadAgc) agc_.reset();
+            agc_.guard(); break;
         case Mode::NFM:
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
             fmDc_.configure(chFs_); useFmDc_ = true;
@@ -285,6 +314,7 @@ void RxPipeline::rebuildAudio() {
 
     baseBuf_.clear(); chBuf_.clear(); demodBuf_.clear(); audioBuf_.clear();
     dirty_ = false;
+    ++rebuilds_;
 }
 
 void RxPipeline::feed(const cf32* iq, int n) {
@@ -299,7 +329,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
         deemphR_.reset();
         dirty_ = true;                       // and rebuild the audio chain around them
     }
-    if (dirty_) rebuildAudio();
+    if (dirty_) rebuildAudio();          // rebuildAudio() re-points the NCO itself
+    // A same-chain retune: nothing to rebuild, just move the oscillator. Skipped when a
+    // rebuild already ran this block, since that has applied the newer offset anyway.
+    else if (tuneReq_.exchange(false, std::memory_order_relaxed))
+        nco_.setFreq(offsetHz_ / sampleRate_);
 
     // ── Spectrum ───────────────────────────────────────────────────────────
     // Gather fftSize contiguous samples for a frame, then skip to the next slot.
