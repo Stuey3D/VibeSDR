@@ -776,13 +776,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   //     the directory that this owner does not allow third-party apps, so connecting would take a
   //     slot on their radio, stream for ten seconds and end with a silent close. Open the page they
   //     DO publish, immediately. Initialiser, not an effect, so no socket is ever opened.
-  const [compatUrl,   setCompatUrl]   = useState<string | null>(() => {
-    if (!route.params?.compatOnly) return null;
+  const [compatUrl,   setCompatUrl]   = useState<string | null>(null);  // Kiwi web UI in a WebView
+  // ★★★ AFTER THE FIRST RENDER, NOT IN THE INITIALISER. BrowserOverlay is an RN Modal, and it has
+  //     to use the NATIVE SafeAreaView because the insets HOOK returns 0 inside a Modal (its own
+  //     note says so). Opening it from the initialiser mounted the Modal in the very first render,
+  //     before the safe-area provider had measured its window — so the bar drew UNDER the status
+  //     bar and the clock (Stuart, build 70). It was right before only because it had never been
+  //     opened this early. One frame is enough.
+  //     ★ The socket is still never created: the connect effect returns early on compatOnly, which
+  //       is a separate guard and does not depend on this timing.
+  useEffect(() => {
+    if (!route.params?.compatOnly) return;
     let u = (route.params.baseUrl || '').trim().replace(/\/+$/, '')
       .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
     if (!/^https?:\/\//.test(u)) u = 'http://' + u;
-    return u + '/';
-  });  // Kiwi web UI in a WebView
+    setCompatUrl(u + '/');
+  }, [route.params?.compatOnly, route.params?.baseUrl]);
   // A definitive Kiwi refusal terminates the session — an auto-reconnect/zombie watchdog must NOT
   // then stack a "serverLost / Reconnect" card on top of the refusal card. Ref (not state) so the
   // callbacks below read it without stale closures.
@@ -5666,6 +5675,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {compatUrl && (
         <BrowserOverlay
           url={compatUrl}
+          topInset={insets.top}
           title={(instanceName ?? rxLabel) + ' — web'}
           backLabel="← VibeSDR"
           onClose={() => { setCompatUrl(null); navigation.goBack(); }}

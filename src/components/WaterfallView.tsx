@@ -1024,7 +1024,13 @@ function WaterfallView({
     //     ★ ONLY the waterfall is gated. The spectrum trace, audio, RDS and the rate meters above
     //       have already run for this frame and still see every one — the trade being bought here
     //       is waterfall TIME RESOLUTION, nothing else.
-    if (cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs) return;
+    // ★★★ SKIP THE WATERFALL ONLY — NOT THE WHOLE FRAME. This was an early `return`, and the
+    //     SPECTRUM TRACE is built further down (section 4), so the gate dropped the trace as well:
+    //     on a fast feed five of every six trace updates vanished and the spectrum juddered badly
+    //     (Stuart, build 70). My comment claimed the trace had "already run for this frame" — it
+    //     had not, and I never checked the order before asserting it.
+    const wfGated = cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs;
+    if (!wfGated) {
     lastWfPushAt.current = now;
 
     pushRow(frame.row,
@@ -1067,6 +1073,7 @@ function WaterfallView({
       uNSv.value = dynRows;
       startRevealStepper(dynRows, dur);
     }
+    }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
 
     // 4. Spectrum + peak paths from normalised [0,1] traces
     if (cfg.specShow && cfg.specH > 4) {

@@ -1227,8 +1227,17 @@ public:
      *  would be resampled on the way out — reintroducing the interpolation this exists to remove.
      *  Takes effect on the next view change. */
     void setZoomLog(ZoomSpectrum::LogFn f) { zoomLog_ = std::move(f); }
-    void setZoomBins(int n) { if (n >= 64) { zoomBins_.store(n, std::memory_order_relaxed);
-                                             zoomDirty_.store(true, std::memory_order_release); } }
+    void setZoomBins(int n) {
+        // ★★★ ONLY ON A REAL CHANGE. This used to mark the DSP dirty unconditionally, and
+        //     updateZoomView() calls it on every pan, zoom and frame-rate message — so each one
+        //     rebuilt the zoom chain, which clears the sample accumulator. Refilling a 16384-sample
+        //     window at the decimated rate takes about HALF A SECOND, so the waterfall simply held
+        //     and then carried on: "a little hold for about 0.5 second" (Stuart, 2026-08-03).
+        //     A setter that marks work dirty when nothing changed is a stall generator.
+        if (n < 64 || n == zoomBins_.load(std::memory_order_relaxed)) return;
+        zoomBins_.store(n, std::memory_order_relaxed);
+        zoomDirty_.store(true, std::memory_order_release);
+    }
     /** The span actually delivered — decimation is a power of two, so it is the next achievable
      *  span AT OR ABOVE what was asked for. A caller that assumes otherwise draws the scale wrong. */
     double zoomSpanHz() const { return zoomSpanOut_.load(std::memory_order_relaxed); }
