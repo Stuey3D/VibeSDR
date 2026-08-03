@@ -182,7 +182,7 @@ export interface WaterfallViewProps {
   wfBrightness?:   number;
   wfContrast?:     number;
   wfSharpness?:    number;
-  frameRate?:      '10fps' | '20fps' | '30fps' | '60fps';   // TARGET scroll rate (minimum), interpolated up
+  frameRate?:      '10fps' | '20fps' | '30fps';   // TARGET scroll rate (minimum), interpolated up
   /** ★★★ WHICH WATERFALL. 'sharp' = ONE ROW PER RECEIVED FRAME: every row is a whole frame's
    *  integration, nothing invented, and the scroll speed IS the data rate — the most detail, and
    *  what the app has always done. 'smooth' = interpolate extra rows up to `frameRate` — motion
@@ -338,10 +338,13 @@ function WaterfallView({
   // ★ SHARP pins the target to the data rate (dynRows resolves to 1 below), so the number here is
   //   only ever used by SMOOTH. It stays at the 20 fps value in SHARP so the unsharp base — which
   //   is derived from the same setting — keeps the look the app has always had.
+  // ★★ 60 was added on 2026-08-02 to TEST whether the row-count path worked at all. It did its job
+  //    — it proved the setting was dead below 15 fps — and is gone: overkill in use (Stuart), and
+  //    well above the data rate the reveal lurches on uneven arrivals.
   const TARGET_FPS = wfScroll === 'sharp' ? 20
-      : frameRate === '60fps' ? 60 : frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
+      : frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
   const ROWS_PER_FRAME = wfScroll === 'sharp' ? 1
-      : frameRate === '60fps' ? 6 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
+      : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
   // touch; inside it the slide is boosted to native rate, outside it drops to
@@ -369,7 +372,7 @@ function WaterfallView({
     const sharpBase =
       wfScroll === 'sharp' ? 2   // ★ SHARP has no interpolation blur to correct, and 2 is the look
                                  //   the app has always shipped (Stuart's "happy medium").
-      : frameRate === '60fps' ? 4 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5;
+      : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5;
     // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
     // maximum. The curve used to be quadratic, which made the BOTTOM half do
     // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point

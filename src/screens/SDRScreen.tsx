@@ -1037,7 +1037,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
-  const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'|'60fps'>('20fps');
+  const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
   // ★ SHARP by default — one row per received frame, which is what the app has always drawn and
   //   what makes its waterfall look better than the web client's at the same data rate.
   const [wfScroll,      setWfScroll]      = useState<'sharp'|'smooth'>('sharp');
@@ -1225,7 +1225,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
     AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
       if (v === 'native' || v === '10fps') setFrameRate('10fps');   // 'native' migrated → 10 FPS
-      else if (v === '20fps' || v === '30fps' || v === '60fps') setFrameRate(v);
+      else if (v === '20fps' || v === '30fps') setFrameRate(v);
     }).catch(() => {});
     AsyncStorage.getItem('lsv_link_mode').then((v: string | null) => {
       if (v === 'full' || v === 'adaptive' || v === 'lowData') setLinkMode(v);
@@ -3400,7 +3400,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
 
-  const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps'|'60fps') => {
+  const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
     setFrameRate(v);
     AsyncStorage.setItem('lsv_frame_rate', v).catch(() => {});
   }, []);
