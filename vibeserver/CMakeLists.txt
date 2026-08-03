@@ -36,11 +36,17 @@ if(NOT EXISTS "${CPP_DIR}/local_sdr_shim.cpp")
 endif()
 
 # ── vibedsp: the clean-room DSP engine ────────────────────────────────────────
+# ★ ONE SOURCE LIST — see vibedsp/SOURCES. Do not list .cpp files here.
+# ★ Match only lines that LOOK LIKE FILENAMES (no spaces, ending .cpp). Comments and blanks
+#   are therefore ignored WHATEVER they contain — a `;` in a comment used to split the line
+#   in two (CMake lists are semicolon-separated) and the tail was read as a source file.
+file(STRINGS "${CPP_DIR}/vibedsp/SOURCES" VIBEDSP_NAMES REGEX "^[A-Za-z0-9_./-]+\\.cpp$")
+set(VIBEDSP_SRC "")
+foreach(f ${VIBEDSP_NAMES})
+    list(APPEND VIBEDSP_SRC "${CPP_DIR}/vibedsp/${f}")
+endforeach()
 add_library(vibedsp STATIC
-    "${CPP_DIR}/vibedsp/fft.cpp"        "${CPP_DIR}/vibedsp/ddc.cpp"
-    "${CPP_DIR}/vibedsp/channelizer.cpp" "${CPP_DIR}/vibedsp/zoomspec.cpp"
-    "${CPP_DIR}/vibedsp/resampler.cpp"  "${CPP_DIR}/vibedsp/stereo.cpp"
-    "${CPP_DIR}/vibedsp/rds.cpp"        "${CPP_DIR}/vibedsp/pipeline.cpp"
+    ${VIBEDSP_SRC}
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fftr.c")
 target_include_directories(vibedsp PUBLIC "${CPP_DIR}/vibedsp")

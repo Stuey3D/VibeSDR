@@ -27,9 +27,19 @@ endif()
 # Static lib linked into the shim. Its vendored KissFFT symbols are PREFIXED
 # (vibe_*) to avoid colliding with ft8_lib's own KissFFT, also linked into the
 # shim. Plain C++17; no SDR++/GPL dependency.
+# ★ ONE SOURCE LIST — see vibedsp/SOURCES. Do not list .cpp files here. ★★ The Android build was
+# MISSING channelizer.cpp and zoomspec.cpp on 2026-08-02 and would have failed to link next; it
+# reads the same list as the tests, the server and the iOS archive now.
+# ★ Match only lines that LOOK LIKE FILENAMES (no spaces, ending .cpp). Comments and blanks
+#   are therefore ignored WHATEVER they contain — a `;` in a comment used to split the line
+#   in two (CMake lists are semicolon-separated) and the tail was read as a source file.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp/SOURCES" VIBEDSP_NAMES REGEX "^[A-Za-z0-9_./-]+\\.cpp$")
+set(VIBEDSP_SRC "")
+foreach(f ${VIBEDSP_NAMES})
+    list(APPEND VIBEDSP_SRC vibedsp/${f})
+endforeach()
 add_library(vibedsp STATIC
-    vibedsp/fft.cpp vibedsp/ddc.cpp vibedsp/resampler.cpp vibedsp/stereo.cpp
-    vibedsp/rds.cpp vibedsp/pipeline.cpp
+    ${VIBEDSP_SRC}
     vibedsp/third_party/kissfft/kiss_fft.c
     vibedsp/third_party/kissfft/kiss_fftr.c)
 set_target_properties(vibedsp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
