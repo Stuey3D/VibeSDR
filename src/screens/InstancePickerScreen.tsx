@@ -586,7 +586,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     //     ident prompt below, which would be asking for a callsign to use a path we are not taking.
     if (compatOnly) {
       registerFavouriteVisit(cleaned).then(setFavourites).catch(() => {});
-      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, viewMode, serverType, compatOnly: true });
+      // serverType is narrowed here: 'fmdx' routes to the Tuner screen above and never reaches
+      // this line, but the SDR route's own union does not include it.
+      navigation.navigate('SDR', {
+        baseUrl: cleaned, instanceName: name, viewMode, compatOnly: true,
+        serverType: serverType === 'fmdx' ? undefined : serverType,
+      });
       return;
     }
     // Most-Used tally: connecting to a favourite (server or custom URL) bumps its visit count so
