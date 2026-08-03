@@ -122,6 +122,16 @@ export class Waterfall {
   // (Detail) change, so scroll speed is now independent of render resolution.
   private screenSpeed = 20;
   private rowsPerSec = 20;
+  /** ★★★ SHARP: one waterfall row per RECEIVED FRAME — no synthesised lines, so every row is a
+   *  whole frame's integration and the scroll speed IS the data rate. This is what the APP has
+   *  always drawn, and why its waterfall looks better at the same data rate.
+   *  ★ It changes NOTHING about how a row is rendered — it only stops extra rows being invented
+   *    between real ones (emitTotal is forced to 1, the state this already reaches naturally when
+   *    the screen speed matches the data rate). The SPECTRUM TRACE is untouched either way: this
+   *    governs waterfall row emission only, and the trace must stay smooth at all times. */
+  setSharpRows(on: boolean) { this.sharpRows = on; }
+  private sharpRows = false;
+
   setSpeed(screenRowsPerSec: number) {
     this.screenSpeed = Math.max(1, screenRowsPerSec);
     this.recomputeRate();
@@ -412,7 +422,8 @@ export class Waterfall {
 
     // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
     const clamped = Math.max(20, Math.min(1000, gap));
-    this.emitTotal = Math.max(1, Math.round(clamped / (1000 / this.rowsPerSec)));
+    this.emitTotal = this.sharpRows ? 1
+                   : Math.max(1, Math.round(clamped / (1000 / this.rowsPerSec)));
     this.emitInterval = clamped / this.emitTotal;
     this.emitStart = now;
     this.emitted = 0;

@@ -2492,7 +2492,25 @@ select.btn { padding: 6px 8px; }
        so this is independent of the data rate; a high speed with a low data rate scrolls smoothly but
        fills the gaps by interpolation (blurrier). Scroll rate is screen-relative (× dpr internally) so
        Detail below never changes the speed. -->
+  <!-- ★★★ THE TWO WATERFALLS, NAMED BY WHAT THEY TRADE. SHARP draws one row per RECEIVED FRAME:
+       every row is a whole frame's integration, nothing invented, and the scroll speed IS the data
+       rate — what the APP has always done, and why its waterfall looks better at the same rate.
+       SMOOTH interpolates rows between real frames up to the chosen speed.
+       ★ Neither changes how a row is RENDERED — both paths already existed; this only chooses
+         whether extra rows are invented. The SPECTRUM TRACE is untouched by either and stays
+         smooth at all times.
+       ★★ WATERFALL SPEED below applies to SMOOTH ONLY and is hidden under SHARP, where the data
+         rate decides — a speed control that cannot move the speed is worse than no control. -->
   <div class="mrow">
+    <label>WATERFALL</label>
+    <div class="seg" id="wfScrollSeg">
+      <button class="btn" data-wfscroll="sharp">SHARP</button>
+      <button class="btn on" data-wfscroll="smooth">SMOOTH</button>
+    </div>
+  </div>
+  <div class="rowNote" id="wfScrollNote">Extra rows are interpolated between frames — set the speed
+    below. Smoother motion, less real detail.</div>
+  <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
     <div class="seg" id="wfSpeedSeg">
       <button class="btn" data-wfspeed="10">10</button>
@@ -2500,7 +2518,7 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-wfspeed="30">30</button>
     </div>
   </div>
-  <div class="rowNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
+  <div class="rowNote" id="wfSpeedNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
     a low data rate it fills the gaps by interpolation — smooth motion, less real detail.</div>
   <!-- WATERFALL DATA RATE — real frames/sec from the SERVER. Auto = adaptive link management (brings in
        as much as the link carries, up to the chosen Speed, capped at the server's 20). Speed options
