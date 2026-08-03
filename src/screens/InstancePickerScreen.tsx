@@ -24,6 +24,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { splashBridge } from '../../App';
+import { IS_TV } from '../utils/tv';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { newLocalSession } from '../services/localSession';
@@ -264,7 +265,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    *  do not refuse at connect — they admit you, stream audio, then close at ~10 s saying nothing,
    *  which is the "connects then kicks us" bug. Shown by default, flagged in red, and hideable.
    *  See memory/kiwi_ext_api_10s_kick.md. */
-  const [showRestricted, setShowRestricted] = useState(true);
+  /** ★★★ ...BUT NEVER ON tvOS, AND THE TOGGLE IS NOT OFFERED THERE EITHER. Revealing them is only
+   *  useful because a revealed one routes to COMPATIBILITY MODE — the Kiwi's own web UI in a
+   *  WebView — and tvOS has no WebView to put it in. So on a TV these receivers cannot be used by
+   *  any route: showing them would list servers that connect, stream for ten seconds and die with
+   *  nothing on screen to explain it. That is 120 of 847 public Kiwis.
+   *  ★ Same conclusion Jr reached for the same reason (no webview on a watch). See
+   *    BRIEF-tvos-app.md §5b and AGENTS.md: never offer a control whose every use is a no-op. */
+  const [showRestricted, setShowRestricted] = useState(!IS_TV);
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
   // Tell native the default-instance name (or '' = none) so the Siri "open and
   // tune" intent can auto-connect, or prompt the user to set a default.
@@ -2098,7 +2106,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                  — a banner about a situation you are not in is just noise. The button is IN the
                  banner because that is where the question arises (Stuart). */
               ListHeaderComponent={
-                restrictedCount > 0 ? (
+                /* ★ Not on tvOS: there the restricted receivers are hidden and cannot be revealed
+                   (no compatibility mode without a WebView), so a banner offering to SHOW them
+                   would be an offer we cannot honour. Nothing is lost — they are unusable there. */
+                restrictedCount > 0 && !IS_TV ? (
                   <View style={{ borderWidth: 1, borderColor: C.red, borderRadius: 8,
                                  paddingHorizontal: 10, paddingVertical: 8, marginBottom: 8,
                                  flexDirection: 'row', alignItems: 'center', gap: 10 }}>

@@ -124,13 +124,17 @@ for ten seconds and die with nothing on screen to explain it.
 the same as we do with Jr now"*). In `InstancePickerScreen.tsx`:
 - `blocksApps(i) => i.extApi === 0` (`:1193`) — and `undefined` deliberately means *unknown*, never
   *allowed*, so nothing is painted red on a guess;
-- they are **hidden by default**: `.filter(i => showRestricted || !blocksApps(i))` (`:1219`);
-- a SHOW/HIDE banner off `restrictedCount` (`:1343`) is the way back;
+- ★ **CORRECTION — they are SHOWN by default**, flagged in red, and *hideable*: `showRestricted`
+  starts `true` and `.filter(i => showRestricted || !blocksApps(i))` applies it. An earlier draft of
+  this brief said hidden-by-default; that was wrong, and the difference matters — the tvOS change is
+  to flip the DEFAULT, not merely to remove a toggle;
+- a SHOW/HIDE banner off `restrictedCount` explains the red rows;
 - `connect(..., blocksApps(inst))` (`:1689`) routes a revealed one straight to compatibility mode.
 
-**So tvOS needs exactly one thing: `showRestricted` can never become true** — no SHOW toggle, no
-compatibility route. The default behaviour is already correct, and it matches Jr, which hides them
-for the same reason (no webview on a watch either).
+**So tvOS needs two small things, both now done on the `tvos-app` branch:** `showRestricted` starts
+`false` and cannot be flipped (`useState(!IS_TV)`), and the SHOW/HIDE banner is not rendered there —
+an offer we cannot honour is worse than no offer. It matches Jr, which hides them for the same
+reason (no webview on a watch either).
 ★ Which is the AGENTS.md rule holding on a third platform: *never offer a control whose every use is
 a no-op*. A dead-ending server list is that same fault.
 
