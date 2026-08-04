@@ -264,13 +264,20 @@ interface, and the browser experiment is the control experiment that shows why.*
 ★ The honest position:
 - **Apple TV** — no browser exists there, so it must be the native app. The Siri Remote's two
   inputs give the highlight scheme with no mode. This brief stands, and is now better motivated.
-- **Android TV / Fire TV / smart TVs** — the web client RUNS (measured) and is a fine demo or a
-  stopgap, but it is **not a product**: driving it by cursor is unpleasant. If those platforms are
-  ever wanted properly they need the highlight scheme too, not just a URL.
+- **Android TV / Fire TV / smart TVs** — the web client is FUNCTIONALLY COMPLETE there (display,
+  waterfall, **audio**, tuning — all measured) and is a fine demo or stopgap, but it is **not a
+  product**: driving it by cursor is unpleasant. The gap is ENTIRELY interaction.
+  ★★ **Which makes those platforms cheap to finish, and the cheapest place to PROTOTYPE the scheme.**
+  The web client already has a keyboard layer ([[keyboard_layer_shipped]]), and a TV remote's D-pad
+  arrives as arrow keys — so the highlight-box scheme could be built THERE, in TypeScript, with a
+  reload-and-try loop, instead of first proving it inside a native tvOS app that has to be archived
+  and uploaded to be seen. Same design, one-tenth the iteration cost, and it ships Android TV as a
+  by-product.
 - ★ Which makes the one-D-pad question moot for now: the blocker there was never the D-pad, it is
   that a pointer-driven SDR is not nice to use from a sofa.
-★ **Still unverified on the Bravia: AUDIO.** The photo proves the display path; it does not prove
-Opus decode in that browser. Worth one check before claiming the platform.
+★ ✅ **AUDIO WORKS TOO** (Stuart, 2026-08-04: *"the audio was fine"*). So Opus decodes in that
+browser and the web client is **functionally COMPLETE on Android TV** — display, waterfall, audio,
+tuning. Nothing is missing except a way to drive it that is pleasant.
 
 ★ *If* a single-D-pad platform is ever wanted, the sleep/wake behaviour in §3 already contains an
 implicit mode that could carry it — highlight hidden ⇒ arrows tune, highlight visible ⇒ arrows
