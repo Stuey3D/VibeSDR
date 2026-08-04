@@ -37,13 +37,27 @@ a mode to escape.
   (§5), but the ring keeps tuning. That is consistent, and probably desirable — but it is the spot
   to check first if the remote ever feels ambiguous in the hand.
 
-## 2. The waterfall screen
+## 2. The waterfall screen — USE THE PORTRAIT CONTROL CLUSTER
 
 - **No drums, no buttons.** Those are dead controls on a TV — nothing points at them, so nothing
   should offer them. Same rule as *"a control that only works in one scenario should not be there"*
   in AGENTS.md.
 - **Only the frequency bar and its 4 buttons.**
-- Layout is the **landscape view, with the status and clock rows directly underneath**.
+- ★★★ **THE CONTROL CLUSTER IS THE PORTRAIT ONE, NOT THE LANDSCAPE ONE** (Stuart, 2026-08-04 —
+  this REPLACES the earlier "landscape view with the status and clock rows underneath"). The screen
+  is still 16:9; it is the arrangement of the controls that comes from portrait.
+  Three reasons, and the first is the one that matters:
+  1. ★★ **IT MATCHES HOW THE HIGHLIGHT MOVES.** Portrait STACKS the sections, so the four buttons
+     are one swipe DOWN from the frequency — the same vertical axis that already reaches the
+     servers chip (§5). Landscape FLANKS the frequency left and right, which turns a single
+     directional move into horizontal hunting.
+  2. **The clock and status rows are already in the right place** in portrait. The landscape plan
+     required moving them under the frequency by hand.
+  3. ★ **It is a row DELETION, not a rearrangement.** Landscape meant assembling a hybrid of the
+     two layouts — new code, new edge cases, and a layout that exists nowhere else. Portrait means
+     removing the drums/buttons row from something that already lays out correctly.
+  ★ Cheapest change is also the safest change here: nothing has to be repositioned, so nothing can
+    be repositioned WRONG on the one screen size nobody can test on a phone.
 
 ## 3. The highlight, and how it sleeps
 
@@ -124,13 +138,17 @@ for ten seconds and die with nothing on screen to explain it.
 the same as we do with Jr now"*). In `InstancePickerScreen.tsx`:
 - `blocksApps(i) => i.extApi === 0` (`:1193`) — and `undefined` deliberately means *unknown*, never
   *allowed*, so nothing is painted red on a guess;
-- they are **hidden by default**: `.filter(i => showRestricted || !blocksApps(i))` (`:1219`);
-- a SHOW/HIDE banner off `restrictedCount` (`:1343`) is the way back;
+- ★ **CORRECTION — they are SHOWN by default**, flagged in red, and *hideable*: `showRestricted`
+  starts `true` and `.filter(i => showRestricted || !blocksApps(i))` applies it. An earlier draft of
+  this brief said hidden-by-default; that was wrong, and the difference matters — the tvOS change is
+  to flip the DEFAULT, not merely to remove a toggle;
+- a SHOW/HIDE banner off `restrictedCount` explains the red rows;
 - `connect(..., blocksApps(inst))` (`:1689`) routes a revealed one straight to compatibility mode.
 
-**So tvOS needs exactly one thing: `showRestricted` can never become true** — no SHOW toggle, no
-compatibility route. The default behaviour is already correct, and it matches Jr, which hides them
-for the same reason (no webview on a watch either).
+**So tvOS needs two small things, both now done on the `tvos-app` branch:** `showRestricted` starts
+`false` and cannot be flipped (`useState(!IS_TV)`), and the SHOW/HIDE banner is not rendered there —
+an offer we cannot honour is worse than no offer. It matches Jr, which hides them for the same
+reason (no webview on a watch either).
 ★ Which is the AGENTS.md rule holding on a third platform: *never offer a control whose every use is
 a no-op*. A dead-ending server list is that same fault.
 
@@ -234,11 +252,46 @@ A Siri Remote gives **two directional inputs simultaneously**: the clickpad **ri
 D-pad, and the touch surface **SWIPES** as a second one. This app needs exactly two — one to
 tune/zoom, one to move the highlight — so it gets both **with no mode switch at all**.
 
-★★ **Android TV / Fire TV remotes have ONE D-pad.** They are the easier platforms technically (real
-browsers, so the web client would run), but the control scheme is the hard part, and there it breaks:
-one D-pad cannot both tune and navigate without a **mode**, and modes are the thing this design
-deliberately avoids. So "easier to reach" and "easier to control" point at different platforms, and
-**the control scheme is what decides it.** Apple TV first.
+★★ **Android TV / Fire TV remotes have ONE D-pad** — so a D-pad-only remote cannot both tune and
+navigate without a **mode**, and modes are the thing this design deliberately avoids.
+
+### ✅ ...BUT THAT ARGUMENT IS PARTLY WRONG, AND STUART MEASURED IT (2026-08-04)
+He ran the web client on a **Sony Bravia Android TV's built-in browser**, against the Pi demo, and
+photographed it: full waterfall, spectrum trace, frequency bar, **20 fps at 30 KB/s, 20 ms**, tuned
+to the Buzzer at 4.625 MHz USB, 29 dB SNR. Not a degraded fallback — the real client, working.
+★★★ **And the screen shows a POINTER.** A Bravia remote drives a CURSOR, not just a D-pad, and the
+web client already speaks `pointerdown` / `pointermove` / `wheel`. So on that TV the two-input
+problem does not arise: **it is a mouse, and the app is already a mouse app.**
+### ★★★ ...AND IT WORKED WITHOUT BEING ANY GOOD — WHICH IS THE REAL FINDING
+Stuart, having used it: *"it wasn't good to use on the bravia, it worked but it wasn't pleasant."*
+★ **Rendering is not usability, and the photo only proved rendering.** I over-corrected on the
+strength of it — from "that platform is blocked" to "near-zero-cost win" — on evidence that showed
+a screen, not a session. The measured result is: **technically works, unpleasant to drive.**
+★★ **And the REASON is the whole argument for this brief.** A pointer on a TV must be AIMED: you
+nudge a cursor across a 4K screen with a remote, hunting for a control. That is the classic failure
+of pointer-on-TV interfaces. **A highlight box that JUMPS between controls needs no aiming** — it is
+the difference between steering and choosing, and at three metres it is the difference between
+usable and not.
+★ So Stuart's original scheme is not merely the Apple TV way of doing it; **it is the right TV
+interface, and the browser experiment is the control experiment that shows why.**
+
+★ The honest position:
+- **Apple TV** — no browser exists there, so it must be the native app. The Siri Remote's two
+  inputs give the highlight scheme with no mode. This brief stands, and is now better motivated.
+- **Android TV / Fire TV / smart TVs** — the web client is FUNCTIONALLY COMPLETE there (display,
+  waterfall, **audio**, tuning — all measured) and is a fine demo or stopgap, but it is **not a
+  product**: driving it by cursor is unpleasant. The gap is ENTIRELY interaction.
+  ★★ **Which makes those platforms cheap to finish, and the cheapest place to PROTOTYPE the scheme.**
+  The web client already has a keyboard layer ([[keyboard_layer_shipped]]), and a TV remote's D-pad
+  arrives as arrow keys — so the highlight-box scheme could be built THERE, in TypeScript, with a
+  reload-and-try loop, instead of first proving it inside a native tvOS app that has to be archived
+  and uploaded to be seen. Same design, one-tenth the iteration cost, and it ships Android TV as a
+  by-product.
+- ★ Which makes the one-D-pad question moot for now: the blocker there was never the D-pad, it is
+  that a pointer-driven SDR is not nice to use from a sofa.
+★ ✅ **AUDIO WORKS TOO** (Stuart, 2026-08-04: *"the audio was fine"*). So Opus decodes in that
+browser and the web client is **functionally COMPLETE on Android TV** — display, waterfall, audio,
+tuning. Nothing is missing except a way to drive it that is pleasant.
 
 ★ *If* a single-D-pad platform is ever wanted, the sleep/wake behaviour in §3 already contains an
 implicit mode that could carry it — highlight hidden ⇒ arrows tune, highlight visible ⇒ arrows
@@ -249,7 +302,38 @@ constant something that on Apple TV is invisible and free.
 keyboard layer already turns a D-pad into arrow keys ([[keyboard_layer_shipped]]), and its waterfall
 is the reference implementation. The blocker is the remote, not the rendering.
 
-### 6.3 ★ The build path needs checking, not assuming.
+### 6.3 ✅ MEASURED: `expo prebuild` DESTROYS 65 OF 82 FILES IN `ios/`. NEVER RUN IT HERE.
+**Tested on the `tvos-app` branch, 2026-08-04, because everything is committed and therefore
+revertable — an assertion was not good enough.** `EXPO_TV=1 npx expo prebuild --platform ios`
+announces *"Clearing ios / Cleared ios code"* and then:
+
+| Destroyed | Count |
+|---|---|
+| Total files in `ios/` | **65 of 82** |
+| **`VibeSDRWatch` (the Buddy watch app)** | **30 files, and all 23 project references** |
+| Native modules (`VibeDSP.swift`, `VibePowerModule`, `FmdxMp3Decoder`, …) | 24 |
+| **`ci_scripts/ci_post_clone.sh`** (Xcode Cloud's whole bootstrap) | 1 |
+| `ExportOptions*.plist`, `Podfile.lock`, the Xcode Cloud manifest, bundled `libopus.a`, image assets | the rest |
+
+★★★ **So the Expo tvOS route is CLOSED for this project.** `@react-native-tvos/config-tv` only acts
+during prebuild, and prebuild cannot be run without losing the watch app and the CI bootstrap. The
+tvOS target must be added to `ios/VibeSDR.xcodeproj` **by hand**.
+★ Reverting was clean (`git checkout -- ios/ && git clean -fd ios/`): every TRACKED file came back
+byte-for-byte. The only losses were untracked local files — `.DS_Store`, Xcode `xcuserdata`, and
+`.xcode.env.local` (regenerate with `export NODE_BINARY=$(command -v node)`).
+
+### 6.3b ★ The JS/dependency side, which DOES work
+- `react-native` aliased to `npm:react-native-tvos@0.86.2-0` — the fork's version matches RN 0.86
+  exactly.
+- ★★ **`--legacy-peer-deps` is mandatory and permanent**: the fork's versions are semver
+  PRERELEASES (`0.86.2-0`), and peer ranges like `>=0.65 <1.0` never match a prerelease, so every
+  consumer of `react-native` in the tree rejects it. Xcode Cloud's `ci_post_clone.sh` needs the
+  same flag for a tvOS workflow.
+- ★ Let ONLY `react-native` move when installing. Re-resolving the tree pulled `expo-modules-jsi`
+  57.0.0 → 57.0.4, which broke `patches/expo-modules-jsi+57.0.0.patch` (patch-package matches the
+  version in the filename) and would have failed `postinstall` — and so the Cloud build.
+
+### 6.3c ★ The old note, kept for the record
 React Native's tvOS support lives in the `react-native-tvos` fork, and Expo's tvOS story has its own
 config-plugin requirements. This project is Expo SDK 57 / RN 0.86 with the New Architecture locked
 in. **Confirm the fork/plugin actually supports that combination before promising a build** — the
@@ -265,6 +349,32 @@ accident.
 `sdrTour`, `pickerTour`, `AboutOverlay` and the watch tutorials all describe *where controls are*.
 A tvOS layout with no drums and no buttons makes several of those sentences false on that platform.
 Add the tvOS tour to that list the day it is written, not afterwards.
+
+## 6.5 ✅ THE BUILD WORKS — THE BLOCKER IS SIGNING, AND IT IS MEASURED
+**Runs 76, 77 and 78 (2026-08-04) all reached `** ARCHIVE SUCCEEDED **` and produced a valid
+App Store export.** The tvOS app compiles: 1074 issues in the log, every one a WARNING, zero errors.
+Skia, Reanimated and the Expo modules all build for tvOS, and the JS bundle is produced.
+
+**What fails is delivery**, and only delivery:
+```
+error: exportArchive No profiles for 'com.vibesdr.app' were found     <- ad-hoc
+error: exportArchive No profiles for 'com.vibesdr.app' were found     <- development
+** EXPORT SUCCEEDED **                                                <- app-store
+```
+Xcode Cloud always attempts ALL THREE exports from an ARCHIVE action and fails the run if any fail.
+- ★ Verified against the iOS workflow: the two action definitions are byte-identical apart from
+  `platform`, and on iOS all three exports SUCCEED — because iOS profiles exist.
+- ★ Verified that `buildDistributionAudience: INTERNAL_ONLY` does NOT help: run 78 still ran both
+  exports and still failed; it only stopped RETAINING their artifacts. **There is no config that
+  disables them.**
+- ★★★ **ROOT CAUSE: the account has NO tvOS DEVICES** — registered devices are iPhone ×2, iPad,
+  Apple Watch and a Mac. Ad-hoc and development profiles cannot exist for a platform with no
+  devices, so Cloud cannot mint them however it is configured.
+
+★★ **THE FIX IS ONE DEVICE REGISTRATION.** Stuart has three Apple TVs. Pair one with Xcode
+(*Settings → Remotes and Devices → Remote App and Devices* on the TV; *Xcode → Window → Devices and
+Simulators* on the Mac), take its Identifier, and register it — `POST /v1/devices` with
+`platform: IOS` (Apple TVs register under the IOS platform with `deviceClass: APPLE_TV`).
 
 ## 7. Open questions for Stuart
 

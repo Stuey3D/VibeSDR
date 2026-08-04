@@ -1,5 +1,8 @@
 #!/bin/sh
-# Xcode Cloud post-clone step for VibeSDR (Expo / React Native bare workflow).
+# Xcode Cloud post-clone step for VibeSDR on APPLE TV.
+#
+# ★ Mirrors ios/ci_scripts/ci_post_clone.sh, with two tvOS-specific differences — see the marked
+#   lines below. Keep them in step: a fix made in one almost certainly belongs in the other.
 #
 # Installs Node + JS deps + CocoaPods after Xcode Cloud clones the repo, so the
 # archive can bundle the JS and link the pods.
@@ -49,16 +52,15 @@ npm --version
 # So the retry deletes node_modules first. It is also worth SAYING that ci failed and why,
 # because the fallback used to hide it — the build only ever reported the second, confusing
 # error, never the first, real one.
-#
-# ★★★ --legacy-peer-deps IS MANDATORY SINCE THE tvOS MERGE, ON iOS TOO. react-native is aliased to
-#     react-native-tvos (a drop-in fork that also supports Apple TV), and the fork's versions are
-#     semver PRERELEASES (0.86.2-0). Peer ranges like ">=0.65 <1.0" never match a prerelease, so
-#     EVERY consumer of react-native in the tree refuses to resolve without this flag — including
-#     on a pure iOS build. Removing it will fail the whole install, not just the TV parts.
-#     ★ It does NOT install peer deps, which is how react-native-worklets (Reanimated 4's peer)
-#       silently vanished once and stopped pod install dead. It is now an explicit dependency.
 cd "$CI_PRIMARY_REPOSITORY_PATH"
 echo "--- installing JS dependencies (npm ci) ---"
+#
+# ★★★ --legacy-peer-deps IS MANDATORY ON THIS BRANCH AND ALWAYS WILL BE. react-native is aliased to
+#     react-native-tvos, whose versions are semver PRERELEASES (0.86.2-0), and peer ranges like
+#     ">=0.65 <1.0" never match a prerelease — so every consumer of react-native in the tree refuses
+#     to resolve without it. This is the tvOS difference from the iOS script.
+#     ★ It does NOT install peer deps, which is how react-native-worklets (Reanimated 4's peer)
+#       silently vanished and stopped pod install dead. It is now an explicit dependency.
 if ! npm ci --legacy-peer-deps; then
   echo "--- npm ci FAILED (see above). Retrying from a clean node_modules… ---"
   rm -rf node_modules
@@ -68,8 +70,10 @@ fi
 # CocoaPods. RN 0.86 fetches a prebuilt "reactnative-dependencies" tarball from
 # Maven Central during pod install, which can transiently reset the connection.
 # Retry a few times so a flaky download doesn't fail the whole build.
-cd "$CI_PRIMARY_REPOSITORY_PATH/ios"
-echo "--- installing CocoaPods (with retries) ---"
+cd "$CI_PRIMARY_REPOSITORY_PATH/tvos"
+# ★ tvOS difference: the pods live in tvos/, not ios/. `platform :tvos` in that Podfile is what
+#   makes autolinking drop the iOS-only modules (webview, document-picker, haptics) by itself.
+echo "--- installing CocoaPods for tvOS (with retries) ---"
 n=0
 until [ "$n" -ge 4 ]; do
   if pod install; then

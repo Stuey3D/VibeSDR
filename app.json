@@ -3,7 +3,10 @@
     "name": "VibeSDR",
     "slug": "VibeSDR",
     "version": "10.0.2",
-    "scheme": ["vibesdr", "sdr"],
+    "scheme": [
+      "vibesdr",
+      "sdr"
+    ],
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -60,7 +63,14 @@
     "plugins": [
       "expo-font",
       "expo-audio",
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "@react-native-tvos/config-tv",
+        {
+          "isTV": true,
+          "tvosDeploymentTarget": "17.0"
+        }
+      ]
     ],
     "extra": {
       "eas": {
