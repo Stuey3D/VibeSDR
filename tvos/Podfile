@@ -76,11 +76,13 @@ target 'VibeSDR' do
     #        silently misses them and leaves the build failing on exactly the two it cannot see.
     projects = installer.respond_to?(:generated_projects) ? installer.generated_projects
                                                           : [installer.pods_project]
+    puts "[tvOS] deployment-target sweep over #{projects.length} project(s)"
     projects.each do |project|
       project.targets.each do |t|
         t.build_configurations.each do |cfg|
           current = cfg.build_settings['TVOS_DEPLOYMENT_TARGET']
           if current.nil? || current.to_f < 15.0
+            puts "[tvOS]   #{t.name} #{cfg.name}: #{current.inspect} -> 15.0"
             cfg.build_settings['TVOS_DEPLOYMENT_TARGET'] = '15.0'
           end
         end
