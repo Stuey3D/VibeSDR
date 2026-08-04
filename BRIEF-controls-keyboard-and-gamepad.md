@@ -439,3 +439,33 @@ type to filter and then step down into the results. The alias table is suppresse
 under FKA an FKA user has the arrows taken by iOS AND WASD/`<>` suppressed by the field — no route
 in. The escape hatch already works: **modified keys pass straight through FKA**, so Shift+Down is
 live even there. Make that explicit in the scheme rather than leaving it to be discovered.
+
+### ★★ THE DECODER BOX — SECTION-LEVEL FOCUS (Stuart, 2026-08-04)
+
+Not explicitly planned before; specified here because it is the first control that is a REGION
+rather than a button, and the pattern will repeat.
+
+1. **Activate decoder mode from the demodulator button.** The box appears on screen.
+2. **Up** moves the highlight to the decoder box's **CONTENT**, where it *breathes around* the
+   whole region — a section-level highlight, not a button focus.
+3. **Up again** selects the box's **HEADER**.
+4. **Enter ENTERS the highlighted section:**
+   - in the **header**: **left/right** between its controls, **Enter** activates one;
+   - in the **content**: **up/down** scrolls, **Enter** selects an entry (a DAB programme, say).
+5. **Backspace backs out** of the section, returning to the breathing highlight AROUND the box —
+   from where the highlight can move on to other controls as normal.
+
+★★ **THE DESCEND/ASCEND SEMANTICS ALREADY EXIST** — `PanelNav.tsx` already has *"BACKSPACE STEPS
+OUT of a sub-panel"* for the multi-level menus (Display Settings et al). This is the same pattern
+applied to a region, so it is not new machinery.
+
+★★★ **WHAT IS NEW IS A SECTION-LEVEL HIGHLIGHT**: a breathing outline around a whole box, visually
+distinct from `btnFocused` on a single control. The grid today is rows of BUTTONS (`NavRow` /
+`RowCtx`); a box is one focus target that CONTAINS a grid. That is the piece to build.
+
+★ **And it is what makes the scheme scale.** Without descend/ascend, every control in every panel
+would have to sit in one flat traversal order — dozens of swipes to cross a decoder panel on a TV.
+Descending keeps the OUTER traversal short: a box is one stop until you choose to enter it.
+
+★ Note this also answers an open question in `BRIEF-tvos-app.md` §7: the decoders panel is IN for
+tvOS v1. Only its spot MAP is cut (no WebView on tvOS) — the decoders themselves are native.
