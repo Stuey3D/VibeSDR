@@ -74,6 +74,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { tourRef, mergeRefs } from './Coachmark';
+import { IS_TV } from '../utils/tv';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -833,8 +834,13 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
       {/* Row 3 — drums (single full-width VFO for FM-DX; vfo+zoom otherwise).
           Greyed and inert on a read-only receiver: another client owns the tuner,
-          so the drums would spin and change nothing. */}
-      <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
+          so the drums would spin and change nothing.
+          ★★★ ABSENT ON APPLE TV. A drum is a DRAG control: you throw it and it spins with
+          inertia. There is nothing on a Siri Remote to drag it with — the ring TUNES directly and
+          the touch surface moves the highlight — so on a TV it would be a control that cannot be
+          operated at all. Removed rather than disabled, per AGENTS.md: an inert control reads as
+          a broken FEATURE, not a missing one. Tuning is not lost; the ring does it, always. */}
+      {!IS_TV && <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
             pointerEvents={readOnly ? 'none' : 'auto'}
             style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
         {/* ★ HANDBACK FLASH. When the decoder box gives the keyboard back, the controls that
@@ -861,7 +867,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
               : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} />}
           </ControlSlot>
         )}
-      </View>
+      </View>}
 
       {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
@@ -1184,7 +1190,15 @@ function ControlsBar({
       {/* Border ring */}
       <View style={[root.border, { borderRadius: RADIUS, borderColor: t.barBorder }]}
             pointerEvents="none" />
-      {s.isLandscape
+      {/* ★★★ APPLE TV USES THE PORTRAIT CLUSTER, on a 16:9 screen (Stuart, 2026-08-04).
+          Not a cosmetic choice — it is the one that matches the remote. Portrait STACKS the
+          sections, so the four buttons sit one swipe DOWN from the frequency, on the same
+          vertical axis the highlight already travels to reach the servers chip. Landscape FLANKS
+          the frequency left and right, which turns a single directional move into horizontal
+          hunting. It also puts the clock and status rows where they already belong, so this is a
+          row DELETION (see PortraitBar) rather than a hand-built hybrid of the two layouts.
+          See BRIEF-tvos-app.md §2. */}
+      {s.isLandscape && !IS_TV
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />
       }
