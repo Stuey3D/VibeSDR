@@ -1846,17 +1846,18 @@ struct LocalSdrShim::Impl {
             // ★ ~10 Hz, not 1. The IF slider follows the AGC live, and a thumb that jumps once a
             //   second reads as broken rather than as tracking. ~90 bytes is nothing next to the
             //   spectrum.
-            // ★★ TO EVERY LISTENER, NOT JUST peers.front(). This went to `sock` alone, so on a
-            //    shared receiver only the FIRST listener could see the gain or watch the AGC
-            //    work — and on this demo every listener is shown that read-only IF slider.
-            if (n % 2 == 0) {
+            // ★★ REVERTED TO THE PRIMARY SOCKET 2026-08-04 — see the sig note below. Sending to
+            //    every peer multiplies traffic through a BLOCKING write under a GLOBAL mutex on
+            //    the DSP thread, which is what let one stalled listener freeze everybody. Restore
+            //    the per-peer fan-out only once that path cannot block.
+            if (sock && n % 2 == 0) {
                 char gb[160];
                 snprintf(gb, sizeof gb,
                     "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
                     "\"settling\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
-                for (auto& pc : peers) sendText(pc, gb);
+                sendText(sock, gb);
             }
         }
 
@@ -1886,16 +1887,23 @@ struct LocalSdrShim::Impl {
             //       with the squelch by construction instead of by coincidence.
             //     ★ OUTSIDE the emit gate, deliberately: see the RSP GAIN SERVICE note above.
             //       Putting a meter behind that gate is what froze the SNR bar in the first place.
-            // ★ EVERY FRAME, not every other one. The client re-draws the meter once per spectrum
-            //   frame, so at half that rate every second draw repeated the previous value and the
-            //   bar STEPPED — read as "slow to react" and jerky (Stuart, 2026-08-03). Matching the
-            //   frame rate lets the meter's own smoothing do its job. ~90 bytes at ~20 fps is
-            //   1.8 KB/s beside a 30 KB/s spectrum.
-            if (!peers.empty()) {
+            // ★★★ CUT BACK 2026-08-04 AFTER IT FROZE THE DEMO. This sent EVERY frame to EVERY
+            //     peer, and both halves were a mistake — not because of bandwidth (~90 bytes), but
+            //     because of WHERE the write happens. sendWs takes ONE GLOBAL sendMtx and then does
+            //     a BLOCKING socket write, on the DSP THREAD. So a single stalled listener blocks
+            //     every send to every other listener and stops the DSP. Stuart connected a second
+            //     client while the app was connected and BOTH FROZE.
+            //     ★ The hazard is older than this line (the spectrum broadcast above has the same
+            //       shape), but multiplying the traffic through it by the peer count, at 20 Hz, is
+            //       what made it fire. Back to the primary socket at ~5 Hz until the socket path
+            //       itself is made non-blocking — see BUG-vibeserver-broadcast-blocks.md.
+            //     ★ The meter's own smoothing copes with 5 Hz; it is the SCALE that mattered
+            //       (a fixed dBFS scale, not the waterfall's auto-contrast), not the update rate.
+            if (sock && (n % 4) == 0) {
                 char sb[128];
                 snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
                          peak, iqFloorDb.load());
-                for (auto& pc : peers) sendText(pc, sb);
+                sendText(sock, sb);
             }
         }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
