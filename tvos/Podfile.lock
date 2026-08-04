@@ -1,5 +1,5 @@
 PODS:
-  - EXConstants (57.0.3):
+  - EXConstants (57.0.9):
     - ExpoModulesCore
   - Expo (57.0.2):
     - ExpoModulesCore
@@ -2303,7 +2303,7 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
-  - EXConstants (from `../node_modules/expo/node_modules/expo-constants/ios`)
+  - EXConstants (from `../node_modules/expo-constants/ios`)
   - Expo (from `../node_modules/expo`)
   - ExpoAsset (from `../node_modules/expo/node_modules/expo-asset/ios`)
   - ExpoAudio (from `../node_modules/expo-audio/ios`)
@@ -2404,7 +2404,7 @@ DEPENDENCIES:
 
 EXTERNAL SOURCES:
   EXConstants:
-    :path: "../node_modules/expo/node_modules/expo-constants/ios"
+    :path: "../node_modules/expo-constants/ios"
   Expo:
     :path: "../node_modules/expo"
   ExpoAsset:
@@ -2600,7 +2600,7 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
-  EXConstants: d069b4a2dd469d5a3a4d3d7b09757e708fda8f64
+  EXConstants: 05451cfe61c84dd2d840831d05bb0c115f96ec6a
   Expo: 20ef75c4eade4e8e95e9be0a181c6df8e5f3e2af
   ExpoAsset: 586e89aeaab2e23bfa90b9dce4d7d5e36815c039
   ExpoAudio: 4f27c2bc1cc08f003c2af070cedf25fefd9da5bb

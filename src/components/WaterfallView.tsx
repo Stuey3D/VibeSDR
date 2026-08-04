@@ -1236,14 +1236,38 @@ function WaterfallView({
     lastRowMeta.current = { centerHz: rowCentre, hzPerBin: rowHzBin };
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
+
+    // The interval the rows are spread over: the gap between ROW-SETS, falling back to the frame
+    // interval until it has been measured.
+    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
+    const dur = Math.max(50, Math.min(1000, revealMs));
+
+    // ★★★ ROW EMISSION HAPPENS ON BOTH PATHS — THIS IS WHAT MADE SLOW FEEDS SLOW.
+    //     `wfBoost` is true whenever the feed is below ~15 fps (lowFps: avgFrameMs > 66 ms), which
+    //     is EVERY UberSDR session. The boost branch only pins uN and animates scrollFrac; it never
+    //     pushed extra rows — so on a slow feed the waterfall ran at the raw DATA rate whatever
+    //     the scroll setting said. "UberSDR is sending the full 10 and all 3 settings the rate is
+    //     extra slow" (Stuart, 2026-08-04), and no amount of tuning the emitter could show up,
+    //     because on that feed the emitter was never reached.
+    //     ★ It made sense in the OLD model, where the glide came from uFrac sweeping across uN
+    //       synthesised lines. With uN = 1 there are no synthesised lines to sweep: the scroll IS
+    //       the rows, so the rows must be pushed on every path.
+    const rowMs = cfg.targetRows > 0 ? 1000 / cfg.targetRows : 0;
+    let extras = 0;
+    if (rowMs > 0) {
+      rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
+      extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
+      rowCarry.current -= Math.floor(rowCarry.current);
+      if (extras > 8) extras = 8;           // a stall must not repay as a burst
+    }
+    lastDynRows.current = extras + 1;
+    scheduleExtraRows(extras, dur / (extras + 1));
     // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
     //     feed these differ by the gate ratio (5x at the 20-row setting), and using the frame
     //     interval made every pair finish in a fifth of the time available and then stall — the
     //     "leap a section, wait" (Stuart, build 74). Falls back to the frame interval only until
     //     the row-set gap has been measured, and on SHARP where there is no gate and the two are
     //     the same thing anyway.
-    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
-    const dur = Math.max(50, Math.min(1000, revealMs));
     if (wfBoost) {
       // Interaction / native rate: the 120Hz vsync glide already handles smoothness, so keep uN on the
       // STABLE static multiplier. ★ Deriving it from the LIVE data rate here (which spikes and
@@ -1290,17 +1314,7 @@ function WaterfallView({
       //     AVERAGE is exactly the rate the setting promises, on any feed.
       //     ★ Only possible because uN is 1: the row count per frame is now a local decision about
       //       new data, not a global mapping, so it may vary frame to frame at no cost.
-      const rowMs = cfg.targetRows > 0 ? 1000 / cfg.targetRows : 0;
-      let extras = 0;
-      if (rowMs > 0) {
-        rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
-        extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
-        rowCarry.current -= Math.floor(rowCarry.current);
-        // A stall must not repay as a burst — cap the catch-up.
-        if (extras > 4) extras = 4;
-      }
-      lastDynRows.current = extras + 1;
-      scrollFrac.value = 1;            // see startRevealStepper — uN is 1, so R must be 1
+      scrollFrac.value = 1;            // uN is 1, so R must be 1 (see the shader note)
       // ★★★ NEVER STOP THE STEPPER BETWEEN ARRIVALS. At 30 rows/s on a 20 fps feed the extras
       //     alternate 0,1,0,1 — so stopping on the zero frames meant a stop/start round trip
       //     through runOnJS every 50 ms, and the single extra row had 25 ms to survive it. It
@@ -1317,7 +1331,6 @@ function WaterfallView({
       //       UI thread only to bounce straight back added latency and a failure mode. The reveal
       //       FRACTION genuinely needed vsync — rows do not.
       //     ★ Self-cancelling on the next arrival, so a slow feed can never queue a burst.
-      scheduleExtraRows(extras, dur / (extras + 1));
     }
     }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
 
