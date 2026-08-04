@@ -248,13 +248,27 @@ to the Buzzer at 4.625 MHz USB, 29 dB SNR. Not a degraded fallback — the real 
 ★★★ **And the screen shows a POINTER.** A Bravia remote drives a CURSOR, not just a D-pad, and the
 web client already speaks `pointerdown` / `pointermove` / `wheel`. So on that TV the two-input
 problem does not arise: **it is a mouse, and the app is already a mouse app.**
-★ So the honest position is now:
-- **Apple TV** — no browser at all, so it must be the native app, and the Siri Remote's two inputs
-  are what make the native control scheme work. This brief stands.
-- **Android TV / Fire TV / smart TVs** — the web client ALREADY WORKS, measured, and needs no
-  control scheme designed for it where the remote offers a pointer. Cost: approximately zero.
-- ★ The one-D-pad concern survives only for remotes with **no pointer**, where the sleep/wake
-  behaviour in §3 would have to carry it as an implicit mode.
+### ★★★ ...AND IT WORKED WITHOUT BEING ANY GOOD — WHICH IS THE REAL FINDING
+Stuart, having used it: *"it wasn't good to use on the bravia, it worked but it wasn't pleasant."*
+★ **Rendering is not usability, and the photo only proved rendering.** I over-corrected on the
+strength of it — from "that platform is blocked" to "near-zero-cost win" — on evidence that showed
+a screen, not a session. The measured result is: **technically works, unpleasant to drive.**
+★★ **And the REASON is the whole argument for this brief.** A pointer on a TV must be AIMED: you
+nudge a cursor across a 4K screen with a remote, hunting for a control. That is the classic failure
+of pointer-on-TV interfaces. **A highlight box that JUMPS between controls needs no aiming** — it is
+the difference between steering and choosing, and at three metres it is the difference between
+usable and not.
+★ So Stuart's original scheme is not merely the Apple TV way of doing it; **it is the right TV
+interface, and the browser experiment is the control experiment that shows why.**
+
+★ The honest position:
+- **Apple TV** — no browser exists there, so it must be the native app. The Siri Remote's two
+  inputs give the highlight scheme with no mode. This brief stands, and is now better motivated.
+- **Android TV / Fire TV / smart TVs** — the web client RUNS (measured) and is a fine demo or a
+  stopgap, but it is **not a product**: driving it by cursor is unpleasant. If those platforms are
+  ever wanted properly they need the highlight scheme too, not just a URL.
+- ★ Which makes the one-D-pad question moot for now: the blocker there was never the D-pad, it is
+  that a pointer-driven SDR is not nice to use from a sofa.
 ★ **Still unverified on the Bravia: AUDIO.** The photo proves the display path; it does not prove
 Opus decode in that browser. Worth one check before claiming the platform.
 
