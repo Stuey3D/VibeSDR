@@ -49,20 +49,14 @@ npm --version
 # So the retry deletes node_modules first. It is also worth SAYING that ci failed and why,
 # because the fallback used to hide it — the build only ever reported the second, confusing
 # error, never the first, real one.
-#
-# ★★★ --legacy-peer-deps IS MANDATORY SINCE THE tvOS MERGE, ON iOS TOO. react-native is aliased to
-#     react-native-tvos (a drop-in fork that also supports Apple TV), and the fork's versions are
-#     semver PRERELEASES (0.86.2-0). Peer ranges like ">=0.65 <1.0" never match a prerelease, so
-#     EVERY consumer of react-native in the tree refuses to resolve without this flag — including
-#     on a pure iOS build. Removing it will fail the whole install, not just the TV parts.
-#     ★ It does NOT install peer deps, which is how react-native-worklets (Reanimated 4's peer)
-#       silently vanished once and stopped pod install dead. It is now an explicit dependency.
+# ★ REVERTED 2026-08-04: --legacy-peer-deps was added for the react-native-tvos alias, which has
+#   now been reverted (it broke the shipping iPhone app). Plain npm ci is the known-good path.
 cd "$CI_PRIMARY_REPOSITORY_PATH"
 echo "--- installing JS dependencies (npm ci) ---"
-if ! npm ci --legacy-peer-deps; then
+if ! npm ci; then
   echo "--- npm ci FAILED (see above). Retrying from a clean node_modules… ---"
   rm -rf node_modules
-  npm install --legacy-peer-deps
+  npm install
 fi
 
 # CocoaPods. RN 0.86 fetches a prebuilt "reactnative-dependencies" tarball from
