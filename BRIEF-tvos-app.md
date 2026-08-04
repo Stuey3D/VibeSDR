@@ -350,6 +350,32 @@ accident.
 A tvOS layout with no drums and no buttons makes several of those sentences false on that platform.
 Add the tvOS tour to that list the day it is written, not afterwards.
 
+## 6.5 ✅ THE BUILD WORKS — THE BLOCKER IS SIGNING, AND IT IS MEASURED
+**Runs 76, 77 and 78 (2026-08-04) all reached `** ARCHIVE SUCCEEDED **` and produced a valid
+App Store export.** The tvOS app compiles: 1074 issues in the log, every one a WARNING, zero errors.
+Skia, Reanimated and the Expo modules all build for tvOS, and the JS bundle is produced.
+
+**What fails is delivery**, and only delivery:
+```
+error: exportArchive No profiles for 'com.vibesdr.app' were found     <- ad-hoc
+error: exportArchive No profiles for 'com.vibesdr.app' were found     <- development
+** EXPORT SUCCEEDED **                                                <- app-store
+```
+Xcode Cloud always attempts ALL THREE exports from an ARCHIVE action and fails the run if any fail.
+- ★ Verified against the iOS workflow: the two action definitions are byte-identical apart from
+  `platform`, and on iOS all three exports SUCCEED — because iOS profiles exist.
+- ★ Verified that `buildDistributionAudience: INTERNAL_ONLY` does NOT help: run 78 still ran both
+  exports and still failed; it only stopped RETAINING their artifacts. **There is no config that
+  disables them.**
+- ★★★ **ROOT CAUSE: the account has NO tvOS DEVICES** — registered devices are iPhone ×2, iPad,
+  Apple Watch and a Mac. Ad-hoc and development profiles cannot exist for a platform with no
+  devices, so Cloud cannot mint them however it is configured.
+
+★★ **THE FIX IS ONE DEVICE REGISTRATION.** Stuart has three Apple TVs. Pair one with Xcode
+(*Settings → Remotes and Devices → Remote App and Devices* on the TV; *Xcode → Window → Devices and
+Simulators* on the Mac), take its Identifier, and register it — `POST /v1/devices` with
+`platform: IOS` (Apple TVs register under the IOS platform with `deviceClass: APPLE_TV`).
+
 ## 7. Open questions for Stuart
 
 1. ✅ **ANSWERED for two of three — 15 s to hide the highlight, 30 s to remember its position** (§3).
