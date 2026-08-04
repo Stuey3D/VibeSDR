@@ -30,17 +30,18 @@
     "react-native-screens": "^4.25.2",
     "react-native-svg": "15.15.4",
     "react-native-webview": "^13.16.1",
+    "react-native-worklets": "^0.10.1",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@react-native-tvos/config-tv": "^0.1.6",
     "@types/pako": "^2.0.4",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "~57.0.0",
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "patch-package": "^8.0.1",
-    "typescript": "~6.0.3",
-    "@react-native-tvos/config-tv": "^0.1.6"
+    "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
