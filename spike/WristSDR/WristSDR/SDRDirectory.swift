@@ -57,6 +57,15 @@ struct SDRServer: Identifiable, Codable, Hashable {
   var bestSnr: Double? = nil
   var users: Int = 0
   var maxUsers: Int = 0
+  /// ★★★ THE OWNER'S THIRD-PARTY ALLOWANCE, from the KiwiSDR directory's `ext_api`.
+  ///  0 = apps like ours are NOT permitted: the receiver admits you, streams audio, then closes at
+  ///  ~10 s saying nothing. nil = unknown (a directory that does not publish it and could not be
+  ///  cross-referenced) — which must NEVER be treated as blocked.
+  ///  ★★ ON THE WATCH THIS MATTERS MORE THAN ANYWHERE. The phone can fall back to compatibility
+  ///     mode (the receiver's own web page in a WebView); a watch cannot. An unflagged blocked
+  ///     receiver here is a dead end with no explanation available, which reads as OUR app being
+  ///     broken — exactly what Stuart hit in early testing before the cause was known.
+  var extApi: Int? = nil
   var full: Bool = false
   var pin: String = ""             // VibeServer PIN (saved per host when the user enters one)
 }
@@ -158,12 +167,97 @@ enum Directories {
   ]
 
   static func fetch(_ id: String) async throws -> [SDRServer] {
+    var list: [SDRServer]
     switch id {
-    case "ubersdr":      return try await fetchUberSDR()
-    case "fmdx":         return try await fetchFmdx()
-    case "kiwisdr":      return try await fetchKiwiList()
-    case "receiverbook": return try await fetchReceiverbook()
+    case "ubersdr":      list = try await fetchUberSDR()
+    case "fmdx":         list = try await fetchFmdx()
+    case "kiwisdr":      list = try await fetchKiwiList()
+    case "receiverbook": list = await annotateExtApi(try await fetchReceiverbook())
     default:             return []
+    }
+    // ★★★ HIDE RECEIVERS THAT REFUSE THIRD-PARTY APPS. On the phone these are shown in red and can
+    //     still be opened in compatibility mode; a WATCH HAS NO SUCH FALLBACK, so offering one is
+    //     offering a dead end. `extApi == 0` is the owner's published policy, not a guess — and nil
+    //     (unknown) is deliberately NOT treated as blocked, so an un-joined receiver still appears.
+    //     ★ Stuart, 2026-08-04: "I'd rather ship 1.0.1 with that in than one which shows receivers
+    //       that wont work and have users think our app is broken."
+    return list.filter { $0.extApi != 0 }
+  }
+
+  // ── Receiverbook ✕ KiwiSDR cross-reference ─────────────────────────────────────
+  /// ★★★ RECEIVERBOOK PUBLISHES NO `ext_api`, BUT THE KIWI DIRECTORY DOES — SO JOIN THEM.
+  /// The same receiver is usually listed in both, so a Receiverbook row can inherit the flag.
+  /// MEASURED on both live directories (2026-08-04, 795 Receiverbook kiwis / 849 Kiwi rows):
+  ///     by address (host+port, then unique host) ... 556
+  ///     by name AND within 25 km ................... 112
+  ///     name matched but geographically far ........   0
+  ///     unmatched (Receiverbook-only) .............. 127
+  ///     => 668 of 795 joined (84%), identifying 96 of the 126 blocked receivers.
+  /// ★ The 25 km guard is kept even though nothing failed it: a future name collision would
+  ///   otherwise HIDE A WORKING receiver, which is worse than missing a blocked one.
+  /// ★ Never throws — if the Kiwi list will not load, the result is simply today's behaviour.
+  private static func joinKey(_ url: String) -> (hostPort: String, host: String) {
+    let clean = url.trimmingCharacters(in: .whitespaces)
+    let withScheme = clean.hasPrefix("http") ? clean : "http://" + clean
+    guard let u = URL(string: withScheme), var h = u.host?.lowercased() else { return ("", "") }
+    if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+    let port = u.port.map(String.init) ?? (u.scheme == "https" ? "443" : "80")
+    return ("\(h):\(port)", h)
+  }
+  private static func joinName(_ s: String) -> String {
+    let stripped = s.replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
+    return String(stripped.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(40))
+  }
+  private static func kmBetween(_ aLat: Double, _ aLon: Double, _ bLat: Double, _ bLon: Double) -> Double {
+    let R = 6371.0, rad = Double.pi / 180
+    let dLat = (bLat - aLat) * rad, dLon = (bLon - aLon) * rad
+    let h = sin(dLat/2)*sin(dLat/2) + cos(aLat*rad)*cos(bLat*rad)*sin(dLon/2)*sin(dLon/2)
+    return 2 * R * asin(min(1, sqrt(h)))
+  }
+
+  /// Cached for the session — the join needs the Kiwi list even when the user opened Receiverbook.
+  private static var kiwiJoinCache: (at: Date, rows: [SDRServer])? = nil
+
+  private static func annotateExtApi(_ list: [SDRServer]) async -> [SDRServer] {
+    guard list.contains(where: { ($0.serverType == .kiwi || $0.serverType == .web888) && $0.extApi == nil })
+    else { return list }
+    var kiwis: [SDRServer] = []
+    if let c = kiwiJoinCache, Date().timeIntervalSince(c.at) < 600 { kiwis = c.rows }
+    else {
+      guard let fetched = try? await fetchKiwiList(), !fetched.isEmpty else { return list }
+      kiwis = fetched
+      kiwiJoinCache = (Date(), fetched)
+    }
+
+    var byHostPort: [String: SDRServer] = [:]
+    var byHost: [String: [SDRServer]] = [:]
+    var byName: [String: [SDRServer]] = [:]
+    for k in kiwis {
+      let key = joinKey(k.url)
+      if !key.hostPort.isEmpty { byHostPort[key.hostPort] = k }
+      if !key.host.isEmpty { byHost[key.host, default: []].append(k) }
+      let n = joinName(k.name)
+      if !n.isEmpty { byName[n, default: []].append(k) }
+    }
+
+    return list.map { row in
+      guard row.serverType == .kiwi || row.serverType == .web888, row.extApi == nil else { return row }
+      var match: SDRServer? = nil
+      let key = joinKey(row.url)
+      // 1. ADDRESS — the strong key.
+      if let m = byHostPort[key.hostPort] { match = m }
+      else if let onHost = byHost[key.host], onHost.count == 1 { match = onHost[0] }
+      // 2. NAME, only when both agree on WHERE they are.
+      if match == nil, let cands = byName[joinName(row.name)], cands.count == 1,
+         let rLat = row.latitude, let rLon = row.longitude,
+         let cLat = cands[0].latitude, let cLon = cands[0].longitude,
+         kmBetween(rLat, rLon, cLat, cLon) <= 25 {
+        match = cands[0]
+      }
+      guard let m = match, let e = m.extApi else { return row }
+      var out = row
+      out.extApi = e
+      return out
     }
   }
 
@@ -265,6 +359,8 @@ enum Directories {
         bestSnr: snr,
         users: kiwiUsers,
         maxUsers: kiwiMax,
+        // ★ Published by this directory only — see SDRServer.extApi.
+        extApi: (r["ext_api"] as? NSNumber)?.intValue ?? Int((r["ext_api"] as? String) ?? ""),
         // ★ The two directories COUNT THE OPPOSITE WAY. UberSDR reports FREE slots
         // (available_clients: 0 = full); KiwiSDR reports slots IN USE (users 8 of users_max 8 =
         // full). Getting this backwards greys out every empty receiver and offers every full one.
