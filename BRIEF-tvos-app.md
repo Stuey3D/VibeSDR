@@ -238,11 +238,25 @@ A Siri Remote gives **two directional inputs simultaneously**: the clickpad **ri
 D-pad, and the touch surface **SWIPES** as a second one. This app needs exactly two — one to
 tune/zoom, one to move the highlight — so it gets both **with no mode switch at all**.
 
-★★ **Android TV / Fire TV remotes have ONE D-pad.** They are the easier platforms technically (real
-browsers, so the web client would run), but the control scheme is the hard part, and there it breaks:
-one D-pad cannot both tune and navigate without a **mode**, and modes are the thing this design
-deliberately avoids. So "easier to reach" and "easier to control" point at different platforms, and
-**the control scheme is what decides it.** Apple TV first.
+★★ **Android TV / Fire TV remotes have ONE D-pad** — so a D-pad-only remote cannot both tune and
+navigate without a **mode**, and modes are the thing this design deliberately avoids.
+
+### ✅ ...BUT THAT ARGUMENT IS PARTLY WRONG, AND STUART MEASURED IT (2026-08-04)
+He ran the web client on a **Sony Bravia Android TV's built-in browser**, against the Pi demo, and
+photographed it: full waterfall, spectrum trace, frequency bar, **20 fps at 30 KB/s, 20 ms**, tuned
+to the Buzzer at 4.625 MHz USB, 29 dB SNR. Not a degraded fallback — the real client, working.
+★★★ **And the screen shows a POINTER.** A Bravia remote drives a CURSOR, not just a D-pad, and the
+web client already speaks `pointerdown` / `pointermove` / `wheel`. So on that TV the two-input
+problem does not arise: **it is a mouse, and the app is already a mouse app.**
+★ So the honest position is now:
+- **Apple TV** — no browser at all, so it must be the native app, and the Siri Remote's two inputs
+  are what make the native control scheme work. This brief stands.
+- **Android TV / Fire TV / smart TVs** — the web client ALREADY WORKS, measured, and needs no
+  control scheme designed for it where the remote offers a pointer. Cost: approximately zero.
+- ★ The one-D-pad concern survives only for remotes with **no pointer**, where the sleep/wake
+  behaviour in §3 would have to carry it as an implicit mode.
+★ **Still unverified on the Bravia: AUDIO.** The photo proves the display path; it does not prove
+Opus decode in that browser. Worth one check before claiming the platform.
 
 ★ *If* a single-D-pad platform is ever wanted, the sleep/wake behaviour in §3 already contains an
 implicit mode that could carry it — highlight hidden ⇒ arrows tune, highlight visible ⇒ arrows
