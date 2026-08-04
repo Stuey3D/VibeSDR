@@ -1347,9 +1347,11 @@ struct LocalSdrShim::Impl {
                 spy->setFftFrequency(hz);
                 spyFftCenter.store((double)hz);
                 viewCenter.store((double)hz);   // keep the display over visible spectrum
-                // Copy the socket out, THEN send. tuneHw() runs under modeMtx, and
-                // holding clientMtx across sendConfig() (which takes sendMtx) would
-                // invert the lock order the spectrum path uses.
+                // Copy the socket out, THEN send. tuneHw() runs under modeMtx, and holding
+                // clientMtx across a send used to invert the lock order the spectrum path uses.
+                // ★ Sends no longer block or take a shared lock (see the Outbox block), so this is
+                //   now belt-and-braces rather than load-bearing — kept because copy-then-send is
+                //   the right shape regardless.
                 std::shared_ptr<net::Socket> sc;
                 { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
                 if (sc) sendConfig(sc);
@@ -1463,9 +1465,9 @@ struct LocalSdrShim::Impl {
      *  keeps working untouched; these are the rest. They receive the same frames, config and state
      *  — one radio, one VFO, one view — which is the shared-receiver model, and the channelizer is
      *  what makes serving them nearly free (+0.02% of a core each, measured).
-     *  ★ Guarded by clientMtx, like specClient. Copy the list under the lock and send OUTSIDE it:
-     *    sendWs takes sendMtx, and holding clientMtx across a send inverts the lock order the
-     *    spectrum path already uses. */
+     *  ★ Guarded by clientMtx, like specClient. Copy the list under the lock and send OUTSIDE it —
+     *    still the rule, though the reason has changed: sends are now queued, not blocking, so this
+     *    is about not holding clientMtx across work rather than about a lock-order inversion. */
     std::vector<std::shared_ptr<net::Socket>> specExtra;
     /** Everyone receiving spectrum right now — primary first. Call WITHOUT clientMtx held. */
     std::vector<std::shared_ptr<net::Socket>> allSpecClients() {
@@ -1475,12 +1477,29 @@ struct LocalSdrShim::Impl {
         for (auto& s : specExtra) if (s && s->isOpen()) out.push_back(s);
         return out;
     }
-    /** How many listeners are attached (spectrum). The landing page and the cap both want this. */
-    int specListenerCount() {
-        std::lock_guard<std::mutex> lk(clientMtx);
+    /** How many listeners are attached (spectrum), with clientMtx ALREADY HELD.
+     *  ★★★ THIS SPLIT IS NOT TIDINESS — IT IS THE FIX FOR A HARD DEADLOCK (2026-08-04).
+     *  `acceptWs` evaluates the "is the server full?" test INSIDE its clientMtx scope, and that
+     *  test called specListenerCount(), which locks clientMtx again. std::mutex is NOT recursive,
+     *  so the second listener deadlocked ON ITSELF — while holding the lock. Every other thread
+     *  that wants clientMtx then piles up behind it forever, the DSP thread included (onAudio
+     *  takes it to read `audioClient`), so the whole server froze the instant a second listener
+     *  arrived.
+     *  ★★ IT COULD ONLY EVER FIRE IN MULTI-USER MODE. The condition short-circuits on
+     *  `maxUsers <= 1`, so a single-user server never reaches the call — which is exactly why
+     *  this survived: every path anyone had actually exercised skipped it. THIS, not the blocking
+     *  broadcast, is what "multi-listener is BUILT BUT UNPROVEN" was really hiding.
+     *  ★ Rule: a helper that takes a lock must never be called from a scope that holds it. Keep
+     *  the two forms distinct and named so the next caller has to choose deliberately. */
+    int specListenerCountLocked() {
         int n = (specClient && specClient->isOpen()) ? 1 : 0;
         for (auto& s : specExtra) if (s && s->isOpen()) ++n;
         return n;
+    }
+    /** How many listeners are attached. Call WITHOUT clientMtx held. */
+    int specListenerCount() {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        return specListenerCountLocked();
     }
     std::shared_ptr<net::Socket> audioClient;
     // The single occupant's session id (empty = free). Guarded by clientMtx. A client's spectrum +
@@ -1498,7 +1517,140 @@ struct LocalSdrShim::Impl {
     std::map<std::string, double> cooldownUntil;
     std::atomic<uint64_t> frameCounter{0};
 
-    std::mutex sendMtx; // serialises all WS writes (both directions are split, sends here)
+    // ── ★★★ PER-CLIENT OUTBOX — see BUG-vibeserver-broadcast-blocks.md ──────────
+    //
+    // THE BUG THIS REPLACES. sendWs() used to take ONE GLOBAL `sendMtx` and then do a BLOCKING
+    // write, and most of those calls happen on the DSP THREAD. So a single listener that stopped
+    // reading — a slow link, a paused browser tab, a client mid-teardown — blocked in its own
+    // send(), held the global lock, and froze EVERY other listener and the DSP thread with it.
+    // Stuart, 2026-08-04: "I tried to connect to it whilst still being connected in the app and
+    // both froze." That is the whole multi-user feature failing on its second user.
+    //
+    // ★★★ THE RULE NOW: NOTHING THAT PRODUCES DATA EVER WRITES TO A SOCKET.
+    // Producers (DSP thread, decoder threads, control threads) only ever APPEND to a per-client
+    // queue and return immediately. Each client has its OWN mutex and its OWN writer thread, so a
+    // stalled peer backs up ITS OWN queue and nobody else can tell.
+    //
+    // ★★ `isOpen()` IS NOT A DEFENCE and never was — a socket can be perfectly open and simply not
+    // draining. The only real defence is never blocking on it in the first place.
+    enum class Out { Control, Spectrum, Audio };
+
+    /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
+     *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
+     *  everybody for one slow peer; the whole point of this rewrite is that the cost stays with
+     *  the client that incurred it. 512 KB is ~2.7 s of uncompressed audio, far more of Opus. */
+    static constexpr size_t kOutboxMaxBytes = 512 * 1024;
+
+    struct Outbox {
+        std::shared_ptr<net::Socket> sock;
+        std::mutex m;
+        std::condition_variable cv;
+        std::deque<std::pair<Out, std::vector<uint8_t>>> q;
+        size_t bytes = 0;
+        bool   closing = false;      // drain what is queued, then the writer exits
+        bool   overran = false;      // dropped for backlog, not for leaving
+        std::thread th;
+    };
+    std::mutex outboxMtx;
+    std::map<net::Socket*, std::shared_ptr<Outbox>> outboxes;
+
+    /** The ONLY thread that ever writes to this client's socket. Blocking sends are fine HERE —
+     *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
+    void outboxWriter(std::shared_ptr<Outbox> ob) {
+        vibeThreadName("vibeTx");
+        for (;;) {
+            std::pair<Out, std::vector<uint8_t>> msg;
+            {
+                std::unique_lock<std::mutex> lk(ob->m);
+                ob->cv.wait(lk, [&]{ return ob->closing || !ob->q.empty(); });
+                if (ob->q.empty()) return;                  // closing and drained
+                msg = std::move(ob->q.front());
+                ob->q.pop_front();
+                ob->bytes -= msg.second.size();
+            }
+            if (!ob->sock->isOpen()) return;
+            if (ob->sock->send(msg.second.data(), msg.second.size()) < 0) {
+                ob->sock->close();                          // peer gone — its read loop unwinds
+                return;
+            }
+        }
+    }
+
+    void outboxOpen(const std::shared_ptr<net::Socket>& sock) {
+        auto ob = std::make_shared<Outbox>();
+        ob->sock = sock;
+        { std::lock_guard<std::mutex> lk(outboxMtx); outboxes[sock.get()] = ob; }
+        ob->th = std::thread([this, ob]{ outboxWriter(ob); });
+    }
+
+    /** Stop accepting, let the writer drain what is already queued (bounded), then join.
+     *  ★ THE DRAIN MATTERS: several paths say their piece and hang up in the next line —
+     *  "cooldown", "needs_codec", the eviction notice. Closing without draining turns a server
+     *  that EXPLAINS itself into one that hangs up silently, which reads to a user as a crash. */
+    void outboxClose(const std::shared_ptr<net::Socket>& sock, int drainMs = 250) {
+        std::shared_ptr<Outbox> ob;
+        { std::lock_guard<std::mutex> lk(outboxMtx);
+          auto it = outboxes.find(sock.get());
+          if (it == outboxes.end()) return;
+          ob = it->second; outboxes.erase(it); }
+        { std::lock_guard<std::mutex> lk(ob->m); ob->closing = true; }
+        ob->cv.notify_all();
+        // Bounded wait: a peer that is not draining must not hold up the thread doing the teardown.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(drainMs);
+        for (;;) {
+            { std::lock_guard<std::mutex> lk(ob->m); if (ob->q.empty()) break; }
+            if (std::chrono::steady_clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ob->sock->close();                    // unblocks the writer if it is stuck mid-send
+        ob->cv.notify_all();
+        if (ob->th.joinable()) ob->th.join();
+    }
+
+    /** Append a framed message for one client. NEVER blocks on the network. */
+    void outboxPush(const std::shared_ptr<net::Socket>& sock, Out cls, std::vector<uint8_t>&& frame) {
+        std::shared_ptr<Outbox> ob;
+        { std::lock_guard<std::mutex> lk(outboxMtx);
+          auto it = outboxes.find(sock.get());
+          if (it != outboxes.end()) ob = it->second; }
+        if (!ob) {
+            // Not registered yet — the HTTP/handshake phase, where this thread is the only one
+            // holding the socket and no other client can be affected. A direct write is safe and
+            // keeps those paths behaving exactly as before.
+            if (sock->isOpen()) sock->send(frame.data(), frame.size());
+            return;
+        }
+        std::lock_guard<std::mutex> lk(ob->m);
+        if (ob->closing) return;
+        // ★★ SPECTRUM IS NEWEST-WINS. A waterfall row is worthless the moment a newer one exists,
+        // so a listener who cannot keep up should fall BEHIND IN DETAIL, not accumulate a backlog
+        // and then be dropped for it. Replacing rather than queueing is what lets a slow client
+        // stay connected and merely run at a lower effective frame rate.
+        if (cls == Out::Spectrum) {
+            for (auto it = ob->q.begin(); it != ob->q.end(); ) {
+                if (it->first == Out::Spectrum) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
+                else ++it;
+            }
+        }
+        // ★ Audio and control are NOT droppable — a gap in audio is audible and a dropped control
+        // reply desynchronises the client. If those alone overflow, the link genuinely cannot carry
+        // this listener, so drop the listener.
+        if (ob->bytes + frame.size() > kOutboxMaxBytes) {
+            if (!ob->overran) {
+                ob->overran = true;
+                LOGI("listener %s dropped — %zu KB backlog, cannot keep up",
+                     ob->sock->peerAddress().c_str(), ob->bytes / 1024);
+            }
+            ob->closing = true;
+            ob->cv.notify_all();
+            ob->sock->close();
+            return;
+        }
+        ob->bytes += frame.size();
+        ob->q.emplace_back(cls, std::move(frame));
+        ob->cv.notify_one();
+    }
+
     double specAuditMs = 0.0; long long specAuditFrames = 0;   // see onSpectrum's rate audit
 
     // ── Spectrum callback (Stage 3) ────────────────────────────────────────
@@ -1596,7 +1748,7 @@ struct LocalSdrShim::Impl {
             int v = (int)lround(db[src] + 256.0);
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
-        for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size());
+        for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size(), Out::Spectrum);
         vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
         if (++zoomFrames_ == 1 || zoomFrames_ % 100 == 0)
             LOGI("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
@@ -1717,7 +1869,7 @@ struct LocalSdrShim::Impl {
                 // Clamp to 1, not 0 — 0 is the no-data sentinel and must stay unambiguous.
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
-            for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size());
+            for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size(), Out::Spectrum);
             vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
             // ★ The RSP's AGC kick and its gain telemetry USED TO LIVE HERE, and that was the bug:
@@ -1846,18 +1998,23 @@ struct LocalSdrShim::Impl {
             // ★ ~10 Hz, not 1. The IF slider follows the AGC live, and a thumb that jumps once a
             //   second reads as broken rather than as tracking. ~90 bytes is nothing next to the
             //   spectrum.
-            // ★★ REVERTED TO THE PRIMARY SOCKET 2026-08-04 — see the sig note below. Sending to
-            //    every peer multiplies traffic through a BLOCKING write under a GLOBAL mutex on
-            //    the DSP thread, which is what let one stalled listener freeze everybody. Restore
-            //    the per-peer fan-out only once that path cannot block.
-            if (sock && n % 2 == 0) {
+            // ★★ CUT TO THE PRIMARY SOCKET 2026-08-04 (it multiplied traffic through a BLOCKING
+            //    write under a GLOBAL mutex on the DSP thread), then RESTORED TO EVERY PEER once
+            //    that path was replaced by the per-client outbox — which is exactly the condition
+            //    the cutback named. Queueing ~90 bytes per peer cannot block anyone.
+            // ★★★ AND IT HAD TO COME BACK. This is the gain readout; the `sig` block below is the
+            //    signal meter. On the primary socket only, EVERY listener after the first had a
+            //    dead S-meter and a frozen gain display — and a control that is visible and inert
+            //    reads as "the feature is broken", not "you are the second listener". A shared
+            //    receiver whose meters only work for whoever connected first is not shared.
+            if (n % 2 == 0) {
                 char gb[160];
                 snprintf(gb, sizeof gb,
                     "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
                     "\"settling\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
-                sendText(sock, gb);
+                for (auto& pc : peers) sendText(pc, gb);
             }
         }
 
@@ -1899,11 +2056,15 @@ struct LocalSdrShim::Impl {
             //       itself is made non-blocking — see BUG-vibeserver-broadcast-blocks.md.
             //     ★ The meter's own smoothing copes with 5 Hz; it is the SCALE that mattered
             //       (a fixed dBFS scale, not the waterfall's auto-contrast), not the update rate.
-            if (sock && (n % 4) == 0) {
+            // ★★ RESTORED TO EVERY PEER 2026-08-04, for the reason the cutback itself gave: the
+            //    write path can no longer block (per-client outbox). ~5 Hz is KEPT — that rate was
+            //    fine on its own merits, since the meter's own smoothing copes and it was the
+            //    SCALE that mattered, not the rate. Only the fan-out was the bug.
+            if ((n % 4) == 0) {
                 char sb[128];
                 snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
                          peak, iqFloorDb.load());
-                sendText(sock, sb);
+                for (auto& pc : peers) sendText(pc, sb);
             }
         }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
@@ -2160,7 +2321,7 @@ struct LocalSdrShim::Impl {
                 frame.push_back((uint8_t)(sr & 0xff));         frame.push_back((uint8_t)((sr >> 8) & 0xff));
                 frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
                 frame.insert(frame.end(), pkt.begin(), pkt.end());
-                sendWs(sock, 0x2, frame.data(), frame.size());
+                sendWs(sock, 0x2, frame.data(), frame.size(), Out::Audio);
                 vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
             }
             return;
@@ -2172,7 +2333,7 @@ struct LocalSdrShim::Impl {
         frame[0] = (uint8_t)ch; frame[1] = 0;
         uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
         std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
-        sendWs(sock, 0x2, frame.data(), frame.size());
+        sendWs(sock, 0x2, frame.data(), frame.size(), Out::Audio);
         vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
     }
 
@@ -2626,17 +2787,22 @@ struct LocalSdrShim::Impl {
     }
 
     // ── WebSocket framing ──────────────────────────────────────────────────
+    /** Frame and QUEUE one WebSocket message. Returns immediately — see the Outbox block above.
+     *  ★★ HEADER AND PAYLOAD ARE ONE BUFFER, not two sends. The old code wrote them separately
+     *  under a lock; queued separately they could be interleaved by anything that ever pushed
+     *  between the two, and a WebSocket header split from its body desynchronises the stream for
+     *  good. One frame in, one frame out — the invariant is now structural rather than a lock. */
     void sendWs(const std::shared_ptr<net::Socket>& sock, uint8_t opcode,
-                const uint8_t* payload, size_t len) {
-        std::vector<uint8_t> hdr;
-        hdr.push_back(0x80 | opcode);
-        if (len < 126) hdr.push_back((uint8_t)len);
-        else if (len < 65536) { hdr.push_back(126); hdr.push_back((uint8_t)(len>>8)); hdr.push_back((uint8_t)len); }
-        else { hdr.push_back(127); for (int i=7;i>=0;i--) hdr.push_back((uint8_t)(len>>(i*8))); }
-        std::lock_guard<std::mutex> lk(sendMtx);
-        if (!sock->isOpen()) return;
-        sock->send(hdr.data(), hdr.size());
-        if (len) sock->send(payload, len);
+                const uint8_t* payload, size_t len, Out cls = Out::Control) {
+        if (!sock || !sock->isOpen()) return;
+        std::vector<uint8_t> f;
+        f.reserve(len + 10);
+        f.push_back(0x80 | opcode);
+        if (len < 126) f.push_back((uint8_t)len);
+        else if (len < 65536) { f.push_back(126); f.push_back((uint8_t)(len>>8)); f.push_back((uint8_t)len); }
+        else { f.push_back(127); for (int i=7;i>=0;i--) f.push_back((uint8_t)(len>>(i*8))); }
+        if (len) f.insert(f.end(), payload, payload + len);
+        outboxPush(sock, cls, std::move(f));
     }
     void sendText(const std::shared_ptr<net::Socket>& sock, const std::string& s) {
         sendWs(sock, 0x1, (const uint8_t*)s.data(), s.size());
@@ -3623,6 +3789,15 @@ struct LocalSdrShim::Impl {
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
 
+        // ★★★ FROM HERE ON, ONE THREAD AND ONLY ONE THREAD WRITES TO THIS SOCKET.
+        // Registered immediately after the handshake, because the moment this client is published
+        // into specClient/specExtra the DSP thread can send to it — and a single blocking write
+        // from there is the freeze this mechanism exists to prevent.
+        // ★ EVERY exit from this function must call outboxClose(sock), the refusals included:
+        //   they say their piece and hang up in the next line, so without the drain the server
+        //   stops explaining itself and just disconnects, which a user reads as a crash.
+        outboxOpen(sock);
+
         // ★ ONE OCCUPANT AT A TIME — and a second one is TURNED AWAY, not allowed to take over.
         //
         // The radio serves one listener until real multi-client lands
@@ -3655,7 +3830,7 @@ struct LocalSdrShim::Impl {
                         const std::string m = "{\"type\":\"cooldown\",\"secs\":"
                                             + std::to_string(left) + "}";
                         sendWs(sock, 0x1, (const uint8_t*)m.data(), m.size());
-                        sock->close();
+                        outboxClose(sock);   // drain, then close — see outboxClose()
                         return;
                     }
                     cooldownUntil.erase(it);   // expired — prune on the way past
@@ -3669,7 +3844,10 @@ struct LocalSdrShim::Impl {
             const bool occupied = !occupantSession.empty()
                 && occupantSession != me
                 && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()))
-                && (maxUsers <= 1 || specListenerCount() >= maxUsers);
+                // ★★★ ...Locked — WE ALREADY HOLD clientMtx HERE. Calling the locking form
+                //     deadlocked this thread against itself and froze the whole server for
+                //     every listener. See specListenerCountLocked().
+                && (maxUsers <= 1 || specListenerCountLocked() >= maxUsers);
 
             // ★★★ ADMIN OVERRIDE — the ONE case where takeover is allowed, and it must not
             // restart the reconnect war that made takeover the wrong default everywhere else.
@@ -3718,7 +3896,7 @@ struct LocalSdrShim::Impl {
                 LOGI("%s WS refused — server busy (occupant present)", isAudio ? "audio" : "spectrum");
                 sendWs(sock, 0x1,
                        (const uint8_t*)"{\"type\":\"busy\"}", 15);
-                sock->close();
+                outboxClose(sock);   // drain, then close — see outboxClose()
                 return;
             }
             // ★ Start the clock on a NEW occupant only. A client opens two sockets (spectrum
@@ -3747,7 +3925,7 @@ struct LocalSdrShim::Impl {
             LOGI("audio WS refused — uncompressed audio not allowed by the owner");
             static const char* kMsg = "{\"type\":\"needs_codec\",\"codec\":\"opus\"}";
             sendWs(sock, 0x1, (const uint8_t*)kMsg, strlen(kMsg));
-            sock->close();
+            outboxClose(sock);   // drain, then close — see outboxClose()
             return;
         }
 
@@ -3814,15 +3992,27 @@ struct LocalSdrShim::Impl {
                   stale = specClient;
                   specClient = sock;
               } }
-            if (asExtra) {
-                sendConfig(sock); sendHwInfo(sock);
+            sendConfig(sock); sendHwInfo(sock);
+            if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
                      specListenerCount(), g_vsMaxUsers.load());
-                if (deviceLost.load()) sendText(sock, "{\"type\":\"device\",\"present\":false}");
-                return;
-            }
-            sendConfig(sock); sendHwInfo(sock);
-            LOGI("spectrum WS connected");
+            else
+                LOGI("spectrum WS connected");
+            // ★★★ AN EXTRA LISTENER USED TO `return` HERE — AND THAT WAS THREE BUGS AT ONCE.
+            // Returning skipped the read loop below, so for every listener after the first:
+            //   1. NOTHING WAS EVER READ from the socket. Its control messages were ignored, so a
+            //      second listener could not even be pinged, and anything it sent sat unread until
+            //      the kernel receive buffer filled.
+            //   2. NO LIVENESS. The ping/pong probe lives in that loop, so a VANISHED extra (a
+            //      suspended phone, a dropped link with no FIN) was never detected — `isOpen()`
+            //      stays true on a peer that is simply gone, so it held a slot forever. On a server
+            //      advertising a user cap, leaked slots eventually refuse everybody.
+            //   3. NO TEARDOWN. The cleanup at the end of this function never ran for extras.
+            // ★★ Falling through fixes all three at once, because that loop is exactly where a
+            //    client's read, liveness and cleanup already live. An extra is a listener like any
+            //    other — the ONLY thing that differs is which pointer holds it.
+            // ★ This is why "multi-listener is BUILT BUT UNPROVEN" was the right label: a second
+            //   listener had never been driven far enough to notice it was write-only.
             // ★ TELL A NEW CLIENT THE CURRENT STATE. The device message is otherwise only sent when
             // the state CHANGES, so anyone who connected — or refreshed — after the dongle was
             // pulled saw a page that simply never updated, with nothing to explain it. Refreshing
@@ -3885,7 +4075,7 @@ struct LocalSdrShim::Impl {
           const bool specGone  = !specClient  || !specClient->isOpen();
           const bool audioGone = !audioClient || !audioClient->isOpen();
           if (specGone && audioGone) { occupantSession.clear(); bothGone = true; } }
-        sock->close();
+        outboxClose(sock);   // drain, then close — see outboxClose()
         // No listeners → idle the dongle so an unattended server stops burning power. OUTSIDE the lock:
         // pauseCaptureIdle() joins the capture thread, which must never happen under clientMtx.
         // ★★★ BUT RE-CHECK FIRST — A NEW CLIENT MAY HAVE ARRIVED WHILE THIS SOCKET WAS CLOSING.
@@ -4074,6 +4264,10 @@ struct LocalSdrShim::Impl {
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
+        // ★★ The decoder sockets are written from the DECODE threads (WEFAX lines, SSTV rows,
+        // FT8 spots), so they need the same protection as the spectrum path — a browser tab that
+        // stops draining its decoder stream must not stall the decoders for everyone else.
+        outboxOpen(sock);
         { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; }
         LOGI("dxcluster (decoder) WS connected");
         while (serverRunning.load() && sock->isOpen()) {
@@ -4120,7 +4314,7 @@ struct LocalSdrShim::Impl {
           stillCurrent = (dxClient == sock);
           if (stillCurrent) dxClient = nullptr; }
         if (stillCurrent) { stopDecoder(); stopSpots(); }
-        sock->close();
+        outboxClose(sock);
         LOGI("dxcluster WS disconnected%s", stillCurrent ? "" : " (superseded — kept decoder)");
     }
 
