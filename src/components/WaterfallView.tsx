@@ -1010,7 +1010,9 @@ function WaterfallView({
     //     stale. The scroll now comes from rows being PUSHED, exactly as in the web client, not
     //     from a fraction being animated over a block of synthesised lines.
     scrollFrac.value = 1;
-    if (n < 1) { setRevealActive(false); return; }
+    // n === 0 is legitimate: nothing extra is due THIS interval, but the stepper must stay alive
+    // (see the caller). Only a negative count means "switch it off".
+    if (n < 0) { setRevealActive(false); return; }
     revN.value = n;
     revStep.value = Math.max(8, intervalMs / n);
     revK.value = 0;
@@ -1274,7 +1276,15 @@ function WaterfallView({
       }
       lastDynRows.current = extras + 1;
       scrollFrac.value = 1;            // see startRevealStepper — uN is 1, so R must be 1
-      if (extras > 0) startRevealStepper(extras, dur * extras / (extras + 1));
+      // ★★★ NEVER STOP THE STEPPER BETWEEN ARRIVALS. At 30 rows/s on a 20 fps feed the extras
+      //     alternate 0,1,0,1 — so stopping on the zero frames meant a stop/start round trip
+      //     through runOnJS every 50 ms, and the single extra row had 25 ms to survive it. It
+      //     mostly did not, which collapsed SMOOTH back to DEFAULT's rate: "the 3 options make no
+      //     difference in visible speed" (Stuart, 2026-08-04). Exactly the same stop/start latency
+      //     that caused the halting scroll in build 73 — twice now.
+      //     ★ It stays active with revN = 0 (nothing due) and releases the display itself after
+      //       ~1 s of no data, which is what the idle counter in the worklet is for.
+      if (cfg.targetRows > 0) startRevealStepper(extras, dur * extras / Math.max(1, extras + 1));
       else stopRevealStepper();
     }
     }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
