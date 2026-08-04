@@ -481,10 +481,26 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
-  const [fontsLoaded] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
   });
+  /** ★★★ NEVER BLOCK THE WHOLE APP ON FONTS FOREVER. `if (!fontsLoaded) return null` renders
+   *  NOTHING until they load — so any font failure is a permanent BLACK SCREEN with a running
+   *  process, no error on screen and nothing in the log. That is the worst shape a fault can take,
+   *  and it is exactly what the first Apple TV build showed (2026-08-04).
+   *  ★ useFonts returns an ERROR as its second value and it was being discarded, so a genuine
+   *    failure was indistinguishable from "still loading".
+   *  ★ Now: proceed after 3 s regardless. Text falls back to the system font — ugly on one screen,
+   *    where before the whole app was invisible. */
+  const [fontWaitOver, setFontWaitOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontWaitOver(true), 3000);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => {
+    if (fontError) console.warn('[fonts] failed to load, continuing with system fonts:', fontError);
+  }, [fontError]);
 
   const [splashDone, setSplashDone]   = useState(false);
   const [splashLabel, setSplashLabel] = useState('CONNECTING TO INSTANCE LIST');
@@ -531,7 +547,7 @@ export default function App() {
   useDeepLinks(fontsLoaded && firstOpen !== undefined);
 
   // Hold splash until fonts are ready — prevents flash of Courier New fallback
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontError && !fontWaitOver) return null;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
