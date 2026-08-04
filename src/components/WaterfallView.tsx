@@ -390,8 +390,13 @@ function WaterfallView({
   //       A single rescale at latch time, ~1 s in on a nearly empty waterfall, is the whole cost.
   const WF_ROWS = WF_TARGET_ROWS <= 0 ? 1
     : (wfRowsLatched ?? Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps)))));
-  /** ms between waterfall row-sets to hold the target: uN rows every (uN/target) seconds. */
-  const WF_MIN_GAP_MS = WF_TARGET_ROWS > 0 ? (WF_ROWS / WF_TARGET_ROWS) * 1000 : 0;
+  /** ★★★ NO GATE ANY MORE — EVERY DATA FRAME BECOMES A ROW.
+   *  The gate existed only because uN had to be constant: holding rows/sec fixed with a fixed
+   *  multiplier meant discarding source frames on a fast feed (a 200 ms gate at 20 fps threw away
+   *  FOUR FRAMES IN FIVE). uN is now pinned to 1 and the multiplier only decides how many rows to
+   *  PUSH, so there is nothing left to protect and no reason to bin data the server already sent.
+   *  ★ That discard was the whole of the "chunky, blurry, lacks detail" against the web client. */
+  const WF_MIN_GAP_MS = 0;
   const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
@@ -471,6 +476,13 @@ function WaterfallView({
   // ── Intensity ring buffer (Gray_8, ring order — the shader does the
   // display-order mapping via uHead). Each push = one row write + a 256KB
   // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
+  /** A copy of the newest row, so the stepper can push the extra rows a SLOW feed needs to hold
+   *  the chosen scroll rate. frame.row is a reused buffer, hence the copy. */
+  /** Fractional row credit carried between arrivals — see the emit note. Without it a target rate
+   *  that is not an integer multiple of the feed rounds to the wrong rate every single frame. */
+  const rowCarry     = useRef(0);
+  const lastRow      = useRef<Uint8Array | null>(null);
+  const lastRowMeta  = useRef<{ centerHz: number; hzPerBin: number }>({ centerHz: 0, hzPerBin: 0 });
   const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
   const [texReady, setTexReady] = useState(false);
   const texReadyRef  = useRef(false);
@@ -900,6 +912,17 @@ function WaterfallView({
   }, []);
   const stopRevealStepper = useCallback(() => { setRevealActive(false); }, [setRevealActive]);
 
+  /** Push `k` more copies of the newest row. Used ONLY on a feed slower than the chosen scroll
+   *  rate, to hold that rate without inventing data: a repeated row is honest (nothing new has
+   *  arrived) where an interpolated one is a picture of a moment that never existed. The web
+   *  client settled on exactly this — see waterfall.ts drawRow, "WHOLE ROWS, NOT BLENDS". */
+  const emitRepeatRows = useCallback((k: number) => {
+    const row = lastRow.current;
+    if (!row) return;
+    const { centerHz, hzPerBin } = lastRowMeta.current;
+    for (let i = 0; i < k; i++) pushRow(row, centerHz, hzPerBin);
+  }, [pushRow]);
+
   const revealCb = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;   // component is gone — see specDead
@@ -966,16 +989,30 @@ function WaterfallView({
     const elapsed = fi.timestamp - revStartTs.value;
     const due = Math.min(n, Math.floor(elapsed / Math.max(1, revStep.value)));
     if (due <= revK.value) return;
-    revK.value = due;                        // catch up in one step if a frame was missed
-    scrollFrac.value = Math.min(1, revK.value / n);
+    // ★★★ THE STEPPER NOW PUSHES REAL ROWS — it no longer advances a reveal fraction, because
+    //     there is no longer anything to reveal: uN is 1, so a row exists or it does not.
+    //     This is the web client's model (waterfall.ts drawRow): the extra rows a SLOW feed needs
+    //     to hold the chosen scroll rate are REAL ring rows, pushed over the interval. History is
+    //     never re-mapped, so changing the scroll setting cannot rescale what is already drawn.
+    //     ★ One JS hop per extra row. On a fast feed there are NONE (the arrival is the row);
+    //       on a 10 fps feed at the 20-row setting it is 10 a second — the same order as the data
+    //       path itself, and far less than the per-pair activation churn this replaces.
+    const owed = due - revK.value;
+    revK.value = due;
+    runOnJS(emitRepeatRows)(owed);
   }, false);
   revealRef.current = revealCb;
 
   const startRevealStepper = useCallback((n: number, intervalMs: number) => {
-    scrollFrac.value = 0;
-    if (n <= 1) { scrollFrac.value = 1; setRevealActive(false); return; } // one whole-line step
+    // ★★★ scrollFrac IS NOW PINNED AT 1, ALWAYS. With uN = 1 there is nothing to "reveal": a row
+    //     either exists in the ring or it does not. The shader reads R = uFrac * uN, and R must be
+    //     1 for the NEWEST row to be the one at the top — at 0 it would draw the head one row
+    //     stale. The scroll now comes from rows being PUSHED, exactly as in the web client, not
+    //     from a fraction being animated over a block of synthesised lines.
+    scrollFrac.value = 1;
+    if (n < 1) { setRevealActive(false); return; }
     revN.value = n;
-    revStep.value = Math.max(16, intervalMs / n);
+    revStep.value = Math.max(8, intervalMs / n);
     revK.value = 0;
     revIdle.value = 0;
     // ★ -1 = "start the clock on the next UI frame". Taking the timestamp HERE would bake in the
@@ -1037,10 +1074,10 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: WF_ROWS, targetFps: TARGET_FPS,
+                            smoothTune, rowsPerFrame: WF_ROWS, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                             minGapMs: WF_MIN_GAP_MS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: WF_ROWS, targetFps: TARGET_FPS,
+                       smoothTune, rowsPerFrame: WF_ROWS, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                        minGapMs: WF_MIN_GAP_MS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
@@ -1162,9 +1199,14 @@ function WaterfallView({
     }
     lastWfPushAt.current = now;
 
-    pushRow(frame.row,
-            fstatus.trueCenterHz ?? fstatus.centerHz,
-            fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0);
+    const rowCentre = fstatus.trueCenterHz ?? fstatus.centerHz;
+    const rowHzBin  = fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0;
+    pushRow(frame.row, rowCentre, rowHzBin);
+    // Keep it for the repeat pushes on a slow feed (frame.row is reused by the caller).
+    if (!lastRow.current || lastRow.current.length !== frame.row.length)
+      lastRow.current = new Uint8Array(frame.row.length);
+    lastRow.current.set(frame.row);
+    lastRowMeta.current = { centerHz: rowCentre, hzPerBin: rowHzBin };
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
     // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
@@ -1196,7 +1238,8 @@ function WaterfallView({
       // identical to what settles afterwards, so nothing rescales.
       // ★ The same constant as the settled path. The old static hold existed only because that
       //   path derived a LIVE value that jumped during a gesture — there is nothing live left.
-      uNSv.value = cfg.rowsPerFrame;
+      // ★★★ uN IS NOW ALWAYS 1 — see the note at WF_ROWS. The shader no longer maps history.
+      uNSv.value = 1;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
@@ -1204,10 +1247,35 @@ function WaterfallView({
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
       // A CONSTANT — never derived from the measured rate, so it can never rescale the picture.
-      const dynRows = cfg.rowsPerFrame;
-      lastDynRows.current = dynRows;   // the gesture branch holds the same number now
-      uNSv.value = dynRows;
-      startRevealStepper(dynRows, dur);
+      // ★★★ uN = 1, ALWAYS. The shader maps ONE ring row to one display line and nothing else,
+      //     so NOTHING RESCALES when the scroll setting changes — which is the whole complaint:
+      //     "speeding up or slowing down the waterfall affects the history too, so the rendered
+      //     waterfall shrinks or expands depending on setting, the client doesnt do that"
+      //     (Stuart, 2026-08-04). The web client has never had this because it maps nothing: it
+      //     pushes REAL ROWS, so a rate change affects only NEW rows and history stays as drawn.
+      //     ★ And with uN out of the picture, `dynRows` is free to VARY per frame — it now only
+      //       says how many rows to PUSH, which is a local decision about new data. That is what
+      //       lets every frame be used (full detail) AND the scroll rate be held on a slow feed.
+      uNSv.value = 1;
+      // ★★★ EMIT AT THE TARGET ROW RATE, WITH A FRACTIONAL CARRY — NOT AN INTEGER MULTIPLE OF THE
+      //     FEED. 30 rows/s from a 20 fps feed is 1.5 rows per frame; rounding that to 2 gives 40
+      //     rows/s and SMOOTH stops meaning 30. The carry spends the halves: 1, 2, 1, 2… so the
+      //     AVERAGE is exactly the rate the setting promises, on any feed.
+      //     ★ Only possible because uN is 1: the row count per frame is now a local decision about
+      //       new data, not a global mapping, so it may vary frame to frame at no cost.
+      const rowMs = cfg.targetRows > 0 ? 1000 / cfg.targetRows : 0;
+      let extras = 0;
+      if (rowMs > 0) {
+        rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
+        extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
+        rowCarry.current -= Math.floor(rowCarry.current);
+        // A stall must not repay as a burst — cap the catch-up.
+        if (extras > 4) extras = 4;
+      }
+      lastDynRows.current = extras + 1;
+      scrollFrac.value = 1;            // see startRevealStepper — uN is 1, so R must be 1
+      if (extras > 0) startRevealStepper(extras, dur * extras / (extras + 1));
+      else stopRevealStepper();
     }
     }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
 
