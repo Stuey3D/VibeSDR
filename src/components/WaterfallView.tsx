@@ -369,13 +369,34 @@ function WaterfallView({
   //         waterfall row-set every 300 ms; the frames in between are skipped FOR THE WATERFALL.
   //     ★ The SPECTRUM TRACE is not gated and still follows every frame — the trade is time
   //       resolution in the waterfall, which is the thing being bought, not liveness elsewhere.
+  /** Lines-per-frame derived from the MEASURED feed rate and then frozen. Null until the rate has
+   *  settled — see WF_ROWS. Frozen because uN maps all waterfall history: it may be WRONG (the old
+   *  floor-based guess) or RIGHT, but it must never keep changing. */
+  const [wfRowsLatched, setWfRowsLatched] = useState<number | null>(null);
+  const wfRateFrames = useRef(0);
   const WF_TARGET_ROWS = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
   // Sized off the BACKEND'S FLOOR, so it is a constant for the session: UberSDR 20/3.3 -> 6x,
   // VibeServer 20/4 -> 5x. Never recomputed from what is arriving right now.
+  // ★★★ SIZED FROM THE RATE THE SERVER IS ACTUALLY SENDING, LATCHED ONCE — NOT FROM THE BACKEND'S
+  //     WORST CASE. `feedFloorFps` is a static per-backend guess (5 for VibeServer, 3.3 for
+  //     UberSDR), so a server genuinely running 20 fps was sized as if it ran at 5: WF_ROWS = 4,
+  //     a 200 ms gate, and therefore FOUR FRAMES IN EVERY FIVE THROWN AWAY for the waterfall,
+  //     each kept row then repeated 4x down the screen.
+  //     ★★ That is the chunky, blurry, detail-free picture in Stuart's side-by-side against the
+  //     web client (2026-08-04) — identical server, identical 20 fps into both, and the browser
+  //     showing 20 rows/s of real data against the app's 5. The input was never the difference.
+  //     ★ Latched ONCE, after the measured rate settles, so uN is still a constant for the session
+  //       — which is the property the floor was protecting. It just protects it at the RIGHT value.
+  //       A single rescale at latch time, ~1 s in on a nearly empty waterfall, is the whole cost.
   const WF_ROWS = WF_TARGET_ROWS <= 0 ? 1
-    : Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps))));
-  /** ms between waterfall row-sets to hold the target: uN rows every (uN/target) seconds. */
-  const WF_MIN_GAP_MS = WF_TARGET_ROWS > 0 ? (WF_ROWS / WF_TARGET_ROWS) * 1000 : 0;
+    : (wfRowsLatched ?? Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps)))));
+  /** ★★★ NO GATE ANY MORE — EVERY DATA FRAME BECOMES A ROW.
+   *  The gate existed only because uN had to be constant: holding rows/sec fixed with a fixed
+   *  multiplier meant discarding source frames on a fast feed (a 200 ms gate at 20 fps threw away
+   *  FOUR FRAMES IN FIVE). uN is now pinned to 1 and the multiplier only decides how many rows to
+   *  PUSH, so there is nothing left to protect and no reason to bin data the server already sent.
+   *  ★ That discard was the whole of the "chunky, blurry, lacks detail" against the web client. */
+  const WF_MIN_GAP_MS = 0;
   const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
@@ -455,6 +476,13 @@ function WaterfallView({
   // ── Intensity ring buffer (Gray_8, ring order — the shader does the
   // display-order mapping via uHead). Each push = one row write + a 256KB
   // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
+  /** A copy of the newest row, so the stepper can push the extra rows a SLOW feed needs to hold
+   *  the chosen scroll rate. frame.row is a reused buffer, hence the copy. */
+  /** Fractional row credit carried between arrivals — see the emit note. Without it a target rate
+   *  that is not an integer multiple of the feed rounds to the wrong rate every single frame. */
+  const rowCarry     = useRef(0);
+  const lastRow      = useRef<Uint8Array | null>(null);
+  const lastRowMeta  = useRef<{ centerHz: number; hzPerBin: number }>({ centerHz: 0, hzPerBin: 0 });
   const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
   const [texReady, setTexReady] = useState(false);
   const texReadyRef  = useRef(false);
@@ -488,6 +516,9 @@ function WaterfallView({
    *    never on measurement drift, which is what every previous attempt got wrong. */
   /** When the waterfall last took a frame — see the discard gate in handleFrame. */
   const lastWfPushAt = useRef(0);
+  /** ★★★ THE INTERVAL THE REVEAL MUST BE PACED OVER: the time between accepted WATERFALL ROW-SETS,
+   *  which on a gated feed is NOT the data-frame interval. See the note where it is measured. */
+  const avgWfGapMs = useRef(0);
   const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
   const frameCount  = useRef(0);
 
@@ -867,14 +898,30 @@ function WaterfallView({
   const revN     = useSharedValue(0);
   const revStep  = useSharedValue(16);   // ms per line
   const revK     = useSharedValue(0);
-  const revFrameMs = useSharedValue(0);   // smoothed display frame time — see revealCb
-  const revAcc   = useSharedValue(0);
+  /** UI-thread timestamp at which the current pair started revealing, or -1 = "capture on the next
+   *  frame". Absolute due-times are measured from this — see revealCb. */
+  const revStartTs = useSharedValue(-1);
+  /** Frames with nothing to reveal. The stepper now stays ACTIVE between pairs (stopping there is
+   *  what caused the halting scroll), so this is what still releases the display when the stream
+   *  genuinely stops rather than merely pausing between pairs. */
+  const revIdle = useSharedValue(0);
   const revealRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
   const setRevealActive = useCallback((on: boolean) => {
     const t = revealRef.current;
     if (t && t.isActive !== on) t.setActive(on);
   }, []);
   const stopRevealStepper = useCallback(() => { setRevealActive(false); }, [setRevealActive]);
+
+  /** Push `k` more copies of the newest row. Used ONLY on a feed slower than the chosen scroll
+   *  rate, to hold that rate without inventing data: a repeated row is honest (nothing new has
+   *  arrived) where an interpolated one is a picture of a moment that never existed. The web
+   *  client settled on exactly this — see waterfall.ts drawRow, "WHOLE ROWS, NOT BLENDS". */
+  const emitRepeatRows = useCallback((k: number) => {
+    const row = lastRow.current;
+    if (!row) return;
+    const { centerHz, hzPerBin } = lastRowMeta.current;
+    for (let i = 0; i < k; i++) pushRow(row, centerHz, hzPerBin);
+  }, [pushRow]);
 
   const revealCb = useFrameCallback((fi) => {
     'worklet';
@@ -901,31 +948,77 @@ function WaterfallView({
     //       a restart, a stall or a GC pause — it carries NO information about the refresh rate, so
     //       it must be DISCARDED rather than averaged in. Clamping was the bug; the clamp made a
     //       nonsense value look plausible instead of throwing it away.
-    const dt = fi.timeSincePreviousFrame ?? 16.7;
-    if (dt > 3 && dt < 40) {
-      revFrameMs.value = revFrameMs.value > 0 ? revFrameMs.value * 0.9 + dt * 0.1 : dt;
-    }
-    // Until a real frame time has been measured, assume 60 Hz rather than dividing by zero.
-    const frameMs = revFrameMs.value > 0 ? revFrameMs.value : 16.7;
-    const framesPerLine = Math.max(1, Math.round(revStep.value / frameMs));
-    revAcc.value += 1;                       // frames, not ms
-    if (revAcc.value < framesPerLine) return;
-    revAcc.value = 0;
+    // ★★★ ABSOLUTE DUE-TIMES, NOT A ROUNDED FRAME COUNT. This is the third attempt and the
+    //     reasoning that finally explains all three symptoms, so it is worth stating properly.
+    //
+    //     The web client quantises the cadence to a whole number of display frames — one row every
+    //     N frames — and that works THERE because it then SIZES THE PAIR FROM THE SAME ROUNDED
+    //     NUMBER (memory/waterfall_refresh_locked_model.md §2). Both halves are load-bearing.
+    //     ★★ THIS RENDERER CANNOT DO THE SECOND HALF. `uN` maps ALL waterfall history through the
+    //     shader, so the lines per pair is a CONSTANT and cannot be resized to match a rounded
+    //     rate (§"the app needs the opposite rule"). So rounding the cadence here GUARANTEES the
+    //     pair finishes early or late against the arrival interval — and that mistiming IS the
+    //     start-stop, at every boundary, no matter how accurately the refresh rate is measured.
+    //     Build 71 rounded against a corrupted average, 72 against a clean one, 73 kept the
+    //     callback alive — all three still rounded, so all three still halted.
+    //
+    //     With n fixed, exactly ONE cadence fills the interval: interval/n, in TIME.
+    //     ★ So each line k is due at pairStart + k*revStep, computed ABSOLUTELY. Absolute due-times
+    //       cannot drift (an incremental accumulator loses its remainder on every reset, which is
+    //       what the ORIGINAL pre-da29ac0 code did), and they are self-correcting under a VARIABLE
+    //       refresh rate — which is the other thing that was wrong: a ProMotion panel moves between
+    //       120 Hz and 60 Hz on its own, so an averaged frame time lands on ~12 ms, a value that is
+    //       not a frame interval on ANY display (Stuart, 2026-08-04: "I wonder if we are mistiming
+    //       it due to VRR"). Timing against the clock does not care what the panel is doing.
+    //     ★ The residual quantisation is ONE FRAME — 8 ms on ProMotion, 17 ms at 60 Hz — because an
+    //       emission can only land on a frame. That is inherent to any display and is far smaller
+    //       than the interval-length halt it replaces.
     const n = revN.value;
-    if (n <= 0) { runOnJS(setRevealActive)(false); return; }
-    revK.value += 1;
-    scrollFrac.value = Math.min(1, revK.value / n);
-    if (revK.value >= n) runOnJS(setRevealActive)(false);
+    if (n <= 0 || revK.value >= n) {
+      // Nothing due. Keep the callback ALIVE between pairs — stopping and restarting it cost a
+      // runOnJS round trip at every boundary, which was its own halt (build 73). Release the
+      // display only when the data has genuinely stopped, ~1 s.
+      revIdle.value += 1;
+      if (revIdle.value > 90) { revIdle.value = 0; runOnJS(setRevealActive)(false); }
+      return;
+    }
+    revIdle.value = 0;
+    // First frame of a pair: start the clock here rather than in startRevealStepper, so the
+    // interval is measured on the UI thread's own timebase and never includes a JS-thread hop.
+    if (revStartTs.value < 0) revStartTs.value = fi.timestamp;
+    const elapsed = fi.timestamp - revStartTs.value;
+    const due = Math.min(n, Math.floor(elapsed / Math.max(1, revStep.value)));
+    if (due <= revK.value) return;
+    // ★★★ THE STEPPER NOW PUSHES REAL ROWS — it no longer advances a reveal fraction, because
+    //     there is no longer anything to reveal: uN is 1, so a row exists or it does not.
+    //     This is the web client's model (waterfall.ts drawRow): the extra rows a SLOW feed needs
+    //     to hold the chosen scroll rate are REAL ring rows, pushed over the interval. History is
+    //     never re-mapped, so changing the scroll setting cannot rescale what is already drawn.
+    //     ★ One JS hop per extra row. On a fast feed there are NONE (the arrival is the row);
+    //       on a 10 fps feed at the 20-row setting it is 10 a second — the same order as the data
+    //       path itself, and far less than the per-pair activation churn this replaces.
+    const owed = due - revK.value;
+    revK.value = due;
+    runOnJS(emitRepeatRows)(owed);
   }, false);
   revealRef.current = revealCb;
 
   const startRevealStepper = useCallback((n: number, intervalMs: number) => {
-    scrollFrac.value = 0;
-    if (n <= 1) { scrollFrac.value = 1; setRevealActive(false); return; } // one whole-line step
+    // ★★★ scrollFrac IS NOW PINNED AT 1, ALWAYS. With uN = 1 there is nothing to "reveal": a row
+    //     either exists in the ring or it does not. The shader reads R = uFrac * uN, and R must be
+    //     1 for the NEWEST row to be the one at the top — at 0 it would draw the head one row
+    //     stale. The scroll now comes from rows being PUSHED, exactly as in the web client, not
+    //     from a fraction being animated over a block of synthesised lines.
+    scrollFrac.value = 1;
+    if (n < 1) { setRevealActive(false); return; }
     revN.value = n;
-    revStep.value = Math.max(16, intervalMs / n);
+    revStep.value = Math.max(8, intervalMs / n);
     revK.value = 0;
-    revAcc.value = 0;
+    revIdle.value = 0;
+    // ★ -1 = "start the clock on the next UI frame". Taking the timestamp HERE would bake in the
+    //   JS-thread hop that got us to this function, which is exactly the latency that made the old
+    //   stop/start cadence uneven.
+    revStartTs.value = -1;
     // Keep the measured frame time across restarts — it is a property of the DISPLAY, not of this
     // reveal, and re-learning it every frame interval would leave the first lines mistimed.
     setRevealActive(true);
@@ -981,10 +1074,10 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: WF_ROWS, targetFps: TARGET_FPS,
+                            smoothTune, rowsPerFrame: WF_ROWS, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                             minGapMs: WF_MIN_GAP_MS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: WF_ROWS, targetFps: TARGET_FPS,
+                       smoothTune, rowsPerFrame: WF_ROWS, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                        minGapMs: WF_MIN_GAP_MS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
@@ -1048,6 +1141,15 @@ function WaterfallView({
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
+      // ★★★ LATCH THE LINES-PER-FRAME FROM THE MEASURED RATE, ONCE. See WF_ROWS. Waits ~25 frames
+      //     so the smoothed average has actually converged — latching on the first sample would
+      //     freeze whatever the connection handshake happened to look like. After this the value
+      //     never changes again for the session, which is the constancy uN requires.
+      if (wfRowsLatched === null && ++wfRateFrames.current >= 25 && avgFrameMs.current > 0) {
+        const fps = 1000 / avgFrameMs.current;
+        const target = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
+        if (target > 0) setWfRowsLatched(Math.max(1, Math.min(8, Math.round(target / Math.max(1, fps)))));
+      }
     }
     lastFrameTs.current = now;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
@@ -1078,14 +1180,43 @@ function WaterfallView({
     //     had not, and I never checked the order before asserting it.
     const wfGated = cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs;
     if (!wfGated) {
+    // ★★★ MEASURE THE GAP BETWEEN ROW-SETS, NOT BETWEEN DATA FRAMES. This is the quantity the
+    //     reveal has to be spread over, and using the wrong one is what made the waterfall "leap a
+    //     section, wait, leap a section, wait" (Stuart, build 74).
+    //     `avgFrameMs` is updated for EVERY data frame, above, and therefore measures the SPECTRUM
+    //     rate — 50 ms at 20 fps. But the waterfall is GATED to one row-set every minGapMs (250 ms
+    //     for the 20-row setting), so pacing n lines over 50 ms finished the whole pair in 80 ms
+    //     and then sat still for the remaining 170 ms. Every one of my three previous attempts
+    //     tuned the CADENCE while feeding it an interval that was five times too short.
+    //   ★ SHARP was immune, which is why it always looked right: WF_TARGET_ROWS = 0 means no gate
+    //     (minGapMs = 0) AND n = 1, so there is no interval to get wrong.
+    if (lastWfPushAt.current > 0) {
+      const wfDt = now - lastWfPushAt.current;
+      // Same smoothing as avgFrameMs. Ignore absurd gaps (a resume, a tune) so one pause cannot
+      // slow the scroll for the next several pairs.
+      if (wfDt > 0 && wfDt < 2000)
+        avgWfGapMs.current = avgWfGapMs.current > 0 ? avgWfGapMs.current * 0.8 + wfDt * 0.2 : wfDt;
+    }
     lastWfPushAt.current = now;
 
-    pushRow(frame.row,
-            fstatus.trueCenterHz ?? fstatus.centerHz,
-            fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0);
+    const rowCentre = fstatus.trueCenterHz ?? fstatus.centerHz;
+    const rowHzBin  = fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0;
+    pushRow(frame.row, rowCentre, rowHzBin);
+    // Keep it for the repeat pushes on a slow feed (frame.row is reused by the caller).
+    if (!lastRow.current || lastRow.current.length !== frame.row.length)
+      lastRow.current = new Uint8Array(frame.row.length);
+    lastRow.current.set(frame.row);
+    lastRowMeta.current = { centerHz: rowCentre, hzPerBin: rowHzBin };
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
-    const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
+    // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
+    //     feed these differ by the gate ratio (5x at the 20-row setting), and using the frame
+    //     interval made every pair finish in a fifth of the time available and then stall — the
+    //     "leap a section, wait" (Stuart, build 74). Falls back to the frame interval only until
+    //     the row-set gap has been measured, and on SHARP where there is no gate and the two are
+    //     the same thing anyway.
+    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
+    const dur = Math.max(50, Math.min(1000, revealMs));
     if (wfBoost) {
       // Interaction / native rate: the 120Hz vsync glide already handles smoothness, so keep uN on the
       // STABLE static multiplier. ★ Deriving it from the LIVE data rate here (which spikes and
@@ -1107,7 +1238,8 @@ function WaterfallView({
       // identical to what settles afterwards, so nothing rescales.
       // ★ The same constant as the settled path. The old static hold existed only because that
       //   path derived a LIVE value that jumped during a gesture — there is nothing live left.
-      uNSv.value = cfg.rowsPerFrame;
+      // ★★★ uN IS NOW ALWAYS 1 — see the note at WF_ROWS. The shader no longer maps history.
+      uNSv.value = 1;
       stopRevealStepper();
       scrollFrac.value = 0;
       scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
@@ -1115,10 +1247,35 @@ function WaterfallView({
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
       // A CONSTANT — never derived from the measured rate, so it can never rescale the picture.
-      const dynRows = cfg.rowsPerFrame;
-      lastDynRows.current = dynRows;   // the gesture branch holds the same number now
-      uNSv.value = dynRows;
-      startRevealStepper(dynRows, dur);
+      // ★★★ uN = 1, ALWAYS. The shader maps ONE ring row to one display line and nothing else,
+      //     so NOTHING RESCALES when the scroll setting changes — which is the whole complaint:
+      //     "speeding up or slowing down the waterfall affects the history too, so the rendered
+      //     waterfall shrinks or expands depending on setting, the client doesnt do that"
+      //     (Stuart, 2026-08-04). The web client has never had this because it maps nothing: it
+      //     pushes REAL ROWS, so a rate change affects only NEW rows and history stays as drawn.
+      //     ★ And with uN out of the picture, `dynRows` is free to VARY per frame — it now only
+      //       says how many rows to PUSH, which is a local decision about new data. That is what
+      //       lets every frame be used (full detail) AND the scroll rate be held on a slow feed.
+      uNSv.value = 1;
+      // ★★★ EMIT AT THE TARGET ROW RATE, WITH A FRACTIONAL CARRY — NOT AN INTEGER MULTIPLE OF THE
+      //     FEED. 30 rows/s from a 20 fps feed is 1.5 rows per frame; rounding that to 2 gives 40
+      //     rows/s and SMOOTH stops meaning 30. The carry spends the halves: 1, 2, 1, 2… so the
+      //     AVERAGE is exactly the rate the setting promises, on any feed.
+      //     ★ Only possible because uN is 1: the row count per frame is now a local decision about
+      //       new data, not a global mapping, so it may vary frame to frame at no cost.
+      const rowMs = cfg.targetRows > 0 ? 1000 / cfg.targetRows : 0;
+      let extras = 0;
+      if (rowMs > 0) {
+        rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
+        extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
+        rowCarry.current -= Math.floor(rowCarry.current);
+        // A stall must not repay as a burst — cap the catch-up.
+        if (extras > 4) extras = 4;
+      }
+      lastDynRows.current = extras + 1;
+      scrollFrac.value = 1;            // see startRevealStepper — uN is 1, so R must be 1
+      if (extras > 0) startRevealStepper(extras, dur * extras / (extras + 1));
+      else stopRevealStepper();
     }
     }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
 
