@@ -369,11 +369,27 @@ function WaterfallView({
   //         waterfall row-set every 300 ms; the frames in between are skipped FOR THE WATERFALL.
   //     ★ The SPECTRUM TRACE is not gated and still follows every frame — the trade is time
   //       resolution in the waterfall, which is the thing being bought, not liveness elsewhere.
+  /** Lines-per-frame derived from the MEASURED feed rate and then frozen. Null until the rate has
+   *  settled — see WF_ROWS. Frozen because uN maps all waterfall history: it may be WRONG (the old
+   *  floor-based guess) or RIGHT, but it must never keep changing. */
+  const [wfRowsLatched, setWfRowsLatched] = useState<number | null>(null);
+  const wfRateFrames = useRef(0);
   const WF_TARGET_ROWS = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
   // Sized off the BACKEND'S FLOOR, so it is a constant for the session: UberSDR 20/3.3 -> 6x,
   // VibeServer 20/4 -> 5x. Never recomputed from what is arriving right now.
+  // ★★★ SIZED FROM THE RATE THE SERVER IS ACTUALLY SENDING, LATCHED ONCE — NOT FROM THE BACKEND'S
+  //     WORST CASE. `feedFloorFps` is a static per-backend guess (5 for VibeServer, 3.3 for
+  //     UberSDR), so a server genuinely running 20 fps was sized as if it ran at 5: WF_ROWS = 4,
+  //     a 200 ms gate, and therefore FOUR FRAMES IN EVERY FIVE THROWN AWAY for the waterfall,
+  //     each kept row then repeated 4x down the screen.
+  //     ★★ That is the chunky, blurry, detail-free picture in Stuart's side-by-side against the
+  //     web client (2026-08-04) — identical server, identical 20 fps into both, and the browser
+  //     showing 20 rows/s of real data against the app's 5. The input was never the difference.
+  //     ★ Latched ONCE, after the measured rate settles, so uN is still a constant for the session
+  //       — which is the property the floor was protecting. It just protects it at the RIGHT value.
+  //       A single rescale at latch time, ~1 s in on a nearly empty waterfall, is the whole cost.
   const WF_ROWS = WF_TARGET_ROWS <= 0 ? 1
-    : Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps))));
+    : (wfRowsLatched ?? Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps)))));
   /** ms between waterfall row-sets to hold the target: uN rows every (uN/target) seconds. */
   const WF_MIN_GAP_MS = WF_TARGET_ROWS > 0 ? (WF_ROWS / WF_TARGET_ROWS) * 1000 : 0;
   const TARGET_FPS = frameRate === '30fps' ? 30 : frameRate === '20fps' ? 20 : 10;
@@ -1088,6 +1104,15 @@ function WaterfallView({
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
+      // ★★★ LATCH THE LINES-PER-FRAME FROM THE MEASURED RATE, ONCE. See WF_ROWS. Waits ~25 frames
+      //     so the smoothed average has actually converged — latching on the first sample would
+      //     freeze whatever the connection handshake happened to look like. After this the value
+      //     never changes again for the session, which is the constancy uN requires.
+      if (wfRowsLatched === null && ++wfRateFrames.current >= 25 && avgFrameMs.current > 0) {
+        const fps = 1000 / avgFrameMs.current;
+        const target = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
+        if (target > 0) setWfRowsLatched(Math.max(1, Math.min(8, Math.round(target / Math.max(1, fps)))));
+      }
     }
     lastFrameTs.current = now;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
