@@ -374,7 +374,15 @@ function WaterfallView({
    *  floor-based guess) or RIGHT, but it must never keep changing. */
   const [wfRowsLatched, setWfRowsLatched] = useState<number | null>(null);
   const wfRateFrames = useRef(0);
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
+  // ★★★ 20 / 30 / 40 ROWS PER SECOND. Raised from 20/30 because on a feed at or above the target
+  //     the app cannot express a SLOWER setting: its rows are one POINT tall, so "one row per
+  //     frame" already IS 20 rows/s, and SHARP and DEFAULT collapsed together. Making the other
+  //     two FASTER is what users actually asked for ("the rate in the app is too slow", Stuart
+  //     2026-08-04) and needs no change to how a row is drawn.
+  //     ★ The web client gets three distinct speeds a different way — its rows are one DEVICE
+  //       pixel tall and its rate is speed x dpr, so SHARP there is genuinely slower. Matching
+  //       that means a device-resolution ring, which needs the full-ring upload fixed first.
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 40 : wfScroll === 'default' ? 30 : 0;
   // Sized off the BACKEND'S FLOOR, so it is a constant for the session: UberSDR 20/3.3 -> 6x,
   // VibeServer 20/4 -> 5x. Never recomputed from what is arriving right now.
   // ★★★ SIZED FROM THE RATE THE SERVER IS ACTUALLY SENDING, LATCHED ONCE — NOT FROM THE BACKEND'S
@@ -923,6 +931,23 @@ function WaterfallView({
     for (let i = 0; i < k; i++) pushRow(row, centerHz, hzPerBin);
   }, [pushRow]);
 
+  /** Timer handle for the extra-row chain — cancelled on every arrival. */
+  const extraTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Push `k` extra rows, one every `spacingMs`, so a feed slower than the chosen scroll rate
+   *  still scrolls at that rate. Cancelled and re-armed by the next arrival, so it cannot run
+   *  ahead of the data or pile up. */
+  const scheduleExtraRows = useCallback((k: number, spacingMs: number) => {
+    if (extraTimer.current) { clearTimeout(extraTimer.current); extraTimer.current = null; }
+    if (k <= 0 || !(spacingMs > 0)) return;
+    let left = k;
+    const tick = () => {
+      emitRepeatRows(1);
+      if (--left > 0) extraTimer.current = setTimeout(tick, spacingMs);
+      else extraTimer.current = null;
+    };
+    extraTimer.current = setTimeout(tick, spacingMs);
+  }, [emitRepeatRows]);
+
   const revealCb = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;   // component is gone — see specDead
@@ -1284,8 +1309,15 @@ function WaterfallView({
       //     that caused the halting scroll in build 73 — twice now.
       //     ★ It stays active with revN = 0 (nothing due) and releases the display itself after
       //       ~1 s of no data, which is what the idle counter in the worklet is for.
-      if (cfg.targetRows > 0) startRevealStepper(extras, dur * extras / Math.max(1, extras + 1));
-      else stopRevealStepper();
+      // ★★★ EXTRA ROWS ARE PUSHED FROM A PLAIN TIMER, NOT FROM THE VSYNC WORKLET.
+      //     The worklet had to hop back to JS (runOnJS) to push a row, and those extra rows were
+      //     not arriving — every scroll setting ran at the DATA rate, which is why UberSDR at
+      //     10 fps was "extra slow, slower than it was before" (Stuart, 2026-08-04).
+      //     ★ The hop bought nothing: pushing a row IS a JS-thread operation, so timing it on the
+      //       UI thread only to bounce straight back added latency and a failure mode. The reveal
+      //       FRACTION genuinely needed vsync — rows do not.
+      //     ★ Self-cancelling on the next arrival, so a slow feed can never queue a burst.
+      scheduleExtraRows(extras, dur / (extras + 1));
     }
     }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
 
