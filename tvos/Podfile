@@ -63,5 +63,28 @@ target 'VibeSDR' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # ★★★ FORCE A LEGAL tvOS DEPLOYMENT TARGET ON EVERY POD.
+    #     Several pods carry an ancient TVOS_DEPLOYMENT_TARGET inherited from their iOS podspec —
+    #     RNCAsyncStorage's resource bundle says 11.0 and RNSVGFilters says 12.4 — and tvOS 27 only
+    #     accepts 15.0 and up, so the archive fails on the RESOURCE BUNDLES rather than on any code
+    #     we wrote. It is not a real incompatibility, just a stale default nobody sets for TV.
+    #     ★ The RESOURCE bundle targets are the ones that bite; they are easy to miss because the
+    #       library target itself builds fine.
+    #     ★★ USE generated_projects, NOT pods_project.targets. The offenders are RESOURCE BUNDLE
+    #        targets, which CocoaPods puts in GENERATED SUB-PROJECTS — iterating pods_project alone
+    #        silently misses them and leaves the build failing on exactly the two it cannot see.
+    projects = installer.respond_to?(:generated_projects) ? installer.generated_projects
+                                                          : [installer.pods_project]
+    projects.each do |project|
+      project.targets.each do |t|
+        t.build_configurations.each do |cfg|
+          current = cfg.build_settings['TVOS_DEPLOYMENT_TARGET']
+          if current.nil? || current.to_f < 15.0
+            cfg.build_settings['TVOS_DEPLOYMENT_TARGET'] = '15.0'
+          end
+        end
+      end
+    end
   end
 end
