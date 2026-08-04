@@ -37,13 +37,27 @@ a mode to escape.
   (§5), but the ring keeps tuning. That is consistent, and probably desirable — but it is the spot
   to check first if the remote ever feels ambiguous in the hand.
 
-## 2. The waterfall screen
+## 2. The waterfall screen — USE THE PORTRAIT CONTROL CLUSTER
 
 - **No drums, no buttons.** Those are dead controls on a TV — nothing points at them, so nothing
   should offer them. Same rule as *"a control that only works in one scenario should not be there"*
   in AGENTS.md.
 - **Only the frequency bar and its 4 buttons.**
-- Layout is the **landscape view, with the status and clock rows directly underneath**.
+- ★★★ **THE CONTROL CLUSTER IS THE PORTRAIT ONE, NOT THE LANDSCAPE ONE** (Stuart, 2026-08-04 —
+  this REPLACES the earlier "landscape view with the status and clock rows underneath"). The screen
+  is still 16:9; it is the arrangement of the controls that comes from portrait.
+  Three reasons, and the first is the one that matters:
+  1. ★★ **IT MATCHES HOW THE HIGHLIGHT MOVES.** Portrait STACKS the sections, so the four buttons
+     are one swipe DOWN from the frequency — the same vertical axis that already reaches the
+     servers chip (§5). Landscape FLANKS the frequency left and right, which turns a single
+     directional move into horizontal hunting.
+  2. **The clock and status rows are already in the right place** in portrait. The landscape plan
+     required moving them under the frequency by hand.
+  3. ★ **It is a row DELETION, not a rearrangement.** Landscape meant assembling a hybrid of the
+     two layouts — new code, new edge cases, and a layout that exists nowhere else. Portrait means
+     removing the drums/buttons row from something that already lays out correctly.
+  ★ Cheapest change is also the safest change here: nothing has to be repositioned, so nothing can
+    be repositioned WRONG on the one screen size nobody can test on a phone.
 
 ## 3. The highlight, and how it sleeps
 
