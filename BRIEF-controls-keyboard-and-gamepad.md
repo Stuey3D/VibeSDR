@@ -395,3 +395,47 @@ confirm the app is still fully operable.
   floor) and where this design was worked out before being extracted here.
 - memory `hifi_tuner_keys_built`, `feedback_zoom_drum` — the two control schemes being mapped onto.
 - memory `watch_split_jr_buddy` — why the watch is out of scope for this one codebase.
+
+---
+
+## ★★★ 2026-08-04 — ONE SCHEME, FOUR INPUTS (the tvOS work settles §2.4)
+
+Stuart, after designing the Apple TV control scheme: *"basically exactly like tvOS just on the
+phone/mac/iPad and this also then lays the groundwork for the game controller remote function."*
+
+**The simplified keyboard scheme:**
+| Input | Does |
+|---|---|
+| **Arrows** AND **WASD** | navigate / move the highlight (the tvOS touchpad) |
+| **Enter** | confirm |
+| **Backspace** | back |
+| **`<` `>`** | tune | 
+| **`-` `+`** | zoom |
+★ **No Tab. No mnemonics to remember at all.** D/S/A/M/C/T/B/H/K/M/P all go.
+
+★★ **WHY WASD AND NOT JUST ARROWS — IT IS THE ACCESSIBILITY FIX.** Under iOS Full Keyboard Access
+the plain ARROWS, Tab and Space are taken by the system before the app sees them; LETTERS and Enter
+still arrive ([[full_keyboard_access_conflict]]). So WASD is not a gamer convenience, it is the
+route that survives FKA — and it means the simplified scheme is MORE accessible than the mnemonic
+one it replaces, not less. ★ Do not "tidy it away" as a duplicate of the arrows.
+
+★ **`<` `>` `-` `+` ALREADY SHIP** — `arrowAlias` in `ios/VibeSDR/AppDelegate.swift` resolves them
+to arrow NAMES at the very bottom of `name(for:)`, so every menu, list, dropdown, decoder box and
+dial inherits them with no second code path. **WASD belongs in that same dictionary**, where it
+also inherits the suppressed-while-typing guard it needs and the arrows do not.
+
+★★★ **THE REAL PRIZE: FOUR INPUTS THAT VALIDATE EACH OTHER.** This is §2.4's minimum control set
+(directions + confirm + back), now demonstrated rather than asserted, because a Siri Remote has
+nothing else. Keyboard, gamepad, Siri Remote and touch drive ONE focus grid, and:
+- a control reachable only by a letter is BROKEN ON tvOS;
+- a control reachable only by a plain arrow is BROKEN UNDER FKA;
+- a control needing more than confirm/back is BROKEN ON A GAMEPAD.
+Each platform is a test of the others. That is worth more than any one of them.
+★ The stick-as-tuning-dial work (§2.2, §2.3) is unaffected: it is an ACCELERATOR on top of the
+minimum set, not part of it.
+
+★ **One gap to design for, and it exists TODAY rather than being new:** in the bookmarks list you
+type to filter and then step down into the results. The alias table is suppressed while typing, so
+under FKA an FKA user has the arrows taken by iOS AND WASD/`<>` suppressed by the field — no route
+in. The escape hatch already works: **modified keys pass straight through FKA**, so Shift+Down is
+live even there. Make that explicit in the scheme rather than leaving it to be discovered.
