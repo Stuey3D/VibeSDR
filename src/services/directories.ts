@@ -177,6 +177,100 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
     });
 }
 
+// ── Receiverbook ✕ KiwiSDR cross-reference ───────────────────────────────────
+/** ★★★ RECEIVERBOOK DOES NOT PUBLISH `ext_api`, BUT THE KIWI DIRECTORY DOES — SO JOIN THEM.
+ *
+ *  A Kiwi whose owner set `ext_api=0` admits an app, streams for ~10 s and closes saying nothing
+ *  ([[kiwi_ext_api_10s_kick]]). On the Kiwi directory we can warn before connecting; on
+ *  Receiverbook the same receiver looked perfectly fine, so the user burned an attempt on it.
+ *  ★ Stuart, 2026-08-04, from his own early testing: "I'd rather catch and block most of them than
+ *    have users try a few Kiwi's and find they dont connect — an issue I had before I realised it
+ *    wasnt our app to blame, it was the Kiwi itself."
+ *  ★★ IT MATTERS MOST ON THE WATCH, which has NO COMPATIBILITY MODE to fall back to: an unflagged
+ *     blocked receiver there is a dead end with no explanation available.
+ *
+ *  MEASURED against both live directories (2026-08-04, 795 Receiverbook kiwis / 849 Kiwi rows):
+ *      by address (host+port, then unique host) ... 556
+ *      by name AND within 25 km ................... 112
+ *      name matched but geographically far ........   0   <- the guard cost nothing here
+ *      unmatched (Receiverbook-only receivers) .... 127
+ *      => 668 of 795 joined (84%), identifying 96 of the 126 blocked receivers.
+ *  ★ The 25 km guard is kept even though nothing failed it: a future name collision would
+ *    otherwise HIDE A WORKING RECEIVER, which is a worse failure than missing a blocked one.
+ */
+const hostOf = (u: string): string => {
+  try {
+    const raw = String(u || '');
+    const x = new URL(/^https?:/i.test(raw) ? raw : `http://${raw}`);
+    return x.hostname.toLowerCase().replace(/^www\./, '');
+  } catch { return ''; }
+};
+const hostPortOf = (u: string): string => {
+  try {
+    const raw = String(u || '');
+    const x = new URL(/^https?:/i.test(raw) ? raw : `http://${raw}`);
+    const port = x.port || (x.protocol === 'https:' ? '443' : '80');
+    return `${x.hostname.toLowerCase().replace(/^www\./, '')}:${port}`;
+  } catch { return ''; }
+};
+const joinName = (s: string): string =>
+  String(s || '').toLowerCase().replace(/<[^>]*>/g, '').replace(/[^a-z0-9]/g, '').slice(0, 40);
+
+/** Session cache — the join needs the Kiwi list even when the user opened Receiverbook, and they
+ *  may well open both. One fetch per session, not per screen. */
+let kiwiJoinCache: { at: number; rows: SDRInstance[] } | null = null;
+const KIWI_JOIN_TTL_MS = 10 * 60 * 1000;
+
+async function kiwiRowsForJoin(): Promise<SDRInstance[]> {
+  if (kiwiJoinCache && Date.now() - kiwiJoinCache.at < KIWI_JOIN_TTL_MS) return kiwiJoinCache.rows;
+  const rows = await fetchKiwiList();
+  kiwiJoinCache = { at: Date.now(), rows };
+  return rows;
+}
+
+/** Tag Receiverbook kiwis with the `extApi` the Kiwi directory publishes for the same receiver.
+ *  Never throws: a directory that fails to load must not take the screen down with it — the
+ *  result is simply today's behaviour, unflagged. */
+async function annotateExtApiFromKiwiDirectory(list: SDRInstance[]): Promise<SDRInstance[]> {
+  const needs = list.some(i => (i.serverType === 'kiwi' || i.serverType === 'web888') && i.extApi === undefined);
+  if (!needs) return list;
+  let kiwis: SDRInstance[];
+  try { kiwis = await kiwiRowsForJoin(); } catch { return list; }
+  if (!kiwis.length) return list;
+
+  const byHostPort = new Map<string, SDRInstance>();
+  const byHost = new Map<string, SDRInstance[]>();
+  const byName = new Map<string, SDRInstance[]>();
+  for (const k of kiwis) {
+    const hp = hostPortOf(k.url); if (hp) byHostPort.set(hp, k);
+    const h = hostOf(k.url);
+    if (h) { const a = byHost.get(h); if (a) a.push(k); else byHost.set(h, [k]); }
+    const n = joinName(k.name);
+    if (n) { const a = byName.get(n); if (a) a.push(k); else byName.set(n, [k]); }
+  }
+
+  return list.map((i) => {
+    if ((i.serverType !== 'kiwi' && i.serverType !== 'web888') || i.extApi !== undefined) return i;
+    // 1. ADDRESS — the strong key. Exact host+port, else a host that hosts exactly one receiver.
+    let m = byHostPort.get(hostPortOf(i.url));
+    if (!m) {
+      const onHost = byHost.get(hostOf(i.url));
+      if (onHost && onHost.length === 1) m = onHost[0];
+    }
+    // 2. NAME, but only when the two agree on WHERE they are — see the 25 km note above.
+    if (!m) {
+      const cands = byName.get(joinName(i.name));
+      if (cands && cands.length === 1 && i.latitude != null && i.longitude != null) {
+        const c = cands[0];
+        if (c.latitude != null && c.longitude != null &&
+            haversineKm(i.latitude, i.longitude, c.latitude, c.longitude) <= 25) m = c;
+      }
+    }
+    if (!m || m.extApi === undefined) return i;
+    return { ...i, extApi: m.extApi };
+  });
+}
+
 /** FM-DX Webserver network (servers.fmdx.org) → SDRInstance rows tagged 'fmdx'.
  *  location carries "city · TUNER" so the row shows the tuner type at a glance. */
 async function fetchFmdx(lat?: number, lon?: number): Promise<SDRInstance[]> {
@@ -246,6 +340,11 @@ export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number
   else if (id === 'fmdx')    list = await fetchFmdx(lat, lon);
   else if (id === 'spyserver') list = await fetchSpyServers(lat, lon);
   else                       list = await fetchKiwiList(lat, lon);
+
+  // ★ Receiverbook publishes no `ext_api`, so borrow it from the Kiwi directory — see
+  //   annotateExtApiFromKiwiDirectory. Costs one extra (cached) fetch on that screen, which is
+  //   cheap beside a user concluding OUR app is broken when the receiver refused them.
+  if (id === 'receiverbook') list = await annotateExtApiFromKiwiDirectory(list);
 
   // CENTRAL country enrichment — applies to EVERY directory (UberSDR incl., e.g. the popular
   // Canaries server). Fill any missing countryCode from coordinates first, then from the
