@@ -488,6 +488,9 @@ function WaterfallView({
    *    never on measurement drift, which is what every previous attempt got wrong. */
   /** When the waterfall last took a frame — see the discard gate in handleFrame. */
   const lastWfPushAt = useRef(0);
+  /** ★★★ THE INTERVAL THE REVEAL MUST BE PACED OVER: the time between accepted WATERFALL ROW-SETS,
+   *  which on a gated feed is NOT the data-frame interval. See the note where it is measured. */
+  const avgWfGapMs = useRef(0);
   const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
   const frameCount  = useRef(0);
 
@@ -1115,6 +1118,23 @@ function WaterfallView({
     //     had not, and I never checked the order before asserting it.
     const wfGated = cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs;
     if (!wfGated) {
+    // ★★★ MEASURE THE GAP BETWEEN ROW-SETS, NOT BETWEEN DATA FRAMES. This is the quantity the
+    //     reveal has to be spread over, and using the wrong one is what made the waterfall "leap a
+    //     section, wait, leap a section, wait" (Stuart, build 74).
+    //     `avgFrameMs` is updated for EVERY data frame, above, and therefore measures the SPECTRUM
+    //     rate — 50 ms at 20 fps. But the waterfall is GATED to one row-set every minGapMs (250 ms
+    //     for the 20-row setting), so pacing n lines over 50 ms finished the whole pair in 80 ms
+    //     and then sat still for the remaining 170 ms. Every one of my three previous attempts
+    //     tuned the CADENCE while feeding it an interval that was five times too short.
+    //   ★ SHARP was immune, which is why it always looked right: WF_TARGET_ROWS = 0 means no gate
+    //     (minGapMs = 0) AND n = 1, so there is no interval to get wrong.
+    if (lastWfPushAt.current > 0) {
+      const wfDt = now - lastWfPushAt.current;
+      // Same smoothing as avgFrameMs. Ignore absurd gaps (a resume, a tune) so one pause cannot
+      // slow the scroll for the next several pairs.
+      if (wfDt > 0 && wfDt < 2000)
+        avgWfGapMs.current = avgWfGapMs.current > 0 ? avgWfGapMs.current * 0.8 + wfDt * 0.2 : wfDt;
+    }
     lastWfPushAt.current = now;
 
     pushRow(frame.row,
@@ -1122,7 +1142,14 @@ function WaterfallView({
             fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0);
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
-    const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
+    // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
+    //     feed these differ by the gate ratio (5x at the 20-row setting), and using the frame
+    //     interval made every pair finish in a fifth of the time available and then stall — the
+    //     "leap a section, wait" (Stuart, build 74). Falls back to the frame interval only until
+    //     the row-set gap has been measured, and on SHARP where there is no gate and the two are
+    //     the same thing anyway.
+    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
+    const dur = Math.max(50, Math.min(1000, revealMs));
     if (wfBoost) {
       // Interaction / native rate: the 120Hz vsync glide already handles smoothness, so keep uN on the
       // STABLE static multiplier. ★ Deriving it from the LIVE data rate here (which spikes and
