@@ -123,12 +123,43 @@ public:
      *  Bins stay valid only for the duration of the callback. */
     void feed(const cf32* in, int n, const std::function<void(const cf32* bins, int nbins)>& onBlock);
 
+    /** ★★★ PER-CALLER SCRATCH, so several threads can extract from the SAME block at once.
+     *  extract() used to use members for its slice buffer and its cache of inverse transforms.
+     *  That is fine for one caller and a data race for two: the slice is overwritten under the
+     *  other thread's feet, and the plan cache is a std::map being INSERTED INTO while another
+     *  thread reads it. VibeServer now runs a DSP thread per listener, all extracting channels
+     *  from one shared forward FFT, so the scratch has to belong to the caller.
+     *  ★ It failed exactly as the comment inside extract() warns a mistake here would: not a
+     *    crash, but channels tuned somewhere other than asked for. */
+    struct ExtractCtx {
+        std::vector<cf32> slice;
+        std::map<int, std::unique_ptr<ComplexFFT>> inv;
+    };
+
     /** One channel taken from a transformed block.
      *  @param bins       the block handed to the feed() callback
      *  @param centreBin  channel centre as a SIGNED offset from DC (may be negative; wraps)
      *  @param chanBins   output size, a power of two dividing fftSize — decimation = fftSize/chanBins
      *  @param out        receives (chanBins - chanBins/OVERLAP_DIV) samples
      *  @return number of samples written */
+    /** @param blockIndex WHICH block these bins came from — see below. */
+    int extract(const cf32* bins, int centreBin, int chanBins, cf32* out, ExtractCtx& ctx,
+                long long blockIndex) const;
+    int extract(const cf32* bins, int centreBin, int chanBins, cf32* out, ExtractCtx& ctx) const;
+    /** ★★★ THE INDEX OF THE BLOCK CURRENTLY IN THE feed() CALLBACK.
+     *  A channel's phase reference restarts every block, and extract() puts it back using this
+     *  counter. That is correct only while extraction happens INSIDE the callback. Hand a block to
+     *  another thread and the counter moves on before that thread gets to it, so it applies the
+     *  rotation for the WRONG block — a phase discontinuity at every boundary, which is a comb of
+     *  spurs and audibly broken audio.
+     *  ★★ It bites SELECTIVELY, which is what makes it so confusing: the correction is exactly
+     *  zero whenever centreBin is a multiple of OVERLAP_DIV, so roughly one frequency in four
+     *  sounds perfect and the rest are distorted. Reported from the air as "tune to 7074 and it is
+     *  broken, 7073.5 or 7074.5 is fine" (Stuart, 2026-08-05).
+     *  ★ So: capture this WITH the block, and pass it back to extract(). */
+    long long blockIndex() const { return blocks_; }
+    /** Convenience for single-threaded callers — uses the channelizer's own scratch. ★ NOT safe
+     *  to call from more than one thread; pass your own ExtractCtx if you might. */
     int extract(const cf32* bins, int centreBin, int chanBins, cf32* out);
 
 private:
@@ -137,10 +168,8 @@ private:
     std::vector<cf32> hist_;                       // [overlap][hop] assembled block
     int have_ = 0;                                 // samples currently in hist_ beyond the overlap
     long long blocks_ = 0;                         // blocks transformed — the channel phase reference
-    std::vector<cf32> block_, spec_, slice_;
-    // One inverse transform per channel SIZE (not per channel) — several channels of the same
-    // width share it, which is the common case.
-    std::map<int, std::unique_ptr<ComplexFFT>> inv_;
+    std::vector<cf32> block_, spec_;
+    ExtractCtx own_;                               // scratch for the single-threaded extract()
 };
 
 // ── Windows ──────────────────────────────────────────────────────────────--

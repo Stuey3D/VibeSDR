@@ -147,6 +147,7 @@ std::string toJson(const Config& c) {
     B("forceIdleSaver", c.forceIdleSaver);
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
+    S("cpuGovernor", c.cpuGovernor);
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -193,6 +194,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err) {
     getBool(s, "rfNotch", c.rfNotch);
     getBool(s, "dabNotch", c.dabNotch);
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
+    getStr(s, "cpuGovernor", c.cpuGovernor);
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
 

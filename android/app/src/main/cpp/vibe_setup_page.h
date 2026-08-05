@@ -205,6 +205,25 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
     </div>
 
     <div class="card">
+      <h2>Processor</h2>
+      <p class="why">How hard this machine is allowed to run.</p>
+      <label><span class="lbl">CPU governor</span>
+        <select id="cpuGovernor">
+          <option value="performance">Full speed — recommended for a receiver</option>
+          <option value="ondemand">On demand — saves a little power</option>
+          <option value="default">Leave the system setting alone</option>
+        </select>
+        <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
+          VibeServer spreads its work across every core, so they all look half-idle and the Pi
+          clocks itself <em>down</em> — measured at 1.9&nbsp;GHz instead of 2.4, cool and
+          un-throttled, while the audio broke up. Full speed costs a couple of watts.
+          <br><b>Choose full speed for a shared receiver</b>, where several people are each being
+          given their own tuner. <b>On demand suits a battery or solar host</b> serving one
+          listener from a dongle — far less work, and the watts matter more than the headroom.</div></label>
+      <div class="hint" id="govNow"></div>
+    </div>
+
+    <div class="card">
       <h2>Audio and power</h2>
       <p class="why">Applies in both modes.</p>
       <label><span class="lbl">Uncompressed audio</span>
@@ -355,6 +374,13 @@ async function renderHw() {
   let hw = null;
   try { hw = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json(); } catch (e) {}
   const el = $("hw");
+  // ★ Show what the processor is ACTUALLY doing, next to the control that asks for it.
+  const gv = document.getElementById("govNow");
+  if (gv && hw && hw.governor) {
+    const mhz = hw.cpuKHz ? ` at ${(hw.cpuKHz/1000).toFixed(0)} MHz` : "";
+    gv.textContent = `Currently: ${hw.governor}${mhz}.`;
+    gv.style.color = hw.governor === "performance" ? "var(--good)" : "var(--dim)";
+  }
   if (!hw || !hw.present) {
     el.innerHTML = `<p class="hint">No radio detected, so there is nothing to set here.
       Plug one in and reload this page.</p>`;
@@ -412,6 +438,7 @@ function fill() {
   $("users").value = cfg.users || 1;
   $("sessionLimit").value = cfg.sessionLimitMin || 0;
   $("uncompressed").value = String(cfg.uncompressed || 0);
+  $("cpuGovernor").value = cfg.cpuGovernor || "performance";
   $("forceIdle").checked = !!cfg.forceIdleSaver;
   setMode((cfg.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw();
@@ -447,6 +474,7 @@ function collect() {
     users: locked ? parseInt($("users").value || "1", 10) : 1,
     sessionLimitMin: locked ? parseInt($("sessionLimit").value || "0", 10) : 0,
     uncompressed: parseInt($("uncompressed").value, 10),
+    cpuGovernor: $("cpuGovernor").value,
     forceIdleSaver: $("forceIdle").checked,
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.

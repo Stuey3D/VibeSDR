@@ -65,6 +65,18 @@ struct Config {
     // Front end
     bool rfNotch = false, dabNotch = false, zoomSpectrum = false;
 
+    /** ★★★ CPU GOVERNOR — a SETTING, because the wrong one costs 25% of the machine silently.
+     *  Raspberry Pi OS defaults to `ondemand`, which decides how hard to run from how busy each
+     *  core looks. That is exactly wrong for this workload: the DSP is spread across every core,
+     *  so each one looks half-idle and the governor clocks the whole chip down — 2.4 GHz to
+     *  1.9 GHz, measured, at 44°C with no thermal throttling. The work did not grow; every cycle
+     *  just took 26% longer, and a job with a real-time deadline started missing it. Parallelising
+     *  the load made it SLOWER.
+     *  ★ "performance" by default: a receiver serving listeners is not an idle desktop, and the
+     *    Pi's power difference is a couple of watts. An owner running on solar can choose
+     *    otherwise, which is why it is a setting rather than a hard-coded write. */
+    std::string cpuGovernor = "performance";
+
     int  port = 0;
     bool web = true;
 };

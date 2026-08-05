@@ -47,14 +47,24 @@ void Channelizer::feed(const cf32* in, int n,
 }
 
 int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* out) {
+    return extract(bins, centreBin, chanBins, out, own_);
+}
+
+int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* out,
+                         ExtractCtx& ctx) const {
+    return extract(bins, centreBin, chanBins, out, ctx, blocks_);
+}
+
+int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* out,
+                         ExtractCtx& ctx, long long blockIndex) const {
     if (chanBins <= 0 || chanBins > n_ || (n_ % chanBins) != 0) return 0;
 
-    auto it = inv_.find(chanBins);
-    if (it == inv_.end())
-        it = inv_.emplace(chanBins, std::make_unique<ComplexFFT>(chanBins, /*inverse=*/true)).first;
+    auto it = ctx.inv.find(chanBins);
+    if (it == ctx.inv.end())
+        it = ctx.inv.emplace(chanBins, std::make_unique<ComplexFFT>(chanBins, /*inverse=*/true)).first;
     ComplexFFT& inv = *it->second;
 
-    if ((int)slice_.size() < chanBins) slice_.resize(chanBins);
+    if ((int)ctx.slice.size() < chanBins) ctx.slice.resize(chanBins);
 
     // ★★ GATHER THE CHANNEL'S BINS, WRAPPING. The slice is centred on `centreBin` and laid out
     //    for the inverse transform in the SAME convention the forward one produced: DC of the
@@ -68,7 +78,7 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
         int src = centreBin + off;
         src %= n_;
         if (src < 0) src += n_;
-        slice_[k] = bins[src];
+        ctx.slice[k] = bins[src];
     }
 
     // ★★★ THE CHANNEL'S TRANSFER FUNCTION — NOT AN OPTIONAL POLISH. ka9q's constraint is that the
@@ -89,8 +99,8 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
             // The slice is laid out DC-first, so the band edges are the two sides of its middle.
             const int hi = chanBins / 2 - 1 - e;       // top of the positive half
             const int lo = chanBins / 2 + e;           // bottom of the negative half
-            if (hi >= 0)        slice_[hi] *= w;
-            if (lo < chanBins)  slice_[lo] *= w;
+            if (hi >= 0)        ctx.slice[hi] *= w;
+            if (lo < chanBins)  ctx.slice[lo] *= w;
         }
     }
 
@@ -98,7 +108,7 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
     //   chanBins leaves a gain of n_. Dividing by n_ makes a unit-amplitude input tone come back
     //   out at unit amplitude, which is what every caller expects and what the test asserts.
     const float g = 1.0f / (float)n_;
-    for (int k = 0; k < chanBins; ++k) slice_[k] *= g;
+    for (int k = 0; k < chanBins; ++k) ctx.slice[k] *= g;
 
     // ★★★ PHASE-CONTINUE THE CHANNEL ACROSS BLOCKS. Each block is transformed independently, so
     //     the extracted channel's phase reference RESTARTS every block. The true signal at
@@ -112,16 +122,18 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
     //     ★ Zero whenever centreBin is a multiple of OVERLAP_DIV, which is why the original
     //       test — centre bin 512 — never saw it. Sweep, do not sample.
     {
-        const double turns = std::fmod((double)centreBin * (double)blocks_
+        // ★ blockIndex, NOT blocks_: the caller may be a different thread working on an older
+        //   block, and the rotation belongs to the block the SAMPLES came from.
+        const double turns = std::fmod((double)centreBin * (double)blockIndex
                                        * (double)hop() / (double)n_, 1.0);
         if (turns != 0.0) {
             const double a = -2.0 * M_PI * turns;
             const cf32 rot((float)std::cos(a), (float)std::sin(a));
-            for (int k = 0; k < chanBins; ++k) slice_[k] *= rot;
+            for (int k = 0; k < chanBins; ++k) ctx.slice[k] *= rot;
         }
     }
 
-    inv.forward(slice_.data(), out);       // cfg was built inverse — this IS the inverse transform
+    inv.forward(ctx.slice.data(), out);       // cfg was built inverse — this IS the inverse transform
 
     // ★★★ DISCARD THE CORRUPTED HEAD. Overlap-save's whole trick: the first `ov/D` output samples
     //     of every block are the circular-convolution wrap-around, and only what follows is the

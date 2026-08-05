@@ -173,3 +173,26 @@ so they cannot be kept; the fix is to keep sending the shared wide row until the
 ready, so the picture keeps moving and merely becomes sharper a moment later.
 
 ★ 451 ms → 108 ms at 3 kHz. Verified to FAIL with the priming cover removed.
+
+## `load.py` + `victim.mjs` + `audioprobe.py` — load testing that means something
+
+- **`load.py` runs ON THE SERVER.** Running the load on a laptop measures the laptop's Wi-Fi as
+  much as the server: an early run looked like a server fault and was the load generator and the
+  browser fighting over one radio link.
+- **It answers pings.** The first version did not, so every client was dropped after 20 s and the
+  measurements were of an empty server that had looked busy briefly.
+- **`victim.mjs`** is one listener over the real network while the load runs locally — what a human
+  actually experiences. It reports GAPS, not frame counts: a probe that counts bytes cannot tell
+  "smooth" from "stuttered then caught up".
+- **`audioprobe.py`** judges the demodulated waveform, not its arrival: clipping, and energy at the
+  channelizer's BLOCK RATE, which is the signature a phase bug leaves.
+
+## `phasesweep.mjs` — sweep the dial, never sample it
+
+The channelizer's phase correction is exactly zero when `centreBin` is a multiple of `OVERLAP_DIV`,
+so a bug in it is invisible at one frequency in four. This steps by a quarter of a bin so every
+residue is covered.
+
+★★ That is not hypothetical: a stale phase reference reached the air as "tune to 7074 and it is
+broken, 7073.5 or 7074.5 is fine". The channelizer's own comments already said "sweep, do not
+sample" — from the last time it happened.

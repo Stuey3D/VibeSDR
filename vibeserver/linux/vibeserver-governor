@@ -1,0 +1,30 @@
+#!/bin/sh
+# Apply the CPU governor the owner chose in the setup page.
+#
+# ★★★ WHY THE SERVER CANNOT DO THIS ITSELF. The daemon runs as an unprivileged user and
+# /sys/devices/system/cpu/*/cpufreq/scaling_governor is root-only, so this runs from the unit's
+# ExecStartPre with a "+" prefix (systemd's "run this one as root" marker). A governor change
+# needs a restart to matter anyway, and saving settings already restarts the service.
+#
+# ★★ WHY IT MATTERS ENOUGH TO SHIP A SCRIPT FOR. Raspberry Pi OS defaults to `ondemand`, which
+# reads how busy each core looks. VibeServer spreads its DSP across every core, so each looks
+# half-idle and the governor drops the clock — measured at 1.9 GHz against a 2.4 GHz maximum, at
+# 44°C, not thermally throttled. Every cycle then takes 26% longer and a real-time job starts
+# missing its deadline: the audio breaks up on a machine that appears to be 60% idle.
+set -e
+CONF=/etc/vibeserver/config.json
+GOV=performance
+if [ -r "$CONF" ]; then
+  # No JSON parser here on purpose: this runs before the service, as root, on every boot. One sed
+  # and a fallback is easier to trust than a dependency.
+  V=$(sed -n 's/.*"cpuGovernor"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$CONF" | head -1)
+  [ -n "$V" ] && GOV="$V"
+fi
+[ "$GOV" = "default" ] && exit 0          # the owner asked us to leave the system alone
+for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  [ -w "$c" ] || continue
+  # Only if the kernel offers it — a governor that is not built in must not fail the start.
+  AVAIL=$(cat "$(dirname "$c")/scaling_available_governors" 2>/dev/null || echo "")
+  case " $AVAIL " in *" $GOV "*) echo "$GOV" > "$c" || true ;; esac
+done
+exit 0

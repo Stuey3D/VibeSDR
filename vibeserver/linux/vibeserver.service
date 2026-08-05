@@ -15,6 +15,9 @@ Type=simple
 # whitespace. So `--name VibeServer Pi500` sent "Pi500" in as a stray argument, the binary exited 2,
 # and Restart=always looped it: saving any setting containing a SPACE broke the service
 # (Stuart, 2026-08-01). Nothing shell-like ever parses that string, so quoting cannot save it.
+# ★ Apply the owner's CPU governor first, as root ("+"), because the daemon itself is
+#   unprivileged and sysfs is not writable to it. See vibeserver-governor for why it matters.
+ExecStartPre=+/usr/lib/vibeserver/vibeserver-governor
 ExecStart=/usr/bin/vibeserver --config /etc/vibeserver/vibeserver.conf
 # ★★ RESTART ALWAYS, and rate-limited. A radio that fails to open (unplugged, or claimed by
 # something else) must not spin the CPU retrying forever; five seconds is long enough to be polite

@@ -1595,7 +1595,25 @@ struct LocalSdrShim::Impl {
         vibe::OpusAudioEncoder opus;
 #endif
         Impl* owner = nullptr;
-        std::mutex mtx;                         // guards retune against the DSP thread
+        std::mutex mtx;                         // guards retune against this listener's own thread
+        // ── ★★★ ONE DSP THREAD PER LISTENER, which is how OpenWebRX does it ────────────────
+        // The DSP thread no longer waits for anybody: it copies the block once, hands every
+        // listener a reference and moves on. A listener that falls behind drops ITS OWN blocks
+        // and nobody else notices — with a barrier, the slowest listener set the pace for the
+        // radio itself.
+        // ★ It also lets the kernel schedule listeners across cores as it sees fit, which is the
+        //   point Stuart made: "give each user their own DSP thread that the CPU can assign".
+        std::thread                                   th;
+        std::mutex                                    qm;
+        std::condition_variable                       qcv;
+        // ★ The block AND which block it was — the phase correction is meaningless without it.
+        struct Block { std::vector<cf32> bins; long long index; };
+        std::deque<std::shared_ptr<const Block>> q;
+        std::atomic<bool>                             run{true};
+        std::atomic<uint64_t>                         dropped{0};
+        /** ★ This listener's own extract scratch — see Channelizer::ExtractCtx. Sharing one made
+         *  every listener's channel land somewhere other than it asked for. */
+        vibedsp::Channelizer::ExtractCtx ectx, vectx;
     };
     std::map<net::Socket*, std::shared_ptr<ClientDsp>> clientDsp;
     /** Audio sockets that arrived before their spectrum socket, by session id. */
@@ -1724,6 +1742,30 @@ struct LocalSdrShim::Impl {
      *  just a different centre bin plus a residual offset — no filter state is thrown away, which
      *  is what keeps tuning smooth instead of clicking. Same reasoning as the shared path's
      *  "a same-chain retune re-points the NCO and rebuilds nothing". */
+    /** The listener's own DSP thread: take blocks from its queue, extract its channels, demod. */
+    void clientThread(std::shared_ptr<ClientDsp> c) {
+        vibeAudioThread("vibe-listener");
+        for (;;) {
+            std::shared_ptr<const ClientDsp::Block> blk;
+            {
+                std::unique_lock<std::mutex> lk(c->qm);
+                c->qcv.wait(lk, [&]{ return !c->q.empty() || !c->run.load(); });
+                if (!c->run.load()) return;
+                blk = std::move(c->q.front());
+                c->q.pop_front();
+            }
+            feedOneClient(c, blk->bins.data(), blk->index);
+        }
+    }
+    void startClientThread(const std::shared_ptr<ClientDsp>& c) {
+        c->th = std::thread([this, c]{ clientThread(c); });
+    }
+    void stopClientThread(const std::shared_ptr<ClientDsp>& c) {
+        { std::lock_guard<std::mutex> lk(c->qm); c->run.store(false); }
+        c->qcv.notify_all();
+        if (c->th.joinable()) c->th.join();
+    }
+
     void clientRetune(ClientDsp* c) {
         if (!c) return;
         const auto mp = paramsFor(c->mode);
@@ -1794,8 +1836,16 @@ struct LocalSdrShim::Impl {
         //     ★ Width = the handover span, which is the widest view this path ever serves. Below
         //       it, RxPipeline's own ZoomSpectrum decimates to whatever span is asked for — that
         //       is exactly what it is for, and it costs nothing to ask it for a narrower one.
-        const double handoverSpan = (sampleRate / (double)fftSize) * (double)binsFor(c->spec);
-        const int want = chanBinsFor(handoverSpan * 1.25);
+        // ★★★ SIZED TO THE VIEW, NOT TO THE HANDOVER. Pinning it at the handover width (1 MHz at
+        //     8 MSPS) to dodge the rebuild hitch made every listener run a 1 MHz pipeline instead
+        //     of a ~30 kHz one — measured at 36-42% of real time for a SINGLE listener, so thirty
+        //     would have needed twelve times real time. It is what destroyed the 30-user test.
+        //     ★★ And it bought nothing: the rebuild hitch is already covered by `viewPriming`,
+        //        which keeps the listener on the shared row until the new view is ready. That was
+        //        added AFTER this, and it is the fix — this was the scaffolding, left standing.
+        //     ★ Lesson: when a later fix subsumes an earlier workaround, take the workaround OUT.
+        //       Two fixes for one problem is how a cheap operation becomes a 30x one.
+        const int want = chanBinsFor(c->viewSpanHz * 1.25);
         if (want != c->viewChanBins || !c->viewRx) {
             c->viewChanBins = want;
             c->viewChanRate = sampleRate * (double)want / (double)fftSize;
@@ -1805,8 +1855,8 @@ struct LocalSdrShim::Impl {
             vcb.ctx = c;
             vcb.zoomSpectrum = &Impl::clientZoomCb;
             c->viewRx->start(c->viewChanRate, 1024, fftRate, (int)AUDIO_SR, vcb);
-            LOGI("client view channel: %.3f kHz wide (%d bins) — serves every zoom below it",
-                 c->viewChanRate / 1e3, want);
+            LOGI("client view channel: %.3f kHz wide (%d bins) for a %.3f kHz view",
+                 c->viewChanRate / 1e3, want, c->viewSpanHz / 1e3);
         }
         // The slice is centred on the VIEW centre bin, so the zoom sits at the residual only.
         const double binHz = sampleRate / (double)fftSize;
@@ -4342,7 +4392,26 @@ struct LocalSdrShim::Impl {
                 std::vector<int> g = LocalSdrShim::instance().getTunerGains();
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
             }
-            j += "]}";
+            j += "]";
+            // ★★ WHAT THE MACHINE IS ACTUALLY DOING, not what was asked for. A governor is applied
+            //    by the service at start and can fail (kernel without it, a read-only sysfs, a
+            //    container) — and a settings page that shows the REQUEST rather than the state is
+            //    how an owner ends up certain they fixed something they did not. Same rule as the
+            //    mDNS name: display what is true.
+            {
+                std::string gov, mhz;
+                if (FILE* f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", "r")) {
+                    char b[64] = {0}; if (fgets(b, sizeof b, f)) gov = b; fclose(f);
+                    while (!gov.empty() && (gov.back()=='\n'||gov.back()=='\r')) gov.pop_back();
+                }
+                if (FILE* f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "r")) {
+                    char b[64] = {0}; if (fgets(b, sizeof b, f)) mhz = b; fclose(f);
+                    while (!mhz.empty() && (mhz.back()=='\n'||mhz.back()=='\r')) mhz.pop_back();
+                }
+                if (!gov.empty()) j += ",\"governor\":\"" + jsonEscape(gov) + "\"";
+                if (!mhz.empty()) j += ",\"cpuKHz\":" + mhz;
+            }
+            j += "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
@@ -4942,6 +5011,7 @@ struct LocalSdrShim::Impl {
                 c->bwHz = paramsFor(c->mode).bandwidth;
                 { std::lock_guard<std::mutex> lk(clientMtx); clientDsp[sock.get()] = c; }
                 clientRetune(c.get());
+                startClientThread(c);            // its own DSP thread, from here on
                 // ★ An audio socket may already be waiting: a browser opens both at once and the
                 //   order is not guaranteed. Adopt it rather than leaving the listener silent.
                 adoptAudioForSession(session);
@@ -5013,6 +5083,7 @@ struct LocalSdrShim::Impl {
             if (op == 0x1) handleControl(sock, payload);
         }
         bool bothGone = false;
+        std::shared_ptr<ClientDsp> goneDsp;
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (specClient == sock) {
               // Promote the next listener so the survivors keep their stream — every path that
@@ -5026,7 +5097,10 @@ struct LocalSdrShim::Impl {
               specExtra.end());
           clientBins.erase(sock.get());     // its width leaves with it
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
-          clientDsp.erase(sock.get());
+          // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
+          //   holding clientMtx would deadlock against anything that thread wants.
+          { auto it = clientDsp.find(sock.get());
+            if (it != clientDsp.end()) { goneDsp = it->second; clientDsp.erase(it); } }
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
@@ -5435,6 +5509,22 @@ struct LocalSdrShim::Impl {
         }
     }
 
+    /** Do one client's channels for this block. Pure per-client work — no shared mutable state,
+     *  which is exactly why it parallelises. */
+    void feedOneClient(const std::shared_ptr<ClientDsp>& c, const cf32* bins, long long blockIndex) {
+        std::lock_guard<std::mutex> lk(c->mtx);
+        if (!c->rx || c->chanBins <= 0) return;
+        const int got = chan_->extract(bins, clientCentreBin(c.get()), c->chanBins,
+                                       c->slice.data(), c->ectx, blockIndex);
+        if (got > 0) c->rx->feed(c->slice.data(), got);
+        // ★ And the VIEW channel, when this listener is drawing its own waterfall.
+        if (c->viewRx && c->viewChanBins > 0) {
+            const int gv = chan_->extract(bins, clientViewCentreBin(c.get()),
+                                          c->viewChanBins, c->viewSlice.data(), c->vectx, blockIndex);
+            if (gv > 0) c->viewRx->feed(c->viewSlice.data(), gv);
+        }
+    }
+
     void feedClientChannels(const cf32* iq, int n) {
         if (!perClientDsp() || n <= 0) return;
         std::vector<std::shared_ptr<ClientDsp>> cs;
@@ -5443,23 +5533,108 @@ struct LocalSdrShim::Impl {
           for (auto& kv : clientDsp) cs.push_back(kv.second); }
         if (cs.empty()) return;
         if (!chan_ || chan_->fftSize() != fftSize) chan_.reset(new vibedsp::Channelizer(fftSize));
+        // ★ Split the channelizer's own forward FFT from the per-listener work, because they
+        //   scale completely differently: the FFT is fixed no matter how many listeners there
+        //   are, the fan-out is proportional. Confusing the two is how "per-client cost" ends up
+        //   looking enormous with a single listener connected.
+        auto fanT0 = std::chrono::steady_clock::now();
+        double fanMs = 0;
         chan_->feed(iq, n, [&](const cf32* bins, int nbins) {
             (void)nbins;
-            for (auto& c : cs) {
-                std::lock_guard<std::mutex> lk(c->mtx);
-                if (!c->rx || c->chanBins <= 0) continue;
-                const int got = chan_->extract(bins, clientCentreBin(c.get()),
-                                               c->chanBins, c->slice.data());
-                if (got > 0) c->rx->feed(c->slice.data(), got);
-                // ★ And the VIEW channel, when this listener is drawing its own waterfall.
-                if (c->viewRx && c->viewChanBins > 0) {
-                    const int gv = chan_->extract(bins, clientViewCentreBin(c.get()),
-                                                  c->viewChanBins, c->viewSlice.data());
-                    if (gv > 0) c->viewRx->feed(c->viewSlice.data(), gv);
-                }
-            }
+            const auto f0 = std::chrono::steady_clock::now();
+            // ★★★ HAND THE BLOCK OVER AND MOVE ON — no barrier, no waiting.
+            //     The DSP thread's only job is the shared forward FFT; every listener's channel
+            //     is done on that listener's OWN thread. Nothing a listener does can delay the
+            //     radio, and the kernel is free to place them across the cores.
+            //     ★ One copy of the block per round, shared by reference: the channelizer
+            //       overwrites its buffer on the next block, so the data has to be taken, but it
+            //       only has to be taken ONCE however many listeners there are.
+            handBlockToListeners(cs, bins, nbins);
+            fanMs += std::chrono::duration<double,std::milli>(
+                         std::chrono::steady_clock::now() - f0).count();
+            // ★★★ THE WIDE WATERFALL COMES OFF THIS SAME FFT — ka9q's whole point.
+            //     We were running TWO 32768-point forward transforms of the same samples: one
+            //     here for the channels and one inside the shared RxPipeline for the display,
+            //     together about 60% of the DSP thread's real-time budget BEFORE a single
+            //     listener connected. ka9q-radio runs exactly one and takes everything from it,
+            //     which is what lets it carry dozens of channels; so do we now.
+            //     ★★ The trade is real and worth knowing: this transform is UNWINDOWED, because
+            //        overlap-save fast convolution requires it. A rectangular window leaks more
+            //        than the Nuttall the display FFT used, so a strong carrier smears a little
+            //        wider. That is inherited from the architecture, not a mistake — it is the
+            //        same compromise the receivers we are matching make.
+            emitWideFromBins(bins, nbins);
         });
+        const double totalMs = std::chrono::duration<double,std::milli>(
+                                   std::chrono::steady_clock::now() - fanT0).count();
+        chanFftMs_ += (totalMs - fanMs);
+        chanFanMs_ += fanMs;
+        chanClients_ += (double)cs.size();
+        chanN_++;
     }
+    double chanFftMs_ = 0, chanFanMs_ = 0, chanClients_ = 0; int chanN_ = 0;
+
+    // ★ The worker POOL that used to live here is gone: every listener now has its own DSP
+    //   thread (see ClientDsp::th), so there is nothing to fan out to and no barrier to wait
+    //   on. Two mechanisms for one job is how the slow one gets quietly left in place.
+
+    /** Convert one forward-FFT block into the dB row the display path expects, and hand it to
+     *  onSpectrum exactly as the pipeline's own FFT used to. */
+    std::vector<float> wideRow_;
+    int wideDecim_ = 0;
+    void emitWideFromBins(const cf32* bins, int n) {
+        // ★ MATCH THE OLD RATE. The pipeline's FFT ran at fftRate*FFT_AVG; this block callback
+        //   runs far faster (hop is 3/4 of the FFT, so ~325/s at 8 MSPS). Feeding onSpectrum every
+        //   block would quadruple the frame rate and the averaging window with it.
+        const double blockRate = sampleRate / (double)(n - n / vibedsp::Channelizer::OVERLAP_DIV);
+        int decim = (int)std::lround(blockRate / std::max(1.0, fftRate * FFT_AVG));
+        if (decim < 1) decim = 1;
+        if (++wideDecim_ < decim) return;
+        wideDecim_ = 0;
+        if ((int)wideRow_.size() != n) wideRow_.assign(n, -200.0f);
+        // ★★ FFTSHIFT ON THE WAY OUT. The channelizer leaves DC at bin 0 (natural FFT order);
+        //    onSpectrum has always been handed a SHIFTED row, bin 0 = -fs/2. Getting this wrong
+        //    puts the centre of the band at the edge of the screen.
+        const int half = n / 2;
+        const float scale = 1.0f / ((float)n * (float)n);
+        for (int i = 0; i < n; i++) {
+            const cf32& c = bins[(i + half) % n];
+            const float p = (c.real() * c.real() + c.imag() * c.imag()) * scale;
+            wideRow_[i] = 10.0f * std::log10(p + 1e-30f) + kWideCalDb;
+        }
+        onSpectrum(wideRow_.data(), n);
+    }
+    /** ★★ Level offset that lines this path up with the windowed FFT it replaces, MEASURED not
+     *  guessed (tools/vibeserver-probes/framestats.mjs, before and after).
+     *  The old path applied a Nuttall window, whose coherent gain is about 0.36 — so it read a
+     *  carrier roughly 8.9 dB LOWER than an unwindowed transform of the same signal. Without this
+     *  every S-meter reading, every squelch threshold and the waterfall auto-contrast would shift
+     *  by that much on the day the FFTs merged.
+     *  ★ It cannot be perfect: a window changes the noise floor and the peaks by DIFFERENT
+     *    amounts (coherent gain vs noise-equivalent bandwidth), so this matches the PEAKS, which
+     *    is what the S-meter and the squelch actually read. The floor lands ~3 dB high. */
+    static constexpr float kWideCalDb = -8.0f;
+
+    /** Copy this block once and post it to every listener's queue. Never blocks. */
+    void handBlockToListeners(const std::vector<std::shared_ptr<ClientDsp>>& cs,
+                              const cf32* bins, int nbins) {
+        auto blk = std::make_shared<ClientDsp::Block>();
+        blk->bins.assign(bins, bins + nbins);
+        blk->index = chan_->blockIndex();     // ★ the phase reference travels WITH the samples
+        for (auto& c : cs) {
+            std::lock_guard<std::mutex> lk(c->qm);
+            // ★★ A LISTENER THAT CANNOT KEEP UP DROPS ITS OWN BLOCKS. Four blocks is ~12 ms of
+            //    slack at 8 MSPS — enough to ride out a scheduling hiccup, short enough that a
+            //    genuinely stuck listener does not accumulate latency it can never pay back.
+            //    Its audio glitches; the radio and everyone else carry on.
+            if (c->q.size() >= 4) { c->q.pop_front(); c->dropped.fetch_add(1); }
+            c->q.push_back(blk);
+            c->qcv.notify_one();
+        }
+    }
+
+    int dspBlocks_ = 0;
+    double dspWideMs_ = 0, dspPerMs_ = 0, dspRealMs_ = 0;
 
     void dspLoop() {
         // This thread runs the whole demod chain (WFM stereo MPX + RDS + FIR
@@ -5497,13 +5672,46 @@ struct LocalSdrShim::Impl {
             iqSpaceCv.notify_one();
             std::lock_guard<std::recursive_mutex> mlk(modeMtx);
             flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
-            rx.feed(buf.data(), (int)buf.size());
+            // ★★★ IS THE DSP KEEPING REAL TIME? The only measure that matters under load, and the
+            //     one nothing was watching: a probe that counts frames cannot tell "smooth" from
+            //     "stuttered, then caught up" — which is exactly the difference between a passing
+            //     test and a listener saying the audio broke up. The IQ backlog IS that signal.
+            const auto t0 = std::chrono::steady_clock::now();
+            const double haveSec = (double)buf.size() / sampleRate;   // real time in this block
+            // ★★★ IN SHARED MODE THE SHARED PIPELINE IS NOT RUN AT ALL. Its FFT is replaced by the
+            //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
+            //     listened to — every listener has their own chain now. Running it was paying full
+            //     price for a spectrum we already had and audio nobody could hear.
+            if (!perClientDsp()) rx.feed(buf.data(), (int)buf.size());
+            const auto tMid = std::chrono::steady_clock::now();
             // ★★★ PER-CLIENT DEMOD. The shared `rx` above still produces the WIDE waterfall
             //     everyone sees; this produces each listener's OWN audio from their own slice of
             //     one shared forward FFT. Costs ~0.09% of a core each (measured, see the spike).
             //     ★ Only in shared/locked mode — a personal receiver never builds any of it, so
             //       the phone and Mac paths are byte-for-byte what they were.
             feedClientChannels(buf.data(), (int)buf.size());
+            {
+                const auto t1 = std::chrono::steady_clock::now();
+                const double wideMs = std::chrono::duration<double,std::milli>(tMid - t0).count();
+                const double perMs  = std::chrono::duration<double,std::milli>(t1 - tMid).count();
+                dspWideMs_ += wideMs; dspPerMs_ += perMs; dspRealMs_ += haveSec * 1000.0;
+                if (++dspBlocks_ >= 200) {
+                    size_t q; { std::lock_guard<std::mutex> lk(iqMtx); q = iqQueuedSamples; }
+                    // ★ >100% means the DSP cannot keep up and the backlog will grow until
+                    //   something drops — the audible symptom is everyone stuttering at once.
+                    LOGI("dsp load: wide %.0f%% + per-client %.0f%% = %.0f%% of real time "
+                         "(backlog %.0f ms)",
+                         dspWideMs_ / dspRealMs_ * 100.0, dspPerMs_ / dspRealMs_ * 100.0,
+                         (dspWideMs_ + dspPerMs_) / dspRealMs_ * 100.0,
+                         (double)q / sampleRate * 1000.0);
+                    if (chanN_ > 0)
+                        LOGI("  split: channelizer FFT %.0f%%, fan-out %.0f%% for %.1f listeners",
+                             chanFftMs_ / dspRealMs_ * 100.0, chanFanMs_ / dspRealMs_ * 100.0,
+                             chanClients_ / chanN_);
+                    chanFftMs_ = chanFanMs_ = chanClients_ = 0; chanN_ = 0;
+                    dspBlocks_ = 0; dspWideMs_ = dspPerMs_ = dspRealMs_ = 0;
+                }
+            }
         }
     }
 
@@ -6904,7 +7112,13 @@ void LocalSdrShim::stopLocked() {
           for (auto& kv : impl->outboxes) socks.push_back(kv.second->sock); }
         for (auto& sk : socks) impl->outboxClose(sk, 0);      // no drain: we are going down
     }
-    { std::lock_guard<std::mutex> lk(impl->clientMtx); impl->clientDsp.clear(); impl->pendingAudio.clear(); }
+    {
+        std::vector<std::shared_ptr<Impl::ClientDsp>> gone;
+        { std::lock_guard<std::mutex> lk(impl->clientMtx);
+          for (auto& kv : impl->clientDsp) gone.push_back(kv.second);
+          impl->clientDsp.clear(); impl->pendingAudio.clear(); }
+        for (auto& c : gone) impl->stopClientThread(c);   // outside the lock — they take it too
+    }
 
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.

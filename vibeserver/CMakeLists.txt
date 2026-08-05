@@ -249,6 +249,9 @@ if(UNIX AND NOT APPLE)
   # ★ /lib/udev/rules.d is the PACKAGE path; /etc/udev/rules.d is for the ADMIN's own overrides.
   #   Shipping into /etc would fight the sysadmin and survive `apt purge`.
   install(FILES linux/99-vibeserver-sdr.rules DESTINATION lib/udev/rules.d)
+  # ★ Run as root from the unit's ExecStartPre — the daemon is unprivileged and cannot write
+  #   sysfs. See linux/vibeserver-governor for why a wrong governor costs 25% of the machine.
+  install(PROGRAMS linux/vibeserver-governor DESTINATION lib/vibeserver)
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)
