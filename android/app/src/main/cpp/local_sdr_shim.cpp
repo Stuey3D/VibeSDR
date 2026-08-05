@@ -1564,6 +1564,22 @@ struct LocalSdrShim::Impl {
         //    out, i.e. served by the SHARED wide waterfall like everyone else.
         double viewCentreHz = 0, viewSpanHz = 0;
         bool   ownView = false;      // true while this listener's own zoom is feeding its display
+        // ★★★ THE VIEW GETS ITS OWN CHANNEL, SEPARATE FROM THE AUDIO ONE.
+        //     Sizing one channel for both meant the private view only existed once the span fell
+        //     inside the DEMODULATOR's channel — about 25 kHz for AM. Between there and the point
+        //     the shared FFT runs out (~250 kHz at 8 MSPS over 1024 bins) the waterfall was the
+        //     wide row stretched 5x: blocky, and blocky exactly across the most useful zooms
+        //     (Stuart, 2026-08-05: "it goes really blocky before having a little hitch when
+        //     zooming in further and it sharpens up... I suspect it isnt in full KA9Q mode until
+        //     max zoom").
+        //     ★★ Two channels, not one, because they have opposite requirements: the audio channel
+        //     must NEVER be resized (a rebuild restarts the AGC and ducks the audio — that was
+        //     this morning's bug), and the view channel must be resized on every zoom. Trying to
+        //     serve both from one is what forced the compromise.
+        std::unique_ptr<vibedsp::RxPipeline> viewRx;
+        std::vector<cf32> viewSlice;
+        int    viewChanBins = 0;
+        double viewChanRate = 0;
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;
 #endif
@@ -1742,13 +1758,44 @@ struct LocalSdrShim::Impl {
         // ★ The view centre expressed INSIDE this listener's channel. The channel is centred on
         //   its VFO, so the view offset is the gap between where it is listening and where it is
         //   looking — they are not the same thing once you can pan away from the signal.
-        if (c->ownView && c->viewSpanHz > 0) {
-            const double viewOff = c->viewCentreHz - (c->vfoHz - resid);
-            c->rx->setZoomBins(binsFor(c->spec));
-            c->rx->setZoomView(viewOff, c->viewSpanHz, fftRate);
-        } else {
-            c->rx->setZoomView(0, 0, 0);      // released — the shared wide path owns the display
+        clientRetuneView(c);
+    }
+
+    /** This listener's VIEW channel — a second, independent extract sized for what it is LOOKING
+     *  at rather than what it is listening to.
+     *  ★ Free to rebuild on every zoom: it produces no audio, so restarting its filters costs a
+     *    frame, not a duck. That separation is the whole point of having two. */
+    void clientRetuneView(ClientDsp* c) {
+        if (!c->ownView || c->viewSpanHz <= 0) {
+            if (c->viewRx) { c->viewRx.reset(); c->viewChanBins = 0; }
+            return;
         }
+        // 1.25x so the channel's own transition band sits outside what we draw.
+        const int want = chanBinsFor(c->viewSpanHz * 1.25);
+        if (want != c->viewChanBins || !c->viewRx) {
+            c->viewChanBins = want;
+            c->viewChanRate = sampleRate * (double)want / (double)fftSize;
+            c->viewSlice.assign((size_t)want, cf32{0.0f, 0.0f});
+            c->viewRx.reset(new vibedsp::RxPipeline());
+            vibedsp::RxPipeline::Callbacks vcb{};
+            vcb.ctx = c;
+            vcb.zoomSpectrum = &Impl::clientZoomCb;
+            c->viewRx->start(c->viewChanRate, 1024, fftRate, (int)AUDIO_SR, vcb);
+            LOGI("client view channel: %.3f kHz wide (%d bins) for a %.3f kHz view",
+                 c->viewChanRate / 1e3, want, c->viewSpanHz / 1e3);
+        }
+        // The slice is centred on the VIEW centre bin, so the zoom sits at the residual only.
+        const double binHz = sampleRate / (double)fftSize;
+        const double off   = c->viewCentreHz - rtlCenter.load() - HW_OFFSET_HZ;
+        const double resid = off - std::lround(off / binHz) * binHz;
+        c->viewRx->setZoomBins(binsFor(c->spec));
+        c->viewRx->setZoomView(resid, c->viewSpanHz, fftRate);
+    }
+
+    /** The signed centre bin this listener's VIEW channel is taken from. */
+    int clientViewCentreBin(const ClientDsp* c) const {
+        const double binHz = sampleRate / (double)fftSize;
+        return (int)std::lround((c->viewCentreHz - rtlCenter.load() - HW_OFFSET_HZ) / binHz);
     }
 
     /** The signed centre bin this listener's channel is taken from. */
@@ -3453,13 +3500,17 @@ struct LocalSdrShim::Impl {
                     if (me->viewCentreHz <= 0) me->viewCentreHz = me->vfoHz;
                     if (jsonNum(msg, "binBandwidth", bb) && bb > 0)
                         me->viewSpanHz = bb * (double)binsFor(sock);
-                    // Worth a private view only when the shared FFT cannot resolve it AND it
-                    // fits inside the channel we already have — the channel is sized for the
-                    // demodulator and must never be resized to accommodate a view.
+                    // ★★★ THE HANDOVER IS EXACTLY WHERE THE SHARED FFT RUNS OUT OF REAL BINS,
+                    //     and nowhere else. `perOutBin < sharedBinHz` IS the brief's step < 1.0:
+                    //     below it the wide row is being stretched and we are magnifying nothing.
+                    //     ★ It used to ALSO require the view to fit the AUDIO channel, which on AM
+                    //       meant 25 kHz — so every zoom between 25 and 250 kHz got the stretched
+                    //       wide row and looked blocky, which is most of the useful range. The
+                    //       view has its own channel now, sized to the view, so that condition is
+                    //       gone and the sharp path starts the moment it is worth having.
                     const double sharedBinHz = sampleRate / (double)fftSize;
                     const double perOutBin   = me->viewSpanHz / (double)binsFor(sock);
-                    const bool   fits        = me->chanRate > 0 && me->viewSpanHz <= me->chanRate * 0.8;
-                    me->ownView = me->viewSpanHz > 0 && perOutBin < sharedBinHz && fits;
+                    me->ownView = me->viewSpanHz > 0 && perOutBin < sharedBinHz;
                 }
                 clientRetune(me.get());
                 sendConfig(sock);
@@ -5372,6 +5423,12 @@ struct LocalSdrShim::Impl {
                 const int got = chan_->extract(bins, clientCentreBin(c.get()),
                                                c->chanBins, c->slice.data());
                 if (got > 0) c->rx->feed(c->slice.data(), got);
+                // ★ And the VIEW channel, when this listener is drawing its own waterfall.
+                if (c->viewRx && c->viewChanBins > 0) {
+                    const int gv = chan_->extract(bins, clientViewCentreBin(c.get()),
+                                                  c->viewChanBins, c->viewSlice.data());
+                    if (gv > 0) c->viewRx->feed(c->viewSlice.data(), gv);
+                }
             }
         });
     }
