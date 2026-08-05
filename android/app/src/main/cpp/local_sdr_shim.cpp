@@ -1701,14 +1701,19 @@ struct LocalSdrShim::Impl {
         if (!c) return;
         const auto mp = paramsFor(c->mode);
         const double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
-        // ★★★ ONE CHANNEL SERVES BOTH THE AUDIO AND THE VIEW. Sizing it for the demodulator alone
-        //     would mean a second channel just to draw a zoomed waterfall; sizing it to cover
-        //     whichever is wider gets per-user zoom for the price of the extract we already do.
-        //     ★ When the view is wider than a channel can sensibly carry, this listener simply
-        //       falls back to the shared wide waterfall — which is what "zoomed out" means, and
-        //       is exactly the handover rule the brief describes (step < 1.0).
-        const double need = std::max(bw * 2.5, c->viewSpanHz > 0 ? c->viewSpanHz * 1.2 : 0.0);
-        const int want = chanBinsFor(need);
+        // ★★★ THE CHANNEL IS SIZED BY THE DEMODULATOR, AND BY NOTHING ELSE.
+        //     It used to be sized by max(audio, view) so one channel could serve both. That is
+        //     tidy and it is wrong: changing the ZOOM then changed the channel WIDTH, which
+        //     rebuilds the pipeline — and a rebuilt pipeline restarts its AGC and filter state,
+        //     so the audio ducked every time somebody zoomed (Stuart, 2026-08-05: "the zoom is
+        //     attenuating the audio, tune is fine though" — tuning kept the same width, which is
+        //     exactly why it was fine).
+        //     ★★ Same bug as memory/tuning_attenuates_agc_reset.md, one field along: THE THING
+        //        THAT MUST NOT REBUILD THE AUDIO CHAIN IS ANYTHING THE LISTENER TOUCHES OFTEN.
+        //     ★ The view is served from this channel when it fits inside it — which is every zoom
+        //       deep enough to be worth a private view — and from the shared wide row when it does
+        //       not. That is the same handover, decided without resizing anything.
+        const int want = chanBinsFor(bw);
         std::lock_guard<std::mutex> lk(c->mtx);
         if (want != c->chanBins || !c->rx) {
             c->chanBins = want;
@@ -3421,11 +3426,13 @@ struct LocalSdrShim::Impl {
                     if (me->viewCentreHz <= 0) me->viewCentreHz = me->vfoHz;
                     if (jsonNum(msg, "binBandwidth", bb) && bb > 0)
                         me->viewSpanHz = bb * (double)binsFor(sock);
-                    // Worth a private channel only while the shared FFT cannot resolve it —
-                    // otherwise the shared row is both correct and already paid for.
+                    // Worth a private view only when the shared FFT cannot resolve it AND it
+                    // fits inside the channel we already have — the channel is sized for the
+                    // demodulator and must never be resized to accommodate a view.
                     const double sharedBinHz = sampleRate / (double)fftSize;
                     const double perOutBin   = me->viewSpanHz / (double)binsFor(sock);
-                    me->ownView = me->viewSpanHz > 0 && perOutBin < sharedBinHz;
+                    const bool   fits        = me->chanRate > 0 && me->viewSpanHz <= me->chanRate * 0.8;
+                    me->ownView = me->viewSpanHz > 0 && perOutBin < sharedBinHz && fits;
                 }
                 clientRetune(me.get());
                 sendConfig(sock);

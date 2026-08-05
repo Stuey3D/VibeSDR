@@ -137,3 +137,18 @@ a picture:
 "VSPG" | u8 ver | u16 bins | u16 rows | f64 centreHz | f64 spanHz
 per row: i64 epoch-ms, then `bins` bytes of dB
 ```
+
+## `zoomnoducking.mjs` — zooming must not touch the audio
+
+Measures the audio before a zoom and the WORST 100 ms block straight after it.
+
+★★★ **THIS TEST FAILED TO CATCH THE BUG TWICE BEFORE IT WORKED.**
+1. It zoomed to 10 kHz — the same channel width 10 kHz of AM audio already needs, so nothing was
+   rebuilt and it passed on broken code. The span has to CROSS A CHANNEL-WIDTH BOUNDARY.
+2. It averaged the whole window four seconds later. A rebuilt chain restarts its AGC, so the level
+   dips and *recovers* — by then the dip had gone. The transient IS the symptom.
+With both fixed it reads 0.60 on the broken build and 1.00 on the fixed one.
+
+★ The bug: the channel was sized by `max(audio, view)`, so changing the ZOOM changed the channel
+WIDTH, which rebuilt the pipeline. Tuning never did, because tuning keeps the same width — which
+is exactly why "tune is fine though". Same shape as `memory/tuning_attenuates_agc_reset.md`.
