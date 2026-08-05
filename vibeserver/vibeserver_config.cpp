@@ -83,27 +83,6 @@ bool getBool(const std::string& s, const std::string& key, bool& out) {
     return false;
 }
 
-bool getStrArray(const std::string& s, const std::string& key, std::vector<std::string>& out) {
-    size_t p = findKey(s, key);
-    if (p == std::string::npos) return false;
-    while (p < s.size() && isspace((unsigned char)s[p])) p++;
-    if (p >= s.size() || s[p] != '[') return false;
-    out.clear();
-    bool inStr = false;
-    std::string cur;
-    for (size_t i = p + 1; i < s.size(); i++) {
-        if (inStr) {
-            if (s[i] == '\\' && i + 1 < s.size()) { cur += s[i]; cur += s[i+1]; i++; continue; }
-            if (s[i] == '"') { out.push_back(unescape(cur)); cur.clear(); inStr = false; continue; }
-            cur += s[i];
-        } else {
-            if (s[i] == '"') { inStr = true; continue; }
-            if (s[i] == ']') return true;
-        }
-    }
-    return false;
-}
-
 std::string esc(const std::string& in) {
     std::string out;
     for (char c : in) {
@@ -168,12 +147,6 @@ std::string toJson(const Config& c) {
     B("forceIdleSaver", c.forceIdleSaver);
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
-    j += "  \"blocked\": [";
-    for (size_t i = 0; i < c.blocked.size(); i++) {
-        if (i) j += ", ";
-        j += "\"" + esc(c.blocked[i]) + "\"";
-    }
-    j += "],\n";
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -220,7 +193,6 @@ bool fromJson(const std::string& s, Config& c, std::string& err) {
     getBool(s, "rfNotch", c.rfNotch);
     getBool(s, "dabNotch", c.dabNotch);
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
-    getStrArray(s, "blocked", c.blocked);
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
 
@@ -238,7 +210,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err) {
     }
     // Did anything at all land? Count the fields most likely to be present in a real config.
     if (!c.name.empty() || !c.adminPass.empty() || c.lockFreq > 0 || c.users > 1
-        || !c.pin.empty() || !c.blocked.empty() || c.port != 0) seen++;
+        || !c.pin.empty() || c.port != 0) seen++;
     if (seen == 0 && s.find_first_not_of(" \t\r\n{}") != std::string::npos) {
         err = "no settings recognised — is the JSON valid?";
         return false;

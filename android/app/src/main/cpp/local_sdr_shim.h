@@ -147,11 +147,6 @@ public:
      *  Applied when the listener count goes 0 -> 1, never on every connect — the shared receiver
      *  is one radio and one VFO, so landing each joiner would yank the group already listening. */
     static void setVibeServerLanding(double hz, const std::string& mode);
-    /** ★★★ Demodulators/decoders the owner has switched off. ENFORCED (a client can send any mode
-     *  it likes) and PUBLISHED on hwinfo (so clients hide them rather than offering something that
-     *  will be refused). Both, or neither works: an unenforced list is decoration, and a control
-     *  that is visible and refused reads as a broken feature, not a blocked one. */
-    static void setBlockedModes(const std::vector<std::string>& modes);
     static bool isConfigured();
 
     /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */

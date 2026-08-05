@@ -852,23 +852,6 @@ static std::atomic<double>  g_vsLandingHz{0.0};
 static std::mutex           g_vsLandingMtx;
 static std::string          g_vsLandingMode;
 
-// ── ★★★ DEMODULATORS AND DECODERS THE OWNER HAS SWITCHED OFF ─────────────────────────────────
-// Stored as what is BLOCKED, never what is allowed, so a build that adds a demodulator does not
-// silently disable it on every existing server.
-// ★★★ AND IT IS ENFORCED HERE, not merely advertised. A client can send `mode=wfm` whatever the
-//     UI drew — an unenforced list is decoration. The list is ALSO published so clients can HIDE
-//     what is blocked: per AGENTS.md, a control that is visible and refused reads as "the feature
-//     is broken", not "the owner turned it off". Publish, enforce, hide — all three, or none of it
-//     works.
-static std::mutex               g_vsBlockedMtx;
-static std::vector<std::string> g_vsBlocked;
-
-static bool vsModeBlocked(const std::string& m) {
-    if (m.empty()) return false;
-    std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
-    for (const auto& b : g_vsBlocked) if (b == m) return true;
-    return false;
-}
 // ★★★ REMOVED 2026-08-04: g_vsOutBins, the client-requestable waterfall width as a GLOBAL.
 // Its own comment justified it — "Single-occupant, so one global suffices" — and `--users 20`
 // repealed that without anyone revisiting the line. The most recent client to connect set the
@@ -2675,9 +2658,6 @@ struct LocalSdrShim::Impl {
         if (n > 0) sendText(dx, std::string(buf, (size_t)n));
     }
     void startSpots() {
-        // ★ FT8/FT4 spots are the third door — subscribe_digital_spots, not a mode and not an
-        //   extension attach. Same rule: if the owner switched FT8 off, it stays off.
-        if (vsModeBlocked("ft8")) { LOGI("digital spots refused — FT8 blocked by the owner"); return; }
         std::lock_guard<std::mutex> lk(spotsMtx);
         if (spotsActive) return;
         delete ft8; delete ft4;
@@ -3254,10 +3234,6 @@ struct LocalSdrShim::Impl {
         }
         if (type == "tune") {
             std::string m = jsonStr(msg, "mode");
-            // ★★ BOTH entry points must check. "tune" carries a mode as well as a frequency, so
-            //    guarding only the "mode" message would leave the block trivially bypassable by
-            //    the message clients send most often.
-            if (vsModeBlocked(m)) { refuseMode(sock, m); m.clear(); }
             bool rebuilt = false;
             if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
@@ -3267,7 +3243,6 @@ struct LocalSdrShim::Impl {
         }
         if (type == "mode") {
             std::string m = jsonStr(msg, "mode");
-            if (vsModeBlocked(m)) { refuseMode(sock, m); return; }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
             if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
@@ -3396,15 +3371,6 @@ struct LocalSdrShim::Impl {
 
     // VibeServer: advertise the tuner's supported gains to the client so its gain
     // slider has real dB steps (it can't query the remote device natively).
-    /** ★ SAY WHY, don't just ignore it. A mode request that vanishes silently looks like a bug in
-     *  the radio; "the owner has switched this off on this receiver" is information the listener
-     *  can act on. Clients that honour the published list never get here — this is the backstop
-     *  for older clients and for anything speaking the protocol directly. */
-    void refuseMode(const std::shared_ptr<net::Socket>& sock, const std::string& m) {
-        LOGI("mode %s refused — blocked by the owner", m.c_str());
-        if (sock) sendText(sock, "{\"type\":\"mode_blocked\",\"mode\":\"" + jsonEscape(m) + "\"}");
-    }
-
     void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
         std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
         std::string j = "{\"type\":\"hwinfo\",\"gains\":[";
@@ -3462,18 +3428,6 @@ struct LocalSdrShim::Impl {
         // destroying RDS all evening. A client cannot present that honestly unless it is
         // told, so it is told.
         j += LocalSdrShim::instance().radioCapsJson();
-        // ★★★ WHAT THE OWNER HAS SWITCHED OFF. Exactly the principle stated below, applied to
-        //     demodulators: the server refuses these, so a client that is not told draws them
-        //     normally and the user finds out by picking one and getting nothing. Told, the
-        //     client can leave them out of the menu entirely — which reads as "this receiver is
-        //     for HF", not "wide FM is broken here".
-        {   std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
-            j += ",\"blocked\":[";
-            for (size_t i = 0; i < g_vsBlocked.size(); i++) {
-                if (i) j += ',';
-                j += "\"" + jsonEscape(g_vsBlocked[i]) + "\"";
-            }
-            j += "]"; }
         // ★★ IS THERE AN ADMIN PASSWORD, AND ARE WE THROUGH IT? Advertised for the same reason
         // as everything else here: the server ENFORCES the lock (bias-T, PPM, direct sampling
         // and calibration all go through adminGate), but a client that is not told simply draws
@@ -4455,33 +4409,8 @@ struct LocalSdrShim::Impl {
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
     }
 
-    /** Returns false if the owner has blocked this decoder. ★ The caller MUST honour it:
-     *  replying "attached" after a refusal contradicts the refusal in the very next message, and
-     *  the client believes the second one. */
-    bool startDecoder(const std::string& msg) {
+    void startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
-        // ★★★ THE BLOCK LIST MUST COVER DECODERS TOO — AND IT DID NOT.
-        // Enforcement was written against the `mode`/`tune` messages, which is where DEMODULATORS
-        // are chosen. But Advanced RDS, WEFAX, SSTV, FT8 and RTTY are not modes: they attach
-        // through THIS path, as extensions. So an owner who unticked "Advanced RDS" got a setting
-        // that was stored, published, and enforced nowhere at all — the listener simply opened it
-        // (Stuart, 2026-08-05: "I disabled WFM and advanced RDS and can still access them").
-        // ★★ The lesson is the shape, not the line: a permission list has to be applied at EVERY
-        //    door, and this feature has two. Adding a new decoder means adding it here as well.
-        // ★ The setup page's id for Advanced RDS is `rdsx`; on the wire the extension is `rds`.
-        //   Map deliberately rather than renaming either — the wire name is protocol, the page
-        //   name is what the owner reads.
-        {
-            const std::string blockName = (ext == "rds") ? "rdsx" : ext;
-            if (vsModeBlocked(blockName)) {
-                LOGI("decoder %s refused — blocked by the owner", ext.c_str());
-                std::shared_ptr<net::Socket> dx;
-                { std::lock_guard<std::mutex> lk(clientMtx); dx = dxClient; }
-                if (dx) sendText(dx, "{\"type\":\"mode_blocked\",\"mode\":\""
-                                     + jsonEscape(blockName) + "\"}");
-                return false;
-            }
-        }
         // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
         // fields we normally discard, plus the constellation). It attaches through the same
         // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
@@ -4495,11 +4424,11 @@ struct LocalSdrShim::Impl {
             // ★ It replaces an operator setting that also widened the channel filter; that half
             // was measured to cost 10 dB of RDS SNR and has been removed entirely.
             rx.setRdsNoiseCorrection(true);
-            return true;
+            return;
         }
-        if (ext == "sstv")  { startSstv(msg);  return true; }
+        if (ext == "sstv")  { startSstv(msg);  return; }
         bool navtex = (ext == "navtex");
-        if (ext != "fsk" && !navtex) return true;   // RTTY / NAVTEX (or an ext handled elsewhere)
+        if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
         if (!jsonNum(msg, "center_frequency", cf)) cf = navtex ? 500.0 : 1000.0;
         if (!jsonNum(msg, "shift", sh)) sh = navtex ? 170.0 : 170.0;
@@ -4517,7 +4446,6 @@ struct LocalSdrShim::Impl {
         };
         decoder->onState = [this](int st) { sendDecoderState(st); };
         LOGI("decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
-        return true;
     }
     void startWefax(const std::string& msg) {
         WefaxDecoder::Config cfg;
@@ -4659,12 +4587,8 @@ struct LocalSdrShim::Impl {
             if (op != 0x1) continue;
             std::string type = jsonStr(payload, "type");
             if (type == "audio_extension_attach") {
-                // ★★ ONLY SAY "attached" IF IT ACTUALLY ATTACHED. This replied unconditionally,
-                //    so a refused decoder was told "mode_blocked" and then "attached" in the very
-                //    next message — and a client believes the second one. A refusal contradicted
-                //    one line later is not a refusal.
-                if (startDecoder(payload))
-                    sendText(sock, "{\"type\":\"audio_extension_attached\"}");
+                startDecoder(payload);
+                sendText(sock, "{\"type\":\"audio_extension_attached\"}");
             } else if (type == "audio_extension_detach") {
                 stopDecoder();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
@@ -5641,10 +5565,6 @@ void LocalSdrShim::setVibeServerLanding(double hz, const std::string& mode) {
     g_vsLandingHz.store(hz > 0 ? hz : 0.0);
     std::lock_guard<std::mutex> lk(g_vsLandingMtx);
     g_vsLandingMode = mode;
-}
-void LocalSdrShim::setBlockedModes(const std::vector<std::string>& modes) {
-    std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
-    g_vsBlocked = modes;
 }
 bool LocalSdrShim::isConfigured() { return g_vsConfigured.load(); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }

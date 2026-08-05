@@ -80,15 +80,3 @@ node config-api.mjs 48000        # expects admin password "secret"
 ★★ The 401 cases are the ones that matter. **The config contains the PIN**, so an unauthenticated
 GET leaking it would be worse than any setting being wrong.
 
-## `blockedmodes.mjs` — the block list must be ENFORCED, not just advertised
-
-With `blocked: ["wfm","rdsx"]` saved, asserts the list is published on `hwinfo`, that a client
-asking for `wfm` is refused with `mode_blocked`, and that an allowed mode still works.
-
-```sh
-node blockedmodes.mjs 48000
-```
-
-★★ It tests **both** routes. `{"type":"mode"}` is the obvious one; `{"type":"tune"}` also carries a
-mode, and guarding only the first would leave the block bypassable by the message clients send most
-often. A UI that hides a mode is not enforcement — a client can send anything.

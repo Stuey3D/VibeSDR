@@ -3,8 +3,8 @@
 // ★★★ WHY THIS EXISTS. Configuration used to be `VIBESERVER_ARGS="--flags…"` in a systemd
 // EnvironmentFile: a command line pretending to be a config file. That was fine while the only
 // editors were a human and a curses screen, and it stops being fine the moment a BROWSER PAGE
-// saves settings — a checkbox list of blocked demodulators does not survive a flag string, and
-// nothing can round-trip a value it had to re-parse out of shell words.
+// saves settings: nothing can round-trip a value it had to re-parse out of shell words, and a
+// page that reads its own settings back needs a format that survives the trip.
 //
 // ★★ THE PRECEDENCE IS DELIBERATE AND UNCHANGED: command line > config.json > defaults.
 // Someone who runs the binary by hand to test something must always win over the stored config,
@@ -17,7 +17,6 @@
 // never registered and the endpoints report that they are unavailable.
 #pragma once
 #include <string>
-#include <vector>
 
 namespace vsconfig {
 
@@ -65,11 +64,6 @@ struct Config {
 
     // Front end
     bool rfNotch = false, dabNotch = false, zoomSpectrum = false;
-
-    /** ★★ Demodulators and decoders the OWNER has switched OFF. Empty = everything allowed.
-     *  Stored as what is BLOCKED rather than what is allowed, so a build that adds a new
-     *  demodulator does not silently disable it on every existing server. */
-    std::vector<std::string> blocked;
 
     int  port = 0;
     bool web = true;

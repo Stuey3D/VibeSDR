@@ -185,13 +185,6 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       </div>
 
       <div class="card">
-        <h2>Available modes</h2>
-        <p class="why">Untick anything you do not want offered. There is no point in wide FM on an
-           HF receiver, and WFM stereo is the most expensive thing a listener can switch on.</p>
-        <div class="checks" id="modeChecks"></div>
-      </div>
-
-      <div class="card">
         <h2>Listeners</h2>
         <p class="why">How many people at once, and for how long.</p>
         <div class="row">
@@ -323,22 +316,6 @@ function mdnsLabel(s) {
   return (out || "vibeserver").slice(0, 63).replace(/-+$/, "");
 }
 
-const DEMODS = [["am","AM"],["lsb","LSB"],["usb","USB"],["nfm","NFM"],["wfm","WFM (wide)"],
-                ["cw","CW"],["rdsx","Advanced RDS"],["ft8","FT8"],["wefax","WEFAX"],
-                ["sstv","SSTV"],["rtty","RTTY"]];
-
-function renderChecks() {
-  $("modeChecks").innerHTML = DEMODS.map(([id,label]) =>
-    `<label><input type="checkbox" data-demod="${id}" checked><span>${label}</span></label>`).join("");
-  // ★ Advanced RDS rides on WFM. Unticking WFM must take RDS with it rather than leaving an
-  //   orphan that can never fire — an option that cannot work is worse than one that is absent.
-  const wfm = document.querySelector('[data-demod="wfm"]');
-  const rds = document.querySelector('[data-demod="rdsx"]');
-  const sync = () => { if (!wfm.checked) { rds.checked = false; } rds.disabled = !wfm.checked; };
-  wfm.addEventListener("change", sync);
-  sync();
-}
-
 function coverage() {
   const f = parseFloat($("lockFreq").value) * 1e3, r = parseFloat($("rate").value);
   if (!(f > 0 && r > 0)) { $("coverage").textContent = ""; return; }
@@ -436,11 +413,6 @@ function fill() {
   $("sessionLimit").value = cfg.sessionLimitMin || 0;
   $("uncompressed").value = String(cfg.uncompressed || 0);
   $("forceIdle").checked = !!cfg.forceIdleSaver;
-  renderChecks();
-  for (const b of (cfg.blocked || [])) {
-    const el = document.querySelector(`[data-demod="${b}"]`);
-    if (el) el.checked = false;
-  }
   setMode((cfg.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw();
 }
@@ -456,8 +428,6 @@ function addr() {
 }
 
 function collect() {
-  const blocked = DEMODS.map(([id]) => id)
-    .filter(id => !document.querySelector(`[data-demod="${id}"]`).checked);
   const locked = cfg.mode === "locked";
   return {
     mode: cfg.mode,
@@ -478,7 +448,6 @@ function collect() {
     sessionLimitMin: locked ? parseInt($("sessionLimit").value || "0", 10) : 0,
     uncompressed: parseInt($("uncompressed").value, 10),
     forceIdleSaver: $("forceIdle").checked,
-    blocked: locked ? blocked : [],
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),

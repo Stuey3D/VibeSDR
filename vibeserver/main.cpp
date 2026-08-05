@@ -477,10 +477,6 @@ int main(int argc, char** argv) {
                          ip.empty() ? "no IPv4 address found" : "no name set");
         }
     }
-    // ★ Only meaningful on a shared receiver: in single-user mode the listener owns the radio, so
-    //   there is nobody to protect the modes from.
-    LocalSdrShim::setBlockedModes(g_runtimeConfig.mode == vsconfig::Mode::LockedRange
-                                  ? g_runtimeConfig.blocked : std::vector<std::string>{});
     LocalSdrShim::setConfigHandlers(
         []() -> std::string {
             // ★ What the server is ACTUALLY RUNNING, not what the file last said. The two differ
