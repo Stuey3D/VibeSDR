@@ -32,6 +32,12 @@ SupplementaryGroups=plugdev
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
+# ★★★ PrivateTmp=yes IS SAFE ONLY BECAUSE IT LEAVES /dev/shm ALONE. The SDRplay API talks to its
+# service through SHARED MEMORY (/dev/shm/Glbl\sdrSrvDv00_*), not a socket — so the day that
+# changes, the RSP stops being detected and nothing here will say why. systemd v257 added
+# `PrivateTmp=disconnected`, which DOES give a private /dev/shm: do not "tighten" this to that
+# value, and if a future default changes under us, this is the line to suspect first.
+# ★ Verified 2026-08-06: restart with the API installed -> "SDRplay RSP detected".
 PrivateTmp=yes
 StateDirectory=vibeserver
 # ★★★ /etc/vibeserver MUST BE WRITABLE — the server now writes its own config.

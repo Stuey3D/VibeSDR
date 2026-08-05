@@ -112,3 +112,7 @@ systemctl status sdrplay_apiService     # should be active
 ★ Do this **before** starting VibeServer. Without it the server runs perfectly and reports no
 radio, which reads as broken hardware rather than a missing driver — so the message it prints
 names the download.
+
+★ **Adding an RSP later?** Install the SDRplay API whenever you like, then
+`sudo systemctl restart vibeserver` — the driver is loaded at runtime, so a restart is all it
+takes. No reinstall, and your settings are untouched.
