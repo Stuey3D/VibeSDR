@@ -1938,15 +1938,15 @@ async function showSplashConditions(): Promise<void> {
       const pred = solar?.bands?.[m.band] || '—';
       return `<tr>
         <td style="padding:1px 12px 1px 0;color:var(--amber);text-align:right">${m.band}</td>
-        <td style="padding:1px 12px 1px 0;opacity:0.8">${pred}</td>
-        <td style="padding:1px 0;opacity:0.8">${rate(m.snrDb)}` +
-        `<span style="opacity:0.45"> (${m.snrDb.toFixed(0)} dB)</span></td></tr>`;
+        <td style="padding:1px 12px 1px 0;opacity:0.95">${pred}</td>
+        <td style="padding:1px 0;opacity:0.95">${rate(m.snrDb)}` +
+        `<span style="opacity:0.6"> (${m.snrDb.toFixed(0)} dB)</span></td></tr>`;
     }).join('');
     const solarLine = solar ? ` &nbsp;·&nbsp; SFI ${solar.sfi} · K ${solar.kp}` : '';
     el.innerHTML =
-      `<div style="opacity:0.55;letter-spacing:1px;margin-bottom:4px">BAND CONDITIONS${solarLine}</div>` +
+      `<div style="opacity:0.8;letter-spacing:1px;margin-bottom:4px">BAND CONDITIONS${solarLine}</div>` +
       `<table style="margin:0 auto;border-collapse:collapse;font-size:11px">` +
-      `<tr style="opacity:0.4"><td></td><td style="padding-right:12px">PREDICTED</td>` +
+      `<tr style="opacity:0.65"><td></td><td style="padding-right:12px">PREDICTED</td>` +
       `<td>ACTUAL</td></tr>${rows}</table>`;
   } catch { /* decoration only */ }
 }
@@ -5082,7 +5082,9 @@ function buildMenu() {
   const applyShow = () => {
     wf!.showSpec = specOn;
     showBtn.classList.toggle('on', specOn);
-    showBtn.textContent = specOn ? 'SHOW' : 'HIDE';
+    // ★ A BUTTON IS LABELLED WITH WHAT IT WILL DO, not with the state it is in. This read the
+    //   state, so it said SHOW while the trace was plainly on screen (Stuart, 2026-08-06).
+    showBtn.textContent = specOn ? 'HIDE' : 'SHOW';
     // The split slider does nothing while the trace is hidden, so say so rather than letting it
     // drag with no visible effect.
     const rs = document.getElementById('specRatio') as HTMLInputElement | null;

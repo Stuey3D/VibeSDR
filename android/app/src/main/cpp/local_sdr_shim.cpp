@@ -1787,9 +1787,24 @@ struct LocalSdrShim::Impl {
             const double lo = b.dialHz, hi = b.dialHz + 3000.0;    // FT8 occupies dial..dial+3k
             // ★ BOTH EDGES AND THE NOISE REFERENCE MUST BE INSIDE THE CAPTURE. A band half in
             //   view would be measured against bins that do not exist and read as dead.
-            const double refLo = b.dialHz + 12000.0, refHi = b.dialHz + 40000.0;
-            const double edgeLo = centre - sampleRate * 0.45, edgeHi = centre + sampleRate * 0.45;
-            if (lo < edgeLo || refHi > edgeHi) continue;
+            // ★★ 0.47, NOT 0.45 — AND THE MEASUREMENT IS WHY THAT IS SAFE. The last of the span is
+            //   anti-alias roll-off, where the noise floor slopes; a fixed 0.45 kept clear of it
+            //   but also excluded 30m from a 2.5-10.5 MHz window by 24 kHz, so a receiver that
+            //   plainly covers the band reported nothing for it. What makes the wider margin
+            //   honest is that this is a DIFFERENTIAL reading: the slot and its reference sit
+            //   ~20 kHz apart, so a slowly sloping response lifts or drops both together and
+            //   largely cancels. An absolute level here would not survive the same move.
+            const double edgeLo = centre - sampleRate * 0.47, edgeHi = centre + sampleRate * 0.47;
+            if (lo < edgeLo || hi > edgeHi) continue;
+
+            // ★★ THE REFERENCE GOES WHICHEVER SIDE HAS ROOM. Pinning it ABOVE the slot dropped
+            //    30m from a 2.5-10.5 MHz window: its FT8 slot at 10.136 is comfortably inside, but
+            //    a reference at +12..40 kHz ran past the usable edge, so the band silently
+            //    vanished from a receiver that covers it perfectly well (Stuart expected
+            //    80/60/40/30 and got 80/60/40). Below is just as good a noise sample.
+            double refLo = b.dialHz + 12000.0, refHi = b.dialHz + 40000.0;
+            if (refHi > edgeHi) { refLo = b.dialHz - 40000.0; refHi = b.dialHz - 12000.0; }
+            if (refLo < edgeLo) continue;                  // no room either side: say nothing
 
             std::vector<float> sig, ref;
             for (double f = lo; f <= hi; f += binHz)       sig.push_back(dbAtHz(f));

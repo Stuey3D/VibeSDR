@@ -91,6 +91,15 @@ input, textarea, [contenteditable],
               rgba(0,0,0,0.86) 0%, rgba(0,0,0,0.66) 42%, rgba(0,0,0,0.24) 100%);
 }
 #splash > *:not(#splashSpectro) { position: relative; z-index: 2; }
+/* ★★★ THE BACKGROUND IS LIVE SPECTRUM, SO IT CANNOT BE DESIGNED AROUND. Every other page can pick
+   a text colour that suits its background; here the background is whatever the band is doing, and
+   a strong signal can put a bright vertical streak directly behind a line of text at any moment
+   (Stuart, 2026-08-06). A darker backdrop would hide the very picture the page exists to show.
+   ★ So: a dark HALO on the text itself. It costs nothing when the background is quiet and
+     guarantees the text stays readable when it is not — contrast that does not depend on luck. */
+#splash h1, #splash .sub, #splashSpectroTip, #splashConditions {
+  text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.85), 0 1px 2px rgba(0,0,0,0.95);
+}
 /* Stamps drawn INTO the canvas, so they scroll with the image rather than floating over it. */
 /* ★★★ NO left/bottom. These are left over from when this sat absolutely positioned in the
    canvas's bottom-left corner. `#splash > *:not(#splashSpectro)` now forces position:relative on
@@ -102,7 +111,7 @@ input, textarea, [contenteditable],
      applying with it. position and its offsets have to be removed together. */
 #splashSpectroTip {
   z-index: 2;
-  font-size: 10px; letter-spacing: 1px; text-indent: 1px; color: var(--text-dim); opacity: 0.75;
+  font-size: 10px; letter-spacing: 1px; text-indent: 1px; color: var(--amber); opacity: 0.8;
 }
 #splash h1 {
   margin: 0; font-size: 34px; letter-spacing: 6px; text-indent: 6px; font-weight: 600;
@@ -113,7 +122,7 @@ input, textarea, [contenteditable],
    to the right — and because each line here has DIFFERENT tracking (6px title, 2px sub, 1px tip)
    each drifts by a different amount, which is why they looked misaligned with each other rather
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
-#splash .sub { color: var(--text-dim); font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
+#splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
 #splash form { display: flex; flex-direction: column; gap: 10px; width: 320px; margin-top: 6px; }
 #splash label { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; }
 #hostRow, #pinRow { display: flex; flex-direction: column; gap: 6px; }
@@ -1679,7 +1688,7 @@ select.btn { padding: 6px 8px; }
   <div id="splashSpectroTip"></div>
   <h1>VIBESDR</h1>
   <div class="sub">VIBESERVER · WEB CLIENT</div>
-  <div id="splashListeners" class="sub" style="margin-top:-4px;opacity:0.6"></div>
+  <div id="splashListeners" class="sub" style="margin-top:-4px;opacity:0.8"></div>
   <!-- Band conditions: predicted (NOAA-derived) beside what this receiver measures. Empty and
        invisible when the profile covers no HF band — see showSplashConditions(). -->
   <div id="splashConditions" class="sub" style="margin-top:10px;font-size:11px;line-height:1.5"></div>

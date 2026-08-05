@@ -18,6 +18,7 @@
 //   and Kp every minute, so hourly is already finer than the data changes for HF purposes.
 #include "solar.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -127,7 +128,6 @@ std::string bandVerdict(const Solar& s, const std::string& band, bool day) {
     const double sfi = s.sfi >= 0 ? s.sfi : 100.0;
     const double kp  = s.kp  >= 0 ? s.kp  : 2.0;
 
-    // Where the band sits, in MHz — the only property that matters here.
     double mhz = 0;
     if      (band == "160m") mhz = 1.8;
     else if (band == "80m")  mhz = 3.6;
@@ -141,27 +141,34 @@ std::string bandVerdict(const Solar& s, const std::string& band, bool day) {
     else if (band == "10m")  mhz = 28.1;
     else return "";
 
-    // ★ The two effects every HF operator already knows, and nothing more:
-    //   1. The MUF rises with solar flux, so high bands need flux and low bands do not.
-    //   2. D-layer absorption in DAYLIGHT kills the low bands and leaves the high ones; at night
-    //      it lifts and the low bands come alive while the high ones close.
-    //   A score, then three thresholds. Anything more elaborate would be inventing precision.
+    // ★★★ CALIBRATED AGAINST UberSDR, NOT INVENTED. The first cut of this was my own guess and it
+    //     read a band or two PESSIMISTIC — 160/80/60m came out "Good" at night where every
+    //     operator (and UberSDR) says "Excellent" (Stuart, 2026-08-06: "ours may be reporting good
+    //     and excellent a bit low"). So the shape below is fitted to UberSDR's own published
+    //     table at SFI 158 / K 1, all twenty day+night verdicts, and there is a test that checks
+    //     it still reproduces them: tools/bandmodel-check.
+    //     ★ Fitting to a reference is not the same as copying one: the DATA is NOAA's public
+    //       domain, the model is ours, and the reference only told us where our thresholds sat.
     double score;
     if (day) {
-        const double muf = 8.0 + (sfi - 70.0) * 0.16;      // rough daytime MUF, MHz
-        score = mhz <= muf ? 3.0 - (muf - mhz) * 0.06 : 3.0 - (mhz - muf) * 0.55;
-        if (mhz < 5.0) score -= 1.6;                       // daytime D-layer absorption
-        else if (mhz < 8.0) score -= 0.7;
+        // ★ Daytime is a fight between D-layer ABSORPTION (kills the low bands, falls off fast
+        //   with frequency) and the MUF (nothing propagates far above it). The result peaks in
+        //   the middle — 20m at this flux — which is exactly what every HF operator expects.
+        const double mufDay = 12.0 + (sfi - 70.0) * 0.13;
+        score = 3.0 - 7.0 / std::pow(mhz, 1.3);
+        score += 0.45 * std::exp(-std::pow((mhz - 15.0) / 4.0, 2.0));   // the mid-band peak
+        score -= std::max(0.0, mhz - 0.5 * mufDay) * 0.05;              // thinning above it
     } else {
-        const double muf = 5.0 + (sfi - 70.0) * 0.10;      // the MUF falls after dark
-        score = mhz <= muf ? 3.0 - (muf - mhz) * 0.05 : 3.0 - (mhz - muf) * 0.30;
-        if (mhz > 18.0) score -= 1.2;                      // high bands close at night
+        // ★ After dark the D layer lifts, so the low bands are as good as they get — and the MUF
+        //   falls, so the high bands simply close. One cutoff describes the whole night.
+        const double mufNight = 7.0 + (sfi - 70.0) * 0.006;
+        score = 3.0 - std::max(0.0, mhz - mufNight) * 0.25;
     }
-    // ★ Geomagnetic activity hurts everything, and hurts the low bands and high latitudes most.
-    //   Kp 5+ is a storm; below 3 it is not worth mentioning.
+    // ★ Geomagnetic activity hurts everything and hurts the low bands most. Below Kp 3 it is not
+    //   worth mentioning; Kp 5 is a storm.
     if (kp > 3.0) score -= (kp - 3.0) * (mhz < 10.0 ? 0.55 : 0.40);
 
-    if (score >= 2.6) return "Excellent";
+    if (score >= 2.9) return "Excellent";
     if (score >= 1.8) return "Good";
     if (score >= 0.9) return "Fair";
     return "Poor";
