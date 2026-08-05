@@ -2789,7 +2789,18 @@ struct LocalSdrShim::Impl {
             //    write path can no longer block (per-client outbox). ~5 Hz is KEPT — that rate was
             //    fine on its own merits, since the meter's own smoothing copes and it was the
             //    SCALE that mattered, not the rate. Only the fan-out was the bug.
-            if ((n % 4) == 0) {
+            // ★★★ EVERY FRAME, NOT EVERY FOURTH. The note above concluded that "the meter's own
+            //     smoothing copes with 5 Hz; it is the SCALE that mattered, not the update rate" —
+            //     which was true of the bug it was written for (the meter borrowing the
+            //     waterfall's auto-contrast) and does not survive the next complaint: no amount of
+            //     client-side smoothing can make a meter respond faster than its measurement
+            //     ARRIVES, and at 5 Hz a signal is up to 200 ms old before the bar has been told
+            //     (Stuart, 2026-08-05: "making the SNR bar more responsive").
+            //     ★ The cost is the reason it was ever throttled, so: ~60 bytes at 20 Hz is
+            //       1.2 KB/s per listener, about 36 KB/s with thirty of them — a third of a
+            //       percent of the spectrum traffic they are already taking. It was the FAN-OUT
+            //       through a blocking write that was expensive, and that is gone.
+            {
                 char sb[128];
                 snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
                          peak, iqFloorDb.load());

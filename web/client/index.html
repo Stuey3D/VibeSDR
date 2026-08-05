@@ -266,6 +266,11 @@ html #bar { display: none; }
   /* Side by side, so the two stacks together read as the app's single four-button row. */
   .mStack { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
   .mStack .mBtn { min-height: max(2.4em, 40px); }
+  /* ★★ THE STEP BUTTON FILLS ITS CELL HERE. Its fixed 7.2em exists to stop a CONTENT-SIZED island
+     resizing when the label changes ("6.25kHz" is wider than "1k") — but this card is already a
+     fixed width a few rules up, so that reason is spent, and all the fixed width still does is
+     make one button in a 1fr 1fr grid a different size from the three around it. */
+  #mStep { width: 100%; max-width: none; }
 }
 /* ★★★ A PHONE IN LANDSCAPE TAKES THE WIDE LAYOUT. Width alone said "narrow" for both phone
    orientations, so a landscape phone got the stacked layout it has plenty of room to avoid —
@@ -287,6 +292,7 @@ html #bar { display: none; }
   #mZoomDial{ grid-column: 5; grid-row: 1; }
   .mStack { grid-template-rows: 1fr 1fr; grid-template-columns: none; }
   .mStack .mBtn { min-height: 0; }
+  #mStep { width: 100%; max-width: none; }     /* same reasoning as the portrait rule above */
 }
 /* ★★ THE OLD `max-width: 440px` RULE IS GONE. It split the two dials onto a row each, which is
    the one thing Stuart did NOT want in portrait: he pointed at the landscape screenshot and said

@@ -1510,7 +1510,10 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   if (srvSigValid) { sigDb = srvChanDb; noiseDb = srvFloorDb; }
 
   const snr = Math.max(0, sigDb - noiseDb);
-  snrSmooth += (snr - snrSmooth) * 0.2;
+  // ★ FAST UP, SLOW DOWN — the same asymmetry the bar itself uses, and for the same reason: a
+  //   meter that lags a signal appearing is useless, while one that falls back gently is readable.
+  //   A single symmetric coefficient has to be a compromise between those, and was.
+  snrSmooth += (snr - snrSmooth) * (snr > snrSmooth ? 0.55 : 0.15);
   lastSigDb = sigDb;
 
   // ★★★ THE METER HAS ITS OWN FIXED SCALE, AND MUST — IT USED TO BORROW THE WATERFALL'S.
