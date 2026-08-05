@@ -43,3 +43,26 @@ HOST=vibeserver.local node many.mjs 48000 18
   timeout expires — a later run then sees a "full" server. Wait 20 s or restart the service.
 - ★ `--fps` and bins are the two levers that decide whether this test is meaningful. If you change
   them, re-run against a deliberately broken build and confirm it still FAILS there.
+
+## `binclash.mjs` — one listener must not resize another's waterfall
+
+A joins at 4096 bins, B then joins at 128 (as the watch does). Asserts A stays at 4096 and B gets
+128. Before the per-client-width fix, A was cut to 128 and never recovered.
+
+```sh
+HOST=vibeserver.local node binclash.mjs 48000
+```
+
+## `zoommixed.mjs` — the zoom path with mixed widths
+
+Same two listeners, then A zooms in hard so the DSP zoom FFT takes over. The zoom row is produced
+at the WIDEST listener's width and peak-held down for narrower ones; both must keep streaming.
+
+★★ **Check the server log says `zoom spectrum ENGAGED`.** The first version of this test passed
+without ever engaging zoom — it was sending the wrong message type, so it proved nothing. The
+control message is `{"type":"zoom","frequency":…,"binBandwidth":…}`.
+
+## `defbins.mjs` / `bandwidth.mjs` / `bw2.mjs`
+
+`defbins` checks a client that sends no `bins` param gets the 1024 default. `bandwidth`/`bw2`
+measure bytes/sec per listener (spectrum + Opus audio) — the numbers behind the listener cap.

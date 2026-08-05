@@ -271,6 +271,20 @@ constexpr int FFT_AVG = 4;
 // The internal FFT is finer (fftSizeForRate); we downsample/crop to this.
 constexpr int OUT_BINS = 4096;
 
+// ★★★ THE SHARED WATERFALL WINDOW — 1024 bins for every listener who does not ask otherwise.
+// Stuart, 2026-08-04, naming the model: *"it needs to function like UberSDR's waterfall — a 1024
+// bin window for all users, and zooming resamples so that 1024 bins remains sharp no matter the
+// zoom level unless zoomed extremely far out."*
+// ★★ 1024 is not a compromise, because RESOLUTION COMES FROM THE ZOOM RESAMPLING, NOT THE WIDTH.
+// With --zoom-spectrum the DSP produces real bins at depth, so a 1024-bin window stays sharp all
+// the way down; a wider window only buys detail when zoomed far OUT, where there is nothing to
+// see anyway. What it costs is linear: measured on the Pi, 4096 bins is 0.50 Mb/s per listener
+// and 1024 is about a quarter of that — which on a shared receiver is the difference between
+// tens of listeners and hundreds.
+// ★ OUT_BINS stays the CEILING (a client may still ask for more, up to a GPU-safe 4096); this is
+// only what a client gets when it expresses no preference. The watch still asks for 128.
+constexpr int WIRE_BINS_DEFAULT = 1024;
+
 // Per-mode demod parameters.
 struct ModeParams {
     enum Kind { AM, SSB_USB, SSB_LSB, CW, NFM, WFM } kind;
@@ -816,11 +830,14 @@ static constexpr int        kSessionCooldownSec = 120;
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
 static std::atomic<int>    g_vsOpusBitrate{64000};
-// Client-requestable output bin count (waterfall width) — the FFT/BIN lever. Default = OUT_BINS
-// (full res, e.g. the web client). A small screen on a constrained link (the watch over Bluetooth)
-// asks for far fewer via /ws/user-spectrum?bins=N, cutting each SPEC frame from 22+OUT_BINS bytes to
-// 22+N. Clamped [128, OUT_BINS]. Single-occupant, so one global suffices.
-static std::atomic<int>    g_vsOutBins{OUT_BINS};
+// ★★★ REMOVED 2026-08-04: g_vsOutBins, the client-requestable waterfall width as a GLOBAL.
+// Its own comment justified it — "Single-occupant, so one global suffices" — and `--users 20`
+// repealed that without anyone revisiting the line. The most recent client to connect set the
+// width for EVERYBODY: a watch asking for 128 cut every browser on the server to 128 bins, and
+// they never recovered. Width is now PER CLIENT (Impl::clientBins); read it with binsFor(sock),
+// and use wireBins() for the one thing that must be single-valued — the DSP-side zoom FFT, which
+// runs at the widest listener's width so narrower ones can be peak-held down from it.
+// ★ If you are about to add another global for something a client chooses, this is the third time.
 
 // Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
 // single-client server, so lock contention is trivial.
@@ -1469,13 +1486,62 @@ struct LocalSdrShim::Impl {
      *    still the rule, though the reason has changed: sends are now queued, not blocking, so this
      *    is about not holding clientMtx across work rather than about a lock-order inversion. */
     std::vector<std::shared_ptr<net::Socket>> specExtra;
-    /** Everyone receiving spectrum right now — primary first. Call WITHOUT clientMtx held. */
+    /** ★★★ EACH LISTENER'S OWN WATERFALL WIDTH. Guarded by clientMtx, alongside the sockets.
+     *
+     *  THE BUG THIS REPLACES (2026-08-04). The requested bin count lived in ONE GLOBAL
+     *  (`g_vsOutBins`), set by whichever client connected most recently — and its declaration
+     *  said why that was thought safe: *"Single-occupant, so one global suffices."* `--users 20`
+     *  made that false and nothing revisited it. Measured on the live Pi: a browser streaming at
+     *  4096 bins was silently CUT TO 128 the moment a watch connected, and never recovered — a
+     *  32x loss of resolution on someone else's screen, caused by a stranger joining. It works the
+     *  other way too: a desktop arriving quadruples the bytes pushed at a phone that asked for 1024.
+     *  ★★ Same family as the other per-client-state-in-globals bugs. The tell is always the same:
+     *  a comment justifying a global by an occupancy assumption a later feature quietly repealed. */
+    std::map<net::Socket*, int> clientBins;
+
+    struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; };
+
+    /** Everyone receiving spectrum right now, WITH the width each asked for — primary first.
+     *  Call WITHOUT clientMtx held. */
+    std::vector<SpecPeer> allSpecPeers() {
+        std::vector<SpecPeer> out;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto add = [&](const std::shared_ptr<net::Socket>& s) {
+            auto it = clientBins.find(s.get());
+            out.push_back({s, it == clientBins.end() ? WIRE_BINS_DEFAULT : it->second});
+        };
+        if (specClient && specClient->isOpen()) add(specClient);
+        for (auto& s : specExtra) if (s && s->isOpen()) add(s);
+        return out;
+    }
+    /** Everyone receiving spectrum right now — for paths that do not care about width. */
     std::vector<std::shared_ptr<net::Socket>> allSpecClients() {
         std::vector<std::shared_ptr<net::Socket>> out;
-        std::lock_guard<std::mutex> lk(clientMtx);
-        if (specClient && specClient->isOpen()) out.push_back(specClient);
-        for (auto& s : specExtra) if (s && s->isOpen()) out.push_back(s);
+        for (auto& p : allSpecPeers()) out.push_back(p.sock);
         return out;
+    }
+    /** This client's requested width. Call WITHOUT clientMtx held. */
+    int binsFor(const std::shared_ptr<net::Socket>& s) {
+        if (!s) return WIRE_BINS_DEFAULT;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = clientBins.find(s.get());
+        return it == clientBins.end() ? WIRE_BINS_DEFAULT : it->second;
+    }
+    /** ★★ The width the DSP-side ZOOM FFT runs at: the WIDEST any listener wants.
+     *  The zoom path makes real bins in the DSP, so unlike the wide path it cannot just be rebuilt
+     *  per client — but a client wanting fewer can always be peak-held DOWN from a wider row.
+     *  Running at the max serves everyone honestly; running at the min would hand the widest
+     *  listener interpolated mush. */
+    int wireBins() {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        int n = 0;
+        auto acc = [&](const std::shared_ptr<net::Socket>& s) {
+            auto it = clientBins.find(s.get());
+            n = std::max(n, it == clientBins.end() ? WIRE_BINS_DEFAULT : it->second);
+        };
+        if (specClient && specClient->isOpen()) acc(specClient);
+        for (auto& s : specExtra) if (s && s->isOpen()) acc(s);
+        return n > 0 ? n : WIRE_BINS_DEFAULT;
     }
     /** How many listeners are attached (spectrum), with clientMtx ALREADY HELD.
      *  ★★★ THIS SPLIT IS NOT TIDINESS — IT IS THE FIX FOR A HARD DEADLOCK (2026-08-04).
@@ -1671,14 +1737,14 @@ struct LocalSdrShim::Impl {
     void updateZoomView() {
         const double shown    = displaySpan() / zoomFactor.load();
         const double srcBinHz = sampleRate / (double)fftSize;
-        const double step     = (shown / (double)g_vsOutBins.load()) / srcBinHz;
+        const double step     = (shown / (double)wireBins()) / srcBinHz;
         // ★★★ TRACK THE WIRE WIDTH. The client picks its bin count when the SPECTRUM SOCKET
         //     CONNECTS, which is after startEngine() has already built the zoom FFT — so the two
         //     disagreed, every zoom frame was dropped by the width check below, and because the
         //     wide path is suppressed while zoom owns the waterfall the display simply FROZE
         //     (Stuart, 2026-08-02: "it worked and then froze as i zoomed in"). Re-applying it here
         //     is cheap: setZoomBins only rebuilds when the number actually changes.
-        rx.setZoomBins(g_vsOutBins.load());
+        rx.setZoomBins(wireBins());
         // ★ A KILL SWITCH. The zoom path SUPPRESSES the wide one, so any fault in it takes the
         //   waterfall with it. Off = the server behaves exactly as it did before any of this.
         const bool want = !useSpy() && g_vsZoomSpectrum.load() && step < 1.0 && shown > 0.0;
@@ -1712,18 +1778,28 @@ struct LocalSdrShim::Impl {
     // A zoom frame, in the SAME wire format as onSpectrum's — same SPEC header, same bin count,
     // same dB offset — so the client needs no new code path and simply sees a sharper picture.
     void onZoomSpectrum(const float* db, int nb) {
-        // ★ Every listener gets the same frame — one radio, one view. Built ONCE, sent to all.
-        auto peers = allSpecClients();
+        // ★ One radio, one view — every listener sees the SAME spectrum. What can differ is the
+        //   WIDTH each asked to receive it at, so build one frame per distinct width.
+        auto peers = allSpecPeers();
         if (peers.empty()) return;
-        const int outBins = g_vsOutBins.load();
-        if (nb != outBins) {
+        const int wire = wireBins();
+        if (nb != wire) {
             // Must never happen now updateZoomView() tracks the wire width — but SAY SO if it
             // does. Dropping frames silently here is precisely what turned a width mismatch into
             // an unexplained frozen waterfall.
             if (zoomFrames_ >= 0) { zoomFrames_ = -1;
-                LOGI("zoom spectrum DROPPED: %d bins but the wire wants %d", nb, outBins); }
+                LOGI("zoom spectrum DROPPED: %d bins but the wire wants %d", nb, wire); }
             return;
         }
+        std::vector<int> widths;
+        for (auto& p : peers)
+            if (std::find(widths.begin(), widths.end(), p.bins) == widths.end())
+                widths.push_back(p.bins);
+        for (int outBins : widths) {
+        // ★★ The zoom row arrives at `nb` REAL bins (the widest listener's width). A listener who
+        //    asked for fewer is peak-held DOWN from it — never interpolated up — so a watch gets a
+        //    128-bin view of the same sharp data instead of forcing everyone to its width.
+        const int grp = (outBins > 0 && nb > outBins) ? (nb / outBins) : 1;
         std::vector<uint8_t> frame(22 + outBins);
         frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
         uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1743,13 +1819,19 @@ struct LocalSdrShim::Impl {
         const int half = outBins / 2;
         for (int i = 0; i < outBins; i++) {
             const int signedOut = (i <= half) ? i : i - outBins;   // same rule as onSpectrum
-            int src = half + signedOut;                            // -> index into the SHIFTED row
-            if (src < 0) src = 0; else if (src >= outBins) src = outBins - 1;
-            int v = (int)lround(db[src] + 256.0);
+            int src = (half + signedOut) * grp;                    // -> index into the SHIFTED row
+            if (src < 0) src = 0; else if (src >= nb) src = nb - 1;
+            float best = db[src];
+            for (int k = 1; k < grp && src + k < nb; k++)          // peak-hold, don't drop carriers
+                if (db[src + k] > best) best = db[src + k];
+            int v = (int)lround(best + 256.0);
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
-        for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size(), Out::Spectrum);
-        vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
+        size_t sent = 0;
+        for (auto& p : peers)
+            if (p.bins == outBins) { sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
+        vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
+        }   // end per-width loop
         if (++zoomFrames_ == 1 || zoomFrames_ % 100 == 0)
             LOGI("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
@@ -1790,8 +1872,12 @@ struct LocalSdrShim::Impl {
 
         int div = rateDivisor.load();
         bool emit = !(div > 1 && (n % (uint64_t)div) != 0);
-        auto peers = allSpecClients();          // ★ one frame, every listener
-        std::shared_ptr<net::Socket> sock = peers.empty() ? nullptr : peers.front();
+        // ★★ ONE FRAME PER DISTINCT WIDTH, not one frame for everybody. In practice that is a
+        //    single frame (all browsers) or two (a browser and a watch) — the loop below groups
+        //    peers by the width each asked for, so nobody's waterfall is resized by somebody
+        //    else's arrival. See clientBins.
+        auto peers = allSpecPeers();
+        std::shared_ptr<net::Socket> sock = peers.empty() ? nullptr : peers.front().sock;
 
         // Hybrid waterfall: the IQ FFT only covers `sampleRate` of spectrum. When the
         // user is zoomed out past that (SpyServer only, where displaySpan is wider),
@@ -1816,7 +1902,13 @@ struct LocalSdrShim::Impl {
             // applying zoom: each output bin covers `step` source bins; peak-hold
             // when downsampling (don't drop narrow carriers).
             double zoom = zoomFactor.load();
-            const int outBins = g_vsOutBins.load();
+            // Distinct widths among the listeners, so the expensive part runs once per WIDTH
+            // rather than once per listener.
+            std::vector<int> widths;
+            for (auto& p : peers)
+                if (std::find(widths.begin(), widths.end(), p.bins) == widths.end())
+                    widths.push_back(p.bins);
+            for (int outBins : widths) {
             // Source bins per output bin. Written in terms of the DISPLAY span so it
             // stays correct when that is decoupled from the IQ rate (SpyServer).
             // Reduces to bins/(zoom*outBins) whenever displaySpan == sampleRate.
@@ -1869,8 +1961,12 @@ struct LocalSdrShim::Impl {
                 // Clamp to 1, not 0 — 0 is the no-data sentinel and must stay unambiguous.
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
-            for (auto& pc : peers) sendWs(pc, 0x2, frame.data(), frame.size(), Out::Spectrum);
-            vsSpecBytes.fetch_add(frame.size() * peers.size(), std::memory_order_relaxed);
+            size_t sent = 0;
+            for (auto& p : peers)
+                if (p.bins == outBins) { sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
+            vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
+            }   // end per-width loop
+            // (byte accounting happens inside the per-width loop now)
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
             // ★ The RSP's AGC kick and its gain telemetry USED TO LIVE HERE, and that was the bug:
             //   this block is skipped whenever the zoom spectrum owns the waterfall (see `emit`
@@ -2014,7 +2110,7 @@ struct LocalSdrShim::Impl {
                     "\"settling\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
-                for (auto& pc : peers) sendText(pc, gb);
+                for (auto& p : peers) sendText(p.sock, gb);
             }
         }
 
@@ -2064,7 +2160,7 @@ struct LocalSdrShim::Impl {
                 char sb[128];
                 snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
                          peak, iqFloorDb.load());
-                for (auto& pc : peers) sendText(pc, sb);
+                for (auto& p : peers) sendText(p.sock, sb);
             }
         }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
@@ -2146,7 +2242,7 @@ struct LocalSdrShim::Impl {
         int div = rateDivisor.load();
         if (div > 1 && (frameNo % (uint64_t)div) != 0) return;
 
-        const int outBins = g_vsOutBins.load();
+        const int outBins = binsFor(sock);
         const double srcBinHz = spyFftSpan / (double)n;
         const double step = (shownHz / (double)outBins) / srcBinHz;   // src bins / out bin
         // Signed source-bin offset of the display centre from the FFT centre.
@@ -2628,7 +2724,7 @@ struct LocalSdrShim::Impl {
         cb.spectrum = &Impl::specCb;
         cb.zoomSpectrum = &Impl::zoomSpecCb;
         // The zoom FFT emits straight to the wire, so its width must BE the wire width.
-        rx.setZoomBins(g_vsOutBins.load());
+        rx.setZoomBins(wireBins());
         // ★★★ Method is fixed for the life of the engine — never switched live (Stuart,
         // 2026-08-02). Shared (fast convolution) only makes sense with a LOCKED centre, since
         // every channel is a slice of one FFT of one captured band.
@@ -2813,7 +2909,10 @@ struct LocalSdrShim::Impl {
         // must be built on the span it can actually SEE.
         const double span = displaySpan();
         double effective = span / zoomFactor.load();                  // zoom-aware span
-        const int cfgBins = g_vsOutBins.load();
+        // ★★★ THIS CLIENT'S width, not a global. sendConfig tells the client the bin count its
+        //     whole zoom/pan model is built on — handing it someone else's is the "derive a wire
+        //     value the same way at BOTH ends" bug, and it lands every zoom off by the ratio.
+        const int cfgBins = binsFor(sock);
         double binBw = effective / (double)cfgBins;                    // we emit cfgBins bins (the FFT/bin lever)
         char buf[384];
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
@@ -2833,7 +2932,11 @@ struct LocalSdrShim::Impl {
     // (binBandwidth*fftSize). Pure display-side crop in onFFT — no IQ
     // decimation, no IQFrontEnd reconfig (which would touch the uninitialised
     // headless core), no effect on audio. Capped so the crop keeps >= 16 bins.
-    void setSpan(double binBw) {
+    /** ★★★ `clientBins` IS THE SENDER'S OWN WIDTH, and it must be. The client expresses the span
+     *  it wants as binBandwidth x (the bins IT receives); interpreting that with anyone else's
+     *  count scales every zoom by exactly the ratio between them — 32x for a watch against a
+     *  desktop. Same shape as "derive a wire value the same way at BOTH ends". */
+    void setSpan(double binBw, int clientBins) {
         if (binBw <= 0) return;
         // ★★ THE CLIENT'S OWN BIN COUNT, not the constant. The client derives its
         // requested span as binBw x (the bins IT receives), which sendConfig()
@@ -2860,7 +2963,7 @@ struct LocalSdrShim::Impl {
         // must use the SAME bin count". Same bug, one field along.
         // ★ NOT filter-related: it reproduces on NFM, which is what ruled out the demod-bandwidth
         // clearance and pointed here.
-        double want = displaySpan() / (binBw * (double)g_vsOutBins.load());
+        double want = displaySpan() / (binBw * (double)clientBins);
         // ★★ ZOOM IS CAPPED BY REAL RESOLUTION, not by an arbitrary fraction.
         // The old /16 left just 16 SOURCE bins spread across ~1024 output bins —
         // a ~9 kHz span on a 2.4 MHz capture, which is 64x interpolation and
@@ -3051,7 +3154,7 @@ struct LocalSdrShim::Impl {
                 viewCenter.store(v);
                 double bb = 0.0;
                 double viewSpan = jsonNum(msg, "binBandwidth", bb) && bb > 0
-                    ? bb * (double)g_vsOutBins.load()   // same reason as setSpan()
+                    ? bb * (double)binsFor(sock)        // same reason as setSpan()
                     : displaySpan() / zoomFactor.load();
                 double dongle = dongleForView(v, viewSpan);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
@@ -3087,7 +3190,7 @@ struct LocalSdrShim::Impl {
                 }
             }
             double bb;
-            if (jsonNum(msg,"binBandwidth",bb) && bb > 0) setSpan(bb);
+            if (jsonNum(msg,"binBandwidth",bb) && bb > 0) setSpan(bb, binsFor(sock));
             // A PAN with no span change never reaches setSpan(), but it moves the view centre —
             // and the zoom channel is tuned to that centre, so it has to follow.
             else updateZoomView();
@@ -3519,7 +3622,7 @@ struct LocalSdrShim::Impl {
             int wantBins = 0;
             if (wsSpec) {
                 const std::string bq = queryParam(reqLine, "bins");
-                wantBins = bq.empty() ? OUT_BINS : atoi(bq.c_str());
+                wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
             }
             // ★ The admin password may ride the connect URL, because an override has to be
@@ -3931,7 +4034,9 @@ struct LocalSdrShim::Impl {
 
         // Slot won — NOW it is safe to adopt this client's bin count. Before the
         // occupancy check, a refused client corrupted the incumbent's stream.
-        if (wantBins > 0) g_vsOutBins.store(wantBins);
+        // ★★★ RECORD IT AGAINST THIS CLIENT, never in a global. Storing it globally is what let
+        //     a watch asking for 128 cut every browser on the server down to 128 bins.
+        if (wantBins > 0) { std::lock_guard<std::mutex> lk(clientMtx); clientBins[sock.get()] = wantBins; }
 
         // ★★ RESET PER-CLIENT RATE STATE ON ARRIVAL. `rateDivisor` is a global
         // that OUTLIVES the client that set it — nothing cleared it on connect or
@@ -4067,6 +4172,7 @@ struct LocalSdrShim::Impl {
           specExtra.erase(std::remove_if(specExtra.begin(), specExtra.end(),
               [&](const std::shared_ptr<net::Socket>& c){ return !c || c == sock || !c->isOpen(); }),
               specExtra.end());
+          clientBins.erase(sock.get());     // its width leaves with it
           if (audioClient == sock) audioClient = nullptr;
           // Free the slot once BOTH of the occupant's sockets are gone (a browser closing one tab
           // drops both). Until then a momentary spectrum reconnect must not surrender the slot to a
