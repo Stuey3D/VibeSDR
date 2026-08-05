@@ -158,7 +158,8 @@ export interface SpectrumCallbacks {
                settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   /** The server is already serving someone else — do not retry. */
-  onBusy?: () => void;
+  onBusy?: (q?: { queuePos?: number; queueLen?: number; freeIn?: number; queueFull?: boolean }) => void;
+  onYourTurn?: (withinSec: number) => void;
   /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
   onSessionWarning?: (secs: number) => void;
   /** The limit expired; we have been disconnected. `cooldown` = seconds before we may return. */
@@ -318,11 +319,24 @@ export class SpectrumClient {
         break;
       }
       case 'busy':
-        // Someone else has the radio. The server refuses one occupant at a time and closes us
-        // right after this frame — so DON'T reconnect (the default 3s retry would hammer a busy
+        // Someone else has the radio. DON'T reconnect (the default 3s retry would hammer a busy
         // server forever, which is the OWRX-style bad-neighbour behaviour we avoid elsewhere).
+        // ★★ The server now HOLDS this socket open rather than closing it, and re-sends this
+        //    frame as our place in the queue changes — so `busy` arrives repeatedly and is an
+        //    UPDATE, not just a refusal. Still terminal for reconnect purposes: the socket we
+        //    already have is the thing keeping our place, and dropping it loses it.
         this.refused = true;
-        this.cb.onBusy?.();
+        this.cb.onBusy?.({ queuePos: Number(msg.queuePos) || undefined,
+                           queueLen: Number(msg.queueLen) || undefined,
+                           freeIn:   msg.freeIn === undefined ? undefined : Number(msg.freeIn),
+                           queueFull: !!msg.queueFull });
+        break;
+      case 'your_turn':
+        // ★★★ Our turn came up. The server has RESERVED the slot for this session for a short
+        //     window, so reconnecting now is not a race — but it is also the only thing that
+        //     claims it, and the window is short.
+        this.refused = true;
+        this.cb.onYourTurn?.(Number(msg.withinSec) || 20);
         break;
       // ★★★ ALL THREE OF THESE SET `refused`, and that is the whole safety of the feature.
       // Every one is the server DELIBERATELY turning us away, and the default 3s retry would

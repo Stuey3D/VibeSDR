@@ -324,7 +324,25 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     // reduction, a target, and real loop dynamics.
     ch->tunerParams.gain.gRdB = 59;      // least gain until the AGC has settled — see setIfAgc
     setIfAgcSetPoint(-30);
-    setIfAgcDynamics(500, 500, 200, 5);
+    // ★★★ SLOW, RELUCTANT DECAY — AND A FAST ATTACK. These were SDRconnect's numbers
+    //     (500/500/200/5), and SDRconnect is tuned for a listener on ONE channel. This receiver is
+    //     locked across 8 MHz of HF, so the AGC's input is the WHOLE BAND: the Buzzer, a broadcast
+    //     carrier fading up, any one of a hundred signals nobody is listening to moves the gain for
+    //     EVERY listener at once. MEASURED on the Pi at 4625 kHz: 94 gain moves a minute, 228 dB of
+    //     travel a minute, over a 10 dB range — a change every 0.6 s, which draws as horizontal
+    //     banding across the entire waterfall (Stuart, 2026-08-05: "the AGC going up and down like
+    //     a YoYo"). tools/vibeserver-probes/agcpump.mjs is the measurement.
+    // ★★ THE ASYMMETRY IS THE WHOLE FIX, and it follows from what each half is FOR:
+    //     - ATTACK protects the ADC from a real overload, and an overload is destructive and
+    //       instant. It stays fast. Slowing it to reduce pumping would trade a cosmetic problem
+    //       for a damaging one.
+    //     - DECAY only ever buys back a few dB of sensitivity, and nothing is harmed by sitting
+    //       slightly low. Every decay step, by contrast, is a visible brightness jump across the
+    //       band for everyone watching. So it is slow, delayed, and needs a bigger excursion
+    //       before it will act at all.
+    // ★ decay_threshold is the hysteresis: 5 dB is inside the ordinary breathing of an HF band,
+    //   so the loop was chasing QSB it should have ignored. 10 dB is a real change.
+    setIfAgcDynamics(/*attack*/ 500, /*decay*/ 5000, /*decayDelay*/ 5000, /*threshold*/ 20);
     setGainTenthDb(gainTenthDb);
 
     static CbCtx ctx;

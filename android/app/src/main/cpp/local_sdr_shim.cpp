@@ -1994,6 +1994,101 @@ struct LocalSdrShim::Impl {
      *  broadcast, is what "multi-listener is BUILT BUT UNPROVEN" was really hiding.
      *  ★ Rule: a helper that takes a lock must never be called from a scope that holds it. Keep
      *  the two forms distinct and named so the next caller has to choose deliberately. */
+    /** Is every slot taken, from the point of view of session `me`? Call WITH clientMtx held.
+     *  ★ ONE predicate, shared by the accept path and the waiting loop. Two copies of this drift,
+     *    and the drift is invisible: the queue would be telling people to come back for a slot the
+     *    accept path does not agree is free. */
+    bool isFullLocked(const std::string& me) {
+        const int maxUsers = g_vsMaxUsers.load();
+        return !occupantSession.empty()
+            && occupantSession != me
+            && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()))
+            && (maxUsers <= 1 || specListenerCountLocked() >= maxUsers);
+    }
+
+    /** Seconds until the earliest slot frees, or -1 when there is no honest answer.
+     *  ★★ -1 IS A REAL ANSWER, NOT A FAILURE. With no session limit set there is no number we can
+     *     stand behind — the occupant may stay all day. "In use, no fixed session limit" is
+     *     honest; a countdown we cannot honour is worse than none, because the user WILL watch it.
+     *     Call WITH clientMtx held. */
+    int freeInSecsLocked() const {
+        const int limitMin = g_vsSessionLimitMin.load();
+        if (limitMin <= 0) return -1;
+        if (occupantSession.empty() || occupantSince <= 0) return -1;
+        if (occupantAddr.empty() || isLoopback(occupantAddr)) return -1;
+        const double left = (double)limitMin * 60.0 - (Impl::nowSecs() - occupantSince);
+        return left > 0 ? (int)(left + 0.5) : 0;
+    }
+
+    /** Hold a refused listener in the queue, telling them where they stand once a second, until
+     *  a slot frees for them or they give up. Runs on the accepting socket's own thread.
+     *  @return true if the caller should simply return (always — the socket is finished with). */
+    void holdInQueue(const std::shared_ptr<net::Socket>& sock, const std::string& me) {
+        const std::string addr = sock->peerAddress();
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            // ★ Bounded. Each waiter costs a thread and a socket; past some depth the honest
+            //   answer is "too many waiting" rather than a queue position nobody will reach.
+            if ((int)waitQueue.size() >= kMaxWaiting) {
+                sendWs(sock, 0x1, (const uint8_t*)"{\"type\":\"busy\",\"queueFull\":true}", 34);
+                outboxClose(sock);
+                return;
+            }
+            waitQueue.push_back({sock.get(), me, Impl::nowSecs()});
+        }
+        int lastPos = -1, lastFree = -2;
+        while (serverRunning.load() && sock->isOpen()) {
+            bool mine = false; int pos = 0, len = 0, freeIn = -1;
+            {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                len = (int)waitQueue.size();
+                for (int i = 0; i < len; i++)
+                    if (waitQueue[i].sock == sock.get()) { pos = i + 1; break; }
+                freeIn = freeInSecsLocked();
+                // ★★★ ONLY THE HEAD MAY CLAIM, and it claims by RESERVING ITS OWN ADDRESS. This is
+                //     what makes the position we displayed true: for the next kReservationSec no
+                //     other connection is admitted, so the person we told to come back is the
+                //     person who gets in — not whoever's client happens to retry soonest.
+                if (pos == 1 && !isFullLocked(me)
+                    && (reservedUntil <= Impl::nowSecs() || reservedFor == me)) {
+                    reservedFor  = me;
+                    reservedUntil = Impl::nowSecs() + kReservationSec;
+                    mine = true;
+                }
+            }
+            if (mine) {
+                // ★ Tell them to come back, then close. Reconnecting is what every client already
+                //   does well; continuing this socket into a session would need the whole accept
+                //   path to run again from the middle of a wait loop.
+                char msg[96];
+                int n = snprintf(msg, sizeof msg,
+                                 "{\"type\":\"your_turn\",\"withinSec\":%d}", (int)kReservationSec);
+                sendWs(sock, 0x1, (const uint8_t*)msg, (size_t)n);
+                LOGI("queue: slot reserved for %s (%s) for %ds", me.c_str(), addr.c_str(),
+                     (int)kReservationSec);
+                break;
+            }
+            if (pos != lastPos || freeIn / 5 != lastFree / 5) {   // ★ only on a real change
+                lastPos = pos; lastFree = freeIn;
+                char msg[160];
+                int n = snprintf(msg, sizeof msg,
+                    "{\"type\":\"busy\",\"queuePos\":%d,\"queueLen\":%d,\"freeIn\":%d}",
+                    pos, len, freeIn);
+                // ★ sendWs returns void; the socket's own state is the liveness signal, and the
+                //   loop condition already checks it every second.
+                sendWs(sock, 0x1, (const uint8_t*)msg, (size_t)n);
+                if (!sock->isOpen()) break;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (size_t i = 0; i < waitQueue.size(); i++)
+                if (waitQueue[i].sock == sock.get()) { waitQueue.erase(waitQueue.begin() + i); break; }
+        }
+        outboxClose(sock);
+    }
+
     int specListenerCountLocked() {
         int n = (specClient && specClient->isOpen()) ? 1 : 0;
         for (auto& s : specExtra) if (s && s->isOpen()) ++n;
@@ -2018,6 +2113,32 @@ struct LocalSdrShim::Impl {
     int occupantWarned = 0;
     /** address -> monotonic time the cooldown ends. Pruned lazily on lookup. */
     std::map<std::string, double> cooldownUntil;
+
+    // ── The waiting queue ──────────────────────────────────────────────────────────────────
+    // ★★★ THE QUEUE *IS* THE SET OF WAITING SOCKETS, IN ARRIVAL ORDER. A refused listener used to
+    //     be told "busy" and closed, which gives a person nothing to decide with — so they hammer
+    //     reconnect, which our own cooldown then punishes. Holding the socket open instead means
+    //     the queue needs no heartbeat, no expiry guess and no reaping: a waiter who gives up
+    //     closes their socket and is gone, which is precisely the semantics we want and the only
+    //     one that cannot drift out of step with reality.
+    // ★★★ AND THE HEAD CLAIMS THE SLOT ITSELF. Showing someone "1st in the queue" and then handing
+    //     the freed slot to whoever reconnects fastest is a lie the user can see. When the head
+    //     notices a free slot it takes a short RESERVATION on its own address; every other
+    //     connection is refused for its duration. A promised order the server does not keep is
+    //     worse than telling them nothing (Stuart, 2026-08-04).
+    struct Waiter { const net::Socket* sock; std::string who; double since; };
+    std::vector<Waiter> waitQueue;              // arrival order; front = next served
+    // ★★★ KEYED BY SESSION, NOT BY ADDRESS. The very same trap the occupancy check already
+    //     documents: "browsers on the SAME machine share an IP but have different ids — which is
+    //     why IP won't do". Reserving an ADDRESS means two people behind one NAT, or two tabs on
+    //     one laptop, are the same claimant — so the second waiter walks into the slot the server
+    //     just promised to the first, which is the exact failure the queue exists to prevent.
+    //     Caught by queue.mjs, where both waiters are on 127.0.0.1.
+    std::string reservedFor;                    // SESSION the next free slot belongs to
+    double      reservedUntil = 0;              // ... until this time, then anyone may take it
+    static constexpr int    kMaxWaiting      = 24;   // bounds the threads we hold open
+    static constexpr double kReservationSec  = 25.0; // long enough to reconnect, short enough to
+                                                     // not strand the slot if they walked away
     std::atomic<uint64_t> frameCounter{0};
 
     // ── ★★★ PER-CLIENT OUTBOX — see BUG-vibeserver-broadcast-blocks.md ──────────
@@ -4540,6 +4661,10 @@ struct LocalSdrShim::Impl {
                              // there is room. Costs nothing — the picker already fetches this.
                              + ",\"listeners\":" + std::to_string(LocalSdrShim::instance().listenerCount())
                              + ",\"maxUsers\":" + std::to_string(g_vsMaxUsers.load())
+                             // ★ AND HOW MANY ARE WAITING. A full server with nobody queued and a
+                             // full server with six people ahead of you are very different
+                             // propositions, and only one of them is worth waiting for.
+                             + ",\"waiting\":" + std::to_string(LocalSdrShim::instance().waitingCount())
                              + ",\"limitMin\":" + std::to_string(g_vsSessionLimitMin.load())
                              // Seconds the current listener has left, -1 = no limit / free. Lets
                              // the picker say "free in 4 min" instead of a bare "in use", which
@@ -4783,7 +4908,9 @@ struct LocalSdrShim::Impl {
         // (that was the case that still fought). A socket with no id at all (an old client, or a raw
         // probe) is treated as its own anonymous occupant so it can't silently share the slot.
         {
-            std::lock_guard<std::mutex> lk(clientMtx);
+            // ★ unique_lock, not lock_guard: the queue path below hands this thread off to
+            //   holdInQueue(), which needs the mutex free and takes it itself once a second.
+            std::unique_lock<std::mutex> lk(clientMtx);
             const std::string me = session.empty() ? ("anon:" + sock->peerAddress()) : session;
 
             // ★★ COOLDOWN FIRST — before occupancy. Someone serving a cooldown must be refused
@@ -4810,14 +4937,20 @@ struct LocalSdrShim::Impl {
             // ★★★ FULL, not merely OCCUPIED. With a cap above 1 a second listener is welcome —
             //     that is the whole point of the shared receiver — so the refusal only applies once
             //     every slot is taken. At --users 1 this is exactly the old behaviour.
-            const int maxUsers = g_vsMaxUsers.load();
-            const bool occupied = !occupantSession.empty()
-                && occupantSession != me
-                && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()))
-                // ★★★ ...Locked — WE ALREADY HOLD clientMtx HERE. Calling the locking form
-                //     deadlocked this thread against itself and froze the whole server for
-                //     every listener. See specListenerCountLocked().
-                && (maxUsers <= 1 || specListenerCountLocked() >= maxUsers);
+            // ★★★ ...Locked — WE ALREADY HOLD clientMtx HERE. Calling the locking form
+            //     deadlocked this thread against itself and froze the whole server for
+            //     every listener. See specListenerCountLocked().
+            bool occupied = isFullLocked(me);
+            // ★★★ A LIVE RESERVATION REFUSES EVERYONE ELSE, EVEN THOUGH A SLOT IS FREE. That is
+            //     the entire value of the queue: we told someone they were next, and this is the
+            //     window in which that has to be true. Without it the freed slot goes to whoever
+            //     reconnects fastest and the position we displayed was decoration.
+            //     ★ Same shape as the cooldown check above — refuse on a FREE radio, deliberately.
+            if (!occupied && reservedUntil > Impl::nowSecs() && reservedFor != me)
+                occupied = true;
+            // ★ The holder arriving CONSUMES the reservation — otherwise it keeps refusing
+            //   everyone else for the rest of its window after it has already done its job.
+            if (!occupied && reservedFor == me) { reservedFor.clear(); reservedUntil = 0; }
 
             // ★★★ ADMIN OVERRIDE — the ONE case where takeover is allowed, and it must not
             // restart the reconnect war that made takeover the wrong default everywhere else.
@@ -4864,9 +4997,10 @@ struct LocalSdrShim::Impl {
                 // client shows "in use, try again later" and must NOT retry-storm — see the web
                 // client's handling of type:"busy".
                 LOGI("%s WS refused — server busy (occupant present)", isAudio ? "audio" : "spectrum");
-                sendWs(sock, 0x1,
-                       (const uint8_t*)"{\"type\":\"busy\"}", 15);
-                outboxClose(sock);   // drain, then close — see outboxClose()
+                // ★★ HOLD THEM, DO NOT HANG UP. Releases clientMtx first: holdInQueue takes it
+                //    itself, once a second, for the life of the wait.
+                lk.unlock();
+                holdInQueue(sock, me);
                 return;
             }
             // ★ Start the clock on a NEW occupant only. A client opens two sockets (spectrum
@@ -6494,6 +6628,12 @@ bool LocalSdrShim::isBusy() const {
          || (p->audioClient && p->audioClient->isOpen()));
 }
 int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0; }
+
+int LocalSdrShim::waitingCount() const {
+    if (!p) return 0;
+    std::lock_guard<std::mutex> lk(p->clientMtx);
+    return (int)p->waitQueue.size();
+}
 
 int LocalSdrShim::occupantSecsLeft() const {
     const int limitMin = g_vsSessionLimitMin.load();

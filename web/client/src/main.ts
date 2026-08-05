@@ -523,7 +523,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onSummon: () => onSummoned(),
-    onBusy: () => showBusy(),
+    onBusy: (q) => showBusy(q),
+    // ★ Our turn. The slot is reserved for this session for a few seconds only, and a reload is
+    //   the honest claim: it re-runs the preflight and opens both sockets cleanly, exactly as the
+    //   admin-override path does. Anything cleverer races the reservation window for no gain.
+    onYourTurn: () => {
+      showRefusal('YOUR TURN', 'A slot has freed up and is being held for you.<br><br>Connecting…', false);
+      setTimeout(() => location.reload(), 600);
+    },
     onEvicted: () => showEvicted(),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
@@ -1777,6 +1784,27 @@ function updateStatus() {
 // megabytes for a picture):
 //   "VSPG" | u8 ver | u16 bins | u16 rows | f64 centreHz | f64 spanHz
 //   then per row: i64 epoch-ms, then `bins` bytes of dB
+/** ★★ WHO IS ALREADY HERE. Stuart asked for the count on the landing page as well as in the
+ *  status bar — and it is the same question the queue answers: a visitor deciding whether to
+ *  bother wants to know there is room BEFORE they press START, not after they are refused.
+ *  ★ Silent on failure. This is decoration on a page that must work without it; a server that
+ *    does not answer (or an older one with no `waiting` field) simply shows nothing. */
+async function showSplashListeners(): Promise<void> {
+  const el = document.getElementById('splashListeners');
+  if (!el) return;
+  try {
+    const r = await fetch('/vibeserver/identity', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const n = Number(j.listeners) || 0, max = Number(j.maxUsers) || 0, wait = Number(j.waiting) || 0;
+    if (!max) return;
+    let txt = `${n} LISTENING OF ${max}`;
+    if (wait > 0) txt += ` · ${wait} WAITING`;
+    else if (n >= max) txt += ' · FULL';
+    el.textContent = txt;
+  } catch { /* decoration only */ }
+}
+
 async function drawSplashSpectrogram(): Promise<void> {
   const cv = document.getElementById('splashSpectro') as HTMLCanvasElement | null;
   if (!cv) return;
@@ -1895,11 +1923,48 @@ async function drawSplashSpectrogram(): Promise<void> {
     // y=0 is the OLDEST row (top), y=H the newest — same as the drawing above.
     const ms = tFirst + (tLast - tFirst) * (k / steps);
     g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    const ty = Math.min(H - 14 * px, y + 3 * px);
+    // ★★ KEEP CLEAR OF THE FREQUENCY ROW. The oldest stamp sits at y=0, which is exactly where
+    //    the frequency labels are drawn, so "21:16" and "2.500 MHz" printed on top of each other
+    //    in the top-left corner (Stuart, 2026-08-05). Push it below that row rather than skipping
+    //    it — the oldest time is the one that tells you how far back the picture goes.
+    //    ★ Safe to nudge because the collision rule below still runs: if the nudge pushes it into
+    //      the next stamp, that one is dropped rather than stacked.
+    const kTopReserved = 19 * px;
+    const ty = Math.min(H - 14 * px, Math.max(kTopReserved, y + 3 * px));
     if (ty < lastBottom + 4 * px) continue;
     g.fillText(hhmm(ms), 4 * px, ty);
     lastBottom = ty + 12 * px;
   }
+  // ── BAND LABELS ALONG THE BOTTOM ─────────────────────────────────────────────────────────
+  // Stuart asked for the same aesthetic as the frequency scale above: |   40M Ham Band   | with
+  // the framing rules ON THE LABEL'S OWN ROW, so the band is bracketed rather than underlined.
+  // ★ A label is drawn only if its band's visible width can actually hold the text — a clipped
+  //   band name reads as a different band, which is worse than an unlabelled stretch of edge.
+  const lo = centre - span / 2, hi = centre + span / 2;
+  // ★ Clear of #splashSpectroTip, which is an HTML element sitting over the bottom-left of
+  //   this canvas — the labels are drawn INTO the image and cannot know about it.
+  const bandY = H - 30 * px;
+  for (const b of BAND_PLAN) {
+    if (b.regions && !b.regions.includes(1)) continue;   // one region's plan, not three overlaid
+    if (b.hi <= lo || b.lo >= hi) continue;
+    const x0 = ((Math.max(b.lo, lo) - lo) / span) * (W - 1);
+    const x1 = ((Math.min(b.hi, hi) - lo) / span) * (W - 1);
+    const label = b.bandLabel ? `${b.bandLabel.toUpperCase()} ${b.name.replace(b.bandLabel, '').trim()}` : b.name;
+    const w = g.measureText(label).width;
+    if (x1 - x0 < w + 18 * px) continue;                 // no room to say it honestly
+    const mid = (x0 + x1) / 2;
+    // The two framing rules sit on the label's row and stop short of the text, which is what
+    // makes it read as a bracket rather than a strikethrough.
+    g.beginPath();
+    g.moveTo(x0 + 2 * px, bandY + 5 * px); g.lineTo(mid - w / 2 - 6 * px, bandY + 5 * px);
+    g.moveTo(mid + w / 2 + 6 * px, bandY + 5 * px); g.lineTo(x1 - 2 * px, bandY + 5 * px);
+    // Uprights at the edges, so the band is closed off at both ends.
+    g.moveTo(x0 + 2 * px, bandY); g.lineTo(x0 + 2 * px, bandY + 10 * px);
+    g.moveTo(x1 - 2 * px, bandY); g.lineTo(x1 - 2 * px, bandY + 10 * px);
+    g.stroke();
+    g.fillText(label, mid - w / 2, bandY);
+  }
+
   const tip = document.getElementById('splashSpectroTip');
   if (tip) {
     const mins = Math.round((tLast - tFirst) / 60000);
@@ -2367,14 +2432,34 @@ function showDeviceBanner(present: boolean) {
   document.body.appendChild(el);
 }
 
-/** The server is already serving another listener. One radio, one occupant, until multi-client
- *  lands — so say so plainly and STOP (the client already suppressed its auto-reconnect). A full
- *  overlay, not a toast: nothing else on the page will work, and a dismissable banner would just
- *  invite the user to sit staring at a dead waterfall. */
-function showBusy() {
-  showRefusal('IN USE',
-    'This server is serving another listener. It handles one at a time.<br><br>' +
-    'Try again in a little while.',
+/** The server is full. A full overlay, not a toast: nothing else on the page will work, and a
+ *  dismissable banner would just invite the user to sit staring at a dead waterfall.
+ *  ★★★ A REFUSAL WITH NO INFORMATION IS THE WORST SCREEN WE CAN SHOW. "Try again later" gives a
+ *      person nothing to decide with, so they sit hammering reload — which our own cooldown then
+ *      punishes. "Free in 4:12, you are 2nd in the queue" turns a dead end into a wait, and a wait
+ *      is something someone will actually sit through (Stuart, 2026-08-04).
+ *  ★ Called REPEATEDLY as our position changes — the server holds the socket open and re-sends.
+ *    So this updates in place and must not stack overlays. */
+function showBusy(q?: { queuePos?: number; queueLen?: number; freeIn?: number; queueFull?: boolean }) {
+  const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  let body: string;
+  if (q?.queueFull) {
+    body = 'This server is full, and so is its waiting queue.<br><br>Please try again later.';
+  } else {
+    // ★★ ONLY PROMISE A TIME WE CAN HONOUR. freeIn < 0 means no session limit is set, so there is
+    //    no honest number — the occupant may stay all day. A countdown we cannot keep is worse
+    //    than none, because the user WILL sit and watch it.
+    const when = (q?.freeIn !== undefined && q.freeIn >= 0)
+      ? `A slot should free up in <b>${mmss(q.freeIn)}</b>.`
+      : 'This server has no fixed session limit, so there is no reliable estimate.';
+    const place = q?.queuePos
+      ? (q.queuePos === 1
+          ? 'You are <b>next in line</b> — keep this page open and you will be let in automatically.'
+          : `You are <b>${q.queuePos} of ${q.queueLen ?? q.queuePos}</b> waiting. Keep this page open to hold your place.`)
+      : '';
+    body = `This server is serving as many listeners as it allows.<br><br>${when}<br><br>${place}`;
+  }
+  showRefusal('IN USE', body,
     // ★ The override box is offered ONLY on the IN USE screen, and only when the server says
     // it HAS an admin password. Offering it everywhere would invite listeners to try guessing
     // it, and offering it on a server with no password set is a puzzle with no answer.
@@ -2421,7 +2506,18 @@ function showCooldown(secs: number) {
 
 function showRefusal(title: string, bodyHtml: string, offerOverride = false) {
   const id = 'busyOverlay';
-  if (document.getElementById(id)) return;
+  // ★★ UPDATE IN PLACE, do not bail. This used to return early if the overlay existed, which was
+  //    right when every refusal was a one-shot. The queue re-sends our position and the countdown
+  //    once a second, so bailing would freeze the display on whatever it said first — a countdown
+  //    stuck at 4:12 is worse than no countdown, because the user trusts it and waits.
+  const existing = document.getElementById(id);
+  if (existing) {
+    const t = existing.querySelector('[data-refusal-title]');
+    const b = existing.querySelector('[data-refusal-body]');
+    if (t) t.textContent = title;
+    if (b) b.innerHTML = bodyHtml;
+    return;
+  }
   // ★★★ STOP THE AUDIO SOCKET TOO. It reconnects every 3s on its own (audio.ts:430,
   // guarded only by `closedByUs`), and the spectrum's `refused` flag does not reach
   // it — so after a session ended, the audio path kept knocking and got back IN the
@@ -2437,9 +2533,9 @@ function showRefusal(title: string, bodyHtml: string, offerOverride = false) {
     'display:flex;align-items:center;justify-content:center;text-align:center;' +
     'font:15px ui-monospace,monospace;color:#ffb833';
   el.innerHTML =
-    '<div style="max-width:340px;padding:24px"><div style="font-size:20px;letter-spacing:4px;' +
+    '<div style="max-width:340px;padding:24px"><div data-refusal-title style="font-size:20px;letter-spacing:4px;' +
     `margin-bottom:12px">${title}</div>` +
-    `<div style="opacity:0.8;line-height:1.5">${bodyHtml}</div>` +
+    `<div data-refusal-body style="opacity:0.8;line-height:1.5">${bodyHtml}</div>` +
     '<button id="busyRetry" style="margin-top:18px;background:none;border:1px solid rgba(255,180,50,0.5);' +
     'color:#ffb833;border-radius:6px;padding:8px 18px;font:13px ui-monospace,monospace;cursor:pointer">' +
     'Try again</button></div>';
@@ -6022,6 +6118,7 @@ initSplash();
 //   new row lands every second for the first five minutes, so a server that has just been set up
 //   visibly fills in while somebody reads the page.
 drawSplashSpectrogram();
+showSplashListeners();
 setInterval(() => {
   const sp = document.getElementById('splash');
   if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();
