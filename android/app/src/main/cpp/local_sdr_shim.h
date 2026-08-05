@@ -143,6 +143,11 @@ public:
      *  wizard makes that mandatory, so it can no longer stand in for this. Drives the
      *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */
     static void setConfigured(bool on);
+    /** ★★★ Demodulators/decoders the owner has switched off. ENFORCED (a client can send any mode
+     *  it likes) and PUBLISHED on hwinfo (so clients hide them rather than offering something that
+     *  will be refused). Both, or neither works: an unenforced list is decoration, and a control
+     *  that is visible and refused reads as a broken feature, not a blocked one. */
+    static void setBlockedModes(const std::vector<std::string>& modes);
     static bool isConfigured();
 
     /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */

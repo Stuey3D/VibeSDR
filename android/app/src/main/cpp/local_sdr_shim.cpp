@@ -839,6 +839,24 @@ static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 // ★ Has the owner finished browser setup? NOT the same question as "is an admin password set".
 static std::atomic<bool>             g_vsConfigured{false};
+
+// ── ★★★ DEMODULATORS AND DECODERS THE OWNER HAS SWITCHED OFF ─────────────────────────────────
+// Stored as what is BLOCKED, never what is allowed, so a build that adds a demodulator does not
+// silently disable it on every existing server.
+// ★★★ AND IT IS ENFORCED HERE, not merely advertised. A client can send `mode=wfm` whatever the
+//     UI drew — an unenforced list is decoration. The list is ALSO published so clients can HIDE
+//     what is blocked: per AGENTS.md, a control that is visible and refused reads as "the feature
+//     is broken", not "the owner turned it off". Publish, enforce, hide — all three, or none of it
+//     works.
+static std::mutex               g_vsBlockedMtx;
+static std::vector<std::string> g_vsBlocked;
+
+static bool vsModeBlocked(const std::string& m) {
+    if (m.empty()) return false;
+    std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
+    for (const auto& b : g_vsBlocked) if (b == m) return true;
+    return false;
+}
 // ★★★ REMOVED 2026-08-04: g_vsOutBins, the client-requestable waterfall width as a GLOBAL.
 // Its own comment justified it — "Single-occupant, so one global suffices" — and `--users 20`
 // repealed that without anyone revisiting the line. The most recent client to connect set the
@@ -3208,6 +3226,10 @@ struct LocalSdrShim::Impl {
         }
         if (type == "tune") {
             std::string m = jsonStr(msg, "mode");
+            // ★★ BOTH entry points must check. "tune" carries a mode as well as a frequency, so
+            //    guarding only the "mode" message would leave the block trivially bypassable by
+            //    the message clients send most often.
+            if (vsModeBlocked(m)) { refuseMode(sock, m); m.clear(); }
             bool rebuilt = false;
             if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
@@ -3217,6 +3239,7 @@ struct LocalSdrShim::Impl {
         }
         if (type == "mode") {
             std::string m = jsonStr(msg, "mode");
+            if (vsModeBlocked(m)) { refuseMode(sock, m); return; }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
             if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
@@ -3345,6 +3368,15 @@ struct LocalSdrShim::Impl {
 
     // VibeServer: advertise the tuner's supported gains to the client so its gain
     // slider has real dB steps (it can't query the remote device natively).
+    /** ★ SAY WHY, don't just ignore it. A mode request that vanishes silently looks like a bug in
+     *  the radio; "the owner has switched this off on this receiver" is information the listener
+     *  can act on. Clients that honour the published list never get here — this is the backstop
+     *  for older clients and for anything speaking the protocol directly. */
+    void refuseMode(const std::shared_ptr<net::Socket>& sock, const std::string& m) {
+        LOGI("mode %s refused — blocked by the owner", m.c_str());
+        if (sock) sendText(sock, "{\"type\":\"mode_blocked\",\"mode\":\"" + jsonEscape(m) + "\"}");
+    }
+
     void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
         std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
         std::string j = "{\"type\":\"hwinfo\",\"gains\":[";
@@ -3402,6 +3434,18 @@ struct LocalSdrShim::Impl {
         // destroying RDS all evening. A client cannot present that honestly unless it is
         // told, so it is told.
         j += LocalSdrShim::instance().radioCapsJson();
+        // ★★★ WHAT THE OWNER HAS SWITCHED OFF. Exactly the principle stated below, applied to
+        //     demodulators: the server refuses these, so a client that is not told draws them
+        //     normally and the user finds out by picking one and getting nothing. Told, the
+        //     client can leave them out of the menu entirely — which reads as "this receiver is
+        //     for HF", not "wide FM is broken here".
+        {   std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
+            j += ",\"blocked\":[";
+            for (size_t i = 0; i < g_vsBlocked.size(); i++) {
+                if (i) j += ',';
+                j += "\"" + jsonEscape(g_vsBlocked[i]) + "\"";
+            }
+            j += "]"; }
         // ★★ IS THERE AN ADMIN PASSWORD, AND ARE WE THROUGH IT? Advertised for the same reason
         // as everything else here: the server ENFORCES the lock (bias-T, PPM, direct sampling
         // and calibration all go through adminGate), but a client that is not told simply draws
@@ -5503,6 +5547,10 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     g_vsConfigSet = std::move(set);
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
+void LocalSdrShim::setBlockedModes(const std::vector<std::string>& modes) {
+    std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
+    g_vsBlocked = modes;
+}
 bool LocalSdrShim::isConfigured() { return g_vsConfigured.load(); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }

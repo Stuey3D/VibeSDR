@@ -403,6 +403,10 @@ int main(int argc, char** argv) {
     // turns GET/POST /vibeserver/config from 501 into a working endpoint — and the browser setup
     // page is a CLIENT of it, so the app becomes a second client later with no work here.
     LocalSdrShim::setConfigured(g_runtimeConfig.configured);
+    // ★ Only meaningful on a shared receiver: in single-user mode the listener owns the radio, so
+    //   there is nobody to protect the modes from.
+    LocalSdrShim::setBlockedModes(g_runtimeConfig.mode == vsconfig::Mode::LockedRange
+                                  ? g_runtimeConfig.blocked : std::vector<std::string>{});
     LocalSdrShim::setConfigHandlers(
         []() -> std::string {
             // ★ What the server is ACTUALLY RUNNING, not what the file last said. The two differ
