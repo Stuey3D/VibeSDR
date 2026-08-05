@@ -840,6 +840,18 @@ static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 // ★ Has the owner finished browser setup? NOT the same question as "is an admin password set".
 static std::atomic<bool>             g_vsConfigured{false};
 
+// ── ★★★ WHERE A NEW SESSION STARTS — the owner's landing frequency and mode ──────────────────
+// The VFO is SERVER state and survives the listener who moved it, which is correct for a shared
+// receiver mid-session and wrong for the first person through the door: Stuart set 7074 USB,
+// connected, and landed wherever the previous session had left the radio (2026-08-05).
+// ★★ APPLIED WHEN THE LISTENER COUNT GOES 0 -> 1, not on every connect. Applying it per-connect
+//    would YANK a group already listening together every time somebody joined — the shared
+//    receiver's whole premise is one radio, one VFO, one view. A fresh session is the only moment
+//    at which "where new listeners start" is unambiguous.
+static std::atomic<double>  g_vsLandingHz{0.0};
+static std::mutex           g_vsLandingMtx;
+static std::string          g_vsLandingMode;
+
 // ── ★★★ DEMODULATORS AND DECODERS THE OWNER HAS SWITCHED OFF ─────────────────────────────────
 // Stored as what is BLOCKED, never what is allowed, so a build that adds a demodulator does not
 // silently disable it on every existing server.
@@ -2663,6 +2675,9 @@ struct LocalSdrShim::Impl {
         if (n > 0) sendText(dx, std::string(buf, (size_t)n));
     }
     void startSpots() {
+        // ★ FT8/FT4 spots are the third door — subscribe_digital_spots, not a mode and not an
+        //   extension attach. Same rule: if the owner switched FT8 off, it stays off.
+        if (vsModeBlocked("ft8")) { LOGI("digital spots refused — FT8 blocked by the owner"); return; }
         std::lock_guard<std::mutex> lk(spotsMtx);
         if (spotsActive) return;
         delete ft8; delete ft4;
@@ -2941,7 +2956,7 @@ struct LocalSdrShim::Impl {
         //     value the same way at BOTH ends" bug, and it lands every zoom off by the ratio.
         const int cfgBins = binsFor(sock);
         double binBw = effective / (double)cfgBins;                    // we emit cfgBins bins (the FFT/bin lever)
-        char buf[384];
+        char buf[512];   // grew when vfo/locked were added — a truncated JSON config is fatal
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
         // to this so you can't zoom out past the actual RTL bandwidth.
         // ★ mode: the server is AUTHORITATIVE on its own starting demodulator (the owner sets it,
@@ -2949,9 +2964,22 @@ struct LocalSdrShim::Impl {
         // wfm — the UI showed NFM with a thin NFM passband until you clicked a mode. The client
         // adopts this on the first config when it has no remembered session.
         snprintf(buf, sizeof buf,
+            // ★★★ `vfo` — WHERE THE RADIO IS ACTUALLY TUNED, and the client was never told.
+            //     Without it a joining listener has no way to know, so it falls back on its own
+            //     remembered frequency and immediately tunes away from where the server put it.
+            //     That is what made the owner's landing frequency look ignored: the server DID
+            //     land on 7074, and the client moved straight off it (Stuart, 2026-08-05).
+            //     ★ Same reasoning as `mode` two fields along, which already exists for exactly
+            //       this: the server is authoritative about its own radio.
+            //     ★★ It matters most on a SHARED receiver, where there is one VFO and a joiner
+            //        must adopt it rather than impose one — otherwise the last person to connect
+            //        silently retunes the radio for everybody already listening.
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
-            "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,\"mode\":\"%s\"}",
-            (long long)llround(viewCenter.load()), cfgBins, binBw, effective, span, mode.c_str());
+            "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,"
+            "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s}",
+            (long long)llround(viewCenter.load()), cfgBins, binBw, effective, span, mode.c_str(),
+            (long long)llround(audioFreq.load()),
+            g_vsLockedCentre.load() > 0.0 ? "true" : "false");
         sendText(sock, buf);
     }
 
@@ -4291,7 +4319,11 @@ struct LocalSdrShim::Impl {
             //     `specClient`, so the primary keeps them all working unchanged, and the extras get
             //     the frames and the config in the broadcast loops.
             bool asExtra = false;
+            bool firstOfSession = false;
             { std::lock_guard<std::mutex> lk(clientMtx);
+              // ★ Nobody listening yet? Then this is a NEW SESSION and the owner's landing
+              //   frequency applies. Counted under the lock, applied outside it.
+              firstOfSession = (specListenerCountLocked() == 0);
               // prune anything that has gone away since
               specExtra.erase(std::remove_if(specExtra.begin(), specExtra.end(),
                   [](const std::shared_ptr<net::Socket>& c){ return !c || !c->isOpen(); }),
@@ -4302,6 +4334,18 @@ struct LocalSdrShim::Impl {
                   stale = specClient;
                   specClient = sock;
               } }
+            // ── ★★★ LAND A NEW SESSION WHERE THE OWNER SAID ────────────────────────────
+            // Before sendConfig, so the client is told the frequency it is actually on rather
+            // than being told one thing and then moved.
+            if (firstOfSession) {
+                const double hz = g_vsLandingHz.load();
+                std::string lm; { std::lock_guard<std::mutex> lk(g_vsLandingMtx); lm = g_vsLandingMode; }
+                if (!lm.empty() && lm != mode) { mode = lm; buildAudio(); }
+                if (hz > 0) retune(hz);
+                if (hz > 0 || !lm.empty())
+                    LOGI("new session — landing on %.3f kHz %s", hz / 1e3,
+                         lm.empty() ? mode.c_str() : lm.c_str());
+            }
             sendConfig(sock); sendHwInfo(sock);
             if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
@@ -4411,8 +4455,33 @@ struct LocalSdrShim::Impl {
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
     }
 
-    void startDecoder(const std::string& msg) {
+    /** Returns false if the owner has blocked this decoder. ★ The caller MUST honour it:
+     *  replying "attached" after a refusal contradicts the refusal in the very next message, and
+     *  the client believes the second one. */
+    bool startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
+        // ★★★ THE BLOCK LIST MUST COVER DECODERS TOO — AND IT DID NOT.
+        // Enforcement was written against the `mode`/`tune` messages, which is where DEMODULATORS
+        // are chosen. But Advanced RDS, WEFAX, SSTV, FT8 and RTTY are not modes: they attach
+        // through THIS path, as extensions. So an owner who unticked "Advanced RDS" got a setting
+        // that was stored, published, and enforced nowhere at all — the listener simply opened it
+        // (Stuart, 2026-08-05: "I disabled WFM and advanced RDS and can still access them").
+        // ★★ The lesson is the shape, not the line: a permission list has to be applied at EVERY
+        //    door, and this feature has two. Adding a new decoder means adding it here as well.
+        // ★ The setup page's id for Advanced RDS is `rdsx`; on the wire the extension is `rds`.
+        //   Map deliberately rather than renaming either — the wire name is protocol, the page
+        //   name is what the owner reads.
+        {
+            const std::string blockName = (ext == "rds") ? "rdsx" : ext;
+            if (vsModeBlocked(blockName)) {
+                LOGI("decoder %s refused — blocked by the owner", ext.c_str());
+                std::shared_ptr<net::Socket> dx;
+                { std::lock_guard<std::mutex> lk(clientMtx); dx = dxClient; }
+                if (dx) sendText(dx, "{\"type\":\"mode_blocked\",\"mode\":\""
+                                     + jsonEscape(blockName) + "\"}");
+                return false;
+            }
+        }
         // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
         // fields we normally discard, plus the constellation). It attaches through the same
         // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
@@ -4426,11 +4495,11 @@ struct LocalSdrShim::Impl {
             // ★ It replaces an operator setting that also widened the channel filter; that half
             // was measured to cost 10 dB of RDS SNR and has been removed entirely.
             rx.setRdsNoiseCorrection(true);
-            return;
+            return true;
         }
-        if (ext == "sstv")  { startSstv(msg);  return; }
+        if (ext == "sstv")  { startSstv(msg);  return true; }
         bool navtex = (ext == "navtex");
-        if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
+        if (ext != "fsk" && !navtex) return true;   // RTTY / NAVTEX (or an ext handled elsewhere)
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
         if (!jsonNum(msg, "center_frequency", cf)) cf = navtex ? 500.0 : 1000.0;
         if (!jsonNum(msg, "shift", sh)) sh = navtex ? 170.0 : 170.0;
@@ -4448,6 +4517,7 @@ struct LocalSdrShim::Impl {
         };
         decoder->onState = [this](int st) { sendDecoderState(st); };
         LOGI("decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
+        return true;
     }
     void startWefax(const std::string& msg) {
         WefaxDecoder::Config cfg;
@@ -4589,8 +4659,12 @@ struct LocalSdrShim::Impl {
             if (op != 0x1) continue;
             std::string type = jsonStr(payload, "type");
             if (type == "audio_extension_attach") {
-                startDecoder(payload);
-                sendText(sock, "{\"type\":\"audio_extension_attached\"}");
+                // ★★ ONLY SAY "attached" IF IT ACTUALLY ATTACHED. This replied unconditionally,
+                //    so a refused decoder was told "mode_blocked" and then "attached" in the very
+                //    next message — and a client believes the second one. A refusal contradicted
+                //    one line later is not a refusal.
+                if (startDecoder(payload))
+                    sendText(sock, "{\"type\":\"audio_extension_attached\"}");
             } else if (type == "audio_extension_detach") {
                 stopDecoder();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
@@ -5563,6 +5637,11 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     g_vsConfigSet = std::move(set);
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
+void LocalSdrShim::setVibeServerLanding(double hz, const std::string& mode) {
+    g_vsLandingHz.store(hz > 0 ? hz : 0.0);
+    std::lock_guard<std::mutex> lk(g_vsLandingMtx);
+    g_vsLandingMode = mode;
+}
 void LocalSdrShim::setBlockedModes(const std::vector<std::string>& modes) {
     std::lock_guard<std::mutex> lk(g_vsBlockedMtx);
     g_vsBlocked = modes;

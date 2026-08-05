@@ -501,7 +501,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         // First config. Resume where this server was left, if we've been here
         // before; otherwise park the VFO at the view centre.
         const last = lastTuned();
-        spec!.frequency = last?.hz ?? cfg.centerFreq;
+        // ★★ A RETURNING VISITOR KEEPS THEIR DIAL; a new one lands where the OWNER said.
+        //    Stuart, 2026-08-05: "its fine when the user has visited the server before, the
+        //    settings are remembered like they are in the app — this is for new users and users
+        //    who have cleared their cookies."
+        //    ★ cfg.centerFreq is the VIEW centre, not the VFO. On a locked receiver the view sits
+        //      at the locked centre, so falling back to it parked a first-time visitor on the
+        //      middle of the band instead of the owner's landing frequency. Same precedence the
+        //      line below already uses for mode: remembered > server > client default.
+        spec!.frequency = last?.hz ?? cfg.serverVfo ?? cfg.centerFreq;
         // Server's mode wins over the client's built-in default on a fresh visit — the owner can
         // set the starting demodulator, and defaulting to nfm showed the wrong mode + a thin NFM
         // passband until the user clicked. A remembered session still wins over both.
@@ -509,6 +517,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         setMode(initialMode, !!last);
         renderFreq();
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
+        // ★ A first-time visitor must be TUNED to the landing frequency, not merely shown it —
+        //   setting spec.frequency only moves the dial readout; the demodulator has to be told.
+        else if (cfg.serverVfo) spec!.tune(cfg.serverVfo, initialMode, { recenter: true });
       }
     },
     onSummon: () => onSummoned(),

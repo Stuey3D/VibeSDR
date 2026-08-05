@@ -48,6 +48,11 @@ export interface Config {
   maxBandwidth: number;
   /** The server's own demodulator, if it reported one — authoritative for a fresh client's mode. */
   serverMode?: string;
+  /** ★ Where the RADIO is actually tuned (Hz), from the server. Distinct from centerFreq, which
+   *  is the VIEW centre — on a locked receiver the view sits at the locked centre while the VFO
+   *  is wherever the owner's landing frequency put it. A first-time visitor has nothing
+   *  remembered, so without this it parked on the view centre instead of where it was sent. */
+  serverVfo?: number;
 }
 
 export interface RdsMeta {
@@ -286,6 +291,7 @@ export class SpectrumClient {
           totalBandwidth: msg.totalBandwidth ?? this.cfg.totalBandwidth,
           maxBandwidth:   msg.maxBandwidth ?? this.cfg.maxBandwidth,
           serverMode:     typeof msg.mode === 'string' ? msg.mode : this.cfg.serverMode,
+          serverVfo:      typeof msg.vfo === 'number' && msg.vfo > 0 ? msg.vfo : this.cfg.serverVfo,
         };
         this.cfg = cfg;
         // ★ Never let the view be WIDER than the capture. On a sample-rate DROP the device span

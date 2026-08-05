@@ -143,6 +143,10 @@ public:
      *  wizard makes that mandatory, so it can no longer stand in for this. Drives the
      *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */
     static void setConfigured(bool on);
+    /** ★★ Where a NEW SESSION starts: the owner's landing frequency (Hz) and demodulator.
+     *  Applied when the listener count goes 0 -> 1, never on every connect — the shared receiver
+     *  is one radio and one VFO, so landing each joiner would yank the group already listening. */
+    static void setVibeServerLanding(double hz, const std::string& mode);
     /** ★★★ Demodulators/decoders the owner has switched off. ENFORCED (a client can send any mode
      *  it likes) and PUBLISHED on hwinfo (so clients hide them rather than offering something that
      *  will be refused). Both, or neither works: an unenforced list is decoration, and a control

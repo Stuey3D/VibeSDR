@@ -450,6 +450,11 @@ int main(int argc, char** argv) {
     // turns GET/POST /vibeserver/config from 501 into a working endpoint — and the browser setup
     // page is a CLIENT of it, so the app becomes a second client later with no work here.
     LocalSdrShim::setConfigured(g_runtimeConfig.configured);
+    // ★ Where a NEW session starts. Falls back to the startup frequency when the owner has not
+    //   set a separate landing one, so "where new listeners start" always means something.
+    LocalSdrShim::setVibeServerLanding(
+        g_runtimeConfig.landingFreq > 0 ? g_runtimeConfig.landingFreq : g_runtimeConfig.freq,
+        g_runtimeConfig.demodMode);
 
     // ── ★★★ mDNS: ADVERTISE THE NAME THE OWNER CHOSE ────────────────────────────────────────
     // This was STORED and never acted on — main.cpp never called startMdns at all, so the Linux
