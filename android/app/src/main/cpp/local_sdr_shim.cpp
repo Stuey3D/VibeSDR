@@ -1599,7 +1599,15 @@ struct LocalSdrShim::Impl {
         std::vector<uint8_t> bins;      // dB, same u8 scale as a waterfall row
         int64_t  atMs = 0;              // wall clock, for the time stamps down the side
     };
-    static constexpr int kSpectroBins = 512;    // narrower than a waterfall: this is an overview
+    // ★★★ RESOLUTION IS THE WHOLE POINT OF ONE OF THESE. At 512 bins over an 8 MHz window each
+    //     bin was 15.6 kHz — wider than an AM channel, so every broadcast station smeared into its
+    //     neighbours and the picture read as coloured fog. The reference (UberSDR, 0-30 MHz at
+    //     ~4096 bins) is 7.3 kHz/bin and you can pick out individual carriers.
+    //     ★ The detail is already there and was being thrown away: the shared FFT is 32768 bins
+    //       across the capture — 244 Hz/bin at 8 MSPS. Storing 2048 keeps 3.9 kHz/bin, sharper
+    //       than the thing we are copying, and costs 1440 x 2048 = ~3 MB of RAM on a box with
+    //       gigabytes.
+    static constexpr int kSpectroBins = 2048;
     static constexpr int kSpectroRows = 1440;   // 24 h at one row per minute
     static constexpr int kFastRows    = 300;    // the first 5 minutes, at one row per second
     std::mutex               spectroMtx;
@@ -4157,11 +4165,20 @@ struct LocalSdrShim::Impl {
         // ★ Deliberately NOT admin-gated: it is the public face of the receiver, and it shows
         //   nothing a listener could not see by watching the waterfall for a day.
         } else if (reqLine.rfind("GET /vibeserver/spectrogram", 0) == 0) {
+            // ★★ The caller says how big its canvas is; we downsample to fit. Sending the full
+            //    2048 x 1440 (~3 MB) to draw on a 900-pixel-wide splash would be paying for detail
+            //    the screen cannot show — and on a landing page, load time IS the feature.
+            //    ★ Peak-hold when reducing, never averaging: a narrow carrier must survive, which
+            //      is the only reason anyone looks at one of these.
+            int wantBins = atoi(queryParam(reqLine, "bins").c_str());
+            int wantRows = atoi(queryParam(reqLine, "rows").c_str());
+            if (wantBins <= 0 || wantBins > kSpectroBins) wantBins = kSpectroBins;
+            if (wantRows <= 0) wantRows = kSpectroRows;
             std::vector<uint8_t> out;
             {
                 std::lock_guard<std::mutex> lk(spectroMtx);
-                const uint16_t nb = (uint16_t)kSpectroBins;
-                const uint16_t nr = (uint16_t)spectro.size();
+                const uint16_t nb = (uint16_t)wantBins;
+                const uint16_t nr = (uint16_t)std::min<size_t>(spectro.size(), (size_t)wantRows);
                 const double centre = g_vsLockedCentre.load() > 0 ? g_vsLockedCentre.load()
                                                                   : rtlCenter.load();
                 const double span = displaySpan();
@@ -4172,7 +4189,25 @@ struct LocalSdrShim::Impl {
                 out.push_back(1);
                 put(&nb, 2); put(&nr, 2);
                 put(&centre, 8); put(&span, 8);
-                for (auto& r : spectro) { put(&r.atMs, 8); put(r.bins.data(), r.bins.size()); }
+                // ★ Newest rows win when there are more than asked for: a landing page showing
+                //   the last few hours in detail beats one showing a day as mush.
+                const size_t skip = spectro.size() - (size_t)nr;
+                size_t idx = 0;
+                for (auto& r : spectro) {
+                    if (idx++ < skip) continue;
+                    put(&r.atMs, 8);
+                    if (nb == kSpectroBins) { put(r.bins.data(), r.bins.size()); continue; }
+                    std::vector<uint8_t> row((size_t)nb);
+                    for (int i = 0; i < nb; i++) {
+                        const int lo = (int)((int64_t)i * kSpectroBins / nb);
+                        const int hi = (int)((int64_t)(i + 1) * kSpectroBins / nb);
+                        uint8_t best = 0;
+                        for (int j = lo; j < hi && j < kSpectroBins; j++)
+                            if (r.bins[j] > best) best = r.bins[j];
+                        row[i] = best;
+                    }
+                    put(row.data(), row.size());
+                }
             }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
                           "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\n"

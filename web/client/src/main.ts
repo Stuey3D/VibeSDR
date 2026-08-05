@@ -1780,9 +1780,13 @@ function updateStatus() {
 async function drawSplashSpectrogram(): Promise<void> {
   const cv = document.getElementById('splashSpectro') as HTMLCanvasElement | null;
   if (!cv) return;
+  // ★ Ask for exactly what this canvas can draw. More is wasted bytes on a landing page; fewer
+  //   is the blur we are trying to get rid of.
+  const wantW = Math.min(2048, Math.max(512, Math.floor(cv.clientWidth  * devicePixelRatio)));
+  const wantH = Math.min(1440, Math.max(180, Math.floor(cv.clientHeight * devicePixelRatio)));
   let buf: ArrayBuffer;
   try {
-    const r = await fetch('/vibeserver/spectrogram', { cache: 'no-store' });
+    const r = await fetch(`/vibeserver/spectrogram?bins=${wantW}&rows=${wantH}`, { cache: 'no-store' });
     if (!r.ok) return;
     buf = await r.arrayBuffer();
   } catch { return; }
@@ -1801,18 +1805,41 @@ async function drawSplashSpectrogram(): Promise<void> {
 
   // ★ Rows are drawn NEWEST AT THE BOTTOM, matching the live waterfall — a visitor should not
   //   have to re-learn which way time runs between the landing page and the receiver.
-  const img = g.createImageData(bins, rows);
   const bytes = new Uint8Array(buf);
+  // ★★★ AUTO-CONTRAST, from the data itself. A fixed dB window is what made this read as fog:
+  //     the noise floor moves with the band, the time of day and the aerial, so a hard-coded
+  //     range either crushes everything into one colour or blows the strong carriers flat.
+  //     Percentiles rather than min/max — one lightning crash would otherwise set the top of the
+  //     scale and darken the entire day.
+  const hist = new Uint32Array(256);
+  for (let r = 0; r < rows; r++) {
+    const off = 25 + r * (8 + bins) + 8;
+    for (let i = 0; i < bins; i++) hist[bytes[off + i]]++;
+  }
+  const total = rows * bins;
+  const pct = (p: number) => {
+    let seen = 0;
+    for (let v = 0; v < 256; v++) { seen += hist[v]; if (seen >= total * p) return v; }
+    return 255;
+  };
+  // ★ Tuned by rendering the Pi's real HF band and LOOKING at it, not by taste. 0.10/0.995 with
+  //   a 0.62 gamma washed the noise floor into a glow and the carriers stopped standing out;
+  //   0.25/0.999 straight was so dark only the strongest lines showed. This keeps the floor dark
+  //   enough to read band structure while carriers stay bright.
+  const loV = pct(0.30), hiV = Math.max(loV + 6, pct(0.998));
+
+  const img = g.createImageData(bins, rows);
   for (let r = 0; r < rows; r++) {
     const off = 25 + r * (8 + bins) + 8;
     for (let i = 0; i < bins; i++) {
       const v = bytes[off + i];
       // Same amber ramp as the waterfall, so the two read as one instrument.
-      const t = Math.max(0, Math.min(1, (v - 150) / 90));
+      // Gamma lifts the mid-levels: linear, almost everything sat at the bottom of the ramp.
+      const t = Math.pow(Math.max(0, Math.min(1, (v - loV) / (hiV - loV))), 0.80);
       const p = ((rows - 1 - r) * bins + i) * 4;
-      img.data[p]     = Math.min(255, 40 + t * 255);
-      img.data[p + 1] = Math.min(255, t * t * 210);
-      img.data[p + 2] = Math.min(255, t * t * t * 90);
+      img.data[p]     = Math.min(255, 30 + t * 225);
+      img.data[p + 1] = Math.min(255, Math.pow(t, 1.5) * 230);
+      img.data[p + 2] = Math.min(255, Math.pow(t, 2.6) * 130);
       img.data[p + 3] = 255;
     }
   }
@@ -1820,7 +1847,10 @@ async function drawSplashSpectrogram(): Promise<void> {
   const tmp = document.createElement('canvas');
   tmp.width = bins; tmp.height = rows;
   tmp.getContext('2d')!.putImageData(img, 0, 0);
-  g.imageSmoothingEnabled = true;
+  // ★ NEAREST-NEIGHBOUR. We now ask the server for roughly one bin per device pixel, so
+  //   smoothing has nothing to interpolate and only softens carriers that are one pixel wide —
+  //   which are exactly the ones worth seeing.
+  g.imageSmoothingEnabled = false;
   g.drawImage(tmp, 0, 0, W, H);
 
   // ── STAMPS ───────────────────────────────────────────────────────────────────────────────
@@ -1833,7 +1863,11 @@ async function drawSplashSpectrogram(): Promise<void> {
   g.strokeStyle = 'rgba(255,200,120,0.20)';
   g.lineWidth = 1 * px;
 
-  // Frequency, across the top — five ticks, MHz.
+  // Frequency, across the top. ★ THE GRID LINES ALWAYS DRAW; the LABELS are skipped when they
+  //   would collide. Clamping a label back into view instead — which is what this did — stacks
+  //   the leftmost two on top of each other on a narrow window and neither is readable.
+  //   A missing label is a small loss; two labels superimposed is worse than none.
+  let lastRight = -1e9;
   for (let k = 0; k <= 4; k++) {
     const x = (W - 1) * (k / 4);
     const hz = centre - span / 2 + span * (k / 4);
@@ -1841,7 +1875,9 @@ async function drawSplashSpectrogram(): Promise<void> {
     const label = `${(hz / 1e6).toFixed(3)} MHz`;
     const w = g.measureText(label).width;
     const tx = Math.max(2 * px, Math.min(W - w - 2 * px, x - w / 2));
+    if (tx < lastRight + 8 * px) continue;      // would touch the previous one — leave it out
     g.fillText(label, tx, 4 * px);
+    lastRight = tx + w;
   }
   // Time, down the left — oldest at the top, newest at the bottom.
   const tFirst = Number(dv.getBigInt64(25, true));
@@ -1850,13 +1886,19 @@ async function drawSplashSpectrogram(): Promise<void> {
     const d = new Date(ms);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   };
-  const steps = 4;
+  // ★ Same rule down the side, and fewer steps on a short panel — five time stamps in 200 pixels
+  //   is a stack, not a scale.
+  const steps = H < 260 * px ? 2 : 4;
+  let lastBottom = -1e9;
   for (let k = 0; k <= steps; k++) {
     const y = (H - 1) * (k / steps);
     // y=0 is the OLDEST row (top), y=H the newest — same as the drawing above.
     const ms = tFirst + (tLast - tFirst) * (k / steps);
     g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    g.fillText(hhmm(ms), 4 * px, Math.min(H - 14 * px, y + 3 * px));
+    const ty = Math.min(H - 14 * px, y + 3 * px);
+    if (ty < lastBottom + 4 * px) continue;
+    g.fillText(hhmm(ms), 4 * px, ty);
+    lastBottom = ty + 12 * px;
   }
   const tip = document.getElementById('splashSpectroTip');
   if (tip) {
