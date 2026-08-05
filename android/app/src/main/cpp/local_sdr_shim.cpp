@@ -1491,6 +1491,8 @@ struct LocalSdrShim::Impl {
      *  listener who OPENED them — fed from the shared VFO they decode a signal nobody chose,
      *  which is what they did before per-client tuning existed. */
     std::string decoderSession;
+    /** Is any decoder socket open? Read on every listener's audio path, so it must be cheap. */
+    std::atomic<bool> decoderAttached{false};
     std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
     std::mutex decBufMtx;
 
@@ -1910,11 +1912,12 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = c->audio; }
         if (!sock || !sock->isOpen()) return;
-        // ★ The decoders follow whoever opened them — see decoderSession.
-        {
-            std::string who;
-            { std::lock_guard<std::mutex> lk(clientMtx); who = decoderSession; }
-            if (!who.empty() && who == c->session) {
+        // ★ The decoders follow whoever opened them — see decoderOwner().
+        //   Guarded on dxClient so that with no decoder attached — the usual case — this costs an
+        //   atomic read rather than clientMtx and a map scan on EVERY listener's every audio block.
+        if (decoderAttached.load(std::memory_order_relaxed)) {
+            auto owner = decoderOwner();
+            if (owner && owner.get() == c) {
                 std::vector<stereo_t> st((size_t)frames);
                 for (int i = 0; i < frames; i++) {
                     st[i].l = pcm[i * ch];
@@ -5312,6 +5315,7 @@ struct LocalSdrShim::Impl {
         // stops draining its decoder stream must not stall the decoders for everyone else.
         outboxOpen(sock);
         { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; decoderSession = session; }
+        decoderAttached.store(true, std::memory_order_relaxed);
         LOGI("dxcluster (decoder) WS connected");
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
@@ -5355,8 +5359,9 @@ struct LocalSdrShim::Impl {
         bool stillCurrent;
         { std::lock_guard<std::mutex> lk(clientMtx);
           stillCurrent = (dxClient == sock);
-          if (stillCurrent) dxClient = nullptr; }
-        if (stillCurrent) { stopDecoder(); stopSpots(); }
+          if (stillCurrent) { dxClient = nullptr; decoderSession.clear(); } }
+        if (stillCurrent) { decoderAttached.store(false, std::memory_order_relaxed);
+                            stopDecoder(); stopSpots(); }
         outboxClose(sock);
         LOGI("dxcluster WS disconnected%s", stillCurrent ? "" : " (superseded — kept decoder)");
     }
@@ -5484,12 +5489,38 @@ struct LocalSdrShim::Impl {
      *  ★ Copies the client list under the lock and works OUTSIDE it: this runs on the DSP thread,
      *  and holding clientMtx across a whole block of demodulation would stall every connect and
      *  disconnect behind it. */
-    /** This listener's channel, by its SPECTRUM socket. Null when per-client DSP is off. */
+    /** This listener's channel, by EITHER of its sockets. Null when per-client DSP is off.
+     *  ★★★ EITHER, and that is not defensive coding — the two clients differ.
+     *  The web client sends its control messages over the SPECTRUM socket; the iOS app sends
+     *  `tune` over the AUDIO socket, from VibePowerModule, because that is where its native audio
+     *  path lives. Keyed on the spectrum socket alone, the app's tune found no listener, fell
+     *  through to the shared handler and moved a VFO nobody was listening to: the waterfall
+     *  followed the dial and the audio stayed where it started (Stuart, 2026-08-05, on an iPhone).
+     *  ★ A lookup that only works for the client you happened to test with is a trap for whoever
+     *    adds the third one. */
     std::shared_ptr<ClientDsp> dspFor(const std::shared_ptr<net::Socket>& sock) {
         if (!sock) return nullptr;
         std::lock_guard<std::mutex> lk(clientMtx);
         auto it = clientDsp.find(sock.get());
-        return it == clientDsp.end() ? nullptr : it->second;
+        if (it != clientDsp.end()) return it->second;
+        for (auto& kv : clientDsp) if (kv.second->audio == sock) return kv.second;
+        return nullptr;
+    }
+
+    /** The listener whose audio drives the decoders. ★ Falls back to the FIRST listener when the
+     *  decoder socket carried no session id — every client shipped before this did exactly that,
+     *  and without the fallback their decoders simply never receive audio: RDS, WEFAX, SSTV and
+     *  FT8 all silently dead (Stuart, 2026-08-05: "none of the decoders are working"). */
+    std::shared_ptr<ClientDsp> decoderOwner() {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (!decoderSession.empty())
+            for (auto& kv : clientDsp)
+                if (kv.second->session == decoderSession) return kv.second;
+        if (specClient) {
+            auto it = clientDsp.find(specClient.get());
+            if (it != clientDsp.end()) return it->second;
+        }
+        return clientDsp.empty() ? nullptr : clientDsp.begin()->second;
     }
 
     /** ★★ A browser opens its spectrum and audio sockets AS A PAIR, in no guaranteed order, and

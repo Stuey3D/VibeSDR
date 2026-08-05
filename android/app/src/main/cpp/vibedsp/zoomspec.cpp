@@ -23,7 +23,15 @@ ZoomSpectrum::ZoomSpectrum(double sampleRate, Method m, int bins)
     //    channel twice as wide as the view (so extract()'s band-edge roll-off lands outside it),
     //    which halves the ratio again, so it needs 4x. Cheap: the transform is small, and the
     //    channel rate doubles alongside the window, so the frame rate is unchanged.
-    fftN_ = bins_ * (m == Method::Shared ? 4 : 2);
+    // ★★★ 4x THE OUTPUT WIDTH FOR BOTH METHODS. push_() crops fftN_ down to
+    //     reqSpan/rawSpan of itself and refuses to go below bins_ ("never stretch"). Halving the
+    //     decimation to make room for the anti-alias transition (see configure()) also halves
+    //     that ratio to just under 1/2 — so at 2x width the crop hit the floor, the frame then
+    //     covered MORE span than the client was told, and every signal was drawn ~4% closer to
+    //     centre than it really is. Silent, and a second phantom in its own right.
+    //     ★ Keep this in step with the halving in configure(): the invariant is
+    //       reqSpan/rawSpan > bins_/fftN_, and it is the clamp in push_() that enforces it badly.
+    fftN_ = bins_ * 4;
     fft_ = std::make_unique<ComplexFFT>(fftN_);
     win_.resize(fftN_);
     nuttallWindow(win_.data(), fftN_);
@@ -57,6 +65,21 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
     // The Shared method also needs at least a few bins per channel for the slice to mean
     // anything, and chanBins = fftSize/D, so D is capped by the forward FFT size.
     const int kSharedFft = 32768;
+    // ★★★ ONE OCTAVE OF MARGIN, FOR BOTH METHODS — THIS IS WHAT KILLS THE PHANTOM STATIONS.
+    //     Picked so that rawSpan is barely wider than the request, this left NO transition band:
+    //     the view showed +/-120 kHz of a 250 kHz stream, so the anti-alias filter had 5 kHz to
+    //     get from passband to stopband. It cannot, and everything it fails to reject FOLDS INTO
+    //     THE PICTURE as a signal that is not there — a real station 155 kHz below the view centre
+    //     reappearing 95 kHz above it, MEASURED (tools/vibeserver-probes/zoomaxis.mjs).
+    //     ★★ That is exactly what Stuart hit on the air (2026-08-05): "tuned to 6070 I can see
+    //        something at 6035, but when I click it to tune to it its empty space and the signal
+    //        that was there disappears." It disappears because the fold is relative to the VIEW
+    //        CENTRE, so retuning moves it — and the audio channel is extracted separately and
+    //        correctly, so there was never anything on that frequency to hear.
+    //     ★ Shared already did this, for a different reason (keeping extract()'s roll-off outside
+    //       the crop). The reason generalises: HALF THE DECIMATION, THEN CROP. Direct was left
+    //       out, and Direct is the method the per-listener view channel actually uses.
+    if (method_ == Method::Direct && d > 1) d /= 2;
     if (method_ == Method::Shared) {
         // ★★ TAKE A CHANNEL TWICE AS WIDE AS THE VIEW. extract() rolls its band edges off to keep
         //    the impulse response inside the overlap (see channelizer.cpp); halving the decimation
@@ -123,8 +146,18 @@ void ZoomSpectrum::rebuild_() {
             const bool last = (rem / st) == 1;
             // Last stage defines the view edge, so it gets the deep stopband; the others only
             // have to keep the fold-in below the noise.
+            // ★★★ THE LAST STAGE'S CUTOFF MUST SCALE WITH ITS OWN FACTOR. `cutoff` is
+            //     cycles/sample of this stage's INPUT, so a fixed 0.40 passes content out to
+            //     0.40*fs — fine when the last stage decimates by 8 (Nyquist 0.0625*fs is far
+            //     below it... and it never mattered because the earlier stages had already
+            //     band-limited), and catastrophic when it decimates by 2, whose output Nyquist is
+            //     0.25*fs. Everything from 0.25 to 0.40 folds back in. The number was chosen for
+            //     one shape of cascade and then used for all of them.
+            //     ★ 0.40/st keeps the passband edge in the same place RELATIVE TO THE OUTPUT
+            //       BAND, which is what "the last stage defines the view edge" was always meant
+            //       to say, and the stopband then starts at 0.5/st = the output Nyquist exactly.
             decs_.push_back(std::make_unique<FirDecimator>(
-                last ? designLowpass(0.40, 0.10, /*deepStop=*/true)
+                last ? designLowpass(0.40 / st, 0.10 / st, /*deepStop=*/true)
                      : designLowpass(0.5 / st, 0.25 / st), st));
             rem /= st;
         }
