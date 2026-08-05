@@ -840,6 +840,7 @@ static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
+static LocalSdrShim::SolarFn       g_vsSolarFn;
 // The RSP front end as the owner last left it. -1 = never set.
 static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
 
@@ -1744,6 +1745,86 @@ struct LocalSdrShim::Impl {
      *  ★ Averaged, not sampled: a single FFT row once a minute would catch whatever happened in
      *  that 40 ms and call it a minute of band activity. Averaging every row between emissions is
      *  what makes a quiet band look quiet instead of speckled. */
+    // ── Band conditions, MEASURED HERE ───────────────────────────────────────────────────────
+    // ★★★ WHAT THIS RECEIVER CAN ACTUALLY HEAR, which is the half of "band conditions" that solar
+    //     indices can never tell you. A prediction models the ionosphere over a region; this is one
+    //     aerial in one garden, and for someone deciding whether to listen HERE it is the more
+    //     useful number. UberSDR publishes the same idea as `ft8_snr` per band.
+    // ★★ FREE, BECAUSE THE FFT IS ALREADY PAID FOR. The FT8 windows for every band inside the
+    //    captured span sit in the wide spectrum we compute anyway, so this is a few hundred bin
+    //    reads every five seconds — no decoder, no extra DSP, nothing that scales with listeners.
+    // ★ FT8 was chosen for the same reason everyone uses it: it is on, worldwide, in a known
+    //   3 kHz slot, at all hours. Its slot being busy or empty is a real statement about
+    //   propagation into this location.
+    struct BandMeas { const char* label; double dialHz; float snrDb; double at; };
+    std::vector<BandMeas> bandMeas;
+    double bandMeasAt = 0;
+
+    /** One reading per band whose FT8 slot is inside the captured span. Called from the spectrum
+     *  path, which already holds the averaged FFT. */
+    void measureBands(const float* sum, int bins, int n) {
+        if (bins <= 0 || n <= 0 || g_vsLockedCentre.load() <= 0.0) return;
+        const double now = Impl::nowSecs();
+        if (now - bandMeasAt < 5.0) return;          // ★ 0.2 Hz: conditions do not change faster
+        bandMeasAt = now;
+
+        static const BandMeas kBands[] = {
+            {"160m", 1840000, 0, 0}, {"80m",  3573000, 0, 0}, {"60m",  5357000, 0, 0},
+            {"40m",  7074000, 0, 0}, {"30m", 10136000, 0, 0}, {"20m", 14074000, 0, 0},
+            {"17m", 18100000, 0, 0}, {"15m", 21074000, 0, 0}, {"12m", 24915000, 0, 0},
+            {"10m", 28074000, 0, 0},
+        };
+        const double inv   = 1.0 / (double)n;
+        const double binHz = sampleRate / (double)bins;
+        const double centre = rtlCenter.load() + HW_OFFSET_HZ;
+        auto dbAtHz = [&](double hz) -> float {
+            const int idx = bins / 2 + (int)llround((hz - centre) / binHz);
+            return (idx < 0 || idx >= bins) ? -200.0f : (float)(sum[idx] * inv);
+        };
+
+        std::vector<BandMeas> out;
+        for (const auto& b : kBands) {
+            const double lo = b.dialHz, hi = b.dialHz + 3000.0;    // FT8 occupies dial..dial+3k
+            // ★ BOTH EDGES AND THE NOISE REFERENCE MUST BE INSIDE THE CAPTURE. A band half in
+            //   view would be measured against bins that do not exist and read as dead.
+            const double refLo = b.dialHz + 12000.0, refHi = b.dialHz + 40000.0;
+            const double edgeLo = centre - sampleRate * 0.45, edgeHi = centre + sampleRate * 0.45;
+            if (lo < edgeLo || refHi > edgeHi) continue;
+
+            std::vector<float> sig, ref;
+            for (double f = lo; f <= hi; f += binHz)       sig.push_back(dbAtHz(f));
+            for (double f = refLo; f <= refHi; f += binHz) ref.push_back(dbAtHz(f));
+            if (sig.size() < 4 || ref.size() < 8) continue;
+            std::sort(sig.begin(), sig.end());
+            std::sort(ref.begin(), ref.end());
+            // ★ A HIGH PERCENTILE OF THE SLOT against a LOW percentile of its neighbourhood: the
+            //   slot's peak is the signals in it, the neighbourhood's floor is the noise. Using a
+            //   mean either side would let one strong carrier next door flatter a dead band.
+            const float s90 = sig[(size_t)(sig.size() * 0.90)];
+            const float r10 = ref[(size_t)(ref.size() * 0.10)];
+            BandMeas m = b;
+            m.snrDb = s90 - r10;
+            m.at    = now;
+            out.push_back(m);
+        }
+        std::lock_guard<std::mutex> lk(clientMtx);
+        bandMeas.swap(out);
+    }
+
+    /** JSON array of what we measured. Empty when the captured span holds no FT8 slot — which is
+     *  the correct answer on an FM profile, and must read as "nothing to say" rather than "zero". */
+    std::string bandMeasJson() {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        std::string j = "[";
+        for (size_t i = 0; i < bandMeas.size(); i++) {
+            char b[128];
+            snprintf(b, sizeof b, "%s{\"band\":\"%s\",\"snrDb\":%.1f}",
+                     i ? "," : "", bandMeas[i].label, bandMeas[i].snrDb);
+            j += b;
+        }
+        return j + "]";
+    }
+
     void spectroFeed(const float* sum, int bins, int n) {
         if (bins <= 0 || n <= 0 || g_vsLockedCentre.load() <= 0.0) return;   // fixed profile only
         // ★ fftAccum holds SUMS over FFT_AVG frames, not averages — the caller divides at its own
@@ -3126,6 +3207,7 @@ struct LocalSdrShim::Impl {
         //   for everybody and cannot be moved by a listener. Feeding it from anyone's per-client
         //   view would make a 24-hour image out of wherever individual people happened to look.
         spectroFeed(fftAccum.data(), (int)fftAccum.size(), accumCount);
+        measureBands(fftAccum.data(), (int)fftAccum.size(), accumCount);
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
         accumCount = 0;
     }
@@ -5160,6 +5242,23 @@ struct LocalSdrShim::Impl {
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        } else if (reqLine.rfind("GET /vibeserver/conditions", 0) == 0) {
+            // ★★ BOTH HALVES IN ONE REPLY, because the whole point is the comparison: what the
+            //    solar numbers SUGGEST beside what this receiver can actually HEAR. Two endpoints
+            //    would let a page render half of it and imply the other half agrees.
+            // ★ `measured` is empty when the captured span holds no FT8 slot — an FM profile has
+            //   nothing to say about HF, and saying nothing is the correct answer. The page must
+            //   render that as absence, never as zeroes.
+            LocalSdrShim::SolarFn sfn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); sfn = g_vsSolarFn; }
+            std::string body = "{\"measured\":" + bandMeasJson();
+            if (sfn) { const std::string sol = sfn(); if (!sol.empty()) body += ",\"solar\":" + sol; }
+            body += "}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
+
         } else if (reqLine.rfind("GET /vibeserver/eibi", 0) == 0) {
             // ★ The daemon owns the fetching (it has the filesystem and the network); the shim
             //   only exposes it, and on a phone no handler is registered so this reports
@@ -7176,6 +7275,10 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsConfigGet = std::move(get);
     g_vsConfigSet = std::move(set);
+}
+void LocalSdrShim::setSolarHandler(SolarFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsSolarFn = std::move(fn);
 }
 void LocalSdrShim::setEibiHandler(EibiFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

@@ -40,6 +40,7 @@
 #include <netinet/in.h>
 #include "vibeserver_config.h"
 #include "eibi.h"
+#include "solar.h"
 
 namespace {
 
@@ -517,6 +518,55 @@ int main(int argc, char** argv) {
             g_restartRequested.store(true);
             return true;
         });
+
+    // ── Space weather ───────────────────────────────────────────────────────────────────────
+    // ★ One request an hour on a detached thread, and the handler only ever READS the cache — so
+    //   a page load never waits on NOAA and a network outage costs freshness, not the page.
+    LocalSdrShim::setSolarHandler([]() -> std::string {
+        const auto s = vssolar::current();
+        if (!s.valid()) return "";
+        // ★ Daylight AT THE RECEIVER decides which column applies, and the receiver's longitude is
+        //   the only thing that can answer that — a UTC hour would be right for one meridian only.
+        //   Rough local solar time is plenty: we are choosing between "day" and "night", not
+        //   computing a sunrise.
+        double lon = 0;
+        try { lon = g_runtimeConfig.lon.empty() ? 0.0 : std::stod(g_runtimeConfig.lon); } catch (...) {}
+        const std::time_t t = std::time(nullptr);
+        std::tm g{}; gmtime_r(&t, &g);
+        double solarHour = g.tm_hour + g.tm_min / 60.0 + lon / 15.0;
+        while (solarHour < 0) solarHour += 24;
+        while (solarHour >= 24) solarHour -= 24;
+        const bool day = solarHour >= 7.0 && solarHour < 19.0;
+
+        char head[256];
+        snprintf(head, sizeof head,
+                 "{\"sfi\":%.0f,\"kp\":%.1f,\"updated\":\"%s\",\"day\":%s,\"bands\":{",
+                 s.sfi, s.kp, s.updated.c_str(), day ? "true" : "false");
+        std::string j = head;
+        static const char* kBands[] = {"160m","80m","60m","40m","30m","20m","17m","15m","12m","10m"};
+        bool first = true;
+        for (const char* b : kBands) {
+            const std::string v = vssolar::bandVerdict(s, b, day);
+            if (v.empty()) continue;
+            if (!first) j += ",";
+            first = false;
+            j += "\"" + std::string(b) + "\":\"" + v + "\"";
+        }
+        return j + "}}";
+    });
+    {
+        std::thread([]{
+            std::this_thread::sleep_for(std::chrono::seconds(25));
+            for (;;) {
+                if (vssolar::needsRefresh()) {
+                    std::string e;
+                    if (!vssolar::fetch(e) && !e.empty())
+                        std::fprintf(stderr, "VibeServer: space weather unavailable — %s\n", e.c_str());
+                }
+                std::this_thread::sleep_for(std::chrono::minutes(15));
+            }
+        }).detach();
+    }
 
     // ── EiBi ────────────────────────────────────────────────────────────────────────────────
     // ★ Published from the cache at start-up so search works immediately, then refreshed in the

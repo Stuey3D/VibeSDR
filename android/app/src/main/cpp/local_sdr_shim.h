@@ -131,6 +131,10 @@ public:
     /** Fetch/report the EiBi schedule. @param refresh download now. Returns entry count; sets
      *  `err` on failure and `updated` to the cache date. Registered by the DAEMON only — a phone
      *  has no /var/lib and no business downloading a shortwave schedule. */
+    /** Space weather + our predicted verdicts, as a JSON object body. The DAEMON supplies it (it
+     *  owns the network); on a phone nothing registers one and the endpoint says so. */
+    using SolarFn = std::function<std::string()>;
+    static void setSolarHandler(SolarFn fn);
     using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
     static void setEibiHandler(EibiFn fn);
     using ConfigPersistFn = std::function<void(const std::string& patch)>;

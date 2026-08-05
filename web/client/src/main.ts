@@ -1902,6 +1902,55 @@ async function showSplashListeners(): Promise<void> {
   } catch { /* decoration only */ }
 }
 
+/** ★★★ WHAT THE SUN SUGGESTS, BESIDE WHAT THIS RECEIVER CAN HEAR. The pairing is the feature: a
+ *  solar prediction models the ionosphere over a region, while the measured column is one aerial
+ *  in one garden — and for somebody deciding whether to listen HERE, the second is the one that
+ *  answers the question. Neither alone would.
+ *  ★★ ONLY BANDS THIS RECEIVER COVERS. A window centred on 6.5 MHz reaches 80/60/40/30m, so
+ *     showing 10m would be listing a verdict nobody here can act on — the same rule as filtering
+ *     the search to the tunable window. On an FM profile there is no HF at all and the whole
+ *     block stays hidden, which is the correct answer rather than an empty table.
+ *  ★ Silent on failure and on an older server: this is decoration on a page that must work
+ *    without it. */
+async function showSplashConditions(): Promise<void> {
+  const el = document.getElementById('splashConditions');
+  if (!el) return;
+  try {
+    const r = await fetch('/vibeserver/conditions', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const measured: Array<{ band: string; snrDb: number }> = j.measured || [];
+    const solar = j.solar;
+    // ★ THE MEASURED LIST DEFINES WHICH BANDS EXIST HERE. It is derived from what is inside the
+    //   captured span, so using it as the key set is what makes the profile filter automatic —
+    //   nothing here needs to know the centre frequency or the span.
+    if (!measured.length) { el.innerHTML = ''; return; }
+    // ★★ THE SAME FOUR WORDS IN BOTH COLUMNS. The value of this block is the COMPARISON, and a
+    //    reader cannot compare "Good" against "Busy" — they would have to learn two scales to
+    //    notice that the prediction and the aerial disagree, which is the one thing worth
+    //    noticing. The dB is shown too, because the word is a bucket and the number is the
+    //    measurement.
+    const rate = (db: number) => db >= 15 ? 'Excellent'
+                               : db >= 9  ? 'Good'
+                               : db >= 4  ? 'Fair'
+                                          : 'Poor';
+    const rows = measured.map((m) => {
+      const pred = solar?.bands?.[m.band] || '—';
+      return `<tr>
+        <td style="padding:1px 12px 1px 0;color:var(--amber);text-align:right">${m.band}</td>
+        <td style="padding:1px 12px 1px 0;opacity:0.8">${pred}</td>
+        <td style="padding:1px 0;opacity:0.8">${rate(m.snrDb)}` +
+        `<span style="opacity:0.45"> (${m.snrDb.toFixed(0)} dB)</span></td></tr>`;
+    }).join('');
+    const solarLine = solar ? ` &nbsp;·&nbsp; SFI ${solar.sfi} · K ${solar.kp}` : '';
+    el.innerHTML =
+      `<div style="opacity:0.55;letter-spacing:1px;margin-bottom:4px">BAND CONDITIONS${solarLine}</div>` +
+      `<table style="margin:0 auto;border-collapse:collapse;font-size:11px">` +
+      `<tr style="opacity:0.4"><td></td><td style="padding-right:12px">PREDICTED</td>` +
+      `<td>ACTUAL</td></tr>${rows}</table>`;
+  } catch { /* decoration only */ }
+}
+
 async function drawSplashSpectrogram(): Promise<void> {
   const cv = document.getElementById('splashSpectro') as HTMLCanvasElement | null;
   if (!cv) return;
@@ -6335,6 +6384,7 @@ initSplash();
 //   visibly fills in while somebody reads the page.
 drawSplashSpectrogram();
 showSplashListeners();
+showSplashConditions();
 setInterval(() => {
   const sp = document.getElementById('splash');
   if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();
