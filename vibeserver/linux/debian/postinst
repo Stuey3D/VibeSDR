@@ -8,6 +8,32 @@ set -e
 
 case "$1" in
   configure)
+    # ── 0. THE SERVICE ACCOUNT ───────────────────────────────────────────────
+    # ★★★ NOTHING ELSE CREATES IT, AND THE UNIT CANNOT START WITHOUT IT. The service declares
+    #     User=vibeserver, so a box where that account does not exist fails at
+    #     "Failed to determine user credentials" before a line of our code runs — and every chown
+    #     below silently no-ops (they are all `|| true`), leaving /etc/vibeserver root-owned so
+    #     the browser Save would fail later too.
+    #     ★ This survived because the account was created BY HAND on the development Pi months
+    #       ago, so every install since has been an upgrade onto a box that already had it. Only a
+    #       genuinely fresh machine can catch it, which is the entire argument for testing one.
+    #     ★★ --system: no login, no home to speak of, no password. This account exists to own a
+    #        config file and a state directory, and nothing else should be possible with it.
+    if ! getent passwd vibeserver >/dev/null; then
+      adduser --system --group --no-create-home \
+              --home /var/lib/vibeserver \
+              --gecos "VibeServer SDR" vibeserver >/dev/null 2>&1 \
+        || useradd --system --user-group --no-create-home \
+                   --home-dir /var/lib/vibeserver \
+                   --shell /usr/sbin/nologin vibeserver >/dev/null 2>&1 \
+        || true
+    fi
+    # ★ The radio is USB, and the daemon is not root: without plugdev the service user cannot open
+    #   the device even though the udev rules below grant the group.
+    if getent group plugdev >/dev/null; then
+      adduser vibeserver plugdev >/dev/null 2>&1 || true
+    fi
+
     # ── 1. The config: NEVER clobber the user's edits ────────────────────────
     # ★ Copied from /usr/share on FIRST install only. Shipping it as a packaged file would let
     #   an upgrade overwrite the name, locator and admin password someone set months ago.
@@ -43,6 +69,9 @@ case "$1" in
     if ! getent group plugdev >/dev/null; then
       addgroup --system plugdev >/dev/null 2>&1 || true
     fi
+    # ★ Again here, because the group may not have existed at step 0 on a minimal image. Both
+    #   calls are idempotent; missing this one costs the daemon its access to the radio.
+    adduser vibeserver plugdev >/dev/null 2>&1 || true
     # ★ The invoking user is the one who will run `vibeserver` interactively for the TUI.
     #   SUDO_USER is who typed `sudo apt install`; without this they must know to add
     #   themselves, which is exactly the sort of undocumented step that sinks an install.

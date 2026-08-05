@@ -95,3 +95,20 @@ cd build && cpack && sudo apt install ./vibeserver_*.deb
 ```
 
 Your config survives. The service restarts on the new binary.
+
+## Before you start: the SDRplay RSP needs one extra download
+
+★★★ **`apt install vibeserver` cannot install it for you, and this is not an oversight.** The
+SDRplay API is SDRplay's own driver, distributed under their licence — we are not permitted to
+redistribute it, so it can never be a `Depends:` line. RTL-SDR and Airspy HF+ need nothing extra;
+only the RSP family does.
+
+```sh
+# https://www.sdrplay.com/downloads  →  "API/HW Driver for Linux (ARM64)"
+chmod +x SDRplay_RSP_API-*.run && sudo ./SDRplay_RSP_API-*.run
+systemctl status sdrplay_apiService     # should be active
+```
+
+★ Do this **before** starting VibeServer. Without it the server runs perfectly and reports no
+radio, which reads as broken hardware rather than a missing driver — so the message it prints
+names the download.

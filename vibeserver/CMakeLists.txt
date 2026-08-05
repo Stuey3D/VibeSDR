@@ -279,7 +279,14 @@ if(UNIX AND NOT APPLE)
   #   gets the versions right for the distro doing the build. A hand-written list rots the first
   #   time a dependency is added and produces a package that installs and then will not start.
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser")
+  # ★★★ curl IS A REAL DEPENDENCY AND shlibdeps CANNOT SEE IT. The EiBi schedule is fetched by
+  #   shelling out to curl (see vibeserver/eibi.cpp), and shlibdeps only reads the ELF — it knows
+  #   nothing about programs we exec. On a Raspberry Pi OS Lite image with no curl, the package
+  #   would install, the server would run, and the station schedule would silently never arrive:
+  #   a failure that looks like a missing feature rather than a missing package.
+  #   ★ The general trap: adding a shell-out adds an undeclared dependency, and NOTHING in the
+  #     build will tell you. Anything exec()d belongs in this line.
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser, curl")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postinst"

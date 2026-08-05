@@ -84,7 +84,14 @@ int        g_apiRefs = 0;
 
 bool apiOpen(std::string& err) {
     if (!api().ok) {
-        err = "SDRplay API not installed on this machine";
+        // ★★ SAY WHAT TO DO, NOT JUST WHAT IS WRONG. This is the FIRST thing an owner meets after
+        //   `apt install vibeserver` on a fresh box with an RSP: the API is SDRplay's own
+        //   installer into /opt and we are not permitted to redistribute it, so the package
+        //   cannot pull it in and no amount of dependency declaration will help. Without the URL
+        //   the message reads as "your radio is broken" rather than "one more download".
+        err = "SDRplay API not installed. The RSP needs SDRplay's own driver, which we are not "
+              "allowed to redistribute — download it from https://www.sdrplay.com/downloads "
+              "(API/HW driver for Linux), run the installer, then restart VibeServer.";
         return false;
     }
     std::lock_guard<std::mutex> lk(g_apiMtx);
