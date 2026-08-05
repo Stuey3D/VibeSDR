@@ -465,9 +465,19 @@ int main(int argc, char** argv) {
     //    missing — the page tells the owner it worked.
     // ★ Gated on `configured`, so an unconfigured server is never discoverable: that is what
     //   keeps the app from meeting a server it has no setup flow for.
-    if (g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise) {
-        const std::string label = vsconfig::mdnsLabel(
-            g_runtimeConfig.mdnsName.empty() ? g_runtimeConfig.name : g_runtimeConfig.mdnsName);
+    // ★★★ NEVER ADVERTISE WITHOUT A NAME THE OWNER CHOSE. mdnsLabel("") falls back to
+    //     "vibeserver", so an unnamed server claims `vibeserver.local` — and EVERY unnamed server
+    //     on the network claims the SAME one. Worse than two of ours clashing: a Raspberry Pi
+    //     whose hostname is "VibeServer" already publishes that name through avahi, so an unnamed
+    //     instance elsewhere on the LAN silently steals the address people use to reach the real
+    //     receiver. Seen live on 2026-08-05 — a test server on a laptop took vibeserver.local
+    //     away from the Pi and SSH to it started failing.
+    //     ★ The friendly name is set in the browser during setup, which is exactly when a server
+    //       becomes worth finding — so "no name yet" and "not ready to advertise" are one state.
+    const std::string wantName = g_runtimeConfig.mdnsName.empty()
+                               ? g_runtimeConfig.name : g_runtimeConfig.mdnsName;
+    if (g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise && !wantName.empty()) {
+        const std::string label = vsconfig::mdnsLabel(wantName);
         const std::string ip = primaryIpv4();
         if (!label.empty() && !ip.empty()) {
             LocalSdrShim::startMdns(label, ip);

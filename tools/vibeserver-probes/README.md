@@ -106,3 +106,17 @@ per-client machinery is constructed; breaking that would be far worse than any s
 ```sh
 node singleuseraudio.mjs 48210      # server with no --lock-freq
 ```
+
+## `perclientzoom.mjs` — one listener zooming must not move anyone else's view
+
+A zooms hard, B touches nothing, then C joins fresh. B must be unchanged and C must arrive at the
+FULL span.
+
+★★ **C is the decisive one.** An earlier version of this test passed while the bug was still
+present: A's zoom went through the OLD GLOBAL handler and rescaled everyone, but B only *looked*
+unaffected because nothing re-sent B its config — its waterfall was quietly rescaled underneath it
+while it was still told the old span. A fresh joiner reads current server state, so it cannot be
+fooled that way.
+
+★ The cause was ordering: the shared handlers return as soon as they match, so a per-client block
+placed after them is dead code for every message they claim.

@@ -1486,6 +1486,11 @@ struct LocalSdrShim::Impl {
     int  sstvDecim = 0; float sstvAcc = 0.0f;
     std::mutex dxSendMtx;
     std::shared_ptr<net::Socket> dxClient;
+    /** ★★ WHOSE AUDIO THE DECODERS ARE LISTENING TO. Empty = the shared pipeline (a personal
+     *  receiver, where there is only one). On a shared receiver the decoders must follow the
+     *  listener who OPENED them — fed from the shared VFO they decode a signal nobody chose,
+     *  which is what they did before per-client tuning existed. */
+    std::string decoderSession;
     std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
     std::mutex decBufMtx;
 
@@ -1554,6 +1559,11 @@ struct LocalSdrShim::Impl {
         // Audio encode is per client too: two listeners may want different codecs, and an Opus
         // encoder carries stream state that cannot be shared.
         bool wantsOpus = false, forceMono = false;
+        // ★★ THIS LISTENER'S OWN VIEW. Per-user zoom falls out of per-user tuning: the narrow
+        //    stream already exists, so a zoom FFT on it is nearly free. `viewSpanHz` 0 = zoomed
+        //    out, i.e. served by the SHARED wide waterfall like everyone else.
+        double viewCentreHz = 0, viewSpanHz = 0;
+        bool   ownView = false;      // true while this listener's own zoom is feeding its display
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;
 #endif
@@ -1582,6 +1592,13 @@ struct LocalSdrShim::Impl {
         return std::min(b, fftSize);
     }
 
+    /** This listener's own zoomed waterfall row. Same wire format as the shared one — the client
+     *  needs no new code path, it simply sees a sharper picture than the person next to it. */
+    static void clientZoomCb(void* ctx, const float* db, int bins) {
+        auto* c = (ClientDsp*)ctx;
+        if (c && c->owner) c->owner->onClientZoom(c, db, bins);
+    }
+
     static void clientAudioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (ClientDsp*)ctx;
         if (!c || !c->owner || frames <= 0) return;
@@ -1597,7 +1614,14 @@ struct LocalSdrShim::Impl {
         if (!c) return;
         const auto mp = paramsFor(c->mode);
         const double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
-        const int want = chanBinsFor(bw);
+        // ★★★ ONE CHANNEL SERVES BOTH THE AUDIO AND THE VIEW. Sizing it for the demodulator alone
+        //     would mean a second channel just to draw a zoomed waterfall; sizing it to cover
+        //     whichever is wider gets per-user zoom for the price of the extract we already do.
+        //     ★ When the view is wider than a channel can sensibly carry, this listener simply
+        //       falls back to the shared wide waterfall — which is what "zoomed out" means, and
+        //       is exactly the handover rule the brief describes (step < 1.0).
+        const double need = std::max(bw * 2.5, c->viewSpanHz > 0 ? c->viewSpanHz * 1.2 : 0.0);
+        const int want = chanBinsFor(need);
         std::lock_guard<std::mutex> lk(c->mtx);
         if (want != c->chanBins || !c->rx) {
             c->chanBins = want;
@@ -1607,6 +1631,7 @@ struct LocalSdrShim::Impl {
             vibedsp::RxPipeline::Callbacks cb{};
             cb.ctx = c;
             cb.audio = &Impl::clientAudioCb;
+            cb.zoomSpectrum = &Impl::clientZoomCb;
             // ★ A small FFT: this pipeline exists to DEMODULATE. The waterfall everyone sees is
             //   the shared wide one, so paying for a per-client spectrum here would be paying
             //   twice for a picture nobody reads.
@@ -1622,6 +1647,16 @@ struct LocalSdrShim::Impl {
         const double off   = c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ;
         const double resid = off - std::lround(off / binHz) * binHz;
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+        // ★ The view centre expressed INSIDE this listener's channel. The channel is centred on
+        //   its VFO, so the view offset is the gap between where it is listening and where it is
+        //   looking — they are not the same thing once you can pan away from the signal.
+        if (c->ownView && c->viewSpanHz > 0) {
+            const double viewOff = c->viewCentreHz - (c->vfoHz - resid);
+            c->rx->setZoomBins(binsFor(c->spec));
+            c->rx->setZoomView(viewOff, c->viewSpanHz, fftRate);
+        } else {
+            c->rx->setZoomView(0, 0, 0);      // released — the shared wide path owns the display
+        }
     }
 
     /** The signed centre bin this listener's channel is taken from. */
@@ -1630,11 +1665,50 @@ struct LocalSdrShim::Impl {
         return (int)std::lround((c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ) / binHz);
     }
 
+    /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
+     *  the wire puts DC at bin 0, while the zoom FFT hands back a shifted row. */
+    void onClientZoom(ClientDsp* c, const float* db, int nb) {
+        std::shared_ptr<net::Socket> sock = c->spec;
+        if (!sock || !sock->isOpen() || nb <= 0) return;
+        const int outBins = nb;
+        std::vector<uint8_t> frame(22 + outBins);
+        frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
+        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::memcpy(&frame[6], &ts, 8);
+        uint64_t f = (uint64_t)llround(c->viewCentreHz);
+        std::memcpy(&frame[14], &f, 8);
+        const int half = outBins / 2;
+        for (int i = 0; i < outBins; i++) {
+            const int signedOut = (i <= half) ? i : i - outBins;
+            int src = half + signedOut;
+            if (src < 0) src = 0; else if (src >= nb) src = nb - 1;
+            int v = (int)lround(db[src] + 256.0);
+            frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+        }
+        sendWs(sock, 0x2, frame.data(), frame.size(), Out::Spectrum);
+        vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+    }
+
     /** Encode and send one block of this listener's audio to ITS OWN socket. */
     void onClientAudio(ClientDsp* c, const float* pcm, int frames, int ch) {
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = c->audio; }
         if (!sock || !sock->isOpen()) return;
+        // ★ The decoders follow whoever opened them — see decoderSession.
+        {
+            std::string who;
+            { std::lock_guard<std::mutex> lk(clientMtx); who = decoderSession; }
+            if (!who.empty() && who == c->session) {
+                std::vector<stereo_t> st((size_t)frames);
+                for (int i = 0; i < frames; i++) {
+                    st[i].l = pcm[i * ch];
+                    st[i].r = ch == 2 ? pcm[i * ch + 1] : pcm[i * ch];
+                }
+                feedDecoder(st.data(), frames);
+                feedSpots(st.data(), frames);
+            }
+        }
         std::vector<int16_t> buf((size_t)frames * ch);
         for (int i = 0; i < frames * ch; i++) {
             float v = pcm[i];
@@ -2107,8 +2181,15 @@ struct LocalSdrShim::Impl {
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
             size_t sent = 0;
-            for (auto& p : peers)
-                if (p.bins == outBins) { sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
+            for (auto& p : peers) {
+                if (p.bins != outBins) continue;
+                // ★★ A listener drawing its OWN zoomed view must not also receive the shared wide
+                //    row: two sources writing one waterfall doubles the frame rate and the two
+                //    fight over the same texture, which is the exact failure the shared zoom path
+                //    documents. Its own channel owns its display until it zooms back out.
+                if (auto c = dspFor(p.sock)) if (c->ownView) continue;
+                sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+            }
             vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
             }   // end per-width loop
             // (byte accounting happens inside the per-width loop now)
@@ -2670,8 +2751,13 @@ struct LocalSdrShim::Impl {
         }
         // Feed the audio-extension decoder (mono int16) — runs even with no audio
         // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
-        feedDecoder(data, count);
-        feedSpots(data, count);
+        // ★★★ NOT IN SHARED MODE. Here the shared pipeline's VFO is nobody's: every listener has
+        //     their own. Decoding from it means decoding a frequency no human selected, so the
+        //     decoders are driven from the OWNING listener's audio instead (onClientAudio).
+        if (!perClientDsp()) {
+            feedDecoder(data, count);
+            feedSpots(data, count);
+        }
 
         // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
         // FFT) is below threshold. Applied AFTER the decoders so they see raw audio.
@@ -3100,8 +3186,15 @@ struct LocalSdrShim::Impl {
         const int cfgBins = binsFor(sock);
         std::string myMode = mode;
         double myVfo = audioFreq.load();
-        if (auto me = dspFor(sock)) { myMode = me->mode; myVfo = me->vfoHz; }
-        double binBw = effective / (double)cfgBins;                    // we emit cfgBins bins (the FFT/bin lever)
+        double myCentre = viewCenter.load(), myEffective = effective;
+        if (auto me = dspFor(sock)) {
+            myMode = me->mode; myVfo = me->vfoHz;
+            // ★ Its own view, or the shared one — the client scales its axis by what we say here,
+            //   so telling it the shared span while sending it a private zoomed row draws every
+            //   signal in the wrong place.
+            if (me->ownView && me->viewSpanHz > 0) { myCentre = me->viewCentreHz; myEffective = me->viewSpanHz; }
+        }
+        const double binBw = myEffective / (double)cfgBins;   // we emit cfgBins bins over MY span
         char buf[512];   // grew when vfo/locked were added — a truncated JSON config is fatal
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
         // to this so you can't zoom out past the actual RTL bandwidth.
@@ -3123,7 +3216,7 @@ struct LocalSdrShim::Impl {
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,"
             "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s}",
-            (long long)llround(viewCenter.load()), cfgBins, binBw, effective, span,
+            (long long)llround(myCentre), cfgBins, binBw, myEffective, span,
             // ★★ THIS listener's mode and VFO, not the server's. In shared mode they are
             //    genuinely different per listener, and telling a client someone else's dial is
             //    how it ends up tuned somewhere it never asked for.
@@ -3213,6 +3306,60 @@ struct LocalSdrShim::Impl {
 
     void handleControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         std::string type = jsonStr(msg, "type");
+        // ★★★ PER-CLIENT CONTROL COMES FIRST, AND THE ORDER IS LOAD-BEARING. The shared handlers
+        //     below (zoom, reset, tune…) return as soon as they match, so a per-client block
+        //     placed after them is dead code for every message they claim. It was, for zoom: one
+        //     listener zooming moved the GLOBAL zoom, and the others only looked unaffected
+        //     because nothing re-sent them a config — their waterfall was quietly rescaled
+        //     underneath them while they were told the old span.
+        // ★★★ IN SHARED MODE, TUNING IS THE SENDER'S OWN BUSINESS. This is the whole point of
+        //     per-client DSP: the message moves THIS listener's VFO and nobody else's. Before
+        //     this, one window tuning retuned every other listener on the server.
+        //     ★ The hardware centre still never moves — it is locked, and everyone's channel is
+        //       taken from inside that one capture.
+        if (auto me = dspFor(sock)) {
+            // ★★ ZOOM IS PER LISTENER TOO. Whether it is served from this client's own channel or
+            //    from the shared wide waterfall is decided HERE, by whether the requested span is
+            //    narrow enough to be worth a private view — the same handover rule the wide path
+            //    already uses internally (zoomed past real resolution ⇒ the narrow path wins).
+            if (type == "zoom" || type == "reset") {
+                double v = 0, bb = 0;
+                if (type == "reset") { me->viewSpanHz = 0; me->ownView = false; }
+                else {
+                    if (jsonNum(msg, "frequency", v) && v > 0) me->viewCentreHz = v;
+                    if (me->viewCentreHz <= 0) me->viewCentreHz = me->vfoHz;
+                    if (jsonNum(msg, "binBandwidth", bb) && bb > 0)
+                        me->viewSpanHz = bb * (double)binsFor(sock);
+                    // Worth a private channel only while the shared FFT cannot resolve it —
+                    // otherwise the shared row is both correct and already paid for.
+                    const double sharedBinHz = sampleRate / (double)fftSize;
+                    const double perOutBin   = me->viewSpanHz / (double)binsFor(sock);
+                    me->ownView = me->viewSpanHz > 0 && perOutBin < sharedBinHz;
+                }
+                clientRetune(me.get());
+                sendConfig(sock);
+                return;
+            }
+            if (type == "tune" || type == "mode" || type == "bandwidth") {
+                std::string m = jsonStr(msg, "mode");
+                double v = 0, lo = 0, hi = 0, bw = 0;
+                bool changed = false;
+                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
+                if (jsonNum(msg, "frequency", v) && v > 0) {
+                    // ★ Clamp to the captured window: a listener cannot tune outside the range
+                    //   the owner locked, and silently accepting it would demodulate noise.
+                    const double half = displaySpan() * 0.5;
+                    const double lo2 = rtlCenter.load() - half, hi2 = rtlCenter.load() + half;
+                    me->vfoHz = v < lo2 ? lo2 : (v > hi2 ? hi2 : v);
+                    changed = true;
+                }
+                if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) { me->bwHz = hi - lo; changed = true; }
+                else if (jsonNum(msg,"bandwidth",bw) && bw > 0) { me->bwHz = bw; changed = true; }
+                if (changed) clientRetune(me.get());
+                return;
+            }
+        }
+
         double v;
         if (type == "ping") { sendText(sock, "{\"type\":\"pong\"}"); return; }
         // ★ LOGGED alongside fftRate: these are the TWO ways a client can ask to be slowed, and
@@ -3400,31 +3547,6 @@ struct LocalSdrShim::Impl {
             else updateZoomView();
             sendConfig(sock);
             return;
-        }
-        // ★★★ IN SHARED MODE, TUNING IS THE SENDER'S OWN BUSINESS. This is the whole point of
-        //     per-client DSP: the message moves THIS listener's VFO and nobody else's. Before
-        //     this, one window tuning retuned every other listener on the server.
-        //     ★ The hardware centre still never moves — it is locked, and everyone's channel is
-        //       taken from inside that one capture.
-        if (auto me = dspFor(sock)) {
-            if (type == "tune" || type == "mode" || type == "bandwidth") {
-                std::string m = jsonStr(msg, "mode");
-                double v = 0, lo = 0, hi = 0, bw = 0;
-                bool changed = false;
-                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
-                if (jsonNum(msg, "frequency", v) && v > 0) {
-                    // ★ Clamp to the captured window: a listener cannot tune outside the range
-                    //   the owner locked, and silently accepting it would demodulate noise.
-                    const double half = displaySpan() * 0.5;
-                    const double lo2 = rtlCenter.load() - half, hi2 = rtlCenter.load() + half;
-                    me->vfoHz = v < lo2 ? lo2 : (v > hi2 ? hi2 : v);
-                    changed = true;
-                }
-                if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) { me->bwHz = hi - lo; changed = true; }
-                else if (jsonNum(msg,"bandwidth",bw) && bw > 0) { me->bwHz = bw; changed = true; }
-                if (changed) clientRetune(me.get());
-                return;
-            }
         }
         if (type == "tune") {
             std::string m = jsonStr(msg, "mode");
@@ -3856,7 +3978,7 @@ struct LocalSdrShim::Impl {
             // reach the port could attach decoders and start the FT8 engine without
             // the PIN — burning the host's CPU on an unattended (solar) server.
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
-            acceptDxcluster(sock, wsKey);
+            acceptDxcluster(sock, wsKey, queryParam(reqLine, "user_session_id"));
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
             // FFT/bin lever: a spectrum client may ask for fewer output bins (?bins=N) to shrink each
@@ -4837,7 +4959,11 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
     }
 
-    void acceptDxcluster(std::shared_ptr<net::Socket> sock, const std::string& wsKey) {
+    /** @param session the listener this decoder socket belongs to. ★ It never carried one: with
+     *  a single VFO there was only one thing it could possibly be decoding. Per-client tuning
+     *  makes "whose audio?" a real question, and the session is the only thing that answers it. */
+    void acceptDxcluster(std::shared_ptr<net::Socket> sock, const std::string& wsKey,
+                         const std::string& session = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -4846,7 +4972,7 @@ struct LocalSdrShim::Impl {
         // FT8 spots), so they need the same protection as the spectrum path — a browser tab that
         // stops draining its decoder stream must not stall the decoders for everyone else.
         outboxOpen(sock);
-        { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; }
+        { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; decoderSession = session; }
         LOGI("dxcluster (decoder) WS connected");
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
