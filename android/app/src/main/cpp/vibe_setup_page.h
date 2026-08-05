@@ -398,8 +398,8 @@ async function renderHw() {
         <input type="checkbox" id="dabNotch" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>DAB notch</span></label>
       <div class="hint">Same idea, for the DAB band.</div>
-      <div class="note">This RSP sets its own gain automatically, and listeners can see it but not
-        change it while the range is locked.</div>`;
+      <div class="hint">The RSP manages its own gain by default. To set it by hand, see the note
+        below.</div>`;
   } else if (hw.driver === "airspyhf") {
     el.innerHTML = `<p class="hint">The Airspy HF+ has no variable gain &mdash; it manages its own
       attenuator and preamp &mdash; so there is nothing to set here.</p>`;
@@ -412,6 +412,21 @@ async function renderHw() {
         <div class="hint">Automatic suits most aerials. Fix it only if you know you need to.</div>
       </label>`;
   }
+  // ★★★ SAY WHERE THE GAIN CONTROLS ACTUALLY ARE. They are deliberately NOT on this page: gain
+  //     is the one setting you cannot choose sensibly in the abstract — it depends on your aerial,
+  //     your noise floor and what is on the band right now — so it belongs where you can watch the
+  //     waterfall while you move it, not in a wizard you fill in before the radio is even
+  //     listening (Stuart, 2026-08-05). Without this note the omission reads as a missing feature.
+  //     ★ And the answer to "how?" has to be here too, or we have only told them what is absent.
+  el.innerHTML += `<div class="note"><b>Gain is not set here.</b> Open this receiver in the client,
+    unlock <b>Protected settings</b> with your admin password, and the gain controls appear in the
+    menu &mdash; so you can set them against live signals instead of guessing. Whatever you set
+    there is saved <b>the moment you change it</b> &mdash; there is nothing to press, and nothing
+    is lost if you close the tab &mdash; and restored when the server restarts.
+    <br><br><b>Do this on your first listen.</b> Finish this page, connect, and spend a minute on
+    the gain while you can see the waterfall: it is the single setting that most decides how good
+    this receiver sounds to everyone who visits it, and the default is only ever a starting point.</div>`;
+
   // Restore stored values into whichever controls we just drew.
   if ($("rfNotch")) $("rfNotch").checked = !!cfg.rfNotch;
   if ($("dabNotch")) $("dabNotch").checked = !!cfg.dabNotch;
