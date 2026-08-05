@@ -1522,7 +1522,7 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   // ★ FAST UP, SLOW DOWN — the same asymmetry the bar itself uses, and for the same reason: a
   //   meter that lags a signal appearing is useless, while one that falls back gently is readable.
   //   A single symmetric coefficient has to be a compromise between those, and was.
-  snrSmooth += (snr - snrSmooth) * (snr > snrSmooth ? 0.55 : 0.15);
+  snrSmooth += (snr - snrSmooth) * (snr > snrSmooth ? 0.30 : 0.12);   // matches the bar
   lastSigDb = sigDb;
 
   // ★★★ THE METER HAS ITS OWN FIXED SCALE, AND MUST — IT USED TO BORROW THE WATERFALL'S.
@@ -1540,7 +1540,17 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   const norm = Math.max(0, Math.min(1, (sigDb - dbMin) / (dbMax - dbMin)));
 
   // Asymmetric smoothing: fast attack, slow decay (same feel as the app's meter).
-  sigSmooth += (norm - sigSmooth) * (norm > sigSmooth ? 0.55 : 0.18);
+  // ★★ SMOOTHED ENOUGH TO RIDE OVER THE AGC'S STAIRCASE. The reading is post-AGC dBFS, and the
+  //    RSP's AGC moves its IF reduction in whole-dB STEPS — so a signal rising smoothly is
+  //    measured as rise, step, rise, step, and the bar "moves a little, halts, moves some more"
+  //    (Stuart, 2026-08-05, on the Buzzer). That is the receiver being visible in a reading that
+  //    should only show the signal.
+  //    ★ Gentler than before on BOTH edges (was 0.55/0.18). At 20 Hz these are time constants of
+  //      roughly 150 ms up and 400 ms down: still quicker than the old 4 Hz repaint could manage
+  //      at any coefficient, and slow enough that a 1 dB AGC step is a ripple rather than a stair.
+  //    ★ Attack still faster than release. A meter that lags a signal appearing is useless; one
+  //      that falls back gently is readable.
+  sigSmooth += (norm - sigSmooth) * (norm > sigSmooth ? 0.30 : 0.12);
   sigPeak = norm > sigPeak ? norm : Math.max(norm, sigPeak - 0.004);
 
   $('sigFill').style.width = `${(sigSmooth * 100).toFixed(1)}%`;
