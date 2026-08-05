@@ -530,6 +530,15 @@ html #bar { display: none; }
   font-size: 0.72em; letter-spacing: 1px; color: var(--unit);
   border-top: 1px solid var(--btn-border); padding-top: 6px; margin-top: 2px;
 }
+/* ★ Deliberately full-width and plain, so it reads as "leave" rather than as an eighth
+   demodulator sitting in the grid. */
+.mModeClose {
+  background: none; border: 1px solid var(--btn-border); border-radius: 7px;
+  color: var(--text-dim); font: inherit; font-size: 0.8em; letter-spacing: 2px;
+  text-indent: 2px; padding: 0.6em; margin-top: 2px; cursor: pointer;
+  min-height: max(2.2em, 38px); touch-action: manipulation;
+}
+.mModeClose:active { background: rgba(255, 160, 0, 0.15); }
 #mModeMenu .bwRow { display: flex; align-items: center; gap: 0.4em; }
 #mModeMenu .bwRow input[type=range] { flex: 1 1 auto; min-width: 3em; height: 40px; }
 .mModeOpt {

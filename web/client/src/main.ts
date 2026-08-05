@@ -3308,6 +3308,7 @@ function initDecoders(host: string, auth: AuthState) {
       spots.unshift(sp);
       if (spots.length > 500) spots.pop();
       renderSpots();
+      pushSpotsToMap();      // ★ keep an open map current — see pushSpotsToMap()
       setDecLive(true);
     },
   });
@@ -4284,7 +4285,10 @@ function initSpotFilters() {
  *
  * Opens even with no spots — a button that does nothing reads as broken.
  */
-function openSpotsMap() {
+/** ★ ONE derivation of the map's points, used both to build the page and to push updates into
+ *  it. Two copies would drift, and a live update that disagreed with the initial render is worse
+ *  than no live update at all. */
+function spotsMapPoints() {
   const me = myPos();
 
   // ★★★ PARSE, THEN FILTER — never filter by LENGTH and then assert the parse. `gridToLatLon`
@@ -4313,6 +4317,30 @@ function openSpotsMap() {
       colour: BAND_COLOUR[s.band] || '#aaaaaa',
     };
   });
+
+  return pts;
+}
+
+/** The open map window, so new spots can be pushed to it. ★ Held rather than re-opened: a map
+ *  that reopens itself would steal focus every time a spot arrived. */
+let spotsMapWin: Window | null = null;
+
+/** ★★★ PUSH NEW SPOTS TO AN OPEN MAP. The map baked its points into the page at open time, so it
+ *  showed whatever had been decoded when you opened it and never changed — "it needs to live
+ *  update or its a pointless map" (Stuart, 2026-08-05). FT8 decodes arrive every 15 seconds; a
+ *  snapshot of them is a screenshot, not a map.
+ *  ★ Silent and cheap when no map is open, because this runs on every spot. */
+function pushSpotsToMap() {
+  if (!spotsMapWin) return;
+  if (spotsMapWin.closed) { spotsMapWin = null; return; }
+  try {
+    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints() }, '*');
+  } catch { spotsMapWin = null; }      // window went away mid-push
+}
+
+function openSpotsMap() {
+  const me = myPos();
+  const pts = spotsMapPoints();
 
   // Closing tags assembled at runtime — a literal </script> or </style> here would
   // terminate the page's OWN inline <script> when the bundle is inlined.
@@ -4384,7 +4412,9 @@ ${ST}
   </div>
 </div>
 <script>
-const spots = ${JSON.stringify(pts)};
+// ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
+//    procedural code over a const, which is exactly why it could never update.
+let spots = ${JSON.stringify(pts)};
 const me = ${JSON.stringify(me)};
 const COL = ${JSON.stringify(BAND_COLOUR)};
 
@@ -4397,16 +4427,22 @@ function radius(snr) {
   const s = Math.max(-24, Math.min(12, snr));
   return 4 + ((s + 24) / 36) * 9;
 }
-for (const s of spots) {
-  L.circleMarker([s.lat, s.lon], {
-    radius: radius(s.snr), color: '#00000066', weight: 1,
-    fillColor: s.colour, fillOpacity: 0.85,
-  }).addTo(map).bindPopup(
-    '<div class="pop"><b>' + s.callsign + '</b><br>' +
-    (s.country ? s.country + '<br>' : '') + s.grid +
-    (s.km != null ? ' · ' + s.km + ' km' : '') + '<br>' +
-    s.mode + ' · ' + s.band + ' · ' + (s.snr > 0 ? '+' : '') + s.snr + ' dB<br>' +
-    (s.frequency / 1e6).toFixed(3) + ' MHz</div>');
+// Spot markers live in their own layer so a redraw can replace them without touching the
+// receiver marker, the range rings or the tile layer.
+const spotLayer = L.layerGroup().addTo(map);
+function drawMarkers() {
+  spotLayer.clearLayers();
+  for (const s of spots) {
+    L.circleMarker([s.lat, s.lon], {
+      radius: radius(s.snr), color: '#00000066', weight: 1,
+      fillColor: s.colour, fillOpacity: 0.85,
+    }).addTo(spotLayer).bindPopup(
+      '<div class="pop"><b>' + s.callsign + '</b><br>' +
+      (s.country ? s.country + '<br>' : '') + s.grid +
+      (s.km != null ? ' · ' + s.km + ' km' : '') + '<br>' +
+      s.mode + ' · ' + s.band + ' · ' + (s.snr > 0 ? '+' : '') + s.snr + ' dB<br>' +
+      (s.frequency / 1e6).toFixed(3) + ' MHz</div>');
+  }
 }
 if (me) {
   L.circleMarker([me.lat, me.lon], { radius: 7, color: '#fff', weight: 2,
@@ -4417,13 +4453,16 @@ if (me) {
       weight: 1, fill: false, dashArray: '4 6' }).addTo(map);
   }
 }
-const all = spots.map(s => [s.lat, s.lon]);
-if (me) all.push([me.lat, me.lon]);
-if (all.length > 1) map.fitBounds(all, { padding: [60, 60] });
-
-document.getElementById('count').textContent = String(spots.length);
-document.getElementById('empty').textContent = spots.length
-  ? '' : 'No spots with a grid yet — leave DIGITAL SPOTS running.';
+// ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
+//     from wherever the user had panned or zoomed, every fifteen seconds as the next FT8 cycle
+//     lands — which would make live updating worse than the snapshot it replaces.
+let fitted = false;
+function fitOnce() {
+  if (fitted) return;
+  const all = spots.map(s => [s.lat, s.lon]);
+  if (me) all.push([me.lat, me.lon]);
+  if (all.length > 1) { map.fitBounds(all, { padding: [60, 60] }); fitted = true; }
+}
 
 // ── Stats ────────────────────────────────────────────────────────────────────
 function bearing(a, b) {
@@ -4450,6 +4489,14 @@ function barList(counts, colourFor, limit) {
     (colourFor && colourFor(k) ? ';background:' + colourFor(k) : '') + '"></i></div>').join('');
 }
 
+// ★ Everything below reads the spots list, so it all has to live in here to be re-runnable.
+// (No backticks in this comment: it sits inside a template literal and would end the string.)
+function render() {
+document.getElementById('count').textContent = String(spots.length);
+document.getElementById('empty').textContent = spots.length
+  ? '' : 'No spots with a grid yet — leave DIGITAL SPOTS running.';
+drawMarkers();
+fitOnce();
 let html = '';
 const withKm = spots.filter(s => s.km != null).sort((a, b) => a.km - b.km);
 
@@ -4535,6 +4582,16 @@ document.getElementById('summary').innerHTML = spots.length
     cell('SPOTS', String(spots.length), new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries')
   : cell('WAITING', 'no spots yet', '');
 
+}
+render();
+
+// ★★★ LIVE. The opener pushes a fresh point list whenever a spot arrives.
+addEventListener('message', (ev) => {
+  if (!ev.data || ev.data.type !== 'vibesdr-spots') return;
+  spots = ev.data.spots;
+  render();
+});
+
 // Clock + panel toggles
 function tick() {
   const d = new Date();
@@ -4553,6 +4610,7 @@ ${ES}`;
   if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
   w.document.write(html);
   w.document.close();
+  spotsMapWin = w;
 }
 
 

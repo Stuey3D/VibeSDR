@@ -258,6 +258,18 @@ export function initMobileControls(deps: MobileDeps) {
       menu.appendChild(bw);
     }
 
+    // ★★ AN EXPLICIT WAY OUT. Dismiss-by-clicking-away is fine when the backdrop is inert; here
+    //    the backdrop is the WATERFALL, and a click on it TUNES. So the only obvious way to leave
+    //    this menu was also the way to lose the frequency you opened it to listen to (Stuart,
+    //    2026-08-05: "I went into it to adjust the bandwidth and clicked the waterfall to exit
+    //    which retuned me"). The button is the fix he asked for; `away` swallowing the click below
+    //    is the other half, because people will keep clicking away out of habit.
+    const closeRow = document.createElement('button');
+    closeRow.className = 'mModeClose';
+    closeRow.textContent = 'CLOSE';
+    closeRow.onclick = () => close();
+    menu.appendChild(closeRow);
+
     document.body.appendChild(menu);
     // Anchored to the pill, and flipped above it when there is no room below — on a
     // phone the pill sits near the bottom, so "below" is almost never where it fits.
@@ -275,7 +287,17 @@ export function initMobileControls(deps: MobileDeps) {
       document.removeEventListener('pointerdown', away, true);
       document.removeEventListener('keydown', esc, true);
     };
-    const away = (ev: Event) => { if (!menu.contains(ev.target as Node)) close(); };
+    // ★★★ THE DISMISS CLICK IS CONSUMED, NOT PASSED ON. This runs in the CAPTURE phase, so the
+    //     same pointerdown that closed the menu went on to reach the waterfall and RETUNE — the
+    //     dismiss gesture and the tune gesture being the same event. Standard popover behaviour is
+    //     that the first click outside only dismisses; here it is not a nicety, because the action
+    //     it was falling through to is destructive of the thing the user was working on.
+    const away = (ev: Event) => {
+      if (menu.contains(ev.target as Node)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
+    };
     const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
     // Deferred, or the click that OPENED the menu immediately closes it again.
     setTimeout(() => {

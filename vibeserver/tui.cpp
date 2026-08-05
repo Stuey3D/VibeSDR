@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -91,6 +92,30 @@ bool saveConfig(const vsconfig::Config& c, std::string& err) {
     std::string out = run(cmd.c_str());
     unlink(tmp);
     if (!out.empty()) { err = out; return false; }
+    return true;
+}
+
+
+/** ★★★ RE-READ, MUTATE, WRITE — NEVER write back the copy loaded when the TUI opened.
+ *  The TUI used to be the only thing that wrote config.json, so holding a copy for the life of the
+ *  screen was safe. It is not any more: the SERVER now writes it too, whenever an admin changes
+ *  the gain from the client (see the persist handler in main.cpp). So a TUI left open while
+ *  someone sets the gain, followed by a password reset here, would write back the stale copy and
+ *  silently revert the gain — a read-modify-write race with a second writer that did not exist
+ *  when this was written.
+ *  ★★ The same lesson the live-persist path learned from the other side: a change to ONE field
+ *     must not carry an opinion about every other field. Patch, do not overwrite.
+ *  ★ have < 0 (exists but unreadable) refuses, exactly as at startup — the one thing worse than
+ *    failing to help is destroying the config we were asked to recover. */
+bool updateConfig(vsconfig::Config& cfg, const std::function<void(vsconfig::Config&)>& mutate,
+                  std::string& err) {
+    vsconfig::Config fresh;
+    const int have = loadConfigViaSudo(fresh, err);
+    if (have < 0) return false;
+    if (have == 0) fresh = cfg;          // nothing on disk yet: our copy is the only truth there is
+    mutate(fresh);
+    if (!saveConfig(fresh, err)) return false;
+    cfg = fresh;                          // keep the screen showing what is actually stored
     return true;
 }
 
@@ -261,9 +286,9 @@ void statusScreen(vsconfig::Config& cfg) {
             if (a.size() < 6) { msg = "Too short — nothing changed."; continue; }
             if (!prompt(9, "Type it again", b, true, nullptr)) continue;
             if (a != b) { msg = "Those did not match — nothing changed."; continue; }
-            cfg.adminPass = a;
             std::string err;
-            if (!saveConfig(cfg, err)) { msg = "Save failed: " + err; continue; }
+            if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.adminPass = a; }, err))
+                { msg = "Save failed: " + err; continue; }
             run("sudo systemctl restart vibeserver 2>&1");
             msg = "Admin password changed, server restarted.";
         } else if (c == 'n') {
@@ -273,9 +298,9 @@ void statusScreen(vsconfig::Config& cfg) {
             attroff(COLOR_PAIR(4));
             std::string pin;
             if (!prompt(6, "PIN (blank = none)", pin, false, "Esc to cancel.")) continue;
-            cfg.pin = pin;
             std::string err;
-            if (!saveConfig(cfg, err)) { msg = "Save failed: " + err; continue; }
+            if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.pin = pin; }, err))
+                { msg = "Save failed: " + err; continue; }
             run("sudo systemctl restart vibeserver 2>&1");
             msg = pin.empty() ? "PIN removed, server restarted." : "PIN changed, server restarted.";
         } else if (c == 'x') {
@@ -288,9 +313,9 @@ void statusScreen(vsconfig::Config& cfg) {
             attron(A_BOLD); mvprintw(8, 2, "Press  y  to confirm, anything else to cancel."); attroff(A_BOLD);
             refresh();
             if (getch() != 'y') { msg = "Cancelled."; continue; }
-            cfg.configured = false;
             std::string err;
-            if (!saveConfig(cfg, err)) { msg = "Save failed: " + err; continue; }
+            if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.configured = false; }, err))
+                { msg = "Save failed: " + err; continue; }
             run("sudo systemctl restart vibeserver 2>&1");
             msg = "Reset. Open the address above in a browser to set it up again.";
         }
