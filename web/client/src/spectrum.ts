@@ -130,6 +130,10 @@ export interface SpectrumCallbacks {
    *  ceiling as a lock hid the picker in the app and merely filtered it here. */
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
               forceIdleSaver?: boolean, radio?: RadioCaps | null, lockedCentre?: number) => void;
+  /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
+   *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
+   *  visible and refused reads as a broken feature, not a blocked one. */
+  onBlockedModes?: (modes: string[]) => void;
   /** ★ Global server-side DSP state (NR, notch). These SURVIVE a listener leaving,
    *  so the next listener inherits them — the client must render what the server
    *  says rather than its own saved prefs, or the control lies about the radio. */
@@ -351,6 +355,11 @@ export class SpectrumClient {
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null,
                            Number(msg.lockedCentre) || 0);
+        // ★★ Demodulators the OWNER has switched off. The server also REFUSES them, so this is
+        //    not the enforcement — it is what lets us leave them out of the menu entirely.
+        //    Offering a mode that will be refused reads as "the feature is broken"; not offering
+        //    it reads as "this receiver is for HF", which is the truth.
+        if (Array.isArray(msg.blocked)) this.cb.onBlockedModes?.(msg.blocked as string[]);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.(msg.nr === true, msg.notch === true);
         }

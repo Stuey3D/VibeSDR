@@ -49,6 +49,18 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 // The useful half — the noise-corrected deviation readout — now switches itself on whenever the
 // Advanced RDS analyser is open, so there is nothing left for a mode to do.
 const MODES: SDRMode[] = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cwu', 'cwl'];
+
+/** ★★ Demodulators the OWNER has switched off (hwinfo.blocked). Lower-cased on arrival.
+ *  ★ The server publishes 'cw' for the CW family while the client offers cwu/cwl, so a blocked
+ *  'cw' must take both — a half-applied block leaves one dead button, which is the exact failure
+ *  hiding them is meant to prevent. */
+let blockedModes = new Set<string>();
+function isModeBlocked(m: string): boolean {
+  const k = m.toLowerCase();
+  if (blockedModes.has(k)) return true;
+  if ((k === 'cwu' || k === 'cwl') && blockedModes.has('cw')) return true;
+  return false;
+}
 const LS_SERVERS = 'vibesdr_web_servers_v1';   // { "host:port": pin }
 const LS_PREFS   = 'vibesdr_web_prefs_v1';
 
@@ -534,6 +546,19 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (nEl && nEl.classList.contains('on') !== notch) {
         nEl.classList.toggle('on', notch);
         nEl.textContent = notch ? 'ON' : 'OFF';
+      }
+    },
+    // ★ Rebuild the mode buttons whenever the server tells us what it allows. It arrives with
+    //   hwinfo, i.e. AFTER the controls are first built, so this must re-render rather than
+    //   assume it can filter at build time.
+    onBlockedModes: (list) => {
+      blockedModes = new Set(list.map(m => m.toLowerCase()));
+      buildModeButtons();
+      // If we are somehow already ON a blocked mode (an owner switched it off mid-session),
+      // move to the first one that is still allowed rather than leaving a dead selection.
+      if (spec?.mode && isModeBlocked(String(spec.mode))) {
+        const first = MODES.find(m => !isModeBlocked(m));
+        if (first) setMode(first, true);
       }
     },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre) => {
@@ -1721,11 +1746,12 @@ function updateStatus() {
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 
-function buildControls() {
-  // Mode buttons
+function buildModeButtons() {
   const modes = $('modes');
+  if (!modes) return;
   modes.innerHTML = '';
   for (const m of MODES) {
+    if (isModeBlocked(m)) continue;      // ★ omitted entirely, not disabled
     const b = document.createElement('button');
     b.className = 'btn';
     b.textContent = m.toUpperCase();
@@ -1733,6 +1759,14 @@ function buildControls() {
     b.onclick = () => setMode(m, true);
     modes.appendChild(b);
   }
+  // Re-mark the active button — this runs after the controls already exist.
+  const cur = spec?.mode;
+  if (cur) for (const b of Array.from(modes.children) as HTMLButtonElement[])
+    b.classList.toggle('on', b.dataset.mode === cur);
+}
+
+function buildControls() {
+  buildModeButtons();
 
   buildVfo();
 
