@@ -34,6 +34,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include "vibeserver_config.h"
 
 namespace {
 
@@ -259,7 +260,51 @@ bool parse(int argc, char** argv, Opts& o) {
     return true;
 }
 
+/** Seed `o` from a stored config. ★ Called BEFORE the command-line pass, which is the whole
+ *  precedence rule in one line: config.json supplies the defaults, the command line overrides
+ *  them. Someone running the binary by hand to test something must always win over the file. */
+void applyConfig(const vsconfig::Config& c, Opts& o) {
+    o.rxName = c.name; o.rxPlace = c.place; o.rxIso = c.country;
+    o.rxGrid = c.locator; o.rxLat = c.lat; o.rxLon = c.lon;
+    o.pin = c.pin; o.adminPass = c.adminPass;
+    o.sessionLimitMin = c.sessionLimitMin;
+    o.freq = c.landingFreq > 0 ? c.landingFreq : c.freq;
+    o.rate = c.rate;
+    o.lockFreq = c.lockFreq; o.lockRate = c.lockRate;
+    o.gain = c.gain;
+    o.mode = c.demodMode;
+    o.users = c.users;
+    o.maxBw = c.maxBw; o.maxFps = c.maxFps; o.fftRate = c.fftRate;
+    o.uncompressed = c.uncompressed;
+    o.forceIdleSaver = c.forceIdleSaver;
+    o.idleGrace = c.idleGrace;
+    o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
+    o.port = c.port; o.web = c.web;
+}
+
+/** The reverse, so a running server can hand the setup page what it is ACTUALLY doing rather than
+ *  what the file last said — the two differ the moment anyone passes a flag. */
+void configFromOpts(const Opts& o, vsconfig::Config& c) {
+    c.name = o.rxName; c.place = o.rxPlace; c.country = o.rxIso;
+    c.locator = o.rxGrid; c.lat = o.rxLat; c.lon = o.rxLon;
+    c.pin = o.pin; c.adminPass = o.adminPass;
+    c.sessionLimitMin = o.sessionLimitMin;
+    c.freq = o.freq; c.rate = o.rate;
+    c.lockFreq = o.lockFreq; c.lockRate = o.lockRate;
+    c.gain = o.gain; c.demodMode = o.mode;
+    c.users = o.users;
+    c.maxBw = o.maxBw; c.maxFps = o.maxFps; c.fftRate = o.fftRate;
+    c.uncompressed = o.uncompressed;
+    c.forceIdleSaver = o.forceIdleSaver;
+    c.idleGrace = o.idleGrace;
+    c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
+    c.port = o.port; c.web = o.web;
+    c.mode = o.lockFreq > 0 ? vsconfig::Mode::LockedRange : vsconfig::Mode::SingleUser;
+}
+
 }  // namespace
+
+namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig; }
 
 int main(int argc, char** argv) {
     // ★★★ NO ARGUMENTS AND A TERMINAL ⇒ A HUMAN TYPED `vibeserver`, so show the settings screen.
@@ -273,8 +318,28 @@ int main(int argc, char** argv) {
         return vibeserverTui();
     }
 #endif
+    // ── STORED CONFIG FIRST, COMMAND LINE SECOND ────────────────────────────────────────────
+    // ★★ The file supplies defaults; every flag overrides one. See vibeserver_config.h for why
+    //    the storage moved from a flag string to JSON: a browser page has to round-trip these.
+    // ★ A missing file is the NORMAL state of a fresh install — it means "not set up yet", not an
+    //   error. A malformed one is reported and IGNORED: a receiver must never stay offline
+    //   because one value is wrong.
     Opts o;
+    vsconfig::Config cfg;
+    {
+        const char* p = getenv("VIBESERVER_CONFIG");
+        g_configPath = p && *p ? p : vsconfig::defaultPath();
+        std::string err;
+        if (vsconfig::load(g_configPath, cfg, err)) {
+            applyConfig(cfg, o);
+        } else if (!err.empty()) {
+            std::fprintf(stderr, "VibeServer: ignoring %s — %s\n", g_configPath.c_str(), err.c_str());
+        }
+    }
     if (!parse(argc, argv, o)) return 0;
+    // What the server is ACTUALLY running, flags included — this is what the setup page reads.
+    g_runtimeConfig = cfg;
+    configFromOpts(o, g_runtimeConfig);
 
     std::signal(SIGINT,  onSignal);
     std::signal(SIGTERM, onSignal);

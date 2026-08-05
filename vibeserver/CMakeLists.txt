@@ -66,6 +66,9 @@ file(GLOB FT8_SRC
 # drift. Both link this.
 add_library(vibeserver_core STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_api.cpp"
+    # ★ The DAEMON owns config persistence, not the shared core — local_sdr_shim.cpp is compiled
+    #   into the Android and iOS apps too, and a phone has no /etc to write. See vibeserver_config.h.
+    "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_config.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     "${CPP_DIR}/mdns_responder.cpp"
