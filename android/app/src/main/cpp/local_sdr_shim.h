@@ -83,6 +83,10 @@ public:
     static void setVibeServerSessionLimit(int minutes);
     /** Is a listener currently holding the radio? Used by the identity endpoint. */
     bool isBusy() const;
+    /** How many spectrum listeners are attached. ★ `isBusy` answers a one-at-a-time question; on
+     *  a shared receiver the owner wants the NUMBER, and someone deciding whether to connect
+     *  wants to know there is room. */
+    int  listenerCount() const;
     /** Seconds until the current listener's limit expires; -1 when there is no limit,
      *  nobody is listening, or the listener is exempt (loopback / admin). */
     int  occupantSecsLeft() const;

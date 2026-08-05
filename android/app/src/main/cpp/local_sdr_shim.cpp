@@ -3371,6 +3371,27 @@ struct LocalSdrShim::Impl {
 
     // VibeServer: advertise the tuner's supported gains to the client so its gain
     // slider has real dB steps (it can't query the remote device natively).
+    /** ★★ Tell everyone how many are listening. Sent when the count CHANGES, not on a timer:
+     *  it changes rarely, and a per-frame field on a hot path would be paying continuously for
+     *  something that is news about twice an hour. */
+    /** Safe to call during teardown — broadcastUsers() re-reads the lists, so a socket that has
+     *  already been removed is simply not in them. */
+    void broadcastUsersSafe() { broadcastUsers(); }
+
+    void broadcastUsers() {
+        const int n = specListenerCount();
+        char b[96];
+        snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}", n, g_vsMaxUsers.load());
+        for (auto& p : allSpecPeers()) sendText(p.sock, b);
+    }
+
+    void sendUsers(const std::shared_ptr<net::Socket>& sock) {
+        char b[96];
+        snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}",
+                 specListenerCount(), g_vsMaxUsers.load());
+        sendText(sock, b);
+    }
+
     void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
         std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
         std::string j = "{\"type\":\"hwinfo\",\"gains\":[";
@@ -3860,6 +3881,12 @@ struct LocalSdrShim::Impl {
                              // extra — and a public receiver that is one-client-at-a-time has to
                              // say so BEFORE someone taps it, or every busy server looks broken.
                              + ",\"busy\":" + (LocalSdrShim::instance().isBusy() ? "true" : "false")
+                             // ★ HOW MANY ARE LISTENING, and the cap. "busy" is a yes/no built for
+                             // a one-at-a-time receiver; on a shared one the owner wants the
+                             // NUMBER, and a listener deciding whether to bother wants to know
+                             // there is room. Costs nothing — the picker already fetches this.
+                             + ",\"listeners\":" + std::to_string(LocalSdrShim::instance().listenerCount())
+                             + ",\"maxUsers\":" + std::to_string(g_vsMaxUsers.load())
                              + ",\"limitMin\":" + std::to_string(g_vsSessionLimitMin.load())
                              // Seconds the current listener has left, -1 = no limit / free. Lets
                              // the picker say "free in 4 min" instead of a bare "in use", which
@@ -4301,6 +4328,7 @@ struct LocalSdrShim::Impl {
                          lm.empty() ? mode.c_str() : lm.c_str());
             }
             sendConfig(sock); sendHwInfo(sock);
+            broadcastUsers();          // ★ everyone learns someone joined, including the joiner
             if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
                      specListenerCount(), g_vsMaxUsers.load());
@@ -4385,6 +4413,7 @@ struct LocalSdrShim::Impl {
           const bool audioGone = !audioClient || !audioClient->isOpen();
           if (specGone && audioGone) { occupantSession.clear(); bothGone = true; } }
         outboxClose(sock);   // drain, then close — see outboxClose()
+        broadcastUsersSafe();      // ★ someone left — tell whoever is still here
         // No listeners → idle the dongle so an unattended server stops burning power. OUTSIDE the lock:
         // pauseCaptureIdle() joins the capture thread, which must never happen under clientMtx.
         // ★★★ BUT RE-CHECK FIRST — A NEW CLIENT MAY HAVE ARRIVED WHILE THIS SOCKET WAS CLOSING.
@@ -5533,6 +5562,7 @@ bool LocalSdrShim::isBusy() const {
         && ((p->specClient && p->specClient->isOpen())
          || (p->audioClient && p->audioClient->isOpen()));
 }
+int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0; }
 
 int LocalSdrShim::occupantSecsLeft() const {
     const int limitMin = g_vsSessionLimitMin.load();
