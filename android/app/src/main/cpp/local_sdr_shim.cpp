@@ -61,6 +61,7 @@
 #include <deque>
 #include <memory>
 #include <map>
+#include <set>
 #include <mutex>
 #include <random>
 #include <unordered_map>
@@ -1424,38 +1425,60 @@ struct LocalSdrShim::Impl {
     std::atomic<float> audioGain{1.0f};   // per-mode output trim (AM is hotter)
     double deempTau = 50e-6;   // FM de-emphasis time constant (0 = off); 50us EU / 75us US
 
-    // WFM RDS (fed by the engine's rdsPs/rdsText callbacks) + stereo-pilot lock.
-    std::mutex rdsMtx;
-    std::string rdsPsName, rdsText;
-    int rdsPi = -1;
-    int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
-    int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
-    float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
+    // ── RDS, PER LISTENER ────────────────────────────────────────────────────────────────────
+    // ★★★ ONE SET OF THESE PER LISTENER, because RDS identifies ONE carrier and every listener is
+    //     on their own. The whole block used to live on Impl — a single station's worth of state
+    //     for the whole server — which was invisible while there was one VFO and wrong the moment
+    //     there were thirty: "what if user 1 is listening to Heart and user 2 is listening to
+    //     Radio 1? The RDS needs to be independent" (Stuart, 2026-08-05).
+    //     ★ The first fix for this designated an OWNER — one WFM listener drove the shared state.
+    //       That is strictly better than nothing and still wrong: it shows user 2 user 1's
+    //       station. Naming a limitation does not make it acceptable.
+    //     ★★ `lastSent*` live here too, so change-detection is per listener as well. Sharing THAT
+    //        would mean the first peer to be told suppressed the message for everyone else — a
+    //        broadcast built on single-listener bookkeeping.
+    struct RdsState {
+        std::mutex rdsMtx;
+        std::string rdsPsName, rdsText;
+        int rdsPi = -1;
+        int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
+        int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
+        float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
+        // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
+        int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
+        // ★ The same five UNCONFIRMED, for the client's RAW view. Live, never sticky.
+        int rdsPtyRaw = -1, rdsTpRaw = -1, rdsTaRaw = -1, rdsMsRaw = -1, rdsDiRaw = -1;
+        int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0, rdsAfSeen = 0;
+        std::vector<int> rdsGrp;
+        std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs, rdsPtyn;
+        int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
+        float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
+        float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
+        // ★ How fast that phase is TURNING, deg/s. Coherence only catches FAST rotation; a slow
+        // one keeps coherence high while the angle walks all the way round. See vibedsp.h.
+        float rdsPhaseDrift = 0.0f;
+        float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
+        std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
+        std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
+        std::vector<int> rdsAf;
+        std::vector<float> rdsConst;
+        std::vector<float> rdsMpx;             // MPX spectrum, dB per bin
+        std::atomic<bool> stereoDetected{false};
+        // Last values pushed to THIS listener (change-detect, to avoid marquee re-trigger).
+        float lastSentSig_ = -999.0f;
+        int lastSentBer_ = -2;   // -2 = never sent (distinct from -1 = decoder has no window)
+        std::string lastSentPs_, lastSentRt_;
+        int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;
+    };
+
+    /** This server's own RDS — used only when there is NO per-client pipeline (the phone and Mac
+     *  apps, where there is one listener and it is the user). */
+    RdsState rdsS;
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
     double rdsxLastAt = 0.0;                 // wall clock of the last rdsx — see the emit site
     // ★★ ADMIN UNLOCK, per connected client. Cleared whenever the spectrum client changes, so
     // an unlock cannot outlive the session that earned it and be inherited by the next visitor.
     std::atomic<bool> adminOk{false};
-    // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
-    int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
-    // ★ The same five UNCONFIRMED, for the client's RAW view. Live, never sticky.
-    int rdsPtyRaw = -1, rdsTpRaw = -1, rdsTaRaw = -1, rdsMsRaw = -1, rdsDiRaw = -1;
-    int rdsCtMin = -1, rdsCtOff = 0, rdsGrpTotal = 0, rdsAfSeen = 0;
-    std::vector<int> rdsGrp;
-    std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs, rdsPtyn;
-    int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
-    float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
-    float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
-    // ★ How fast that phase is TURNING, deg/s. Coherence only catches FAST rotation; a slow
-    // one keeps coherence high while the angle walks all the way round. See vibedsp.h.
-    float rdsPhaseDrift = 0.0f;
-    float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
-    std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
-    std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
-    std::vector<int> rdsAf;
-    std::vector<float> rdsConst;
-    std::vector<float> rdsMpx;             // MPX spectrum, dB per bin
-    std::atomic<bool> stereoDetected{false};
     // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
     // it. Jr's future VibeServer backend opts in. Single-occupant, so one flag suffices.
@@ -1618,6 +1641,12 @@ struct LocalSdrShim::Impl {
         //       per-listener, EVERY path that identified the listener must be re-derived.
         //     ★★ They are also settings a listener may choose FOR THEMSELVES: one person's noise
         //        reduction has no business being applied to everyone else's audio.
+        /** ★ THIS listener's RDS — see RdsState. Independent of every other listener's, which is
+         *  the whole point: two people on two stations get two station names. */
+        RdsState rdsS;
+        /** The frequency this listener's RDS belongs to. RDS is about ONE carrier, so the moment
+         *  the dial moves it is stale — this is what notices. */
+        double rdsAtHz = -1;
         std::atomic<bool> nrOn{false}, notchOn{false};
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
@@ -1771,12 +1800,48 @@ struct LocalSdrShim::Impl {
         c->owner->onClientAudio(c, pcm, frames, ch);
     }
 
-    /** Build (or rebuild) a listener's channel for its current VFO/mode/bandwidth.
-     *  ★ Rebuilds only when the WIDTH changes. Moving the dial inside the same channel width is
-     *  just a different centre bin plus a residual offset — no filter state is thrown away, which
-     *  is what keeps tuning smooth instead of clicking. Same reasoning as the shared path's
-     *  "a same-chain retune re-points the NCO and rebuilds nothing". */
-    /** The listener's own DSP thread: take blocks from its queue, extract its channels, demod. */
+    /** ★★★ RDS AND THE STEREO PILOT COME FROM A LISTENER'S OWN PIPELINE NOW. They were wired to
+     *  the SHARED one only, which in per-client mode demodulates for nobody — so RDS, Advanced RDS
+     *  and the stereo indicator were all dead on a shared receiver, while the audio itself was
+     *  perfectly fine (Stuart, 2026-08-05: "RDS and ADVANCED RDS not working"... "oh no it IS in
+     *  stereo, just not displaying the icon" — which is the tell: the DEMODULATOR was working and
+     *  only the telemetry hanging off it was not).
+     *  ★ FIFTH instance of the family in one session. The rule earns its keep: when a shared
+     *    resource becomes per-listener, every path that identified the listener must be re-derived.
+     *
+     *  ★★ ONE OWNER AT A TIME, because the RDS state it feeds is a single set of fields on Impl —
+     *  including the whole Advanced RDS surface. Two WFM listeners writing it at once would
+     *  interleave two stations' names into one. The first WFM listener claims it; when they leave
+     *  WFM or disconnect the claim is released and the next one takes it.
+     *  ▶ Genuinely per-listener RDS means moving ~30 fields onto ClientDsp. Worth doing, not
+     *    tonight, and the same known limitation the decoders already carry. */
+    /** ★★★ EVERY LISTENER DECODES THEIR OWN. Each forwards into that listener's OWN RdsState, so
+     *  user 1 on Heart and user 2 on Radio 1 see their own station's name, PI, RadioText and
+     *  stereo flag — which is what an OWRX-style profile means and what the earlier
+     *  single-owner design could not do (Stuart, 2026-08-05). */
+    static void cRdsPs(void* ctx, uint16_t pi, const char* ps8) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsPsCb_(c->rdsS, c->vfoHz, c->owner, pi, ps8); }
+    static void cRdsText(void* ctx, const char* rt64) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsTextCb_(c->rdsS, c->vfoHz, c->owner, rt64); }
+    static void cRdsPi(void* ctx, uint16_t pi) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsPiCb_(c->rdsS, c->vfoHz, c->owner, pi); }
+    static void cRdsExt(void* ctx, const vibedsp::RxPipeline::Callbacks::RdsExt& x) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsExtCb_(c->rdsS, c->vfoHz, c->owner, x); }
+    static void cRdsSig(void* ctx, float relDb) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsSigCb_(c->rdsS, c->vfoHz, c->owner, relDb); }
+    static void cRdsBer(void* ctx, int percent) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsBerCb_(c->rdsS, c->vfoHz, c->owner, percent); }
+    static void cRdsEcc(void* ctx, uint8_t ecc) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsEccCb_(c->rdsS, c->vfoHz, c->owner, ecc); }
+    static void cStereo(void* ctx, bool locked) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) stereoCb_(c->rdsS, c->vfoHz, c->owner, locked); }
+
+    static void freeClientFx(ClientDsp* c) {
+        std::lock_guard<std::mutex> lk(c->fxMtx);
+        delete c->nrEng;    c->nrEng = nullptr;
+        delete c->notchEng; c->notchEng = nullptr;
+    }
+
     void clientThread(std::shared_ptr<ClientDsp> c) {
         vibeAudioThread("vibe-listener");
         for (;;) {
@@ -1791,15 +1856,9 @@ struct LocalSdrShim::Impl {
             feedOneClient(c, blk->bins.data(), blk->index);
         }
     }
+
     void startClientThread(const std::shared_ptr<ClientDsp>& c) {
         c->th = std::thread([this, c]{ clientThread(c); });
-    }
-    /** ★ The per-listener effect engines are heap objects with STFT state; they must die with the
-     *  listener or thirty joins and leaves leak thirty of each. */
-    static void freeClientFx(ClientDsp* c) {
-        std::lock_guard<std::mutex> lk(c->fxMtx);
-        delete c->nrEng;    c->nrEng = nullptr;
-        delete c->notchEng; c->notchEng = nullptr;
     }
 
     void stopClientThread(const std::shared_ptr<ClientDsp>& c) {
@@ -1811,6 +1870,21 @@ struct LocalSdrShim::Impl {
 
     void clientRetune(ClientDsp* c) {
         if (!c) return;
+        // ★★★ RDS IDENTIFIES ONE CARRIER, SO IT DIES WITH THE DIAL. Clear it whenever this
+        //     listener's frequency or mode changes — the shared retune path has always done this
+        //     (see retune()), and the per-client one did not, so a listener who tuned away kept
+        //     the previous station's NAME and PI while their own decoder reported nothing:
+        //     ps="Heart" alongside ber=-1 and sig=-99, which reads as "RDS is shared and broken"
+        //     when it is in fact per-listener and merely stale. Measured on the Pi, 2026-08-05.
+        //     ★ It is the same rule the WEB client applies at its end (expireRdsIfRetuned) — a
+        //       station name outliving the tune is the bug both were written to prevent.
+        if (c->mode != "wfm" || c->vfoHz != c->rdsAtHz) {
+            c->rdsAtHz = c->vfoHz;
+            std::lock_guard<std::mutex> lk(c->rdsS.rdsMtx);
+            c->rdsS.rdsPsName.clear(); c->rdsS.rdsText.clear();
+            c->rdsS.rdsPi = -1; c->rdsS.rdsEcc = 0; c->rdsS.rdsBer = -1; c->rdsS.rdsSig = -99.0f;
+            c->rdsS.stereoDetected.store(false);
+        }
         const auto mp = paramsFor(c->mode);
         const double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
         // ★★★ THE CHANNEL IS SIZED BY THE DEMODULATOR, AND BY NOTHING ELSE.
@@ -1836,6 +1910,12 @@ struct LocalSdrShim::Impl {
             cb.ctx = c;
             cb.audio = &Impl::clientAudioCb;
             cb.zoomSpectrum = &Impl::clientZoomCb;
+            // ★ Always wired; the forwarders themselves check ownership, so a listener who becomes
+            //   the RDS owner later does not need their pipeline rebuilding to start reporting.
+            cb.rdsPs = &Impl::cRdsPs;   cb.rdsPi   = &Impl::cRdsPi;
+            cb.rdsBer = &Impl::cRdsBer; cb.rdsSig  = &Impl::cRdsSig;
+            cb.rdsExt = &Impl::cRdsExt; cb.rdsText = &Impl::cRdsText;
+            cb.rdsEcc = &Impl::cRdsEcc; cb.stereo  = &Impl::cStereo;
             // ★ A small FFT: this pipeline exists to DEMODULATE. The waterfall everyone sees is
             //   the shared wide one, so paying for a per-client spectrum here would be paying
             //   twice for a picture nobody reads.
@@ -2684,7 +2764,7 @@ struct LocalSdrShim::Impl {
             vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
             }   // end per-width loop
             // (byte accounting happens inside the per-width loop now)
-            if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
+            // (fm meta is serviced OUTSIDE this gate — see FM META SERVICE below)
             // ★ The RSP's AGC kick and its gain telemetry USED TO LIVE HERE, and that was the bug:
             //   this block is skipped whenever the zoom spectrum owns the waterfall (see `emit`
             //   above), so on a --zoom-spectrum server neither ever ran. They are now hoisted out
@@ -2735,6 +2815,17 @@ struct LocalSdrShim::Impl {
             // agree and the colour map is fed the values it was designed for.
             if (eN) iqFloorDb.store((float)(eSum / eN));
         }
+
+        // ══ FM META SERVICE ══════════════════════════════════════════════════════════════
+        // ★★★ OUTSIDE THE EMIT GATE, for the same reason the RSP gain service below is. The call
+        //     lived inside the wide-spectrum block, which is SKIPPED entirely whenever the zoom
+        //     spectrum owns the waterfall — and --zoom-spectrum is on for every shared receiver we
+        //     ship. So RDS was not merely per-client-broken, it was never sent at all on the
+        //     configuration this product actually runs in. Third symptom of that one gate; the
+        //     comment above it has been warning about exactly this since the AGC kick.
+        // ★★ AND TO EVERY PEER. It went to one socket, so on a shared receiver only whoever
+        //    happened to be the primary listener could ever see RDS.
+        if ((n % 10) == 0) sendFmMetaAll();
 
         // ══ RSP GAIN SERVICE ═════════════════════════════════════════════════════════════
         // ★★★ DELIBERATELY OUTSIDE THE `emit` BLOCK ABOVE, AND THAT IS THE WHOLE POINT.
@@ -3110,19 +3201,21 @@ struct LocalSdrShim::Impl {
         onAudio(audioPack.data(), frames, channels);
     }
     // RDS programme-service name / RadioText / stereo-pilot lock from the engine.
-    static void rdsPsCb(void* ctx, uint16_t pi, const char* ps8) {
-        Impl* t = (Impl*)ctx;
+    static void rdsPsCb_(RdsState& st, double vfoHz, Impl* im, uint16_t pi, const char* ps8) {
         {
-            std::lock_guard<std::mutex> lk(t->rdsMtx);
-            t->rdsPi = pi; t->rdsPsName = ps8 ? ps8 : "";
+            std::lock_guard<std::mutex> lk(st.rdsMtx);
+            st.rdsPi = pi; st.rdsPsName = ps8 ? ps8 : "";
         }
         // Learn the station against the frequency it was heard on. audioFreq is the
         // VFO — the thing actually being listened to — not the dongle centre.
-        if (ps8) bmLearn(t->audioFreq.load(), (int)pi, ps8);
+        // ★ Learned against THIS listener's VFO — the frequency actually being heard. It used to
+        //   read the shared audioFreq, which in per-client mode is nobody's, so a learned
+        //   bookmark would be filed under a frequency no one was on.
+        if (ps8) bmLearn(vfoHz, (int)pi, ps8);
     }
-    static void rdsTextCb(void* ctx, const char* rt64) {
-        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsText = rt64 ? rt64 : "";
+    static void rdsTextCb_(RdsState& st, double vfoHz, Impl* im, const char* rt64) {
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsText = rt64 ? rt64 : "";
     }
     // ★ PI on its own, the moment the decoder confirms it. It used to be set ONLY
     // inside rdsPsCb, so the station's identity was hostage to its NAME assembling —
@@ -3130,50 +3223,73 @@ struct LocalSdrShim::Impl {
     // can be lost), while PI is 16 error-protected bits repeated ~11 times a second.
     // Weak stations therefore reported nothing at all when they were in fact telling
     // us exactly who they were (2026-07-26).
+    static void rdsPiCb_(RdsState& st, double vfoHz, Impl* im, uint16_t pi) {
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsPi = (int)pi;
+    }
+    static void rdsExtCb_(RdsState& st, double vfoHz, Impl* im, const vibedsp::RxPipeline::Callbacks::RdsExt& x) {
+        if (!im || !im->rdsxOn.load()) return;
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsPty = x.pty; st.rdsTp = x.tp; st.rdsTa = x.ta; st.rdsMs = x.ms; st.rdsDi = x.di;
+        st.rdsPtyRaw = x.ptyRaw; st.rdsTpRaw = x.tpRaw; st.rdsTaRaw = x.taRaw;
+        st.rdsMsRaw = x.msRaw;   st.rdsDiRaw = x.diRaw;
+        st.rdsCtMin = x.ctMinutes; st.rdsCtOff = x.ctOffsetHalfHours;
+        st.rdsGrpTotal = x.groupTotal; st.rdsAfSeen = x.afSeen;
+        st.rdsAf.assign(x.afKhz, x.afKhz + x.nAf);
+        st.rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
+        st.rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
+        if (x.mpx && x.nMpx > 0) st.rdsMpx.assign(x.mpx, x.mpx + x.nMpx);
+        st.rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
+        st.rdsRtpArtist = x.rtpArtist ? x.rtpArtist : "";
+        st.rdsLongPs = x.longPs ? x.longPs : "";
+        st.rdsPtyn = x.ptyn ? x.ptyn : "";
+        st.rdsLang = x.language;
+        st.rdsPinDay = x.pinDay; st.rdsPinHour = x.pinHour; st.rdsPinMin = x.pinMinute;
+        st.rdsEon.assign(x.eon, x.eon + x.nEon);
+        st.rdsOda.assign(x.oda, x.oda + x.nOda);
+        st.rdsPhase = x.pilotPhaseDeg;
+        st.rdsPhaseCoh = x.pilotPhaseCoherence;
+        st.rdsPhaseDrift = x.pilotPhaseDriftDegPerSec;
+        st.rdsPilotDev = x.pilotDevKHz;
+        st.rdsDev      = x.rdsDevKHz;
+    }
+    static void rdsSigCb_(RdsState& st, double vfoHz, Impl* im, float relDb) {
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsSig = relDb;
+    }
+    static void rdsBerCb_(RdsState& st, double vfoHz, Impl* im, int percent) {
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsBer = percent;
+    }
+    static void rdsEccCb_(RdsState& st, double vfoHz, Impl* im, uint8_t ecc) {
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsEcc = ecc;
+    }
+    static void stereoCb_(RdsState& st, double, Impl*, bool locked) { st.stereoDetected.store(locked); }
+
+    // ── Callback plumbing ────────────────────────────────────────────────────────────────────
+    // ★★ TWO THIN WRAPPERS OVER ONE BODY. RxPipeline::Callbacks carries a single `ctx`, shared
+    //    with the audio callback — so the shared pipeline must pass Impl* and a per-listener one
+    //    must pass ClientDsp*. Resolving which RdsState to write in the wrapper, and keeping the
+    //    logic in one place, is what stops the two drifting: a fix applied to one and not the
+    //    other would be indistinguishable from the bug it fixed.
+    static void rdsPsCb(void* ctx, uint16_t pi, const char* ps8) {
+        auto* t = (Impl*)ctx; rdsPsCb_(t->rdsS, t->audioFreq.load(), t, pi, ps8); }
+    static void rdsTextCb(void* ctx, const char* rt64) {
+        auto* t = (Impl*)ctx; rdsTextCb_(t->rdsS, 0, t, rt64); }
     static void rdsPiCb(void* ctx, uint16_t pi) {
-        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsPi = (int)pi;
-    }
+        auto* t = (Impl*)ctx; rdsPiCb_(t->rdsS, 0, t, pi); }
     static void rdsExtCb(void* ctx, const vibedsp::RxPipeline::Callbacks::RdsExt& x) {
-        Impl* t = (Impl*)ctx;
-        if (!t->rdsxOn.load()) return;
-        std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsPty = x.pty; t->rdsTp = x.tp; t->rdsTa = x.ta; t->rdsMs = x.ms; t->rdsDi = x.di;
-        t->rdsPtyRaw = x.ptyRaw; t->rdsTpRaw = x.tpRaw; t->rdsTaRaw = x.taRaw;
-        t->rdsMsRaw = x.msRaw;   t->rdsDiRaw = x.diRaw;
-        t->rdsCtMin = x.ctMinutes; t->rdsCtOff = x.ctOffsetHalfHours;
-        t->rdsGrpTotal = x.groupTotal; t->rdsAfSeen = x.afSeen;
-        t->rdsAf.assign(x.afKhz, x.afKhz + x.nAf);
-        t->rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
-        t->rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
-        if (x.mpx && x.nMpx > 0) t->rdsMpx.assign(x.mpx, x.mpx + x.nMpx);
-        t->rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
-        t->rdsRtpArtist = x.rtpArtist ? x.rtpArtist : "";
-        t->rdsLongPs = x.longPs ? x.longPs : "";
-        t->rdsPtyn = x.ptyn ? x.ptyn : "";
-        t->rdsLang = x.language;
-        t->rdsPinDay = x.pinDay; t->rdsPinHour = x.pinHour; t->rdsPinMin = x.pinMinute;
-        t->rdsEon.assign(x.eon, x.eon + x.nEon);
-        t->rdsOda.assign(x.oda, x.oda + x.nOda);
-        t->rdsPhase = x.pilotPhaseDeg;
-        t->rdsPhaseCoh = x.pilotPhaseCoherence;
-        t->rdsPhaseDrift = x.pilotPhaseDriftDegPerSec;
-        t->rdsPilotDev = x.pilotDevKHz;
-        t->rdsDev      = x.rdsDevKHz;
-    }
+        auto* t = (Impl*)ctx; rdsExtCb_(t->rdsS, 0, t, x); }
     static void rdsSigCb(void* ctx, float relDb) {
-        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsSig = relDb;
-    }
+        auto* t = (Impl*)ctx; rdsSigCb_(t->rdsS, 0, t, relDb); }
     static void rdsBerCb(void* ctx, int percent) {
-        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsBer = percent;
-    }
+        auto* t = (Impl*)ctx; rdsBerCb_(t->rdsS, 0, t, percent); }
     static void rdsEccCb(void* ctx, uint8_t ecc) {
-        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsEcc = ecc;
-    }
-    static void stereoCb(void* ctx, bool locked) { ((Impl*)ctx)->stereoDetected.store(locked); }
+        auto* t = (Impl*)ctx; rdsEccCb_(t->rdsS, 0, t, ecc); }
+    static void stereoCb(void* ctx, bool locked) {
+        auto* t = (Impl*)ctx; stereoCb_(t->rdsS, 0, t, locked); }
+
 
     // Frame + send one block of interleaved int16 PCM to the audio client.
     //
@@ -3518,9 +3634,9 @@ struct LocalSdrShim::Impl {
     // engine reconfigures itself on the next feed() after setTune(). teardownAudio
     // just resets the derived UI state; the engine retains no audio across modes.
     void teardownAudio() {
-        std::lock_guard<std::mutex> lk(rdsMtx);
-        rdsPsName.clear(); rdsText.clear(); rdsPi = -1; rdsEcc = 0; rdsBer = -1; rdsSig = -99.0f;
-        stereoDetected.store(false);
+        std::lock_guard<std::mutex> lk(rdsS.rdsMtx);
+        rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; rdsS.rdsEcc = 0; rdsS.rdsBer = -1; rdsS.rdsSig = -99.0f;
+        rdsS.stereoDetected.store(false);
     }
 
     void buildAudio() {
@@ -3619,17 +3735,32 @@ struct LocalSdrShim::Impl {
         }
         return o;
     }
-    void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
+    /** ★ Each listener has their own change-detection now (it lives in their RdsState), so this
+     *  is a plain loop: nobody can suppress anybody else's message, and a listener who joins
+     *  mid-song is told the station's name on their first tick because their own lastSent* are
+     *  empty. The peer-tracking set this needed a moment ago was a symptom of shared state. */
+    void sendFmMetaAll() { for (auto& p : allSpecPeers()) sendFmMeta(p.sock); }
+
+    bool sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
         std::string ps, rt; int pi = -1, ecc = 0, ber = -1; float sig = -99.0f;
-        bool wfm = (mode == "wfm");
+        // ★★★ THIS LISTENER'S MODE, not the shared one. `mode` is the shared pipeline's, which in
+        //     per-client mode is whatever the server started in — so a listener who tuned WFM
+        //     themselves was judged "not FM" and the whole RDS message was suppressed. RDS,
+        //     Advanced RDS and the stereo flag all vanished together, which is exactly how it
+        //     presented (Stuart, 2026-08-05).
+        auto c = dspFor(sock);
+        // ★ THIS listener's state, falling back to the server's own only where there is no
+        //   per-client pipeline at all (the phone and Mac apps, one listener, no ambiguity).
+        RdsState& R = c ? c->rdsS : rdsS;
+        bool wfm = c ? (c->mode == "wfm") : (mode == "wfm");
         if (wfm) {
-            std::lock_guard<std::mutex> lk(rdsMtx);
-            ps = rdsPsName; rt = rdsText; pi = rdsPi; ecc = rdsEcc; ber = rdsBer; sig = rdsSig;
+            std::lock_guard<std::mutex> lk(R.rdsMtx);
+            ps = R.rdsPsName; rt = R.rdsText; pi = R.rdsPi; ecc = R.rdsEcc; ber = R.rdsBer; sig = R.rdsSig;
         }
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
         ps = trim(ps); rt = trim(rt);
-        const bool st = wfm && stereoDetected.load();
+        const bool st = wfm && R.stereoDetected.load();
         // Only send when something actually CHANGED — re-sending identical RDS each
         // second re-triggers the client's notification marquee (text "repopulates"
         // and flickers). Change-detect ps/rt/pi/ecc/stereo and skip otherwise.
@@ -3640,22 +3771,19 @@ struct LocalSdrShim::Impl {
         // running at all". Those are opposite faults and they looked identical.
         // The client must not re-trigger its marquee on a BER-only change (it keys that off
         // ps/rt), so this is safe to send at the 1 Hz metadata cadence.
-        if (ps == lastSentPs_ && rt == lastSentRt_ && pi == lastSentPi_ && ecc == lastSentEcc_
-            && st == lastSentStereo_ && ber == lastSentBer_
-            && std::fabs(sig - lastSentSig_) < 0.5f) return;
-        lastSentPs_ = ps; lastSentRt_ = rt; lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st;
-        lastSentBer_ = ber; lastSentSig_ = sig;
+        if (ps == R.lastSentPs_ && rt == R.lastSentRt_ && pi == R.lastSentPi_ && ecc == R.lastSentEcc_
+            && st == R.lastSentStereo_ && ber == R.lastSentBer_
+            && std::fabs(sig - R.lastSentSig_) < 0.5f) return false;
+        R.lastSentPs_ = ps; R.lastSentRt_ = rt; R.lastSentPi_ = pi; R.lastSentEcc_ = ecc; R.lastSentStereo_ = st;
+        R.lastSentBer_ = ber; R.lastSentSig_ = sig;
         char buf[512];
         snprintf(buf, sizeof buf,
             "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d,\"sig\":%.1f}",
             st ? "true" : "false",
             jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig);
         sendText(sock, buf);
+        return true;
     }
-    float lastSentSig_ = -999.0f;
-    int lastSentBer_ = -2;   // -2 = never sent (distinct from -1 = decoder has no window)
-    // Last RDS values pushed to the client (change-detect to avoid marquee re-trigger).
-    std::string lastSentPs_, lastSentRt_; int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;
 
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
@@ -3689,8 +3817,8 @@ struct LocalSdrShim::Impl {
             }
             audioFreq.store(freq);
             rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
-            { std::lock_guard<std::mutex> rl(rdsMtx); rdsPsName.clear(); rdsText.clear(); rdsPi = -1; }
-            stereoDetected.store(false);
+            { std::lock_guard<std::mutex> rl(rdsS.rdsMtx); rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; }
+            rdsS.stereoDetected.store(false);
             return;
         }
 
@@ -3719,8 +3847,8 @@ struct LocalSdrShim::Impl {
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // New frequency -> drop the cached RDS so a different station doesn't keep
         // showing the previous one's PS/RadioText until its own RDS re-syncs.
-        { std::lock_guard<std::mutex> rl(rdsMtx); rdsPsName.clear(); rdsText.clear(); rdsPi = -1; }
-        stereoDetected.store(false);
+        { std::lock_guard<std::mutex> rl(rdsS.rdsMtx); rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; }
+        rdsS.stereoDetected.store(false);
     }
 
     // ── WebSocket framing ──────────────────────────────────────────────────
@@ -6317,6 +6445,11 @@ struct LocalSdrShim::Impl {
      *  would be fifty times the bytes for precision no eye can resolve. */
     void sendRdsExt(std::shared_ptr<net::Socket> sock) {
         if (!sock || !sock->isOpen()) return;
+        // ★ THIS listener's decoder, like the basic RDS path — the Advanced panel is the one that
+        //   most obviously must not show somebody else's station: it is all constellation, phase
+        //   and block-error figures for a signal the reader is judging by ear at the same time.
+        auto c_ = dspFor(sock);
+        RdsState& R = c_ ? c_->rdsS : rdsS;
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
         int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, phaseDrift;
@@ -6325,16 +6458,16 @@ struct LocalSdrShim::Impl {
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
         std::vector<int> af, grp; std::vector<float> pts, mpx;
-        { std::lock_guard<std::mutex> lk(rdsMtx);
-          pty = rdsPty; tp = rdsTp; ta = rdsTa; ms = rdsMs; di = rdsDi;
-          ptyR = rdsPtyRaw; tpR = rdsTpRaw; taR = rdsTaRaw; msR = rdsMsRaw; diR = rdsDiRaw;
-          ctMin = rdsCtMin; ctOff = rdsCtOff; gTot = rdsGrpTotal;
-          af = rdsAf; grp = rdsGrp; pts = rdsConst; mpx = rdsMpx; afSeen = rdsAfSeen;
-          rtpT = rdsRtpTitle; rtpA = rdsRtpArtist; lps = rdsLongPs; ptyn = rdsPtyn;
-          lang = rdsLang; pinD = rdsPinDay; pinH = rdsPinHour; pinM = rdsPinMin;
-          eon = rdsEon; oda = rdsOda; phase = rdsPhase; phaseCoh = rdsPhaseCoh;
-          phaseDrift = rdsPhaseDrift;
-          pilotDev = rdsPilotDev; rdsDev_ = rdsDev; berNow = rdsBer; }
+        { std::lock_guard<std::mutex> lk(R.rdsMtx);
+          pty = R.rdsPty; tp = R.rdsTp; ta = R.rdsTa; ms = R.rdsMs; di = R.rdsDi;
+          ptyR = R.rdsPtyRaw; tpR = R.rdsTpRaw; taR = R.rdsTaRaw; msR = R.rdsMsRaw; diR = R.rdsDiRaw;
+          ctMin = R.rdsCtMin; ctOff = R.rdsCtOff; gTot = R.rdsGrpTotal;
+          af = R.rdsAf; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
+          rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
+          lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
+          eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
+          phaseDrift = R.rdsPhaseDrift;
+          pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; berNow = R.rdsBer; }
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -6363,7 +6496,7 @@ struct LocalSdrShim::Impl {
                       + ",\"phaseDrift\":" + std::to_string(phaseDrift)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)
-                      + ",\"rdsDev\":" + std::to_string(rdsDev_)
+                      + ",\"R.rdsDev\":" + std::to_string(rdsDev_)
                       + ",\"ber\":" + std::to_string(berNow)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }

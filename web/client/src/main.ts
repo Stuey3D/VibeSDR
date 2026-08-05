@@ -1175,9 +1175,58 @@ function piHex(pi: number): string {
 const bmLogos = new Map<string, string | null>();
 let logoQuery = '';     // guards against a stale async logo landing late
 
+/** ★★★ BAND CROSSING, as the app announces it. The web VTS computed the band and then hid the
+ *  whole bar whenever there was no station name — so on HF, where most of the dial has no
+ *  bookmark, crossing into 40m told you nothing at all (Stuart, 2026-08-05: "the VTS isn't
+ *  displaying the band when you move over a band boundary like it does in the app").
+ *  ★ Keyed on the JOINED band names, exactly as SDRScreen's vtsCheck does: moving WITHIN a band
+ *    must not re-announce it, and a frequency covered by two overlapping bands is a different
+ *    place from one covered by either alone.
+ *  ★ NOT announced on the first tune. Arriving somewhere is not crossing into it, and an
+ *    announcement on page load is noise before the user has done anything. */
+let vtsBandKey: string | null = null;
+let vtsBandInit = false;
+let vtsBandMsg = '';
+let vtsBandSub = '';
+let vtsBandUntil = 0;
+const VTS_BAND_MS = 4000;
+
+function fmtBandFreq(hz: number): string {
+  if (hz >= 1_000_000) {
+    const mhz = hz / 1_000_000;
+    return (mhz === Math.floor(mhz) ? mhz.toFixed(0) : mhz.toFixed(mhz < 10 ? 3 : 1)) + ' MHz';
+  }
+  return Math.round(hz / 1000) + ' kHz';
+}
+
+function checkBandCrossing(hz: number) {
+  const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
+  const bands = getBandsAtRegion(hz, ituRegion())
+    .sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+  const key = bands.length ? bands.map(b => b.name).join('|') : null;
+  if (!vtsBandInit) { vtsBandInit = true; vtsBandKey = key; return; }
+  if (key === vtsBandKey) return;
+  vtsBandKey = key;
+  if (!bands.length) return;                    // left the band plan: nothing to announce
+  const p = bands[0];
+  const region = ituRegion();
+  // ★ Same sentence as the app's, minus the band-conditions figure: that comes from UberSDR's
+  //   /api/noisefloor/latest, which a VibeServer does not serve. Inventing one would be worse
+  //   than omitting it — see "no inferred hardware readouts".
+  vtsBandMsg = `BAND: ${fmtBandFreq(p.lo)}–${fmtBandFreq(p.hi)} · ${p.name}`
+             + (bands.length > 1 && region ? ` (ITU R${region})` : '');
+  vtsBandSub = bands.slice(1).map(b => b.name).join('  │  ');
+  vtsBandUntil = Date.now() + VTS_BAND_MS;
+  // ★ The app also applies band-aware mode/step defaults on crossing, but ONLY when the tuning
+  //   was NOT hands-on (lock screen, watch, car controls). In a browser every tune is hands-on,
+  //   so there is no case to apply it to — porting it would only yank the mode out from under
+  //   someone who had just chosen it.
+}
+
 function updateVts() {
   expireRdsIfRetuned();
   if (!spec) return;
+  checkBandCrossing(spec.frequency);
   // ★★ The Advanced RDS decoder OWNS the RDS display while it is open — the bar would be
   // the same data, smaller and less complete. Hidden, not emptied: the media card reads
   // the name from here, and clearing it would strip the OS Now Playing title (the same
@@ -1229,6 +1278,21 @@ function updateVts() {
   // Nothing known here — hide it rather than show an empty bar. ★ A confirmed PI counts as
   // known (see the fallback above); a block-error figure does NOT. Diagnostics belong in the
   // Advanced RDS decoder, not on the bar an ordinary listener reads (Stuart, 2026-07-26).
+  // ★★ THE BAND ANNOUNCEMENT OWNS THE BAR WHILE IT IS LIVE, station or not. It is transient and
+  //    it is about where you have just ARRIVED, which is exactly the moment it is worth reading.
+  if (Date.now() < vtsBandUntil) {
+    $('vtsName').textContent = vtsBandMsg;
+    $('vtsBand').textContent = vtsBandSub;
+    for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
+      ($(id) as HTMLElement).style.display = 'none';
+    vts.classList.add('show');
+    vts.classList.remove('on');
+    setDecBoxOffset();
+    return;
+  }
+  for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
+    ($(id) as HTMLElement).style.removeProperty('display');
+
   if (!name) {
     vts.classList.remove('show', 'on');
     // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
