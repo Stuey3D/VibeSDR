@@ -1793,7 +1793,9 @@ async function showSplashListeners(): Promise<void> {
   const el = document.getElementById('splashListeners');
   if (!el) return;
   try {
-    const r = await fetch('/vibeserver/identity', { cache: 'no-store' });
+    // ★ /vibeserver.json — NOT /vibeserver/identity, which does not exist and 404s in
+    //   silence behind the try/catch. The endpoint is named for the file it pretends to be.
+    const r = await fetch('/vibeserver.json', { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const n = Number(j.listeners) || 0, max = Number(j.maxUsers) || 0, wait = Number(j.waiting) || 0;
@@ -1944,26 +1946,51 @@ async function drawSplashSpectrogram(): Promise<void> {
   // ★ Clear of #splashSpectroTip, which is an HTML element sitting over the bottom-left of
   //   this canvas — the labels are drawn INTO the image and cannot know about it.
   const bandY = H - 30 * px;
+  // ★ BRIGHTER THAN THE GRID, AND ON PURPOSE. These inherited the frequency grid's 0.20 alpha,
+  //   which is right for a rule you should read past and wrong for one that carries information:
+  //   the brackets were invisible until a band happened to fall on a quiet stretch of spectrum
+  //   (Stuart, 2026-08-05: "I didn't realise they were even there until I saw the 90m band").
+  //   A label nobody can see is the same as no label. Restored below so nothing downstream
+  //   silently inherits the brighter pen.
+  const gridStroke = g.strokeStyle;
+  g.strokeStyle = 'rgba(255,200,120,0.55)';
+  g.lineWidth = 1.5 * px;
   for (const b of BAND_PLAN) {
     if (b.regions && !b.regions.includes(1)) continue;   // one region's plan, not three overlaid
     if (b.hi <= lo || b.lo >= hi) continue;
     const x0 = ((Math.max(b.lo, lo) - lo) / span) * (W - 1);
     const x1 = ((Math.min(b.hi, hi) - lo) / span) * (W - 1);
-    const label = b.bandLabel ? `${b.bandLabel.toUpperCase()} ${b.name.replace(b.bandLabel, '').trim()}` : b.name;
-    const w = g.measureText(label).width;
-    if (x1 - x0 < w + 18 * px) continue;                 // no room to say it honestly
+    // ★★ FALL BACK TO THE SHORT NAME, THEN TO NO NAME AT ALL — but always draw the frame.
+    //    Requiring room for the full name silently dropped EVERY band: across 8 MHz of HF even
+    //    40m is about fifty pixels wide and "40M HAM BAND" needs a hundred, so the rule was
+    //    correct in principle and drew nothing whatsoever in practice.
+    //    ★ The bracket is worth drawing on its own: it shows WHERE the band is, which is most of
+    //      the value, and an unlabelled bracket is honest where a clipped name is misleading.
+    const full  = b.bandLabel ? `${b.bandLabel.toUpperCase()} ${b.name.replace(b.bandLabel, '').trim()}` : b.name;
+    const short_ = b.bandLabel ? b.bandLabel.toUpperCase() : b.name.split(' ')[0];
+    const room = x1 - x0;
+    const label = room >= g.measureText(full).width + 18 * px ? full
+                : room >= g.measureText(short_).width + 12 * px ? short_
+                : '';
+    const w = label ? g.measureText(label).width : 0;
     const mid = (x0 + x1) / 2;
     // The two framing rules sit on the label's row and stop short of the text, which is what
     // makes it read as a bracket rather than a strikethrough.
     g.beginPath();
-    g.moveTo(x0 + 2 * px, bandY + 5 * px); g.lineTo(mid - w / 2 - 6 * px, bandY + 5 * px);
-    g.moveTo(mid + w / 2 + 6 * px, bandY + 5 * px); g.lineTo(x1 - 2 * px, bandY + 5 * px);
+    if (label) {
+      g.moveTo(x0 + 2 * px, bandY + 5 * px); g.lineTo(mid - w / 2 - 6 * px, bandY + 5 * px);
+      g.moveTo(mid + w / 2 + 6 * px, bandY + 5 * px); g.lineTo(x1 - 2 * px, bandY + 5 * px);
+    } else {
+      g.moveTo(x0 + 2 * px, bandY + 5 * px); g.lineTo(x1 - 2 * px, bandY + 5 * px);
+    }
     // Uprights at the edges, so the band is closed off at both ends.
     g.moveTo(x0 + 2 * px, bandY); g.lineTo(x0 + 2 * px, bandY + 10 * px);
     g.moveTo(x1 - 2 * px, bandY); g.lineTo(x1 - 2 * px, bandY + 10 * px);
     g.stroke();
-    g.fillText(label, mid - w / 2, bandY);
+    if (label) g.fillText(label, mid - w / 2, bandY);
   }
+  g.strokeStyle = gridStroke;
+  g.lineWidth = 1 * px;
 
   const tip = document.getElementById('splashSpectroTip');
   if (tip) {
