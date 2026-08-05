@@ -1276,6 +1276,14 @@ public:
     // blended in by pilot-lock confidence so weak/edge signals fade smoothly
     // instead of screeching as lock flickers. Thread-safe to call any time.
     void setStereoEnabled(bool on) { stereoEnabled_ = on; }
+    /** ★★★ RUN THE RDS DEMOD, OR DO NOT. Generating the 57 kHz reference and the bit clock is
+     *  about a third of the stereo PLL's per-sample work, and on a SHARED receiver most listeners
+     *  do not need it done AGAIN: RDS is a property of the CARRIER, so everyone on one station
+     *  decodes byte-identical data. Measured on a Pi: 20 WFM listeners each decoding cost 61-102%
+     *  of real time against 35-38% with it off — roughly TRIPLE.
+     *  ★ Live, because it is read per block: ownership of a station's decode moves as listeners
+     *    come and go, and rebuilding a pipeline to change it would duck their audio. */
+    void setRdsEnabled(bool on) { rdsEnabled_ = on; }
     // Spectrum frame rate (frames/sec), changeable LIVE. This is a real power
     // lever, not just a bandwidth one: the rate sets how many input samples pass
     // between FFTs, so lowering it genuinely skips FFT work on the serving phone
@@ -1429,6 +1437,7 @@ private:
     std::vector<float> lprBuf_, lmrBuf_, leftBuf_, rightBuf_, rOutBuf_, ilvBuf_;
     bool lastStereo_ = false;
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
+    std::atomic<bool> rdsEnabled_{true};     // see setRdsEnabled — shared-receiver economy
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()

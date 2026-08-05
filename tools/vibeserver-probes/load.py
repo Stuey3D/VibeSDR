@@ -19,6 +19,9 @@ DUR    = int(sys.argv[3]) if len(sys.argv) > 3 else 60
 CENTRE = int(os.environ.get('CENTRE', '6500000'))
 SPAN   = int(os.environ.get('SPAN', '8000000'))
 HW     = 15000                      # offset tuning: the radio sits this far above the logical centre
+# ★ MODE matters for cost now: every WFM listener runs their OWN RDS decoder since RDS went
+#   per-listener, so a room full of FM listeners is the expensive case, not AM.
+MODE   = os.environ.get('MODE', 'am')
 
 stop = False
 live = [0]
@@ -54,7 +57,7 @@ def client(i):
             socks.append([s, bytearray(), False])
         time.sleep(0.6)
         socks[0][0].sendall(wsframe(1, json.dumps(
-            {'type': 'tune', 'frequency': f, 'mode': 'am'}).encode()))
+            {'type': 'tune', 'frequency': f, 'mode': MODE}).encode()))
         time.sleep(0.4)
         # Zoomed in, so each one earns its own view channel — the full per-listener cost.
         socks[0][0].sendall(wsframe(1, json.dumps(

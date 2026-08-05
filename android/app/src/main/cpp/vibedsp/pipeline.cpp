@@ -445,7 +445,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // Only generate the 57 kHz reference and bit clock when something is
             // actually listening for RDS — that is a third of the PLL's per-sample
             // work, and with no subscriber it was being computed and thrown away.
-            const bool wantRds = (cb_.rdsPs || cb_.rdsText || cb_.rdsPi || cb_.rdsSig || cb_.rdsExt);
+            const bool wantRds = rdsEnabled_.load(std::memory_order_relaxed)
+                              && (cb_.rdsPs || cb_.rdsText || cb_.rdsPi || cb_.rdsSig || cb_.rdsExt);
             lprBuf_.assign(demodBuf_.begin(), demodBuf_.begin() + nc);   // L+R = MPX
             lmrBuf_.resize(nc);
             if (wantRds) { ref57Buf_.resize(nc); ref57qBuf_.resize(nc); bitClkBuf_.resize(nc); }

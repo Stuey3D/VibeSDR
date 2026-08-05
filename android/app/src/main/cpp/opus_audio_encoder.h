@@ -56,7 +56,10 @@ public:
         if (channels != channels_) { destroy(); channels_ = channels; buf_.clear(); }
         if (!enc_ && !create()) return;
 
-        buf_.insert(buf_.end(), pcm, pcm + (size_t)count * channels_);
+        // ★ `channels_` was assigned `channels` two lines above, so these are identical here;
+        //   using the parameter says the intent (the CALLER's frame shape) without relying on
+        //   that assignment staying put.
+        buf_.insert(buf_.end(), pcm, pcm + (size_t)count * channels);
 
         const size_t frameInterleaved = (size_t)kFrameSamples * channels_;
         size_t off = 0;
@@ -68,6 +71,14 @@ public:
             // n <= 0 = encode error: skip this frame rather than wedging the stream.
         }
         if (off > 0) buf_.erase(buf_.begin(), buf_.begin() + off);
+        // ★★ CHEAP INSURANCE ON A LOAD-BEARING INVARIANT. `buf_` is INTERLEAVED, so an odd
+        //    sample count while stereo would shift every later sample one place and SWAP L/R for
+        //    the rest of the stream — audible as the stereo image inside out.
+        //    ★ NOT a fix for an observed bug: it was added while chasing distortion that was
+        //      actually CPU starvation from a runaway test process, and the alignment test
+        //      (tools/opusinterleave.cpp) passes WITHOUT it. Kept because the invariant is real
+        //      and self-correcting costs one comparison; do not cite it as a past defect.
+        if (channels_ == 2 && (buf_.size() & 1)) buf_.pop_back();
     }
 
 private:
@@ -84,6 +95,11 @@ private:
     void destroy() { if (enc_) { opus_encoder_destroy(enc_); enc_ = nullptr; } }
 
     OpusEncoder* enc_ = nullptr;
+    /** Interleaved samples not yet encoded. ★ Exposed for the alignment test: this being
+     *  odd while stereo is exactly the fault that swaps L and R. */
+public:
+    size_t pendingSamples() const { return buf_.size(); }
+private:
     int channels_ = 0;
     int bitrate_ = 64000;            // sensible FM-stereo default; the ladder overrides
     std::vector<int16_t> buf_;       // interleaved carry-over between callbacks

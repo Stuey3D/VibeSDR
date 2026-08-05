@@ -1474,6 +1474,19 @@ struct LocalSdrShim::Impl {
     /** This server's own RDS — used only when there is NO per-client pipeline (the phone and Mac
      *  apps, where there is one listener and it is the user). */
     RdsState rdsS;
+    /** ★★★ ONE RDS DECODER PER STATION, NOT PER LISTENER. RDS describes the CARRIER, so everyone
+     *  tuned to 96.6 would decode byte-identical data — and decoding it thirty times over costs
+     *  roughly triple the FM DSP budget for nothing (measured: 20 WFM listeners at 61-102% of real
+     *  time each-decoding, 35-38% sharing). One listener per frequency runs it; the rest read the
+     *  result, which is not an approximation — it is the same broadcast.
+     *  ★★ This is what makes per-listener RDS AFFORDABLE. Independence was never the expensive
+     *     part; DUPLICATION was, and the two got conflated because they arrived together.
+     *  ★ Keyed to 1 kHz. FM stations sit 100 kHz apart, so this is tolerant of a listener being a
+     *    few hundred Hz off and still cannot merge two different stations.
+     *  Guarded by clientMtx. */
+    struct ClientDsp;                       // ★ defined further down; only the pointer is needed here
+    std::map<long long, ClientDsp*> rdsFreqOwner;
+    static long long rdsKeyOf(double hz) { return (long long)llround(hz / 1000.0); }
     std::atomic<bool> rdsxOn{false};         // a client has the Advanced RDS decoder open
     double rdsxLastAt = 0.0;                 // wall clock of the last rdsx — see the emit site
     // ★★ ADMIN UNLOCK, per connected client. Cleared whenever the spectrum client changes, so
@@ -1647,6 +1660,8 @@ struct LocalSdrShim::Impl {
         /** The frequency this listener's RDS belongs to. RDS is about ONE carrier, so the moment
          *  the dial moves it is stale — this is what notices. */
         double rdsAtHz = -1;
+        /** Is THIS listener the one decoding RDS for its frequency? See rdsClaim(). */
+        bool rdsDecode = false;
         std::atomic<bool> nrOn{false}, notchOn{false};
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
@@ -1868,6 +1883,63 @@ struct LocalSdrShim::Impl {
         freeClientFx(c.get());        // ★ after the thread has stopped touching them
     }
 
+    /** Decide whether this listener decodes RDS for its own frequency, and tell its pipeline.
+     *  ★ Called on every retune, so ownership follows the dial. Cheap: a map lookup and an atomic.
+     *  Call WITHOUT clientMtx held. */
+    /** Recompute EVERY listener's RDS decode assignment: one owner per occupied frequency, and
+     *  nobody left decoding a frequency they have moved off.
+     *  ★★★ WHY A FULL RESWEEP AND NOT AN INCREMENTAL CLAIM. A claim that only ever adjusts the
+     *      CALLER strands everyone else: two listeners both land on the server's landing
+     *      frequency, the first claims it, the second is refused — and when they later tune apart
+     *      the loser never re-claims, because its own retune has already been and gone. It
+     *      decodes nothing for the rest of its session while `owners=1` looks perfectly healthy.
+     *      Measured exactly that way on the Pi.
+     *      ★ The set is at most one entry per listener and this runs on retune, not per block, so
+     *        the cost is irrelevant next to being correct.
+     *  Call WITHOUT clientMtx held. */
+    void rdsResweep() {
+        std::vector<std::pair<std::shared_ptr<ClientDsp>, bool>> decisions;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            rdsFreqOwner.clear();
+            for (auto& kv : clientDsp) {
+                auto& d = kv.second;
+                bool decode = false;
+                if (d->mode == "wfm") {
+                    const long long key = rdsKeyOf(d->vfoHz);
+                    auto it = rdsFreqOwner.find(key);
+                    if (it == rdsFreqOwner.end()) { rdsFreqOwner[key] = d.get(); decode = true; }
+                }
+                decisions.emplace_back(d, decode);
+            }
+        }
+        // ★ Applied outside the lock: setRdsEnabled touches the pipeline, and holding clientMtx
+        //   across DSP calls is how this file has deadlocked itself before.
+        for (auto& [d, decode] : decisions) {
+            d->rdsDecode = decode;
+            if (d->rx) d->rx->setRdsEnabled(decode);
+        }
+    }
+
+    /** The listener currently decoding RDS for `c`'s frequency — `c` itself, or whoever got there
+     *  first. Null when nobody on this frequency is decoding (nothing to report yet).
+     *  Call WITHOUT clientMtx held; returns a shared_ptr so the state cannot die while it is read. */
+    std::shared_ptr<ClientDsp> rdsSourceFor(const std::shared_ptr<ClientDsp>& c) {
+        if (!c) return nullptr;
+        if (c->rdsDecode) return c;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = rdsFreqOwner.find(rdsKeyOf(c->vfoHz));
+        if (it == rdsFreqOwner.end()) return nullptr;
+        // ★ Validate on read as well: an owner that has retuned since claiming is decoding a
+        //   DIFFERENT station, and returning its state would put someone else's name on this
+        //   listener's bar — the exact staleness this whole area keeps producing.
+        for (auto& kv : clientDsp)
+            if (kv.second.get() == it->second)
+                return (kv.second->mode == "wfm" && rdsKeyOf(kv.second->vfoHz) == it->first)
+                     ? kv.second : nullptr;
+        return nullptr;
+    }
+
     void clientRetune(ClientDsp* c) {
         if (!c) return;
         // ★★★ RDS IDENTIFIES ONE CARRIER, SO IT DIES WITH THE DIAL. Clear it whenever this
@@ -1939,6 +2011,10 @@ struct LocalSdrShim::Impl {
         const double off   = c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ;
         const double resid = off - std::lround(off / binHz) * binHz;
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+        // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
+        //   because this listener moving can free a frequency somebody else is sitting on — see
+        //   rdsResweep().
+        rdsResweep();
         // ★ The view centre expressed INSIDE this listener's channel. The channel is centred on
         //   its VFO, so the view offset is the gap between where it is listening and where it is
         //   looking — they are not the same thing once you can pan away from the signal.
@@ -3751,7 +3827,17 @@ struct LocalSdrShim::Impl {
         auto c = dspFor(sock);
         // ★ THIS listener's state, falling back to the server's own only where there is no
         //   per-client pipeline at all (the phone and Mac apps, one listener, no ambiguity).
-        RdsState& R = c ? c->rdsS : rdsS;
+        // ★ Read from whoever is decoding THIS listener's frequency — themselves, or the listener
+        //   who claimed it. Same carrier, same data; see rdsFreqOwner.
+        auto src = rdsSourceFor(c);
+        RdsState& R = src ? src->rdsS : (c ? c->rdsS : rdsS);
+        // ★★★ STEREO IS THIS LISTENER'S OWN, ALWAYS. It is the 19 kHz PILOT, which every WFM
+        //     pipeline locks as part of producing stereo audio — it costs nothing extra and is
+        //     never shared. Reading it from the RDS source meant a listener who was not the RDS
+        //     owner had no stereo icon while plainly HEARING stereo (Stuart, 2026-08-05: "I can
+        //     hear the stereo working but no icon for it"). The share is for the RDS DEMOD, which
+        //     is expensive and identical for everyone on a carrier; the pilot is neither.
+        RdsState& S = c ? c->rdsS : rdsS;
         bool wfm = c ? (c->mode == "wfm") : (mode == "wfm");
         if (wfm) {
             std::lock_guard<std::mutex> lk(R.rdsMtx);
@@ -3760,7 +3846,7 @@ struct LocalSdrShim::Impl {
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
         ps = trim(ps); rt = trim(rt);
-        const bool st = wfm && R.stereoDetected.load();
+        const bool st = wfm && S.stereoDetected.load();
         // Only send when something actually CHANGED — re-sending identical RDS each
         // second re-triggers the client's notification marquee (text "repopulates"
         // and flickers). Change-detect ps/rt/pi/ecc/stereo and skip otherwise.
@@ -6449,7 +6535,8 @@ struct LocalSdrShim::Impl {
         //   most obviously must not show somebody else's station: it is all constellation, phase
         //   and block-error figures for a signal the reader is judging by ear at the same time.
         auto c_ = dspFor(sock);
-        RdsState& R = c_ ? c_->rdsS : rdsS;
+        auto src_ = rdsSourceFor(c_);
+        RdsState& R = src_ ? src_->rdsS : (c_ ? c_->rdsS : rdsS);
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
         int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, phaseDrift;
@@ -7729,6 +7816,9 @@ void LocalSdrShim::stopLocked() {
           for (auto& kv : impl->clientDsp) gone.push_back(kv.second);
           impl->clientDsp.clear(); impl->pendingAudio.clear(); }
         for (auto& c : gone) impl->stopClientThread(c);   // outside the lock — they take it too
+        // ★ A departing listener may have been the RDS decoder for its frequency; hand it to
+        //   whoever is still there. Cheap, and only when somebody actually left.
+        if (!gone.empty()) impl->rdsResweep();
     }
 
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
