@@ -327,12 +327,14 @@ int main(int argc, char** argv) {
     //   because one value is wrong.
     Opts o;
     vsconfig::Config cfg;
+    bool hadConfigFile = false;
     {
         const char* p = getenv("VIBESERVER_CONFIG");
         g_configPath = p && *p ? p : vsconfig::defaultPath();
         std::string err;
         if (vsconfig::load(g_configPath, cfg, err)) {
             applyConfig(cfg, o);
+            hadConfigFile = true;
         } else if (!err.empty()) {
             std::fprintf(stderr, "VibeServer: ignoring %s — %s\n", g_configPath.c_str(), err.c_str());
         }
@@ -341,6 +343,28 @@ int main(int argc, char** argv) {
     // What the server is ACTUALLY running, flags included — this is what the setup page reads.
     g_runtimeConfig = cfg;
     configFromOpts(o, g_runtimeConfig);
+
+    // ★★★ AN EXISTING INSTALL MUST NOT BE DEMOTED TO "NOT SET UP" BY AN UPGRADE.
+    // Every VibeServer deployed before config.json existed is configured through VIBESERVER_ARGS
+    // and has no config file — so on first run of a new build, `configured` would be false and
+    // GET / would answer the SETUP PAGE instead of the receiver. That is not a cosmetic
+    // regression: a working public receiver would start asking every visitor for an admin
+    // password. It happened to the live Pi demo the moment this shipped (2026-08-05).
+    // ★★ So: no config file, but the command line supplied REAL settings ⇒ this is an existing
+    //    deployment and it is already configured. A genuinely fresh install has an EMPTY
+    //    VIBESERVER_ARGS (that is what the package ships), so it still gets the setup page.
+    // ★ Deliberately generous about what counts. Being wrong in this direction leaves an owner
+    //   configuring by hand as they always have; being wrong the other way takes a working
+    //   receiver off the air.
+    if (!hadConfigFile) {
+        g_runtimeConfig.configured =
+            !o.adminPass.empty() || !o.pin.empty() || !o.rxName.empty() ||
+            o.lockFreq > 0 || o.users > 1 || o.sessionLimitMin > 0 || o.lockRate > 0;
+        if (g_runtimeConfig.configured)
+            std::fprintf(stderr, "VibeServer: no %s yet — running from the command line as before. "
+                                 "Settings you save in the browser will create it.\n",
+                         g_configPath.c_str());
+    }
 
     std::signal(SIGINT,  onSignal);
     std::signal(SIGTERM, onSignal);
