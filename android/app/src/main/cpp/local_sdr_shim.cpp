@@ -1580,6 +1580,17 @@ struct LocalSdrShim::Impl {
         std::vector<cf32> viewSlice;
         int    viewChanBins = 0;
         double viewChanRate = 0;
+        /** ★★★ TRUE FROM A ZOOM UNTIL THE PRIVATE VIEW ACTUALLY PRODUCES A FRAME.
+         *  A zoom that changes decimation empties the zoom FFT's accumulator, and it cannot emit
+         *  anything until it has refilled — fftN_ samples of a now-much-narrower stream, which at
+         *  a 3 kHz span is about a SECOND. Deeper zoom, longer wait, which is why the stall only
+         *  showed at the deepest levels (Stuart, 2026-08-05: "a hitch moving into the most zoomed
+         *  in levels where the spectrum stops for a split second").
+         *  ★★ The old samples are at the wrong rate so they cannot be kept — but nothing requires
+         *  us to go QUIET while it fills. Keep sending the shared wide row, cropped to the new
+         *  view, until the sharp one is ready: the picture keeps moving and simply becomes
+         *  sharper a moment later, instead of freezing and then snapping. */
+        std::atomic<bool> viewPriming{false};
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;
 #endif
@@ -1770,8 +1781,21 @@ struct LocalSdrShim::Impl {
             if (c->viewRx) { c->viewRx.reset(); c->viewChanBins = 0; }
             return;
         }
-        // 1.25x so the channel's own transition band sits outside what we draw.
-        const int want = chanBinsFor(c->viewSpanHz * 1.25);
+        // ★★★ ONE FIXED WIDTH FOR EVERY ZOOM LEVEL — the view channel must NOT be resized as the
+        //     listener zooms. Sizing it to each view meant a new width every time a zoom crossed a
+        //     power-of-two boundary, and a new width rebuilds the pipeline: the fresh ZoomSpectrum
+        //     has to refill its accumulator before it emits, so the waterfall STOPPED for a moment
+        //     on the way in (Stuart, 2026-08-05: "there is a hitch moving into the most zoomed in
+        //     levels where the spectrum stops for a split second"). Zooming is the single most
+        //     interactive thing on the page; it must not rebuild anything.
+        //     ★★ Same lesson as the audio channel this morning, arrived at from the other side:
+        //        THE THING A LISTENER TOUCHES CONSTANTLY MUST NOT REBUILD A PIPELINE. There it
+        //        cost a duck in the audio; here a gap in the picture.
+        //     ★ Width = the handover span, which is the widest view this path ever serves. Below
+        //       it, RxPipeline's own ZoomSpectrum decimates to whatever span is asked for — that
+        //       is exactly what it is for, and it costs nothing to ask it for a narrower one.
+        const double handoverSpan = (sampleRate / (double)fftSize) * (double)binsFor(c->spec);
+        const int want = chanBinsFor(handoverSpan * 1.25);
         if (want != c->viewChanBins || !c->viewRx) {
             c->viewChanBins = want;
             c->viewChanRate = sampleRate * (double)want / (double)fftSize;
@@ -1781,8 +1805,8 @@ struct LocalSdrShim::Impl {
             vcb.ctx = c;
             vcb.zoomSpectrum = &Impl::clientZoomCb;
             c->viewRx->start(c->viewChanRate, 1024, fftRate, (int)AUDIO_SR, vcb);
-            LOGI("client view channel: %.3f kHz wide (%d bins) for a %.3f kHz view",
-                 c->viewChanRate / 1e3, want, c->viewSpanHz / 1e3);
+            LOGI("client view channel: %.3f kHz wide (%d bins) — serves every zoom below it",
+                 c->viewChanRate / 1e3, want);
         }
         // The slice is centred on the VIEW centre bin, so the zoom sits at the residual only.
         const double binHz = sampleRate / (double)fftSize;
@@ -1790,6 +1814,7 @@ struct LocalSdrShim::Impl {
         const double resid = off - std::lround(off / binHz) * binHz;
         c->viewRx->setZoomBins(binsFor(c->spec));
         c->viewRx->setZoomView(resid, c->viewSpanHz, fftRate);
+        c->viewPriming.store(true);      // cleared by the first frame out of the new view
     }
 
     /** The signed centre bin this listener's VIEW channel is taken from. */
@@ -1807,6 +1832,7 @@ struct LocalSdrShim::Impl {
     /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
      *  the wire puts DC at bin 0, while the zoom FFT hands back a shifted row. */
     void onClientZoom(ClientDsp* c, const float* db, int nb) {
+        c->viewPriming.store(false);     // the sharp path is live — the shared row can stand down
         std::shared_ptr<net::Socket> sock = c->spec;
         if (!sock || !sock->isOpen() || nb <= 0) return;
         const int outBins = nb;
@@ -2274,7 +2300,9 @@ struct LocalSdrShim::Impl {
             std::vector<ViewKey> views;
             for (auto& p : peers) {
                 auto c = dspFor(p.sock);
-                if (c && c->ownView) continue;           // drawing its own — not from this path
+                // ★ `viewPriming` keeps a listener on the shared row for the moment its own view
+                //   takes to fill — see ClientDsp::viewPriming. Without it the display freezes.
+                if (c && c->ownView && !c->viewPriming.load()) continue;
                 const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
                 const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
                 bool seen = false;
@@ -2345,7 +2373,7 @@ struct LocalSdrShim::Impl {
                 //    row: two sources writing one waterfall doubles the frame rate and the two
                 //    fight over the same texture, which is the exact failure the shared zoom path
                 //    documents. Its own channel owns its display until it zooms back out.
-                if (c && c->ownView) continue;
+                if (c && c->ownView && !c->viewPriming.load()) continue;
                 const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
                 const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
                 if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;

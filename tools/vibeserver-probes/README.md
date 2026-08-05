@@ -160,3 +160,16 @@ Walks one listener down a ladder of spans (2 MHz → 8 kHz) and checks the serve
 ★ The bug: the shared wide row was cropped to the GLOBAL zoom and grouped only by bin width, so a
 listener's own zoom did nothing until it was narrow enough to earn a private channel — the
 waterfall jumped from the full span straight to 20 kHz with one step in between.
+
+## `zoomnogap.mjs` — the spectrum must never stop while zooming
+
+Walks a zoom ladder and measures the worst gap between frames after each step.
+
+★★ The stall was NOT a pipeline rebuild, which is where I looked first. A zoom that changes
+decimation empties the zoom FFT's accumulator, and it cannot emit until it refills — `fftN_`
+samples of a now-much-narrower stream, about a SECOND at a 3 kHz span. Deeper zoom, longer wait,
+which is exactly why it only showed at the deepest levels. The old samples are at the wrong rate
+so they cannot be kept; the fix is to keep sending the shared wide row until the private view is
+ready, so the picture keeps moving and merely becomes sharper a moment later.
+
+★ 451 ms → 108 ms at 3 kHz. Verified to FAIL with the priming cover removed.
