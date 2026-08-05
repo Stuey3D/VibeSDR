@@ -830,6 +830,14 @@ static constexpr int        kSessionCooldownSec = 120;
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
 static std::atomic<int>    g_vsOpusBitrate{64000};
+
+// ── The config API's handlers, registered by the DAEMON (never on a phone) ────────────────────
+// See local_sdr_shim.h for why this is a callback and not code in here.
+static std::mutex                    g_vsConfigMtx;
+static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
+static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
+// ★ Has the owner finished browser setup? NOT the same question as "is an admin password set".
+static std::atomic<bool>             g_vsConfigured{false};
 // ★★★ REMOVED 2026-08-04: g_vsOutBins, the client-requestable waterfall width as a GLOBAL.
 // Its own comment justified it — "Single-occupant, so one global suffices" — and `--users 20`
 // repealed that without anyone revisiting the line. The most recent client to connect set the
@@ -3546,9 +3554,15 @@ struct LocalSdrShim::Impl {
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey;
+        long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         while (sock->recvline(line, 8192, 5000) > 0) {
             if (line.empty() || line == "\r") break;
+            if (line.size() > 15) {
+                std::string cl = line.substr(0, 15);
+                for (auto& c : cl) c = (char)tolower(c);
+                if (cl == "content-length:") contentLength = atoll(line.c_str() + 15);
+            }
             if (line.size() > 18) {
                 std::string lk = line.substr(0, 18);
                 for (auto& c : lk) c = (char)tolower(c);
@@ -3668,6 +3682,85 @@ struct LocalSdrShim::Impl {
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        // ── ★★★ THE CONFIG API ────────────────────────────────────────────────────────────
+        // GET  /vibeserver/config  -> the stored settings, as JSON
+        // POST /vibeserver/config  -> replace them, persist, and report whether a restart is due
+        //
+        // Both are gated on the ADMIN credential using the SAME nonce + HMAC challenge-response
+        // the admin unlock and the admin override already use — no new credential mechanism, and
+        // the password never crosses the wire.
+        // ★★ The browser setup page is a CLIENT of this. So is the VibeSDR app, later, over a
+        //    captive portal on a Pi up a tree. That is the whole reason it is an endpoint and not
+        //    form handling wired into this router — see local_sdr_shim.h.
+        } else if (reqLine.rfind("GET /vibeserver/config", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/config", 0) == 0) {
+            const bool isPost = reqLine.rfind("POST", 0) == 0;
+            LocalSdrShim::ConfigGetFn getFn; LocalSdrShim::ConfigSetFn setFn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); getFn = g_vsConfigGet; setFn = g_vsConfigSet; }
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            if (!getFn) {   // a phone: the endpoints exist in the code but not on this platform
+                reply(501, "Not Implemented",
+                      "{\"error\":\"this build does not store server configuration\"}");
+                return;
+            }
+            // ★★★ AUTHORISE FIRST, AND REFUSE WHEN NO PASSWORD IS SET. An unconfigured server
+            //     still has an admin password — the wizard makes it mandatory — so "no password"
+            //     here means something is wrong, and serving the config (which CONTAINS the PIN)
+            //     to an unauthenticated caller would be the worst possible default.
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string ip = sock->peerAddress();
+            const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
+            const std::string token = queryParam(reqLine, "vs_admin_auth");
+            const bool authed = !secret.empty() && !nonce.empty() && !token.empty()
+                             && !g_vsAuthState.blocked(ip)
+                             && g_vsAuthState.verify(secret, nonce, token);
+            if (!authed) {
+                if (!secret.empty()) g_vsAuthState.recordFail(ip);
+                LOGI("config API refused for %s", ip.c_str());
+                reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
+                return;
+            }
+            g_vsAuthState.recordOk(ip);
+            if (!isPost) { reply(200, "OK", getFn()); return; }
+
+            // ── POST: read the body, hand it to the daemon, report the outcome ──────────────
+            const long long clen = contentLength;   // captured while reading the headers
+            if (clen <= 0 || clen > 256 * 1024) {
+                reply(400, "Bad Request", "{\"error\":\"missing or oversized body\"}");
+                return;
+            }
+            std::string body;
+            body.resize((size_t)clen);
+            size_t got = 0;
+            while (got < body.size()) {
+                int n = sock->recv((uint8_t*)&body[got], body.size() - got, false, 5000);
+                if (n <= 0) break;
+                got += (size_t)n;
+            }
+            if (got != body.size()) {
+                reply(400, "Bad Request", "{\"error\":\"short body\"}");
+                return;
+            }
+            std::string err;
+            if (!setFn(body, err)) {
+                LOGI("config API rejected a save: %s", err.c_str());
+                reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}");
+                return;
+            }
+            LOGI("config saved by %s", ip.c_str());
+            // ★ SAY THAT A RESTART IS COMING. Most of these settings are read once at start, so
+            //   the honest answer is "saved, and the server is restarting" — a page that said
+            //   only "saved" would leave the owner watching settings that have not taken effect.
+            reply(200, "OK", "{\"ok\":true,\"restart\":true}");
+            return;
+
         } else if (reqLine.rfind("GET /vibeserver.json", 0) == 0) {
             // ★★ POSITIVE IDENTITY. detectServerType() used to sniff the landing
             // page for the substring "vibeserver" — but serving that page is
@@ -3701,6 +3794,12 @@ struct LocalSdrShim::Impl {
                              + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
                              + ",\"admin\":" + (adminSet ? "true" : "false")
+                             // ★★ CONFIGURED, and it is NOT the same as `admin`. A fresh install
+                             // has an admin password (the wizard makes it mandatory) and is still
+                             // not set up. Clients read this to show "not set up yet — open it in
+                             // a browser" rather than failing to connect against a server that is
+                             // working exactly as designed.
+                             + ",\"configured\":" + (g_vsConfigured.load() ? "true" : "false")
                              // ★★ OCCUPANCY IN THE IDENTITY RESPONSE. The picker already fetches
                              // this for every known server, so an IN USE badge costs nothing
                              // extra — and a public receiver that is one-client-at-a-time has to
@@ -5351,6 +5450,14 @@ void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(s
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
 void LocalSdrShim::setVibeServerDabNotch(bool on) { g_vsDabNotch.store(on); }
 void LocalSdrShim::setVibeServerMaxUsers(int n) { g_vsMaxUsers.store(n > 1 ? n : 1); }
+
+void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsConfigGet = std::move(get);
+    g_vsConfigSet = std::move(set);
+}
+void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
+bool LocalSdrShim::isConfigured() { return g_vsConfigured.load(); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
 void LocalSdrShim::clearBookmarks() { bmClear(); }
 

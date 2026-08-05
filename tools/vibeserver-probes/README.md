@@ -66,3 +66,16 @@ control message is `{"type":"zoom","frequency":…,"binBandwidth":…}`.
 
 `defbins` checks a client that sends no `bins` param gets the 1024 default. `bandwidth`/`bw2`
 measure bytes/sec per listener (spectrum + Opus audio) — the numbers behind the listener cap.
+
+## `config-api.mjs` — the config endpoint and its auth gate
+
+Exercises `GET`/`POST /vibeserver/config`: no credentials and wrong password must both 401, the
+right password returns the config, a valid POST persists and answers `{"ok":true,"restart":true}`,
+and a contradictory one (multi-user with no locked centre) must 400.
+
+```sh
+node config-api.mjs 48000        # expects admin password "secret"
+```
+
+★★ The 401 cases are the ones that matter. **The config contains the PIN**, so an unauthenticated
+GET leaking it would be worse than any setting being wrong.

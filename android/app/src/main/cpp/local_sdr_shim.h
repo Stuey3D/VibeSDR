@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include <functional>
+
 namespace vibe {
 
 class LocalSdrShim {
@@ -119,6 +121,30 @@ public:
      *  server). The DSP cost of an extra listener is ~nothing now the channelizer shares one
      *  forward FFT (+0.02% of a Pi core each, measured); the real ceiling is UPLINK. */
     static void setVibeServerMaxUsers(int n);
+    // ── ★★★ THE CONFIG API — the browser setup page is a CLIENT of this, not a special case ──
+    //
+    // WHY HANDLERS AND NOT CODE IN HERE. This shim compiles into the Android and iOS apps as well
+    // as the daemon, and a phone has no /etc and no business writing one. The DAEMON registers
+    // these; on a phone they are simply never registered and the endpoints report as unavailable.
+    //
+    // ★★★ AND WHY AN API AT ALL, rather than form handling wired into the request router: the
+    // roadmap is a Pi Zero 2 W up a tree with no keyboard, no screen and no SSH, set up entirely
+    // from the VibeSDR app over a captive portal. If the browser page is one CLIENT of a
+    // documented endpoint, the app later becomes a second client with NO SERVER-SIDE WORK. If the
+    // validation lives in the page's JavaScript instead, app setup is a from-scratch rebuild of
+    // every rule — and a SECOND implementation of them, which is the same drift this whole config
+    // rework exists to kill, moved from settings to setup.
+    // ★ Corollary: every question the first-run wizard asks must also be answerable through here,
+    //   the admin password included, or the appliance story is blocked on the terminal.
+    using ConfigGetFn = std::function<std::string()>;                             // -> JSON
+    using ConfigSetFn = std::function<bool(const std::string&, std::string&)>;    // JSON, &err
+    static void setConfigHandlers(ConfigGetFn get, ConfigSetFn set);
+    /** Has the owner finished browser setup? Distinct from "an admin password is set" — the
+     *  wizard makes that mandatory, so it can no longer stand in for this. Drives the
+     *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */
+    static void setConfigured(bool on);
+    static bool isConfigured();
+
     /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */
     static void setBookmarksJson(const std::string& json);
     /** File the shim persists bookmarks to. It owns them, so it saves them — the app's

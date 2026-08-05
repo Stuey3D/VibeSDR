@@ -304,7 +304,8 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
 
 }  // namespace
 
-namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig; }
+namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
+            std::atomic<bool> g_restartRequested{false}; }
 
 int main(int argc, char** argv) {
     // ★★★ NO ARGUMENTS AND A TERMINAL ⇒ A HUMAN TYPED `vibeserver`, so show the settings screen.
@@ -396,6 +397,37 @@ int main(int argc, char** argv) {
                 o.rfNotch ? "ON" : "off", o.dabNotch ? "ON" : "off", o.idleGrace);
     // ★ --users is now the real listener cap, not just the channel-method hint.
     LocalSdrShim::setVibeServerMaxUsers(o.users);
+
+    // ── ★★★ THE CONFIG API ────────────────────────────────────────────────────────────────
+    // The daemon owns persistence; the shim owns the HTTP surface. Registering these is what
+    // turns GET/POST /vibeserver/config from 501 into a working endpoint — and the browser setup
+    // page is a CLIENT of it, so the app becomes a second client later with no work here.
+    LocalSdrShim::setConfigured(g_runtimeConfig.configured);
+    LocalSdrShim::setConfigHandlers(
+        []() -> std::string {
+            // ★ What the server is ACTUALLY RUNNING, not what the file last said. The two differ
+            //   the moment anyone passes a flag, and a settings page that shows the file while the
+            //   radio obeys something else is a page that lies.
+            return vsconfig::toJson(g_runtimeConfig);
+        },
+        [](const std::string& json, std::string& err) -> bool {
+            // Apply over the RUNNING config so a partial POST is a patch, not a wipe.
+            vsconfig::Config next = g_runtimeConfig;
+            if (!vsconfig::fromJson(json, next, err)) return false;
+            // ★★ SAVING IS WHAT MARKS IT CONFIGURED. The owner pressing Save on the setup page is
+            //    the only event that means "I have finished" — nothing else should set this.
+            next.configured = true;
+            if (!vsconfig::save(g_configPath, next, err)) return false;
+            g_runtimeConfig = next;
+            LocalSdrShim::setConfigured(true);
+            // ★★★ RESTART TO APPLY. Almost everything here is read ONCE at start (the channel
+            //     method most of all — "never switch methods live, it is in the setup"), so
+            //     applying half of it live would leave the server in a state no code path was
+            //     written for. systemd brings us straight back; the page reconnects and lands on
+            //     the normal receiver screen. Under systemd this is the documented way to reload.
+            g_restartRequested.store(true);
+            return true;
+        });
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
                 shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");
     LocalSdrShim::setVibeServerWebEnabled(o.web);
@@ -544,6 +576,18 @@ int main(int argc, char** argv) {
         if (!shim.isRunning()) {
             std::fprintf(stderr, "VibeServer: capture stopped unexpectedly.\n");
             break;
+        }
+        // ★★ A SAVE FROM THE SETUP PAGE ASKS FOR A RESTART. Exit cleanly and let systemd bring us
+        //    back with the new config — the settings that matter most (the channel method, the
+        //    locked window, the capture rate) are read ONCE at start, and Stuart's rule is "never
+        //    switch methods live, it is in the setup".
+        // ★ Exit 0, not a failure code: this is a requested restart, and `Restart=always` must
+        //   treat it as routine. A non-zero exit here would look like a crash in the journal of a
+        //   box nobody can see.
+        if (g_restartRequested.load()) {
+            std::printf("\nConfiguration saved — restarting to apply it.\n");
+            shim.stop();
+            return 0;
         }
     }
 
