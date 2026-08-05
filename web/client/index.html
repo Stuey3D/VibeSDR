@@ -78,6 +78,24 @@ input, textarea, [contenteditable],
   gap: 18px; background: var(--bg);
 }
 #splash.hidden { display: none; }
+/* ★ Behind everything, and DIMMED. At full contrast the form became unreadable over a busy band —
+   the picture is the backdrop, not the subject. The gradient keeps the middle darkest, where the
+   PIN and buttons sit. */
+#splashSpectro {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 0; opacity: 0.55;
+}
+#splash::after {
+  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(ellipse at center,
+              rgba(0,0,0,0.86) 0%, rgba(0,0,0,0.66) 42%, rgba(0,0,0,0.24) 100%);
+}
+#splash > *:not(#splashSpectro) { position: relative; z-index: 2; }
+/* Stamps drawn INTO the canvas, so they scroll with the image rather than floating over it. */
+#splashSpectroTip {
+  position: absolute; left: 10px; bottom: 8px; z-index: 2;
+  font-size: 10px; letter-spacing: 1px; color: var(--text-dim); opacity: 0.75;
+}
 #splash h1 {
   margin: 0; font-size: 34px; letter-spacing: 6px; font-weight: 600;
   color: var(--amber); text-shadow: 0 0 24px rgba(255,170,0,0.35);
@@ -125,6 +143,7 @@ input, textarea, [contenteditable],
   text-shadow: 0 0 6px #000, 0 0 2px #000;   /* legible over a bright waterfall */
 }
 #rxName  { font-size: 0.95em; color: var(--amber); letter-spacing: 0.04em; }
+#rxUsers { font-size: 0.8em; color: var(--text-dim); letter-spacing: 0.04em; }
 #rxWhere { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
 /* ★ The countdown earns attention only as it runs out — amber under two minutes, red under
    thirty seconds. Steady grey the rest of the time, so a 30-minute session is not a clock
@@ -1616,6 +1635,13 @@ select.btn { padding: 6px 8px; }
 <img id="artInset" src="__ARTWORK_INSET__" alt="" hidden>
 
 <div id="splash">
+  <!-- ★★ THE BAND'S LAST 24 HOURS, AS THE BACKGROUND. Stuart, 2026-08-05: "I wonder if it would
+       be cool to make the spectrogram the background to the landing page." It is: the first thing
+       a visitor sees is what this receiver has actually been hearing, which says more about
+       whether it is worth connecting to than any amount of text. Server-side, so it is already
+       full on a first visit. -->
+  <canvas id="splashSpectro"></canvas>
+  <div id="splashSpectroTip"></div>
   <h1>VIBESDR</h1>
   <div class="sub">VIBESERVER · WEB CLIENT</div>
   <form id="connForm" autocomplete="off">
@@ -1674,6 +1700,7 @@ select.btn { padding: 6px 8px; }
        (GET /location) — the location half is absent unless the host opted in. -->
   <div id="rxBadge" hidden>
     <div id="rxName"></div>
+    <div id="rxUsers"></div>
     <div id="rxWhere"></div>
     <!-- ★ Time remaining on a limited session, under the receiver's name and location because
          that is where "whose radio is this" already lives. Hidden entirely when the server sets

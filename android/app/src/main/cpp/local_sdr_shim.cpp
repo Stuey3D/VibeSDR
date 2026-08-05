@@ -1575,6 +1575,85 @@ struct LocalSdrShim::Impl {
     std::map<std::string, std::shared_ptr<net::Socket>> pendingAudio;
     std::unique_ptr<vibedsp::Channelizer> chan_;
 
+    // ── ★★★ THE BAND SPECTROGRAM — a 24-hour record, kept by the SERVER ──────────────────────
+    //
+    // Stuart, 2026-08-05: *"copy UberSDR's spectrogram homework, but make ours rapidly populate
+    // so it looks good on the landing page then slow it down, but always keep the previous lines
+    // so the oldest data scrolls off the top."*
+    //
+    // ★★ SERVER-SIDE, NOT PER-BROWSER, and that is the whole point. It must be populated when
+    // nobody is connected and survive a reload — a landing page whose history starts empty on
+    // every visit is a landing page with nothing to show. One buffer, shared by everyone.
+    //
+    // ★★★ LOCKED MODE MAKES IT FREE AND MAKES IT HONEST. `BRIEF-band-spectrogram.md` spends its
+    // length on one problem: a spectrogram is only readable if every row shares a profile, and
+    // inheriting the live dial gives you 40m for an hour then FM then wherever someone left it at
+    // 2am. Here the centre CANNOT move — the owner locked it — so the profile is fixed by
+    // construction, no row can disagree with another, and taking a row disturbs nobody.
+    //
+    // ★ TWO RATES, ONE BUFFER. A fresh server has nothing to show, so the first five minutes fill
+    // at one row a second; after that it settles to one a minute, which is 24 hours in 1440 rows.
+    // Rows are never discarded on the change of pace — the fast ones stay until they age out of
+    // the top, so the picture only ever grows more complete.
+    struct SpectroRow {
+        std::vector<uint8_t> bins;      // dB, same u8 scale as a waterfall row
+        int64_t  atMs = 0;              // wall clock, for the time stamps down the side
+    };
+    static constexpr int kSpectroBins = 512;    // narrower than a waterfall: this is an overview
+    static constexpr int kSpectroRows = 1440;   // 24 h at one row per minute
+    static constexpr int kFastRows    = 300;    // the first 5 minutes, at one row per second
+    std::mutex               spectroMtx;
+    std::deque<SpectroRow>   spectro;
+    double  spectroAcc[kSpectroBins] = {0};
+    int     spectroAccN = 0;
+    double  spectroLastAt = 0;
+    int     spectroTaken  = 0;          // rows so far — decides fast vs slow cadence
+
+    /** Fold one wide FFT row into the spectrogram accumulator, and emit a row when due.
+     *  ★ Averaged, not sampled: a single FFT row once a minute would catch whatever happened in
+     *  that 40 ms and call it a minute of band activity. Averaging every row between emissions is
+     *  what makes a quiet band look quiet instead of speckled. */
+    void spectroFeed(const float* sum, int bins, int n) {
+        if (bins <= 0 || n <= 0 || g_vsLockedCentre.load() <= 0.0) return;   // fixed profile only
+        // ★ fftAccum holds SUMS over FFT_AVG frames, not averages — the caller divides at its own
+        //   emit site. Divide here too, or every row is offset by 10*log10(FFT_AVG) and the whole
+        //   image sits at the wrong level.
+        const double inv = 1.0 / (double)n;
+        for (int i = 0; i < kSpectroBins; i++) {
+            // Peak-hold across the group: a narrow carrier must survive the downsample, which is
+            // the whole reason anyone reads one of these.
+            const int lo = (int)((int64_t)i * bins / kSpectroBins);
+            const int hi = (int)((int64_t)(i + 1) * bins / kSpectroBins);
+            float best = -300.0f;
+            for (int j = lo; j < hi && j < bins; j++) { const float v = (float)(sum[j] * inv); if (v > best) best = v; }
+            spectroAcc[i] += best;
+        }
+        spectroAccN++;
+
+        const double now = nowSecs();
+        const double period = spectroTaken < kFastRows ? 1.0 : 60.0;
+        if (spectroLastAt == 0) spectroLastAt = now;
+        if (now - spectroLastAt < period) return;
+        spectroLastAt = now;
+
+        SpectroRow r;
+        r.bins.resize(kSpectroBins);
+        for (int i = 0; i < kSpectroBins; i++) {
+            const double v = spectroAcc[i] / std::max(1, spectroAccN);
+            const int q = (int)lround(v + 256.0);
+            r.bins[i] = (uint8_t)(q < 0 ? 0 : (q > 255 ? 255 : q));
+            spectroAcc[i] = 0;
+        }
+        spectroAccN = 0;
+        r.atMs = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch()).count();
+        std::lock_guard<std::mutex> lk(spectroMtx);
+        spectro.push_back(std::move(r));
+        // ★ Oldest scrolls off the top, exactly as asked — the buffer never grows without bound.
+        while ((int)spectro.size() > kSpectroRows) spectro.pop_front();
+        spectroTaken++;
+    }
+
     /** ★ The gate. Per-client DSP exists only where it means something: a SHARED receiver, where
      *  the owner has locked the centre and more than one listener is allowed. */
     bool perClientDsp() const {
@@ -2389,6 +2468,10 @@ struct LocalSdrShim::Impl {
                 for (auto& p : peers) sendText(p.sock, sb);
             }
         }
+        // ★ The spectrogram is fed from the SHARED wide row — the one picture that is the same
+        //   for everybody and cannot be moved by a listener. Feeding it from anyone's per-client
+        //   view would make a 24-hour image out of wherever individual people happened to look.
+        spectroFeed(fftAccum.data(), (int)fftAccum.size(), accumCount);
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
         accumCount = 0;
     }
@@ -4065,6 +4148,40 @@ struct LocalSdrShim::Impl {
         //     preamp), the SDRplay RSP uses IF gain REDUCTION. Drawing one set of sliders for all
         //     three leaves two of them inert, and a control that does nothing reads as a broken
         //     FEATURE, not a wrong control.
+        // ── ★★ THE SPECTROGRAM, for the landing page ─────────────────────────────────────
+        // Binary, because 1440 rows x 512 bins as JSON numbers would be megabytes of text for a
+        // picture. Header carries what the STAMPS need: the span (for the frequency scale down
+        // the top) and each row's wall-clock time (for the time scale down the side).
+        //   magic "VSPG" | u8 ver | u16 bins | u16 rows | f64 centreHz | f64 spanHz
+        //   then per row: i64 epoch-ms, then `bins` bytes of dB
+        // ★ Deliberately NOT admin-gated: it is the public face of the receiver, and it shows
+        //   nothing a listener could not see by watching the waterfall for a day.
+        } else if (reqLine.rfind("GET /vibeserver/spectrogram", 0) == 0) {
+            std::vector<uint8_t> out;
+            {
+                std::lock_guard<std::mutex> lk(spectroMtx);
+                const uint16_t nb = (uint16_t)kSpectroBins;
+                const uint16_t nr = (uint16_t)spectro.size();
+                const double centre = g_vsLockedCentre.load() > 0 ? g_vsLockedCentre.load()
+                                                                  : rtlCenter.load();
+                const double span = displaySpan();
+                out.reserve(16 + (size_t)nr * (8 + nb));
+                auto put = [&](const void* p, size_t n) {
+                    const uint8_t* b = (const uint8_t*)p; out.insert(out.end(), b, b + n); };
+                out.push_back('V'); out.push_back('S'); out.push_back('P'); out.push_back('G');
+                out.push_back(1);
+                put(&nb, 2); put(&nr, 2);
+                put(&centre, 8); put(&span, 8);
+                for (auto& r : spectro) { put(&r.atMs, 8); put(r.bins.data(), r.bins.size()); }
+            }
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                          "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Connection: close\r\nContent-Length: "
+                          + std::to_string(out.size()) + "\r\n\r\n");
+            if (!out.empty()) sock->send(out.data(), out.size());
+            sock->close();
+            return;
+
         } else if (reqLine.rfind("GET /vibeserver/hardware", 0) == 0) {
             const bool rsp = LocalSdrShim::instance().isSdrplay();
             const bool hf  = LocalSdrShim::instance().isAirspyHf();

@@ -527,6 +527,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onEvicted: () => showEvicted(),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
+    // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
+    //   visitor actually has — is there room, and is anyone else here — and it is the number the
+    //   owner wanted at a glance. `busy` was a yes/no built for a one-at-a-time receiver.
+    onUsers: (n, max) => {
+      listenerCount = n; listenerMax = max;
+      const el = document.getElementById('rxUsers');
+      if (el) el.textContent = n > 0
+        ? `${n} listening${max > 1 ? ` of ${max}` : ''}`
+        : '';
+    },
     onSessionWarning: (secs) => setTimeLeft(secs),
     onDevice: (present) => showDeviceBanner(present),
     onAdmin: (ok, refused) => {
@@ -1757,6 +1767,105 @@ function updateStatus() {
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 
+// ── ★★★ THE LANDING-PAGE SPECTROGRAM ────────────────────────────────────────────────────────
+// The server's own 24-hour record of the locked band, drawn as the splash background. It is
+// SERVER-side (see spectroFeed in the shim), so it is already populated the first time anyone
+// visits and it survives a reload — a landing page whose history starts empty on every visit has
+// nothing to say.
+//
+// Wire format from GET /vibeserver/spectrogram (binary, because 1440x512 as JSON text would be
+// megabytes for a picture):
+//   "VSPG" | u8 ver | u16 bins | u16 rows | f64 centreHz | f64 spanHz
+//   then per row: i64 epoch-ms, then `bins` bytes of dB
+async function drawSplashSpectrogram(): Promise<void> {
+  const cv = document.getElementById('splashSpectro') as HTMLCanvasElement | null;
+  if (!cv) return;
+  let buf: ArrayBuffer;
+  try {
+    const r = await fetch('/vibeserver/spectrogram', { cache: 'no-store' });
+    if (!r.ok) return;
+    buf = await r.arrayBuffer();
+  } catch { return; }
+  const dv = new DataView(buf);
+  if (buf.byteLength < 25) return;
+  if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== 'VSPG') return;
+  const bins = dv.getUint16(5, true), rows = dv.getUint16(7, true);
+  const centre = dv.getFloat64(9, true), span = dv.getFloat64(17, true);
+  if (!rows || !bins) return;
+
+  const W = cv.width  = Math.max(640, Math.floor(cv.clientWidth  * devicePixelRatio));
+  const H = cv.height = Math.max(360, Math.floor(cv.clientHeight * devicePixelRatio));
+  const g = cv.getContext('2d');
+  if (!g) return;
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+
+  // ★ Rows are drawn NEWEST AT THE BOTTOM, matching the live waterfall — a visitor should not
+  //   have to re-learn which way time runs between the landing page and the receiver.
+  const img = g.createImageData(bins, rows);
+  const bytes = new Uint8Array(buf);
+  for (let r = 0; r < rows; r++) {
+    const off = 25 + r * (8 + bins) + 8;
+    for (let i = 0; i < bins; i++) {
+      const v = bytes[off + i];
+      // Same amber ramp as the waterfall, so the two read as one instrument.
+      const t = Math.max(0, Math.min(1, (v - 150) / 90));
+      const p = ((rows - 1 - r) * bins + i) * 4;
+      img.data[p]     = Math.min(255, 40 + t * 255);
+      img.data[p + 1] = Math.min(255, t * t * 210);
+      img.data[p + 2] = Math.min(255, t * t * t * 90);
+      img.data[p + 3] = 255;
+    }
+  }
+  // Stretch the (bins x rows) image over the whole panel.
+  const tmp = document.createElement('canvas');
+  tmp.width = bins; tmp.height = rows;
+  tmp.getContext('2d')!.putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = true;
+  g.drawImage(tmp, 0, 0, W, H);
+
+  // ── STAMPS ───────────────────────────────────────────────────────────────────────────────
+  // ★ Stuart asked for both: without them it is a pretty texture, and with them it is a record
+  //   you can actually read something off.
+  const px = devicePixelRatio;
+  g.font = `${11 * px}px ui-monospace, monospace`;
+  g.textBaseline = 'top';
+  g.fillStyle = 'rgba(255,200,120,0.85)';
+  g.strokeStyle = 'rgba(255,200,120,0.20)';
+  g.lineWidth = 1 * px;
+
+  // Frequency, across the top — five ticks, MHz.
+  for (let k = 0; k <= 4; k++) {
+    const x = (W - 1) * (k / 4);
+    const hz = centre - span / 2 + span * (k / 4);
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+    const label = `${(hz / 1e6).toFixed(3)} MHz`;
+    const w = g.measureText(label).width;
+    const tx = Math.max(2 * px, Math.min(W - w - 2 * px, x - w / 2));
+    g.fillText(label, tx, 4 * px);
+  }
+  // Time, down the left — oldest at the top, newest at the bottom.
+  const tFirst = Number(dv.getBigInt64(25, true));
+  const tLast  = Number(dv.getBigInt64(25 + (rows - 1) * (8 + bins), true));
+  const hhmm = (ms: number) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const steps = 4;
+  for (let k = 0; k <= steps; k++) {
+    const y = (H - 1) * (k / steps);
+    // y=0 is the OLDEST row (top), y=H the newest — same as the drawing above.
+    const ms = tFirst + (tLast - tFirst) * (k / steps);
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+    g.fillText(hhmm(ms), 4 * px, Math.min(H - 14 * px, y + 3 * px));
+  }
+  const tip = document.getElementById('splashSpectroTip');
+  if (tip) {
+    const mins = Math.round((tLast - tFirst) / 60000);
+    tip.textContent = `BAND ACTIVITY · ${mins < 60 ? mins + ' MIN' : (mins / 60).toFixed(1) + ' H'} · `
+                    + `${hhmm(tFirst)}–${hhmm(tLast)}`;
+  }
+}
+
 function buildModeButtons() {
   const modes = $('modes');
   if (!modes) return;
@@ -2850,6 +2959,7 @@ function locLine(): string {
 // listener for a number the client can work out for itself.
 // ★ It also means the clock keeps running if a warning frame is lost — the deadline is what we
 // hold, not the remaining seconds.
+let listenerCount = 0, listenerMax = 0;
 let sessionDeadline = 0;      // epoch ms, 0 = no limit
 let sessionTicker: ReturnType<typeof setInterval> | null = null;
 
@@ -5865,3 +5975,16 @@ function escapeHtml(s: string): string {
 }
 
 initSplash();
+
+// ★ Draw as soon as the page exists, then refresh while the visitor is still on the splash — a
+//   new row lands every second for the first five minutes, so a server that has just been set up
+//   visibly fills in while somebody reads the page.
+drawSplashSpectrogram();
+setInterval(() => {
+  const sp = document.getElementById('splash');
+  if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();
+}, 15000);
+addEventListener('resize', () => {
+  const sp = document.getElementById('splash');
+  if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();
+});

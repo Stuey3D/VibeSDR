@@ -120,3 +120,20 @@ fooled that way.
 
 ★ The cause was ordering: the shared handlers return as soon as they match, so a per-client block
 placed after them is dead code for every message they claim.
+
+## `spectrogram.mjs` — the 24-hour band record
+
+Fetches `GET /vibeserver/spectrogram` and renders it as ASCII: proves the binary format parses,
+the orientation is right (oldest at top) and carriers land at the right frequencies.
+
+```sh
+HOST=vibeserver.local node spectrogram.mjs 48000
+```
+
+Wire format — binary, because 1440 rows x 512 bins as JSON numbers would be megabytes of text for
+a picture:
+
+```
+"VSPG" | u8 ver | u16 bins | u16 rows | f64 centreHz | f64 spanHz
+per row: i64 epoch-ms, then `bins` bytes of dB
+```

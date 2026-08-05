@@ -138,7 +138,8 @@ export interface SpectrumCallbacks {
   /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
-  onBlockedModes?: (modes: string[]) => void;
+  /** How many are listening, and the owner's cap. Sent when the count CHANGES. */
+  onUsers?: (n: number, max: number) => void;
   /** ★ Global server-side DSP state (NR, notch). These SURVIVE a listener leaving,
    *  so the next listener inherits them — the client must render what the server
    *  says rather than its own saved prefs, or the control lies about the radio. */
@@ -382,6 +383,9 @@ export class SpectrumClient {
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
         });
+        break;
+      case 'users':
+        this.cb.onUsers?.(Number(msg.n) || 0, Number(msg.max) || 0);
         break;
       case 'admin':
         // ok=true after a correct password; refused=true when a protected control was
