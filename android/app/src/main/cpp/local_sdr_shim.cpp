@@ -84,6 +84,7 @@
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
+#include "vibe_setup_page.h"        // hand-written: the setup page, GET / when unconfigured
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -3692,6 +3693,34 @@ struct LocalSdrShim::Impl {
         // ★★ The browser setup page is a CLIENT of this. So is the VibeSDR app, later, over a
         //    captive portal on a Pi up a tree. That is the whole reason it is an endpoint and not
         //    form handling wired into this router — see local_sdr_shim.h.
+        // ── ★★ WHAT RADIO IS THIS? — read-only, for the setup page's hardware panel ──────
+        // Separate from /vibeserver/config on purpose: config is what you SET, this is what you
+        // HAVE. Mixing them would invite a page to POST back a field the server derives.
+        // ★★★ THE SETUP PAGE MUST BRANCH ON THIS. AGENTS.md: "a control that only works on one
+        //     radio should not be there." The three supported radios do not share a gain model —
+        //     RTL has a gain LIST, the Airspy HF+ has no variable gain at all (attenuator +
+        //     preamp), the SDRplay RSP uses IF gain REDUCTION. Drawing one set of sliders for all
+        //     three leaves two of them inert, and a control that does nothing reads as a broken
+        //     FEATURE, not a wrong control.
+        } else if (reqLine.rfind("GET /vibeserver/hardware", 0) == 0) {
+            const bool rsp = LocalSdrShim::instance().isSdrplay();
+            const bool hf  = LocalSdrShim::instance().isAirspyHf();
+            const bool lost = deviceLost.load();
+            std::string j = std::string("{\"driver\":\"")
+                          + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : "rtl")
+                          + "\",\"present\":" + (lost ? "false" : "true")
+                          + ",\"gains\":[";
+            if (!rsp && !hf && !lost) {
+                std::vector<int> g = LocalSdrShim::instance().getTunerGains();
+                for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
+            }
+            j += "]}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(j.size()) + "\r\n\r\n" + j);
+            sock->close();
+            return;
+
         } else if (reqLine.rfind("GET /vibeserver/config", 0) == 0 ||
                    reqLine.rfind("POST /vibeserver/config", 0) == 0) {
             const bool isPost = reqLine.rfind("POST", 0) == 0;
@@ -3945,6 +3974,23 @@ struct LocalSdrShim::Impl {
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET / ", 0) == 0 || reqLine.rfind("GET /index.htm", 0) == 0) {
+            // ★★★ NOT SET UP YET ⇒ THE SETUP PAGE, NOT THE RECEIVER.
+            // A fresh install has a radio and an admin password but no POLICY — no range, no
+            // listener cap, no decision about what may be changed — and until the owner sets one
+            // it has no business serving strangers. So the first visit is a sign-in and a setup
+            // form, not a spectrum.
+            // ★ Gated on `configured`, NOT on "is an admin password set": the first-run wizard
+            //   makes the password mandatory, so that can no longer stand in for this.
+            // ★★ The endpoints stay open while unconfigured — this page needs /vibeserver/auth and
+            //    /vibeserver/config to work, and both are admin-gated in their own right.
+            if (!g_vsConfigured.load() && g_vsWebEnabled.load()) {
+                const std::string page = kVibeSetupPage;
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                              "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                              + std::to_string(page.size()) + "\r\n\r\n" + page);
+                sock->close();
+                return;
+            }
             // VibeServer web client. Compiled in (vibe_web_page.h) because a phone
             // has nowhere to serve files FROM — one self-contained page, no assets,
             // no second request. Matched on the request-line PREFIX, not a substring:
