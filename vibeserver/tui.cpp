@@ -322,7 +322,33 @@ int vibeserverTui() {
 
     // ★ Running `vibeserver` again after setup must NOT re-run the wizard. Anything already
     //   configured goes straight to status and recovery.
-    if (have == 0 || !cfg.configured) {
+    // ★★★ AND THE HALF-WAY STATE IS ITS OWN SCREEN. The wizard saves `configured = false` because
+    //     the BROWSER finishes setup — so between the two, `!cfg.configured` sent the owner
+    //     straight back into the wizard. That is the wrong screen for the one question they are
+    //     most likely to have come back with: "what was that address again?". They already gave
+    //     us a name and a password; asking for them again treats a half-finished setup as no
+    //     setup at all. Show them the address, and let them re-run the wizard only if they say so.
+    bool wizardWanted = (have == 0);
+    if (have == 1 && !cfg.configured) {
+        header("Setup started");
+        const std::string ip0 = myIp(), port0 = listenPort();
+        message(4, 3, "This server has been started but setup is not finished.");
+        mvprintw(6, 2, "Finish it in a browser on any machine on this network:");
+        attron(A_BOLD | COLOR_PAIR(3));
+        mvprintw(8, 4, "http://%s:%s/", ip0.c_str(), port0.c_str());
+        attroff(A_BOLD | COLOR_PAIR(3));
+        attron(COLOR_PAIR(4));
+        mvprintw(10, 2, "Sign in with the admin password you chose here.");
+        attroff(COLOR_PAIR(4));
+        mvprintw(12, 2, "Press  W  to start the setup questions again, or any other key to exit.");
+        refresh();
+        const int k = getch();
+        if (k != 'w' && k != 'W') { endwin();
+            std::printf("\nFinish setup at  http://%s:%s/\n\n", ip0.c_str(), port0.c_str());
+            return 0; }
+        wizardWanted = true;
+    }
+    if (wizardWanted) {
         if (!runWizard(cfg)) { endwin(); return 0; }
         cfg.configured = false;       // ★★ The BROWSER finishes setup; this only makes it reachable.
         std::string serr;
