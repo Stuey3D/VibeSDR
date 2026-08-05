@@ -92,8 +92,16 @@ input, textarea, [contenteditable],
 }
 #splash > *:not(#splashSpectro) { position: relative; z-index: 2; }
 /* Stamps drawn INTO the canvas, so they scroll with the image rather than floating over it. */
+/* ★★★ NO left/bottom. These are left over from when this sat absolutely positioned in the
+   canvas's bottom-left corner. `#splash > *:not(#splashSpectro)` now forces position:relative on
+   it — which overrides the POSITION but leaves `left` in force, and on a relatively positioned
+   element `left:10px` is not a corner, it is a 10px SHIFT. So the line sat exactly 10px right of
+   the title it is supposed to be centred over, and no amount of adjusting the centring would have
+   found that (Stuart, 2026-08-05: "needs to nudge left a touch").
+   ★ The lesson is the general one: when a rule stops applying, its DEPENDENTS do not stop
+     applying with it. position and its offsets have to be removed together. */
 #splashSpectroTip {
-  position: absolute; left: 10px; bottom: 8px; z-index: 2;
+  z-index: 2;
   font-size: 10px; letter-spacing: 1px; text-indent: 1px; color: var(--text-dim); opacity: 0.75;
 }
 #splash h1 {
@@ -266,11 +274,6 @@ html #bar { display: none; }
   /* Side by side, so the two stacks together read as the app's single four-button row. */
   .mStack { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
   .mStack .mBtn { min-height: max(2.4em, 40px); }
-  /* ★★ THE STEP BUTTON FILLS ITS CELL HERE. Its fixed 7.2em exists to stop a CONTENT-SIZED island
-     resizing when the label changes ("6.25kHz" is wider than "1k") — but this card is already a
-     fixed width a few rules up, so that reason is spent, and all the fixed width still does is
-     make one button in a 1fr 1fr grid a different size from the three around it. */
-  #mStep { width: 100%; max-width: none; }
 }
 /* ★★★ A PHONE IN LANDSCAPE TAKES THE WIDE LAYOUT. Width alone said "narrow" for both phone
    orientations, so a landscape phone got the stacked layout it has plenty of room to avoid —
@@ -292,7 +295,6 @@ html #bar { display: none; }
   #mZoomDial{ grid-column: 5; grid-row: 1; }
   .mStack { grid-template-rows: 1fr 1fr; grid-template-columns: none; }
   .mStack .mBtn { min-height: 0; }
-  #mStep { width: 100%; max-width: none; }     /* same reasoning as the portrait rule above */
 }
 /* ★★ THE OLD `max-width: 440px` RULE IS GONE. It split the two dials onto a row each, which is
    the one thing Stuart did NOT want in portrait: he pointed at the landscape screenshot and said
@@ -413,6 +415,19 @@ html #bar { display: none; }
    resized the stack and pushed the island wider. Fixed width, same reasoning as #stepBtn. */
 #mStep { width: 7.2em; max-width: 30vw; box-sizing: border-box;
          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ★★★ THE STEP BUTTON FILLS ITS CELL ON A PHONE — AND THIS RULE MUST LIVE *AFTER* THE ONE ABOVE.
+   The fixed 7.2em exists to stop a CONTENT-SIZED island resizing when the label changes ("6.25kHz"
+   is wider than "1k"). The phone card is already a fixed width, so that reason is spent and the
+   fixed width only makes one button in a `1fr 1fr` grid a different size from its three
+   neighbours.
+   ★★ The first attempt at this put the override inside the ≤900px block, which sits ~140 lines
+      EARLIER in this file. Same specificity (#mStep both), so SOURCE ORDER decides and the base
+      rule won — a media query does not raise specificity, and the override silently did nothing.
+      Placing it here is what makes it apply. */
+@media (max-width: 900px) { #mStep { width: 100%; max-width: none; } }
+@media (orientation: landscape) and (max-height: 560px) and (min-width: 700px) {
+  #mStep { width: 100%; max-width: none; }
+}
 
 /* ★★ AUDIO SHOWS ITS STATE. Muting is the one setting on this card whose effect is total
    silence, and silence is indistinguishable from a broken stream — so the button must SAY
@@ -2487,10 +2502,17 @@ select.btn { padding: 6px 8px; }
            placeholder="admin password">
     <div class="seg"><button class="btn" id="adminPwGo">GO</button></div>
   </div>
+  <!-- ★★ NAMES THE CATEGORY, NOT A LIST THAT GOES STALE. This read "Bias-T, direct sampling and
+       calibration are locked" — written when those three were the whole of it, and wrong ever
+       since gain, AGC, filters, squelch and the notches joined them on a locked receiver. A list
+       that omits half of what it describes is worse than a category: the reader concludes the
+       gain slider is BROKEN rather than protected (Stuart, 2026-08-05).
+       ★ The readouts stay VISIBLE while locked, deliberately — Stuart: "it is good to see the AGC,
+         if it is working or not and what exactly it is doing". Locked is not the same as hidden. -->
   <div class="lbl wrap" id="adminNote" hidden>
-    Bias-T, direct sampling and calibration are locked by this receiver's operator. Bias-T puts
-    DC on the feedline, and the other two change the radio for everyone who listens after you.
-    Enter the admin password to unlock them.
+    Radio controls are locked by this receiver's operator. Gain, AGC, filters and calibration
+    change the radio for everyone listening, not just for you, and Bias-T puts DC on the feedline.
+    You can still see what they are set to. Enter the admin password to unlock them.
   </div>
   <div class="mrow rtlOnly">
     <label for="ppm">PPM</label>

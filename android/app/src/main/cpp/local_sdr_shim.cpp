@@ -2169,7 +2169,15 @@ struct LocalSdrShim::Impl {
     //
     // ★★ `isOpen()` IS NOT A DEFENCE and never was — a socket can be perfectly open and simply not
     // draining. The only real defence is never blocking on it in the first place.
-    enum class Out { Control, Spectrum, Audio };
+    // ★★★ Sig and RspStat are LIVE READOUTS, and a live readout is newest-wins exactly like a
+    //     waterfall row: the moment a newer one exists the old one is not late, it is WRONG.
+    //     They used to ride on Control, which is never dropped — harmless at 5 Hz, and the reason
+    //     raising the signal meter to 20 Hz made it LAG WORSE rather than better: the frames
+    //     queued, and every reading the client displayed was progressively further behind the
+    //     radio (Stuart, 2026-08-05: "the whole signal meter is lagging now").
+    //     ★ The lesson is that a rate rise is only safe on a channel that can DISCARD. Speeding up
+    //       a never-drop stream converts spare bandwidth into latency.
+    enum class Out { Control, Spectrum, Audio, Sig, RspStat };
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -2262,9 +2270,11 @@ struct LocalSdrShim::Impl {
         // so a listener who cannot keep up should fall BEHIND IN DETAIL, not accumulate a backlog
         // and then be dropped for it. Replacing rather than queueing is what lets a slow client
         // stay connected and merely run at a lower effective frame rate.
-        if (cls == Out::Spectrum) {
+        // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
+        //   discard the pending gain telemetry, which is a different quantity that has not changed.
+        if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::RspStat) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
-                if (it->first == Out::Spectrum) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
+                if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
             }
         }
@@ -2743,7 +2753,7 @@ struct LocalSdrShim::Impl {
                     "\"settling\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
-                for (auto& p : peers) sendText(p.sock, gb);
+                for (auto& p : peers) sendText(p.sock, gb, Out::RspStat);
             }
         }
 
@@ -2801,10 +2811,42 @@ struct LocalSdrShim::Impl {
             //       percent of the spectrum traffic they are already taking. It was the FAN-OUT
             //       through a blocking write that was expensive, and that is gone.
             {
-                char sb[128];
-                snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
-                         peak, iqFloorDb.load());
-                for (auto& p : peers) sendText(p.sock, sb);
+                // ★★★ MEASURED PER LISTENER, AT THE FREQUENCY THAT LISTENER IS ACTUALLY ON.
+                //     `peak` above is the SHARED VFO's passband — and in per-client mode the
+                //     shared VFO is nobody's: a per-client `tune` goes to that listener's own
+                //     ClientDsp and never touches `audioFreq`. So every listener's signal meter
+                //     has been reporting a frequency no human selected since per-client DSP
+                //     landed. It does not merely lag: it reads the WRONG BAND, and with the AGC
+                //     riding the whole 8 MHz it moves INVERSELY to the signal you are listening
+                //     to — a strong station keying up makes the AGC pull everything else down, so
+                //     the bar FALLS as the signal arrives (Stuart, 2026-08-05, on the Buzzer:
+                //     "the bar is going down when the buzz actually happens, the opposite of how
+                //     it should react"). That is what pointed at the frequency rather than the
+                //     rate; no amount of draw-rate work would have touched it.
+                // ★★★ THE FAMILY: when a shared resource becomes per-listener, EVERY path that
+                //     identified the listener has to be re-derived — not just the one you were
+                //     looking at. This is the third in one session (the app's tune routing, the
+                //     decoder feed, and now the meter). See [[clients_differ_which_socket]].
+                const double binHz = sampleRate / (double)bins;
+                const float floorDb = iqFloorDb.load();
+                for (auto& p : peers) {
+                    float mine = peak;                       // shared VFO — the fallback
+                    if (auto c = dspFor(p.sock)) {
+                        const double off = c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ;
+                        const int cb = (int)llround(off / binHz);
+                        const int hw2 = std::max(1, (int)(c->bwHz / 2.0 / binHz));
+                        float pk = -1e9f;
+                        for (int o = -hw2; o <= hw2; o++) {
+                            const float v = dbAt(cb + o);
+                            if (v > pk) pk = v;
+                        }
+                        mine = pk;
+                    }
+                    char sb[128];
+                    snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
+                             mine, floorDb);
+                    sendText(p.sock, sb, Out::Sig);
+                }
             }
         }
         // ★ The spectrogram is fed from the SHARED wide row — the one picture that is the same
@@ -3593,8 +3635,9 @@ struct LocalSdrShim::Impl {
         if (len) f.insert(f.end(), payload, payload + len);
         outboxPush(sock, cls, std::move(f));
     }
-    void sendText(const std::shared_ptr<net::Socket>& sock, const std::string& s) {
-        sendWs(sock, 0x1, (const uint8_t*)s.data(), s.size());
+    void sendText(const std::shared_ptr<net::Socket>& sock, const std::string& s,
+                  Out cls = Out::Control) {
+        sendWs(sock, 0x1, (const uint8_t*)s.data(), s.size(), cls);
     }
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
         // NB: displaySpan(), not sampleRate. On SpyServer the waterfall is the

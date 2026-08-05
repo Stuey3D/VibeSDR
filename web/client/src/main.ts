@@ -483,6 +483,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       noteFrame();
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
+      // ★★ PAINT THE CARD'S METER ON THE FRAME, not on the card's 250 ms poll. Everything else in
+      //    that poll describes something a human changes (frequency, mode, recording) and 4 Hz is
+      //    plenty; the meter describes the BAND, and at 4 Hz nineteen of every twenty readings the
+      //    server sends were thrown away — which is both the lag and the jerkiness, since a bar
+      //    stepping four times a second cannot look smooth however well it is smoothed.
+      mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
@@ -1465,6 +1471,9 @@ function drawDbAxis(ctx: CanvasRenderingContext2D, W: number, H: number) {
 // ── Signal meter (derived from the SPEC bins — the shim sends no S-meter) ────
 
 let sigSmooth = 0, sigPeak = 0;
+/** ★ Module-level so the SPECTRUM FRAME handler can repaint the card's meter. It is set
+ *  during UI init, which happens before any frame arrives; the `?.` covers the gap. */
+let mobileUi: ReturnType<typeof initMobileControls> | null = null;
 /** ★ The last passband peak in dBFS. updateSignal() computes it as a local, but the card's
  *  meter can be switched to show dBFS or S-units, and both need the raw figure rather than the
  *  0..1 the gradient uses. Mirrored here rather than recomputed, so every readout agrees. */
@@ -2074,7 +2083,7 @@ function buildControls() {
   // ★ Wired unconditionally; CSS alone decides whether the card is on screen (≤1280px).
   //   Gating the WIRING on width instead would mean a user who resizes the window gets a
   //   dead card — and resizing is precisely how this layout is meant to be reached.
-  initMobileControls({
+  mobileUi = initMobileControls({
     nudgeSteps: (n) => nudge(n * step),
     zoomBy:     (f) => { spec?.zoomBy(f); updateViewOverlays(); },
     freqHz:     () => spec?.frequency ?? null,

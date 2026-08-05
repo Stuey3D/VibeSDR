@@ -360,6 +360,19 @@ export function initMobileControls(deps: MobileDeps) {
     // The whole group (dot + digits) appears and disappears together.
     $('mRecTime').classList.toggle('on', rv !== '');
 
+    paintSignal();
+  }
+
+  /** ★★★ THE METER IS NOT PART OF THE 4 Hz POLL. Everything else in refresh() describes something
+   *  a human changes — the frequency, the mode, whether we are recording — and 250 ms is plenty
+   *  for those. The signal meter describes the BAND, which changes far faster than a thumb, and
+   *  painting it four times a second is a visible lag no amount of work upstream can undo: the
+   *  server was sending 20 readings a second and nineteen of them were being thrown away
+   *  (Stuart, 2026-08-05, having noticed the squelch meter — drawn on the spectrum frame — was
+   *  quicker than this one, which is what pointed straight at the draw rate rather than the data).
+   *  ★ Called from the spectrum frame handler, so it paints exactly as often as there is
+   *    something new to paint, and never more. */
+  function paintSignal() {
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
     $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
@@ -388,5 +401,5 @@ export function initMobileControls(deps: MobileDeps) {
   // enough to leave running on a phone.
   setInterval(refresh, 250);
   setInterval(clock, 10_000);
-  return { refresh };
+  return { refresh, paintSignal };
 }
