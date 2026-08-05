@@ -835,7 +835,8 @@ export class Waterfall {
       // Say what it is. With an RF-centre marker on screen too, an unlabelled
       // needle is ambiguous — which line is the one you're listening to?
       const dpr2 = renderDpr();
-      this.markerLabel(ctx, nX, W, 28 * dpr2,
+      void dpr2;
+      this.markerLabel(ctx, nX, W, this.markerLabelY(H, 0),
         `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, col);
     }
 
@@ -879,6 +880,25 @@ export class Waterfall {
 
   /** A small boxed label pinned to a vertical marker. Flips side near the edge so
    *  it never runs off-screen. */
+  /** ★★★ WHERE A MARKER LABEL SITS, and it is NOT the top of the canvas.
+   *  RF CENTRE and LISTEN used to be drawn 12 and 28 device pixels down, which is exactly where
+   *  the receiver name, the listener count and the session timer live — so on a shared server
+   *  they overlapped and neither was readable (Stuart, 2026-08-05, with a screenshot).
+   *  ★★ Anchored to the SPECTRUM/WATERFALL BOUNDARY instead, which is Stuart's own suggestion and
+   *  the right one: it is the widest reliably-empty strip on the display, it moves when the split
+   *  moves, and nothing else is ever drawn there.
+   *  ★ With the spectrum switched off there is no boundary to hang them on, so fall back to a
+   *  fixed drop that clears the name block — low enough to be out of the way, high enough not to
+   *  be lost in the waterfall.
+   *  @param stack 0 for the first label, 1 for a second stacked under it. */
+  private markerLabelY(H: number, stack = 0): number {
+    const dpr = renderDpr();
+    const specH = H - this.wf.height;
+    const row = 14 * dpr;
+    if (specH > 40 * dpr && this._showSpec) return specH - 8 * dpr - stack * row;
+    return 96 * dpr + stack * row;
+  }
+
   private markerLabel(
     ctx: CanvasRenderingContext2D, x: number, W: number, y: number,
     text: string, colour: string,
@@ -966,7 +986,7 @@ export class Waterfall {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    this.markerLabel(ctx, x, W, 12 * dpr,
+    this.markerLabel(ctx, x, W, this.markerLabelY(H, 1),
       `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M`, 'rgba(120,200,255,0.95)');
     ctx.restore();
   }

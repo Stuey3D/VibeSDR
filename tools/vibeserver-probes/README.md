@@ -152,3 +152,11 @@ With both fixed it reads 0.60 on the broken build and 1.00 on the fixed one.
 ★ The bug: the channel was sized by `max(audio, view)`, so changing the ZOOM changed the channel
 WIDTH, which rebuilt the pipeline. Tuning never did, because tuning keeps the same width — which
 is exactly why "tune is fine though". Same shape as `memory/tuning_attenuates_agc_reset.md`.
+
+## `zoomsteps.mjs` — the zoom must be continuous
+
+Walks one listener down a ladder of spans (2 MHz → 8 kHz) and checks the server reports each one.
+
+★ The bug: the shared wide row was cropped to the GLOBAL zoom and grouped only by bin width, so a
+listener's own zoom did nothing until it was narrow enough to earn a private channel — the
+waterfall jumped from the full span straight to 20 kHz with one step in between.

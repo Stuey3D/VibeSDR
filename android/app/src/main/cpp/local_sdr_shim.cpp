@@ -2215,16 +2215,34 @@ struct LocalSdrShim::Impl {
             double zoom = zoomFactor.load();
             // Distinct widths among the listeners, so the expensive part runs once per WIDTH
             // rather than once per listener.
-            std::vector<int> widths;
-            for (auto& p : peers)
-                if (std::find(widths.begin(), widths.end(), p.bins) == widths.end())
-                    widths.push_back(p.bins);
-            for (int outBins : widths) {
+            // ★★★ ONE FRAME PER DISTINCT VIEW, NOT PER WIDTH.
+            //     Grouping only by width meant every listener got the frame cropped to the GLOBAL
+            //     zoom — so a listener's own zoom did nothing until it was narrow enough to earn a
+            //     private channel, and the waterfall jumped straight from "all 8 MHz" to "20 kHz"
+            //     with nothing in between (Stuart, 2026-08-05: "zoom now has maximum out and
+            //     maximum in"). The crop is per listener, so the GROUP is per listener's view.
+            //     ★ Cheap: the FFT is shared and already paid for; only the crop and downsample
+            //       repeat, and in practice everyone zoomed out shares one view.
+            struct ViewKey { int bins; double centre, span; };
+            std::vector<ViewKey> views;
+            for (auto& p : peers) {
+                auto c = dspFor(p.sock);
+                if (c && c->ownView) continue;           // drawing its own — not from this path
+                const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
+                const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
+                bool seen = false;
+                for (auto& v : views)
+                    if (v.bins == p.bins && std::fabs(v.centre - ce) < 1 && std::fabs(v.span - sp) < 1)
+                        { seen = true; break; }
+                if (!seen) views.push_back({p.bins, ce, sp});
+            }
+            for (auto& view : views) {
+            const int outBins = view.bins;
             // Source bins per output bin. Written in terms of the DISPLAY span so it
             // stays correct when that is decoupled from the IQ rate (SpyServer).
             // Reduces to bins/(zoom*outBins) whenever displaySpan == sampleRate.
             const double srcBinHz = sampleRate / (double)bins;
-            const double step = (shownHz / (double)outBins) / srcBinHz;  // src bins / out bin
+            const double step = (view.span / (double)outBins) / srcBinHz;  // src bins / out bin
             std::vector<uint8_t> frame(22 + outBins);
             frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
             uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2239,8 +2257,8 @@ struct LocalSdrShim::Impl {
             // centre (rtlCenter) — shift the crop by their difference so the user
             // can pan the view across the captured band while the dongle (and the
             // tuned VFO) stay put. dbAt clamps past the capture edge → floor.
-            const double viewOffsetBin = (viewCenter.load() - rtlCenter.load()) * (double)bins / sampleRate;
-            uint64_t f = (uint64_t)llround(viewCenter.load());   // display centre = view centre
+            const double viewOffsetBin = (view.centre - rtlCenter.load()) * (double)bins / sampleRate;
+            uint64_t f = (uint64_t)llround(view.centre);         // display centre = THIS view's centre
             std::memcpy(&frame[14], &f, 8);
             // ★★★ NOTHING IS RENDERED OUTSIDE THE CAPTURED BAND — u8 0 MEANS "NO DATA".
             //     The comment above used to claim dbAt "clamps past the capture edge → floor".
@@ -2275,11 +2293,15 @@ struct LocalSdrShim::Impl {
             size_t sent = 0;
             for (auto& p : peers) {
                 if (p.bins != outBins) continue;
+                auto c = dspFor(p.sock);
                 // ★★ A listener drawing its OWN zoomed view must not also receive the shared wide
                 //    row: two sources writing one waterfall doubles the frame rate and the two
                 //    fight over the same texture, which is the exact failure the shared zoom path
                 //    documents. Its own channel owns its display until it zooms back out.
-                if (auto c = dspFor(p.sock)) if (c->ownView) continue;
+                if (c && c->ownView) continue;
+                const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
+                const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
+                if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;
                 sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
             }
             vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
@@ -3288,7 +3310,12 @@ struct LocalSdrShim::Impl {
             // ★ Its own view, or the shared one — the client scales its axis by what we say here,
             //   so telling it the shared span while sending it a private zoomed row draws every
             //   signal in the wrong place.
-            if (me->ownView && me->viewSpanHz > 0) { myCentre = me->viewCentreHz; myEffective = me->viewSpanHz; }
+            // ★ Whenever this listener has a view of its own — whether it is served from its
+            //   private channel or as a crop of the shared row. The client scales its axis by
+            //   what we say here, so reporting the global span while sending it a cropped frame
+            //   draws every signal in the wrong place. Gating this on ownView was why the zoom
+            //   appeared to have only two positions.
+            if (me->viewSpanHz > 0) { myCentre = me->viewCentreHz; myEffective = me->viewSpanHz; }
         }
         const double binBw = myEffective / (double)cfgBins;   // we emit cfgBins bins over MY span
         char buf[512];   // grew when vfo/locked were added — a truncated JSON config is fatal
@@ -6773,7 +6800,26 @@ void LocalSdrShim::stopLocked() {
     { std::lock_guard<std::mutex> lk(impl->clientMtx);
       if (impl->specClient) impl->specClient->close();
       if (impl->audioClient) impl->audioClient->close();
-      if (impl->dxClient) impl->dxClient->close(); }
+      if (impl->dxClient) impl->dxClient->close();
+      // ★ Per-client sockets too, for the same reason — a shared receiver has N of them and
+      //   closing only the primary leaves the rest blocking their writers.
+      for (auto& kv : impl->clientDsp) {
+          if (kv.second->spec)  kv.second->spec->close();
+          if (kv.second->audio) kv.second->audio->close();
+      } }
+
+    // ★★★ JOIN EVERY PER-CLIENT WRITER BEFORE THE MAPS GO. Each listener owns an outbox thread,
+    //     and destroying a std::thread that is still joinable calls std::terminate — which is
+    //     precisely what "terminate called without an active exception" and status=6/ABRT in the
+    //     journal were: every single restart aborted on the way out. Harmless in itself, and
+    //     exactly the kind of noise that hides a REAL crash the first time one happens.
+    {
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(impl->outboxMtx);
+          for (auto& kv : impl->outboxes) socks.push_back(kv.second->sock); }
+        for (auto& sk : socks) impl->outboxClose(sk, 0);      // no drain: we are going down
+    }
+    { std::lock_guard<std::mutex> lk(impl->clientMtx); impl->clientDsp.clear(); impl->pendingAudio.clear(); }
 
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.

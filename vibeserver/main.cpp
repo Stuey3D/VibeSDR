@@ -670,12 +670,20 @@ int main(int argc, char** argv) {
         //   box nobody can see.
         if (g_restartRequested.load()) {
             std::printf("\nConfiguration saved — restarting to apply it.\n");
+            LocalSdrShim::stopMdns();
             shim.stop();
             return 0;
         }
     }
 
     std::printf("\nStopping…\n");
+    // ★★★ STOP THE mDNS RESPONDER, or every exit is an ABRT. It keeps a STATIC std::thread, so
+    //     at process exit its destructor runs on a still-joinable thread and std::terminate
+    //     fires: "terminate called without an active exception", status=6/ABRT in the journal on
+    //     EVERY restart from the moment advertising was first wired in (2026-08-05, 16:40 — the
+    //     timeline is what identified it, since the message names nothing).
+    //     ★ Harmless in itself, and exactly the kind of noise that hides the first REAL crash.
+    LocalSdrShim::stopMdns();
     shim.stop();
     return 0;
 }

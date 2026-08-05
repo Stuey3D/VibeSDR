@@ -336,6 +336,18 @@ function WaterfallView({
   const specH    = specShow ? Math.round(below * Math.max(0.05, Math.min(0.65, specFrac))) : 0;
   const wfTop    = specTop + specH;
   const wfH      = height - wfTop;
+  // ★★★ WHERE THE RF-CENTRE AND LISTEN LABELS SIT, and it is NOT the top of the spectrum.
+  //     They were at specTop+3 and specTop+29 — exactly where the SERVERS CHIP and the receiver
+  //     name/limit block live — so on a shared server they overlapped and neither was readable
+  //     (Stuart, 2026-08-05, with a screenshot from the web client; the app has the same fault).
+  //     ★★ Anchored to the SPECTRUM/WATERFALL BOUNDARY, which is Stuart's own suggestion: it is
+  //     the widest reliably-empty strip on the display, it moves when the split moves, and
+  //     nothing else is ever drawn there.
+  //     ★ Spectrum off ⇒ no boundary to hang them on, so a fixed drop that clears the chip.
+  //     ★★ KEEP THIS IN STEP WITH web/client/src/waterfall.ts markerLabelY(). Two clients drawing
+  //        the same two labels in different places is exactly the drift this project keeps
+  //        writing rules about.
+  const markerLabelBase = (specShow && specH > 40) ? wfTop - 16 : specTop + 56;
   // ★ 1 DATA ROW = 1 SCREEN POINT. The ring depth tracks the waterfall's pixel height. A FIXED depth
   // (was 256) stretched to fill a tall PORTRAIT waterfall made each row span ~2 points, so signals
   // blurred and scrolled ~2× too fast vs landscape — present in EVERY version, masked by a high frame
@@ -1919,7 +1931,7 @@ function WaterfallView({
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: centerMarkerColor,
-                  left: Math.min(width - 96, centerMarker.x + 3), top: specTop + 3,
+                  left: Math.min(width - 96, centerMarker.x + 3), top: markerLabelBase - 14,
                   width: 96, textAlign: 'left', fontSize: 9,
                 }]}>
             {'RF CENTRE: ' + fmtHz(centerMarkerHz as number)}
@@ -1955,7 +1967,7 @@ function WaterfallView({
           <Text pointerEvents="none"
                 style={[styles.tickLabel, {
                   fontFamily, color: needleColor,
-                  left: Math.min(width - 96, needle.nX + 3), top: specTop + 29,
+                  left: Math.min(width - 96, needle.nX + 3), top: markerLabelBase,
                   width: 96, textAlign: 'left', fontSize: 9,
                 }]}>
             {'LISTEN: ' + fmtHz(tuneHz)}
