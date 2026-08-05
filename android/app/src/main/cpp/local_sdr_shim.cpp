@@ -1521,6 +1521,129 @@ struct LocalSdrShim::Impl {
      *  a comment justifying a global by an occupancy assumption a later feature quietly repealed. */
     std::map<net::Socket*, int> clientBins;
 
+    // ── ★★★ PER-CLIENT DSP — every listener their own VFO, demodulator and audio ─────────────
+    //
+    // THE MODEL, in Stuart's words (2026-08-05): *"it needs to act like an OWRX profile whereby
+    // everybody gets their own vfo and demodulator/decoders within that frequency range."*
+    // Until now the shim was the opposite shape by design — "one radio, one pipeline, one server
+    // per process", ONE `audioFreq`, ONE `mode` — so tuning in one browser window retuned every
+    // other listener.
+    //
+    // ★★ HOW IT IS AFFORDABLE. Not one full-rate pipeline per listener: that runs an NCO over the
+    // whole capture for each of them and was measured at +13% of a core each, out of road at
+    // about eight. Instead one shared forward FFT (Channelizer, ka9q-style fast convolution), a
+    // narrow slice extracted per listener, and a pipeline running at the CHANNEL rate — measured
+    // in tools/spike-per-client-channel.cpp at **+0.09% of a core per listener**, with 30
+    // listeners costing 40% more than none.
+    //
+    // ★★★ ONLY IN SHARED/LOCKED MODE. A personal receiver has exactly one listener who owns the
+    // radio, and the phone and Mac builds compile this same file — so when the centre is not
+    // locked, none of this is constructed and the original single-pipeline path runs untouched.
+    // The riskiest thing here would be changing behaviour for the shipping app.
+    struct ClientDsp {
+        std::shared_ptr<net::Socket> spec;      // whose channel this is
+        std::shared_ptr<net::Socket> audio;     // its own audio socket, or null until one opens
+        std::string session;
+        double vfoHz = 0;                       // ABSOLUTE, like audioFreq
+        std::string mode = "am";
+        double bwHz = 0;
+        int    chanBins = 0;                    // power of two dividing fftSize
+        double chanRate = 0;
+        std::unique_ptr<vibedsp::RxPipeline> rx;
+        std::vector<cf32> slice;
+        // Audio encode is per client too: two listeners may want different codecs, and an Opus
+        // encoder carries stream state that cannot be shared.
+        bool wantsOpus = false, forceMono = false;
+#ifdef VIBE_HAVE_OPUS
+        vibe::OpusAudioEncoder opus;
+#endif
+        Impl* owner = nullptr;
+        std::mutex mtx;                         // guards retune against the DSP thread
+    };
+    std::map<net::Socket*, std::shared_ptr<ClientDsp>> clientDsp;
+    /** Audio sockets that arrived before their spectrum socket, by session id. */
+    std::map<std::string, std::shared_ptr<net::Socket>> pendingAudio;
+    std::unique_ptr<vibedsp::Channelizer> chan_;
+
+    /** ★ The gate. Per-client DSP exists only where it means something: a SHARED receiver, where
+     *  the owner has locked the centre and more than one listener is allowed. */
+    bool perClientDsp() const {
+        return g_vsLockedCentre.load() > 0.0 && g_vsMaxUsers.load() > 1;
+    }
+
+    /** Narrowest channel that still carries this mode, as a power of two dividing fftSize.
+     *  ★ The channel must be comfortably wider than the demodulator's passband — a channel cut to
+     *  exactly the filter width puts the filter skirts on the channel edge, where the fast
+     *  convolution's own transition lives. 2.5x keeps them apart. */
+    int chanBinsFor(double bwHz) const {
+        const double need = std::max(bwHz * 2.5, 24000.0);
+        int b = 64;
+        while (b < fftSize && sampleRate * (double)b / (double)fftSize < need) b <<= 1;
+        return std::min(b, fftSize);
+    }
+
+    static void clientAudioCb(void* ctx, const float* pcm, int frames, int ch, int) {
+        auto* c = (ClientDsp*)ctx;
+        if (!c || !c->owner || frames <= 0) return;
+        c->owner->onClientAudio(c, pcm, frames, ch);
+    }
+
+    /** Build (or rebuild) a listener's channel for its current VFO/mode/bandwidth.
+     *  ★ Rebuilds only when the WIDTH changes. Moving the dial inside the same channel width is
+     *  just a different centre bin plus a residual offset — no filter state is thrown away, which
+     *  is what keeps tuning smooth instead of clicking. Same reasoning as the shared path's
+     *  "a same-chain retune re-points the NCO and rebuilds nothing". */
+    void clientRetune(ClientDsp* c) {
+        if (!c) return;
+        const auto mp = paramsFor(c->mode);
+        const double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
+        const int want = chanBinsFor(bw);
+        std::lock_guard<std::mutex> lk(c->mtx);
+        if (want != c->chanBins || !c->rx) {
+            c->chanBins = want;
+            c->chanRate = sampleRate * (double)want / (double)fftSize;
+            c->slice.assign((size_t)want, cf32{0.0f, 0.0f});
+            c->rx.reset(new vibedsp::RxPipeline());
+            vibedsp::RxPipeline::Callbacks cb{};
+            cb.ctx = c;
+            cb.audio = &Impl::clientAudioCb;
+            // ★ A small FFT: this pipeline exists to DEMODULATE. The waterfall everyone sees is
+            //   the shared wide one, so paying for a per-client spectrum here would be paying
+            //   twice for a picture nobody reads.
+            c->rx->start(c->chanRate, 1024, 10.0, (int)AUDIO_SR, cb);
+            LOGI("client channel: %.3f kHz wide (%d bins) for %s",
+                 c->chanRate / 1e3, want, c->mode.c_str());
+        }
+        // ★★★ THE RESIDUAL IS NOT OPTIONAL. extract() centres on a whole BIN, so the channel
+        //     lands up to half a bin away from where the listener actually tuned — 122 Hz at
+        //     8 MSPS with a 32k FFT, which on SSB is the difference between speech and a growl.
+        //     Hand the leftover to the pipeline, which tunes within the channel.
+        const double binHz = sampleRate / (double)fftSize;
+        const double off   = c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ;
+        const double resid = off - std::lround(off / binHz) * binHz;
+        c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+    }
+
+    /** The signed centre bin this listener's channel is taken from. */
+    int clientCentreBin(const ClientDsp* c) const {
+        const double binHz = sampleRate / (double)fftSize;
+        return (int)std::lround((c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ) / binHz);
+    }
+
+    /** Encode and send one block of this listener's audio to ITS OWN socket. */
+    void onClientAudio(ClientDsp* c, const float* pcm, int frames, int ch) {
+        std::shared_ptr<net::Socket> sock;
+        { std::lock_guard<std::mutex> lk(clientMtx); sock = c->audio; }
+        if (!sock || !sock->isOpen()) return;
+        std::vector<int16_t> buf((size_t)frames * ch);
+        for (int i = 0; i < frames * ch; i++) {
+            float v = pcm[i];
+            v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+            buf[i] = (int16_t)std::lround(v * 32767.0f);
+        }
+        sendClientAudio(c, sock, buf.data(), frames, ch);
+    }
+
     struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; };
 
     /** Everyone receiving spectrum right now, WITH the width each asked for — primary first.
@@ -2412,6 +2535,46 @@ struct LocalSdrShim::Impl {
     // Header (both): [0]=channels(1|2), [1]=format, [2..5]=sampleRate u32 LE. PCM appends int16
     // samples; Opus appends one packet. ADPCM (old formats 1/2) is retired — every VibeServer
     // consumer (its own web page, VibeSDR, Jr) is ours, so there is no third party to keep it for.
+    /** Per-client twin of sendAudioPcm. Identical wire format — the difference is WHOSE encoder
+     *  and WHOSE codec preference it uses. ★ An Opus encoder carries stream state, so it cannot be
+     *  shared between listeners: two clients through one encoder interleave their frames and both
+     *  get garbage. */
+    void sendClientAudio(ClientDsp* c, const std::shared_ptr<net::Socket>& sock,
+                         const int16_t* pcm, int count, int ch) {
+        if (count <= 0) return;
+        std::vector<int16_t> monoBuf;
+        if (c->forceMono && ch == 2) {
+            monoBuf.resize((size_t)count);
+            for (int i = 0; i < count; i++)
+                monoBuf[i] = (int16_t)(((int)pcm[i*2] + (int)pcm[i*2+1]) / 2);
+            pcm = monoBuf.data(); ch = 1;
+        }
+#ifdef VIBE_HAVE_OPUS
+        if (c->wantsOpus) {
+            c->opus.setBitrate(g_vsOpusBitrate.load());
+            std::vector<std::vector<uint8_t>> packets;
+            c->opus.encode(pcm, count, ch, packets);
+            const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;
+            for (auto& pkt : packets) {
+                std::vector<uint8_t> frame; frame.reserve(6 + pkt.size());
+                frame.push_back((uint8_t)ch); frame.push_back(3);
+                frame.push_back((uint8_t)(sr & 0xff));         frame.push_back((uint8_t)((sr >> 8) & 0xff));
+                frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
+                frame.insert(frame.end(), pkt.begin(), pkt.end());
+                sendWs(sock, 0x2, frame.data(), frame.size(), Out::Audio);
+                vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+            }
+            return;
+        }
+#endif
+        std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
+        frame[0] = (uint8_t)ch; frame[1] = 0;
+        uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
+        std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
+        sendWs(sock, 0x2, frame.data(), frame.size(), Out::Audio);
+        vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+    }
+
     void sendAudioPcm(const std::shared_ptr<net::Socket>& sock, const int16_t* pcm, int count, int ch) {
         if (count <= 0) return;
 
@@ -2935,6 +3098,9 @@ struct LocalSdrShim::Impl {
         //     whole zoom/pan model is built on — handing it someone else's is the "derive a wire
         //     value the same way at BOTH ends" bug, and it lands every zoom off by the ratio.
         const int cfgBins = binsFor(sock);
+        std::string myMode = mode;
+        double myVfo = audioFreq.load();
+        if (auto me = dspFor(sock)) { myMode = me->mode; myVfo = me->vfoHz; }
         double binBw = effective / (double)cfgBins;                    // we emit cfgBins bins (the FFT/bin lever)
         char buf[512];   // grew when vfo/locked were added — a truncated JSON config is fatal
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
@@ -2957,8 +3123,11 @@ struct LocalSdrShim::Impl {
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,"
             "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s}",
-            (long long)llround(viewCenter.load()), cfgBins, binBw, effective, span, mode.c_str(),
-            (long long)llround(audioFreq.load()),
+            (long long)llround(viewCenter.load()), cfgBins, binBw, effective, span,
+            // ★★ THIS listener's mode and VFO, not the server's. In shared mode they are
+            //    genuinely different per listener, and telling a client someone else's dial is
+            //    how it ends up tuned somewhere it never asked for.
+            myMode.c_str(), (long long)llround(myVfo),
             g_vsLockedCentre.load() > 0.0 ? "true" : "false");
         sendText(sock, buf);
     }
@@ -3231,6 +3400,31 @@ struct LocalSdrShim::Impl {
             else updateZoomView();
             sendConfig(sock);
             return;
+        }
+        // ★★★ IN SHARED MODE, TUNING IS THE SENDER'S OWN BUSINESS. This is the whole point of
+        //     per-client DSP: the message moves THIS listener's VFO and nobody else's. Before
+        //     this, one window tuning retuned every other listener on the server.
+        //     ★ The hardware centre still never moves — it is locked, and everyone's channel is
+        //       taken from inside that one capture.
+        if (auto me = dspFor(sock)) {
+            if (type == "tune" || type == "mode" || type == "bandwidth") {
+                std::string m = jsonStr(msg, "mode");
+                double v = 0, lo = 0, hi = 0, bw = 0;
+                bool changed = false;
+                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
+                if (jsonNum(msg, "frequency", v) && v > 0) {
+                    // ★ Clamp to the captured window: a listener cannot tune outside the range
+                    //   the owner locked, and silently accepting it would demodulate noise.
+                    const double half = displaySpan() * 0.5;
+                    const double lo2 = rtlCenter.load() - half, hi2 = rtlCenter.load() + half;
+                    me->vfoHz = v < lo2 ? lo2 : (v > hi2 ? hi2 : v);
+                    changed = true;
+                }
+                if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) { me->bwHz = hi - lo; changed = true; }
+                else if (jsonNum(msg,"bandwidth",bw) && bw > 0) { me->bwHz = bw; changed = true; }
+                if (changed) clientRetune(me.get());
+                return;
+            }
         }
         if (type == "tune") {
             std::string m = jsonStr(msg, "mode");
@@ -4282,9 +4476,30 @@ struct LocalSdrShim::Impl {
         // client (same id) — a DIFFERENT client is still refused as busy above.
         std::shared_ptr<net::Socket> stale;
         if (isAudio) {
+            // ★★★ IN SHARED MODE EVERY LISTENER HAS THEIR OWN AUDIO SOCKET. `audioClient` is a
+            //     single pointer built for a one-at-a-time receiver; here it would mean the last
+            //     listener to connect took everyone's audio. Attach this socket to ITS OWN
+            //     channel instead, matched on the session id.
+            if (perClientDsp()) {
+                bool matched = false;
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  for (auto& kv : clientDsp) {
+                      if (kv.second->session != session || session.empty()) continue;
+                      kv.second->audio = sock;
+                      kv.second->wantsOpus = wantsOpus;
+                      kv.second->forceMono = forceMono;
+                      matched = true;
+                      break;
+                  }
+                  // Arrived first: hold it until its spectrum socket turns up.
+                  if (!matched) pendingAudio[session] = sock; }
+                LOGI("audio WS connected (%s, codec=%s)",
+                     matched ? "own channel" : "waiting for its spectrum socket",
+                     wantsOpus ? "opus" : "pcm");
+            }
             { std::lock_guard<std::mutex> lk(clientMtx);
-              stale = audioClient;
-              audioClient = sock; }
+              stale = perClientDsp() ? nullptr : audioClient;
+              if (!perClientDsp()) audioClient = sock; }
             audioForceMono.store(forceMono);
 #ifdef VIBE_HAVE_OPUS
             audioWantsOpus.store(wantsOpus);
@@ -4326,6 +4541,25 @@ struct LocalSdrShim::Impl {
                 if (hz > 0 || !lm.empty())
                     LOGI("new session — landing on %.3f kHz %s", hz / 1e3,
                          lm.empty() ? mode.c_str() : lm.c_str());
+            }
+            // ★★★ THIS LISTENER'S OWN CHANNEL. Created before sendConfig so the config it is sent
+            //     already describes its own VFO rather than somebody else's.
+            if (perClientDsp()) {
+                auto c = std::make_shared<ClientDsp>();
+                c->owner = this;
+                c->spec = sock;
+                c->session = session;
+                c->vfoHz = g_vsLandingHz.load() > 0 ? g_vsLandingHz.load() : audioFreq.load();
+                { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
+                  c->mode = g_vsLandingMode.empty() ? mode : g_vsLandingMode; }
+                c->bwHz = paramsFor(c->mode).bandwidth;
+                { std::lock_guard<std::mutex> lk(clientMtx); clientDsp[sock.get()] = c; }
+                clientRetune(c.get());
+                // ★ An audio socket may already be waiting: a browser opens both at once and the
+                //   order is not guaranteed. Adopt it rather than leaving the listener silent.
+                adoptAudioForSession(session);
+                LOGI("listener %s: own channel at %.3f kHz %s",
+                     session.empty() ? "(anon)" : session.c_str(), c->vfoHz / 1e3, c->mode.c_str());
             }
             sendConfig(sock); sendHwInfo(sock);
             broadcastUsers();          // ★ everyone learns someone joined, including the joiner
@@ -4404,6 +4638,12 @@ struct LocalSdrShim::Impl {
               [&](const std::shared_ptr<net::Socket>& c){ return !c || c == sock || !c->isOpen(); }),
               specExtra.end());
           clientBins.erase(sock.get());     // its width leaves with it
+          // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
+          clientDsp.erase(sock.get());
+          for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
+              if (it->second == sock) it = pendingAudio.erase(it); else ++it;
+          }
+          for (auto& kv : clientDsp) if (kv.second->audio == sock) kv.second->audio = nullptr;
           if (audioClient == sock) audioClient = nullptr;
           // Free the slot once BOTH of the occupant's sockets are gone (a browser closing one tab
           // drops both). Until then a momentary spectrum reconnect must not surrender the slot to a
@@ -4775,6 +5015,55 @@ struct LocalSdrShim::Impl {
         LOGI("deferred retune applied: dongle -> %.0f Hz", dongle);
     }
 
+    /** Push IQ through the shared forward FFT and hand every listener their own channel.
+     *  ★ Copies the client list under the lock and works OUTSIDE it: this runs on the DSP thread,
+     *  and holding clientMtx across a whole block of demodulation would stall every connect and
+     *  disconnect behind it. */
+    /** This listener's channel, by its SPECTRUM socket. Null when per-client DSP is off. */
+    std::shared_ptr<ClientDsp> dspFor(const std::shared_ptr<net::Socket>& sock) {
+        if (!sock) return nullptr;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = clientDsp.find(sock.get());
+        return it == clientDsp.end() ? nullptr : it->second;
+    }
+
+    /** ★★ A browser opens its spectrum and audio sockets AS A PAIR, in no guaranteed order, and
+     *  they are tied together only by the session id. Whichever arrives second does the matching —
+     *  so this is called from both paths. Without it a listener whose audio socket landed first is
+     *  silent forever, which looks exactly like a broken receiver. */
+    void adoptAudioForSession(const std::string& session) {
+        if (session.empty()) return;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = pendingAudio.find(session);
+        if (it == pendingAudio.end()) return;
+        for (auto& kv : clientDsp) {
+            if (kv.second->session != session) continue;
+            kv.second->audio = it->second;
+            pendingAudio.erase(it);
+            return;
+        }
+    }
+
+    void feedClientChannels(const cf32* iq, int n) {
+        if (!perClientDsp() || n <= 0) return;
+        std::vector<std::shared_ptr<ClientDsp>> cs;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          cs.reserve(clientDsp.size());
+          for (auto& kv : clientDsp) cs.push_back(kv.second); }
+        if (cs.empty()) return;
+        if (!chan_ || chan_->fftSize() != fftSize) chan_.reset(new vibedsp::Channelizer(fftSize));
+        chan_->feed(iq, n, [&](const cf32* bins, int nbins) {
+            (void)nbins;
+            for (auto& c : cs) {
+                std::lock_guard<std::mutex> lk(c->mtx);
+                if (!c->rx || c->chanBins <= 0) continue;
+                const int got = chan_->extract(bins, clientCentreBin(c.get()),
+                                               c->chanBins, c->slice.data());
+                if (got > 0) c->rx->feed(c->slice.data(), got);
+            }
+        });
+    }
+
     void dspLoop() {
         // This thread runs the whole demod chain (WFM stereo MPX + RDS + FIR
         // filters) and must keep up in real time or the audio it produces
@@ -4812,6 +5101,12 @@ struct LocalSdrShim::Impl {
             std::lock_guard<std::recursive_mutex> mlk(modeMtx);
             flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
             rx.feed(buf.data(), (int)buf.size());
+            // ★★★ PER-CLIENT DEMOD. The shared `rx` above still produces the WIDE waterfall
+            //     everyone sees; this produces each listener's OWN audio from their own slice of
+            //     one shared forward FFT. Costs ~0.09% of a core each (measured, see the spike).
+            //     ★ Only in shared/locked mode — a personal receiver never builds any of it, so
+            //       the phone and Mac paths are byte-for-byte what they were.
+            feedClientChannels(buf.data(), (int)buf.size());
         }
     }
 

@@ -80,3 +80,29 @@ node config-api.mjs 48000        # expects admin password "secret"
 ★★ The 401 cases are the ones that matter. **The config contains the PIN**, so an unauthenticated
 GET leaking it would be worse than any setting being wrong.
 
+
+## `independenttune.mjs` — OWRX-style per-client tuning
+
+Two listeners tune to two different synthetic stations on one radio and must recover two
+different audio tones (fake-rtl-tcp puts AM carriers at ±120 kHz with distinct pitches).
+
+```sh
+node independenttune.mjs 48200      # server needs --lock-freq and --users > 1
+```
+
+★★★ **OFFSET TUNING WILL FOOL YOU.** The radio sits `HW_OFFSET_HZ` (15 kHz) ABOVE the logical
+centre so the DC spike misses the channel, so a station at capture-DC + X is at
+`centre + 15 kHz + X`. Tuning without that puts both listeners 15 kHz off-station, and two
+listeners hearing noise looks *identical* to two listeners sharing one VFO — which is the very
+thing under test. Check the recovered tone matches the EXPECTED pitch, never just that the two
+differ.
+
+## `singleuseraudio.mjs` — the regression guard that matters most
+
+One listener on an UNLOCKED server must still demodulate through the shared pipeline. This file
+compiles into the phone and Mac apps, where there is exactly one listener and none of the
+per-client machinery is constructed; breaking that would be far worse than any server bug.
+
+```sh
+node singleuseraudio.mjs 48210      # server with no --lock-freq
+```
