@@ -52,6 +52,15 @@ struct Config {
     // Radio / window
     double freq = 9'410'000, rate = 2'400'000, lockFreq = 0, lockRate = 0;
     int    gain = -1;
+    // ★★ THE FRONT END AS THE OWNER LEFT IT. An admin who unlocked the controls and turned the RF
+    //    gain down did it for a reason — 3955 kHz blasting the front end, in the case that prompted
+    //    this — and losing that on the next restart means the receiver comes back overloaded and
+    //    the owner has to notice and fix it again. -1 = never set, so leave the radio's default.
+    //    ★ Deliberately NOT in the setup wizard: these are live adjustments made while listening,
+    //      and the place they are made is the place they must stick.
+    int    lnaState = -1;      // RSP LNA state (raw, as the API numbers it)
+    int    ifGr = -1;          // RSP IF gain reduction, dB
+    int    ifAgc = -1;         // RSP IF AGC: 1 on, 0 off, -1 not set
     std::string demodMode = "am";        // landing mode for a new listener
     double landingFreq = 0;              // 0 = same as freq
 
@@ -91,7 +100,15 @@ std::string toJson(const Config& cfg);
 
 /** Parse JSON into `cfg`. Unknown keys are ignored (forward compatibility); absent keys keep
  *  whatever `cfg` already holds, so this doubles as a PATCH. */
-bool fromJson(const std::string& json, Config& cfg, std::string& err);
+/** @param validate run the whole-config coherence rules (multi-user needs a lock, a configured
+ *  server needs an admin password, ...). TRUE for the setup page, which is submitting a complete
+ *  configuration and must be told when it is contradictory.
+ *  ★★ FALSE for a LIVE ONE-FIELD PATCH — saving the RF gain an admin just set must not be
+ *     refused because some UNRELATED part of the running config would not pass the setup page's
+ *     rules. It did exactly that: a server started from the command line is marked configured by
+ *     the migration rule but has no admin password, so every gain save was rejected with a
+ *     message about admin passwords. A patch cannot fix a field it does not mention. */
+bool fromJson(const std::string& json, Config& cfg, std::string& err, bool validate = true);
 
 /** Write atomically: temp file in the same directory, fsync, rename. ★ A half-written config is
  *  read at every boot, so the failure mode of a naive write is a receiver that will not start. */

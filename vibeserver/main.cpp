@@ -435,6 +435,10 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerZoomSpectrum(o.zoomSpectrum);
     LocalSdrShim::setVibeServerIdleGrace(o.idleGrace);
     LocalSdrShim::setVibeServerRfNotch(o.rfNotch);
+    // ★ The front end as the owner last left it. Applied after the start-up AGC sequence — see
+    //   the kick's final step, which is the only point where it will not be immediately undone.
+    LocalSdrShim::setVibeServerSavedFrontEnd(g_runtimeConfig.lnaState, g_runtimeConfig.ifGr,
+                                             g_runtimeConfig.ifAgc);
     LocalSdrShim::setVibeServerDabNotch(o.dabNotch);
     // ★ SAY WHAT THE FRONT END WILL DO. These are set once at startup and a listener cannot
     //   change them on a locked receiver, so if the operator's intent and the radio disagree
@@ -512,6 +516,26 @@ int main(int argc, char** argv) {
             g_restartRequested.store(true);
             return true;
         });
+
+    // ★★ THE LIVE-SETTING PATH, deliberately separate from the one above. That one is the setup
+    //    page pressing Save and it RESTARTS to apply; this one is an admin nudging the RF gain
+    //    while listening, where a restart would be absurd — the radio has already been told, and
+    //    all that is left is to remember it. Merge, write, carry on.
+    LocalSdrShim::setConfigPersistHandler([](const std::string& patch) {
+        std::string err;
+        vsconfig::Config next = g_runtimeConfig;
+        if (!vsconfig::fromJson(patch, next, err, /*validate=*/false)) {
+            std::fprintf(stderr, "VibeServer: could not apply setting (%s)\n", err.c_str());
+            return;
+        }
+        // ★ Do NOT touch `configured` here. Only the setup page finishing means "set up"; a gain
+        //   tweak on a half-configured server must not silently declare it done.
+        if (!vsconfig::save(g_configPath, next, err)) {
+            std::fprintf(stderr, "VibeServer: could not save setting (%s)\n", err.c_str());
+            return;
+        }
+        g_runtimeConfig = next;
+    });
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
                 shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");
     LocalSdrShim::setVibeServerWebEnabled(o.web);

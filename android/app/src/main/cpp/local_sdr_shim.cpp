@@ -837,6 +837,18 @@ static std::atomic<int>    g_vsOpusBitrate{64000};
 static std::mutex                    g_vsConfigMtx;
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
+static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
+// The RSP front end as the owner last left it. -1 = never set.
+static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
+
+/** Merge `patch` into the stored config and write it out. No-op where nothing registered a
+ *  handler (the phone and Mac apps). Never throws and never blocks the caller on I/O errors —
+ *  losing a saved gain is a nuisance; wedging the control path that set it is not. */
+static void vsPersist(const std::string& patch) {
+    LocalSdrShim::ConfigPersistFn fn;
+    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsConfigPersist; }
+    if (fn) fn(patch);
+}
 // ★ Has the owner finished browser setup? NOT the same question as "is an admin password set".
 static std::atomic<bool>             g_vsConfigured{false};
 
@@ -2651,7 +2663,23 @@ struct LocalSdrShim::Impl {
             //       frames ≈ 1 s, which is also what "disables for a second" asks for.
             //     ★ AND IT SAYS WHAT IT DID — a silent fix cannot be told apart from one that
             //       never ran, which is precisely the position this was in.
-            if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
+            // ★★★ THE KICK IS FOR AN AGC-ENABLED RECEIVER ONLY. It exists to settle the tuner's
+            //     own loop, and its last act is to switch the AGC ON — so on a receiver the owner
+            //     has deliberately set to a FIXED gain it is worse than useless: it walks the LNA
+            //     and IF reduction around for a second and then hands control to the very loop
+            //     that was turned off (Stuart, 2026-08-05: "our kick only fires on AGC being left
+            //     in the enabled state"). Apply the saved gain once instead, and be done.
+            if (g_vsSavedIfAgc.load() == 0 && sdrpAgcKick < 6 && n > 10) {
+                const int savedLna = g_vsSavedLna.load(), savedGr = g_vsSavedIfGr.load();
+                sdrp->setIfAgc(false);
+                if (savedLna >= 0) sdrp->setLnaState(savedLna);
+                if (savedGr  >= 0) sdrp->setIfGainReduction(savedGr);
+                sdrpAgcKick = 6;                       // nothing left to settle
+                LOGI("RSP: owner's FIXED gain restored — AGC off, lna %d, ifgr %d, sysGain %.1f dB "
+                     "(no AGC kick: there is no loop to settle)",
+                     sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
+            }
+            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
                             LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
@@ -2667,9 +2695,25 @@ struct LocalSdrShim::Impl {
                     case 5: sdrp->setIfGainReduction(59);
                             LOGI("AGC kick 5/6: ifgr -> %d (back down, ready to hand over)",
                                  sdrp->currentIfGr()); break;
-                    default: sdrp->setIfAgc(true);
-                            LOGI("AGC kick 6/6: AGC on (ifgr %d, sysGain %.1f dB)",
-                                 sdrp->currentIfGr(), sdrp->systemGainDb()); break;
+                    default: {
+                            // ★★★ THE OWNER'S SAVED FRONT END WINS, AND IT MUST BE APPLIED HERE —
+                            //     after the kick, not before. The kick deliberately walks the LNA
+                            //     and IF reduction to settle the tuner, so anything applied earlier
+                            //     is overwritten by the very next step and the owner's setting
+                            //     vanishes with no trace of why.
+                            const int savedLna = g_vsSavedLna.load(), savedGr = g_vsSavedIfGr.load();
+                            const int savedAgc = g_vsSavedIfAgc.load();
+                            if (savedLna >= 0) sdrp->setLnaState(savedLna);
+                            // ★ AGC BEFORE the manual IF reduction: it owns the gain path, so
+                            //   setting the reduction first and then enabling AGC would let the
+                            //   loop immediately undo it. Same ordering rule as ahf_control.
+                            sdrp->setIfAgc(savedAgc != 0);          // -1 (unset) => on, as before
+                            if (savedAgc == 0 && savedGr >= 0) sdrp->setIfGainReduction(savedGr);
+                            LOGI("AGC kick 6/6: %s (ifgr %d, lna %d, sysGain %.1f dB)%s",
+                                 savedAgc == 0 ? "AGC off — owner's saved gain restored" : "AGC on",
+                                 sdrp->currentIfGr(), sdrp->currentLnaState(), sdrp->systemGainDb(),
+                                 (savedLna >= 0 || savedGr >= 0) ? " [saved]" : "");
+                            break; }
                 }
             }
             // Settling window: the whole kick plus a margin, reported to the client so the
@@ -3849,9 +3893,18 @@ struct LocalSdrShim::Impl {
             //     lock rather than always: a control that a phone user must unlock to use their
             //     own dongle would be an obstacle, not protection.
             if (!sharedGate("gain")) return;
-            if (jsonNum(msg, "lna", v))      LocalSdrShim::instance().setLnaState((int)v);
-            if (jsonNum(msg, "ifgr", v))     LocalSdrShim::instance().setIfGainReduction((int)v);
-            if (jsonNum(msg, "ifagc", v))    LocalSdrShim::instance().setIfAgc(v != 0);
+            // ★★★ AND REMEMBER IT. An admin who unlocked these and moved them did so deliberately
+            //     — "I have used the admin password to unlock them, so it is safe to say I'm the
+            //     admin and I've changed the controls for a reason" (Stuart, 2026-08-05). Losing it
+            //     on the next restart brings the receiver back overloaded, silently, and the owner
+            //     has to spot it and do it again. Saved WITHOUT a restart: this is a live nudge,
+            //     not a setup change.
+            if (jsonNum(msg, "lna", v))    { LocalSdrShim::instance().setLnaState((int)v);
+                                             vsPersist("{\"lnaState\":" + std::to_string((int)v) + "}"); }
+            if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
+                                             vsPersist("{\"ifGr\":" + std::to_string((int)v) + "}"); }
+            if (jsonNum(msg, "ifagc", v))  { LocalSdrShim::instance().setIfAgc(v != 0);
+                                             vsPersist(std::string("{\"ifAgc\":") + (v != 0 ? "1" : "0") + "}"); }
             if (jsonNum(msg, "agcset", v))   LocalSdrShim::instance().setIfAgcSetPoint((int)v);
             // Loop dynamics arrive together — they only make sense as a set.
             {
@@ -3860,8 +3913,10 @@ struct LocalSdrShim::Impl {
                  && jsonNum(msg, "agcDelay", dd) && jsonNum(msg, "agcThresh", th))
                     LocalSdrShim::instance().setIfAgcDynamics((int)a, (int)d, (int)dd, (int)th);
             }
-            if (jsonNum(msg, "rfnotch", v))  LocalSdrShim::instance().setRfNotch(v != 0);
-            if (jsonNum(msg, "dabnotch", v)) LocalSdrShim::instance().setDabNotch(v != 0);
+            if (jsonNum(msg, "rfnotch", v))  { LocalSdrShim::instance().setRfNotch(v != 0);
+                                               vsPersist(std::string("{\"rfNotch\":") + (v != 0 ? "true" : "false") + "}"); }
+            if (jsonNum(msg, "dabnotch", v)) { LocalSdrShim::instance().setDabNotch(v != 0);
+                                               vsPersist(std::string("{\"dabNotch\":") + (v != 0 ? "true" : "false") + "}"); }
             // ★ The RSP has its own bias-T, and it is the same hazard as the dongle's.
             if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
                 LocalSdrShim::instance().setBiasT(v != 0);
@@ -3955,8 +4010,12 @@ struct LocalSdrShim::Impl {
             // Same rule as rsp_control above: the front end is shared, so a locked receiver puts it
             // behind the admin password; a personal one leaves it alone.
             if (!sharedGate("gain")) return;
-            if (msg.find("\"auto\":true") != std::string::npos) LocalSdrShim::instance().setGain(-1);
-            else if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setGain((int)v);
+            if (msg.find("\"auto\":true") != std::string::npos) {
+                LocalSdrShim::instance().setGain(-1); vsPersist("{\"gain\":-1}");
+            } else if (jsonNum(msg,"value",v)) {
+                LocalSdrShim::instance().setGain((int)v);
+                vsPersist("{\"gain\":" + std::to_string((int)v) + "}");
+            }
             return;
         }
         if (type == "biasT") {
@@ -3966,7 +4025,10 @@ struct LocalSdrShim::Impl {
         if (type == "agc") {
             // The AGC owns the gain, so it is the same shared front-end control by another name.
             if (!sharedGate("AGC")) return;
-            LocalSdrShim::instance().setAgc(msg.find("\"on\":true") != std::string::npos); return;
+            const bool on = msg.find("\"on\":true") != std::string::npos;
+            LocalSdrShim::instance().setAgc(on);
+            vsPersist(std::string("{\"ifAgc\":") + (on ? "1" : "0") + "}");
+            return;
         }
         if (type == "ppm") {
             if (!adminGate("ppm")) return;
@@ -6660,6 +6722,13 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsConfigGet = std::move(get);
     g_vsConfigSet = std::move(set);
+}
+void LocalSdrShim::setConfigPersistHandler(ConfigPersistFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsConfigPersist = std::move(fn);
+}
+void LocalSdrShim::setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc) {
+    g_vsSavedLna.store(lnaState); g_vsSavedIfGr.store(ifGr); g_vsSavedIfAgc.store(ifAgc);
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
 void LocalSdrShim::setVibeServerLanding(double hz, const std::string& mode) {

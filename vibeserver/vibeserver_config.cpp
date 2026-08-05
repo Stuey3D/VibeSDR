@@ -140,6 +140,9 @@ std::string toJson(const Config& c) {
     N("sessionLimitMin", c.sessionLimitMin);
     N("freq", c.freq); N("rate", c.rate); N("lockFreq", c.lockFreq); N("lockRate", c.lockRate);
     N("gain", c.gain);
+    N("lnaState", c.lnaState);
+    N("ifGr", c.ifGr);
+    N("ifAgc", c.ifAgc);
     S("demodMode", c.demodMode);
     N("landingFreq", c.landingFreq);
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
@@ -153,7 +156,7 @@ std::string toJson(const Config& c) {
     return j;
 }
 
-bool fromJson(const std::string& s, Config& c, std::string& err) {
+bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) {
     if (s.find('{') == std::string::npos) { err = "not a JSON object"; return false; }
     double d;
     std::string t;
@@ -182,6 +185,9 @@ bool fromJson(const std::string& s, Config& c, std::string& err) {
     if (getNum(s, "lockFreq", d))    c.lockFreq = d;
     if (getNum(s, "lockRate", d))    c.lockRate = d;
     if (getNum(s, "gain", d))        c.gain = (int)d;
+    if (getNum(s, "lnaState", d))    c.lnaState = (int)d;
+    if (getNum(s, "ifGr", d))        c.ifGr = (int)d;
+    if (getNum(s, "ifAgc", d))       c.ifAgc = (int)d;
     getStr(s, "demodMode", c.demodMode);
     if (getNum(s, "landingFreq", d)) c.landingFreq = d;
     if (getNum(s, "users", d))       c.users = (int)d;
@@ -202,6 +208,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err) {
     //    start is worse than one with an odd value in it, so the rule is: clamp the recoverable,
     //    reject only the contradictory.
     if (c.users < 1) c.users = 1;
+    if (!validate) return true;      // a live patch — see the note in the header
     if (c.users > 1 && c.lockFreq <= 0) {
         err = "multi-user needs a locked centre frequency (lockFreq)";
         return false;

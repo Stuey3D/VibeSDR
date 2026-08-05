@@ -122,6 +122,17 @@ public:
      *  0 parks immediately, i.e. the old behaviour. */
     static void setVibeServerIdleGrace(double sec);
     static void setVibeServerRfNotch(bool on);
+    /** ★★★ SAVE A LIVE SETTING THE ADMIN JUST CHANGED, without restarting.
+     *  Distinct from the config SET handler on purpose: that one is the setup page pressing Save,
+     *  and it restarts to apply — correct there, absurd for someone nudging the RF gain while
+     *  listening. `patch` is a JSON fragment merged over the running config and written out.
+     *  ★ Registered only by the daemon. On a phone there is no /etc and nothing to persist to, so
+     *    it stays unset and every call is a no-op. */
+    using ConfigPersistFn = std::function<void(const std::string& patch)>;
+    static void setConfigPersistHandler(ConfigPersistFn fn);
+    /** The RSP front end as the owner last left it, applied AFTER the start-up AGC sequence.
+     *  -1 on any of them = never set; leave the radio's own default. */
+    static void setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc);
     static void setVibeServerDabNotch(bool on);
     /** ★★★ How many spectrum listeners may attach at once (default 1 = the old single-occupant
      *  server). The DSP cost of an extra listener is ~nothing now the channelizer shares one
