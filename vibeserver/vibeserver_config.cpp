@@ -8,6 +8,7 @@
 #include <string>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 namespace vsconfig {
 namespace {
@@ -273,6 +274,10 @@ bool save(const std::string& path, const Config& cfg, std::string& err) {
     }
     fflush(f);
     if (fsync(fileno(f)) != 0) { err = "fsync failed"; fclose(f); unlink(tmp.c_str()); return false; }
+    // ★★★ 0600 BEFORE THE RENAME, NOT AFTER. This file contains the ADMIN PASSWORD and the PIN in
+    //     clear, and on a public receiver it is the one file that must not be world-readable.
+    //     Setting the mode after the rename would leave a window where it is not.
+    fchmod(fileno(f), 0600);
     fclose(f);
     if (rename(tmp.c_str(), path.c_str()) != 0) {
         err = std::string("rename failed: ") + strerror(errno);

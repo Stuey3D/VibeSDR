@@ -11,6 +11,18 @@ case "$1" in
     # ── 1. The config: NEVER clobber the user's edits ────────────────────────
     # ★ Copied from /usr/share on FIRST install only. Shipping it as a packaged file would let
     #   an upgrade overwrite the name, locator and admin password someone set months ago.
+    # ★★ THE SERVER WRITES ITS OWN CONFIG NOW (config.json, saved from the browser setup page),
+    #    so the directory must belong to the service user — not just be readable by it. Without
+    #    this, Save fails with a permission error the owner cannot act on.
+    mkdir -p /etc/vibeserver
+    chown vibeserver:vibeserver /etc/vibeserver 2>/dev/null || true
+    chmod 755 /etc/vibeserver
+    # ★ And the config itself holds the admin password and PIN in clear: owner-only, always.
+    if [ -e /etc/vibeserver/config.json ]; then
+      chown vibeserver:vibeserver /etc/vibeserver/config.json 2>/dev/null || true
+      chmod 600 /etc/vibeserver/config.json
+    fi
+
     if [ ! -e /etc/vibeserver/vibeserver.conf ]; then
       mkdir -p /etc/vibeserver
       cp /usr/share/vibeserver/vibeserver.conf /etc/vibeserver/vibeserver.conf

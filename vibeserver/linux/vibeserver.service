@@ -31,7 +31,12 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 StateDirectory=vibeserver
-ReadWritePaths=/var/lib/vibeserver
+# ★★★ /etc/vibeserver MUST BE WRITABLE — the server now writes its own config.
+# ProtectSystem=strict makes /etc read-only, which is right for a daemon whose settings a human
+# edits by hand. It is wrong the moment the SERVER owns the file: saving from the browser setup
+# page failed with "Read-only file system" and the owner had no way to tell why (2026-08-05).
+# ★ Deliberately narrow — this ONE directory, with everything else still read-only.
+ReadWritePaths=/var/lib/vibeserver /etc/vibeserver
 # ★ The radio needs raw USB; everything else stays off.
 DeviceAllow=char-usb_device rw
 
