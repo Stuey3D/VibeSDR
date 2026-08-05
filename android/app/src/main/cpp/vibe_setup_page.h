@@ -77,7 +77,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 
   <!-- ── 1. SIGN IN ──────────────────────────────────────────────────────── -->
   <div id="signin">
-    <p class="sub">This server is not configured yet.</p>
+    <p class="sub" id="signinSub">Sign in to set up this server.</p>
     <div class="card">
       <h2>Sign in</h2>
       <p class="why">Use the admin password you set when you ran <code>vibeserver</code> on the
@@ -103,6 +103,31 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <label><span class="lbl">Name</span>
         <input type="text" id="name" placeholder="VibeServer: Pi500"></label>
       <div class="hint" id="addrLine"></div>
+    </div>
+
+    <div class="card">
+      <h2>Where this receiver is</h2>
+      <p class="why">Published to listeners. It sets the flag and the ITU band plan, centres the
+         map, and is what lets RDS name a station's country — with no location set, every station
+         shows a blank country.</p>
+      <div class="row">
+        <label><span class="lbl">Town or area</span>
+          <input type="text" id="place" placeholder="Northampton"></label>
+        <label><span class="lbl">Country code</span>
+          <input type="text" id="country" maxlength="2" placeholder="GB"></label>
+      </div>
+      <label><span class="lbl">Maidenhead locator</span>
+        <input type="text" id="locator" maxlength="8" placeholder="IO92nh">
+        <div class="hint">Deliberately coarse — about 4 km. A receiver's position is published, so
+          this is usually the right amount to give away.</div></label>
+      <div class="row">
+        <label><span class="lbl">Latitude (optional)</span>
+          <input type="text" id="lat" placeholder="52.24"></label>
+        <label><span class="lbl">Longitude (optional)</span>
+          <input type="text" id="lon" placeholder="-0.90"></label>
+      </div>
+      <div class="hint">Exact coordinates win over the locator. Leave them blank to publish only
+        the square.</div>
     </div>
 
     <div class="card">
@@ -135,6 +160,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             <input type="number" id="rate" step="1"></label>
         </div>
         <div class="hint" id="coverage"></div>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+          <input type="checkbox" id="zoomSpectrum" checked
+                 style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Keep the spectrum sharp when zoomed in</span></label>
+        <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
+          already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
+          what makes a shared receiver worth zooming into.</div>
       </div>
 
       <div class="card">
@@ -385,6 +417,16 @@ async function renderHw() {
 
 function fill() {
   $("name").value = cfg.name || "";
+  $("place").value = cfg.place || "";
+  $("country").value = cfg.country || "";
+  $("locator").value = cfg.locator || "";
+  $("lat").value = cfg.lat || "";
+  $("lon").value = cfg.lon || "";
+  // ★ Default ON for a shared receiver. The 1024-bin window only stays sharp BECAUSE of the zoom
+  //   resampling — without it, deep zoom interpolates and looks blocky, which is what a listener
+  //   reads as a poor receiver. Off by default was right when this was experimental; it is not
+  //   right for the model a shared server is built on.
+  $("zoomSpectrum").checked = cfg.zoomSpectrum !== false;
   $("mdns").checked = cfg.mdnsAdvertise !== false;
   $("lockFreq").value = Math.round((cfg.lockFreq || cfg.freq || 0) / 1e3);
   $("rate").value = cfg.rate || 2400000;
@@ -420,6 +462,12 @@ function collect() {
   return {
     mode: cfg.mode,
     name: $("name").value.trim(),
+    place: $("place").value.trim(),
+    country: $("country").value.trim().toUpperCase(),
+    locator: $("locator").value.trim(),
+    lat: $("lat").value.trim(),
+    lon: $("lon").value.trim(),
+    zoomSpectrum: $("zoomSpectrum").checked,
     mdnsAdvertise: $("mdns").checked,
     mdnsName: $("name").value.trim(),
     lockFreq: locked ? Math.round(parseFloat($("lockFreq").value || "0") * 1e3) : 0,
@@ -448,6 +496,13 @@ $("signinBtn").onclick = async () => {
     if (r.status === 401) { $("signinErr").textContent = "That password was not accepted."; return; }
     if (!r.ok) { $("signinErr").textContent = "Server error (" + r.status + ")."; return; }
     cfg = await r.json();
+    // ★ Same page, two jobs. Say which one you are doing — "Save and start" on a receiver that
+    //   is already running would read as if it were about to do something drastic.
+    if (cfg.configured) {
+      document.querySelector("#setup .sub").textContent =
+        "Change how this receiver is set up. Saving restarts it, so listeners will reconnect.";
+      $("saveBtn").textContent = "Save changes";
+    }
     $("signin").classList.add("hide");
     $("setup").classList.remove("hide");
     $("bar").classList.remove("hide");

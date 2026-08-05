@@ -4017,6 +4017,22 @@ struct LocalSdrShim::Impl {
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        // ── ★★★ THE SETTINGS PAGE, REACHABLE AFTER SETUP ────────────────────────────────
+        // GET /setup serves the same page whether or not the server is configured. Without this
+        // the setup page was a ONE-SHOT: once `configured` went true, GET / served the receiver
+        // and there was no route back — while the page itself promised "you can change any of
+        // this later from Admin". A promise the product does not keep is worse than an absent
+        // feature, and the only way back would have been the TUI's reset-to-not-set-up.
+        // ★ Still admin-gated in the only way that matters: the page can display, but every
+        //   value on it comes from GET /vibeserver/config, which refuses without the password.
+        } else if (reqLine.rfind("GET /setup", 0) == 0) {
+            const std::string page = kVibeSetupPage;
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(page.size()) + "\r\n\r\n" + page);
+            sock->close();
+            return;
+
         } else if (reqLine.rfind("GET / ", 0) == 0 || reqLine.rfind("GET /index.htm", 0) == 0) {
             // ★★★ NOT SET UP YET ⇒ THE SETUP PAGE, NOT THE RECEIVER.
             // A fresh install has a radio and an admin password but no POLICY — no range, no

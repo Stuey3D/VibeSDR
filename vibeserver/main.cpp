@@ -34,6 +34,10 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include "vibeserver_config.h"
 
 namespace {
@@ -260,6 +264,25 @@ bool parse(int argc, char** argv, Opts& o) {
     return true;
 }
 
+/** ★ The address to publish in the mDNS A record: this machine's first non-loopback IPv4.
+ *  Deliberately the same thing `hostname -I | awk '{print $1}'` gives, because that is the address
+ *  the TUI prints and the two must agree — an owner told one address and advertised another has
+ *  no way to work out which is real. */
+std::string primaryIpv4() {
+    struct ifaddrs* ifa = nullptr;
+    if (getifaddrs(&ifa) != 0) return "";
+    std::string out;
+    for (struct ifaddrs* p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        if (!(p->ifa_flags & IFF_UP) || (p->ifa_flags & IFF_LOOPBACK)) continue;
+        char buf[INET_ADDRSTRLEN] = {0};
+        auto* sin = (struct sockaddr_in*)p->ifa_addr;
+        if (inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof buf)) { out = buf; break; }
+    }
+    freeifaddrs(ifa);
+    return out;
+}
+
 /** Seed `o` from a stored config. ★ Called BEFORE the command-line pass, which is the whole
  *  precedence rule in one line: config.json supplies the defaults, the command line overrides
  *  them. Someone running the binary by hand to test something must always win over the file. */
@@ -427,6 +450,28 @@ int main(int argc, char** argv) {
     // turns GET/POST /vibeserver/config from 501 into a working endpoint — and the browser setup
     // page is a CLIENT of it, so the app becomes a second client later with no work here.
     LocalSdrShim::setConfigured(g_runtimeConfig.configured);
+
+    // ── ★★★ mDNS: ADVERTISE THE NAME THE OWNER CHOSE ────────────────────────────────────────
+    // This was STORED and never acted on — main.cpp never called startMdns at all, so the Linux
+    // daemon has never advertised itself. `vibeserver.local` appearing to work on the Pi was the
+    // OS's own avahi publishing the machine's HOSTNAME; the name set in the setup page did
+    // nothing (Stuart, 2026-08-05: "the mdns address doesnt appear to be working, direct IP is").
+    // ★★ A setting that is saved, echoed back and never acted on is worse than one that is
+    //    missing — the page tells the owner it worked.
+    // ★ Gated on `configured`, so an unconfigured server is never discoverable: that is what
+    //   keeps the app from meeting a server it has no setup flow for.
+    if (g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise) {
+        const std::string label = vsconfig::mdnsLabel(
+            g_runtimeConfig.mdnsName.empty() ? g_runtimeConfig.name : g_runtimeConfig.mdnsName);
+        const std::string ip = primaryIpv4();
+        if (!label.empty() && !ip.empty()) {
+            LocalSdrShim::startMdns(label, ip);
+            std::printf("VibeServer: advertising as %s.local (%s)\n", label.c_str(), ip.c_str());
+        } else {
+            std::fprintf(stderr, "VibeServer: cannot advertise on mDNS — %s\n",
+                         ip.empty() ? "no IPv4 address found" : "no name set");
+        }
+    }
     // ★ Only meaningful on a shared receiver: in single-user mode the listener owns the radio, so
     //   there is nobody to protect the modes from.
     LocalSdrShim::setBlockedModes(g_runtimeConfig.mode == vsconfig::Mode::LockedRange
