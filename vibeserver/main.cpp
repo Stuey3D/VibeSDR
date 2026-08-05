@@ -39,6 +39,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "vibeserver_config.h"
+#include "eibi.h"
 
 namespace {
 
@@ -516,6 +517,50 @@ int main(int argc, char** argv) {
             g_restartRequested.store(true);
             return true;
         });
+
+    // ── EiBi ────────────────────────────────────────────────────────────────────────────────
+    // ★ Published from the cache at start-up so search works immediately, then refreshed in the
+    //   BACKGROUND: a receiver must not wait on eibispace.de to start serving listeners.
+    LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
+        int n = refresh ? vseibi::refresh(err) : 0;
+        if (!refresh || n == 0) { const int c = vseibi::loadFromCache(); if (c > n) n = c; }
+        updated = vseibi::status();
+        return n;
+    });
+    {
+        const int n = vseibi::loadFromCache();
+        if (n > 0) std::printf("VibeServer: EiBi schedule — %d entries (cached %s)\n",
+                               n, vseibi::status().c_str());
+        else       std::printf("VibeServer: no EiBi schedule yet — download it from the setup page\n"
+                               "            so listeners can search by station name.\n");
+        // ★★ A DAILY REFRESH, DETACHED. Once a day matches the app, and a season roll-over is
+        //    picked up because the filename is derived from the date each time. Detached because
+        //    nothing here may ever block the radio: a hung download must cost a schedule, not a
+        //    receiver.
+        std::thread([]{
+            // ★★★ CHECK FIRST, THEN SLEEP — and decide from the CACHE'S AGE, never from uptime.
+            //     Sleeping 24 h before the first attempt meant the timer restarted whenever the
+            //     server did, and saving anything on the setup page restarts the server: a
+            //     receiver its owner adjusts every few days would have refreshed NEVER while
+            //     looking like it refreshed daily.
+            //     ★ A short delay before the first go, so start-up is not competing with the
+            //       radio coming up for the network.
+            std::this_thread::sleep_for(std::chrono::seconds(20));
+            for (;;) {
+                if (vseibi::needsRefresh()) {
+                    std::string e;
+                    const int n2 = vseibi::refresh(e);
+                    if (n2 > 0) std::printf("VibeServer: EiBi refreshed — %d entries\n", n2);
+                    else if (!e.empty())
+                        std::fprintf(stderr, "VibeServer: EiBi refresh failed — %s\n", e.c_str());
+                }
+                // ★ Hourly wake, daily WORK: needsRefresh() is a stat() and a tiny read, so the
+                //   cost is nothing, and it means a server that was off over a season rollover
+                //   picks it up within the hour rather than within the day.
+                std::this_thread::sleep_for(std::chrono::hours(1));
+            }
+        }).detach();
+    }
 
     // ★★ THE LIVE-SETTING PATH, deliberately separate from the one above. That one is the setup
     //    page pressing Save and it RESTARTS to apply; this one is an admin nudging the RF gain

@@ -198,6 +198,17 @@ function parseFreq(q: string): number | null {
   return Math.round(n);
 }
 
+/** The window this receiver can actually reach, or null when it can reach anything.
+ *  ★★★ WHY SEARCH CARES. On a locked receiver most of EiBi is unreachable — a 2.5-10.5 MHz
+ *  window cannot hear a single VHF entry — and offering results you cannot tune to is the same
+ *  lie as a readout showing a frequency you are not on: the user picks one, nothing happens where
+ *  they expected, and they conclude the receiver is broken rather than out of range. OWRX filters
+ *  its bookmarks to the profile for exactly this reason (Stuart, 2026-08-05).
+ *  ★ Null on a personal receiver, where the dongle follows the dial and everything IS reachable —
+ *    the filter must never narrow a radio that is not locked. */
+let tunableWindow: [number, number] | null = null;
+export function setTunableWindow(w: [number, number] | null) { tunableWindow = w; }
+
 export function search(query: string, limit = 40): SearchResult[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -272,7 +283,29 @@ export function search(query: string, limit = 40): SearchResult[] {
   // alphabetical, but keep source order as the primary key.
   const rank: Record<ResultSource, number> = { user: 0, server: 1, eibi: 2, band: 3 };
   out.sort((a, b) => rank[a.source] - rank[b.source]);
-  return out.slice(0, limit);
+
+  // ★★ Filter LAST, so every source is narrowed by the same rule and none can be forgotten when
+  //    a fourth is added. A band that merely OVERLAPS the window is kept and re-pointed at a
+  //    frequency inside it — "40m" is a reasonable thing to ask for on a receiver that covers half
+  //    of it, whereas a single station outside the window is simply not available here.
+  const win = tunableWindow;
+  if (!win) return out.slice(0, limit);
+  const [lo, hi] = win;
+  const kept: SearchResult[] = [];
+  for (const r of out) {
+    if (r.frequency >= lo && r.frequency <= hi) { kept.push(r); continue; }
+    if (r.source === 'band') {
+      const m = /([\d.]+)–([\d.]+) MHz/.exec(r.detail ?? '');
+      if (m) {
+        const bLo = parseFloat(m[1]) * 1e6, bHi = parseFloat(m[2]) * 1e6;
+        if (bHi >= lo && bLo <= hi) {
+          const mid = Math.round((Math.max(bLo, lo) + Math.min(bHi, hi)) / 2);
+          kept.push({ ...r, frequency: mid });
+        }
+      }
+    }
+  }
+  return kept.slice(0, limit);
 }
 
 export type { UserBookmark, SDRMode };

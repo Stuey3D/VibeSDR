@@ -33,7 +33,7 @@ import { lookupStationLogo } from '../../../src/services/stationLogo';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
-  loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer,
+  loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer, setTunableWindow,
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
@@ -492,6 +492,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       updateRangeGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
+      // ★★ ALSO HERE, not only in onHwInfo. lockedWindow() needs the capture bandwidth, which
+      //    arrives with the CONFIG — and the two messages have no guaranteed order, so setting it
+      //    on one alone leaves the filter unset whenever that one lands first. Cheap and
+      //    idempotent, so run it on both rather than reasoning about which wins.
+      setTunableWindow(lockedWindow());
       // Drop stale waterfall history when the new window shares no frequency with
       // the old one. Overlapping windows (pan, zoom) keep their history — the rows
       // are still about the band you're looking at. A jump has nothing in common
@@ -598,6 +603,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwLockedCentre = lockedCentre ?? 0;
+      // ★ Search is narrowed to what this receiver can actually reach — see setTunableWindow().
+      //   Set from here because this is where the lock becomes known, and re-set on every hwinfo
+      //   so a server whose window changes does not leave the filter describing the old one.
+      setTunableWindow(lockedWindow());
       applyRadioCaps(radio ?? null);
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
       // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
@@ -5457,8 +5466,32 @@ function tuneRanges(): [number, number][] | null {
   return r && r.length > 1 ? r : null;
 }
 
+/** The operator's locked window, or null when the dongle is free-running.
+ *  ★ This is NOT `tuneRanges()`. Those are the RADIO's ranges — what the hardware can reach. This
+ *    is what the OWNER has pinned it to, which is a much smaller box and the only one a listener
+ *    on a shared receiver may move inside. */
+function lockedWindow(): [number, number] | null {
+  if (!(hwLockedCentre > 0)) return null;
+  const fs = spec?.captureBandwidth();
+  if (!fs) return null;
+  return [hwLockedCentre - fs / 2, hwLockedCentre + fs / 2];
+}
+
 function clampTune(hz: number): number {
   const want = Math.round(hz);
+  // ★★★ THE LOCKED WINDOW WINS, AND IS CHECKED FIRST. The server clamps a request outside it
+  //     ("retune … is outside the LOCKED window — clamped") but said nothing back, so the client
+  //     went on displaying the frequency it had ASKED for: typing 99700 on a receiver locked to
+  //     2.5-10.5 MHz left the readout sitting at 99.700 MHz while the radio was somewhere else
+  //     entirely (Stuart, 2026-08-05). A readout that disagrees with the radio is worse than a
+  //     refusal — it is the one thing on screen the user has no way to check.
+  //     ★ Clamped rather than refused, matching the server: asking for 14 MHz on a 2.5-10.5 window
+  //       gets you the edge, not silence, and the wall on the waterfall shows why.
+  const win = lockedWindow();
+  if (win) {
+    gapNudgeDir = 0;
+    return Math.max(win[0], Math.min(win[1], want));
+  }
   const ranges = tuneRanges();
   if (!ranges) { gapNudgeDir = 0; return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want)); }
 
@@ -5653,7 +5686,19 @@ function initFreqEntry() {
     const raw = normaliseDecimal($<HTMLInputElement>('freqInput').value);
     const v = parseFloat(raw.replace(/[^\d.]/g, ''));
     if (!isFinite(v) || v <= 0) { $('freqMsg').textContent = 'Enter a frequency'; return; }
-    spec!.tune(clampTune(v * UNIT_DIV[freqUnit]), undefined, { recenter: true, retarget: true });
+    const asked = v * UNIT_DIV[freqUnit];
+    const got = clampTune(asked);
+    // ★★ SAY SO WHEN IT IS OUT OF RANGE, and do NOT close the panel. A silent clamp is barely
+    //    better than the wrong readout it replaces: the user typed a number, something else
+    //    happened, and nothing on screen connects the two. Tell them what this receiver covers
+    //    and leave the box open so they can correct it.
+    const win = lockedWindow();
+    if (win && Math.abs(got - asked) > 1) {
+      $('freqMsg').textContent =
+        `This receiver covers ${(win[0] / 1e6).toFixed(3)}–${(win[1] / 1e6).toFixed(3)} MHz`;
+      return;
+    }
+    spec!.tune(got, undefined, { recenter: true, retarget: true });
     renderFreq();
     syncStep();
     closePanels();

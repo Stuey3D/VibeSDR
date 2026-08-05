@@ -838,6 +838,7 @@ static std::mutex                    g_vsConfigMtx;
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
+static LocalSdrShim::EibiFn        g_vsEibiFn;
 // The RSP front end as the owner last left it. -1 = never set.
 static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
 
@@ -1605,6 +1606,25 @@ struct LocalSdrShim::Impl {
          *  view, until the sharp one is ready: the picture keeps moving and simply becomes
          *  sharper a moment later, instead of freezing and then snapping. */
         std::atomic<bool> viewPriming{false};
+
+        // ── This listener's own audio effects ────────────────────────────────────────────────
+        // ★★★ PER LISTENER, because the audio is. NR, the auto notch, de-emphasis and stereo all
+        //     used to be set on the SHARED pipeline — which in per-client mode feeds nobody, so
+        //     every one of them moved a control and changed nothing audible (Stuart, 2026-08-05:
+        //     "the NR and I assume auto notch is not working, the controls move but no audible
+        //     difference, I assume FM de-emphasis and WFM stereo will be the same issue too" —
+        //     and he was right about all four).
+        //     ★ FOURTH instance of the same family in one session: when a shared resource becomes
+        //       per-listener, EVERY path that identified the listener must be re-derived.
+        //     ★★ They are also settings a listener may choose FOR THEMSELVES: one person's noise
+        //        reduction has no business being applied to everyone else's audio.
+        std::atomic<bool> nrOn{false}, notchOn{false};
+        float             nrStrength = 0.5f;
+        double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
+        std::atomic<bool> stereoOn{true};
+        std::mutex        fxMtx;
+        AudioNR*          nrEng = nullptr;
+        AutoNotch*        notchEng = nullptr;
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;
 #endif
@@ -1774,10 +1794,19 @@ struct LocalSdrShim::Impl {
     void startClientThread(const std::shared_ptr<ClientDsp>& c) {
         c->th = std::thread([this, c]{ clientThread(c); });
     }
+    /** ★ The per-listener effect engines are heap objects with STFT state; they must die with the
+     *  listener or thirty joins and leaves leak thirty of each. */
+    static void freeClientFx(ClientDsp* c) {
+        std::lock_guard<std::mutex> lk(c->fxMtx);
+        delete c->nrEng;    c->nrEng = nullptr;
+        delete c->notchEng; c->notchEng = nullptr;
+    }
+
     void stopClientThread(const std::shared_ptr<ClientDsp>& c) {
         { std::lock_guard<std::mutex> lk(c->qm); c->run.store(false); }
         c->qcv.notify_all();
         if (c->th.joinable()) c->th.join();
+        freeClientFx(c.get());        // ★ after the thread has stopped touching them
     }
 
     void clientRetune(ClientDsp* c) {
@@ -1811,6 +1840,14 @@ struct LocalSdrShim::Impl {
             //   the shared wide one, so paying for a per-client spectrum here would be paying
             //   twice for a picture nobody reads.
             c->rx->start(c->chanRate, 1024, 10.0, (int)AUDIO_SR, cb);
+            // ★★★ RE-APPLY THIS LISTENER'S SETTINGS TO THE NEW PIPELINE. A width change builds a
+            //     fresh RxPipeline with fresh defaults, so anything the listener had chosen would
+            //     be silently forgotten the next time they changed mode — the control still ON in
+            //     their UI and no longer doing anything, which is the WORST version of this bug
+            //     because it looks like it is working. Same reasoning as the RSP front end being
+            //     re-applied after the AGC kick: whatever rebuilds must restore.
+            if (c->deempTau >= 0) c->rx->setDeemphasis(c->deempTau);
+            c->rx->setStereoEnabled(c->stereoOn.load());
             LOGI("client channel: %.3f kHz wide (%d bins) for %s",
                  c->chanRate / 1e3, want, c->mode.c_str());
         }
@@ -1939,13 +1976,43 @@ struct LocalSdrShim::Impl {
                 feedSpots(st.data(), frames);
             }
         }
-        std::vector<int16_t> buf((size_t)frames * ch);
-        for (int i = 0; i < frames * ch; i++) {
-            float v = pcm[i];
+        // ── This listener's own effects ──────────────────────────────────────────────────────
+        // ★ Mono only, exactly as the shared path has always been: the auto notch tracks a single
+        //   tone and NR's spectral subtraction is built for one channel. On a stereo WFM listen
+        //   they are simply not applied, which is what the client's own gating already assumes.
+        std::vector<float> fx;
+        const float* out = pcm;
+        int outFrames = frames;
+        if (ch == 1 && (c->notchOn.load() || c->nrOn.load())) {
+            fx.assign(pcm, pcm + frames);
+            std::lock_guard<std::mutex> lk(c->fxMtx);
+            // Notch BEFORE NR: it removes steady carriers, which NR would otherwise learn as
+            // part of the noise floor and then preserve.
+            if (c->notchOn.load()) {
+                if (!c->notchEng) c->notchEng = new AutoNotch();
+                c->notchEng->process(fx.data(), (int)fx.size());
+            }
+            if (c->nrOn.load()) {
+                if (!c->nrEng) { c->nrEng = new AudioNR(); c->nrEng->setStrength(c->nrStrength); }
+                std::vector<float> nrOut;
+                c->nrEng->process(fx.data(), (int)fx.size(), nrOut);
+                // ★ STFT latency: the first frames produce NOTHING. Returning early is correct —
+                //   sending the un-processed audio instead would make switching NR on emit a
+                //   moment of raw audio, which reads as NR "not doing anything".
+                if (nrOut.empty()) return;
+                fx.swap(nrOut);
+            }
+            out = fx.data();
+            outFrames = (int)fx.size();
+        }
+
+        std::vector<int16_t> buf((size_t)outFrames * ch);
+        for (int i = 0; i < outFrames * ch; i++) {
+            float v = out[i];
             v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
             buf[i] = (int16_t)std::lround(v * 32767.0f);
         }
-        sendClientAudio(c, sock, buf.data(), frames, ch);
+        sendClientAudio(c, sock, buf.data(), outFrames, ch);
     }
 
     struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; };
@@ -2099,6 +2166,45 @@ struct LocalSdrShim::Impl {
                 if (waitQueue[i].sock == sock.get()) { waitQueue.erase(waitQueue.begin() + i); break; }
         }
         outboxClose(sock);
+    }
+
+    /** The sample rates THIS radio can actually be run at, newest-first, as a JSON array body.
+     *  ★★★ ONE LIST, TWO CONSUMERS. The client's hwinfo has always carried this; the SETUP PAGE
+     *      asked the owner to TYPE a rate instead, which is a question almost nobody can answer —
+     *      "not everybody knows the spans their radio can handle" (Stuart, 2026-08-05) — and one
+     *      where a wrong answer is rejected by the radio and reads as broken hardware. A second
+     *      hand-written list on the page would drift from this one, which is the same failure in
+     *      slower motion. So both read this.
+     *  ★ Every entry here is a measured decision, not a datasheet figure — no 10 MSPS on the RSP,
+     *    no 3.2 on the dongle: see the notes at the hwinfo site. */
+    /** Admin challenge-response on an HTTP query string. ★ Extracted so a second endpoint cannot
+     *  re-implement it slightly differently — the failure lockout and the "empty secret never
+     *  authenticates" rule are both easy to leave out, and either omission is a hole. */
+    bool adminOkFor(const std::string& reqLine, const std::shared_ptr<net::Socket>& sock) {
+        std::string secret;
+        { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+        const std::string ip = sock->peerAddress();
+        const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
+        const std::string token = queryParam(reqLine, "vs_admin_auth");
+        const bool ok = !secret.empty() && !nonce.empty() && !token.empty()
+                     && !g_vsAuthState.blocked(ip)
+                     && g_vsAuthState.verify(secret, nonce, token);
+        if (ok) g_vsAuthState.recordOk(ip);
+        else if (!secret.empty()) g_vsAuthState.recordFail(ip);
+        return ok;
+    }
+
+    std::string supportedRates() {
+        if (useSdrplay()) return "8000000,6000000,5000000,4000000,3000000,2048000,2000000";
+        if (useAirspyHf()) {
+            std::string out;
+            if (auto* a = ahf.get()) {
+                const auto& rl = a->sampleRates();
+                for (size_t i = rl.size(); i-- > 0; ) out += std::to_string(rl[i]) + (i ? "," : "");
+            }
+            return out;
+        }
+        return "2560000,2400000,1800000,1200000,960000";
     }
 
     int specListenerCountLocked() {
@@ -3834,6 +3940,42 @@ struct LocalSdrShim::Impl {
                 if (changed) clientRetune(me.get());
                 return;
             }
+            // ★★★ THIS LISTENER'S OWN AUDIO EFFECTS. Falling through to the shared handlers below
+            //     set them on a pipeline that feeds nobody in per-client mode — the control moved
+            //     and the audio did not change. See the note on ClientDsp's effect state.
+            //     ★ Deliberately NOT admin-gated, unlike gain: these change only what THIS
+            //       listener hears, so there is nothing shared to protect.
+            if (type == "nr") {
+                me->nrOn.store(msg.find("\"on\":true") != std::string::npos);
+                double st;
+                if (jsonNum(msg, "strength", st)) {
+                    me->nrStrength = (float)std::max(0.0, std::min(1.0, st));
+                    std::lock_guard<std::mutex> lk(me->fxMtx);
+                    if (me->nrEng) me->nrEng->setStrength(me->nrStrength);
+                }
+                if (!me->nrOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
+                                        if (me->nrEng) me->nrEng->reset(); }
+                return;
+            }
+            if (type == "notch") {
+                me->notchOn.store(msg.find("\"on\":true") != std::string::npos);
+                if (!me->notchOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
+                                           if (me->notchEng) me->notchEng->reset(); }
+                return;
+            }
+            if (type == "deemph") {
+                double tau;
+                // ★ SECONDS on the wire — see vibeserver_wire_units_seconds. A value in
+                //   microseconds here is 1000x wrong and sounds like no de-emphasis at all.
+                if (jsonNum(msg, "tau", tau) && me->rx) { me->deempTau = tau; me->rx->setDeemphasis(tau); }
+                return;
+            }
+            if (type == "stereo") {
+                const bool on = msg.find("\"on\":true") != std::string::npos;
+                me->stereoOn.store(on);
+                if (me->rx) me->rx->setStereoEnabled(on);
+                return;
+            }
         }
 
         double v;
@@ -4627,7 +4769,7 @@ struct LocalSdrShim::Impl {
             std::string j = std::string("{\"driver\":\"")
                           + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
-                          + ",\"gains\":[";
+                          + ",\"rates\":[" + supportedRates() + "],\"gains\":[";
             if (!rsp && !hf && !lost) {
                 std::vector<int> g = LocalSdrShim::instance().getTunerGains();
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
@@ -4804,6 +4946,44 @@ struct LocalSdrShim::Impl {
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        } else if (reqLine.rfind("GET /vibeserver/eibi", 0) == 0) {
+            // ★ The daemon owns the fetching (it has the filesystem and the network); the shim
+            //   only exposes it, and on a phone no handler is registered so this reports
+            //   unavailable rather than pretending. Same split as the config endpoints.
+            const bool wantRefresh = reqLine.find("refresh=1") != std::string::npos;
+            LocalSdrShim::EibiFn fn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsEibiFn; }
+            if (!fn) {
+                const std::string b = "{\"entries\":0,\"error\":\"not available on this server\"}";
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                              "Connection: close\r\nContent-Length: " + std::to_string(b.size())
+                              + "\r\n\r\n" + b);
+                sock->close(); return;
+            }
+            // ★★ A REFRESH IS ADMIN-ONLY. It spends the owner's bandwidth and CPU and writes to
+            //    their disk; READING the status is not, because a listener's client may reasonably
+            //    want to know whether this receiver has a schedule at all.
+            if (wantRefresh && !adminOkFor(reqLine, sock)) {
+                const std::string b = "{\"entries\":0,\"error\":\"admin password required\"}";
+                sock->sendstr("HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
+                              "Connection: close\r\nContent-Length: " + std::to_string(b.size())
+                              + "\r\n\r\n" + b);
+                sock->close(); return;
+            }
+            std::string err, updated;
+            const int n = fn(wantRefresh, err, updated);
+            std::string b = "{\"entries\":" + std::to_string(n)
+                          + ",\"updated\":\"" + updated + "\"";
+            if (!err.empty()) {
+                std::string e; for (char c : err) { if (c=='"'||c=='\\') e += '\\'; if ((unsigned char)c >= 0x20) e += c; }
+                b += ",\"error\":\"" + e + "\"";
+            }
+            b += "}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Connection: close\r\nContent-Length: " + std::to_string(b.size())
+                          + "\r\n\r\n" + b);
+            sock->close(); return;
+
         } else if (reqLine.rfind("GET /stations", 0) == 0) {
             // Station list for the web client's search: the EiBi schedule the APP
             // already downloaded and cached, handed to the shim when Server mode
@@ -6776,6 +6956,10 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsConfigGet = std::move(get);
     g_vsConfigSet = std::move(set);
+}
+void LocalSdrShim::setEibiHandler(EibiFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsEibiFn = std::move(fn);
 }
 void LocalSdrShim::setConfigPersistHandler(ConfigPersistFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

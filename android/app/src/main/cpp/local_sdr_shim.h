@@ -128,6 +128,11 @@ public:
      *  listening. `patch` is a JSON fragment merged over the running config and written out.
      *  ★ Registered only by the daemon. On a phone there is no /etc and nothing to persist to, so
      *    it stays unset and every call is a no-op. */
+    /** Fetch/report the EiBi schedule. @param refresh download now. Returns entry count; sets
+     *  `err` on failure and `updated` to the cache date. Registered by the DAEMON only — a phone
+     *  has no /var/lib and no business downloading a shortwave schedule. */
+    using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
+    static void setEibiHandler(EibiFn fn);
     using ConfigPersistFn = std::function<void(const std::string& patch)>;
     static void setConfigPersistHandler(ConfigPersistFn fn);
     /** The RSP front end as the owner last left it, applied AFTER the start-up AGC sequence.

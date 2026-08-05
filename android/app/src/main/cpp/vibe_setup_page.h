@@ -156,10 +156,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <div class="row">
           <label><span class="lbl">Centre frequency (kHz)</span>
             <input type="number" id="lockFreq" step="1"></label>
-          <label><span class="lbl">Sample rate (Hz)</span>
-            <input type="number" id="rate" step="1"></label>
+          <label><span class="lbl">Span (sample rate)</span>
+            <select id="rate"></select></label>
         </div>
         <div class="hint" id="coverage"></div>
+        <div class="note" id="eibiNote" style="margin-top:18px">
+          <b>Shortwave schedule (EiBi)</b>
+          <div class="hint" id="eibiState">checking…</div>
+          <div class="hint">Who is broadcasting, where and when — so the search box on this
+            receiver finds stations by name instead of only by frequency. The list is fetched by
+            the server, because a browser is not allowed to fetch it directly, and it refreshes
+            itself once a day.</div>
+          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
+            Download now</button>
+        </div>
         <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
           <input type="checkbox" id="zoomSpectrum" checked
                  style="width:16px;height:16px;accent-color:var(--amber)">
@@ -370,6 +380,38 @@ function setMode(locked) {
 //     slider concludes the FEATURE is broken, not that it is the wrong control for their radio.
 // ★★ And if we cannot tell what is plugged in, we say exactly that and offer nothing. A guess here
 //    is worse than a blank: it would be a control that appears to work.
+/** ★ The schedule is the SERVER's job, so this only reports and triggers. Failure is reported in
+ *  full rather than as "failed": the likely causes are no internet and a season file that has not
+ *  been published yet, and those need different actions from the owner. */
+async function eibiStatus() {
+  const el = $("eibiState");
+  if (!el) return;
+  try {
+    const r = await fetch("/vibeserver/eibi", { cache: "no-store" });
+    const j = await r.json();
+    el.textContent = j.entries
+      ? `${j.entries.toLocaleString()} entries, updated ${j.updated || "unknown"}.`
+      : "Not downloaded yet — this receiver's search will find frequencies but not station names.";
+    el.style.color = j.entries ? "var(--good)" : "var(--dim)";
+  } catch { el.textContent = "This server is too old to fetch the schedule."; }
+}
+
+async function eibiFetch() {
+  const el = $("eibiState"), b = $("eibiGet");
+  el.textContent = "downloading…"; el.style.color = "var(--dim)";
+  b.disabled = true;
+  try {
+    // ★ Admin-gated: a download is CPU, bandwidth and a write to /var/lib on the owner's
+    //   machine, triggerable by anyone who can reach the port if it were not.
+    const r = await fetch("/vibeserver/eibi?refresh=1&" + (await authQuery()), { cache: "no-store" });
+    const j = await r.json();
+    if (j.entries) { el.textContent = `${j.entries.toLocaleString()} entries, updated ${j.updated}.`;
+                     el.style.color = "var(--good)"; }
+    else { el.textContent = j.error || "could not download the schedule"; el.style.color = "var(--bad)"; }
+  } catch (e) { el.textContent = "could not reach the server"; el.style.color = "var(--bad)"; }
+  b.disabled = false;
+}
+
 async function renderHw() {
   let hw = null;
   try { hw = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json(); } catch (e) {}
@@ -381,6 +423,27 @@ async function renderHw() {
     gv.textContent = `Currently: ${hw.governor}${mhz}.`;
     gv.style.color = hw.governor === "performance" ? "var(--good)" : "var(--dim)";
   }
+  // ★★★ THE SPAN IS A LIST, NOT A TYPED NUMBER. It used to be a number box, which asks the owner
+  //     for a figure most people do not have — and every radio refuses the ones it cannot do, so a
+  //     wrong guess fails at the hardware and reads as a broken receiver. The rates come from the
+  //     RADIO (GET /vibeserver/hardware), so the list is never wrong and never needs updating here
+  //     when a fourth radio is added.
+  //     ★ The stored value is kept even if it is not in the list — an owner who set 10 MSPS by
+  //       hand on an older build must SEE that, not have the page silently pick something else and
+  //       save it back. Marked so it is obvious.
+  const rateSel = $("rate");
+  if (rateSel && hw && hw.rates && hw.rates.length) {
+    const want = String(cfg.rate || hw.rates[0]);
+    rateSel.innerHTML = hw.rates.map(r =>
+      `<option value="${r}">${(r / 1e6).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} MHz` +
+      ` &nbsp;(${(r / 1e6).toFixed(2)} MS/s)</option>`).join("");
+    if (!hw.rates.some(r => String(r) === want))
+      rateSel.insertAdjacentHTML("afterbegin",
+        `<option value="${want}">${(+want / 1e6).toFixed(3)} MHz — not offered by this radio</option>`);
+    rateSel.value = want;
+    coverage();
+  }
+
   if (!hw || !hw.present) {
     el.innerHTML = `<p class="hint">No radio detected, so there is nothing to set here.
       Plug one in and reload this page.</p>`;
@@ -447,7 +510,9 @@ function fill() {
   $("zoomSpectrum").checked = cfg.zoomSpectrum !== false;
   $("mdns").checked = cfg.mdnsAdvertise !== false;
   $("lockFreq").value = Math.round((cfg.lockFreq || cfg.freq || 0) / 1e3);
-  $("rate").value = cfg.rate || 2400000;
+  // ★ NOT set here: the options do not exist until renderHw() has heard back from the
+  //   radio, and assigning a value to an empty <select> silently selects nothing.
+  //   renderHw() applies cfg.rate once it has built the list.
   $("landingFreq").value = ((cfg.landingFreq || cfg.freq || 0) / 1e3).toFixed(1);
   $("demodMode").value = cfg.demodMode || "am";
   $("users").value = cfg.users || 1;
@@ -456,7 +521,8 @@ function fill() {
   $("cpuGovernor").value = cfg.cpuGovernor || "performance";
   $("forceIdle").checked = !!cfg.forceIdleSaver;
   setMode((cfg.mode || "single") === "locked");
-  addr(); coverage(); bwNote(); renderHw();
+  addr(); coverage(); bwNote(); renderHw(); eibiStatus();
+  $("eibiGet").addEventListener("click", eibiFetch);
 }
 
 function addr() {
