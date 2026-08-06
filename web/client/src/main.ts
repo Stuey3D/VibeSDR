@@ -1229,7 +1229,59 @@ let vtsBandInit = false;
 let vtsBandMsg = '';
 let vtsBandSub = '';
 let vtsBandUntil = 0;
-const VTS_BAND_MS = 4000;
+/** ★★★ EIGHT SECONDS, AND A TIMER THAT ACTUALLY FIRES. The expiry was checked only when something
+ *  ELSE re-rendered the bar, so once the last event passed the message simply stayed on screen —
+ *  "the VTS seems to get stuck showing either a station name or Band change" (Stuart, 2026-08-06).
+ *  A time-based expiry needs a time-based trigger; an event-driven one is not an expiry at all.
+ *  ★ 8000 ms matches the app's NOTIF_MS, so the two behave the same. */
+const VTS_BAND_MS = 8000;
+let vtsHideTimer: ReturnType<typeof setTimeout> | null = null;
+/** When the current STATIC entry stops being worth showing. 0 = nothing static up. */
+let vtsStaticUntil = 0;
+let vtsLastHz = -1;
+
+/** ★★ WHAT PERSISTS AND WHAT DOES NOT — the app's rule, verbatim. LIVE data (RDS) HOLDS on screen,
+ *  because it keeps changing and is genuinely about what you are hearing right now. STATIC data —
+ *  a bookmark or EiBi name, a band change — is an announcement, so it says its piece and goes.
+ *  Leaving a bookmark name up forever makes the bar a permanent label that is only sometimes
+ *  right, which is how it ends up describing a frequency you left ten minutes ago. */
+/** Marquee whatever overflows. ★ Measured, not guessed: the distance is the difference between
+ *  the text's real width and the box it has to live in, so the animation stops exactly at the end
+ *  of the words rather than at some fraction that happens to look right at one window size.
+ *  ★★ The text is wrapped in a span because the ELEMENT must stay put (it is the clip) while its
+ *     CONTENT moves. Wrapping is done here rather than in the markup so every caller — RDS,
+ *     bookmark, EiBi, band conditions — gets it without having to remember. */
+function applyVtsScroll(isLive: boolean) {
+  const vts = $('vts');
+  vts.classList.toggle('live', isLive);
+  let any = false;
+  for (const id of ['vtsName', 'vtsText']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const txt = el.textContent ?? '';
+    if (!txt) { el.style.removeProperty('--vts-slide-dist'); continue; }
+    if (el.firstElementChild?.tagName !== 'SPAN') el.innerHTML = `<span>${escapeHtml(txt)}</span>`;
+    const span = el.firstElementChild as HTMLElement;
+    // Read the natural width against the space actually available.
+    const over = span.scrollWidth - el.clientWidth;
+    if (over > 4) {
+      any = true;
+      el.style.setProperty('--vts-slide-dist', `${-over}px`);
+      // ★ Speed scales with LENGTH, like the app's `Math.max(2200, dist * 16)`: a long RadioText
+      //   and a short band line should read at the same pace, not take the same time.
+      el.style.setProperty('--vts-slide-dur', `${Math.max(4, over * 0.03).toFixed(1)}s`);
+    } else {
+      el.style.removeProperty('--vts-slide-dist');
+    }
+  }
+  vts.classList.toggle('scroll', any);
+}
+
+
+function vtsHoldFor(ms: number) {
+  if (vtsHideTimer) clearTimeout(vtsHideTimer);
+  vtsHideTimer = setTimeout(() => { vtsHideTimer = null; updateVts(); }, ms);
+}
 
 function fmtBandFreq(hz: number): string {
   if (hz >= 1_000_000) {
@@ -1253,8 +1305,9 @@ function checkBandCrossing(hz: number) {
   // ★ Same sentence as the app's, minus the band-conditions figure: that comes from UberSDR's
   //   /api/noisefloor/latest, which a VibeServer does not serve. Inventing one would be worse
   //   than omitting it — see "no inferred hardware readouts".
-  vtsBandMsg = `BAND: ${fmtBandFreq(p.lo)}–${fmtBandFreq(p.hi)} · ${p.name}`
-             + (bands.length > 1 && region ? ` (ITU R${region})` : '');
+  // ★ Stuart's wording: the BAND first, then its conditions spelled out. "BAND: 7.000-7.200 MHz"
+  //   led with numbers the reader already has on the dial; the NAME is what a band change is.
+  vtsBandMsg = p.name + (bands.length > 1 && region ? ` (ITU R${region})` : '');
   // ★★★ AND WHAT THE BAND IS DOING, when this receiver has something to say about it. The
   //     measured figure is THIS aerial right now, so it is the part worth leading with; the
   //     prediction follows as context. Silent for a band we do not measure — an FM profile has
@@ -1264,13 +1317,14 @@ function checkBandCrossing(hz: number) {
   const pred = lbl ? bandCond.predicted[lbl] : undefined;
   if (meas !== undefined) {
     const word = meas >= 15 ? 'Excellent' : meas >= 9 ? 'Good' : meas >= 4 ? 'Fair' : 'Poor';
-    vtsBandMsg += ` · Here now: ${word} (${meas.toFixed(0)} dB)`;
-    if (pred) vtsBandMsg += ` · Predicted ${pred}`;
+    vtsBandMsg += ` — Conditions: Predicted: ${pred || '—'}`
+                + ` / Actual: ${word} (${meas.toFixed(0)} dB)`;
   } else if (pred) {
-    vtsBandMsg += ` · Predicted ${pred}`;
+    vtsBandMsg += ` — Conditions: Predicted: ${pred}`;
   }
   vtsBandSub = bands.slice(1).map(b => b.name).join('  │  ');
   vtsBandUntil = Date.now() + VTS_BAND_MS;
+  vtsHoldFor(VTS_BAND_MS + 60);      // ★ re-render when it expires, or it never disappears
   // ★ The app also applies band-aware mode/step defaults on crossing, but ONLY when the tuning
   //   was NOT hands-on (lock screen, watch, car controls). In a browser every tune is hands-on,
   //   so there is no case to apply it to — porting it would only yank the mode out from under
@@ -1280,6 +1334,9 @@ function checkBandCrossing(hz: number) {
 function updateVts() {
   expireRdsIfRetuned();
   if (!spec) return;
+  // ★ A move of the dial is a NEW announcement, so the static clock restarts rather than the old
+  //   one continuing to run against a station you have already left.
+  if (spec.frequency !== vtsLastHz) { vtsLastHz = spec.frequency; vtsStaticUntil = 0; }
   checkBandCrossing(spec.frequency);
   // ★★ The Advanced RDS decoder OWNS the RDS display while it is open — the bar would be
   // the same data, smaller and less complete. Hidden, not emptied: the media card reads
@@ -1302,6 +1359,9 @@ function updateVts() {
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
+  // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
+  //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
+  let live = !!rdsName;
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -1364,6 +1424,17 @@ function updateVts() {
 
   $('vtsName').textContent = name;
   $('vtsBand').textContent = band ? (band.bandLabel || band.name) : '';
+  applyVtsScroll(live || rdsPi > 0);
+  // ★★ Static content gets a life; live RDS does not. A PI-only identification counts as live —
+  //   it is the transmitter telling us who it is, and it will keep arriving.
+  if (!live && rdsPi <= 0) {
+    if (!vtsStaticUntil || Date.now() > vtsStaticUntil) vtsStaticUntil = Date.now() + VTS_BAND_MS;
+    if (Date.now() > vtsStaticUntil) { vts.classList.remove('show', 'on'); setDecBoxOffset(); return; }
+    vtsHoldFor(vtsStaticUntil - Date.now() + 60);
+  } else {
+    vtsStaticUntil = 0;                       // live: no expiry at all
+    if (vtsHideTimer) { clearTimeout(vtsHideTimer); vtsHideTimer = null; }
+  }
   $('vtsFlag').textContent = flag;
 
   // RadioText, when the station is sending one. Scroll it only if it actually
@@ -2158,10 +2229,18 @@ async function drawSplashSpectrogram(): Promise<void> {
   let lastBottom = -1e9;
   for (let k = 0; k <= steps; k++) {
     const y = (H - 1) * (k / steps);
-    // y=0 is the OLDEST row (top), y=H the newest — same as the drawing above.
-    const ms = tFirst + (tLast - tFirst) * (k / steps);
+    // ★★★ NEWEST AT THE TOP, BECAUSE THAT IS WHERE THE IMAGE PUTS IT — and because it is what the
+    //     waterfall does ("blit at top, scroll down", waterfall.ts). The drawing above maps source
+    //     row 0 (the OLDEST) to the BOTTOM via `rows - 1 - r`; these labels ran the other way and
+    //     claimed the top was oldest. So the picture and its own axis disagreed, and reading the
+    //     axis made the spectrogram look like it ran bottom-to-top when it never did (Stuart,
+    //     2026-08-06 — he asked for the image to be flipped, which would have made it genuinely
+    //     wrong; the labels were the fault).
+    //     ★ A time axis that contradicts the picture it labels is worse than no axis: it is
+    //       believed, and it is the only thing telling you which end is now.
+    const ms = tLast - (tLast - tFirst) * (k / steps);
     g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    // ★★ KEEP CLEAR OF THE FREQUENCY ROW. The oldest stamp sits at y=0, which is exactly where
+    // ★★ KEEP CLEAR OF THE FREQUENCY ROW. The newest stamp sits at y=0, which is exactly where
     //    the frequency labels are drawn, so "21:16" and "2.500 MHz" printed on top of each other
     //    in the top-left corner (Stuart, 2026-08-05). Push it below that row rather than skipping
     //    it — the oldest time is the one that tells you how far back the picture goes.

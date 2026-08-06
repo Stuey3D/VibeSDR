@@ -1324,6 +1324,28 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 @container decbox (max-width: 360px) {
   #rdsGrid { grid-template-columns: 1fr; }
 }
+/* ★★★ THE HEADER CONTROLS MUST STAY REACHABLE. #decBoxHead is a flex row that neither wraps nor
+   scrolls, so on a phone the buttons past the title simply fell off the end — "I cannot access
+   half of them" (Stuart, 2026-08-06). The app scrolls them; this did nothing, which is the worst
+   of the three options because the controls LOOK complete until you need one.
+   ★★ SCROLL RATHER THAN WRAP. Wrapping would grow the header and eat the panel below it, on the
+      one screen with least room; a scrolling strip costs no height at all. The status text is the
+      elastic part, so it gives up its space first and the buttons keep their size.
+   ★ Momentum scrolling and no scrollbar furniture: on a phone this should feel like the app's
+     control strip, not like a web page with a scrollbar in it. */
+@container decbox (max-width: 420px) {
+  #decBoxHead {
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    /* Anything that would otherwise be squeezed keeps its size and scrolls instead. */
+    flex-wrap: nowrap;
+  }
+  #decBoxHead::-webkit-scrollbar { display: none; }
+  #decBoxHead > * { flex: 0 0 auto; }
+  /* ★ The status line is the only elastic member: let it shrink to nothing before the buttons do,
+     because a truncated status is readable-later and a missing button is not reachable at all. */
+  #decStatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
 /* ★★★ THE BACKSTOP. `overflow-wrap: anywhere` on the values is right — an unbroken 32-character
    Long PS has to go somewhere — but it means a value squeezed to near-zero width breaks EVERY
    character onto its own line, which is what "shits the bed" looked like. Below this width the
@@ -1568,6 +1590,29 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* The station NAME never truncates — it's the one thing you actually need to
    read. The bar grows instead, and the RadioText gives up the space. */
 #vtsName { flex: 0 0 auto; white-space: nowrap; }
+/* ★★★ SCROLL WHAT DOES NOT FIT. The bar grew to fit its content, which works for a station name
+   and fails for everything longer — an EiBi entry with time and language, or a band line carrying
+   both a prediction and a measurement, simply ran off the end and the half you needed was the half
+   you could not see (Stuart, 2026-08-06). The app has always marqueed these (VTSBar's slide
+   animation); the web client never did.
+   ★★ TWO BEHAVIOURS, as the app has: LIVE data (RDS radiotext) loops for as long as it is up,
+      because it keeps changing and you may look at any moment. STATIC data gets ONE pass, timed to
+      finish inside its 8 s life — a bookmark name that kept sliding after you had read it would be
+      movement for its own sake. */
+#vts.scroll #vtsName, #vts.scroll #vtsText {
+  overflow: hidden; max-width: min(58vw, 520px);
+}
+#vts.scroll #vtsName > span, #vts.scroll #vtsText > span {
+  display: inline-block; white-space: nowrap;
+  animation: vtsSlide var(--vts-slide-dur, 9s) linear var(--vts-slide-delay, 1.1s) 1 both;
+}
+#vts.scroll.live #vtsName > span, #vts.scroll.live #vtsText > span {
+  animation-iteration-count: infinite;
+}
+@keyframes vtsSlide {
+  0%, 12%   { transform: translateX(0); }
+  88%, 100% { transform: translateX(var(--vts-slide-dist, 0)); }
+}
 #vtsBand {
   color: var(--unit); font-size: 11px; flex: 0 0 auto;
   /* Its own space, with a divider: the RadioText is elastic and the band label is
