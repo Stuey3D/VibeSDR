@@ -1307,7 +1307,11 @@ function checkBandCrossing(hz: number) {
   //   than omitting it — see "no inferred hardware readouts".
   // ★ Stuart's wording: the BAND first, then its conditions spelled out. "BAND: 7.000-7.200 MHz"
   //   led with numbers the reader already has on the dial; the NAME is what a band change is.
-  vtsBandMsg = p.name + (bands.length > 1 && region ? ` (ITU R${region})` : '');
+  // ★ Name first, then the range: the NAME is what a band change IS, and the range is the useful
+  //   detail that follows (Stuart asked for the range back, 2026-08-06 — it belongs, just not
+  //   leading).
+  vtsBandMsg = `${p.name} · ${fmtBandFreq(p.lo)}–${fmtBandFreq(p.hi)}`
+             + (bands.length > 1 && region ? ` (ITU R${region})` : '');
   // ★★★ AND WHAT THE BAND IS DOING, when this receiver has something to say about it. The
   //     measured figure is THIS aerial right now, so it is the part worth leading with; the
   //     prediction follows as context. Silent for a band we do not measure — an FM profile has
@@ -1428,8 +1432,15 @@ function updateVts() {
   // ★★ Static content gets a life; live RDS does not. A PI-only identification counts as live —
   //   it is the transmitter telling us who it is, and it will keep arriving.
   if (!live && rdsPi <= 0) {
-    if (!vtsStaticUntil || Date.now() > vtsStaticUntil) vtsStaticUntil = Date.now() + VTS_BAND_MS;
-    if (Date.now() > vtsStaticUntil) { vts.classList.remove('show', 'on'); setDecBoxOffset(); return; }
+    // ★★★ START THE CLOCK ONCE. The condition here used to ALSO fire on expiry — so the moment the
+    //     deadline passed it was pushed another 8 s into the future, and the hide below could
+    //     never be reached. The bar therefore renewed itself forever, which is exactly the
+    //     "still sticking" Stuart saw after the first fix (2026-08-06).
+    //     ★ The two questions are DIFFERENT and must not share a branch: "has this clock started?"
+    //       is `!vtsStaticUntil`; "has it run out?" is the comparison. Answering them together
+    //       makes expiry indistinguishable from a fresh start.
+    if (!vtsStaticUntil) vtsStaticUntil = Date.now() + VTS_BAND_MS;
+    if (Date.now() >= vtsStaticUntil) { vts.classList.remove('show', 'on'); setDecBoxOffset(); return; }
     vtsHoldFor(vtsStaticUntil - Date.now() + 60);
   } else {
     vtsStaticUntil = 0;                       // live: no expiry at all
