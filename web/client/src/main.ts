@@ -1205,6 +1205,25 @@ let logoQuery = '';     // guards against a stale async logo landing late
  *    place from one covered by either alone.
  *  ★ NOT announced on the first tune. Arriving somewhere is not crossing into it, and an
  *    announcement on page load is noise before the user has done anything. */
+/** ★★ THE CONDITIONS THE VTS ANNOUNCES. Kept here rather than fetched on the crossing: a band
+ *  change should say something IMMEDIATELY, and a fetch would either delay the announcement or
+ *  arrive after it had gone. Refreshed on the same slow timer that feeds the landing page.
+ *  ★ The app does exactly this for UberSDR (SDRScreen's showBandNotif reads getBandSnrDb), so a
+ *    listener sees the same thing on the web client as on their phone (Stuart, 2026-08-06). */
+let bandCond: { measured: Record<string, number>; predicted: Record<string, string> } =
+  { measured: {}, predicted: {} };
+
+async function refreshBandConditions(): Promise<void> {
+  try {
+    const r = await fetch('/vibeserver/conditions', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const m: Record<string, number> = {};
+    for (const x of (j.measured || [])) m[x.band] = x.snrDb;
+    bandCond = { measured: m, predicted: j.solar?.bands || {} };
+  } catch { /* leave the previous reading; a stale one is better than none */ }
+}
+
 let vtsBandKey: string | null = null;
 let vtsBandInit = false;
 let vtsBandMsg = '';
@@ -1236,6 +1255,20 @@ function checkBandCrossing(hz: number) {
   //   than omitting it — see "no inferred hardware readouts".
   vtsBandMsg = `BAND: ${fmtBandFreq(p.lo)}–${fmtBandFreq(p.hi)} · ${p.name}`
              + (bands.length > 1 && region ? ` (ITU R${region})` : '');
+  // ★★★ AND WHAT THE BAND IS DOING, when this receiver has something to say about it. The
+  //     measured figure is THIS aerial right now, so it is the part worth leading with; the
+  //     prediction follows as context. Silent for a band we do not measure — an FM profile has
+  //     nothing to report about HF, and inventing a verdict would be worse than saying nothing.
+  const lbl = p.bandLabel || '';
+  const meas = lbl ? bandCond.measured[lbl] : undefined;
+  const pred = lbl ? bandCond.predicted[lbl] : undefined;
+  if (meas !== undefined) {
+    const word = meas >= 15 ? 'Excellent' : meas >= 9 ? 'Good' : meas >= 4 ? 'Fair' : 'Poor';
+    vtsBandMsg += ` · Here now: ${word} (${meas.toFixed(0)} dB)`;
+    if (pred) vtsBandMsg += ` · Predicted ${pred}`;
+  } else if (pred) {
+    vtsBandMsg += ` · Predicted ${pred}`;
+  }
   vtsBandSub = bands.slice(1).map(b => b.name).join('  │  ');
   vtsBandUntil = Date.now() + VTS_BAND_MS;
   // ★ The app also applies band-aware mode/step defaults on crossing, but ONLY when the tuning
@@ -6459,6 +6492,11 @@ initSplash();
 drawSplashSpectrogram();
 showSplashListeners();
 showSplashConditions();
+refreshBandConditions();
+// ★ Slow on purpose: this is a one-minute rolling median on the server, so polling faster would
+//   re-fetch a figure that has not moved. It also keeps working after the splash is dismissed,
+//   which is when the VTS needs it.
+setInterval(refreshBandConditions, 60000);
 setInterval(() => {
   const sp = document.getElementById('splash');
   if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();

@@ -1753,7 +1753,87 @@ struct LocalSdrShim::Impl {
     static constexpr int kFastRows    = 300;    // the first 5 minutes, at one row per second
     std::mutex               spectroMtx;
     std::deque<SpectroRow>   spectro;
+
+    // ── Persistence ──────────────────────────────────────────────────────────────────────────
+    // ★★★ 24 HOURS OF HISTORY MUST NOT DIE WITH THE PROCESS. The landing page's whole appeal is
+    //     showing what this receiver has been hearing — and every settings save RESTARTS the
+    //     server, so an owner who changed one setting lost the lot. Stuart went to bed expecting a
+    //     night of band activity and woke to an empty picture (2026-08-06).
+    // ★★ SAVED ON A CLEAN STOP AND EVERY 15 MINUTES. The clean stop covers the common case (a
+    //    settings save, a reboot, systemctl restart) at no cost; the periodic write bounds what a
+    //    POWER CUT can take to a quarter of an hour. ~3 MB a time is nothing for an SD card at
+    //    that rate, and writing every row would be.
+    // ★ Format is deliberately the same u8-per-bin the wire uses, with a header carrying the
+    //   geometry: a file whose shape does not match this build is DISCARDED rather than
+    //   reinterpreted, because a mis-shaped picture is worse than no picture.
+    static constexpr uint32_t kSpectroMagic = 0x47505356;   // "VSPG"
+    std::string spectroPath;                                 // empty = do not persist
+    double      spectroSavedAt = 0;
+
+    void spectroSetPath(const std::string& p) { spectroPath = p; }
+
+    void spectroSave() {
+        if (spectroPath.empty()) return;
+        std::vector<SpectroRow> rows;
+        { std::lock_guard<std::mutex> lk(spectroMtx); rows.assign(spectro.begin(), spectro.end()); }
+        if (rows.empty()) return;
+        // ★ Temp file beside the target, then rename: a half-written history read at the next
+        //   start is worse than none, and rename() cannot cross a filesystem (see the EiBi note).
+        const std::string tmp = spectroPath + ".tmp";
+        FILE* f = fopen(tmp.c_str(), "wb");
+        if (!f) return;
+        const uint32_t magic = kSpectroMagic;
+        const uint32_t bins = kSpectroBins, count = (uint32_t)rows.size();
+        const double centre = g_vsLockedCentre.load(), span = sampleRate;
+        fwrite(&magic, 4, 1, f); fwrite(&bins, 4, 1, f); fwrite(&count, 4, 1, f);
+        fwrite(&centre, sizeof centre, 1, f); fwrite(&span, sizeof span, 1, f);
+        for (const auto& r : rows) {
+            fwrite(&r.atMs, sizeof r.atMs, 1, f);
+            fwrite(r.bins.data(), 1, r.bins.size(), f);
+        }
+        fclose(f);
+        rename(tmp.c_str(), spectroPath.c_str());
+        LOGI("spectrogram saved — %zu rows", rows.size());
+    }
+
+    void spectroLoad() {
+        if (spectroPath.empty()) return;
+        FILE* f = fopen(spectroPath.c_str(), "rb");
+        if (!f) return;
+        uint32_t magic = 0, bins = 0, count = 0;
+        double centre = 0, span = 0;
+        if (fread(&magic, 4, 1, f) != 1 || magic != kSpectroMagic) { fclose(f); return; }
+        if (fread(&bins, 4, 1, f) != 1 || fread(&count, 4, 1, f) != 1) { fclose(f); return; }
+        if (fread(&centre, sizeof centre, 1, f) != 1 || fread(&span, sizeof span, 1, f) != 1)
+            { fclose(f); return; }
+        // ★★ A HISTORY OF A DIFFERENT BAND IS NOT OUR HISTORY. If the owner has moved the window
+        //    since, every stored row maps to frequencies that are no longer under those pixels —
+        //    so it is discarded rather than drawn against the new axis, which would be a picture
+        //    that is confidently wrong.
+        if (bins != kSpectroBins || std::fabs(centre - g_vsLockedCentre.load()) > 1.0
+            || std::fabs(span - sampleRate) > 1.0) {
+            fclose(f);
+            LOGI("spectrogram: stored history is for a different window — starting fresh");
+            return;
+        }
+        if (count > (uint32_t)kSpectroRows) count = kSpectroRows;
+        std::deque<SpectroRow> in;
+        for (uint32_t i = 0; i < count; i++) {
+            SpectroRow r;
+            r.bins.resize(kSpectroBins);
+            if (fread(&r.atMs, sizeof r.atMs, 1, f) != 1) break;
+            if (fread(r.bins.data(), 1, kSpectroBins, f) != (size_t)kSpectroBins) break;
+            in.push_back(std::move(r));
+        }
+        fclose(f);
+        if (in.empty()) return;
+        { std::lock_guard<std::mutex> lk(spectroMtx); spectro = std::move(in); }
+        LOGI("spectrogram restored — %zu rows", spectro.size());
+    }
     double  spectroAcc[kSpectroBins] = {0};
+    /** ★ Set under spectroMtx by the DSP path, ACTED ON elsewhere: a 3 MB write must never
+     *  happen on the thread feeding the radio. */
+    std::atomic<bool> needSpectroSave{false};
     int     spectroAccN = 0;
     double  spectroLastAt = 0;
     int     spectroTaken  = 0;          // rows so far — decides fast vs slow cadence
@@ -1776,6 +1856,17 @@ struct LocalSdrShim::Impl {
     struct BandMeas { const char* label; double dialHz; float snrDb; double at; };
     std::vector<BandMeas> bandMeas;
     double bandMeasAt = 0;
+    /** ★★★ A ROLLING MEDIAN, NOT THE LAST SAMPLE. One 5-second snapshot of an HF band is mostly
+     *  luck: a burst of QRM, a station keying up, or a quiet moment between transmissions moves it
+     *  several dB, so the verdict flickered between Fair and Good while nothing about propagation
+     *  had changed. Conditions must be LIVE — tracking a real opening within a minute — and
+     *  ACCURATE, which a single sample is not (Stuart, 2026-08-06).
+     *  ★ MEDIAN rather than mean: the thing being rejected is exactly the occasional loud burst
+     *    that a mean would chase. Twelve samples at 5 s is a one-minute window.
+     *  ★★ Not persisted, deliberately: unlike the spectrogram this describes RIGHT NOW, and an
+     *     hour-old band report restored from disk would be worse than none. */
+    static constexpr int kBandWindow = 12;
+    std::map<std::string, std::deque<float>> bandHist;
 
     /** One reading per band whose FT8 slot is inside the captured span. Called from the spectrum
      *  path, which already holds the averaged FFT. */
@@ -1834,8 +1925,13 @@ struct LocalSdrShim::Impl {
             //   mean either side would let one strong carrier next door flatter a dead band.
             const float s90 = sig[(size_t)(sig.size() * 0.90)];
             const float r10 = ref[(size_t)(ref.size() * 0.10)];
+            auto& h = bandHist[b.label];
+            h.push_back(s90 - r10);
+            while ((int)h.size() > kBandWindow) h.pop_front();
+            std::vector<float> w(h.begin(), h.end());
+            std::sort(w.begin(), w.end());
             BandMeas m = b;
-            m.snrDb = s90 - r10;
+            m.snrDb = w[w.size() / 2];
             m.at    = now;
             out.push_back(m);
         }
@@ -1895,6 +1991,11 @@ struct LocalSdrShim::Impl {
         spectro.push_back(std::move(r));
         // ★ Oldest scrolls off the top, exactly as asked — the buffer never grows without bound.
         while ((int)spectro.size() > kSpectroRows) spectro.pop_front();
+        // ★ Driven from the feed rather than a timer: no extra thread, and it cannot fire while
+        //   there is nothing new to write.
+        const double nowS = Impl::nowSecs();
+        if (spectroSavedAt <= 0) spectroSavedAt = nowS;
+        else if (nowS - spectroSavedAt > 900.0) { spectroSavedAt = nowS; needSpectroSave = true; }
         spectroTaken++;
     }
 
@@ -3065,13 +3166,39 @@ struct LocalSdrShim::Impl {
             //     and IF reduction around for a second and then hands control to the very loop
             //     that was turned off (Stuart, 2026-08-05: "our kick only fires on AGC being left
             //     in the enabled state"). Apply the saved gain once instead, and be done.
-            if (g_vsSavedIfAgc.load() == 0 && sdrpAgcKick < 6 && n > 10) {
-                const int savedLna = g_vsSavedLna.load(), savedGr = g_vsSavedIfGr.load();
+            // ★★★ UNSET NOW MEANS MINIMUM, NOT "LET THE AGC SORT IT OUT". Everything the owner has
+            //     not chosen starts at the safe end and stays MANUAL: least RF gain, most IF
+            //     attenuation, AGC off (Stuart, 2026-08-06). The kick exists to settle the tuner's
+            //     own loop, so with that loop switched off there is nothing to settle and it is
+            //     skipped entirely.
+            //     ★★ THIS CHANGED A REAL DEFAULT. The kick used to hand over at RF gain 7/9 — the
+            //        working point of Stuart's own demo, chosen when the only receiver was his.
+            //        On somebody else's aerial that is a guess, and the wrong guess damages a
+            //        front end. A quiet receiver costs one click to fix; an overloaded one may
+            //        cost the hardware.
+            // ★★★ "NEVER TOUCHED" IS THE TEST, NOT "UNSET". The protective minimums are for a
+            //     receiver whose owner has not chosen a gain yet — a FRESH install. An existing
+            //     server whose owner set an RF gain but left the IF on AGC has chosen; forcing it
+            //     to minimum would silently deafen a working receiver on an upgrade, which is
+            //     exactly what Stuart asked not to happen to the demo ("these gain settings are
+            //     for going forward on new installs", 2026-08-06).
+            //     ★ An upgrade must never change how a running receiver hears. That is worth more
+            //       than the tidiness of one rule covering both cases.
+            const int savedLna0 = g_vsSavedLna.load(), savedGr0 = g_vsSavedIfGr.load();
+            const int savedAgc0 = g_vsSavedIfAgc.load();
+            const bool neverTouched = (savedLna0 < 0 && savedGr0 < 0 && savedAgc0 < 0);
+            if ((savedAgc0 == 0 || neverTouched) && sdrpAgcKick < 6 && n > 10) {
+                const int savedGr  = g_vsSavedIfGr.load();
+                // LNA state counts the OTHER WAY: 0 is maximum RF gain, so the last state is the
+                // least. Derived from the ladder so an RSP1 (4 states) and a dx (28) both land at
+                // their own minimum rather than at a literal that suits one model.
+                const int minRfLna = std::max(0, sdrp->lnaStateCount() - 1);
+                const int savedLna = g_vsSavedLna.load() >= 0 ? g_vsSavedLna.load() : minRfLna;
                 sdrp->setIfAgc(false);
-                if (savedLna >= 0) sdrp->setLnaState(savedLna);
-                if (savedGr  >= 0) sdrp->setIfGainReduction(savedGr);
+                sdrp->setLnaState(savedLna);
+                sdrp->setIfGainReduction(savedGr >= 0 ? savedGr : 59);   // 59 = most attenuation
                 sdrpAgcKick = 6;                       // nothing left to settle
-                LOGI("RSP: owner's FIXED gain restored — AGC off, lna %d, ifgr %d, sysGain %.1f dB "
+                LOGI("RSP: manual gain — AGC off, lna %d, ifgr %d, sysGain %.1f dB "
                      "(no AGC kick: there is no loop to settle)",
                      sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
             }
@@ -6350,7 +6477,19 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx);
           cs.reserve(clientDsp.size());
           for (auto& kv : clientDsp) cs.push_back(kv.second); }
-        if (cs.empty()) return;
+        // ★★★ THE WIDE SPECTRUM MUST RUN WITH NOBODY LISTENING. This used to `return` on an empty
+        //     listener list, which is obviously right for the per-listener fan-out and quietly
+        //     disastrous for everything the SHARED row feeds: the landing-page spectrogram and the
+        //     band-conditions measurement. Both exist to tell somebody who has NOT connected what
+        //     this receiver has been hearing — and they only accumulated while somebody WAS
+        //     connected. Stuart left the server overnight and woke to an empty spectrogram: "it's
+        //     like it never woke up" (2026-08-06). Measured: 48 rows over 16 minutes on a server
+        //     up 5h46m — exactly the span since he opened the page.
+        //     ★★ The cost is the channelizer's forward FFT, which is the FIXED part of the DSP and
+        //        is paid the moment one listener arrives anyway. What is skipped below is the
+        //        fan-out, which is the part that scales — so an idle server does the cheap half.
+        //     ★ The idle saver is a separate matter and still applies: when capture genuinely
+        //       parks there is no IQ at all and this is never called.
         if (!chan_ || chan_->fftSize() != fftSize) chan_.reset(new vibedsp::Channelizer(fftSize));
         // ★ Split the channelizer's own forward FFT from the per-listener work, because they
         //   scale completely differently: the FFT is fixed no matter how many listeners there
@@ -6437,6 +6576,10 @@ struct LocalSdrShim::Impl {
     /** Copy this block once and post it to every listener's queue. Never blocks. */
     void handBlockToListeners(const std::vector<std::shared_ptr<ClientDsp>>& cs,
                               const cf32* bins, int nbins) {
+        // ★ Nothing to hand out: skip the copy entirely. The wide path still runs above (that is
+        //   the point of getting here with no listeners), but copying a 32k block for an empty
+        //   list every round would be pure waste on an idle server.
+        if (cs.empty()) return;
         auto blk = std::make_shared<ClientDsp::Block>();
         blk->bins.assign(bins, bins + nbins);
         blk->index = chan_->blockIndex();     // ★ the phase reference travels WITH the samples
@@ -7291,6 +7434,16 @@ int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0;
 
 double LocalSdrShim::captureSpanHz() const { return p ? p->sampleRate : 0.0; }
 
+void LocalSdrShim::setSpectrogramPath(const std::string& path) {
+    if (!p) return;
+    p->spectroSetPath(path);
+    p->spectroLoad();
+}
+void LocalSdrShim::saveSpectrogram() { if (p) p->spectroSave(); }
+void LocalSdrShim::saveSpectrogramIfDue() {
+    if (p && p->needSpectroSave.exchange(false)) p->spectroSave();
+}
+
 int LocalSdrShim::waitingCount() const {
     if (!p) return 0;
     std::lock_guard<std::mutex> lk(p->clientMtx);
@@ -7453,9 +7606,27 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
     // Offset tuning: physically tune HW_OFFSET_HZ above the logical centre.
     impl->tuneHw(centerFreq);
-    impl->lastGainTenthDb = gainTenthDb;   // re-applied if the dongle is replugged
-    if (gainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
-    else { rtlsdr_set_tuner_gain_mode(impl->dev, 1); rtlsdr_set_tuner_gain(impl->dev, gainTenthDb); }
+    // ★★★ NEVER THE TUNER'S OWN AUTOMATIC GAIN. `gain < 0` used to mean "hardware AGC", and on an
+    //     RTL that is a mode to stay out of: it is unreliable across tuners and is KNOWN BROKEN on
+    //     the v4 (Stuart, 2026-08-06). An unset gain now means the LOWEST the tuner offers —
+    //     manual, and the safe end — so a receiver whose owner has not chosen yet is quiet rather
+    //     than at the mercy of a gain loop we do not control and cannot fix.
+    //     ★ Quiet is recoverable in one click; an overloaded front end on an unknown aerial is
+    //       not, and neither is a listener concluding the receiver is deaf because its AGC misbehaved.
+    int applyGain = gainTenthDb;
+    if (applyGain < 0) {
+        int n = rtlsdr_get_tuner_gains(impl->dev, nullptr);
+        if (n > 0) {
+            std::vector<int> gs((size_t)n);
+            rtlsdr_get_tuner_gains(impl->dev, gs.data());
+            applyGain = *std::min_element(gs.begin(), gs.end());
+            LOGI("gain: no setting yet — starting at the tuner's minimum, %.1f dB (never auto)",
+                 applyGain / 10.0);
+        }
+    }
+    impl->lastGainTenthDb = applyGain;   // re-applied if the dongle is replugged
+    rtlsdr_set_tuner_gain_mode(impl->dev, 1);
+    if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
     rtlsdr_reset_buffer(impl->dev);
     // Use the ACTUAL rate the RTL rounded to (keeps the waterfall calibrated).
     uint32_t actualSr = rtlsdr_get_sample_rate(impl->dev);

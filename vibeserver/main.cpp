@@ -529,14 +529,30 @@ int main(int argc, char** argv) {
         //   the only thing that can answer that — a UTC hour would be right for one meridian only.
         //   Rough local solar time is plenty: we are choosing between "day" and "night", not
         //   computing a sunrise.
-        double lon = 0;
-        try { lon = g_runtimeConfig.lon.empty() ? 0.0 : std::stod(g_runtimeConfig.lon); } catch (...) {}
+        // ★★★ THE REAL SUN, AND THE LOCATOR IF THAT IS ALL WE HAVE. lat/lon are optional on the
+        //     setup page and were EMPTY on the very server this was written for — but the locator
+        //     was filled in, and a locator IS a position. Deriving one from the other is what
+        //     makes the setting the owner actually filled in do the work (Stuart, 2026-08-06).
+        //     ★ And the day/night test is now sun-above-horizon rather than a 07:00-19:00 window,
+        //       which was wrong by hours: at 52°N in August the sun is up at 04:30, so the server
+        //       reported NIGHT through a summer morning and predicted 80m "Excellent" on a band
+        //       that was plainly a daytime Fair.
+        double lat = 0, lon = 0;
+        bool havePos = false;
+        try {
+            if (!g_runtimeConfig.lat.empty() && !g_runtimeConfig.lon.empty()) {
+                lat = std::stod(g_runtimeConfig.lat);
+                lon = std::stod(g_runtimeConfig.lon);
+                havePos = true;
+            }
+        } catch (...) { havePos = false; }
+        if (!havePos && !g_runtimeConfig.locator.empty())
+            havePos = vssolar::gridToLatLon(g_runtimeConfig.locator, lat, lon);
         const std::time_t t = std::time(nullptr);
-        std::tm g{}; gmtime_r(&t, &g);
-        double solarHour = g.tm_hour + g.tm_min / 60.0 + lon / 15.0;
-        while (solarHour < 0) solarHour += 24;
-        while (solarHour >= 24) solarHour -= 24;
-        const bool day = solarHour >= 7.0 && solarHour < 19.0;
+        // ★ With no position at all, fall back to Greenwich rather than refusing: a day/night
+        //   verdict that is right for most of Europe beats no conditions panel at all, and the
+        //   owner can fix it by filling in one field.
+        const bool day = vssolar::sunUp(havePos ? lat : 51.5, havePos ? lon : 0.0, t);
 
         char head[256];
         snprintf(head, sizeof head,
@@ -774,8 +790,14 @@ int main(int argc, char** argv) {
 
     // Status line once a second — the CLI's whole UI. Deliberately the same numbers the menu-bar
     // status view will show (BRIEF §3), so the GUI is a renderer of this, not its own accounting.
+    // ★ Set AFTER start(), because loading needs the window (centre and span) to know whether the
+    //   stored history belongs to this profile at all.
+    LocalSdrShim::instance().setSpectrogramPath("/var/lib/vibeserver/spectrogram.bin");
+
     while (!g_stop) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        // ★ The DSP path only raises a FLAG; the write happens here, off that thread.
+        LocalSdrShim::instance().saveSpectrogramIfDue();
         if (!shim.isRunning()) {
             std::fprintf(stderr, "VibeServer: capture stopped unexpectedly.\n");
             break;
@@ -789,6 +811,10 @@ int main(int argc, char** argv) {
         //   box nobody can see.
         if (g_restartRequested.load()) {
             std::printf("\nConfiguration saved — restarting to apply it.\n");
+            // ★★ SAVE BEFORE A RESTART. This is the common case by far — every settings save
+            //    restarts the server, and losing a day of history to a one-field change is what
+            //    made persistence necessary in the first place.
+            LocalSdrShim::instance().saveSpectrogram();
             LocalSdrShim::stopMdns();
             shim.stop();
             return 0;
@@ -796,6 +822,11 @@ int main(int argc, char** argv) {
     }
 
     std::printf("\nStopping…\n");
+    // ★★★ AND ON A PLAIN STOP, which is the path `systemctl restart` and a reboot actually take —
+    //     SIGTERM sets g_stop and we arrive here. The first cut of this only saved on the
+    //     SETUP-PAGE restart, so a reboot silently lost the history it was written to protect; the
+    //     edit had matched the wrong `stopMdns()` of the two. Both exits save now.
+    LocalSdrShim::instance().saveSpectrogram();
     // ★★★ STOP THE mDNS RESPONDER, or every exit is an ABRT. It keeps a STATIC std::thread, so
     //     at process exit its destructor runs on a still-joinable thread and std::terminate
     //     fires: "terminate called without an active exception", status=6/ABRT in the journal on

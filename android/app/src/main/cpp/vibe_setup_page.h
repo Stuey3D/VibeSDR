@@ -513,8 +513,11 @@ async function renderHw() {
     : hw.driver === "airspyhf"
     ? `The HF+ has no variable gain to set &mdash; it manages its own attenuator and preamp &mdash;
        so there is nothing to protect here and nothing to adjust.`
-    : `This receiver starts in <b>automatic gain</b>. That is usually right, but fixing the gain by
-       hand against live signals is how you get the best out of a quiet aerial or a crowded band.`;
+    : `<b>Signals will look weak until you do.</b> This receiver starts at the tuner's
+       <b>lowest gain</b>, deliberately, and never uses the tuner's own automatic gain &mdash; that
+       mode is unreliable across RTL tuners and is known to misbehave on the v4. We know nothing
+       about your aerial yet, so coming UP to a working gain is the safe direction. A near-empty
+       waterfall on a brand-new server is this protection working, not a fault.`;
 
   el.innerHTML += `<div class="note">${startState}</div>`;
   el.innerHTML += `<div class="note"><b>Gain is not set here.</b> Open this receiver in the client,

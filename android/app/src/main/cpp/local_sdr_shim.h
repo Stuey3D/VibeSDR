@@ -91,6 +91,14 @@ public:
     int  waitingCount() const;
     /** The captured span in Hz (the sample rate). 0 when nothing is running. */
     double captureSpanHz() const;
+    /** ★★ SPECTROGRAM PERSISTENCE. Setting a path also LOADS whatever is there, so a restart keeps
+     *  the history the landing page exists to show. Empty path (the default, and every phone) =
+     *  memory only, exactly as before.
+     *  ★ The daemon drives the writing: `saveSpectrogramIfDue()` from its own loop, and
+     *    `saveSpectrogram()` on the way out. A 3 MB write must never land on the DSP thread. */
+    void setSpectrogramPath(const std::string& path);
+    void saveSpectrogram();
+    void saveSpectrogramIfDue();
     /** Seconds until the current listener's limit expires; -1 when there is no limit,
      *  nobody is listening, or the listener is exempt (loopback / admin). */
     int  occupantSecsLeft() const;

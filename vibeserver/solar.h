@@ -1,5 +1,6 @@
 // Space weather (NOAA, public domain) — see solar.cpp for why this source and not the ham ones.
 #pragma once
+#include <ctime>
 #include <string>
 
 namespace vssolar {
@@ -10,6 +11,20 @@ struct Solar {
     std::string updated;    // ISO time of the newest reading we used
     bool valid() const { return sfi >= 0 || kp >= 0; }
 };
+
+/** Is the sun above the horizon at this position, now?
+ *  ★★★ A REAL SUN CALCULATION, NOT AN OFFICE-HOURS WINDOW. This began as "day = 07:00-19:00
+ *  local", which is wrong by hours for most of the year and most latitudes: at 52°N in August the
+ *  sun is up at 04:30 and still up at 20:30, so the server reported NIGHT through a summer morning
+ *  and predicted 80m "Excellent" on a band that was plainly a daytime Fair (Stuart, 2026-08-06).
+ *  D-layer absorption follows the SUN, so the model must too.
+ *  @param lat,lon degrees, north/east positive. */
+bool sunUp(double lat, double lon, std::time_t when);
+
+/** Latitude/longitude from a Maidenhead locator, e.g. "IO92nh". False if it does not parse.
+ *  ★ The locator is the position field owners actually fill in — lat/lon are optional on the
+ *    setup page and were empty on the very server this was written for. */
+bool gridToLatLon(const std::string& grid, double& lat, double& lon);
 
 /** Fetch now. False + `err` on failure; a failure never destroys the last good reading. */
 bool fetch(std::string& err);

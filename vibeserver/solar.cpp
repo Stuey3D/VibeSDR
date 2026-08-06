@@ -123,6 +123,53 @@ Solar current() {
     return g_cur;
 }
 
+bool gridToLatLon(const std::string& g, double& lat, double& lon) {
+    if (g.size() < 4) return false;
+    auto up = [](char c){ return (char)toupper((unsigned char)c); };
+    const int A = up(g[0]) - 'A', B = up(g[1]) - 'A';
+    if (A < 0 || A > 17 || B < 0 || B > 17) return false;
+    if (!isdigit((unsigned char)g[2]) || !isdigit((unsigned char)g[3])) return false;
+    lon = A * 20.0 - 180.0 + (g[2] - '0') * 2.0;
+    lat = B * 10.0 -  90.0 + (g[3] - '0') * 1.0;
+    if (g.size() >= 6) {                       // sub-square: 5 min lon, 2.5 min lat
+        const int a = up(g[4]) - 'A', b = up(g[5]) - 'A';
+        if (a >= 0 && a < 24 && b >= 0 && b < 24) {
+            lon += a * (2.0 / 24.0);
+            lat += b * (1.0 / 24.0);
+        }
+    }
+    lon += 1.0;    // centre of the square rather than its corner
+    lat += 0.5;
+    return true;
+}
+
+bool sunUp(double lat, double lon, std::time_t when) {
+    std::tm g{};
+    gmtime_r(&when, &g);
+    const double dayFrac = g.tm_hour + g.tm_min / 60.0 + g.tm_sec / 3600.0;
+    // Days since J2000, at the current instant.
+    const double n = (double)(when / 86400.0) - 10957.5;
+    // ★ The low-precision solar position from the Astronomical Almanac: good to about a minute of
+    //   arc, which is far beyond what a day/night verdict needs. Anything more elaborate would be
+    //   precision we then throw away in a four-way Good/Fair/Poor bucket.
+    const double D2R = M_PI / 180.0;
+    const double L = std::fmod(280.460 + 0.9856474 * n, 360.0);          // mean longitude
+    const double gAnom = std::fmod(357.528 + 0.9856003 * n, 360.0) * D2R; // mean anomaly
+    const double lambda = (L + 1.915 * std::sin(gAnom) + 0.020 * std::sin(2 * gAnom)) * D2R;
+    const double eps = (23.439 - 0.0000004 * n) * D2R;                    // obliquity
+    const double decl = std::asin(std::sin(eps) * std::sin(lambda));      // declination
+    // Greenwich hour angle of the sun, then local.
+    const double eqTime = 4.0 * (L - 0.0057183 - std::atan2(std::cos(eps) * std::sin(lambda),
+                                                            std::cos(lambda)) / D2R);
+    const double trueSolarMin = dayFrac * 60.0 + eqTime + 4.0 * lon;
+    const double ha = (trueSolarMin / 4.0 - 180.0) * D2R;                 // hour angle
+    const double elev = std::asin(std::sin(lat * D2R) * std::sin(decl) +
+                                  std::cos(lat * D2R) * std::cos(decl) * std::cos(ha));
+    // ★ Above the horizon = day. The D layer forms and decays with the sun, so this is the line
+    //   that actually matters to HF rather than any clock hour.
+    return elev > 0.0;
+}
+
 std::string bandVerdict(const Solar& s, const std::string& band, bool day) {
     if (!s.valid()) return "";
     const double sfi = s.sfi >= 0 ? s.sfi : 100.0;
