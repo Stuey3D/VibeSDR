@@ -51,6 +51,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          padding:11px 20px;font:600 15px/1 inherit;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  /* ★ An ANCHOR styled as the primary button: it is a navigation, so it should be a real link
+     (middle-click, open in a new tab, copy the address) rather than a button running location=. */
+  a.gotoBtn{background:var(--amber);color:#1a1200;border-radius:8px;padding:9px 18px;
+            font:600 14px/1 inherit;text-decoration:none;display:inline-block;white-space:nowrap}
   .modes{display:grid;gap:14px;grid-template-columns:1fr}
   @media(min-width:620px){.modes{grid-template-columns:1fr 1fr}}
   .mode{background:#0a0704;border:1px solid var(--line);border-radius:10px;padding:16px;
@@ -383,6 +387,13 @@ function setMode(locked) {
 /** ★ The schedule is the SERVER's job, so this only reports and triggers. Failure is reported in
  *  full rather than as "failed": the likely causes are no internet and a season file that has not
  *  been published yet, and those need different actions from the owner. */
+/** The server instance this page was loaded from. Captured once, compared after a restart. */
+let BOOT_ID = "";
+(async () => {
+  try { BOOT_ID = (await (await fetch("/vibeserver.json", {cache:"no-store"})).json()).instance || ""; }
+  catch (e) { /* the compare simply falls back to the timed rule */ }
+})();
+
 async function eibiStatus() {
   const el = $("eibiState");
   if (!el) return;
@@ -613,13 +624,23 @@ $("saveBtn").onclick = async () => {
     // ★ The server restarts to apply this, so the honest thing is to say so and then WAIT for it
     //   to come back rather than reloading into a connection error.
     $("barMsg").innerHTML = '<span class="ok">Saved. Restarting the receiver…</span>';
+    // ★★★ WAIT FOR A DIFFERENT PROCESS, NOT MERELY A LIVE ONE. The old server keeps answering for
+    //     the moment between our POST and its exit, so "is it up?" says yes immediately — the
+    //     button appeared at once and then led to a dead page (Stuart, 2026-08-06). `instance`
+    //     changes on every start, so a reply carrying a NEW one is proof the restart has happened
+    //     and this server is the one holding the settings we just saved.
     const waitBack = async () => {
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1000));
         try {
           const s = await fetch("/vibeserver.json", {cache:"no-store"});
-          if (s.ok && (await s.json()).configured) { location.reload(); return; }
-        } catch (e) { /* still down — expected */ }
+          if (!s.ok) continue;
+          const j = await s.json();
+          // ★ An older server sends no `instance`. Rather than never showing the button, fall back
+          //   to the old rule but only after a few seconds, by which time the restart has begun.
+          const isNew = j.instance ? (j.instance !== BOOT_ID) : (i >= 4);
+          if (isNew && j.configured) { backUp(); return; }
+        } catch (e) { /* still down — expected, and the point */ }
       }
       $("barMsg").textContent = "Saved, but the server has not come back. Check it on the machine.";
       $("saveBtn").disabled = false;
@@ -631,5 +652,21 @@ $("saveBtn").onclick = async () => {
     $("barMsg").textContent = "";
   }
 };
+
+/** ★★★ THE SERVER IS BACK — SO OFFER THE DOOR. Saving restarts the receiver, and the page used to
+ *  reload itself the moment it answered again: that lands you back on the SETTINGS page, so the
+ *  one thing you actually wanted next — to go and listen — meant typing the address by hand
+ *  (Stuart, 2026-08-06). The restart is also the only moment we can be SURE the new settings are
+ *  live, which makes it exactly the right time to offer the link.
+ *  ★ A button, not an automatic redirect: an owner who has just changed one setting may well want
+ *    to change another, and being thrown out of a settings page is worse than one more click.
+ *  ★ Enabling Save again matters too — without it the page is left in a state where nothing can
+ *    be done at all. */
+function backUp() {
+  $("saveBtn").disabled = false;
+  $("barMsg").innerHTML =
+    '<span class="ok">Receiver is back up with your settings.</span>' +
+    '<a id="gotoRx" href="/" class="gotoBtn" style="margin-left:14px">Open the receiver &rarr;</a>';
+}
 </script>
 )HTML";

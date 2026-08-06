@@ -109,8 +109,18 @@ input, textarea, [contenteditable],
    found that (Stuart, 2026-08-05: "needs to nudge left a touch").
    ★ The lesson is the general one: when a rule stops applying, its DEPENDENTS do not stop
      applying with it. position and its offsets have to be removed together. */
-#splashSpectroTip {
-  z-index: 2;
+/* ★★★ IT IS A CAPTION FOR THE SPECTROGRAM, SO IT SITS ON THE SPECTROGRAM. In the normal flow it
+   landed directly above the VIBESDR title, where it read as a heading for the PAGE — and a
+   visitor had no way to tell that "BAND ACTIVITY · 1 MIN" described the picture behind everything
+   (Stuart, 2026-08-06). Pinned to the top, just below the frequency scale drawn into the canvas,
+   it lines up with the axis it belongs to: frequencies across the top, times down the left, and
+   this naming what they are labelling.
+   ★★ TWO IDs, deliberately: `#splash > *:not(#splashSpectro)` forces position:relative on every
+      child, and a single-ID rule would lose to it — leaving `top` applied to a relative element,
+      which is a SHIFT rather than a position. That exact trap cost a bug on this page already. */
+#splash #splashSpectroTip {
+  position: absolute; top: 26px; left: 0; right: 0; text-align: center;
+  z-index: 2; pointer-events: none;
   font-size: 10px; letter-spacing: 1px; text-indent: 1px; color: var(--amber); opacity: 0.8;
 }
 #splash h1 {

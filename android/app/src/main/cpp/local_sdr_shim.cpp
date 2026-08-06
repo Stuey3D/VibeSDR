@@ -844,6 +844,23 @@ static LocalSdrShim::SolarFn       g_vsSolarFn;
 // The RSP front end as the owner last left it. -1 = never set.
 static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
 
+/** ★★★ A NEW VALUE EVERY TIME THE PROCESS STARTS. Something that restarts the server needs to know
+ *  the server it is now talking to is the NEW one — and "is it answering?" cannot tell you that,
+ *  because the OLD process is still answering for the moment between the request and its exit.
+ *  The setup page's "Receiver is back up" button appeared on that stale reply and then led to a
+ *  dead page (Stuart, 2026-08-06). Comparing an instance id cannot be fooled by timing.
+ *  ★ Not a UUID: this only has to differ from the value the caller saw a moment ago. */
+static const std::string& vsInstanceId() {
+    static const std::string id = [] {
+        char b[32];
+        snprintf(b, sizeof b, "%llx-%x",
+                 (unsigned long long)std::chrono::steady_clock::now().time_since_epoch().count(),
+                 (unsigned)getpid());
+        return std::string(b);
+    }();
+    return id;
+}
+
 /** Merge `patch` into the stored config and write it out. No-op where nothing registered a
  *  handler (the phone and Mac apps). Never throws and never blocks the caller on I/O errors —
  *  losing a saved gain is a nuisance; wedging the control path that set it is not. */
@@ -5234,6 +5251,19 @@ struct LocalSdrShim::Impl {
                              // full server with six people ahead of you are very different
                              // propositions, and only one of them is worth waiting for.
                              + ",\"waiting\":" + std::to_string(LocalSdrShim::instance().waitingCount())
+                             // ★ WHAT THIS RECEIVER COVERS, in Hz. On the identity endpoint rather
+                             // than tucked inside a page, because it answers the question a client
+                             // has BEFORE connecting: is the band I want even here? The picker can
+                             // use it, and the landing page states it in words instead of leaving
+                             // the visitor to read it off the spectrogram axis (Stuart, 2026-08-06).
+                             // ★ 0 when the centre is not locked — a free-running dongle has no
+                             //   fixed range to promise, and inventing one would be a lie.
+                             + ",\"instance\":\"" + vsInstanceId() + "\""
+                             + ",\"instance\":\"" + vsInstanceId() + "\""
+                             + ",\"rangeLo\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
+                                   ? g_vsLockedCentre.load() - LocalSdrShim::instance().captureSpanHz() / 2 : 0))
+                             + ",\"rangeHi\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
+                                   ? g_vsLockedCentre.load() + LocalSdrShim::instance().captureSpanHz() / 2 : 0))
                              + ",\"limitMin\":" + std::to_string(g_vsSessionLimitMin.load())
                              // Seconds the current listener has left, -1 = no limit / free. Lets
                              // the picker say "free in 4 min" instead of a bare "in use", which
@@ -7258,6 +7288,8 @@ bool LocalSdrShim::isBusy() const {
          || (p->audioClient && p->audioClient->isOpen()));
 }
 int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0; }
+
+double LocalSdrShim::captureSpanHz() const { return p ? p->sampleRate : 0.0; }
 
 int LocalSdrShim::waitingCount() const {
     if (!p) return 0;

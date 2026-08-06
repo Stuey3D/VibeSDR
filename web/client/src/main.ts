@@ -1898,6 +1898,16 @@ async function showSplashListeners(): Promise<void> {
     let txt = `${n} LISTENING OF ${max}`;
     if (wait > 0) txt += ` · ${wait} WAITING`;
     else if (n >= max) txt += ' · FULL';
+    // ★ SAY WHAT THIS RECEIVER COVERS, IN WORDS. The spectrogram behind the page shows it on its
+    //   axis, but reading a range off an axis is work — and it is the first thing a visitor wants
+    //   to know (Stuart, 2026-08-06). Omitted entirely when the centre is not locked: a
+    //   free-running dongle has no fixed range and a made-up one would be worse than none.
+    const lo = Number(j.rangeLo) || 0, hi = Number(j.rangeHi) || 0;
+    if (lo > 0 && hi > lo) {
+      const mhz = (v: number) => (v / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+      txt += `\n${mhz(lo)} – ${mhz(hi)} MHz`;
+    }
+    el.style.whiteSpace = 'pre-line';
     el.textContent = txt;
   } catch { /* decoration only */ }
 }
@@ -1934,20 +1944,24 @@ async function showSplashConditions(): Promise<void> {
                                : db >= 9  ? 'Good'
                                : db >= 4  ? 'Fair'
                                           : 'Poor';
+    const DIV = 'padding:1px 12px;opacity:0.95;border-right:1px solid rgba(255,184,51,0.28)';
     const rows = measured.map((m) => {
       const pred = solar?.bands?.[m.band] || '—';
+      // ★ The rule sits on the PREDICTED cell's right edge, so it runs the height of the table
+      //   automatically — a separate element would have to be measured and kept in step.
       return `<tr>
         <td style="padding:1px 12px 1px 0;color:var(--amber);text-align:right">${m.band}</td>
-        <td style="padding:1px 12px 1px 0;opacity:0.95">${pred}</td>
-        <td style="padding:1px 0;opacity:0.95">${rate(m.snrDb)}` +
+        <td style="${DIV}">${pred}</td>
+        <td style="padding:1px 0 1px 12px;opacity:0.95">${rate(m.snrDb)}` +
         `<span style="opacity:0.6"> (${m.snrDb.toFixed(0)} dB)</span></td></tr>`;
     }).join('');
     const solarLine = solar ? ` &nbsp;·&nbsp; SFI ${solar.sfi} · K ${solar.kp}` : '';
     el.innerHTML =
       `<div style="opacity:0.8;letter-spacing:1px;margin-bottom:4px">BAND CONDITIONS${solarLine}</div>` +
       `<table style="margin:0 auto;border-collapse:collapse;font-size:11px">` +
-      `<tr style="opacity:0.65"><td></td><td style="padding-right:12px">PREDICTED</td>` +
-      `<td>ACTUAL</td></tr>${rows}</table>`;
+      `<tr style="opacity:0.65"><td></td>` +
+      `<td style="padding:1px 12px;border-right:1px solid rgba(255,184,51,0.28)">PREDICTED</td>` +
+      `<td style="padding-left:12px">ACTUAL</td></tr>${rows}</table>`;
   } catch { /* decoration only */ }
 }
 

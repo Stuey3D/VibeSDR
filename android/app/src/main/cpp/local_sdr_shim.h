@@ -89,6 +89,8 @@ public:
     int  listenerCount() const;
     /** How many are waiting in the queue for a slot. 0 when nobody is. */
     int  waitingCount() const;
+    /** The captured span in Hz (the sample rate). 0 when nothing is running. */
+    double captureSpanHz() const;
     /** Seconds until the current listener's limit expires; -1 when there is no limit,
      *  nobody is listening, or the listener is exempt (loopback / admin). */
     int  occupantSecsLeft() const;
