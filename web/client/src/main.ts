@@ -2047,8 +2047,12 @@ async function drawSplashSpectrogram(): Promise<void> {
   const px = devicePixelRatio;
   g.font = `${11 * px}px ui-monospace, monospace`;
   g.textBaseline = 'top';
-  g.fillStyle = 'rgba(255,200,120,0.85)';
-  g.strokeStyle = 'rgba(255,200,120,0.20)';
+  // ★ FULL ALPHA HERE, because the canvas is dimmed TWICE downstream: opacity 0.68 on the element
+  //   and a radial black gradient over the middle of it. A label drawn at 0.85 therefore lands
+  //   near 0.4 in the corners and far less in the centre. Brightening the pen lifts the LABELS
+  //   without touching the image, which is the thing the dimming exists to hold back.
+  g.fillStyle = 'rgba(255,205,130,1)';
+  g.strokeStyle = 'rgba(255,200,120,0.30)';
   g.lineWidth = 1 * px;
 
   // Frequency, across the top. ★ THE GRID LINES ALWAYS DRAW; the LABELS are skipped when they
@@ -2089,7 +2093,11 @@ async function drawSplashSpectrogram(): Promise<void> {
     //    it — the oldest time is the one that tells you how far back the picture goes.
     //    ★ Safe to nudge because the collision rule below still runs: if the nudge pushes it into
     //      the next stamp, that one is dropped rather than stacked.
-    const kTopReserved = 19 * px;
+    //    ★★ NOW ALSO CLEAR OF THE CAPTION ROW. The BAND ACTIVITY caption is drawn into the canvas
+    //       at y=20px (see below), so a stamp pushed to 19px would share its line — fine on a wide
+    //       window where one is left-aligned and the other centred, and a collision the moment the
+    //       window narrows. Reserve both rows rather than relying on the width.
+    const kTopReserved = 34 * px;
     const ty = Math.min(H - 14 * px, Math.max(kTopReserved, y + 3 * px));
     if (ty < lastBottom + 4 * px) continue;
     g.fillText(hhmm(ms), 4 * px, ty);
@@ -2150,12 +2158,18 @@ async function drawSplashSpectrogram(): Promise<void> {
   g.strokeStyle = gridStroke;
   g.lineWidth = 1 * px;
 
+  // ★★★ DRAWN INTO THE IMAGE, NOT FLOATED OVER IT. This is a caption for the spectrogram, and as
+  //     an HTML element it sat outside the canvas's opacity and the radial dimmer — so it could
+  //     never match the frequency, time and band labels no matter how its colour was tuned, and
+  //     two values would have to be kept in step by hand forever (Stuart, 2026-08-06). Drawing it
+  //     with the same pen on the same canvas makes it match BY CONSTRUCTION.
+  const mins = Math.round((tLast - tFirst) / 60000);
+  const cap = `BAND ACTIVITY · ${mins < 60 ? mins + ' MIN' : (mins / 60).toFixed(1) + ' H'} · `
+            + `${hhmm(tFirst)}–${hhmm(tLast)}`;
+  const capW = g.measureText(cap).width;
+  g.fillText(cap, (W - capW) / 2, 20 * px);
   const tip = document.getElementById('splashSpectroTip');
-  if (tip) {
-    const mins = Math.round((tLast - tFirst) / 60000);
-    tip.textContent = `BAND ACTIVITY · ${mins < 60 ? mins + ' MIN' : (mins / 60).toFixed(1) + ' H'} · `
-                    + `${hhmm(tFirst)}–${hhmm(tLast)}`;
-  }
+  if (tip) tip.textContent = '';       // the element stays for layout; the text now lives on canvas
 }
 
 function buildModeButtons() {
