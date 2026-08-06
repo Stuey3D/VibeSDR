@@ -492,6 +492,31 @@ async function renderHw() {
   //     waterfall while you move it, not in a wizard you fill in before the radio is even
   //     listening (Stuart, 2026-08-05). Without this note the omission reads as a missing feature.
   //     ★ And the answer to "how?" has to be here too, or we have only told them what is absent.
+  // ★★★ SAY THAT A QUIET WATERFALL IS DELIBERATE. On an RSP the tuner starts at 59 dB of IF
+  //     reduction — the least gain it can produce — because approaching a gain target from the
+  //     QUIET side is the only safe direction: the alternative is starting hot and clipping on the
+  //     way down, into a front end whose aerial we know nothing about. The cost is that a
+  //     brand-new receiver shows almost nothing until its owner sets a gain, and an owner who has
+  //     not been told that will read it as broken hardware or broken software and stop there
+  //     (Stuart, 2026-08-06). A deliberate behaviour nobody explained is indistinguishable from a
+  //     fault.
+  // ★★ PER RADIO, because it is only TRUE per radio. The RSP starts at minimum; an RTL starts in
+  //    its own automatic mode; the HF+ has no variable gain to start anywhere. Printing the RSP's
+  //    story for all three would be the same misdescription this project keeps having to fix —
+  //    see the note on branching by driver in AGENTS.md.
+  const startState = hw.driver === "sdrplay"
+    ? `<b>Signals will look weak until you do.</b> This receiver starts with the tuner at
+       <b>minimum gain and maximum attenuation</b>, deliberately: we know nothing about your
+       aerial yet, and coming UP to a working gain is the only safe direction — the alternative
+       risks overloading the front end on the way down. A near-empty waterfall on a brand-new
+       server is this protection working, not a fault in the hardware or the software.`
+    : hw.driver === "airspyhf"
+    ? `The HF+ has no variable gain to set &mdash; it manages its own attenuator and preamp &mdash;
+       so there is nothing to protect here and nothing to adjust.`
+    : `This receiver starts in <b>automatic gain</b>. That is usually right, but fixing the gain by
+       hand against live signals is how you get the best out of a quiet aerial or a crowded band.`;
+
+  el.innerHTML += `<div class="note">${startState}</div>`;
   el.innerHTML += `<div class="note"><b>Gain is not set here.</b> Open this receiver in the client,
     unlock <b>Protected settings</b> with your admin password, and the gain controls appear in the
     menu &mdash; so you can set them against live signals instead of guessing. Whatever you set
