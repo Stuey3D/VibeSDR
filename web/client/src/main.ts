@@ -2053,6 +2053,26 @@ async function drawSplashSpectrogram(): Promise<void> {
   //   without touching the image, which is the thing the dimming exists to hold back.
   g.fillStyle = 'rgba(255,205,130,1)';
   g.strokeStyle = 'rgba(255,200,120,0.30)';
+
+  /** ★★★ EVERY LABEL GETS A DARK HALO. The background is live spectrum, so it cannot be designed
+   *  around: a strong carrier puts a bright vertical streak straight through a time stamp and
+   *  washes it out (Stuart, 2026-08-06). Brightening the text alone does not fix that — bright
+   *  text on a bright streak is still unreadable; it needs CONTRAST, which means darkening what
+   *  is immediately behind it.
+   *  ★★ A shadow rather than a filled rectangle: it costs no layout, needs no measuring, and
+   *     leaves no hard edges over a picture whose whole job is to be looked at. Same technique as
+   *     the HTML text on this page, so the two match.
+   *  ★ Drawn TWICE at low blur rather than once at high: a single wide blur reads as a smudge,
+   *    two tight ones read as an outline. */
+  const label = (text: string, x: number, y: number) => {
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,0.95)';
+    g.shadowBlur = 4 * px;
+    g.fillText(text, x, y);
+    g.shadowBlur = 2 * px;
+    g.fillText(text, x, y);
+    g.restore();
+  };
   g.lineWidth = 1 * px;
 
   // Frequency, across the top. ★ THE GRID LINES ALWAYS DRAW; the LABELS are skipped when they
@@ -2064,11 +2084,11 @@ async function drawSplashSpectrogram(): Promise<void> {
     const x = (W - 1) * (k / 4);
     const hz = centre - span / 2 + span * (k / 4);
     g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
-    const label = `${(hz / 1e6).toFixed(3)} MHz`;
-    const w = g.measureText(label).width;
+    const lbl = `${(hz / 1e6).toFixed(3)} MHz`;
+    const w = g.measureText(lbl).width;
     const tx = Math.max(2 * px, Math.min(W - w - 2 * px, x - w / 2));
     if (tx < lastRight + 8 * px) continue;      // would touch the previous one — leave it out
-    g.fillText(label, tx, 4 * px);
+    label(lbl, tx, 4 * px);
     lastRight = tx + w;
   }
   // Time, down the left — oldest at the top, newest at the bottom.
@@ -2100,7 +2120,7 @@ async function drawSplashSpectrogram(): Promise<void> {
     const kTopReserved = 34 * px;
     const ty = Math.min(H - 14 * px, Math.max(kTopReserved, y + 3 * px));
     if (ty < lastBottom + 4 * px) continue;
-    g.fillText(hhmm(ms), 4 * px, ty);
+    label(hhmm(ms), 4 * px, ty);
     lastBottom = ty + 12 * px;
   }
   // ── BAND LABELS ALONG THE BOTTOM ─────────────────────────────────────────────────────────
@@ -2135,15 +2155,18 @@ async function drawSplashSpectrogram(): Promise<void> {
     const full  = b.bandLabel ? `${b.bandLabel.toUpperCase()} ${b.name.replace(b.bandLabel, '').trim()}` : b.name;
     const short_ = b.bandLabel ? b.bandLabel.toUpperCase() : b.name.split(' ')[0];
     const room = x1 - x0;
-    const label = room >= g.measureText(full).width + 18 * px ? full
-                : room >= g.measureText(short_).width + 12 * px ? short_
-                : '';
-    const w = label ? g.measureText(label).width : 0;
+    // ★ `bandLbl`, not `label` — the halo helper above is called label(), and a local of the same
+    //   name would shadow it inside this loop only, so the band names would silently lose their
+    //   backing while every other label kept one.
+    const bandLbl = room >= g.measureText(full).width + 18 * px ? full
+                  : room >= g.measureText(short_).width + 12 * px ? short_
+                  : '';
+    const w = bandLbl ? g.measureText(bandLbl).width : 0;
     const mid = (x0 + x1) / 2;
     // The two framing rules sit on the label's row and stop short of the text, which is what
     // makes it read as a bracket rather than a strikethrough.
     g.beginPath();
-    if (label) {
+    if (bandLbl) {
       g.moveTo(x0 + 2 * px, bandY + 5 * px); g.lineTo(mid - w / 2 - 6 * px, bandY + 5 * px);
       g.moveTo(mid + w / 2 + 6 * px, bandY + 5 * px); g.lineTo(x1 - 2 * px, bandY + 5 * px);
     } else {
@@ -2153,7 +2176,7 @@ async function drawSplashSpectrogram(): Promise<void> {
     g.moveTo(x0 + 2 * px, bandY); g.lineTo(x0 + 2 * px, bandY + 10 * px);
     g.moveTo(x1 - 2 * px, bandY); g.lineTo(x1 - 2 * px, bandY + 10 * px);
     g.stroke();
-    if (label) g.fillText(label, mid - w / 2, bandY);
+    if (bandLbl) label(bandLbl, mid - w / 2, bandY);
   }
   g.strokeStyle = gridStroke;
   g.lineWidth = 1 * px;
@@ -2167,7 +2190,7 @@ async function drawSplashSpectrogram(): Promise<void> {
   const cap = `BAND ACTIVITY · ${mins < 60 ? mins + ' MIN' : (mins / 60).toFixed(1) + ' H'} · `
             + `${hhmm(tFirst)}–${hhmm(tLast)}`;
   const capW = g.measureText(cap).width;
-  g.fillText(cap, (W - capW) / 2, 20 * px);
+  label(cap, (W - capW) / 2, 20 * px);
   const tip = document.getElementById('splashSpectroTip');
   if (tip) tip.textContent = '';       // the element stays for layout; the text now lives on canvas
 }
