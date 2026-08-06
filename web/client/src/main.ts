@@ -520,17 +520,23 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //      at the locked centre, so falling back to it parked a first-time visitor on the
         //      middle of the band instead of the owner's landing frequency. Same precedence the
         //      line below already uses for mode: remembered > server > client default.
-        spec!.frequency = last?.hz ?? cfg.serverVfo ?? cfg.centerFreq;
+        // ★★★ CLAMPED, because a REMEMBERED frequency is from a DIFFERENT TIME. The owner may have
+        //     moved the window since — Stuart changed this receiver's centre four times in an
+        //     evening — so the last place you were listening can be nowhere this receiver now
+        //     reaches. Restored blind, it put the dial on 10 kHz on a 2.8-10.8 MHz receiver: the
+        //     server clamped the audio to the edge and the readout went on claiming 10 kHz, which
+        //     is the one thing on screen a listener cannot check (2026-08-06).
+        spec!.frequency = clampTune(last?.hz ?? cfg.serverVfo ?? cfg.centerFreq);
         // Server's mode wins over the client's built-in default on a fresh visit — the owner can
         // set the starting demodulator, and defaulting to nfm showed the wrong mode + a thin NFM
         // passband until the user clicked. A remembered session still wins over both.
         const initialMode = (last?.mode ?? cfg.serverMode ?? spec!.mode) as SDRMode;
         setMode(initialMode, !!last);
         renderFreq();
-        if (last) spec!.tune(last.hz, last.mode, { recenter: true });
+        if (last) spec!.tune(clampTune(last.hz), last.mode, { recenter: true });
         // ★ A first-time visitor must be TUNED to the landing frequency, not merely shown it —
         //   setting spec.frequency only moves the dial readout; the demodulator has to be told.
-        else if (cfg.serverVfo) spec!.tune(cfg.serverVfo, initialMode, { recenter: true });
+        else if (cfg.serverVfo) spec!.tune(clampTune(cfg.serverVfo), initialMode, { recenter: true });
       }
     },
     onSummon: () => onSummoned(),
@@ -607,6 +613,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //   Set from here because this is where the lock becomes known, and re-set on every hwinfo
       //   so a server whose window changes does not leave the filter describing the old one.
       setTunableWindow(lockedWindow());
+      // ★★★ AND CATCH ANYTHING THAT GOT OUT. Clamping each call site fixes the paths we thought
+      //     of; this fixes the ones we did not. The window only becomes KNOWN when hwinfo arrives,
+      //     which can be after a session has already been restored — so the guard belongs here,
+      //     where the answer first exists, rather than being duplicated at every tune.
+      //     ★ Silent when nothing is wrong, which is almost always: this only fires when the dial
+      //       is genuinely outside a window the server would refuse anyway.
+      const win = lockedWindow();
+      if (win && spec && spec.frequency && (spec.frequency < win[0] || spec.frequency > win[1])) {
+        const to = Math.max(win[0], Math.min(win[1], spec.frequency));
+        console.warn(`[tune] ${(spec.frequency / 1e6).toFixed(3)} MHz is outside this receiver's `
+                   + `${(win[0] / 1e6).toFixed(3)}–${(win[1] / 1e6).toFixed(3)} MHz — moved to `
+                   + `${(to / 1e6).toFixed(3)}`);
+        spec.tune(to, undefined, { recenter: true, retarget: true });
+        renderFreq();
+      }
       applyRadioCaps(radio ?? null);
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
       // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
