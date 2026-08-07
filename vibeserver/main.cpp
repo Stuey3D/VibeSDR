@@ -22,6 +22,7 @@
 #include <cctype>
 #include <fstream>
 #include <unistd.h>
+#include <rtl-sdr.h>
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
 
@@ -52,6 +53,8 @@ void onSignal(int) { g_stop = true; }
 struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
     bool        useUsb  = true;          // default: drive the dongle directly
+    int         radio   = 0;             // index into the FLAT list (dongles, then RSPs, then HF+)
+    bool        radioGiven = false;
     bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
     // ★★★ THE ADMIN / OPERATOR SETTINGS. Without these a Pi CANNOT SAFELY BE MADE PUBLIC — Stuart,
     // 2026-07-31. The admin password is not a convenience: it is what stands between a stranger and
@@ -227,6 +230,9 @@ bool parse(int argc, char** argv, Opts& o) {
         const std::string& a = args[i];
         if (a == "-h" || a == "--help") { usage(); return false; }
         else if (a == "--device") { o.device = std::atoi(need(i)); o.useUsb = true; o.deviceGiven = true; }
+        // ★ --radio indexes the FLAT list across all three drivers; --device is the old
+        //   dongle-only index, kept because existing installs pass it.
+        else if (a == "--radio")  { o.radio = std::atoi(need(i)); o.useUsb = true; o.radioGiven = true; }
         else if (a == "--tcp") {
             o.useUsb = false;
             std::string v = need(i);
@@ -802,6 +808,28 @@ int main(int argc, char** argv) {
     if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
+    } else if (o.radioGiven) {
+        // ★★★ PICK A RADIO OUT OF THE FLAT LIST — the SAME list vs_device_count() and
+        //     vs_device_name() publish, so "the third radio" means the same thing to the setup
+        //     screen, the config API and this. Until now `--device N` reached ONLY the dongle
+        //     path (its error even says "RTL-SDR index N out of range"), and there was no way at
+        //     all to name an RSP or an Airspy: you got whichever the discovery chain preferred.
+        //     With three radios on one machine that is not a preference, it is a lottery.
+        const int nRtl = (int)rtlsdr_get_device_count();
+        const int nRsp = vibe::SdrplaySource::deviceCount();
+        if (o.radio >= nRtl + nRsp) {
+            std::printf("VibeServer: using Airspy HF+ %d\n", o.radio - nRtl - nRsp);
+            port = shim.startAirspyHf(o.radio - nRtl - nRsp, o.freq, o.rate, o.gain,
+                                      o.fftSize, o.fftRate, o.mode, err);
+        } else if (o.radio >= nRtl) {
+            std::printf("VibeServer: using SDRplay RSP %d\n", o.radio - nRtl);
+            port = shim.startSdrplay(o.radio - nRtl, o.freq, o.rate, o.gain,
+                                     o.fftSize, o.fftRate, o.mode, err);
+        } else {
+            std::printf("VibeServer: using RTL-SDR %d\n", o.radio);
+            port = shim.start(-(o.radio + 1), 0, 0, o.freq, o.rate, o.gain,
+                              o.fftSize, o.fftRate, o.mode, err);
+        }
     } else if (!o.deviceGiven && vibe::AirspyHfSource::deviceCount() > 0) {
         std::printf("VibeServer: Airspy HF+ detected\n");
         port = shim.startAirspyHf(0, o.freq, o.rate, o.gain,

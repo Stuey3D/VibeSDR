@@ -44,8 +44,11 @@ while (Date.now() < deadline) {
   clearInterval(hammer);
   spec.destroy();
   cycles++;
-  // Long enough for the idle grace to fire a release when one is configured.
-  await new Promise(r => setTimeout(r, 1500));
+  // ★★★ LONGER THAN THE GRACE, OR THE RELEASE NEVER MATURES AND THE TEST PROVES NOTHING. The
+  //     first run of this probe waited 1.5 s against a 3 s grace: 6284 control messages, zero
+  //     releases, and a confident PASS that had never exercised the path it exists to test.
+  //     Set IDLE_WAIT above the server's --idle-grace.
+  await new Promise(r => setTimeout(r, Number(process.env.IDLE_WAIT || 6000)));
   if (!(await alive())) {
     console.log(`\n  FAIL ★ the server DIED after ${cycles} cycles / ${sent} control messages`);
     process.exit(1);
