@@ -22,7 +22,11 @@
 #include <cctype>
 #include <fstream>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <ctime>
+#include <cstring>
 #include <rtl-sdr.h>
+#include "rtl_eeprom.h"
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
 
@@ -374,7 +378,148 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
 namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             std::atomic<bool> g_restartRequested{false}; }
 
+
+/** ★★★ RENAME A DONGLE, THE ONE DESTRUCTIVE THING THIS PROGRAM DOES.
+ *
+ *  Two RTL dongles of the same model are indistinguishable — they ship with the same serial — so
+ *  anything that remembers per-radio settings remembers them against the WRONG radio as soon as a
+ *  second one appears. Giving each a unique serial is the fix, and it is a normal step for anyone
+ *  running several (OpenWebRX needs it too). There was simply nowhere to do it: Stuart had to boot
+ *  a Windows PC and use SDR Console (2026-08-07). A receiver that sends you to another operating
+ *  system to finish setting it up is not finished.
+ *
+ *  ★★ A BAD WRITE BRICKS THE DONGLE. Not "resets" — bricks. So, in order, and no step is optional:
+ *      1. refuse if anything else has the radio, rather than fighting it for the chip
+ *      2. read and fully PARSE the existing image; refuse anything not understood completely
+ *      3. save a byte-for-byte BACKUP to disk and print where it went
+ *      4. show old → new and make the operator type the new serial back
+ *      5. write, then reopen and READ BACK, and compare against what we meant to write
+ *  The rebuild itself is covered by test-rtl-eeprom against a real dumped image, so by the time we
+ *  get here the bytes are the part we are least worried about.
+ */
+static int setRtlSerial(int index, const std::string& newSerial) {
+    std::string err;
+    if (!vibe::rtlSerialAcceptable(newSerial, err)) {
+        std::fprintf(stderr, "VibeServer: %s\n", err.c_str());
+        return 1;
+    }
+    const uint32_t n = rtlsdr_get_device_count();
+    if (index < 0 || (uint32_t)index >= n) {
+        std::fprintf(stderr, "VibeServer: there is no RTL-SDR %d (%u found)\n", index, n);
+        return 1;
+    }
+    rtlsdr_dev_t* dev = nullptr;
+    if (rtlsdr_open(&dev, (uint32_t)index) != 0 || !dev) {
+        std::fprintf(stderr,
+            "VibeServer: could not open that dongle — something else is using it.\n"
+            "            Stop the server first:  sudo systemctl stop vibeserver\n");
+        return 1;
+    }
+    uint8_t buf[vibe::RTL_EEPROM_SIZE] = {0};
+    if (rtlsdr_read_eeprom(dev, buf, 0, sizeof buf) < 0) {
+        std::fprintf(stderr, "VibeServer: could not read the dongle's memory — nothing was changed.\n");
+        rtlsdr_close(dev); return 1;
+    }
+    vibe::RtlEeprom cur;
+    if (!vibe::rtlEepromParse(buf, sizeof buf, cur, err)) {
+        std::fprintf(stderr,
+            "VibeServer: %s\n"
+            "            Refusing to write to a chip we do not fully understand — the parts we\n"
+            "            could not read are exactly the parts we would destroy. Nothing changed.\n",
+            err.c_str());
+        rtlsdr_close(dev); return 1;
+    }
+    std::vector<uint8_t> want;
+    if (!vibe::rtlEepromWithSerial(cur, newSerial, want, err)) {
+        std::fprintf(stderr, "VibeServer: %s — nothing was changed.\n", err.c_str());
+        rtlsdr_close(dev); return 1;
+    }
+
+    // ── 3. The backup, before anything is written ───────────────────────────────────────────
+    std::string dir = "/var/lib/vibeserver/eeprom";
+    ::mkdir("/var/lib/vibeserver", 0755);
+    ::mkdir(dir.c_str(), 0755);
+    char stamp[32]; const std::time_t t = std::time(nullptr);
+    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&t));
+    const std::string backup = dir + "/" + (cur.serial.empty() ? "unnamed" : cur.serial)
+                             + "-" + stamp + ".bin";
+    if (FILE* f = std::fopen(backup.c_str(), "wb")) {
+        const bool wrote = std::fwrite(buf, 1, sizeof buf, f) == sizeof buf;
+        std::fclose(f);
+        if (!wrote) {
+            std::fprintf(stderr, "VibeServer: the backup did not write fully — stopping here.\n");
+            rtlsdr_close(dev); return 1;
+        }
+    } else {
+        // ★ NO BACKUP, NO WRITE. Without it a failed write leaves nothing to restore from, and
+        //   this is the operation where that matters most.
+        std::fprintf(stderr, "VibeServer: could not save a backup to %s — stopping here.\n"
+                             "            (try again with sudo)\n", backup.c_str());
+        rtlsdr_close(dev); return 1;
+    }
+
+    // ── 4. Say exactly what is about to happen, and make them type it ──────────────────────
+    std::printf("\n  Dongle %d:  %s %s\n", index, cur.manufacturer.c_str(), cur.product.c_str());
+    std::printf("  Serial:    %s  ->  %s\n", cur.serial.c_str(), newSerial.c_str());
+    std::printf("  Backup:    %s\n\n", backup.c_str());
+    std::printf("  This writes to the dongle's memory. If it is interrupted the dongle can be\n"
+                "  left unusable. Do not unplug it, and do not do this on a machine that might\n"
+                "  lose power.\n\n");
+    std::printf("  Type the new serial to confirm, or anything else to cancel: ");
+    std::fflush(stdout);
+    char typed[128] = {0};
+    if (!std::fgets(typed, sizeof typed, stdin)) { rtlsdr_close(dev); return 1; }
+    std::string confirm(typed);
+    while (!confirm.empty() && (confirm.back() == '\n' || confirm.back() == '\r')) confirm.pop_back();
+    if (confirm != newSerial) {
+        std::printf("\n  Cancelled. Nothing was changed.\n");
+        rtlsdr_close(dev); return 1;
+    }
+
+    // ── 5. Write, then prove it ────────────────────────────────────────────────────────────
+    if (rtlsdr_write_eeprom(dev, want.data(), 0, (uint16_t)want.size()) < 0) {
+        std::fprintf(stderr,
+            "\nVibeServer: the write failed. The dongle is probably untouched, but if it now\n"
+            "            misbehaves, restore it from:  %s\n", backup.c_str());
+        rtlsdr_close(dev); return 1;
+    }
+    rtlsdr_close(dev);
+
+    // ★★ READ IT BACK FROM A FRESH HANDLE. Verifying from the same open handle would be happy to
+    //    hand us a cached copy of what we just sent, which proves nothing about the chip.
+    dev = nullptr;
+    if (rtlsdr_open(&dev, (uint32_t)index) == 0 && dev) {
+        uint8_t check[vibe::RTL_EEPROM_SIZE] = {0};
+        const bool readOk = rtlsdr_read_eeprom(dev, check, 0, sizeof check) >= 0;
+        rtlsdr_close(dev);
+        if (readOk && std::memcmp(check, want.data(), want.size()) == 0) {
+            std::printf("\n  Done, and verified by reading it back.\n"
+                        "  Unplug the dongle and plug it in again for the new serial to appear.\n\n");
+            return 0;
+        }
+        std::fprintf(stderr,
+            "\nVibeServer: the dongle did not read back what we wrote.\n"
+            "            Restore it with the backup before using it:  %s\n", backup.c_str());
+        return 1;
+    }
+    std::printf("\n  Written. Unplug the dongle and plug it in again, then check the serial.\n"
+                "  Backup, if you need it: %s\n\n", backup.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    // ★ Handled before everything else: it never starts a server, and it must work on a machine
+    //   whose config is broken or absent — renaming a dongle is often what you do BEFORE setup.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--set-rtl-serial") {
+            if (i + 2 >= argc) {
+                std::fprintf(stderr, "usage: vibeserver --set-rtl-serial <dongle-number> <new-serial>\n");
+                return 1;
+            }
+            return setRtlSerial(std::atoi(argv[i + 1]), argv[i + 2]);
+        }
+    }
+
     // ★★★ LINE-BUFFER STDOUT, ALWAYS. Under systemd stdout is a PIPE, so libc block-buffers it —
     //     and every status message this server prints sat in a 4 KB buffer until the process
     //     EXITED. `journalctl -u vibeserver` showed nothing while it ran, then dumped the whole
