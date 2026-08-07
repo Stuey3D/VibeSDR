@@ -101,6 +101,7 @@ endif()
 add_executable(vibeserver
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/rtl_eeprom.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/radios.cpp"
     $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
 if(CURSES_FOUND)
   target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)

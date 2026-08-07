@@ -26,6 +26,7 @@
 #include <algorithm>
 
 #include "vibeserver_config.h"
+#include "radios.h"
 #include "vibeserver_api.h"
 
 namespace {
@@ -214,12 +215,23 @@ void message(int row, int pair, const char* s) {
 // setup completes, so nothing needs a name until the browser page — and the URL this prints is an
 // IP ADDRESS, which works with no name at all. Asking here and editing there is the two-editors
 // drift this whole change exists to kill. The browser owns the name.
-bool runWizard(vsconfig::Config& cfg) {
-    // ── Step 1: the radio ────────────────────────────────────────────────────
+bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
+               std::vector<bool>& serve) {
+    // ── Step 1: which radios to serve ────────────────────────────────────────
+    // ★★★ ALL OF THEM, TICKED, BY DEFAULT. Someone who plugged three radios in wants three
+    //     receivers; making them opt each one in would be asking a question they have already
+    //     answered with their hands. Space unticks the odd one out — the dongle that is on loan to
+    //     another program, or the one they have not decided about yet.
+    // ★★ AND THIS IS ONLY HALF THE GATE. Ticking a radio here says "serve this"; it still has to be
+    //    configured in its own tab in the browser before it goes on air. The two are separate on
+    //    purpose — see BRIEF-multi-radio.md.
+    int cursor = 0;
     while (true) {
         header("First-time setup  ·  step 1 of 3");
-        std::string radio = radioLine();
-        if (radio.empty()) {
+        radios = vibe::detectRadios();
+        if (serve.size() != radios.size()) serve.assign(radios.size(), true);
+
+        if (radios.empty()) {
             message(4, 2, "No radio detected.");
             mvprintw(6, 2, "Plug an SDR into this machine, then press  r  to look again.");
             mvprintw(7, 2, "Supported: RTL-SDR, Airspy HF+, SDRplay RSP.");
@@ -229,14 +241,60 @@ bool runWizard(vsconfig::Config& cfg) {
             if (c == 'q') return false;
             continue;                      // ★ Never proceed to a server that cannot receive.
         }
-        message(4, 1, "Radio found:");
-        mvprintw(4, 20, "%s", radio.c_str());
-        mvprintw(6, 2, "This is the receiver VibeServer will serve.");
-        attron(A_BOLD); mvprintw(8, 2, "Enter = continue    r = look again    q = quit"); attroff(A_BOLD);
+
+        message(4, 1, radios.size() == 1 ? "Radio found:" : "Radios found:");
+        int row = 6;
+        for (size_t i = 0; i < radios.size(); i++) {
+            const bool here = ((int)i == cursor);
+            if (here) attron(A_REVERSE);
+            mvprintw(row, 2, " [%c] %-34s ", serve[i] ? 'x' : ' ', radios[i].name.c_str());
+            if (here) attroff(A_REVERSE);
+            attron(COLOR_PAIR(4));
+            mvprintw(row, 42, "%s", radios[i].serial.empty() ? "" : radios[i].serial.c_str());
+            attroff(COLOR_PAIR(4));
+            row++;
+        }
+        row++;
+        attron(COLOR_PAIR(4));
+        if (radios.size() > 1) {
+            mvprintw(row++, 2, "Each ticked radio becomes its own receiver, with its own settings.");
+            mvprintw(row++, 2, "You will set each one up in the browser afterwards.");
+        } else {
+            mvprintw(row++, 2, "This is the receiver VibeServer will serve.");
+        }
+        // ★★ RTL dongles ship with the SAME serial, and two of them are then indistinguishable —
+        //    so settings would follow the wrong radio. Say so HERE, where the owner can still act,
+        //    rather than letting them discover it when their locked frequency range moves.
+        if (vibe::serialsCollide(radios)) {
+            row++;
+            attron(COLOR_PAIR(2));
+            mvprintw(row++, 2, "Two radios report the same serial number, so they cannot be told apart.");
+            attroff(COLOR_PAIR(2));
+            mvprintw(row++, 2, "Give one a new one:  vibeserver --set-rtl-serial <number> <serial>");
+        }
+        attroff(COLOR_PAIR(4));
+
+        int ticked = 0;
+        for (bool b : serve) if (b) ticked++;
+        row++;
+        attron(A_BOLD);
+        mvprintw(row, 2, radios.size() > 1 ? "Space = serve / do not serve    Enter = continue    r = look again    q = quit"
+                                           : "Enter = continue    r = look again    q = quit");
+        attroff(A_BOLD);
+        if (ticked == 0) {
+            attron(COLOR_PAIR(2));
+            mvprintw(row + 1, 2, "Tick at least one radio — a server with none cannot receive anything.");
+            attroff(COLOR_PAIR(2));
+        }
         refresh();
-        int c = getch();
+
+        const int c = getch();
         if (c == 'q') return false;
-        if (c == '\n' || c == KEY_ENTER) break;
+        if (c == 'r') { serve.clear(); continue; }
+        if (c == KEY_UP   && cursor > 0) cursor--;
+        if (c == KEY_DOWN && cursor + 1 < (int)radios.size()) cursor++;
+        if (c == ' ' && cursor < (int)serve.size()) serve[cursor] = !serve[cursor];
+        if ((c == '\n' || c == KEY_ENTER) && ticked > 0) break;
     }
 
     // ── Step 2: the admin password — MANDATORY ───────────────────────────────
@@ -498,7 +556,9 @@ int vibeserverTui() {
         wizardWanted = true;
     }
     if (wizardWanted) {
-        if (!runWizard(cfg)) { endwin(); return 0; }
+        std::vector<vibe::DetectedRadio> detected;
+        std::vector<bool> serve;
+        if (!runWizard(cfg, detected, serve)) { endwin(); return 0; }
         cfg.configured = false;       // ★★ The BROWSER finishes setup; this only makes it reachable.
         std::string serr;
         if (!saveConfig(cfg, serr)) {

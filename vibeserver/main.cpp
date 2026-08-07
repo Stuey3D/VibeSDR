@@ -27,6 +27,7 @@
 #include <cstring>
 #include <rtl-sdr.h>
 #include "rtl_eeprom.h"
+#include "radios.h"
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
 
@@ -529,23 +530,16 @@ int main(int argc, char** argv) {
     //   serial at all and is identified by a serial its own API hands out.
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--list-radios") {
-            const int nRtl = (int)rtlsdr_get_device_count();
-            const int nRsp = vibe::SdrplaySource::deviceCount();
-            const int nAhf = vibe::AirspyHfSource::deviceCount();
-            if (nRtl + nRsp + nAhf == 0) { std::printf("No radios found.\n"); return 1; }
+            const auto rs = vibe::detectRadios();
+            if (rs.empty()) { std::printf("No radios found.\n"); return 1; }
             std::printf("\n  #  driver    radio\n");
-            for (int k = 0; k < nRtl; k++) {
-                char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
-                rtlsdr_get_device_usb_strings((uint32_t)k, mfr, prd, ser);
-                std::printf("  %d  rtlsdr    %s %s  (serial %s)\n", k, mfr, prd,
-                            ser[0] ? ser : "none");
-            }
-            for (int k = 0; k < nRsp; k++)
-                std::printf("  %d  sdrplay   %s\n", nRtl + k,
-                            vibe::SdrplaySource::deviceName(k).c_str());
-            for (int k = 0; k < nAhf; k++)
-                std::printf("  %d  airspyhf  %s\n", nRtl + nRsp + k,
-                            vibe::AirspyHfSource::deviceName(k).c_str());
+            for (const auto& r : rs)
+                std::printf("  %d  %-9s %s%s%s\n", r.index, r.driver.c_str(), r.name.c_str(),
+                            r.serial.empty() ? "" : "  (serial ",
+                            r.serial.empty() ? "" : (r.serial + ")").c_str());
+            if (vibe::serialsCollide(rs))
+                std::printf("\n  ! Two radios report the same serial, so they cannot be told apart.\n"
+                            "    Give one a new one:  vibeserver --set-rtl-serial <#> <serial>\n");
             std::printf("\n  Pick one with:  vibeserver --radio <#>\n\n");
             return 0;
         }
