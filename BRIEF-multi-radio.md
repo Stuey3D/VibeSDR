@@ -50,6 +50,19 @@ multi-dongle owners, and the page should treat it as such — show each radio's 
 offer the rename next to it rather than only when something has already gone wrong. It also means
 we can point at OWRX's own requirement instead of asking the owner to take our word for it.
 
+★★ **AND IT COMES FROM THREE DIFFERENT PLACES.** Measured on the Pi with all three attached:
+
+```
+  0  rtlsdr    RTLSDRBlog Blog V4  (serial vibe-rtl-01)     ← USB serial, and RENAMEABLE
+  1  sdrplay   SDRplay RSP1B 240513CA60                     ← the SDRplay API's own serial
+  2  airspyhf  Airspy HF+ (DD52B980BE4946DA)                ← USB serial
+```
+
+★ **An RSP presents no USB serial at all** — nothing in sysfs, so anything reading identity from
+the USB layer finds an empty string and falls back to an index. Its serial comes from
+`sdrplay_api_DeviceT`. The identity resolver must therefore ask the DRIVER, per driver, and must
+not be written against the USB bus as though that were the single source of truth.
+
 So identity is resolved in this order:
 
 1. **USB serial, if it is unique among the radios present.** Best case: the radio can be moved to
@@ -161,7 +174,8 @@ Two ways, and the second is the one to build:
 
 ## Order of work
 
-1. **`--radio N`** — select any driver from the flat list. ✅ done 2026-08-07; until then `--device`
+1. **`--radio N`** and **`--list-radios`** — select any driver from the flat list, and show what
+   the server sees. ✅ done 2026-08-07; until then `--device`
    reached only the dongle and discovery was a preference chain (Airspy → RSP → RTL), so with three
    radios plugged in *which one you got was a lottery*. It moved Stuart's own demo off the RSP.
 2. Config schema: `radios[]`, identity resolution (serial → port path), duplicate-serial
@@ -173,7 +187,10 @@ Two ways, and the second is the one to build:
    enabled+configured radio.
 5. Setup page tabs, per-tab save, footer save-and-reboot.
 6. Landing page aggregation.
-7. EEPROM serial rename in the setup page — shown next to every dongle's serial, not only on
+7. ✅ **EEPROM serial rename** — `vibeserver --set-rtl-serial <n> <serial>`, done 2026-08-07 and
+   proven end to end on the Blog V4 (`00000003` → `vibe-rtl-01`, verified across a reboot).
+   ★ The new serial only appears once the dongle LOSES POWER: a reboot does it, unbind/bind and
+     toggling `authorized` do not. Still to do: the same thing in the setup page — shown next to every dongle's serial, not only on
    a collision, since multi-dongle owners expect to do this (OWRX requires it too).
 
 ## Related work landing at the same time
