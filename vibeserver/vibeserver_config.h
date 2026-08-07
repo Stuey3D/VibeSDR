@@ -17,6 +17,7 @@
 // never registered and the endpoints report that they are unavailable.
 #pragma once
 #include <string>
+#include <vector>
 
 namespace vsconfig {
 
@@ -134,6 +135,85 @@ struct Config {
     int  port = 0;
     bool web = true;
 };
+
+/** ★★★ ONE RADIO, INSIDE A SERVER THAT MAY HAVE SEVERAL.
+ *
+ *  Deliberately holds ONLY what differs per radio. Everything the machine shares — the admin
+ *  password, the PIN, where the receiver is, the update schedule — stays in ServerConfig and is
+ *  stated once, so it cannot drift between radios.
+ *
+ *  ★★ IDENTITY IS NOT AN INDEX. Enumeration order changes when a dongle is plugged into a
+ *     different socket or a new one is added, and settings that follow the order rather than the
+ *     hardware then apply to the WRONG radio — including a locked frequency range, which is the
+ *     one that puts a receiver somewhere its owner never agreed to.
+ *  ★★ AND THE SOURCE DIFFERS BY DRIVER, measured on the Pi with all three attached: an RTL dongle
+ *     and an Airspy HF+ carry USB serials, but an **SDRplay RSP presents no USB serial at all** —
+ *     its serial comes from the SDRplay API. So identity is asked of the DRIVER, never of the USB
+ *     bus as though that were the single source of truth.
+ *  ★ RTL serials are not unique either (stock dongles are all "00000001"), which is what `usbPath`
+ *    is for and why `vibeserver --set-rtl-serial` exists. */
+struct RadioConfig {
+    std::string serial;      // as the DRIVER reports it — empty until the radio is first seen
+    std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf"
+    std::string usbPath;     // physical socket, e.g. "1-2" — the tie-break when serials collide
+    std::string label;       // what the owner calls it; shown to listeners
+
+    /** ★★ TWO GATES, AND THEY MEAN DIFFERENT THINGS. `enabled` is the owner saying "serve this
+     *  radio" (the TUI toggle); `configured` is "I have said what it should do" (its setup tab was
+     *  saved). Both must be true to serve. Collapsing them would either put a half-set-up receiver
+     *  on air at whatever the defaults happen to be, or lose an owner's settings when they
+     *  temporarily take a radio out of service. `enabled` wins: un-ticking a fully configured radio
+     *  takes it off the air and KEEPS its settings. */
+    bool enabled = true;
+    bool configured = false;
+
+    int  port = 0;           // 0 = assigned automatically; bound to loopback behind the front door
+
+    // Everything below mirrors the same field in Config, for this radio alone.
+    Mode   mode = Mode::SingleUser;
+    double freq = 9'410'000, rate = 2'400'000, lockFreq = 0, lockRate = 0;
+    int    gain = -1, lnaState = -1, ifGr = -1, ifAgc = -1;
+    std::string demodMode = "am";
+    double landingFreq = 0;
+    int    users = 1;
+    double maxBw = 0, maxFps = 0, fftRate = 15;
+    int    uncompressed = 0;
+    bool   forceIdleSaver = false, releaseWhenIdle = false;
+    double idleGrace = 300;
+    bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
+};
+
+/** The whole machine: what every radio shares, plus the radios themselves. */
+struct ServerConfig {
+    bool configured = false;
+    Sharing sharing = Sharing::Local;
+    std::string place, country, locator, lat, lon;   // ★ the SITE — one machine, one location
+    std::string name;                                // the machine's name, shown above the list
+    bool        mdnsAdvertise = true;
+    std::string mdnsName;
+    std::string pin, adminPass;
+    int         sessionLimitMin = 0;
+    int         updateSrvHour = -1, updateSrvDay = -1;
+    int         updateAllHour = -1, updateAllDay = -1;
+    int         adminIdleMin = 30;
+    std::string cpuGovernor = "performance";
+    int         port = 0;      // the ONE port that leaves the machine
+    bool        web = true;
+    std::vector<RadioConfig> radios;
+};
+
+/** ★★★ READS BOTH FORMATS. A file with no `radios` array is today's single-radio config, and is
+ *  migrated into a one-entry list — enabled AND configured, because it is a receiver that is
+ *  already working and must not be taken off the air by gaining a gate it never had. */
+bool loadServer(const std::string& path, ServerConfig& cfg, std::string& err);
+bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& err);
+std::string toJson(const ServerConfig& cfg);
+bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
+
+/** Flatten the shared settings and one radio's settings into the Config a single VibeServer
+ *  process consumes. ★ This is what makes process-per-radio cheap: the existing single-radio code
+ *  never learns that it has siblings. */
+Config effectiveFor(const ServerConfig& srv, const RadioConfig& radio);
 
 /** Read `path`. Returns false and leaves `cfg` untouched if the file is absent or unreadable;
  *  a malformed file is reported in `err` and treated as absent — a receiver must not stay
