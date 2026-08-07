@@ -178,13 +178,20 @@ Two ways, and the second is the one to build:
    the server sees. ✅ done 2026-08-07; until then `--device`
    reached only the dongle and discovery was a preference chain (Airspy → RSP → RTL), so with three
    radios plugged in *which one you got was a lottery*. It moved Stuart's own demo off the RSP.
-2. Config schema: `radios[]`, identity resolution (serial → port path), duplicate-serial
-   detection, and migration from today's single-radio file.
-   ★ An existing install must come out of this with its current radio configured and enabled —
-   the "not configured, so not served" gate must never silently take a working receiver off air.
-3. TUI radio list with the space toggle.
-4. systemd template unit `vibeserver@<serial>.service`, and a supervisor that starts one per
-   enabled+configured radio.
+2. ✅ **Config schema** — `ServerConfig` + `radios[]`, `effectiveFor()`, migration from today's
+   single-radio file, duplicate-serial detection. 32 checks, and the migration verified against the
+   demo Pi's REAL config: old file in, locked 6.8 MHz / 30 listeners / shared channelizer out.
+   ★ Still to do: physical-port fallback when serials collide (detection is in, the fallback is not).
+3. ✅ **TUI radio list** with the space toggle, and the server reading its own radio out of the
+   machine config (`--radio` by index OR serial).
+   ★ `--radio` by SERIAL exists because indices MOVE: a radio in use by another program does not
+     enumerate at all, so the Airspy silently became index 1 instead of 2 while the demo itself was
+     pinned to `--radio 1`. The demo is now pinned by serial.
+4. ◀ **NEXT** — systemd template `vibeserver@<serial>.service` plus a supervisor that starts one
+   process per enabled+configured radio.
+   ★★ BACK-COMPATIBILITY IS THE HARD PART, not the units. Every install in the field has
+      `vibeserver.service` enabled, and an upgrade must not leave that unit pointing at nothing.
+      Whatever replaces it has to keep a single-radio machine working without the owner acting.
 5. Setup page tabs, per-tab save, footer save-and-reboot.
 6. Landing page aggregation.
 7. ✅ **EEPROM serial rename** — `vibeserver --set-rtl-serial <n> <serial>`, done 2026-08-07 and
