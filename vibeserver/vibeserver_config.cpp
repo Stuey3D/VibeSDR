@@ -154,6 +154,7 @@ std::string toJson(const Config& c) {
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
     N("uncompressed", c.uncompressed);
     B("forceIdleSaver", c.forceIdleSaver);
+    B("releaseWhenIdle", c.releaseWhenIdle);
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
     S("cpuGovernor", c.cpuGovernor);
@@ -222,6 +223,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "fftRate", d))     c.fftRate = d;
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     getBool(s, "forceIdleSaver", c.forceIdleSaver);
+    getBool(s, "releaseWhenIdle", c.releaseWhenIdle);
     if (getNum(s, "idleGrace", d))   c.idleGrace = d;
     getBool(s, "rfNotch", c.rfNotch);
     getBool(s, "dabNotch", c.dabNotch);

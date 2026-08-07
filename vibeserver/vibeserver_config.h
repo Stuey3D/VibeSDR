@@ -110,6 +110,10 @@ struct Config {
     double maxBw = 0, maxFps = 0, fftRate = 15;
     int    uncompressed = 0;
     bool   forceIdleSaver = false;
+    /** ★ Let another program (OpenWebRX, a decoder) open the SDR while nobody is listening.
+     *  OFF by default: it costs the spectrogram and the band-conditions history, which almost
+     *  every server would rather keep. See LocalSdrShim::releaseRadio. */
+    bool   releaseWhenIdle = false;
     double idleGrace = 300;
 
     // Front end

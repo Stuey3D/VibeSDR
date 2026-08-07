@@ -424,6 +424,12 @@ static std::atomic<bool>   g_vsZoomSpectrum{true};
 //       its samples (see pauseCaptureIdle), so an idle receiver already draws what a busy one does.
 //     ★ It also guarantees the AGC settle finishes — see the kick, which must not be abandoned
 //       half-done by someone who connected and left (Stuart, 2026-08-03).
+/** ★★ OFF BY DEFAULT, AND IT MUST STAY THAT WAY. Almost every server is the only thing
+ *  using its radio, and for them releasing it buys nothing and costs the spectrogram and
+ *  the band-conditions history. This is for the machine that shares one SDR with
+ *  OpenWebRX or a decoder, where holding the device idle blocks the other program
+ *  entirely (Stuart, 2026-08-07: "just dont enable it by default"). */
+std::atomic<bool> g_vsReleaseWhenIdle{false};
 static std::atomic<double> g_vsIdleGraceSec{300.0};
 static std::atomic<bool>   g_vsRfNotch{false};
 static std::atomic<bool>   g_vsDabNotch{false};
@@ -7258,7 +7264,11 @@ struct LocalSdrShim::Impl {
      *  every 2 s — no new thread, and nothing to join on shutdown. */
     void armIdlePark() {
         const double g = g_vsIdleGraceSec.load();
-        if (g <= 0.0) { pauseCaptureIdle(); return; }         // grace disabled: old behaviour
+        if (g <= 0.0) {                                      // grace disabled: act at once
+            if (g_vsReleaseWhenIdle.load()) LocalSdrShim::instance().releaseRadio();
+            else                            pauseCaptureIdle();
+            return;
+        }
         idleParkDueAt.store(nowSecs() + g);
         LOGI("no listeners — idle park in %.0fs (grace period)", g);
     }
@@ -7268,6 +7278,15 @@ struct LocalSdrShim::Impl {
         //   only ever scheduled, so it is cancelled before it can happen.
         if (idleParkDueAt.exchange(0.0) > 0.0)
             LOGI("listener returned within the grace period — idle park cancelled");
+        // ★★ TAKE THE RADIO BACK FIRST, because everything below assumes a device. If another
+        //    program has it we carry on WITHOUT one rather than failing the connection: the
+        //    listener gets the server, the band plan and a clear reason, which is far better than
+        //    a socket that refuses to open or a waterfall that is simply blank.
+        if (radioReleased.load()) {
+            std::string err;
+            if (!LocalSdrShim::instance().reacquireRadio(err))
+                LOGI("listener arrived but the radio is not ours to take back — %s", err.c_str());
+        }
         if (!captureIdle.exchange(false)) return;             // wasn't paused
         // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
         // is null, so the dongle branch called launchCapture() anyway — rtlsdr_read_async(NULL)
@@ -7570,6 +7589,16 @@ struct LocalSdrShim::Impl {
                     const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6;
                     if (!empty) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
+                    else if (g_vsReleaseWhenIdle.load()) {
+                        // ★★★ RELEASE, NOT PARK — and note this bypasses the shared-receiver rule
+                        //     that pauseCaptureIdle enforces. Parking is skipped on a locked
+                        //     receiver to keep the RSP's AGC converged; here the operator has
+                        //     explicitly asked for the device to be let go, and keeping it for the
+                        //     AGC's sake would defeat the entire feature. The re-converge on the
+                        //     next listener is the price, and the setup page says so.
+                        idleParkDueAt.store(0.0);
+                        LocalSdrShim::instance().releaseRadio();
+                    }
                     else { idleParkDueAt.store(0.0); pauseCaptureIdle(); }
                 }
 
@@ -8320,6 +8349,7 @@ void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store
 void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
 void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
+void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
 void LocalSdrShim::setVibeServerDabNotch(bool on) { g_vsDabNotch.store(on); }
 void LocalSdrShim::setVibeServerMaxUsers(int n) { g_vsMaxUsers.store(n > 1 ? n : 1); }

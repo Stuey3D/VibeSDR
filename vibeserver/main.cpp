@@ -67,6 +67,7 @@ struct Opts {
     int         updateSrvHour = -1, updateSrvDay = -1;   // VibeServer only
     int         updateAllHour = -1, updateAllDay = -1;   // every package
     bool        forceIdleSaver  = false; // listeners may not switch idle power-saving off
+    bool        releaseWhenIdle = false; // hand the SDR to another program while nobody listens
     int         uncompressed    = 0;     // 0 = off, 1 = listener's choice, 2 = compatibility only
     // Receiver identity — published to every listener, and the reason a directory entry is useful.
     std::string rxName, rxPlace, rxIso, rxGrid, rxLat, rxLon;
@@ -267,6 +268,7 @@ bool parse(int argc, char** argv, Opts& o) {
         //     Now there is an honest way to say it, and the setup screen can offer it.
         else if (a == "--serve")          { /* config supplies everything */ }
         else if (a == "--force-idle-saver") o.forceIdleSaver = true;
+        else if (a == "--release-when-idle") o.releaseWhenIdle = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
             o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }
         else if (a == "--name")     o.rxName  = need(i);
@@ -330,6 +332,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.maxBw = c.maxBw; o.maxFps = c.maxFps; o.fftRate = c.fftRate;
     o.uncompressed = c.uncompressed;
     o.forceIdleSaver = c.forceIdleSaver;
+    o.releaseWhenIdle = c.releaseWhenIdle;
     o.idleGrace = c.idleGrace;
     o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
     o.port = c.port; o.web = c.web;
@@ -353,6 +356,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.maxBw = o.maxBw; c.maxFps = o.maxFps; c.fftRate = o.fftRate;
     c.uncompressed = o.uncompressed;
     c.forceIdleSaver = o.forceIdleSaver;
+    c.releaseWhenIdle = o.releaseWhenIdle;
     c.idleGrace = o.idleGrace;
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
     c.port = o.port; c.web = o.web;
@@ -712,6 +716,7 @@ int main(int argc, char** argv) {
     //   macOS and Android must NOT — see setMaintenanceActions in local_sdr_shim.h.
     LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all");
     LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
+    LocalSdrShim::setVibeServerReleaseWhenIdle(o.releaseWhenIdle);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
     // ★ Identity, published to every listener — and what makes a directory entry worth anything.
     // Built here in exactly the shape the Mac app produces (VibeServerApp.swift locationJson), so

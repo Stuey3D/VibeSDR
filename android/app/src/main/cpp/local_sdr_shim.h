@@ -59,6 +59,8 @@ public:
     /** Require listeners to keep their idle power-saving on (they normally choose). For a host on
      *  solar/cellular where saving power outranks a listener's preference. Set BEFORE start(). */
     static void setVibeServerForceIdleSaver(bool on);
+    /** Hand the SDR to another program while nobody is listening. Off by default. */
+    static void setVibeServerReleaseWhenIdle(bool on);
     /** Tell the connected client the host is looking for it — the browser tab flashes and tries to
      *  focus itself. Uses the socket we already have, so no browser automation and no permission
      *  prompt. No-op when nobody is listening. */
