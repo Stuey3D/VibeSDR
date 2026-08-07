@@ -31,7 +31,18 @@
 
 namespace {
 
-const char* CONF = "/etc/vibeserver/config.json";
+/** ★★ THE SAME FILE THE SERVER READS, INCLUDING THE OVERRIDE. This was hard-coded while the
+ *  server honoured $VIBESERVER_CONFIG, so the two could edit different files while both believing
+ *  they were editing "the" config — and a setting changed here would simply never appear. It also
+ *  made the setup screens untestable without touching a live receiver's real configuration. */
+static const std::string& confPath() {
+    static const std::string p = [] {
+        const char* e = getenv("VIBESERVER_CONFIG");
+        return (e && *e) ? std::string(e) : std::string("/etc/vibeserver/config.json");
+    }();
+    return p;
+}
+#define CONF (confPath().c_str())
 
 std::string run(const char* cmd) {
     std::string out; char buf[256];
