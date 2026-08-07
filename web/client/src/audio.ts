@@ -59,6 +59,18 @@ class VibeSink extends AudioWorkletProcessor {
     // obvious once the waterfall was tied to the display refresh and stopped hitching.
     this.target = 48000 * ${JITTER_SEC};
     this.port.onmessage = (e) => {
+      // ★★★ FLUSH ON RETUNE. Everything already queued was demodulated at the OLD frequency, so
+      //     playing it out after the dial has moved is just the previous station arriving late —
+      //     which is exactly what "the audio is a second behind the waterfall when I tune" is
+      //     (Stuart, 2026-08-07). Dropping it costs a few milliseconds of silence and removes the
+      //     entire lag; keeping it buys nothing anybody wants to hear.
+      //     * Re-arm rather than play immediately: started=false makes the buffer refill to
+      //       its target before playout resumes, the same protection a cold start gets.
+      //     * NOTE: this block lives inside a template literal — no backticks in here.
+      if (e.data && e.data.flush) {
+        this.r = this.w; this.filled = 0; this.started = false;
+        return;
+      }
       const { l, r } = e.data;
       const n = l.length;
       if (this.filled + n > this.cap) {   // overflow: drop oldest
@@ -73,6 +85,23 @@ class VibeSink extends AudioWorkletProcessor {
       }
       this.w = (this.w + n) % this.cap;
       this.filled += n;
+      // ★★★ BOUND THE LATENCY, do not just bound the memory. The only trim here was the overflow
+      //     guard above, which fires at 2 SECONDS — so if frames arrive even slightly faster than
+      //     the device drains them (they do: the server's clock and the sound card's are not the
+      //     same crystal), the buffer creeps up and STAYS there. The audio then lags the waterfall
+      //     by however far it crept, permanently, and nothing ever brings it back. That is the
+      //     other half of "the audio can be up to a full second behind" (Stuart, 2026-08-07).
+      //     ★★ Trim back to the target, not to zero: dropping to empty would re-arm and stutter.
+      //        The discarded samples are the OLDEST, so what is thrown away is the stalest audio.
+      //     ★ The margin is deliberately generous (2.5x). Trimming near the target would fight
+      //       normal jitter and click constantly; at this depth it fires rarely, and a rare small
+      //       discontinuity is far cheaper than a permanent half-second of lag.
+      const ceiling = this.target * 2.5;
+      if (this.filled > ceiling) {
+        const drop = this.filled - this.target;
+        this.r = (this.r + drop) % this.cap;
+        this.filled -= drop;
+      }
       if (!this.started && this.filled >= this.target) this.started = true;
     };
   }
@@ -425,6 +454,16 @@ export class AudioPlayer {
 
   /** The element the OS media controls attach to (null if unavailable). */
   get element(): HTMLAudioElement | null { return this.mediaEl; }
+
+  /** ★ Drop everything queued for playout. See the worklet's flush handler for why. Called on
+   *  every retune, through SpectrumClient.tune(). */
+  flush() {
+    // The worklet path.
+    if (this.node) { try { this.node.port.postMessage({ flush: true }); } catch { /* closing */ } }
+    // The main-thread fallback path uses its own ring; clear that too, or the fallback keeps the
+    // very bug this fixes.
+    this.rPos = this.wPos; this.filled = 0; this.playing = false;
+  }
 
   /** Push decoded frames into the fallback ring buffer. */
   private _pushRing(l: Float32Array, r: Float32Array) {
