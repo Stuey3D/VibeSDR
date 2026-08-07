@@ -493,16 +493,17 @@ static int setRtlSerial(int index, const std::string& newSerial) {
         const bool readOk = rtlsdr_read_eeprom(dev, check, 0, sizeof check) >= 0;
         rtlsdr_close(dev);
         if (readOk && std::memcmp(check, want.data(), want.size()) == 0) {
-            // ★★ "PHYSICALLY" IS NOT PADDING. The RTL2832U reads its EEPROM at POWER-ON, so the
-            //    new serial does not appear until the device is power-cycled. Measured on the Pi
-            //    2026-08-07: after a verified write, the chip read back the new serial while USB
-            //    still reported the old one — and neither unbind/bind nor toggling `authorized`
-            //    changed that, because neither removes power. Someone who checks with lsusb and
-            //    sees the old serial will conclude the write silently failed and try again.
+            // ★★ SAYING THIS MATTERS, because the write looks like it failed otherwise. The
+            //    RTL2832U reads its EEPROM at POWER-ON, so the new serial does not appear until
+            //    the device loses power. Measured on the Pi 2026-08-07: after a verified write the
+            //    chip read back the new serial while USB still reported the old one. A REBOOT
+            //    clears it (the Pi drops port power); unbind/bind and toggling `authorized` do
+            //    NOT, because neither removes power — so "re-enumerate it in software" is advice
+            //    that quietly does nothing. Anyone checking with lsusb in between sees the old
+            //    serial and concludes the write silently failed.
             std::printf("\n  Done, and verified by reading it back.\n\n"
-                        "  Now PHYSICALLY unplug the dongle and plug it back in.\n"
-                        "  Until you do, it still reports its old serial (%s): the chip only\n"
-                        "  re-reads this when it loses power, so software cannot do it for you.\n\n",
+                        "  Unplug the dongle and plug it back in — or reboot — for the new serial\n"
+                        "  to take effect. Until then it still reports the old one (%s).\n\n",
                         cur.serial.c_str());
             return 0;
         }
