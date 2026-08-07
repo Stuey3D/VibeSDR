@@ -60,9 +60,27 @@ std::string svcState()  { return run("systemctl is-active vibeserver 2>/dev/null
  *  this screen now agrees with it by construction — including RSPs and Airspy HF+s, which lsusb
  *  matching handled only by luck. */
 std::string radioLine() {
-    if (vs_device_count() <= 0) return "";
-    const char* n = vs_device_name(0);
-    return (n && *n) ? std::string(n) : std::string("SDR");
+    // ★ FIRST CHOICE: the driver, because it is the same enumeration the server starts from and
+    //   it names the radio properly ("RTLSDRBlog Blog V4", not a USB ID).
+    if (vs_device_count() > 0) {
+        const char* n = vs_device_name(0);
+        return (n && *n) ? std::string(n) : std::string("SDR");
+    }
+    // ★★★ SECOND CHOICE, AND NOT REDUNDANT — the two methods fail in OPPOSITE situations, which is
+    //     exactly why neither can be trusted alone. Measured, both on the same evening:
+    //
+    //     · The DRIVER misses an SDRplay whose API is busy or still letting go. deviceCount()
+    //       gives up after 2 s, and sdrplay_api's open waits on a SYSTEM-WIDE lock, so seconds
+    //       after stopping the service it still reported nothing with an RSP1B plugged in.
+    //     · `lsusb` misses everything on a machine without usbutils, which we do not depend on —
+    //       that is the fault that had a user hunting through udev rules while
+    //       `vibeserver --device 0` ran the same dongle perfectly.
+    //
+    //  ★ So: ask the driver, and if it says nothing, ask the USB bus before believing it. A false
+    //    "no radio" is the single most expensive thing this screen can say — it sends people
+    //    looking for a hardware fault that is not there.
+    return run("lsusb 2>/dev/null | grep -iE 'airspy|sdrplay|rtl|realtek|1df7' "
+               "| sed 's/.*ID [0-9a-f:]* //' | head -1");
 }
 std::string myIp() { return run("hostname -I 2>/dev/null | awk '{print $1}'"); }
 
