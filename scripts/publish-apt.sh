@@ -16,8 +16,8 @@
 # upstream version still comes from CMake; this only ever appends `-N`.
 set -euo pipefail
 
-REPO_URL="https://github.com/Stuey3D/vibesdr-apt.git"
-APT_DIR="${APT_DIR:-$HOME/vibesdr-apt}"
+REPO_URL="https://github.com/Stuey3D/VibeServer.git"
+APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_KEY="packages@vibesdr.net"
 ARCH="$(dpkg --print-architecture)"
@@ -44,8 +44,32 @@ mkdir -p "$POOL" "$DIST/main/binary-$ARCH"
 UPSTREAM="$(grep -oE 'project\([^)]*VERSION[[:space:]]+[0-9.]+' "$SRC_DIR/vibeserver/CMakeLists.txt" \
             | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 [ -n "$UPSTREAM" ] || { echo "could not read the version from vibeserver/CMakeLists.txt"; exit 1; }
-REV=1
-while ls "$POOL"/vibeserver_"${UPSTREAM}-${REV}"_*.deb >/dev/null 2>&1; do REV=$((REV+1)); done
+# ★★★ NEVER REUSE A REVISION NUMBER. This used to walk up from 1 looking for a gap — and the
+# PRUNE below deletes old revisions, so it kept finding the numbers it had just freed. A publish
+# after a prune therefore shipped a DIFFERENT package under a version that had already been
+# public: apt on a machine holding the original sees the same version string and refuses to
+# upgrade, silently, for ever. (Hit on 2026-08-07: a build went out as 2.0.0-1 for the second
+# time, minutes after 2.0.0-4 was pruned.)
+# ★★ So the high-water mark comes from three places, and we take the largest: what is in the pool,
+#    what the PUBLISHED index still advertises, and a marker that survives pruning. Any one of
+#    them alone can be made to forget.
+HIGH=0
+for f in "$POOL"/vibeserver_"${UPSTREAM}"-*_*.deb; do
+  [ -e "$f" ] || continue
+  r="$(basename "$f" | sed -nE "s/^vibeserver_${UPSTREAM}-([0-9]+)_.*/\1/p")"
+  [ -n "$r" ] && [ "$r" -gt "$HIGH" ] && HIGH="$r"
+done
+PKGS="$DIST/main/binary-$ARCH/Packages"
+if [ -f "$PKGS" ]; then
+  r="$(grep -oE "^Version: ${UPSTREAM}-[0-9]+" "$PKGS" | grep -oE '[0-9]+$' | sort -n | tail -1)"
+  [ -n "$r" ] && [ "$r" -gt "$HIGH" ] && HIGH="$r"
+fi
+MARK="$APT_DIR/.highest-revision"
+if [ -f "$MARK" ]; then
+  r="$(tr -cd '0-9' < "$MARK")"
+  [ -n "$r" ] && [ "$r" -gt "$HIGH" ] && HIGH="$r"
+fi
+REV=$((HIGH + 1))
 FULLVER="${UPSTREAM}-${REV}"
 echo "==> publishing vibeserver $FULLVER ($ARCH)"
 
@@ -62,6 +86,8 @@ echo "==> built $(basename "$DEB")"
 PKGVER="$(dpkg-deb -f "$DEB" Version)"
 [ "$PKGVER" = "$FULLVER" ] || { echo "version mismatch: package says $PKGVER, expected $FULLVER"; exit 1; }
 cp "$DEB" "$POOL/"
+# ★ Record the high-water mark BEFORE pruning, so a pruned revision can never be handed out again.
+echo "$REV" > "$APT_DIR/.highest-revision"
 
 # ── Prune ────────────────────────────────────────────────────────────────────
 # ★★ THE POOL IS NOT AN ARCHIVE. Every publish adds a .deb and nothing ever removed one, so the

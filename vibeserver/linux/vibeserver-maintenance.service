@@ -1,0 +1,9 @@
+[Unit]
+Description=VibeServer — perform a maintenance action
+Documentation=https://vibesdr.net
+
+[Service]
+Type=oneshot
+# ★ Root, deliberately and only here. The action list is inside the script, which the daemon
+#   cannot write to — see the header there for why this is a tighter boundary than sudo.
+ExecStart=/usr/lib/vibeserver/vibeserver-maintenance

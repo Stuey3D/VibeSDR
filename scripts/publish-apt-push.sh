@@ -13,9 +13,9 @@
 set -euo pipefail
 
 PI="${PI:-stuey3d@192.168.86.88}"
-PI_DIR="${PI_DIR:-/home/stuey3d/vibesdr-apt}"
-APT_DIR="${APT_DIR:-$HOME/vibesdr-apt}"
-REPO_URL="https://github.com/Stuey3D/vibesdr-apt.git"
+PI_DIR="${PI_DIR:-/home/stuey3d/VibeServer}"
+APT_DIR="${APT_DIR:-$HOME/VibeServer}"
+REPO_URL="https://github.com/Stuey3D/VibeServer.git"
 
 if [ ! -d "$APT_DIR/.git" ]; then
   echo "==> cloning $REPO_URL -> $APT_DIR"
@@ -39,7 +39,7 @@ if [ "$BEFORE" = "$AFTER" ]; then echo "==> nothing new to publish"; exit 0; fi
 git --no-pager log --oneline "$BEFORE..$AFTER" | sed 's/^/    /'
 
 git push -q origin HEAD
-echo "==> published: https://stuey3d.github.io/vibesdr-apt/"
+echo "==> published: https://apt.vibesdr.net/"
 echo "    (GitHub Pages takes a few seconds to rebuild before apt sees it)"
 
 # ★★ RECLAIM THE BUILD BOX'S CLONE once it is safely on GitHub and here. The Pi runs from a 32 GB

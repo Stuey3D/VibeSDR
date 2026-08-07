@@ -1,15 +1,62 @@
 #!/bin/sh
-# ★★ PURGE REMOVES THE CONFIG, PLAIN REMOVE KEEPS IT. Someone who removes and reinstalls expects
-#    their receiver name, locator and admin password to survive; someone who PURGES has asked for
-#    every trace to go. Deleting on plain remove would silently destroy settings on an upgrade
-#    path that went wrong.
+# VibeServer — post-removal.
+#
+# ★★★ REMOVE vs PURGE, and the difference is the whole file.
+#   remove : take the program away, LEAVE the settings. Someone removing a package to reinstall it,
+#            or upgrading across a broken version, must not lose the name, locator, admin password
+#            and ban list they set up months ago.
+#   purge  : the user has said "get rid of it". Debian policy requires configuration to go, and
+#            here that is not a formality: config.json holds the ADMIN PASSWORD AND THE PIN IN
+#            CLEAR. Leaving it behind after someone has explicitly purged is both a policy breach
+#            and a small pile of credentials on a machine whose owner believes they are gone.
+#
+# ★★ THIS FILE USED TO REMOVE ONLY vibeserver.conf. It left /etc/vibeserver/config.json, the whole
+#    of /var/lib/vibeserver (spectrogram, EiBi schedule, country and network databases, the BAN
+#    LIST) and the service account — so `apt purge` followed by a reinstall silently inherited the
+#    previous machine's identity and policy, and a purge left credentials on disk. Found while
+#    preparing 2.0 by purging and then LOOKING at what survived, which is the only way to find it:
+#    nothing in a build or an install reports on what a removal failed to clean.
 set -e
+
 case "$1" in
   purge)
+    # ── Configuration ────────────────────────────────────────────────────────
     rm -f /etc/vibeserver/vibeserver.conf
+    # ★ config.json is what the browser setup page writes: name, locator, radio, PIN and admin
+    #   password. It is configuration by every definition, and the one file here with secrets in it.
+    rm -f /etc/vibeserver/config.json
     rmdir /etc/vibeserver 2>/dev/null || true
+
+    # ── State ────────────────────────────────────────────────────────────────
+    # ★ Created by systemd's StateDirectory=, so systemd will not remove it — that is our job.
+    #   The ban list is POLICY: a reinstalled server silently inheriting the previous owner's
+    #   blocks is a surprise nobody would think to look for.
+    #   ★ Everything else here is a rebuildable cache (spectrogram, eibi.csv, geoip.bin, asn.bin),
+    #     so there is nothing to preserve and ~20 MB to reclaim.
+    rm -rf /var/lib/vibeserver
+
+    # ★ An earlier 2.0 build shipped a sudoers rule; remove it on purge whether or not this
+    #   version installed one.
+    rm -f /etc/sudoers.d/vibeserver
+
+    # ── The service account ──────────────────────────────────────────────────
+    # ★ We created it in postinst; a purge that leaves it behind leaves a user in /etc/passwd that
+    #   nothing owns and nothing will ever clean up.
+    # ★★ Deliberately AFTER the directories: removing the owner first can leave files with a bare
+    #    numeric uid that a later account silently inherits.
+    if getent passwd vibeserver >/dev/null; then
+      deluser --system vibeserver >/dev/null 2>&1 \
+        || userdel vibeserver >/dev/null 2>&1 || true
+    fi
+    if getent group vibeserver >/dev/null; then
+      delgroup --system vibeserver >/dev/null 2>&1 \
+        || groupdel vibeserver >/dev/null 2>&1 || true
+    fi
     ;;
 esac
+
+# ★ Always, on both paths: the unit file has gone, so systemd must be told or it keeps offering a
+#   service that cannot start.
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload >/dev/null 2>&1 || true
 fi

@@ -1,0 +1,65 @@
+#!/bin/bash
+# ★ bash, NOT sh: the output capture below uses process substitution (`> >(tee …)`), which dash
+#   does not support — and Debian's /bin/sh IS dash. Under sh this script would have failed at the
+#   first line that mattered, as root, with the failure visible only in the journal. bash is an
+#   Essential package on Debian, so this adds no dependency.
+# VibeServer — perform one maintenance action, as root, on behalf of the unprivileged daemon.
+#
+# ★★★ WHY A HELPER AND NOT sudo. The service runs with NoNewPrivileges=yes — correct hardening for
+# a daemon exposed to the internet — and that flag makes sudo impossible by design, whatever the
+# sudoers file says ("sudo: The 'no new privileges' flag is set, which prevents sudo from running
+# as root"). The choice was to weaken the sandbox or to stop asking the daemon to elevate at all.
+# This is the second: the daemon WRITES A REQUEST, systemd notices the file (vibeserver-
+# maintenance.path) and runs this script as root. The daemon never holds privilege for a moment.
+#
+# ★★★ AND IT IS A BETTER BOUNDARY THAN sudo WAS. The list of permitted actions lives HERE, in a
+# root-owned file the daemon cannot write to. Even if the daemon were compromised outright, the
+# most it can do is ask for one of these five things by name. That is the same argument that kept
+# a web terminal out of the admin page, applied one layer down.
+#
+# ★★ The request is DELETED BEFORE it is acted on. systemd's .path unit triggers on the file
+#    EXISTING, so a request left in place after a failure would re-trigger for ever — a reboot
+#    loop, on a machine in a loft.
+set -e
+
+REQ=/var/lib/vibeserver/maintenance.request
+[ -f "$REQ" ] || exit 0
+
+action=$(head -c 32 "$REQ" | tr -cd 'a-z-')
+rm -f "$REQ"
+
+# ★★★ EVERYTHING THIS SCRIPT PRINTS GOES SOMEWHERE THE ADMIN PAGE CAN READ IT.
+# Without this the output existed only in the journal, which the daemon cannot read (it is
+# unprivileged) — so pressing "Install updates" produced a button that went quiet and a person
+# with no idea whether apt was working, finished, or had failed. For an action that can take
+# minutes and reboot the machine afterwards, "no feedback" is the same as "broken"
+# (Stuart, 2026-08-07).
+# ★ Truncated at the start of each action, so the page always shows THIS run and never a
+#   confusing tail of the last one.
+LOG=/var/lib/vibeserver/maintenance.log
+: > "$LOG"
+chmod 644 "$LOG" 2>/dev/null || true
+exec > >(tee -a "$LOG") 2>&1
+
+# ★★ The daemon decides "still running?" by the ABSENCE of this marker, so it must be written on
+#    EVERY exit path — including a failure. A trap is the only way to be sure of that; an `echo`
+#    at the end of the happy path would leave a failed update looking like one still in progress,
+#    for ever.
+finish() { rc=$?; echo "__VIBESERVER_DONE__ $rc"; }
+trap finish EXIT
+
+log() { echo "$*"; }
+
+case "$action" in
+  restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
+  reboot)       log "rebooting";                 systemctl reboot ;;
+  shutdown)     log "powering off";              systemctl poweroff ;;
+  update-check) log "refreshing the package index"
+                apt-get update ;;
+  update)       log "installing updates"
+                apt-get update
+                # ★ ONLY this package, and never a fresh install of anything else. `--only-upgrade`
+                #   means a request for `update` cannot pull in a new package by name.
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade vibeserver ;;
+  *)            log "ignoring unknown action '$action'"; exit 0 ;;
+esac

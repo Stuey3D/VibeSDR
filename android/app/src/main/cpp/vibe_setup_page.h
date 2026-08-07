@@ -104,8 +104,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <input type="checkbox" id="mdns" checked style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Let VibeSDR apps on this network discover this server automatically</span>
       </label>
+      <!-- ★★ PLACEHOLDERS ARE EXAMPLES, NOT SOMEBODY'S ACTUAL RECEIVER. These carried the
+           development Pi's real name, town and locator ("VibeServer: Pi500", "Northampton",
+           "IO92nh") — so every new owner was shown the author's home location as the suggestion,
+           and anyone who accepted the hint without thinking would publish it as their own
+           (Stuart, 2026-08-06, before going live).
+           ★ A placeholder still has to TEACH THE FORMAT — that a locator is six characters, that
+             a name can describe the antenna — so these are plausible and clearly generic, not
+             blanked out. -->
       <label><span class="lbl">Name</span>
-        <input type="text" id="name" placeholder="VibeServer: Pi500"></label>
+        <input type="text" id="name" placeholder="e.g. Coastal SDR — 60 m vertical"></label>
       <div class="hint" id="addrLine"></div>
     </div>
 
@@ -116,12 +124,12 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          shows a blank country.</p>
       <div class="row">
         <label><span class="lbl">Town or area</span>
-          <input type="text" id="place" placeholder="Northampton"></label>
+          <input type="text" id="place" placeholder="e.g. Cardiff"></label>
         <label><span class="lbl">Country code</span>
           <input type="text" id="country" maxlength="2" placeholder="GB"></label>
       </div>
       <label><span class="lbl">Maidenhead locator</span>
-        <input type="text" id="locator" maxlength="8" placeholder="IO92nh">
+        <input type="text" id="locator" maxlength="8" placeholder="e.g. IO81jm">
         <div class="hint">Deliberately coarse — about 4 km. A receiver's position is published, so
           this is usually the right amount to give away.</div></label>
       <div class="row">

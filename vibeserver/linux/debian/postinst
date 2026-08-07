@@ -80,6 +80,12 @@ case "$1" in
       echo "VibeServer: added $SUDO_USER to 'plugdev' — log out and back in for it to take effect."
     fi
 
+    # ── 2b. Drop the old sudo rule, if an earlier 2.0 build installed one ───
+    # ★ 2.0.0-4 shipped a /etc/sudoers.d/vibeserver that could never work (NoNewPrivileges=yes
+    #   makes sudo impossible for this service). Leaving it behind would leave a real privilege
+    #   grant lying around for no benefit at all.
+    rm -f /etc/sudoers.d/vibeserver
+
     # ── 3. systemd ───────────────────────────────────────────────────────────
     # ★ Enabled but NOT started: the user has not chosen a radio, a name or a location yet, and
     #   an unconfigured server that starts itself and fails is a worse first impression than one
@@ -87,7 +93,14 @@ case "$1" in
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload >/dev/null 2>&1 || true
       systemctl enable vibeserver.service >/dev/null 2>&1 || true
-      echo "VibeServer: installed. Run 'vibeserver' to configure it, then 'sudo systemctl start vibeserver'."
+      # ★★ THE WATCHER MUST BE ENABLED OR THE MAINTENANCE BUTTONS DO NOTHING. The daemon writes
+      #    its request happily; without this unit running, nothing is watching for it, and the
+      #    admin page reports success for an action that never happens — worse than an error.
+      systemctl enable --now vibeserver-maintenance.path >/dev/null 2>&1 || true
+      # ★ The wizard enables and starts the service itself (tui.cpp), so telling people to run
+      #   systemctl afterwards is wrong — and it is the sort of wrong that makes someone think a
+      #   step failed when it simply was not needed (Stuart hit exactly this, 2026-08-06).
+      echo "VibeServer: installed. Log out and back in, then run 'vibeserver' to set it up."
     fi
     ;;
 esac

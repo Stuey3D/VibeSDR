@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Template for the vibesdr-apt landing page. publish-apt.sh substitutes __VERSION__/__ARCH__
+<!-- Template for the VibeServer landing page. publish-apt.sh substitutes __VERSION__/__ARCH__
      and writes the result to the repository root. Edit it HERE, not there — the copy in the
      artefact repo is generated and will be overwritten on the next publish. -->
 <html lang="en">
@@ -16,6 +16,7 @@
   h1 { letter-spacing: 4px; font-size: 1.6rem; margin: 0 0 .2rem; }
   h2 { font-size: 1rem; letter-spacing: 2px; margin: 2.4rem 0 .6rem;
        border-bottom: 1px solid var(--line); padding-bottom: .35rem; }
+  h3 { font-size: .92rem; letter-spacing: 1px; margin: 1.8rem 0 .4rem; color: #ffe566; }
   p, li { color: var(--dim); }
   a { color: #ffe566; }
   pre { background: rgba(255,160,0,0.06); border: 1px solid var(--line); border-radius: 8px;
@@ -32,28 +33,70 @@
   <p>Turn an SDR into a network receiver for the VibeSDR apps and any browser.<br>
      <span class="ver">Current package: __VERSION__ (__ARCH__)</span></p>
 
-  <h2>Debian / Raspberry Pi OS</h2>
-  <p>Add the repository once, then it updates with everything else on the machine.</p>
-<pre>curl -fsSL https://stuey3d.github.io/vibesdr-apt/KEY.gpg \
+  <h2>Debian / Raspberry Pi OS &mdash; 64-bit ARM</h2>
+  <p>Tested on Debian 13 (trixie) and Raspberry Pi OS on a Pi 500. Anything arm64 running Debian
+     or Ubuntu should work.</p>
+  <p><strong>64-bit only, in practice.</strong> The DSP's NEON path is gated on
+     <code>__aarch64__</code>, and a 32-bit userland silently loses all of it &mdash; roughly
+     <strong>13&times; slower</strong> on the same hardware.</p>
+
+  <h3>1. Install</h3>
+  <p>Copy and paste the whole block. <strong>Nothing else needs installing</strong> &mdash; apt
+     pulls in every library VibeServer needs.</p>
+<pre>curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-
-echo "deb [signed-by=/usr/share/keyrings/vibesdr.gpg] \
-https://stuey3d.github.io/vibesdr-apt stable main" \
+echo "deb [signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
-
 sudo apt update
 sudo apt install vibeserver</pre>
-  <p>Then run <code>vibeserver</code> to configure it (name, location, radio) and
-     <code>sudo systemctl start vibeserver</code> to serve. The service is enabled but not
-     started by the install, on purpose: an unconfigured server that starts itself and fails is
-     a worse first impression than one that waits to be asked.</p>
-  <p><strong>64-bit only, in practice.</strong> The DSP's NEON path is gated on
-     <code>__aarch64__</code>, and a 32-bit userland silently loses all of it — roughly
-     <strong>13× slower</strong> on the same hardware.</p>
+  <p><strong>Log out and back in now.</strong> The install adds you to the <code>plugdev</code>
+     group so the radio can be opened without root, and group membership only takes effect on a
+     new login. Skip this and the next step will report no radio.</p>
+
+  <h3>2. Set it up</h3>
+<pre>vibeserver</pre>
+  <p>That opens a short text wizard: give the receiver a name, say roughly where it is, pick the
+     radio, and set an admin password. When you finish, <strong>it enables and starts the service
+     for you</strong> &mdash; there is no separate command to run.</p>
+
+  <h3>3. Open it in a browser</h3>
+<pre>http://&lt;the address the wizard printed&gt;:48000</pre>
+  <p>That is the receiver itself &mdash; waterfall, audio, decoders &mdash; and the same page the
+     VibeSDR apps talk to. On the same network, <code>http://vibeserver.local:48000</code> usually
+     works too.</p>
+
+  <h3>&#9733; The waterfall will look quiet at first, and that is deliberate</h3>
+  <p>A new install starts the radio at <strong>minimum gain, in manual mode</strong>. That is a
+     choice, not a fault: an unknown antenna on an unknown band can overload a front end the
+     moment it is switched on, and a receiver that starts safe and sounds quiet is far easier to
+     recover from than one that starts hot and distorts everything.</p>
+  <p>Open the menu and bring the gain up until the noise floor lifts and signals appear. Whatever
+     you set is remembered, and upgrades never change a gain you have touched.</p>
+
+  <h3>If you have an SDRplay RSP</h3>
+  <p><code>apt install</code> cannot fetch the SDRplay driver and this is not an oversight:
+     SDRplay distribute it under their own licence and we are not permitted to redistribute it.
+     RTL-SDR and Airspy HF+ need nothing extra.</p>
+<pre># https://www.sdrplay.com/downloads  &rarr;  "API/HW Driver for Linux (ARM64)"
+chmod +x SDRplay_RSP_API-*.run &amp;&amp; sudo ./SDRplay_RSP_API-*.run
+systemctl status sdrplay_apiService     # should be active</pre>
+  <p>Install it whenever you like &mdash; before or after VibeServer. If you add an RSP later,
+     <code>sudo systemctl restart vibeserver</code> is enough; the driver is loaded at runtime.</p>
+
+  <h3>Updating</h3>
+<pre>sudo apt update &amp;&amp; sudo apt upgrade</pre>
+  <p>Your settings survive and the service restarts on the new binary. The admin page has an
+     <strong>Install updates</strong> button that does the same thing from a browser.</p>
+
+  <h3>Prefer a single file?</h3>
+  <p>Install the <code>.deb</code> with <code>apt install ./&hellip;</code> &mdash; with the
+     <code>./</code> &mdash; so apt still resolves the dependencies. Never
+     <code>dpkg -i</code>: it does not resolve them, and leaves you part-installed.</p>
+<pre>sudo apt install ./vibeserver___VERSION____ARCH__.deb</pre>
 
   <h2>macOS</h2>
   <p>A signed, notarised build — download, open, and it runs without a Gatekeeper argument.</p>
-  <p><a href="https://github.com/Stuey3D/vibesdr-apt/releases/latest">Latest release →</a></p>
+  <p><a href="https://github.com/Stuey3D/VibeServer/releases/latest">Latest release →</a></p>
 
   <h2>Source</h2>
   <p>VibeServer is built from the VibeSDR tree — the same DSP engine, decoders and protocol the

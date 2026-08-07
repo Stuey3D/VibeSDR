@@ -9,48 +9,74 @@ userland silently loses all of it — roughly **13× slower** on the same hardwa
 
 ---
 
-## Build and install (copy-paste)
+## Install
+
+Two commands to add the repository, then one to install. **`apt install` pulls in everything
+VibeServer needs** — there is no list of libraries to chase, and nothing to build.
 
 ```bash
-# 1. Build tools and the libraries VibeServer links
+# 1. Trust the signing key and add the repository (once, ever)
+curl -fsSL https://apt.vibesdr.net/KEY.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
+echo "deb [signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+  | sudo tee /etc/apt/sources.list.d/vibesdr.list
+
+# 2. Install
 sudo apt update
-sudo apt install -y build-essential cmake git pkg-config \
-                    libusb-1.0-0-dev librtlsdr-dev libopus-dev libncurses-dev
-
-# 2. Get the source
-git clone https://github.com/Stuey3D/VibeSDR.git
-cd VibeSDR/vibeserver
-
-# 3. Build (use all cores; on a Pi with 4 GB drop to -j2 if it runs out of memory)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-
-# 4. Make a .deb and install it
-cd build && cpack
-sudo apt install ./vibeserver_*.deb
+sudo apt install vibeserver
 ```
 
-That last step is `apt install ./…` — **with the `./`**. It tells apt this is a local file, so it
-pulls the runtime dependencies from your normal repos. `dpkg -i` would fail on missing
-dependencies and leave you to chase them.
+That is the whole installation. Every runtime dependency — libusb, librtlsdr, libopus, ncurses,
+curl, gzip — is declared by the package and fetched by apt automatically.
+
+★ **The one exception is the SDRplay RSP driver**, and it is not an oversight: SDRplay distribute
+it under their own licence and we are not permitted to redistribute it, so it can never be a
+`Depends:` line. RTL-SDR and Airspy HF+ need nothing extra. See the section at the end.
+
+### Prefer a file?
+
+A standalone `.deb` is published with each release. Install it with **`apt install ./…`** — with
+the `./` — so apt still resolves the dependencies for you:
+
+```bash
+sudo apt install ./vibeserver_2.0.0-3_arm64.deb
+```
+
+★ Use `apt install ./file.deb`, never `dpkg -i file.deb`. `dpkg` does not resolve dependencies: it
+fails part-installed and leaves you to work out what was missing, which is exactly the experience
+this package exists to avoid.
 
 ### Then
 
 ```bash
-vibeserver                          # opens the TUI: set the name, location, radio and options
-sudo systemctl start vibeserver     # start serving
-sudo systemctl status vibeserver    # check it came up
-journalctl -u vibeserver -f         # watch the log
+vibeserver          # a short wizard: name, location, radio, admin password
 ```
 
-The service is **enabled but not started** by the install, on purpose: an unconfigured server that
-starts itself and fails is a worse first impression than one that waits to be asked. It will start
-automatically on every boot from then on.
+When you finish the wizard it **enables and starts the service for you** — there is no separate
+`systemctl start` to run. Then open the receiver in a browser:
 
-★ **Log out and back in after installing.** The package adds you to the `plugdev` group so you can
-open the radio without root, and group membership only takes effect on a new login.
+```
+http://<the address the wizard printed>:48000
+```
 
----
+★ **Log out and back in before running `vibeserver`.** The package adds you to the `plugdev` group
+so the radio can be opened without root, and group membership only takes effect on a new login.
+Skip it and the wizard reports no radio.
+
+```bash
+sudo systemctl status vibeserver     # check it came up
+journalctl -u vibeserver -f          # watch the log
+```
+
+### ★ The waterfall looks quiet at first, deliberately
+
+A new install starts the radio at **minimum gain, in manual mode**. An unknown antenna on an
+unknown band can overload a front end the instant it is switched on, and a receiver that starts
+safe and sounds quiet is much easier to recover from than one that starts hot and distorts
+everything.
+
+Open the menu and bring the gain up until the noise floor lifts. Whatever you set is remembered,
+and upgrades never change a gain you have touched.
 
 ## Where things go
 
@@ -60,6 +86,8 @@ open the radio without root, and group membership only takes effect on a new log
 | `/etc/vibeserver/vibeserver.conf` | your settings. **Yours** — upgrades never overwrite it |
 | `/usr/lib/systemd/system/vibeserver.service` | the service |
 | `/usr/lib/udev/rules.d/99-vibeserver-sdr.rules` | USB access without root |
+| `/usr/lib/vibeserver/vibeserver-maintenance` | run as root by systemd for the admin page's Reboot / Restart / Update buttons |
+| `/var/lib/vibeserver/` | state: ban list, spectrogram, EiBi schedule, country and network data |
 
 Uninstall with `sudo apt remove vibeserver` (keeps your config) or
 `sudo apt purge vibeserver` (removes it).
@@ -89,12 +117,11 @@ and unplug/replug the radio.
 ## Updating
 
 ```bash
-cd VibeSDR && git pull
-cd vibeserver && cmake --build build -j$(nproc)
-cd build && cpack && sudo apt install ./vibeserver_*.deb
+sudo apt update && sudo apt upgrade
 ```
 
-Your config survives. The service restarts on the new binary.
+Your settings survive, and the service restarts on the new binary. That is all — the repository is
+the update channel, so there is nothing to download by hand and nothing to rebuild.
 
 ## Before you start: the SDRplay RSP needs one extra download
 
@@ -116,3 +143,20 @@ names the download.
 ★ **Adding an RSP later?** Install the SDRplay API whenever you like, then
 `sudo systemctl restart vibeserver` — the driver is loaded at runtime, so a restart is all it
 takes. No reinstall, and your settings are untouched.
+
+---
+
+## Building from source (developers only)
+
+You do **not** need this to run VibeServer — the package above is the supported route. This is for
+working on the code.
+
+```bash
+sudo apt install -y build-essential cmake git pkg-config \
+                    libusb-1.0-0-dev librtlsdr-dev libopus-dev libncurses-dev
+git clone https://github.com/Stuey3D/VibeSDR.git
+cd VibeSDR/vibeserver
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+cd build && cpack && sudo apt install ./vibeserver_*.deb
+```

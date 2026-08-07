@@ -1014,7 +1014,7 @@ struct SettingsView: View {
             // ★ Country alone is enough for the RDS flag, and it defaults from the Mac, so the
             // common case needs no typing at all.
             Section("Location") {
-                TextField("Receiver name", text: $server.rxName, prompt: Text("Northampton RSP1B"))
+                TextField("Receiver name", text: $server.rxName, prompt: Text("Coastal SDR — 60 m vertical"))
                 Text("Shown to listeners over the spectrum, with the place below it. Leave it "
                      + "blank and they just see the location.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -1022,12 +1022,12 @@ struct SettingsView: View {
                 Text("Two-letter code. Sets the RDS country and flag, and the band plan's ITU region. "
                      + "Filled in from this Mac's own region.")
                     .font(.caption).foregroundStyle(.secondary)
-                TextField("Place", text: $server.rxPlace, prompt: Text("Northampton"))
+                TextField("Place", text: $server.rxPlace, prompt: Text("Cardiff"))
                 HStack {
                     TextField("Latitude",  text: $server.rxLat, prompt: Text("52.24"))
                     TextField("Longitude", text: $server.rxLon, prompt: Text("-0.90"))
                 }
-                TextField("Or locator", text: $server.rxGrid, prompt: Text("IO92ng"))
+                TextField("Or locator", text: $server.rxGrid, prompt: Text("IO81jm"))
                 HStack {
                     // ★★ THE LABEL SETS THE EXPECTATION. "Use this Mac's location" promises a location and
                     // delivers a SQUARE — Hans pressed it expecting coordinates, got "JO32bl", and had

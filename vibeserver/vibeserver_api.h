@@ -78,7 +78,7 @@ typedef struct {
      *  note first. */
 
     /** ★ RECEIVER LOCATION as the JSON served at GET /location:
-     *    {"name":"…","iso":"GB","lat":52.24,"lon":-0.90,"label":"Northampton","grid":"IO92ng"}
+     *    {"name":"…","iso":"GB","lat":51.48,"lon":-3.18,"label":"Cardiff","grid":"IO81jm"}
      *  NULL/"" = unknown, and everything that depends on it degrades honestly rather than
      *  guessing. It is the SERVER's position, never the listener's: distances, map centring
      *  and the ITU REGION (80m is 3.5-3.8 in R1 but 3.5-4.0 in R2) all follow the ANTENNA.

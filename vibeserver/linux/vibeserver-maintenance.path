@@ -1,0 +1,12 @@
+[Unit]
+Description=VibeServer — watch for a maintenance request
+Documentation=https://vibesdr.net
+
+[Path]
+# ★ The daemon writes this file into its own StateDirectory, which is the ONLY place it can write.
+#   systemd does the privileged part; see /usr/lib/vibeserver/vibeserver-maintenance.
+PathExists=/var/lib/vibeserver/maintenance.request
+Unit=vibeserver-maintenance.service
+
+[Install]
+WantedBy=multi-user.target
