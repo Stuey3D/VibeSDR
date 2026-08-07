@@ -599,8 +599,28 @@ int main(int argc, char** argv) {
         const char* p = getenv("VIBESERVER_CONFIG");
         g_configPath = p && *p ? p : vsconfig::defaultPath();
         std::string err;
-        if (vsconfig::load(g_configPath, cfg, err)) {
-            applyConfig(cfg, o);
+        // ★★★ READ THE MACHINE, THEN TAKE THIS PROCESS'S RADIO OUT OF IT.
+        //
+        //     loadServer() understands BOTH file shapes: today's single-radio file becomes a
+        //     one-radio machine (enabled and configured, so a working receiver is not taken off
+        //     the air by gaining gates it never had), and the new shape is read as written.
+        //
+        // ★★ WHICH RADIO IS THIS PROCESS? `--radio` decides when given — that is how the
+        //    supervisor starts one process per radio. Otherwise take the first that is both
+        //    ENABLED and CONFIGURED, which for every existing install is the only one there is.
+        vsconfig::ServerConfig srv;
+        if (vsconfig::loadServer(g_configPath, srv, err)) {
+            const vsconfig::RadioConfig* mine = nullptr;
+            if (!o.radioSerial.empty()) {
+                for (const auto& r : srv.radios) if (r.serial == o.radioSerial) { mine = &r; break; }
+            }
+            if (!mine) {
+                for (const auto& r : srv.radios) if (r.enabled && r.configured) { mine = &r; break; }
+            }
+            // ★ A machine with radios but none ready still runs: it serves the setup page, which
+            //   is exactly where the owner goes to make one ready. Refusing to start would leave
+            //   them with no way in.
+            if (mine) { cfg = vsconfig::effectiveFor(srv, *mine); applyConfig(cfg, o); }
             hadConfigFile = true;
         } else if (!err.empty()) {
             std::fprintf(stderr, "VibeServer: ignoring %s — %s\n", g_configPath.c_str(), err.c_str());

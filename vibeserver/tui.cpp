@@ -162,6 +162,32 @@ bool saveConfig(const vsconfig::Config& c, std::string& err) {
 }
 
 
+/** The whole machine, radios and all. ★ Reads today's single-radio file too — see loadServer. */
+int loadServerViaSudo(vsconfig::ServerConfig& cfg, std::string& err) {
+    if (run(("test -e " + std::string(CONF) + " && echo yes").c_str()) != "yes") return 0;
+    const std::string j = run(("sudo cat " + std::string(CONF) + " 2>/dev/null").c_str());
+    if (j.empty()) { err = "cannot read " + std::string(CONF) + " (need sudo)"; return -1; }
+    if (!vsconfig::fromJson(j, cfg, err)) return -1;
+    return 1;
+}
+
+bool saveServerConfig(const vsconfig::ServerConfig& c, std::string& err) {
+    char tmp[] = "/tmp/vibeserver-config.XXXXXX";
+    int fd = mkstemp(tmp);
+    if (fd < 0) { err = "could not create a temporary file"; return false; }
+    const std::string j = vsconfig::toJson(c);
+    if (write(fd, j.data(), j.size()) != (ssize_t)j.size()) {
+        close(fd); unlink(tmp); err = "short write"; return false;
+    }
+    close(fd);
+    const std::string cmd = std::string("sudo install -o vibeserver -g vibeserver -m600 ")
+                          + tmp + " " + CONF + " 2>&1";
+    const std::string out = run(cmd.c_str());
+    unlink(tmp);
+    if (!out.empty()) { err = out; return false; }
+    return true;
+}
+
 /** ★★★ RE-READ, MUTATE, WRITE — NEVER write back the copy loaded when the TUI opened.
  *  The TUI used to be the only thing that wrote config.json, so holding a copy for the life of the
  *  screen was safe. It is not any more: the SERVER now writes it too, whenever an admin changes
@@ -574,9 +600,38 @@ int vibeserverTui() {
         std::vector<vibe::DetectedRadio> detected;
         std::vector<bool> serve;
         if (!runWizard(cfg, detected, serve)) { endwin(); return 0; }
-        cfg.configured = false;       // ★★ The BROWSER finishes setup; this only makes it reachable.
         std::string serr;
-        if (!saveConfig(cfg, serr)) {
+
+        // ★★★ WRITE THE MACHINE, NOT JUST A RADIO. Load first so an existing file is PATCHED —
+        //     the same read-modify-write rule as everywhere else here, and it matters more now:
+        //     re-running the wizard on a working multi-radio server must keep each radio's
+        //     settings, changing only which ones are ticked and the shared secrets.
+        vsconfig::ServerConfig srv;
+        loadServerViaSudo(srv, serr);
+        srv.configured = false;   // ★★ The BROWSER finishes setup; this only makes it reachable.
+        srv.adminPass  = cfg.adminPass;
+        srv.pin        = cfg.pin;
+
+        // ★ Match by SERIAL, so a radio keeps its settings across a re-run even if the list order
+        //   has changed since. A radio we have never seen is added; one that is no longer attached
+        //   is KEPT but untouched — unplugging a dongle for an afternoon must not erase how it was
+        //   set up.
+        for (size_t i = 0; i < detected.size(); i++) {
+            vsconfig::RadioConfig* found = nullptr;
+            for (auto& r : srv.radios)
+                if (!r.serial.empty() && r.serial == detected[i].serial) { found = &r; break; }
+            if (!found) {
+                vsconfig::RadioConfig r;
+                r.serial = detected[i].serial;
+                r.driver = detected[i].driver;
+                r.label  = detected[i].name;
+                srv.radios.push_back(r);
+                found = &srv.radios.back();
+            }
+            found->enabled = i < serve.size() ? serve[i] : true;
+        }
+
+        if (!saveServerConfig(srv, serr)) {
             endwin();
             std::fprintf(stderr, "VibeServer: could not save the configuration — %s\n", serr.c_str());
             return 1;
