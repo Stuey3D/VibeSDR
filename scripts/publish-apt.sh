@@ -101,7 +101,8 @@ done
 sudo rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
 sudo chroot "$BUILD_ROOT" /bin/bash -c "
   cd /build/VibeSDR/vibeserver
-  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV >/dev/null
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
+        -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
   cmake --build build -j$(nproc) | tail -1
   cd build && cpack >/dev/null"
 DEB="$(ls -t "$BUILD_ROOT/build/VibeSDR/vibeserver/build"/vibeserver_*.deb | head -1)"

@@ -157,6 +157,19 @@ if(SDRPLAY_INC)
   message(STATUS "SDRplay headers: ${SDRPLAY_INC} (runtime dlopen, not linked)")
   target_include_directories(vibeserver_core PUBLIC "${SDRPLAY_INC}")
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_SDRPLAY)
+elseif(VIBESERVER_STRICT_RADIOS)
+  # ★★★ A RELEASE MUST NEVER BE QUIETLY MISSING A RADIO. This branch used to just print a note
+  #     and carry on, and the note scrolled past in a build log nobody reads. Moving packaging
+  #     into a clean bookworm chroot — which has no SDRplay headers, because the API is a
+  #     separate closed-source install — therefore SHIPPED two releases with RSP support silently
+  #     compiled out. Every RSP owner who installed them got "no radio found" from a receiver
+  #     that had, on the previous version, worked perfectly.
+  # ★★ The headers are just structs and typedefs and nothing is linked, so the fix is only to put
+  #    them in the build root. But the guard is the point: packaging fails loudly instead.
+  message(FATAL_ERROR
+          "SDRplay headers not found, and VIBESERVER_STRICT_RADIOS is on.\n"
+          "A package built now would report 'no radio' to every RSP owner.\n"
+          "Copy sdrplay_api*.h into the build root's /usr/local/include and try again.")
 else()
   message(STATUS "SDRplay headers not found — building without RSP support")
 endif()
