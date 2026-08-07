@@ -45,10 +45,17 @@ typedef struct {
      *  touching on someone else's radio: bias-T, direct sampling and frequency calibration.
      *  ★ Independent of the PIN deliberately. A public receiver is typically open to every
      *  listener (no PIN) and must STILL refuse a stranger putting DC on the feedline.
-     *  ★ What it does NOT protect: gain, sample rate, tuning, mode and the per-listener DSP.
-     *  Those are what someone needs to actually use a receiver and are recoverable in a click.
-     *  ★ NULL/"" = no admin password, and then nothing is protected — a host who has not asked
-     *  for this must not find controls mysteriously refusing to work. */
+     *  ★ What it does NOT protect: tuning, mode and the per-listener DSP. Those are what
+     *  someone needs to actually use a receiver and are recoverable in a click.
+     *  ★★★ NULL/"" DOES NOT MEAN EVERYONE IS AUTHORISED — it means NOBODY is, and the hardware
+     *  controls fall back to LOOPBACK ONLY. A blank secret cannot tell the owner from a
+     *  stranger, so the old reading handed the whole network the bias-T.
+     *  ★★ Which makes blank a TRAP for a GUI host, and callers must handle it: a new receiver
+     *  starts at MINIMUM GAIN by design, so a server left without a password can be one that
+     *  NOBODY — including its owner, from another machine — can raise the gain on, and the
+     *  owner concludes the radio is broken. Worse on Android, which has no local browser at
+     *  all. The macOS app's answer is to GENERATE a password and show it rather than demand
+     *  one; that keeps plug-and-play and still leaves the receiver controllable. */
     const char* adminPassword;
     /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). Only meaningful on a
      *  PUBLIC receiver: one client per radio makes the server a queue of one, so without a
@@ -87,6 +94,15 @@ typedef struct {
      *  against the RECEIVER's country — so with no location set, every station's country
      *  and flag stayed blank (found on air 2026-07-26). */
     const char* locationJson;
+    /** ★★★ FULL MODE — which surface owns configuration.
+     *  false (Simple, the default): the GUI owns setup and the browser wizard is never served.
+     *    Plug a radio in and press start; one configuration surface, so none can drift.
+     *  true (Full): the BROWSER SETUP PAGE becomes the configuration surface and the GUI keeps
+     *    only what it takes to get running. The full option set already exists there and is
+     *    already shared by Linux, macOS and Android — implementing it again in SwiftUI and again
+     *    in Kotlin would be three copies of one set of rules, in a settings pane that is a thin
+     *    strip and a lot to scroll before anything is added (Stuart, 2026-08-07). */
+    bool        fullMode;
 } VsConfig;
 
 /** Live status for a status view. Deliberately the same numbers the CLI prints. */

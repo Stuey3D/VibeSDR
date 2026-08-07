@@ -80,6 +80,34 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     if (cfg->locationJson && *cfg->locationJson)
         LocalSdrShim::setLocationJson(cfg->locationJson);
 
+    // ★★★ A GUI APP IS CONFIGURED BY DEFINITION — its settings pane IS the setup.
+    //
+    // `configured` defaults to FALSE and only the Linux daemon ever set it, so on macOS the shim
+    // believed it had never been set up and served the browser SETUP WIZARD at GET / instead of
+    // the receiver. Pressing "Start serving" therefore opened a page demanding the admin password
+    // before anything would work — on an app whose whole promise is plug a radio in and press
+    // start (Stuart, 2026-08-07: "simple mode is broken").
+    //
+    // ★★ The setup page exists for a HEADLESS Linux box, where a browser is the only way in and
+    //    the server genuinely has a radio and a password but no policy yet. A Mac has a window.
+    //    There is no unconfigured state to be in, so there is nothing for that page to ask.
+    // ★ Not gated on Simple/Full: even in Full the questions are answered in the GUI, not a
+    //   browser wizard.
+    // ★★★ WHICH SURFACE OWNS SETUP, and it depends on the mode.
+    //
+    //   SIMPLE — the GUI owns it. A handful of controls in the app's own window, and the browser
+    //     wizard is never served: plug a radio in, press start. Two ways to configure one server
+    //     is how they drift apart, so in Simple there is exactly one.
+    //   FULL — the WEB PAGE owns it. The full option set already exists there, is already
+    //     maintained, and is already shared by Linux, macOS and Android. Re-implementing it in
+    //     SwiftUI and again in Kotlin would be three copies of one set of rules — and the GUI is
+    //     a thin strip that is a lot to scroll before we add anything (Stuart, 2026-08-07).
+    //
+    // ★ `configured` is always true on a GUI host either way: there is no "never been set up"
+    //   state to be in when the app has a window. What changes is where the DETAIL lives.
+    LocalSdrShim::setConfigured(true);
+    LocalSdrShim::setNativeSetup(!cfg->fullMode);
+
     // ── ★★★ THE ADMIN FEATURES ON macOS ──────────────────────────────────────────────────────
     // The admin page, the ban list, the connection log and the idle re-lock all live in the
     // SHARED shim, so they arrive here by recompiling. What has to be registered per platform is

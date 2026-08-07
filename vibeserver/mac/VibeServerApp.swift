@@ -148,6 +148,23 @@ final class LocationFinder: NSObject, ObservableObject, CLLocationManagerDelegat
 @MainActor
 final class Server: ObservableObject {
     @Published var running = false
+
+    /// ★ SIMPLE vs FULL. Simple is the plug-a-radio-in pane this app has always had. Full trims
+    ///   it to the radio, the two secrets and Start, and moves the rest to the browser setup page
+    ///   — the same page Linux uses, so a public receiver is configured one way everywhere.
+    @AppStorage("fullMode") var fullMode = false
+
+    /// True when the admin password below was GENERATED rather than chosen. The pane then shows
+    /// it in the clear, because a secret nobody has ever seen protects nothing and helps no one.
+    @AppStorage("generatedAdmin") var generatedAdmin = false
+
+    /// ★ NO 0/O/1/I/l. This is read off a screen and typed on a phone, and one ambiguous
+    ///   character turns a working password into "the admin login is broken".
+    static func generatedPassword() -> String {
+        let alphabet = Array("ABCDEFGHJKMNPQRSTUVWXYZ23456789")
+        let word = { String((0..<4).map { _ in alphabet.randomElement()! }) }
+        return "\(word())-\(word())"
+    }
     @Published var port: Int = 0
     @Published var lastError: String?
     @Published var status = VsStatus()
@@ -452,6 +469,14 @@ final class Server: ObservableObject {
         return ch(f1) + ch(f2) + "\(s1)\(s2)" + ch(t1).lowercased() + ch(t2).lowercased()
     }
 
+    /// Opens the shared setup page. ★ The LAN address, not loopback — an owner reading this pane
+    /// may well be screen-sharing or on the machine's own display, and either works from here.
+    func openSetupInBrowser() {
+        guard running, let host = accessAddresses.first,
+              let url = URL(string: "http://\(host)/setup") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     func start() {
         lastError = nil
         var cfg = VsConfig()
@@ -477,6 +502,32 @@ final class Server: ObservableObject {
         // ★ A hang is worse than a failure: a failure can be SHOWN.
         starting = true
         lastError = nil
+        // ★★★ NO PASSWORD MUST NOT MEAN NO CONTROL.
+        //
+        // The hardware gate refuses gain, bias-T, direct sampling and calibration to everyone
+        // when no admin password is set — the only safe reading, since a blank secret cannot
+        // tell the owner from a stranger. But that leaves a receiver NOBODY can control: a new
+        // one starts at MINIMUM GAIN by design, so the waterfall is flat until the gain is
+        // raised, and an owner browsing from another room has nothing that raises it. They
+        // conclude the RADIO is broken. Android is worse — no browser on the machine at all.
+        //
+        // ★★ So GENERATE one rather than DEMAND one. Forcing the owner to invent a password
+        //    taxes the plug-and-play flow this app exists to protect; a generated one costs
+        //    them nothing, is shown with a Copy button, and unlocks the controls from ANY
+        //    browser. This is the EXISTING admin credential, not a new mechanism.
+        //
+        // ★ Written through and synchronised rather than left to @AppStorage's timing: measured
+        //   the server coming up with a generated password while the preference stayed EMPTY,
+        //   so the next launch generated a DIFFERENT one and the password the owner had copied
+        //   off the screen stopped working. Of everything here, this must not drift.
+        if adminPassword.isEmpty {
+            let generated = Self.generatedPassword()
+            UserDefaults.standard.set(generated, forKey: "adminPassword")
+            UserDefaults.standard.set(true, forKey: "generatedAdmin")
+            UserDefaults.standard.synchronize()
+            adminPassword = generated
+            generatedAdmin = true
+        }
         let modeS = mode, pinS = pin, admS = adminPassword
         let limitS = sessionLimitMin
         DispatchQueue.global(qos: .userInitiated).async {
@@ -939,8 +990,136 @@ struct SettingsView: View {
     @ObservedObject var server: Server
     @StateObject private var finder = LocationFinder()
 
+    // ★★★ TWO MODES, TWO VIEWS — NOT ONE FORM FULL OF `if`s.
+    //
+    // The first attempt threaded `if !fullMode` through the single shipped Form. It compiled, and
+    // then rendered the OPPOSITE of what it said: in Simple the Access section — the PIN and the
+    // admin password — was absent, while Full showed everything. A Form carrying that many
+    // conditional children regroups them in ways the source does not describe, and the failure is
+    // SILENT, so the code reads correct while the pane is wrong.
+    //
+    // ★★ Two separate views cannot do that. Simple is the shipped Form, untouched; Full is its own
+    //    short one. Neither can lose a section the other owns.
     var body: some View {
+        if server.fullMode { fullForm } else { simpleForm }
+    }
+
+    /// The mode switch itself, FIRST in both panes, because it decides what the rest of them show.
+    @ViewBuilder private var modeSection: some View {
+        Section {
+            Picker("Setup", selection: $server.fullMode) {
+                Text("Simple").tag(false)
+                Text("Full").tag(true)
+            }
+            .pickerStyle(.segmented)
+            Text(server.fullMode
+                 ? "Everything else is set up in a browser — one settings page shared by every "
+                   + "VibeServer, rather than a different thin strip of controls per platform."
+                 : "Plug a radio in and press Start. Switch to Full to share this receiver "
+                   + "publicly and set it up in a browser.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// ★ FULL — deliberately four things: the radio, the two secrets, and Start. Everything else
+    ///   moved to the browser setup page, which is where a public receiver is actually configured.
+    private var fullForm: some View {
         Form {
+            modeSection
+            Section("Radio") {
+                HStack {
+                    Text("Receiver")
+                    Spacer()
+                    Text(server.devices.indices.contains(server.deviceIndex)
+                         ? server.devices[server.deviceIndex]
+                         : "None found").foregroundStyle(.secondary)
+                    Button("Refresh") { server.rescan() }
+                }
+                if server.devices.count > 1 {
+                    Picker("Use", selection: $server.wantedDevice) {
+                        ForEach(Array(server.devices.enumerated()), id: \.offset) { i, d in
+                            Text(d).tag(d)
+                        }
+                    }
+                }
+            }
+            Section("Access") {
+                adminPasswordRow
+                SecureField("PIN", text: $server.pin, prompt: Text("Open — no PIN"))
+                Text("PASSWORD unlocks the settings and the hardware — the gain, bias-T, direct "
+                   + "sampling and calibration — from any browser, and opens the setup page "
+                   + "below. PIN decides who may connect and listen at all; a public receiver "
+                   + "usually has none.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Button(server.running ? "Stop serving" : "Start serving") {
+                    server.running ? server.stop() : server.start()
+                }
+                Button("Open setup in your browser…") { server.openSetupInBrowser() }
+                    .disabled(!server.running)
+                Text(server.running
+                     ? "Name, location, sharing, session limits, bandwidth and the link settings "
+                       + "are all on that page."
+                     : "Start serving first — the setup page is served by the server itself.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let err = server.lastError {
+                    Text(err).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section("Startup") {
+                Toggle("Open VibeServer at login", isOn: Binding(
+                    get: { server.openAtLogin },
+                    set: { server.openAtLogin = $0 }))
+                Toggle("Start serving when VibeServer opens", isOn: $server.autoStart)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(minWidth: 380)
+    }
+
+    /// ★★ ONE ROW, NOT TWO. The first attempt drew a SecureField AND a separate "your control
+    ///    password" block, so the pane showed the same secret twice — once as dots and once in
+    ///    the clear — and gave no hint which was live.
+    ///
+    /// ★★★ VISIBLE ONLY WHILE IT IS OURS. A generated password must be readable: the owner has
+    ///     never seen it, and dots would lock them out of their own radio. One THEY chose is
+    ///     already known to them, so it goes behind dots — a settings pane is exactly where
+    ///     someone reads over your shoulder.
+    @ViewBuilder private var adminPasswordRow: some View {
+        // ★ The setter clears the flag on the FIRST keystroke. Left set, a password the owner had
+        //   typed themselves stayed on screen in plain text — which is how a real one came to be
+        //   displayed to the room during testing.
+        let bound = Binding(get: { server.adminPassword },
+                            set: { server.adminPassword = $0; server.generatedAdmin = false })
+        if server.generatedAdmin && !server.adminPassword.isEmpty {
+            HStack {
+                TextField("Admin password", text: bound)
+                    .font(.system(.body, design: .monospaced))
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(server.adminPassword, forType: .string)
+                }
+            }
+            Text("MADE FOR YOU, and shown in full because you have not seen it before. Without a "
+               + "password NOBODY may change this radio's GAIN, bias-T, direct sampling or "
+               + "calibration — not a stranger, and not you from another machine — and a receiver "
+               + "deliberately starts at MINIMUM GAIN, so the waterfall would stay flat with "
+               + "nothing able to lift it. Enter this in the client to unlock the controls.\n\n"
+               + "Type over it to use your own, and it is hidden from then on.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            SecureField("Admin password", text: bound,
+                        prompt: Text("One will be made for you"))
+        }
+    }
+
+    /// ★ SIMPLE — the pane exactly as it shipped, plus the mode switch. Stuart, 2026-08-06:
+    ///   "Simple mode on both is what it is now with 0 changes."
+    private var simpleForm: some View {
+        Form {
+            modeSection
             // ── The addresses to point a client at, and what the server is pushing right now. AT THE
             // TOP because "how do I reach this / what's it doing" is the first question — and the
             // reason a user typed the wrong port (couldn't see which one it bound). ──
@@ -1111,8 +1290,7 @@ struct SettingsView: View {
                    + "A public receiver typically has NO PIN, so everyone can listen — and a "
                    + "password, so no visitor can put DC on your feedline.")
                     .font(.caption).foregroundStyle(.secondary)
-                SecureField("Admin password", text: $server.adminPassword,
-                            prompt: Text("Not set — nothing is protected"))
+                adminPasswordRow
                 Text("A SECOND password, for a different job. The PIN decides who may listen; "
                    + "this decides who may change the settings a visitor has no business "
                    + "touching on someone else's radio:\n\n"
@@ -1121,10 +1299,9 @@ struct SettingsView: View {
                    + "• DIRECT SAMPLING — reconfigures the front end; left on, the receiver "
                    + "looks broken to everyone after.\n"
                    + "• CALIBRATION — miscalibrates the radio invisibly and permanently.\n\n"
-                   + "Gain, sample rate, tuning and the audio controls stay open to listeners — "
-                   + "those are what anyone needs to actually use the receiver, and they undo in "
-                   + "a click.\n\n"
-                   + "Leave it blank and nothing is protected. Set it, and listeners see those "
+                   + "Tuning, mode and the audio controls stay open to listeners — those are "
+                   + "what anyone needs to actually use the receiver, and they undo in a click.\n\n"
+                   + "Listeners see those "
                    + "controls locked with a box to unlock them — which is how YOU change them "
                    + "on your own server from anywhere.")
                     .font(.caption).foregroundStyle(.secondary)

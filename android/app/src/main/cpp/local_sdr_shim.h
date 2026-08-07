@@ -289,6 +289,17 @@ public:
      *  wizard makes that mandatory, so it can no longer stand in for this. Drives the
      *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */
     static void setConfigured(bool on);
+
+    /** ★★★ THIS PLATFORM SETS ITSELF UP IN ITS OWN WINDOW, so the browser setup wizard must not
+     *  be served at all — not at GET / and not at GET /setup.
+     *  ★★ The wizard exists for a HEADLESS Linux box, where a browser is the only way in. macOS
+     *     and Android have a settings pane that IS the setup (Stuart, 2026-08-07: "this wizard
+     *     page shouldn't need to exist for either android or mac"). Leaving it reachable would
+     *     leave a SECOND way to configure the same server — and two configuration surfaces drift,
+     *     which is the failure this project keeps paying for.
+     *  ★ Default false: the daemon is the one that needs it, and a new host should have to say
+     *    it has its own UI rather than inherit an assumption. */
+    static void setNativeSetup(bool on);
     /** ★★ Where a NEW SESSION starts: the owner's landing frequency (Hz) and demodulator.
      *  Applied when the listener count goes 0 -> 1, never on every connect — the shared receiver
      *  is one radio and one VFO, so landing each joiner would yank the group already listening. */

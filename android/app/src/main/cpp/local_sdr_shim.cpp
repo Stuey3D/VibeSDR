@@ -910,6 +910,9 @@ static void vsPersist(const std::string& patch) {
 }
 // ★ Has the owner finished browser setup? NOT the same question as "is an admin password set".
 static std::atomic<bool>             g_vsConfigured{false};
+/** True when the host has its own settings UI (macOS, Android) — then the browser setup wizard is
+ *  never served, because it would be a second way to configure one server. */
+static std::atomic<bool>             g_vsNativeSetup{false};
 
 // ── ★★★ WHERE A NEW SESSION STARTS — the owner's landing frequency and mode ──────────────────
 // The VFO is SERVER state and survives the listener who moved it, which is correct for a shared
@@ -3489,7 +3492,16 @@ struct LocalSdrShim::Impl {
         startEngine();
         startDspThread();
         tcpRunning.store(true);
-        { std::lock_guard<std::mutex> lk(clientMtx); if (specClient) sendConfig(specClient); }
+        // ★★★ COPY THE CLIENT OUT, THEN DROP THE LOCK BEFORE sendConfig — a SELF-DEADLOCK.
+        //     sendConfig calls binsFor(), which locks clientMtx itself, and clientMtx is a plain
+        //     std::mutex: re-locking it on the same thread is undefined and here it simply hung
+        //     forever. The whole server froze — DSP heartbeat stopped, HTTP stopped answering —
+        //     while the PROCESS stayed alive, so it read as a crash with no crash report.
+        // ★★ Fired on any client sample-rate change, which is a normal thing to do from the
+        //    audio menu. The two call sites above already copy-then-release; these two did not.
+        std::shared_ptr<net::Socket> scfg;
+        { std::lock_guard<std::mutex> lk(clientMtx); scfg = specClient; }
+        if (scfg) sendConfig(scfg);
         return true;
     }
 
@@ -4548,11 +4560,30 @@ struct LocalSdrShim::Impl {
         // the controls someone needs to actually USE a receiver, they are recoverable in a
         // click, and locking them would make a public server pointless (Stuart, 2026-07-27:
         // Hans "will probably only want the gain and sample rate accessible").
-        auto adminGate = [this](const char* what) -> bool {
+        auto adminGate = [this, &sock](const char* what) -> bool {
             bool needed;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx); needed = !g_vsAdminSecret.empty(); }
-            if (!needed || adminOk.load()) return true;
-            LOGI("refused %s — admin password required", what);
+            if (adminOk.load()) return true;
+            // ★★★ NO PASSWORD SET MEANS NOBODY IS AUTHORISED — NOT THAT EVERYONE IS.
+            //
+            // This used to be `if (!needed || adminOk)`, so a receiver with no admin password let
+            // EVERY listener change the gain, the calibration, direct sampling and BIAS-T — which
+            // puts DC on the feedline. The reasoning was that a host who never asked for a
+            // password should not find their own controls refusing to work, and that is right —
+            // but the host is LOOPBACK, and this let the whole network in to protect them.
+            //
+            // ★★ So: with no password, the machine running the server keeps every control and
+            //    nobody else gets any. Zero friction for plug-and-play (there is still nothing to
+            //    type), and a radio that is accidentally exposed cannot be damaged by a stranger.
+            //    Silence is not consent (Stuart asked the right question, 2026-08-07: "do we force
+            //    an admin password in simple mode to prevent a user accidentally exposing a radio
+            //    with full admin controls?" — forcing one taxes the flow; this does not).
+            // ★ A headless Linux server is unaffected: its wizard makes the admin password
+            //   mandatory, so `needed` is always true there and this branch never applies.
+            if (!needed && sock && isLoopback(sock->peerAddress())) return true;
+            LOGI("refused %s — %s", what,
+                 needed ? "admin password required"
+                        : "no admin password is set, so only this machine may change the radio");
             std::shared_ptr<net::Socket> sc;
             { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
             if (sc) sendText(sc, "{\"type\":\"admin\",\"ok\":false,\"refused\":true}");
@@ -5940,7 +5971,7 @@ struct LocalSdrShim::Impl {
         // feature, and the only way back would have been the TUI's reset-to-not-set-up.
         // ★ Still admin-gated in the only way that matters: the page can display, but every
         //   value on it comes from GET /vibeserver/config, which refuses without the password.
-        } else if (reqLine.rfind("GET /setup", 0) == 0) {
+        } else if (reqLine.rfind("GET /setup", 0) == 0 && !g_vsNativeSetup.load()) {
             const std::string page = kVibeSetupPage;
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
@@ -5958,7 +5989,7 @@ struct LocalSdrShim::Impl {
             //   makes the password mandatory, so that can no longer stand in for this.
             // ★★ The endpoints stay open while unconfigured — this page needs /vibeserver/auth and
             //    /vibeserver/config to work, and both are admin-gated in their own right.
-            if (!g_vsConfigured.load() && g_vsWebEnabled.load()) {
+            if (!g_vsConfigured.load() && !g_vsNativeSetup.load() && g_vsWebEnabled.load()) {
                 const std::string page = kVibeSetupPage;
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                               "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
@@ -8294,6 +8325,7 @@ void LocalSdrShim::setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc)
     g_vsSavedLna.store(lnaState); g_vsSavedIfGr.store(ifGr); g_vsSavedIfAgc.store(ifAgc);
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
+void LocalSdrShim::setNativeSetup(bool on) { g_vsNativeSetup.store(on); }
 void LocalSdrShim::setVibeServerLanding(double hz, const std::string& mode) {
     g_vsLandingHz.store(hz > 0 ? hz : 0.0);
     std::lock_guard<std::mutex> lk(g_vsLandingMtx);
@@ -9288,7 +9320,12 @@ void LocalSdrShim::setSampleRate(double rate) {
     impl->rx.stop();
     impl->startEngine();
     impl->buildAudio();
-    { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
+    // ★★★ SAME SELF-DEADLOCK as the one fixed in spyRetuneDecimation — see the note there.
+    //     sendConfig -> binsFor re-locks clientMtx, and this held it across the call. THIS is
+    //     the one that fired: a listener changing the capture rate wedged the entire server.
+    std::shared_ptr<net::Socket> scfg;
+    { std::lock_guard<std::mutex> lk(impl->clientMtx); scfg = impl->specClient; }
+    if (scfg) impl->sendConfig(scfg);
     impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
     else if (rsp) { impl->sdrp->setPaused(false); }
