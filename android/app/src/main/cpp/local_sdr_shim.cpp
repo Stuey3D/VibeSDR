@@ -1308,6 +1308,25 @@ struct LocalSdrShim::Impl {
     // "destroyed mutex"). So the USB/TCP reader only CONVERTS + ENQUEUES IQ here;
     // a dedicated dspThread drains the queue and runs rx.feed off the libusb path
     // (mirrors how SDR++ ran the DSP on its own threads).
+    /** ★★★ THE DEVICE HANDLE, AND EVERY CONTROL CALL THAT TOUCHES IT.
+     *
+     *  Closing a device while another thread is tuning it is a use-after-free, and on an
+     *  unattended server libusb ABORTS rather than returning an error. That is exactly why
+     *  reopenDevice() sat here for months marked "NOT CALLED — kept as the skeleton of the real
+     *  fix": nothing serialised rtlsdr_set_gain / tuneHw / setFftRate against a close.
+     *
+     *  ★★ LOCK ORDER: devMtx BEFORE modeMtx, never the reverse. setSampleRate takes both.
+     *  ★★ THE CAPTURE THREAD NEVER TAKES THIS. It blocks inside rtlsdr_read_async for as long as
+     *     the stream runs, so taking devMtx there would mean holding it forever — and releasing
+     *     the radio joins that thread while holding devMtx. The stream is always STOPPED first;
+     *     serialising it as well would deadlock the very path this exists for.
+     *  ★ Recursive because the release path calls control helpers that lock it themselves.
+     */
+    std::recursive_mutex devMtx;
+    /** True while the radio is deliberately let go for another program (see releaseRadio).
+     *  Control calls become no-ops rather than touching a handle that is not there. */
+    std::atomic<bool> radioReleased{false};
+
     std::deque<std::vector<cf32>> iqQueue;
     std::mutex iqMtx;
     std::condition_variable iqCv;
@@ -9108,8 +9127,19 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 }
 
 // ── Hardware controls ─────────────────────────────────────────────────────────
+// ★ DEFINED HERE, above its FIRST user — it used to sit halfway down the file, next to the RSP
+//   setters that were its only callers. The RTL setters above needed it too.
+#define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
+
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
+    // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
+    //    never took it, which is why reopenDevice() could never be called: a close could
+    //    land mid-tune, and libusb turns that into an ABORT, not an error.
+    // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
+    //   and already the one held across engine rebuilds.
+    VIBE_HW_LOCK();
+    if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useSpy()) {
         // No AGC in the protocol — "auto" has no wire representation, so mid-scale.
         p->lastGainTenthDb = gainTenthDb;
@@ -9140,6 +9170,13 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 }
 void LocalSdrShim::setPpm(int ppm) {
     if (!p) return;
+    // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
+    //    never took it, which is why reopenDevice() could never be called: a close could
+    //    land mid-tune, and libusb turns that into an ABORT, not an error.
+    // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
+    //   and already the one held across engine rebuilds.
+    VIBE_HW_LOCK();
+    if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
 
     if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); return; }
@@ -9148,18 +9185,39 @@ void LocalSdrShim::setPpm(int ppm) {
 }
 void LocalSdrShim::setBiasTee(bool on) {
     if (!p) return;
+    // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
+    //    never took it, which is why reopenDevice() could never be called: a close could
+    //    land mid-tune, and libusb turns that into an ABORT, not an error.
+    // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
+    //   and already the one held across engine rebuilds.
+    VIBE_HW_LOCK();
+    if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x0e, on ? 1 : 0); return; }
     if (!p->dev) return;
     rtlsdr_set_bias_tee(p->dev, on ? 1 : 0); LOGI("bias-tee: %d", on);
 }
 void LocalSdrShim::setAgc(bool on) {
     if (!p) return;
+    // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
+    //    never took it, which is why reopenDevice() could never be called: a close could
+    //    land mid-tune, and libusb turns that into an ABORT, not an error.
+    // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
+    //   and already the one held across engine rebuilds.
+    VIBE_HW_LOCK();
+    if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x08, on ? 1 : 0); return; }
     if (!p->dev) return;
     rtlsdr_set_agc_mode(p->dev, on ? 1 : 0); LOGI("agc: %d", on);
 }
 void LocalSdrShim::setDirectSampling(int mode) {
     if (!p) return;
+    // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
+    //    never took it, which is why reopenDevice() could never be called: a close could
+    //    land mid-tune, and libusb turns that into an ABORT, not an error.
+    // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
+    //   and already the one held across engine rebuilds.
+    VIBE_HW_LOCK();
+    if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x09, (uint32_t)mode); return; }
     if (!p->dev) return;
     rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
@@ -9227,6 +9285,11 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
+    // ★★★ NO VIBE_HW_LOCK HERE, DELIBERATELY. This function calls stopDspThread() before it
+    //     takes modeMtx, and that join waits on a thread which takes modeMtx per buffer —
+    //     holding it from the top would deadlock exactly as the stopDspThread note warns.
+    //     It takes the lock further down, at the only point where that is safe.
+    if (p->radioReleased.load()) return;   // the radio is lent to another program
     // ★★★ A LOCKED CENTRE LOCKS THE RATE TOO. The centre and the rate TOGETHER define the
     //     captured window; pinning one and leaving the other client-changeable is incoherent,
     //     and it showed: with the centre held at 6.5 MHz a listener changed the rate and the
@@ -9501,7 +9564,6 @@ std::string LocalSdrShim::radioCapsJson() const {
 //
 // ★★ UNVERIFIED. The proof is changing settings repeatedly on air and the freeze no longer
 //    following. If it still happens, this was not it — do not assume it away.
-#define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
 
 void LocalSdrShim::setAhfAgc(bool on) {
     g_dsp.ahfAgc.store(on ? 1 : 0);
