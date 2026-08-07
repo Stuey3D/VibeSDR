@@ -24,7 +24,7 @@ ARCH="$(dpkg --print-architecture)"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
-for t in dpkg-scanpackages apt-ftparchive gpg dpkg-deb cmake git; do
+for t in dpkg-scanpackages apt-ftparchive gpg dpkg-deb cmake git rsync; do
   command -v "$t" >/dev/null || { echo "missing: $t (apt install dpkg-dev apt-utils gnupg)"; exit 1; }
 done
 gpg --list-secret-keys "$SIGN_KEY" >/dev/null 2>&1 || { echo "no signing key for $SIGN_KEY"; exit 1; }
@@ -73,12 +73,48 @@ REV=$((HIGH + 1))
 FULLVER="${UPSTREAM}-${REV}"
 echo "==> publishing vibeserver $FULLVER ($ARCH)"
 
-# ── Build ────────────────────────────────────────────────────────────────────
-cmake -S "$SRC_DIR/vibeserver" -B "$SRC_DIR/vibeserver/build" -DCMAKE_BUILD_TYPE=Release \
-      -DVIBESERVER_DEB_REV="$REV" >/dev/null
-cmake --build "$SRC_DIR/vibeserver/build" -j"$(nproc)" | tail -1
-( cd "$SRC_DIR/vibeserver/build" && cpack >/dev/null )
-DEB="$(ls -t "$SRC_DIR/vibeserver/build"/vibeserver_*.deb | head -1)"
+# ── Build, INSIDE A DEBIAN BOOKWORM ROOT ─────────────────────────────────────
+# ★★★ NOT ON THE HOST. CPack derives Depends: from whatever the build machine links against, so
+#     building on this Pi (trixie) stamped the package `libc6 (>= 2.38), libstdc++6 (>= 14)` and
+#     it became UNINSTALLABLE on Debian 12 and Ubuntu 22.04 — while nothing in the source needs
+#     either, as it is plain C++17 that gcc-12 compiles unchanged.
+#
+# ★★ AND THE FAILURE WAS WORSE THAN A REFUSAL. apt names the offending libraries, so the obvious
+#    response is to upgrade them — which on a distribution not built for them takes the rest of
+#    the machine with it. It cost a user their working OpenWebRX before we understood why.
+#
+# ★ The build root is the OLDEST distribution we intend to support, and that is the whole trick:
+#   glibc and libstdc++ are backward compatible, so a binary built against 2.36 runs on 2.41,
+#   but never the other way round. Create it once with:
+#     sudo debootstrap --arch=arm64 --variant=buildd bookworm "$BUILD_ROOT"
+BUILD_ROOT="${VIBESERVER_BUILD_ROOT:-/srv/bookworm}"
+if [ ! -x "$BUILD_ROOT/usr/bin/g++" ]; then
+  echo "!! no build root at $BUILD_ROOT — see the comment above; refusing to build against"
+  echo "   this machine's libraries, which is what shipped an uninstallable package before."
+  exit 1
+fi
+sudo mkdir -p "$BUILD_ROOT/build"
+sudo cp /etc/resolv.conf "$BUILD_ROOT/etc/resolv.conf"
+for d in proc sys dev dev/pts; do
+  sudo mountpoint -q "$BUILD_ROOT/$d" || sudo mount --bind "/$d" "$BUILD_ROOT/$d"
+done
+sudo rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
+sudo chroot "$BUILD_ROOT" /bin/bash -c "
+  cd /build/VibeSDR/vibeserver
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV >/dev/null
+  cmake --build build -j$(nproc) | tail -1
+  cd build && cpack >/dev/null"
+DEB="$(ls -t "$BUILD_ROOT/build/VibeSDR/vibeserver/build"/vibeserver_*.deb | head -1)"
+
+# ★★ ASSERT THE BASELINE, every publish. The point of the build root is the Depends: line it
+#    produces, so a silent regression to a newer libc is the one failure that must never ship.
+BAD="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | grep -E 'libc6 \(>= 2\.(3[7-9]|[4-9])|libstdc\+\+6 \(>= 1[3-9]' || true)"
+if [ -n "$BAD" ]; then
+  echo "!! this package demands a newer runtime than the build root should produce:"
+  echo "$BAD"
+  echo "   it would be uninstallable on the systems the build root exists to support."
+  exit 1
+fi
 echo "==> built $(basename "$DEB")"
 
 # ★ Sanity: the package must actually carry the version we think it does, or the pool fills with
