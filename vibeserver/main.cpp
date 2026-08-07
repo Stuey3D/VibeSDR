@@ -520,7 +520,35 @@ static int setRtlSerial(int index, const std::string& newSerial) {
 int main(int argc, char** argv) {
     // ★ Handled before everything else: it never starts a server, and it must work on a machine
     //   whose config is broken or absent — renaming a dongle is often what you do BEFORE setup.
+    // ★★ WHAT THE SERVER ACTUALLY SEES, in the order --radio numbers them. Needed the moment
+    //    there is more than one radio: the setup screen, the config file and --radio must all
+    //    agree about which one is "the second radio", and until now nothing could show you.
+    // ★ IDENTITY COMES FROM THREE DIFFERENT PLACES, which is why this prints it rather than
+    //   assuming. RTL dongles carry a USB serial (and ship with duplicates — see
+    //   --set-rtl-serial); the Airspy HF+ carries one too; but an SDRplay RSP presents NO USB
+    //   serial at all and is identified by a serial its own API hands out.
     for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--list-radios") {
+            const int nRtl = (int)rtlsdr_get_device_count();
+            const int nRsp = vibe::SdrplaySource::deviceCount();
+            const int nAhf = vibe::AirspyHfSource::deviceCount();
+            if (nRtl + nRsp + nAhf == 0) { std::printf("No radios found.\n"); return 1; }
+            std::printf("\n  #  driver    radio\n");
+            for (int k = 0; k < nRtl; k++) {
+                char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
+                rtlsdr_get_device_usb_strings((uint32_t)k, mfr, prd, ser);
+                std::printf("  %d  rtlsdr    %s %s  (serial %s)\n", k, mfr, prd,
+                            ser[0] ? ser : "none");
+            }
+            for (int k = 0; k < nRsp; k++)
+                std::printf("  %d  sdrplay   %s\n", nRtl + k,
+                            vibe::SdrplaySource::deviceName(k).c_str());
+            for (int k = 0; k < nAhf; k++)
+                std::printf("  %d  airspyhf  %s\n", nRtl + nRsp + k,
+                            vibe::AirspyHfSource::deviceName(k).c_str());
+            std::printf("\n  Pick one with:  vibeserver --radio <#>\n\n");
+            return 0;
+        }
         if (std::string(argv[i]) == "--set-rtl-serial") {
             if (i + 2 >= argc) {
                 std::fprintf(stderr, "usage: vibeserver --set-rtl-serial <dongle-number> <new-serial>\n");
