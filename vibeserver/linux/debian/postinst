@@ -97,6 +97,12 @@ case "$1" in
       #    its request happily; without this unit running, nothing is watching for it, and the
       #    admin page reports success for an action that never happens — worse than an error.
       systemctl enable --now vibeserver-maintenance.path >/dev/null 2>&1 || true
+      # ★★ THE OTHER RADIOS. Enabled, and RUN NOW on an upgrade so a machine that was already
+      #    serving several comes back serving several — without this, the second and third radios
+      #    would quietly stay down until the next reboot and the owner would have no idea why.
+      #    On a fresh install it finds nothing configured and exits, which is correct.
+      systemctl enable vibeserver-radios.service >/dev/null 2>&1 || true
+      systemctl start  vibeserver-radios.service >/dev/null 2>&1 || true
       # ★ The wizard enables and starts the service itself (tui.cpp), so telling people to run
       #   systemctl afterwards is wrong — and it is the sort of wrong that makes someone think a
       #   step failed when it simply was not needed (Stuart hit exactly this, 2026-08-06).

@@ -491,6 +491,27 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     return true;
 }
 
+int primaryRadio(const ServerConfig& cfg) {
+    for (size_t i = 0; i < cfg.radios.size(); i++)
+        if (cfg.radios[i].enabled && cfg.radios[i].configured) return (int)i;
+    return -1;
+}
+
+int portForRadio(const ServerConfig& cfg, size_t index) {
+    const int base = cfg.port > 0 ? cfg.port : 48000;
+    if (index >= cfg.radios.size()) return base;
+    // ★ An explicit per-radio port always wins — an owner who pinned one did it for a router rule.
+    if (cfg.radios[index].port > 0) return cfg.radios[index].port;
+    const int primary = primaryRadio(cfg);
+    if ((int)index == primary) return base;
+    // Everyone else takes base+1, base+2 … in ARRAY order, skipping the primary. Counting only
+    // the radios before this one keeps a receiver's port stable when a LATER radio is switched off.
+    int offset = 1;
+    for (size_t i = 0; i < index && i < cfg.radios.size(); i++)
+        if ((int)i != primary) offset++;
+    return base + offset;
+}
+
 Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     Config c;
     c.configured = s.configured && r.configured;

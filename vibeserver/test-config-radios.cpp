@@ -129,6 +129,45 @@ int main() {
         }
     }
 
+    std::printf("\nPorts: the primary keeps the machine's port, the rest queue behind it\n");
+    {
+        ServerConfig s; s.configured = true; s.port = 48000;
+        RadioConfig a; a.serial="A"; a.enabled=true;  a.configured=true;
+        RadioConfig b; b.serial="B"; b.enabled=true;  b.configured=true;
+        RadioConfig c; c.serial="C"; c.enabled=true;  c.configured=true;
+        s.radios = {a,b,c};
+        ok(primaryRadio(s) == 0, "the first ready radio is primary");
+        ok(portForRadio(s,0) == 48000, "★ the primary keeps 48000", std::to_string(portForRadio(s,0)));
+        ok(portForRadio(s,1) == 48001, "the second gets 48001", std::to_string(portForRadio(s,1)));
+        ok(portForRadio(s,2) == 48002, "the third gets 48002", std::to_string(portForRadio(s,2)));
+
+        // ★ A LATER radio going dark must not move an EARLIER one's port — listeners are on it.
+        s.radios[2].enabled = false;
+        ok(portForRadio(s,1) == 48001, "★ switching off radio 3 leaves radio 2 where it was",
+           std::to_string(portForRadio(s,1)));
+
+        // The first radio not being ready hands the machine port to the next one that is.
+        s.radios[2].enabled = true;
+        s.radios[0].configured = false;
+        ok(primaryRadio(s) == 1, "an unconfigured first radio is not primary");
+        ok(portForRadio(s,1) == 48000, "★ the machine's port follows the primary",
+           std::to_string(portForRadio(s,1)));
+
+        // An owner who pinned a port for a router rule keeps it.
+        s.radios[2].port = 49000;
+        ok(portForRadio(s,2) == 49000, "an explicit port wins", std::to_string(portForRadio(s,2)));
+    }
+
+    std::printf("\nNo radio ready is a state, not an error\n");
+    {
+        ServerConfig s; s.configured = true;
+        RadioConfig a; a.enabled = true; a.configured = false;   // ticked, never set up
+        s.radios = {a};
+        ok(primaryRadio(s) == -1, "★ nothing is primary, and nothing crashes");
+        ok(portForRadio(s,0) == 48001, "and it does not squat on the machine's port",
+           std::to_string(portForRadio(s,0)));
+    }
+
     std::printf("\nA machine with no radios is a valid answer, not an error\n");
     {
         ServerConfig s; s.configured = true;

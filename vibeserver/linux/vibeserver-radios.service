@@ -1,0 +1,20 @@
+[Unit]
+# Starts the SECOND and subsequent radios once the primary is up. Oneshot: it reconciles what is
+# running against the config and exits, so there is no long-lived supervisor to go wrong.
+Description=VibeServer — start the other radios
+Documentation=https://vibesdr.net
+After=vibeserver.service
+Wants=vibeserver.service
+PartOf=vibeserver.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibeserver/vibeserver-radios
+# ★ Root, because it starts and stops units. It runs a FIXED reconciliation against the config
+#   file — it takes no arguments and executes nothing the config names, which is what keeps this
+#   from being an arbitrary-command channel for anyone who can write config.json.
+User=root
+
+[Install]
+WantedBy=multi-user.target

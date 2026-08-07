@@ -265,6 +265,9 @@ if(UNIX AND NOT APPLE)
   include(GNUInstallDirs)
   install(TARGETS vibeserver RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   install(FILES linux/vibeserver.service DESTINATION lib/systemd/system)
+# ★ The per-radio template and the reconciler that starts the second and later radios.
+install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
+        DESTINATION lib/systemd/system)
   # ★ /lib/udev/rules.d is the PACKAGE path; /etc/udev/rules.d is for the ADMIN's own overrides.
   #   Shipping into /etc would fight the sysadmin and survive `apt purge`.
   install(FILES linux/99-vibeserver-sdr.rules DESTINATION lib/udev/rules.d)
@@ -278,7 +281,7 @@ if(UNIX AND NOT APPLE)
           DESTINATION lib/systemd/system)
   # ★ Run as root from the unit's ExecStartPre — the daemon is unprivileged and cannot write
   #   sysfs. See linux/vibeserver-governor for why a wrong governor costs 25% of the machine.
-  install(PROGRAMS linux/vibeserver-governor DESTINATION lib/vibeserver)
+  install(PROGRAMS linux/vibeserver-governor linux/vibeserver-radios DESTINATION lib/vibeserver)
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)

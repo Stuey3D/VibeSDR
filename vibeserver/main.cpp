@@ -60,6 +60,7 @@ struct Opts {
     bool        useUsb  = true;          // default: drive the dongle directly
     int         radio   = 0;             // index into the FLAT list (dongles, then RSPs, then HF+)
     std::string radioSerial;             // ★ preferred: identity that does not move
+    bool        portGiven = false;       // an explicit --port always wins
     bool        radioGiven = false;
     bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
     // ★★★ THE ADMIN / OPERATOR SETTINGS. Without these a Pi CANNOT SAFELY BE MADE PUBLIC — Stuart,
@@ -264,7 +265,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--mode")      o.mode     = need(i);
         else if (a == "--fft")       o.fftSize  = std::atoi(need(i));
         else if (a == "--fps")       o.fftRate  = std::atof(need(i));
-        else if (a == "--port")      o.port     = std::atoi(need(i));
+        else if (a == "--port")      { o.port = std::atoi(need(i)); o.portGiven = true; }
         else if (a == "--pin")       o.pin      = need(i);
         else if (a == "--max-bw")    o.maxBw    = std::atof(need(i));
         else if (a == "--max-fps")   o.maxFps   = std::atof(need(i));
@@ -530,6 +531,10 @@ static int setRtlSerial(int index, const std::string& newSerial) {
     return 0;
 }
 
+/** True when this process owns the machine's main port — it serves the landing page and
+ *  the setup page for every radio, not just its own. */
+static bool g_isPrimaryRadio = true;
+
 int main(int argc, char** argv) {
     // ★ Handled before everything else: it never starts a server, and it must work on a machine
     //   whose config is broken or absent — renaming a dongle is often what you do BEFORE setup.
@@ -541,6 +546,27 @@ int main(int argc, char** argv) {
     //   --set-rtl-serial); the Airspy HF+ carries one too; but an SDRplay RSP presents NO USB
     //   serial at all and is identified by a serial its own API hands out.
     for (int i = 1; i < argc; i++) {
+        // ★★ THE SUPERVISOR ASKS US, rather than parsing JSON in shell. Which radio is primary and
+        //    which port each takes are rules with real subtleties (a disabled radio must not move
+        //    an earlier one's port), and a second implementation of them in bash would drift from
+        //    this one the first time either changed. One serial per line; the primary is NOT
+        //    listed, because it is vibeserver.service and starting it twice would fight for a USB
+        //    device with itself.
+        if (std::string(argv[i]) == "--list-secondary-radios") {
+            const char* e = getenv("VIBESERVER_CONFIG");
+            const std::string path = (e && *e) ? e : vsconfig::defaultPath();
+            vsconfig::ServerConfig srv; std::string err;
+            if (!vsconfig::loadServer(path, srv, err)) return 0;   // nothing configured yet
+            const int primary = vsconfig::primaryRadio(srv);
+            for (size_t k = 0; k < srv.radios.size(); k++) {
+                const auto& r = srv.radios[k];
+                if ((int)k == primary) continue;
+                if (!r.enabled || !r.configured) continue;
+                if (r.serial.empty()) continue;   // ★ cannot name a unit after nothing
+                std::printf("%s\n", r.serial.c_str());
+            }
+            return 0;
+        }
         if (std::string(argv[i]) == "--list-radios") {
             const auto rs = vibe::detectRadios();
             if (rs.empty()) { std::printf("No radios found.\n"); return 1; }
@@ -620,7 +646,17 @@ int main(int argc, char** argv) {
             // ★ A machine with radios but none ready still runs: it serves the setup page, which
             //   is exactly where the owner goes to make one ready. Refusing to start would leave
             //   them with no way in.
-            if (mine) { cfg = vsconfig::effectiveFor(srv, *mine); applyConfig(cfg, o); }
+            if (mine) {
+                cfg = vsconfig::effectiveFor(srv, *mine);
+                applyConfig(cfg, o);
+                // ★★ THE PORT COMES FROM THE MACHINE, not from this radio in isolation: which port
+                //    a radio answers on depends on whether it is the primary, and that is a
+                //    property of the whole list. Computed here rather than stored, so it cannot
+                //    drift from what the supervisor and the landing page believe.
+                const size_t idx = (size_t)(mine - &srv.radios[0]);
+                if (!o.portGiven) o.port = vsconfig::portForRadio(srv, idx);
+                g_isPrimaryRadio = ((int)idx == vsconfig::primaryRadio(srv));
+            }
             hadConfigFile = true;
         } else if (!err.empty()) {
             std::fprintf(stderr, "VibeServer: ignoring %s — %s\n", g_configPath.c_str(), err.c_str());

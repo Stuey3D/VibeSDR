@@ -1,0 +1,57 @@
+#!/bin/bash
+# vibeserver-radios — start one VibeServer per radio the owner has enabled AND configured.
+#
+# ★★★ ONE PROCESS PER RADIO, which is the whole shape of multi-radio here. The shim is a singleton
+#     and the wire protocol carries no radio id, so one process serving three radios would mean
+#     threading an id through every socket, message and listener table. Separate processes get
+#     that for free — and a separate crash domain with it, so one wedged radio cannot take the
+#     others off the air.
+#
+# ★★ THE PRIMARY IS NOT STARTED HERE. It is `vibeserver.service`, exactly as it has always been,
+#    and it keeps the machine's own port. That is what makes this safe to ship to every existing
+#    install: a single-radio server does not gain a unit, does not change port, and does not
+#    notice. This script only ever adds the SECOND and subsequent radios.
+#
+# ★ bash, not sh: `mapfile` and process substitution below. dash silently lacks both, which is how
+#   vibeserver-maintenance broke once already.
+set -uo pipefail
+
+CONF="${VIBESERVER_CONFIG:-/etc/vibeserver/config.json}"
+[ -r "$CONF" ] || { echo "vibeserver-radios: no readable $CONF — nothing to do"; exit 0; }
+
+# ── What SHOULD be running ───────────────────────────────────────────────────────────────────
+# Ask the binary rather than parsing JSON in shell: it already owns the rules for which radio is
+# primary and which port each one takes, and two implementations of that would drift.
+mapfile -t WANT < <(/usr/bin/vibeserver --list-secondary-radios 2>/dev/null)
+
+declare -A want_set=()
+for serial in "${WANT[@]}"; do
+    [ -n "$serial" ] && want_set["$serial"]=1
+done
+
+# ── What IS running ──────────────────────────────────────────────────────────────────────────
+mapfile -t RUNNING < <(systemctl list-units --plain --no-legend --all 'vibeserver@*.service' 2>/dev/null \
+                       | awk '{print $1}' | sed 's/^vibeserver@//; s/\.service$//')
+
+# ── Stop what is no longer wanted ────────────────────────────────────────────────────────────
+# ★ Before starting anything: a radio that has been switched off is still HOLDING its USB device,
+#   and a newly enabled radio may be the same physical one under a different setting.
+for serial in "${RUNNING[@]}"; do
+    [ -z "$serial" ] && continue
+    if [ -z "${want_set[$serial]:-}" ]; then
+        echo "vibeserver-radios: stopping $serial"
+        systemctl stop "vibeserver@${serial}.service" 2>/dev/null
+        systemctl disable "vibeserver@${serial}.service" 2>/dev/null
+    fi
+done
+
+# ── Start what is ────────────────────────────────────────────────────────────────────────────
+for serial in "${WANT[@]}"; do
+    [ -z "$serial" ] && continue
+    echo "vibeserver-radios: serving $serial"
+    systemctl enable "vibeserver@${serial}.service" 2>/dev/null
+    # restart, not start: if it is already up on stale settings this is how it picks up new ones.
+    systemctl restart "vibeserver@${serial}.service" 2>/dev/null
+done
+
+exit 0

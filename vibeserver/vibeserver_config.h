@@ -210,6 +210,19 @@ bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& e
 std::string toJson(const ServerConfig& cfg);
 bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
 
+/** ★★★ WHICH RADIO ANSWERS ON THE MACHINE'S MAIN PORT. The first one that is both enabled and
+ *  configured. Returns -1 when none is ready — a real state, and not an error: the machine still
+ *  runs and serves the setup page, which is where the owner goes to make one ready.
+ *  ★ For every existing single-radio install this is radio 0, so nothing moves. */
+int primaryRadio(const ServerConfig& cfg);
+
+/** The port a given radio listens on. ★ DETERMINISTIC, from the radios[] ORDER — not from
+ *  detection order, and not assigned and written back. Detection order changes when a radio is
+ *  busy or unplugged; a stored port that is recomputed differently each boot would move receivers
+ *  between addresses under their listeners. The primary always takes the machine's own port so a
+ *  single-radio server keeps answering exactly where it always has. */
+int portForRadio(const ServerConfig& cfg, size_t index);
+
 /** Flatten the shared settings and one radio's settings into the Config a single VibeServer
  *  process consumes. ★ This is what makes process-per-radio cheap: the existing single-radio code
  *  never learns that it has siblings. */

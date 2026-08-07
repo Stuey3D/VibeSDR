@@ -1,0 +1,34 @@
+[Unit]
+# ★★★ ONE RADIO, ONE PROCESS. %i is the radio's SERIAL, not its position: enumeration order changes
+# when a radio is busy or unplugged, and a unit named after a position would silently point at
+# different hardware after a reboot. See BRIEF-multi-radio.md.
+# ★ The PRIMARY radio is vibeserver.service, not an instance of this — so a single-radio machine
+#   never gains a unit and nothing about it changes.
+Description=VibeServer — radio %i
+Documentation=https://vibesdr.net
+After=network-online.target vibeserver.service
+Wants=network-online.target
+PartOf=vibeserver.service
+
+[Service]
+Type=simple
+ExecStartPre=+/usr/lib/vibeserver/vibeserver-governor
+ExecStart=/usr/bin/vibeserver --config /etc/vibeserver/vibeserver.conf --radio %i
+Restart=always
+RestartSec=5
+User=vibeserver
+Group=vibeserver
+SupplementaryGroups=plugdev
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# ★★★ PrivateTmp=yes, NOT `disconnected` — the SDRplay API talks to its service through shared
+# memory in /dev/shm, so a private /dev/shm makes RSPs vanish with no message saying why. Same
+# reasoning as vibeserver.service; keep the two in step.
+PrivateTmp=yes
+StateDirectory=vibeserver
+ReadWritePaths=/var/lib/vibeserver /etc/vibeserver
+DeviceAllow=char-usb_device rw
+
+[Install]
+WantedBy=multi-user.target
