@@ -261,8 +261,18 @@ void statusScreen(vsconfig::Config& cfg) {
         attron(up ? COLOR_PAIR(1) : COLOR_PAIR(2));
         mvprintw(4, 14, "%s", up ? "running" : (st.empty() ? "not installed" : st.c_str()));
         attroff(up ? COLOR_PAIR(1) : COLOR_PAIR(2));
+        // ★★★ A RUNNING SERVER HOLDS THE DEVICE, so enumerating it here finds NOTHING — and
+        //     printing "none detected" next to "Service: running" is the same contradiction that
+        //     sent a user hunting through udev rules, only inverted: the screen would be calling a
+        //     working receiver broken. If the service is up, the radio is by definition fine;
+        //     what we cannot do is name it, so say that instead of guessing.
+        // ★ Stop serving (x) and this line fills in — which is also exactly when you need it, in
+        //   the middle of swapping one radio for another.
         std::string radio = radioLine();
-        mvprintw(5, 2, "Radio   : %s", radio.empty() ? "none detected" : radio.c_str());
+        const char* radioTxt = !radio.empty() ? radio.c_str()
+                             : up             ? "in use by the running server"
+                                              : "none detected";
+        mvprintw(5, 2, "Radio   : %s", radioTxt);
         mvprintw(6, 2, "Settings: %s", cfg.configured ? "configured" : "NOT set up yet");
 
         const std::string ip = myIp(), port = listenPort();
