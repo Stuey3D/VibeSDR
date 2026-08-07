@@ -493,8 +493,17 @@ static int setRtlSerial(int index, const std::string& newSerial) {
         const bool readOk = rtlsdr_read_eeprom(dev, check, 0, sizeof check) >= 0;
         rtlsdr_close(dev);
         if (readOk && std::memcmp(check, want.data(), want.size()) == 0) {
-            std::printf("\n  Done, and verified by reading it back.\n"
-                        "  Unplug the dongle and plug it in again for the new serial to appear.\n\n");
+            // ★★ "PHYSICALLY" IS NOT PADDING. The RTL2832U reads its EEPROM at POWER-ON, so the
+            //    new serial does not appear until the device is power-cycled. Measured on the Pi
+            //    2026-08-07: after a verified write, the chip read back the new serial while USB
+            //    still reported the old one — and neither unbind/bind nor toggling `authorized`
+            //    changed that, because neither removes power. Someone who checks with lsusb and
+            //    sees the old serial will conclude the write silently failed and try again.
+            std::printf("\n  Done, and verified by reading it back.\n\n"
+                        "  Now PHYSICALLY unplug the dongle and plug it back in.\n"
+                        "  Until you do, it still reports its old serial (%s): the chip only\n"
+                        "  re-reads this when it loses power, so software cannot do it for you.\n\n",
+                        cur.serial.c_str());
             return 0;
         }
         std::fprintf(stderr,
