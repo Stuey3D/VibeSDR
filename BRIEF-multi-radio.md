@@ -36,11 +36,19 @@ nothing silently inherits another radio's configuration — including its locked
 which is the one that would put a receiver somewhere its owner never agreed to.
 
 ★★★ **AND THE SERIAL ALONE IS NOT ENOUGH, WHICH IS THE TRAP IN THIS WHOLE DESIGN.** RTL-SDR dongles
-ship with a factory serial that is NOT unique: stock Realtek ones are all `00000001`, and the
-RTL-SDR Blog V4 on this Pi reports `00000003`. **Two of the same model are indistinguishable by
-serial.** `findOurDevice()` matches by serial and falls back to INDEX when it is empty — so with two
-identical dongles it would cheerfully bind one radio's settings to the other one. That is the worst
-possible failure here, because a locked frequency range is part of those settings.
+ship with a factory serial that is NOT unique — stock Realtek ones are all `00000001`. **Two of the
+same model are indistinguishable by serial out of the box.** `findOurDevice()` matches by serial and
+falls back to INDEX when it is empty, so with two identical dongles it would cheerfully bind one
+radio's settings to the other one. That is the worst possible failure here, because a locked
+frequency range is part of those settings.
+
+★★ **BUT THE PEOPLE WHO NEED THIS HAVE USUALLY ALREADY FIXED IT.** Stuart's V4 reports `00000003`
+because he renamed it for OpenWebRX — OWRX requires unique serials for the same reason we do, so
+anyone already running several dongles has been through this. That changes the emphasis: renaming
+is not a rare rescue path to hide behind collision detection, it is the **normal setup step** for
+multi-dongle owners, and the page should treat it as such — show each radio's serial plainly, and
+offer the rename next to it rather than only when something has already gone wrong. It also means
+we can point at OWRX's own requirement instead of asking the owner to take our word for it.
 
 So identity is resolved in this order:
 
@@ -165,7 +173,8 @@ Two ways, and the second is the one to build:
    enabled+configured radio.
 5. Setup page tabs, per-tab save, footer save-and-reboot.
 6. Landing page aggregation.
-7. EEPROM serial rename in the setup page, offered when duplicates are detected.
+7. EEPROM serial rename in the setup page — shown next to every dongle's serial, not only on
+   a collision, since multi-dongle owners expect to do this (OWRX requires it too).
 
 ## Related work landing at the same time
 
