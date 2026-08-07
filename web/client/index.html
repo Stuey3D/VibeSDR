@@ -1674,6 +1674,138 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   font-weight: 500; border-bottom: 1px solid var(--bar-border); padding-bottom: 5px;
 }
 #menu h2:first-of-type { margin-top: 4px; }
+
+/* ── ★★★ THE ADMIN PAGE ────────────────────────────────────────────────────────────────────
+   NOT the menu's centred card. This one is WIDE and near-full-screen, because it is the only
+   screen here made of TABLES: a listener list squeezed into 520px wraps every row into an
+   unreadable stack, and the whole value of the connection log is being able to run an eye down
+   a column. The menu's shape is right for rows of controls and wrong for this. */
+#adminPanel {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(6,5,2,0.985);
+  display: flex; flex-direction: column;
+  font-size: 12px; color: var(--btn-text);
+}
+#adminPanel[hidden] { display: none; }
+#adminPanelHead {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; border-bottom: 1px solid var(--bar-border); flex: 0 0 auto;
+}
+#adminPanelHead > span:first-child {
+  font-size: 13px; letter-spacing: 3px; color: var(--amber);
+}
+#adminPanelHead #adminHost { flex: 1 1 auto; font-size: 11px; }
+#adminPanelBody { flex: 1 1 auto; overflow-y: auto; padding: 4px 16px 40px;
+                  max-width: 1100px; width: 100%; margin: 0 auto; }
+#adminPanelBody h2 {
+  margin: 22px 0 9px; font-size: 11px; letter-spacing: 2px; color: var(--text-dim);
+  font-weight: 500; border-bottom: 1px solid var(--bar-border); padding-bottom: 5px;
+}
+#adminPanel .dim { color: var(--text-dim); }
+#adminPanel .wrap { line-height: 1.5; }
+/* ★ The "why we do not do this" notes. Set apart so they read as the page explaining itself
+   rather than as more controls, but NOT hidden away — an unexplained absence reads as a bug. */
+#adminPanel .aNote {
+  border-left: 2px solid var(--bar-border); padding: 2px 0 2px 10px;
+  margin: 10px 0 0; font-size: 11px; max-width: 68ch;
+}
+
+/* Health cards — one per vital sign, colour-coded by its own status. */
+.aCards { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.aCard {
+  background: var(--btn-bg); border: 1px solid var(--btn-border);
+  border-radius: 8px; padding: 9px 11px;
+}
+.aCard .k { font-size: 10px; letter-spacing: 1.5px; color: var(--text-dim); }
+.aCard .v { font-size: 19px; margin-top: 3px; font-variant-numeric: tabular-nums; color: var(--freq); }
+.aCard .s { font-size: 10.5px; margin-top: 2px; color: var(--unit); }
+/* ★ Status colours on the CARD's border, not the number: an owner scanning this wants to see
+   WHICH panel is unhappy from across the room, and a coloured digit is easy to miss. */
+.aCard.warn     { border-color: rgba(255,180,0,0.75); }
+.aCard.warn .v  { color: #ffc447; }
+.aCard.crit     { border-color: rgba(224,80,80,0.85); background: rgba(224,80,80,0.09); }
+.aCard.crit .v  { color: var(--red); }
+/* ★★ "unknown" is drawn as ABSENT, never as a zero. A CPU temperature of 0 °C is
+   indistinguishable from a very cold Pi, and an owner who believes it will not check the fan. */
+.aCard.none .v  { color: var(--unit); font-size: 14px; }
+
+#adminGraphs { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+#adminGraphs figure { margin: 0; background: var(--btn-bg); border: 1px solid var(--btn-border);
+                      border-radius: 8px; padding: 8px 10px; }
+#adminGraphs figcaption { font-size: 10px; letter-spacing: 1.5px; color: var(--text-dim);
+                          display: flex; justify-content: space-between; }
+#adminGraphs svg { display: block; width: 100%; height: 54px; margin-top: 4px; }
+
+/* Tables. ★ The wrapper scrolls, not the page — a wide table must never make the whole
+   screen scroll sideways. */
+.aTblWrap { overflow-x: auto; }
+#adminPanel table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+#adminPanel th {
+  text-align: left; font-weight: 500; color: var(--text-dim); font-size: 10px;
+  letter-spacing: 1.2px; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--bar-border);
+  white-space: nowrap;
+}
+#adminPanel td { padding: 6px 8px 6px 0; border-bottom: 1px solid rgba(255,160,0,0.08);
+                 white-space: nowrap; font-variant-numeric: tabular-nums; }
+#adminPanel td.agent { white-space: normal; color: var(--unit); font-size: 10.5px;
+                       max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+#adminPanel tr.me td { color: var(--btn-active-tx); }
+#adminPanel td .btn { padding: 2px 8px; font-size: 10.5px; }
+/* ★ An ended-for-a-REASON row is the one an owner is looking for, so it is the one that is
+   coloured. "closed" is the boring majority and stays quiet. */
+#adminPanel td.why-kicked  { color: #ffc447; }
+#adminPanel td.why-banned  { color: var(--red); }
+#adminPanel td.why-timeout { color: var(--unit); }
+
+/* Where listeners connect from. */
+.ccRow { display: flex; align-items: center; gap: 9px; padding: 3px 0; font-size: 11.5px; }
+.ccFlag { font-size: 15px; width: 1.4em; text-align: center; }
+.ccName { width: 2.4em; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ccBar  { flex: 1 1 auto; height: 9px; background: var(--meter-track); border-radius: 5px; overflow: hidden; }
+.ccBar i { display: block; height: 100%; background: var(--amber); border-radius: 5px; }
+.ccN    { width: 3em; text-align: right; color: var(--freq); font-variant-numeric: tabular-nums; }
+/* The flag beside an address in the tables. */
+#adminPanel td .cc { font-size: 14px; margin-right: 2px; }
+
+.aBanForm { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.aBanForm input[type=text] {
+  flex: 1 1 200px; min-width: 0; background: rgba(0,0,0,0.35);
+  border: 1px solid var(--btn-border); border-radius: 5px; color: var(--btn-text);
+  padding: 5px 8px; font: inherit;
+}
+.aBanForm input:focus, .aBanForm select:focus { outline: none; border-color: var(--amber); }
+.aBanForm #banCidr { flex: 1 1 260px; font-variant-numeric: tabular-nums; }
+
+.aActions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* The live output of a maintenance action. */
+#actLog {
+  margin: 8px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto;
+  background: rgba(0,0,0,0.45); border: 1px solid var(--btn-border); border-radius: 8px;
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--unit); white-space: pre-wrap; word-break: break-word;
+}
+#actLog[hidden] { display: none; }
+#actLog.done  { color: var(--btn-text); }
+#actLog.failed { border-color: rgba(224,80,80,0.6); color: #ff8b7d; }
+/* ★ The one button here that cannot be undone from this page looks different. Everything else
+   is recoverable by pressing it again; a reboot takes the page away with it. */
+#adminPanel .btn.aWarn { border-color: rgba(224,80,80,0.6); color: #ff8b7d; }
+#adminPanel .btn.aWarn:hover { background: rgba(224,80,80,0.12); }
+
+/* ── ★★ THE PILL — a transient notice, not a dialog ──────────────────────────────────────
+   Used by the admin idle re-lock. It must be impossible to mistake for a failure: nothing has
+   stopped, the audio and any decoder are still running, and only the ability to CHANGE things
+   has gone. So: no backdrop, no buttons, nothing to dismiss, and it leaves on its own. */
+#vsPill {
+  position: fixed; left: 50%; top: 14px; transform: translate(-50%, -14px);
+  z-index: 70; max-width: min(92vw, 460px);
+  background: var(--pill-bg); border: 1px solid var(--btn-border); border-radius: 999px;
+  padding: 9px 18px; font-size: 12px; line-height: 1.35; text-align: center;
+  color: var(--btn-text); box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .18s ease-out, transform .18s ease-out, visibility .18s;
+}
+#vsPill.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
 #menuHead { display: flex; align-items: center; justify-content: space-between; }
 #menuHead span { font-size: 13px; letter-spacing: 3px; color: var(--amber); }
 .mrow {
@@ -2802,6 +2934,126 @@ select.btn { padding: 6px 8px; }
     <label for="vfoFrost">FROSTED BACKING</label>
     <input type="range" id="vfoFrost" min="0" max="10" value="0">
     <span class="val" id="vfoFrostVal">OFF</span>
+  </div>
+
+  <!-- ★★★ SERVER ADMIN — the last thing in the menu, and only for the owner.
+       Hidden unless this session is unlocked as admin: a listener has no use for it, and a
+       button that exists only to refuse you is worse than no button at all. Everything above
+       this point is about LISTENING; this is about running the receiver, which is why it is a
+       door to another screen rather than another block of rows. -->
+  <div id="adminServerRow" hidden>
+    <h2>SERVER</h2>
+    <div class="mrow">
+      <label>ADMINISTRATION</label>
+      <div class="seg"><button class="btn" id="btnServerAdmin">SERVER ADMIN</button></div>
+    </div>
+    <div class="lbl wrap">
+      Monitoring, listeners, connection history, blocking and maintenance for this receiver.
+    </div>
+  </div>
+</div>
+
+<!-- ★★★ THE ADMIN PAGE. A full-screen panel over the client rather than a separate document,
+     so it keeps the live socket: the listener list, the load and the uplink figure are only
+     true while connected, and a separate page would have to re-authenticate and re-open its
+     own sockets — showing a different server's worth of numbers.
+     ★ Never populated until opened. Polling a monitoring endpoint once a second in every
+       listener's browser would be a self-inflicted load problem. -->
+<div id="adminPanel" hidden>
+  <div id="adminPanelHead">
+    <span>SERVER ADMIN</span>
+    <span class="dim" id="adminHost"></span>
+    <button class="btn" id="adminPanelClose">CLOSE</button>
+  </div>
+  <div id="adminPanelBody">
+
+    <h2>HEALTH</h2>
+    <div id="adminHealth" class="aCards"></div>
+
+    <h2>THE LAST HOUR</h2>
+    <div id="adminGraphs"></div>
+
+    <h2>WHERE THEY CONNECT FROM <span class="dim">— distinct addresses, last 24 hours</span></h2>
+    <div id="adminCountries"></div>
+    <!-- ★ Explains its own emptiness. A blank chart otherwise reads as "nobody has connected",
+         which is a very different claim from "the country data has not downloaded yet". -->
+    <p class="dim wrap" id="adminNoCountries" hidden>
+      No country data yet. The list of which address ranges belong to which country is downloaded
+      from the internet registries shortly after the server starts, and refreshed weekly.
+    </p>
+
+    <h2>LISTENERS <span class="dim" id="adminListenerCount"></span></h2>
+    <div class="aTblWrap"><table id="adminSessions">
+      <thead><tr><th>Address</th><th>Frequency</th><th>Mode</th><th>For</th>
+                 <th>Drops</th><th>Network</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
+
+    <h2>BLOCKED ADDRESSES</h2>
+    <!-- ★★ CIDR IS OFFERED FIRST-CLASS, not hidden behind an "advanced" toggle. A single
+         address is nearly useless against what an owner actually wants to stop — a proxy pool
+         or a cloud range cycling through hundreds of addresses. Blocking .7 when the next
+         request comes from .8 is a treadmill; one /24 is a decision that holds. -->
+    <div class="aBanForm">
+      <input type="text" id="banCidr" autocomplete="off" spellcheck="false"
+             placeholder="192.0.2.7   ·   192.0.2.0/24   ·   2001:db8::/32   ·   AS15169">
+      <input type="text" id="banReason" autocomplete="off"
+             placeholder="reason — for your own notes">
+      <select id="banFor" class="btn">
+        <option value="0">forever</option>
+        <option value="60">1 hour</option>
+        <option value="1440">1 day</option>
+        <option value="10080">1 week</option>
+      </select>
+      <button class="btn" id="banAdd">BLOCK</button>
+    </div>
+    <p class="dim wrap" id="banMsg"></p>
+    <div class="aTblWrap"><table id="adminBans">
+      <thead><tr><th>Address or range</th><th>Reason</th><th>Added</th><th>Until</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="dim" id="adminNoBans" hidden>Nothing is blocked.</p>
+    <!-- ★ Says what blocking DOES and the one thing that can go wrong with it. An earlier draft
+         also explained what we deliberately do NOT do (VPN/bot detection) — removed at Stuart's
+         request, 2026-08-06: naming an absent feature only plants the idea that it is missing.
+         The reasoning still lives in vibe_admin.h, where the next developer will look. -->
+    <p class="dim wrap aNote">
+      Blocking is by address, by range, or by whole network. A single address is easy to get
+      around; a range or a network is one decision that holds. Take care with home internet
+      providers — blocking one blocks everybody behind it.
+    </p>
+
+    <h2>CONNECTION HISTORY</h2>
+    <div class="aTblWrap"><table id="adminConns">
+      <thead><tr><th>When</th><th>Address</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="dim" id="adminNoConns" hidden>Nothing yet.</p>
+
+    <h2>MAINTENANCE</h2>
+    <div class="aActions">
+      <button class="btn" id="actUpdateCheck">CHECK FOR UPDATES</button>
+      <button class="btn" id="actUpdate">INSTALL UPDATES</button>
+      <button class="btn" id="actRestart">RESTART VIBESERVER</button>
+      <button class="btn aWarn" id="actReboot">REBOOT THE MACHINE</button>
+    </div>
+    <p class="dim wrap" id="actMsg"></p>
+    <!-- ★★ THE OUTPUT, UNDER THE BUTTON THAT CAUSED IT. "Install updates" can run for minutes;
+         without this it was a button that went quiet, and quiet is indistinguishable from broken
+         (Stuart, 2026-08-07). Hidden until there is something to show, so the panel is not
+         permanently occupied by an empty box. -->
+    <pre id="actLog" hidden></pre>
+    <!-- ★★★ WHY THERE IS NO TERMINAL, said out loud — its absence is a decision, and an owner
+         who wants one should know that rather than assume we forgot.
+         The full argument is in local_sdr_shim.cpp's /vibeserver/admin/ router. -->
+    <p class="dim wrap aNote">
+      There is deliberately no web terminal here. The admin password's other job is guarding the
+      gain sliders, and a shell behind it would be full control of this machine and the network
+      around it — on a receiver that is publicly listed and served over plain HTTP. The buttons
+      above cover what a terminal was wanted for. For a real shell from your phone, put this
+      machine on Tailscale or WireGuard: proper key authentication, nothing exposed.
+    </p>
   </div>
 </div>
 <script type="module" src="./src/main.ts"></script>

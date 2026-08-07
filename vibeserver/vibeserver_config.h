@@ -48,6 +48,10 @@ struct Config {
     // Access
     std::string pin, adminPass;
     int         sessionLimitMin = 0;
+    /** ★★ Minutes of no interaction after which an ADMIN session's controls re-lock. The
+     *  session, its audio and any decoder keep running — only the ability to CHANGE anything
+     *  goes away. 0 = never. Defends against a forgotten admin tab, not a guessed password. */
+    int         adminIdleMin = 30;
 
     // Radio / window
     double freq = 9'410'000, rate = 2'400'000, lockFreq = 0, lockRate = 0;

@@ -86,6 +86,7 @@
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"        // hand-written: the setup page, GET / when unconfigured
+#include "vibe_admin.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -829,6 +830,25 @@ static std::atomic<int>     g_vsSessionLimitMin{0};
  *  behind one router shares a cooldown, which is the accepted trade (Stuart, 2026-07-27). */
 static constexpr int        kSessionCooldownSec = 120;
 
+// ── ★★★ THE ADMIN SUBSYSTEM'S STATE — see vibe_admin.h ────────────────────────────────────────
+// Bans and the connection log are policy and history, not radio, so they live in their own
+// header. These are the single instances the endpoints and the accept path share.
+static vibeadmin::BanList  g_vsBans;
+static vibeadmin::ConnLog  g_vsConnLog;
+static vibeadmin::History  g_vsHistory;
+/** ★★ IDLE RE-LOCK, minutes. 0 = never (and that is NOT the default — see below).
+ *  ★★★ WHY THIS EXISTS AT ALL (Stuart, 2026-08-06): "an admin may have opened a session to make
+ *  some tweaks and left a decode running and forgotten that they were logged in as admin, which
+ *  then means anybody else could then interact with the open tab to meddle." The dangerous state
+ *  is not a stolen password — it is an UNATTENDED BROWSER TAB in a shack, a loft or an office,
+ *  still holding admin rights hours after the last click.
+ *  ★★ IT RE-LOCKS THE CONTROLS, IT DOES NOT END THE SESSION. That distinction is the whole
+ *  design: an admin frequently leaves a session running ON PURPOSE (a decode, a recording, a
+ *  long listen), so dropping the connection would punish the intended use to defend against the
+ *  accidental one. The audio keeps playing and the decoder keeps decoding; only the ability to
+ *  CHANGE anything goes away, and the menu's existing password box brings it straight back. */
+static std::atomic<int>    g_vsAdminIdleMin{30};
+
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
 static std::atomic<int>    g_vsOpusBitrate{64000};
@@ -841,6 +861,14 @@ static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
 static LocalSdrShim::SolarFn       g_vsSolarFn;
+/** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
+static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
+static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
+static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
+static LocalSdrShim::AsnFn         g_vsAsnFn;
+/** Forward-declared: used on the connection path, defined with the other handler plumbing. */
+static std::string vsCountry(const std::string& ip);
+static std::string vsAsnLabel(const std::string& ip);
 // The RSP front end as the owner last left it. -1 = never set.
 static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
 
@@ -1510,6 +1538,10 @@ struct LocalSdrShim::Impl {
     // ★★ ADMIN UNLOCK, per connected client. Cleared whenever the spectrum client changes, so
     // an unlock cannot outlive the session that earned it and be inherited by the next visitor.
     std::atomic<bool> adminOk{false};
+    /** Monotonic seconds at the last CONTROL message from the client, for the idle re-lock.
+     *  0 = never. See enforceAdminIdle() for why this is stamped on commands and not on
+     *  traffic — a streaming session with nobody in the room sends frames forever. */
+    std::atomic<double> lastAdminTouch{0};
     // The audio client asked for Opus (via /ws/audio?codec=opus) AND this build can encode it.
     // Default OFF = raw PCM, so a client that can't decode Opus (today's web client) is never sent
     // it. Jr's future VibeServer backend opts in. Single-occupant, so one flag suffices.
@@ -1560,6 +1592,13 @@ struct LocalSdrShim::Impl {
     std::string decoderSession;
     /** Is any decoder socket open? Read on every listener's audio path, so it must be cheap. */
     std::atomic<bool> decoderAttached{false};
+    /** ★★ HOW MANY SAMPLES THE DECODERS HAVE ACTUALLY BEEN GIVEN. Exposed on the admin page.
+     *  ★★★ This exists because "the decoder is attached" and "the decoder is being fed" looked
+     *  identical from outside for a whole evening — WEFAX missed an entire transmission and the
+     *  UI said `decoding…` throughout. A counter that only moves when audio really reaches the
+     *  decoder is the difference between "no signal" and "no samples", and those need opposite
+     *  fixes: one is an antenna, the other is us. */
+    std::atomic<uint64_t> decoderFedSamples{0};
     std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
     std::mutex decBufMtx;
 
@@ -2328,12 +2367,24 @@ struct LocalSdrShim::Impl {
 
     /** Encode and send one block of this listener's audio to ITS OWN socket. */
     void onClientAudio(ClientDsp* c, const float* pcm, int frames, int ch) {
-        std::shared_ptr<net::Socket> sock;
-        { std::lock_guard<std::mutex> lk(clientMtx); sock = c->audio; }
-        if (!sock || !sock->isOpen()) return;
-        // ★ The decoders follow whoever opened them — see decoderOwner().
-        //   Guarded on dxClient so that with no decoder attached — the usual case — this costs an
-        //   atomic read rather than clientMtx and a map scan on EVERY listener's every audio block.
+        // ★★★ THE DECODERS RUN FIRST, AND WITHOUT AN AUDIO SOCKET.
+        //     This used to sit BELOW the `if (!sock || !sock->isOpen()) return;` guard, so in
+        //     per-client mode the decoders only ran while the owning listener happened to have an
+        //     open audio WebSocket — and stopped, silently, the instant it blipped. The shared
+        //     path has always promised the opposite in its own comment: "runs even with no audio
+        //     WS client". Per-client DSP quietly dropped that guarantee.
+        //     ★★ WHAT IT LOOKS LIKE FROM OUTSIDE: WEFAX misses an ENTIRE transmission (one blip
+        //     inside a 10-20 minute image loses the lot), and RTTY prints a perfect line, then a
+        //     corrupted one, then a perfect one — which reads as poor reception, not as a gap in
+        //     the feed. Stuart, 2026-08-06: "the RTTY signal is strong but it seems to be garbling
+        //     more than usual… WEFAX completely missed an entire transmission too." The second
+        //     symptom is what ruled out the front end: an AGC degrades an image, it does not
+        //     delete one.
+        //     ★ A decoder is not a listener. It needs the SAMPLES, and nothing about whether
+        //       anyone is listening to them — which is exactly why the audio socket must not be
+        //       able to gate it.
+        //   Guarded on decoderAttached so that with no decoder attached — the usual case — this
+        //   costs an atomic read rather than clientMtx and a map scan on every audio block.
         if (decoderAttached.load(std::memory_order_relaxed)) {
             auto owner = decoderOwner();
             if (owner && owner.get() == c) {
@@ -2344,8 +2395,12 @@ struct LocalSdrShim::Impl {
                 }
                 feedDecoder(st.data(), frames);
                 feedSpots(st.data(), frames);
+                decoderFedSamples.fetch_add((uint64_t)frames, std::memory_order_relaxed);
             }
         }
+        std::shared_ptr<net::Socket> sock;
+        { std::lock_guard<std::mutex> lk(clientMtx); sock = c->audio; }
+        if (!sock || !sock->isOpen()) return;
         // ── This listener's own effects ──────────────────────────────────────────────────────
         // ★ Mono only, exactly as the shared path has always been: the auto notch tracks a single
         //   tone and NR's spectral subtraction is built for one channel. On a stereo WFM listen
@@ -3080,7 +3135,7 @@ struct LocalSdrShim::Impl {
                 const double now = nowSecs();
                 if (now - rdsxLastAt >= 1.0 / 6.0) { rdsxLastAt = now; sendRdsExt(sock); }
             }
-            if (n % 2 == 0) enforceSessionLimit();
+            if (n % 2 == 0) { enforceSessionLimit(); enforceAdminIdle(); }
         }
 
         // ★★★ STATION PRESENCE / NOISE FLOOR — HOISTED OUT OF THE `emit` BLOCK (2026-08-03).
@@ -3760,6 +3815,7 @@ struct LocalSdrShim::Impl {
         if (!perClientDsp()) {
             feedDecoder(data, count);
             feedSpots(data, count);
+            decoderFedSamples.fetch_add((uint64_t)count, std::memory_order_relaxed);
         }
 
         // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
@@ -4337,6 +4393,14 @@ struct LocalSdrShim::Impl {
 
     void handleControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         std::string type = jsonStr(msg, "type");
+        // ★★ THE IDLE CLOCK IS STAMPED HERE, AT THE TOP OF EVERY CONTROL MESSAGE — see
+        //    enforceAdminIdle(). Every message that arrives on this path is something a client
+        //    ASKED FOR, which is as close to "a human is present" as a server can honestly get;
+        //    the frames going the other way keep flowing to an empty room forever.
+        //    ★ Deliberately not filtered to admin-only commands: tuning, zooming and changing
+        //      mode are all evidence that somebody is there, and re-locking an admin who is
+        //      plainly using the receiver would be a bug wearing a security feature's clothes.
+        if (adminOk.load()) lastAdminTouch.store(Impl::nowSecs());
         // ★★★ PER-CLIENT CONTROL COMES FIRST, AND THE ORDER IS LOAD-BEARING. The shared handlers
         //     below (zoom, reset, tune…) return as soon as they match, so a per-client block
         //     placed after them is dead code for every message they claim. It was, for zoom: one
@@ -4501,6 +4565,9 @@ struct LocalSdrShim::Impl {
                 g_vsAuthState.recordFail(ip);
             }
             adminOk.store(ok);
+            // ★ Start (or restart) the idle clock the moment admin is granted, so a session
+            //   that is unlocked and then never touched still re-locks on schedule.
+            if (ok) lastAdminTouch.store(Impl::nowSecs());
             LOGI("admin unlock %s", ok ? "granted" : "REFUSED");
             std::shared_ptr<net::Socket> sc;
             { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
@@ -5008,7 +5075,7 @@ struct LocalSdrShim::Impl {
 
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
-        std::string reqLine, line, wsKey;
+        std::string reqLine, line, wsKey, userAgent;
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         while (sock->recvline(line, 8192, 5000) > 0) {
@@ -5017,6 +5084,16 @@ struct LocalSdrShim::Impl {
                 std::string cl = line.substr(0, 15);
                 for (auto& c : cl) c = (char)tolower(c);
                 if (cl == "content-length:") contentLength = atoll(line.c_str() + 15);
+            }
+            if (line.size() > 11) {
+                std::string ua = line.substr(0, 11);
+                for (auto& c : ua) c = (char)tolower(c);
+                if (ua == "user-agent:") {
+                    auto vv = line.substr(11);
+                    size_t a = vv.find_first_not_of(" \t");
+                    size_t b = vv.find_last_not_of(" \t\r\n");
+                    if (a != std::string::npos) userAgent = vv.substr(a, b - a + 1);
+                }
             }
             if (line.size() > 18) {
                 std::string lk = line.substr(0, 18);
@@ -5104,8 +5181,15 @@ struct LocalSdrShim::Impl {
                      queryParam(reqLine, "codec") == "opus",
                      queryParam(reqLine, "channels") == "1", wantBins,
                      queryParam(reqLine, "vs_admin_nonce"),
-                     queryParam(reqLine, "vs_admin_auth"));
-        } else if (reqLine.find("/connection") != std::string::npos) {
+                     queryParam(reqLine, "vs_admin_auth"), userAgent);
+        // ★★ MATCHED ON A PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE. This was
+        //    `reqLine.find("/connection") != npos`, which quietly claimed every later route whose
+        //    path merely CONTAINS that word — /vibeserver/admin/connections was answered by the
+        //    preflight, so the admin connection log returned {"allowed":true} and looked, from
+        //    outside, like an unauthenticated endpoint leaking. A substring match against a whole
+        //    request line is a route that grows new meanings every time somebody adds a URL.
+        } else if (reqLine.find("/connection ") != std::string::npos ||
+                   reqLine.find("/connection?") != std::string::npos) {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
             // instead of the client opening a socket only to be refused with type:"busy". A
@@ -5130,7 +5214,15 @@ struct LocalSdrShim::Impl {
             // the occupant or about to become one. It was also masking the bug
             // above, which is why only NETWORK clients ever saw it.
             if (busy && isLoopback(sock->peerAddress())) busy = false;
-            std::string body = busy
+            // ★ The preflight exists so a client learns it cannot connect BEFORE opening
+            //   sockets. A ban is the most certain "no" we have, so leaving it out would mean
+            //   the one refusal that never changes is also the one the client has to discover
+            //   the hard way.
+            const bool isBanned = !isLoopback(sock->peerAddress())
+                               && LocalSdrShim::isBanned(sock->peerAddress());
+            std::string body = isBanned
+                ? "{\"allowed\":false,\"reason\":\"banned\"}"
+                : busy
                 ? "{\"allowed\":false,\"reason\":\"in-use\"}"
                 : "{\"allowed\":true}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -5285,7 +5377,11 @@ struct LocalSdrShim::Impl {
                              && !g_vsAuthState.blocked(ip)
                              && g_vsAuthState.verify(secret, nonce, token);
             if (!authed) {
-                if (!secret.empty()) g_vsAuthState.recordFail(ip);
+                // ★★ Same fix as the admin API's gate: a request with no credentials is not a
+                //    failed guess, and counting it lets anyone lock the owner out of their own
+                //    settings by hitting this URL a handful of times without ever guessing.
+                if (!secret.empty() && !nonce.empty() && !token.empty())
+                    g_vsAuthState.recordFail(ip);
                 LOGI("config API refused for %s", ip.c_str());
                 reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
                 return;
@@ -5322,6 +5418,179 @@ struct LocalSdrShim::Impl {
             //   the honest answer is "saved, and the server is restarting" — a page that said
             //   only "saved" would leave the owner watching settings that have not taken effect.
             reply(200, "OK", "{\"ok\":true,\"restart\":true}");
+            return;
+
+        // ── ★★★ THE ADMIN API — /vibeserver/admin/* ───────────────────────────────────────
+        // Monitoring, the listener list, the ban list and the four maintenance actions. Reached
+        // from the SERVER ADMIN button at the bottom of the client's menu, which appears only
+        // once the admin session is unlocked.
+        //
+        // ★★★ ONE GATE FOR ALL OF IT, and it is the SAME nonce + HMAC challenge the config API,
+        //     the admin unlock and the admin override already use. Not a new credential, not a
+        //     cookie, not a bearer token: a fourth authentication mechanism is a fourth thing to
+        //     get wrong, and this one inherits the brute-force lockout for free.
+        //
+        // ★★★ THERE IS NO TERMINAL HERE, AND THAT IS A DECISION, NOT AN OMISSION.
+        //     UberSDR ships one (`gotty_client.go`: POST /api/exec taking an arbitrary command
+        //     string). Stuart wanted the capability — "send a reboot command from my iPhone if
+        //     the server was having issues... loft or up the allotment" — and raised the security
+        //     worry himself. The argument against is not that a shell is risky in the abstract:
+        //       • The admin password's day job is guarding GAIN SLIDERS. It was chosen as a
+        //         convenience credential. A terminal behind it is root on the box and the home
+        //         network behind it.
+        //       • These receivers are PUBLICLY LISTED (instances.ubersdr.org), served over plain
+        //         HTTP, and port-forwarded. Bots scan for exactly this shape.
+        //       • ★ The decisive point is that a terminal is an UNBOUNDED hole for a BOUNDED
+        //         need. The need is four buttons. Buttons are loggable, rate-limitable, and
+        //         cannot be repurposed into something nobody has thought of yet.
+        //       • It also duplicates SSH with weaker auth. For "a shell from my phone", the right
+        //         answer is Tailscale/WireGuard — real key auth, nothing exposed.
+        //     ★★ UberSDR's own source is the best argument against its own feature: its server
+        //        only ever calls that exec API with four fixed commands (`ip address show`, read
+        //        the cpufreq governor, `check_time.sh`, `uptime`). It built a general hole to do
+        //        four specific things.
+        } else if (reqLine.rfind("GET /vibeserver/admin/", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/admin/", 0) == 0) {
+            const bool isPost = reqLine.rfind("POST", 0) == 0;
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            // ★★ SAME GATE AS THE CONFIG API, INCLUDING "REFUSE WHEN NO PASSWORD IS SET".
+            //    A server with no admin password has no owner we can recognise, so the honest
+            //    answer to "show me your listeners' IP addresses" is no, not yes-to-everyone.
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string ip = sock->peerAddress();
+            const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
+            const std::string token = queryParam(reqLine, "vs_admin_auth");
+            const bool authed = !secret.empty() && !nonce.empty() && !token.empty()
+                             && !g_vsAuthState.blocked(ip)
+                             && g_vsAuthState.verify(secret, nonce, token);
+            if (!authed) {
+                // ★★★ ONLY A WRONG GUESS COUNTS AS A GUESS. Recording a failure for a request
+                //     that carried NO credentials at all turns the brute-force defence into a
+                //     denial of service against the owner: any scanner hitting /vibeserver/admin/
+                //     a few times — and they will, these servers are publicly listed — locks the
+                //     legitimate admin out of their own receiver for the backoff period, from an
+                //     address the attacker never has to guess anything from.
+                //     ★ Found by the probe in tools/vibeserver-probes/admin-api.mjs: its five
+                //       deliberate no-credential requests locked out its own next real one.
+                if (!secret.empty() && !nonce.empty() && !token.empty())
+                    g_vsAuthState.recordFail(ip);
+                LOGI("admin API refused for %s", ip.c_str());
+                reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
+                return;
+            }
+            g_vsAuthState.recordOk(ip);
+
+            // Everything after "/vibeserver/admin/" up to the query or the HTTP version.
+            std::string what;
+            {
+                const size_t a = reqLine.find("/vibeserver/admin/");
+                size_t b = reqLine.find_first_of(" ?", a);
+                if (b == std::string::npos) b = reqLine.size();
+                what = reqLine.substr(a + 18, b - a - 18);
+            }
+
+            // ── Read the body for the POSTs. Small by construction: the largest is a ban. ──
+            std::string body;
+            if (isPost) {
+                const long long clen = contentLength;
+                if (clen < 0 || clen > 64 * 1024) {
+                    reply(400, "Bad Request", "{\"error\":\"oversized body\"}"); return;
+                }
+                body.resize((size_t)clen);
+                size_t got = 0;
+                while (got < body.size()) {
+                    int n = sock->recv((uint8_t*)&body[got], body.size() - got, false, 5000);
+                    if (n <= 0) break;
+                    got += (size_t)n;
+                }
+                if (got != body.size()) { reply(400, "Bad Request", "{\"error\":\"short body\"}"); return; }
+            }
+
+            if (!isPost && what == "status") {
+                reply(200, "OK", LocalSdrShim::instance().adminStatusJson());
+                return;
+            }
+            if (!isPost && what == "sessions") {
+                reply(200, "OK", LocalSdrShim::instance().adminSessionsJson());
+                return;
+            }
+            if (!isPost && what == "maintenance-log") {
+                // ★ Polled once a second while an action runs, so it must be cheap and must never
+                //   block: the handler reads a file and returns. No systemd, no subprocess.
+                LocalSdrShim::AdminLogFn fn;
+                { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminLogFn; }
+                if (!fn) { reply(200, "OK", "{\"running\":false,\"text\":\"\"}"); return; }
+                std::string text; bool running = false; int code = 0;
+                fn(text, running, code);
+                reply(200, "OK", std::string("{\"running\":") + (running ? "true" : "false")
+                               + ",\"exitCode\":" + std::to_string(code)
+                               + ",\"text\":\"" + vibeadmin::esc(text) + "\"}");
+                return;
+            }
+            if (!isPost && what == "history") {
+                reply(200, "OK", g_vsHistory.json());
+                return;
+            }
+            if (!isPost && what == "connections") {
+                reply(200, "OK", "{\"connections\":" + g_vsConnLog.json() + "}");
+                return;
+            }
+            if (!isPost && what == "bans") {
+                reply(200, "OK", "{\"bans\":" + g_vsBans.json() + "}");
+                return;
+            }
+            if (isPost && what == "ban") {
+                const std::string cidr   = jsonStr(body, "cidr");
+                const std::string reason = jsonStr(body, "reason");
+                double minsV = 0;
+                const int mins = jsonNum(body, "minutes", minsV) ? (int)minsV : 0;
+                std::string err;
+                if (cidr.empty()) { reply(400, "Bad Request", "{\"error\":\"no address given\"}"); return; }
+                if (!g_vsBans.add(cidr, reason, mins, err)) {
+                    reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return;
+                }
+                // ★★ A BAN THAT LEAVES THE BANNED PERSON CONNECTED IS NOT A BAN. It only takes
+                //    effect on the NEXT connection otherwise, and the owner — watching the
+                //    listener they just banned carry on listening — reasonably concludes it did
+                //    not work. Kick every session the new rule now matches.
+                const int kicked = LocalSdrShim::instance().adminKickMatching(cidr);
+                LOGI("admin banned %s (%s) — kicked %d", cidr.c_str(), reason.c_str(), kicked);
+                reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(kicked) + "}");
+                return;
+            }
+            if (isPost && what == "unban") {
+                const std::string cidr = jsonStr(body, "cidr");
+                const bool ok = g_vsBans.remove(cidr);
+                reply(ok ? 200 : 404, ok ? "OK" : "Not Found",
+                      ok ? "{\"ok\":true}" : "{\"error\":\"no such ban\"}");
+                return;
+            }
+            if (isPost && what == "kick") {
+                const std::string session = jsonStr(body, "session");
+                const std::string addr    = jsonStr(body, "ip");
+                const int n = LocalSdrShim::instance().adminKick(session, addr);
+                LOGI("admin kicked %s%s — %d session(s)", session.c_str(), addr.c_str(), n);
+                reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(n) + "}");
+                return;
+            }
+            if (isPost && what == "action") {
+                const std::string act = jsonStr(body, "action");
+                std::string err;
+                if (!LocalSdrShim::instance().adminAction(act, err)) {
+                    reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return;
+                }
+                LOGI("admin action '%s' requested by %s", act.c_str(), ip.c_str());
+                reply(200, "OK", "{\"ok\":true}");
+                return;
+            }
+            reply(404, "Not Found", "{\"error\":\"no such admin endpoint\"}");
             return;
 
         } else if (reqLine.rfind("GET /vibeserver.json", 0) == 0) {
@@ -5659,7 +5928,11 @@ struct LocalSdrShim::Impl {
     void acceptWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, bool isAudio,
                   const std::string& session, bool wantsOpus, bool forceMono = false,
                   int wantBins = 0, const std::string& adminNonce = "",
-                  const std::string& adminToken = "") {
+                  const std::string& adminToken = "",
+                  // ★ Carried purely for the connection log. It is the one field that separates
+                  //   "a person opened the web client" from "something is scraping us" without
+                  //   guessing, and the owner reading the log is the only consumer.
+                  const std::string& userAgent = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -5693,6 +5966,35 @@ struct LocalSdrShim::Impl {
             //   holdInQueue(), which needs the mutex free and takes it itself once a second.
             std::unique_lock<std::mutex> lk(clientMtx);
             const std::string me = session.empty() ? ("anon:" + sock->peerAddress()) : session;
+
+            // ★★★ THE BAN LIST COMES BEFORE EVERYTHING — before the cooldown, before occupancy,
+            //     before the queue. A banned address must not be able to hold a queue slot, and
+            //     it must be refused on a completely FREE radio, which is the same reasoning the
+            //     cooldown check below is built on.
+            // ★★ NOT APPLIED TO THE ADMIN API (see the /vibeserver/admin/ router), deliberately.
+            //    An owner who fat-fingers their own range into the ban box must still be able to
+            //    reach the page that undoes it. Banning yourself out of your own admin page,
+            //    from a field designed for typing addresses into, is a foreseeable accident and
+            //    the recovery should not be "drive to the Pi".
+            // ★ Loopback is exempt for the same reason it is exempt from the cooldown: the host
+            //   listening on its own machine is not the threat model.
+            if (!isLoopback(sock->peerAddress())) {
+                std::string why;
+                if (LocalSdrShim::isBanned(sock->peerAddress(), &why)) {
+                    LOGI("%s WS refused — banned (%s)", isAudio ? "audio" : "spectrum", why.c_str());
+                    // ★★ TELL THEM, rather than dropping the socket. A silent close is
+                    //    indistinguishable from a broken server, so a banned user retries
+                    //    forever — which costs US the connection attempts, not them. A client
+                    //    that is told `banned` treats it as terminal and stops, exactly as it
+                    //    does for `evicted` and `cooldown`.
+                    static const char* kBanned = "{\"type\":\"banned\"}";
+                    sendWs(sock, 0x1, (const uint8_t*)kBanned, strlen(kBanned));
+                    lk.unlock();
+                    LocalSdrShim::noteConnectionClosed(sock->peerAddress(), session, "banned");
+                    outboxClose(sock);
+                    return;
+                }
+            }
 
             // ★★ COOLDOWN FIRST — before occupancy. Someone serving a cooldown must be refused
             // even when the radio is FREE; that is the entire point of it. Checking occupancy
@@ -5740,8 +6042,19 @@ struct LocalSdrShim::Impl {
             // told WHY ("evicted"), which the clients treat as terminal and do not retry — and
             // an admin arriving is a deliberate, rare act by the owner, not a race between two
             // equal listeners.
+            // ★★★ VERIFY WHENEVER CREDENTIALS ARE PRESENTED, NOT ONLY WHEN WE ARE BUSY. This
+            //     read `if (occupied && ...)`, so connecting as admin to an IDLE receiver never
+            //     checked the password at all — and therefore never granted anything. The owner
+            //     got a plain listener's session: controls locked, session timer running, and no
+            //     hint as to why, because on a BUSY receiver the identical action worked. It only
+            //     ever looked right in the one state anybody thought to test it in (Stuart,
+            //     2026-08-06: connecting as admin should be a full upgrade "the same as if they
+            //     had connected as an admin direct from the splash screen").
+            // ★★ Eviction still requires `occupied` — there is nobody to evict otherwise. What
+            //    changes is that ADMIN STATUS no longer rides on somebody else being here.
+            bool adminAuthed = false;
             bool override_ = false;
-            if (occupied && !adminNonce.empty() && !adminToken.empty()) {
+            if (!adminNonce.empty() && !adminToken.empty()) {
                 std::string secret;
                 { std::lock_guard<std::mutex> al(g_vsAdminMtx); secret = g_vsAdminSecret; }
                 // ★★★ CHALLENGE-RESPONSE, NEVER THE PASSWORD ITSELF. The first cut of this put
@@ -5755,11 +6068,13 @@ struct LocalSdrShim::Impl {
                 // override endpoint without one is an open guessing gallery, and unlike the PIN
                 // this one displaces a listener on success.
                 const std::string ip = sock->peerAddress();
-                override_ = !secret.empty()
-                         && !g_vsAuthState.blocked(ip)
-                         && g_vsAuthState.verify(secret, adminNonce, adminToken);
-                if (override_) g_vsAuthState.recordOk(ip);
-                else           g_vsAuthState.recordFail(ip);
+                adminAuthed = !secret.empty()
+                           && !g_vsAuthState.blocked(ip)
+                           && g_vsAuthState.verify(secret, adminNonce, adminToken);
+                if (adminAuthed) g_vsAuthState.recordOk(ip);
+                else             g_vsAuthState.recordFail(ip);
+                // Evicting only makes sense if somebody is actually in the way.
+                override_ = adminAuthed && occupied;
                 if (override_) {
                     LOGI("admin override — evicting the current occupant");
                     static const char* kEvict = "{\"type\":\"evicted\"}";
@@ -5796,7 +6111,15 @@ struct LocalSdrShim::Impl {
             occupantSession = me;   // claim (or re-affirm) the slot for this client
             // ★ A NEW CLIENT IS NOT THE ADMIN. Clearing here means an unlock cannot outlive the
             // session that earned it and be inherited by whoever connects next.
-            adminOk.store(false);
+            // ★★★ ...UNLESS THEY PROVED THEY ARE. A client that arrives holding a valid admin
+            //     credential is the owner, and must land in the SAME state as one who typed the
+            //     password into the menu afterwards: controls unlocked, no session limit, no
+            //     eviction. Before this, connecting as admin cleared the flag it had just earned,
+            //     so the owner was let in past the queue and then treated as a guest — the
+            //     takeover worked and nothing else did.
+            adminOk.store(adminAuthed);
+            if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
+            if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
         }
 
         // ★ A client that cannot take Opus, on a server that does not allow raw,
@@ -5904,6 +6227,11 @@ struct LocalSdrShim::Impl {
                   stale = specClient;
                   specClient = sock;
               } }
+            // ★★ THE CONNECTION LOG STARTS HERE — at the SPECTRUM socket, not the audio one.
+            //    A slot is a spectrum listener; the audio socket is optional and arrives second,
+            //    so logging both would double-count every ordinary browser.
+            LocalSdrShim::noteConnectionOpened(sock->peerAddress(), session, userAgent,
+                                               vsCountry(sock->peerAddress()));
             // ── ★★★ LAND A NEW SESSION WHERE THE OWNER SAID ────────────────────────────
             // Before sendConfig, so the client is told the frequency it is actually on rather
             // than being told one thing and then moved.
@@ -6014,6 +6342,14 @@ struct LocalSdrShim::Impl {
               [&](const std::shared_ptr<net::Socket>& c){ return !c || c == sock || !c->isOpen(); }),
               specExtra.end());
           clientBins.erase(sock.get());     // its width leaves with it
+          // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
+          //   paths that end a session for a REASON (kicked, banned, timeout) each record their
+          //   own before getting here, and ConnLog::close only ever fills the most recent
+          //   still-open record, so this cannot overwrite one of those.
+          { auto it = clientDsp.find(sock.get());
+            if (it != clientDsp.end() && it->second)
+                LocalSdrShim::noteConnectionClosed(sock->peerAddress(), it->second->session,
+                                                   "closed"); }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
           //   holding clientMtx would deadlock against anything that thread wants.
@@ -6075,6 +6411,19 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (ext == "sstv")  { startSstv(msg);  return; }
+        // ★★★ WEFAX WAS NEVER DISPATCHED. startWefax() has always existed, fully written —
+        //     config parsing, onLine/onStart/onStop, the image framing — and NOTHING EVER CALLED
+        //     IT. `extension_name: "wefax"` fell through to the `ext != "fsk" && !navtex` guard
+        //     below and returned, so no WefaxDecoder was ever constructed and not one line of
+        //     image was ever produced.
+        //     ★★ It did not look like an absent feature, which is why it survived: the client
+        //     drew the WEFAX panel, said "decoding…", and waited. Stuart, 2026-08-06 — "WEFAX
+        //     completely missed an entire transmission", then, having caught the next one from
+        //     the very start, "wefax still not working". It was never running.
+        //     ★ Same family as `doAdminUnlock` being defined and never called, and as the admin
+        //       `adminOk` flag being sent and never read: complete, correct code with no caller.
+        //       A function nobody calls is invisible to every test that exercises the callers.
+        if (ext == "wefax") { startWefax(msg); return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
@@ -6923,6 +7272,46 @@ struct LocalSdrShim::Impl {
      *
      *  ★ WARN BEFORE ENDING IT. A session that simply stops reads as a crash, and the listener
      *  blames the software rather than understanding they had a share of a shared radio. */
+    /** ★★★ RE-LOCK AN IDLE ADMIN, WITHOUT ENDING THEIR SESSION.
+     *
+     *  Stuart, 2026-08-06: *"an admin may have opened a session to make some tweaks and left a
+     *  decode running and forgotten that they were logged in as admin, which then means anybody
+     *  else could then interact with the open tab to meddle."* The threat is not a guessed
+     *  password — it is a browser tab in a shack or an office, hours after the last click, still
+     *  holding the right to change the gain on a live receiver.
+     *
+     *  ★★★ THE WHOLE DESIGN IS IN WHAT IT DOES *NOT* DO. It does not disconnect, mute, stop the
+     *  decoder or surrender the slot. Leaving a session running unattended is a NORMAL, INTENDED
+     *  use of this software — a long listen, an FT8 run, a recording — so ending it would punish
+     *  the ordinary case in order to defend against the careless one. Only the ability to CHANGE
+     *  anything is withdrawn, and the menu's existing password box gives it straight back.
+     *
+     *  ★★ "INTERACTION" MEANS A CONTROL MESSAGE, NOT TRAFFIC. Audio and spectrum frames flow
+     *  continuously whether or not a human is in the room, so any measure built on them would
+     *  never fire — the session that most needs re-locking is precisely the one still streaming
+     *  happily to an empty chair. `lastAdminTouch` is stamped where the client sends a COMMAND. */
+    void enforceAdminIdle() {
+        const int idleMin = g_vsAdminIdleMin.load();
+        if (idleMin <= 0) return;                        // owner switched it off
+        if (!adminOk.load()) return;                     // nothing to re-lock
+        const double last = lastAdminTouch.load();
+        if (last <= 0) return;
+        if (Impl::nowSecs() - last < (double)idleMin * 60.0) return;
+
+        adminOk.store(false);
+        LOGI("admin controls re-locked after %d min idle (session left running)", idleMin);
+        // ★ TELL THE CLIENT WHY. A control that silently stops working reads as a bug, and this
+        //   one stops working a long time after anybody touched it — so without a message the
+        //   owner returns to a receiver that has apparently broken itself. `relocked` is what
+        //   raises the pill; `ok:false` is what greys the controls, through the path the client
+        //   already has for a refusal.
+        std::shared_ptr<net::Socket> sc;
+        { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
+        if (sc && sc->isOpen())
+            sendText(sc, "{\"type\":\"admin\",\"ok\":false,\"relocked\":true,\"idleMin\":"
+                       + std::to_string(idleMin) + "}");
+    }
+
     void enforceSessionLimit() {
         const int limitMin = g_vsSessionLimitMin.load();
         if (limitMin <= 0) return;                       // unlimited: the default
@@ -6959,6 +7348,7 @@ struct LocalSdrShim::Impl {
         // a dropped link and retry-storming a server that is deliberately turning it away.
         if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); spec->close(); }
         if (aud  && aud->isOpen())  { aud->close(); }
+        LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
         { std::lock_guard<std::mutex> lk(clientMtx);
           cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
           occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear(); }
@@ -7448,6 +7838,311 @@ int LocalSdrShim::waitingCount() const {
     if (!p) return 0;
     std::lock_guard<std::mutex> lk(p->clientMtx);
     return (int)p->waitQueue.size();
+}
+
+// ── ★★★ THE ADMIN API's back end ──────────────────────────────────────────────────────────────
+
+void LocalSdrShim::setBanListPath(const std::string& path) { g_vsBans.setPath(path); }
+void LocalSdrShim::setConnLogPath(const std::string& path) { g_vsConnLog.setPath(path); }
+void LocalSdrShim::saveConnLogIfDue() { g_vsConnLog.saveIfDue(); }
+void LocalSdrShim::setAdminIdleMinutes(int minutes) {
+    g_vsAdminIdleMin.store(minutes >= 0 ? minutes : 0);
+    LOGI("admin idle re-lock: %d min", g_vsAdminIdleMin.load());
+}
+bool LocalSdrShim::isBanned(const std::string& ip, std::string* reason) {
+    return g_vsBans.banned(ip, reason);
+}
+void LocalSdrShim::noteConnectionOpened(const std::string& ip, const std::string& session,
+                                        const std::string& agent, const std::string& cc) {
+    g_vsConnLog.open(ip, session, agent, cc);
+}
+void LocalSdrShim::noteConnectionClosed(const std::string& ip, const std::string& session,
+                                        const char* reason, uint64_t bytes) {
+    g_vsConnLog.close(ip, session, reason, bytes);
+}
+
+/** ★★ EVERYTHING THE MONITOR PAGE DRAWS, IN ONE REQUEST. A page that polls five endpoints once a
+ *  second is five times the wake-ups on a Pi that is also running the DSP, and its panels can
+ *  disagree with each other — the listener count from one fetch beside the bandwidth from
+ *  another, taken 300 ms apart. One snapshot is one consistent moment. */
+std::string LocalSdrShim::adminStatusJson() {
+    const vibeadmin::SysStats sys = vibeadmin::readSys();
+    std::string j = "{\"sys\":" + vibeadmin::sysJson(sys);
+
+    j += ",\"listeners\":" + std::to_string(listenerCount())
+       + ",\"maxUsers\":"  + std::to_string(g_vsMaxUsers.load())
+       + ",\"waiting\":"   + std::to_string(waitingCount());
+
+    // ★ The radio, as the hardware endpoint reports it — an owner looking at a monitor page
+    //   wants "is the dongle still there" answered HERE, not on another screen.
+    {
+        const bool lost = p && p->deviceLost.load();
+        j += std::string(",\"radio\":{\"present\":") + (lost ? "false" : "true")
+           + ",\"driver\":\"" + (lost ? "none" : isSdrplay() ? "sdrplay"
+                                              : isAirspyHf() ? "airspyhf" : "rtl") + "\"";
+        j += ",\"centreHz\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
+                                    ? g_vsLockedCentre.load() : (p ? p->rtlCenter.load() : 0)));
+        j += ",\"spanHz\":" + std::to_string((long long)captureSpanHz());
+        // ★★★ WHAT THE FRONT END IS ACTUALLY DOING, on the page an owner opens when something is
+        //     wrong. This telemetry has always existed — it goes to every listener as `rspstat` —
+        //     but it never reached the admin API, so diagnosing a gain problem meant reading the
+        //     STARTUP LOG and inferring. I did exactly that and got it wrong: the AGC's settling
+        //     ritual (`ifgr 59, sysGain 2.8 dB`) is not the operating point it hands over to
+        //     (Stuart, 2026-08-06 — his receiver was sitting at a perfectly healthy 18.8 dB).
+        //     ★★ Same rule as the CPU governor and the mDNS name: show what IS, never what was
+        //        asked for or what it was a minute ago.
+        if (p && p->useSdrplay() && p->sdrp) {
+            char b[192];
+            snprintf(b, sizeof b,
+                     ",\"frontEnd\":{\"sysGainDb\":%.1f,\"lna\":%d,\"lnaStates\":%d,"
+                     "\"ifGrDb\":%d,\"overload\":%s,\"ifAgc\":%s}",
+                     p->sdrp->systemGainDb(), p->sdrp->currentLnaState(),
+                     p->sdrp->lnaStateCount(), p->sdrp->currentIfGr(),
+                     p->sdrp->overloaded() ? "true" : "false",
+                     g_vsSavedIfAgc.load() == 0 ? "false" : "true");
+            j += b;
+        }
+        j += ",\"lockedCentre\":" + std::to_string((long long)g_vsLockedCentre.load()) + "}";
+    }
+
+    // ★★ BYTES SENT, AS A RATE. The raw counters are monotonic since start, which answers
+    //    "how much have we ever sent" — a question nobody asks. What an owner wants is "am I
+    //    saturating my uplink right now", so the delta since the last call is what is reported.
+    //    ★ Kept here rather than in the page: two browsers polling at different intervals would
+    //      each compute a different rate from the same counters, and both would be wrong.
+    if (p) {
+        static std::mutex        rateMtx;
+        static uint64_t          lastBytes = 0;
+        static double            lastAt = 0;
+        const uint64_t total = p->vsSpecBytes.load(std::memory_order_relaxed)
+                             + p->vsAudioBytes.load(std::memory_order_relaxed);
+        const double now = Impl::nowSecs();
+        double kbps = 0;
+        { std::lock_guard<std::mutex> lk(rateMtx);
+          if (lastAt > 0 && now > lastAt && total >= lastBytes)
+              kbps = (double)(total - lastBytes) * 8.0 / 1000.0 / (now - lastAt);
+          lastBytes = total; lastAt = now; }
+        char b[96];
+        snprintf(b, sizeof b, ",\"txBytes\":%llu,\"txKbps\":%.1f",
+                 (unsigned long long)total, kbps);
+        j += b;
+        // Feed the history ring from the same snapshot, so the graph and the readouts can
+        // never disagree about what a moment looked like.
+        vibeadmin::HistSample hs;
+        hs.atEpoch   = vibeadmin::nowEpoch();
+        hs.load1     = (float)sys.load1;
+        hs.tempC     = (float)sys.tempC;
+        hs.listeners = (uint16_t)listenerCount();
+        hs.kbps      = (uint32_t)kbps;
+        g_vsHistory.push(hs);
+    }
+
+    j += ",\"bans\":" + g_vsBans.json();
+    j += ",\"uniqueDay\":" + std::to_string(g_vsConnLog.uniqueSince(24 * 3600));
+    // ★ Where listeners come from, over the last day. Empty when the country data has not been
+    //   downloaded yet — the page must draw that as absence, not as "nowhere".
+    j += ",\"countries\":" + g_vsConnLog.topCountriesJson(24 * 3600);
+    j += ",\"uniqueHour\":" + std::to_string(g_vsConnLog.uniqueSince(3600));
+    // ★ Decoder health: attached, and actually receiving samples. See decoderFedSamples.
+    if (p) {
+        j += std::string(",\"decoderAttached\":") + (p->decoderAttached.load() ? "true" : "false")
+           + ",\"decoderFedSamples\":"
+           + std::to_string((unsigned long long)p->decoderFedSamples.load());
+        // ★★★ RESYNCS AND LEVEL. See FskDecoder::resyncs() — a resync discards the decoder's
+        //     whole state, so a counter climbing while text is on the air IS the "clean for a
+        //     bit then slips out" symptom, measured rather than described. `audioLevel` beside
+        //     `audioThreshold` says whether the signal is simply too quiet for the decoder,
+        //     which is a completely different fix from a bad signal.
+        // ★★★ WHICH decoder is actually running. Exposed because "attached" was true while
+        //     NOTHING had been constructed — WEFAX fell through its dispatch for months and the
+        //     only outward sign was an image that never arrived. A name here makes that a
+        //     one-line test instead of an evening.
+        { std::lock_guard<std::mutex> dl(p->decoderMtx);
+          j += std::string(",\"decoderKind\":\"")
+             + (p->wefax ? "wefax" : p->sstv ? "sstv" : p->decoder ? "fsk" : "none") + "\""; }
+        { std::lock_guard<std::mutex> dl(p->decoderMtx);
+          if (p->decoder) {
+              char db[160];
+              snprintf(db, sizeof db,
+                       ",\"decoder\":{\"resyncs\":%lu,\"audioLevel\":%.1f,"
+                       "\"audioThreshold\":%.1f,\"state\":%d}",
+                       p->decoder->resyncs(), p->decoder->audioLevel(),
+                       p->decoder->audioThreshold(), p->decoder->stateNow());
+              j += db;
+          } }
+    }
+    j += ",\"adminIdleMin\":" + std::to_string(g_vsAdminIdleMin.load());
+    j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
+    // ★ Say plainly that there is no shell here, so a page never has to guess whether the
+    //   button is missing because the server is old or because we chose not to ship one.
+    j += ",\"terminal\":false";
+    return j + "}";
+}
+
+/** The live listeners. ★★ One row per LISTENER, keyed on the spectrum socket, because that is
+ *  what a slot actually is — the audio socket is optional and arrives second. */
+std::string LocalSdrShim::adminSessionsJson() {
+    if (!p) return "{\"sessions\":[]}";
+    std::string j = "{\"sessions\":[";
+    bool first = true;
+    std::lock_guard<std::mutex> lk(p->clientMtx);
+    const double now = Impl::nowSecs();
+    for (auto& kv : p->clientDsp) {
+        auto& c = kv.second;
+        if (!c || !c->spec || !c->spec->isOpen()) continue;
+        if (!first) j += ',';
+        first = false;
+        const bool isOccupant = !p->occupantSession.empty() && p->occupantSession == c->session;
+        j += "{\"session\":\"" + vibeadmin::esc(c->session) + "\""
+           + ",\"ip\":\"" + vibeadmin::esc(c->spec->peerAddress()) + "\""
+           + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
+           + ",\"mode\":\"" + vibeadmin::esc(c->mode) + "\""
+           + ",\"bwHz\":" + std::to_string((long long)c->bwHz)
+           + ",\"audio\":" + ((c->audio && c->audio->isOpen()) ? "true" : "false")
+           + ",\"opus\":" + (c->wantsOpus ? "true" : "false")
+           // ★ How far behind this listener's own DSP thread has fallen. The one per-listener
+           //   number that says WHOSE link is the problem when the server is struggling.
+           + ",\"dropped\":" + std::to_string((unsigned long long)c->dropped.load())
+           + ",\"zoomed\":" + (c->ownView ? "true" : "false")
+           + ",\"cc\":\"" + vibeadmin::esc(vsCountry(c->spec->peerAddress())) + "\""
+           + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(c->spec->peerAddress())) + "\""
+           + ",\"occupant\":" + (isOccupant ? "true" : "false");
+        if (isOccupant && p->occupantSince > 0)
+            j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
+        j += "}";
+    }
+    j += "],\"adminOk\":" + std::string(p->adminOk.load() ? "true" : "false");
+    return j + "}";
+}
+
+/** Close a listener's sockets. Empty `session` matches on address instead, which is what the
+ *  ban path needs. Returns how many were closed. */
+int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
+    if (!p || (session.empty() && ip.empty())) return 0;
+    std::vector<std::shared_ptr<net::Socket>> doomed;
+    std::vector<std::pair<std::string, std::string>> logged;   // ip, session
+    {
+        std::lock_guard<std::mutex> lk(p->clientMtx);
+        for (auto& kv : p->clientDsp) {
+            auto& c = kv.second;
+            if (!c || !c->spec) continue;
+            const std::string addr = c->spec->peerAddress();
+            const bool hit = (!session.empty() && c->session == session)
+                          || (session.empty() && !ip.empty() && addr == ip);
+            if (!hit) continue;
+            doomed.push_back(c->spec);
+            if (c->audio) doomed.push_back(c->audio);
+            logged.emplace_back(addr, c->session);
+            if (p->occupantSession == c->session) {
+                p->occupantSession.clear(); p->occupantSince = 0; p->occupantAddr.clear();
+            }
+        }
+    }
+    // ★★ TELL THEM, THEN CLOSE — and OUTSIDE clientMtx. A blocking send under the lock the DSP
+    //    thread needs is the shape of the freeze that took a whole session to find (see the
+    //    per-client outbox note). A client that is merely dropped auto-reconnects; one that is
+    //    told `kicked` treats it as terminal and stops.
+    static const char* kMsg = "{\"type\":\"kicked\"}";
+    for (auto& s : doomed) {
+        if (!s || !s->isOpen()) continue;
+        p->sendWs(s, 0x1, (const uint8_t*)kMsg, strlen(kMsg));
+        s->close();
+    }
+    for (auto& e : logged) g_vsConnLog.close(e.first, e.second, "kicked");
+    return (int)logged.size();
+}
+
+/** Kick everyone the given ban rule now matches — the other half of "a ban must take effect on
+ *  people who are already here". */
+int LocalSdrShim::adminKickMatching(const std::string& cidr) {
+    if (!p) return 0;
+    vibeadmin::Ban rule;
+    rule.cidr = cidr;
+    if (!vibeadmin::compile(rule)) return 0;
+    std::vector<std::string> hits;
+    {
+        std::lock_guard<std::mutex> lk(p->clientMtx);
+        for (auto& kv : p->clientDsp) {
+            auto& c = kv.second;
+            if (!c || !c->spec) continue;
+            const std::string addr = c->spec->peerAddress();
+            // ★★ AN ASN RULE MATCHES BY NETWORK, NOT BY ADDRESS — vibeadmin::matches() returns
+            //    false for one by design (its `net` is meaningless). Without this branch a
+            //    "block this network" would store the rule, report success, and leave everyone
+            //    it names still listening: the precise failure the ban-then-kick step exists to
+            //    prevent, reintroduced one rule type later.
+            bool hit = false;
+            if (rule.asn) {
+                LocalSdrShim::AsnFn fn;
+                { std::lock_guard<std::mutex> cl(g_vsConfigMtx); fn = g_vsAsnFn; }
+                uint32_t a = 0; std::string nm;
+                hit = fn && fn(addr, a, nm) && a == rule.asn;
+            } else {
+                hit = vibeadmin::matches(rule, addr);
+            }
+            if (hit) hits.push_back(c->session);
+        }
+    }
+    int n = 0;
+    for (auto& s : hits) n += adminKick(s, "");
+    return n;
+}
+
+/** ★★★ THE FOUR BUTTONS THAT REPLACE A TERMINAL. See the routing comment for why this is a
+ *  fixed list and not an exec endpoint.
+ *  ★★ The actions are performed by the DAEMON, not here: this file is compiled into the phone
+ *  app too, and an Android build has no systemd, no apt and no business rebooting anything. A
+ *  build with no handler registered answers "not supported on this server", which is the
+ *  truth rather than a silent no-op. */
+bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
+    AdminActionFn fn;
+    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminActionFn; }
+    if (!fn) { err = "this server cannot perform maintenance actions"; return false; }
+    if (action != "reboot" && action != "restart" &&
+        action != "update-check" && action != "update" && action != "shutdown") {
+        err = "unknown action: " + action;
+        return false;
+    }
+    return fn(action, err);
+}
+void LocalSdrShim::setAdminActionHandler(AdminActionFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsAdminActionFn = std::move(fn);
+}
+void LocalSdrShim::setAdminLogHandler(AdminLogFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsAdminLogFn = std::move(fn);
+}
+void LocalSdrShim::setGeoIpHandler(GeoIpFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsGeoIpFn = std::move(fn);
+}
+void LocalSdrShim::setAsnHandler(AsnFn fn) {
+    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); g_vsAsnFn = std::move(fn); }
+    // The ban list resolves ASN rules through this. Wired here so there is ONE place the handler
+    // is installed and no way to register the lookup but forget the enforcement.
+    g_vsBans.setAsnResolver([](const std::string& ip, uint32_t& asn) {
+        LocalSdrShim::AsnFn f;
+        { std::lock_guard<std::mutex> lk(g_vsConfigMtx); f = g_vsAsnFn; }
+        std::string name;
+        return f ? f(ip, asn, name) : false;
+    });
+}
+/** Network for an address: "AS15169 GOOGLE", or empty when unknown. */
+static std::string vsAsnLabel(const std::string& ip) {
+    LocalSdrShim::AsnFn fn;
+    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAsnFn; }
+    if (!fn || ip.empty()) return {};
+    uint32_t asn = 0; std::string name;
+    if (!fn(ip, asn, name) || !asn) return {};
+    return "AS" + std::to_string(asn) + (name.empty() ? "" : " " + name);
+}
+/** Country for an address, or empty. Never throws and never blocks on the network. */
+static std::string vsCountry(const std::string& ip) {
+    LocalSdrShim::GeoIpFn fn;
+    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsGeoIpFn; }
+    if (!fn || ip.empty()) return {};
+    return fn(ip);
 }
 
 int LocalSdrShim::occupantSecsLeft() const {

@@ -41,6 +41,8 @@
 #include "vibeserver_config.h"
 #include "eibi.h"
 #include "solar.h"
+#include "geoip.h"
+#include "asndb.h"
 
 namespace {
 
@@ -58,6 +60,7 @@ struct Opts {
     // the headless build shipped without any of it, which made it the LEAST safe place to host.
     std::string adminPass;
     int         sessionLimitMin = 0;     // per-listener minutes; 0 = unlimited
+    int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     bool        forceIdleSaver  = false; // listeners may not switch idle power-saving off
     int         uncompressed    = 0;     // 0 = off, 1 = listener's choice, 2 = compatibility only
     // Receiver identity — published to every listener, and the reason a directory entry is useful.
@@ -183,6 +186,8 @@ void usage() {
         "\nAccess and operator limits\n"
         "  --pin SECRET          who may CONNECT at all\n"
         "  --admin-pass SECRET   who may change settings that can DAMAGE the radio\n"
+        "  --admin-idle MIN      re-lock admin controls after MIN idle (default 30, 0 = never).\n"
+        "                        The session keeps running — only the controls lock.\n"
         "                        (bias-T, direct sampling, calibration). Set this on any\n"
         "                        receiver reachable from the internet.\n"
         "  --session-limit MIN   per-listener time limit; 0 = unlimited\n"
@@ -242,6 +247,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
+        else if (a == "--admin-idle")     o.adminIdleMin    = std::atoi(need(i));
         else if (a == "--force-idle-saver") o.forceIdleSaver = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
             o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }
@@ -293,6 +299,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.rxGrid = c.locator; o.rxLat = c.lat; o.rxLon = c.lon;
     o.pin = c.pin; o.adminPass = c.adminPass;
     o.sessionLimitMin = c.sessionLimitMin;
+    o.adminIdleMin    = c.adminIdleMin;
     o.freq = c.landingFreq > 0 ? c.landingFreq : c.freq;
     o.rate = c.rate;
     o.lockFreq = c.lockFreq; o.lockRate = c.lockRate;
@@ -314,6 +321,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.locator = o.rxGrid; c.lat = o.rxLat; c.lon = o.rxLon;
     c.pin = o.pin; c.adminPass = o.adminPass;
     c.sessionLimitMin = o.sessionLimitMin;
+    c.adminIdleMin    = o.adminIdleMin;
     c.freq = o.freq; c.rate = o.rate;
     c.lockFreq = o.lockFreq; c.lockRate = o.lockRate;
     c.gain = o.gain; c.demodMode = o.mode;
@@ -333,6 +341,17 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             std::atomic<bool> g_restartRequested{false}; }
 
 int main(int argc, char** argv) {
+    // ★★★ LINE-BUFFER STDOUT, ALWAYS. Under systemd stdout is a PIPE, so libc block-buffers it —
+    //     and every status message this server prints sat in a 4 KB buffer until the process
+    //     EXITED. `journalctl -u vibeserver` showed nothing while it ran, then dumped the whole
+    //     boot's worth of messages at shutdown, timestamped with the moment it died.
+    // ★★ That is not a cosmetic problem: it makes the log useless for the one job it has. I lost
+    //    time to it reading "no country data yet — downloading" and "country data ready" as the
+    //    CURRENT boot re-downloading 50 MB, when both lines were half an hour old and belonged to
+    //    the previous process. A log that lies about WHEN is worse than no log.
+    // ★ Must be before any printf, hence the first line of main.
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+
     // ★★★ NO ARGUMENTS AND A TERMINAL ⇒ A HUMAN TYPED `vibeserver`, so show the settings screen.
     // That is the one thing a command-line-shy person will try, and answering it with a wall of
     // flags tells them they are in the wrong place (Stuart, 2026-07-31).
@@ -661,6 +680,7 @@ int main(int argc, char** argv) {
     // wants NO pin and a STRONG admin password.
     LocalSdrShim::setVibeServerAdminSecret(o.adminPass);
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
+    LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
     LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
     // ★ Identity, published to every listener — and what makes a directory entry worth anything.
@@ -701,7 +721,7 @@ int main(int argc, char** argv) {
         } else if (!o.rxGrid.empty()) {
             haveLL = gridCentre(o.rxGrid, la, lo);            // exact coordinates win; this is the fallback
             if (!haveLL) std::fprintf(stderr, "VibeServer: --locator \"%s\" is not a Maidenhead square "
-                                              "(expected 4 or 6 characters, e.g. IO92nh)\n", o.rxGrid.c_str());
+                                              "(expected 4 or 6 characters, e.g. IO81jm)\n", o.rxGrid.c_str());
         }
         std::string j; auto add = [&](const std::string& k, const std::string& v, bool quote) {
             if (v.empty()) return;
@@ -793,11 +813,158 @@ int main(int argc, char** argv) {
     // ★ Set AFTER start(), because loading needs the window (centre and span) to know whether the
     //   stored history belongs to this profile at all.
     LocalSdrShim::instance().setSpectrogramPath("/var/lib/vibeserver/spectrogram.bin");
+    // ★ Beside the spectrogram, and for the same reason: this is state the SERVER writes and must
+    //   keep across a restart. A ban that evaporates on reboot is not a ban — and this Pi reboots.
+    LocalSdrShim::instance().setBanListPath("/var/lib/vibeserver/bans.jsonl");
+    // ★ Beside the bans, and for the same reason: this is history the owner needs ACROSS
+    //   restarts, and an update restarts the server.
+    LocalSdrShim::instance().setConnLogPath("/var/lib/vibeserver/connections.jsonl");
+
+    // ── ★★ WHERE LISTENERS ARE CONNECTING FROM ────────────────────────────────────────────────
+    // Flags beside the listener list, and the top-countries chart. See vibeserver/geoip.cpp for
+    // why this is the RIRs' OWN published allocation data and not a geolocation API: no account,
+    // no licence, and — the part that matters — no visitor's address ever leaves this machine.
+    geoip::setDir("/var/lib/vibeserver");
+    if (!geoip::load())
+        std::printf("VibeServer: no country data yet — downloading in the background.\n");
+    LocalSdrShim::setGeoIpHandler([](const std::string& ip) { return geoip::lookup(ip); });
+
+    // ── ★★ WHICH NETWORK an address belongs to — for the listener list and for ASN BANS ───────
+    // ★★★ THIS IS WHAT MAKES BLOCKING WORK AGAINST ABUSE. A single address is a treadmill: ban
+    //     .7 and the next request is .8. Even a /24 loses to a proxy pool spread across a
+    //     provider. Blocking the ASN blocks the whole network in one decision — which is exactly
+    //     why it also needs care, and why the page names the network you are about to block.
+    // ★ NOT from the registry files. Their opaque-id is a per-holder UUID with no name, and their
+    //   `asn` records say which AS NUMBERS were allocated to whom — not which AS announces a
+    //   given prefix. That only exists in BGP. See asndb.cpp.
+    asndb::setDir("/var/lib/vibeserver");
+    asndb::load();
+    LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
+        return asndb::lookup(ip, asn, name);
+    });
+    // ★ OFF THE STARTUP PATH. It is ~50 MB across five registries; doing it inline would leave
+    //   the radio silent for a minute on every boot, and a receiver that is slow to start reads
+    //   as a broken one. Refreshed at most weekly — allocations move slowly.
+    // ★★ ONE background thread for BOTH datasets, in sequence. Two threads would have the Pi
+    //    downloading and parsing ~90 MB at once while the DSP is trying to keep up — and this
+    //    machine has four cores and a radio to run. Sequential costs a minute and disturbs
+    //    nothing.
+    if (geoip::stale(7) || asndb::stale(7)) {
+        std::thread([]{
+            std::string err;
+            if (geoip::stale(7)) {
+                if (geoip::refresh(err))
+                    std::printf("VibeServer: country data ready — %d ranges.\n", geoip::count());
+                else
+                    std::printf("VibeServer: country data unavailable (%s) — listeners will show "
+                                "no flag, which is the honest answer.\n", err.c_str());
+            }
+            if (asndb::stale(7)) {
+                if (asndb::refresh(err))
+                    std::printf("VibeServer: network data ready — %d ranges.\n", asndb::count());
+                else
+                    std::printf("VibeServer: network data unavailable (%s) — network blocking "
+                                "will match nobody until it downloads.\n", err.c_str());
+            }
+        }).detach();
+    }
+
+    // ── ★★★ THE MAINTENANCE ACTIONS — the four buttons that exist INSTEAD of a web terminal ──
+    //
+    // See local_sdr_shim.cpp's /vibeserver/admin/ router for the full argument. In short: the
+    // need Stuart described ("send a reboot command from my iPhone... loft or up the allotment")
+    // is bounded — reboot, restart, update — and a terminal is an unbounded hole for a bounded
+    // need, behind a password whose day job is guarding gain sliders, on a receiver that is
+    // publicly listed and served over plain HTTP.
+    //
+    // ★★★ THE COMMANDS ARE LITERALS IN THIS FILE. Not templated, not built from any part of the
+    //     request, not read from config. `action` selects WHICH fixed string runs and can do
+    //     nothing else — so there is no argument to escape, and no injection to get wrong. The
+    //     moment one of these takes a parameter from the network, that property is gone.
+    //
+    // ★★ FIRE AND FORGET, ON A DETACHED THREAD. `reboot` never returns, and blocking the caller
+    //    would leave the admin page waiting on a socket the kernel is about to take away — which
+    //    renders as "the reboot failed" for the one action that most obviously worked.
+    // ★★ THE OUTPUT OF THE LAST MAINTENANCE ACTION. The helper tees everything it prints into
+    //    this file; the admin page polls it so "Install updates" shows apt working rather than a
+    //    button that goes silent for two minutes.
+    LocalSdrShim::setAdminLogHandler([](std::string& text, bool& running, int& exitCode) {
+        text.clear(); running = false; exitCode = 0;
+        FILE* f = fopen("/var/lib/vibeserver/maintenance.log", "rb");
+        if (!f) return;
+        // ★ Tail, not the whole file: an apt run can print a lot, and this is polled every
+        //   second. The page only ever shows the end of it anyway.
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        const long kMax = 16 * 1024;
+        if (len > kMax) { fseek(f, len - kMax, SEEK_SET); len = kMax; } else fseek(f, 0, SEEK_SET);
+        text.resize((size_t)len);
+        const size_t got = fread(&text[0], 1, (size_t)len, f);
+        text.resize(got);
+        fclose(f);
+        // ★★ RUNNING IS THE ABSENCE OF THE END MARKER, which the helper writes from an EXIT trap
+        //    so it appears even when the action fails. Deciding this any other way (asking
+        //    systemd, timing out) would leave a crashed action looking like a busy one.
+        const std::string kDone = "__VIBESERVER_DONE__";
+        const size_t at = text.rfind(kDone);
+        if (at == std::string::npos) { running = !text.empty(); return; }
+        exitCode = atoi(text.c_str() + at + kDone.size());
+        text.erase(at);                       // the marker is plumbing, not something to show
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+    });
+
+    LocalSdrShim::setAdminActionHandler([](const std::string& action, std::string& err) -> bool {
+        // ★★★ WRITE A REQUEST; DO NOT TRY TO BECOME ROOT. The unit sets NoNewPrivileges=yes, so
+        //     sudo can never work here however correct the sudoers file is — sudo says so itself:
+        //     "The 'no new privileges' flag is set, which prevents sudo from running as root."
+        //     The choice was to weaken the sandbox or to stop asking the daemon to elevate. This
+        //     is the second: systemd watches for this file (vibeserver-maintenance.path) and runs
+        //     a ROOT helper that owns the list of permitted actions.
+        //     ★★ It is also a tighter boundary than sudo was. The whitelist now lives in a
+        //        root-owned script this process cannot write to, so a compromised daemon can ask
+        //        for one of five things by name and nothing else. Same argument as refusing a web
+        //        terminal, one layer down.
+        //     ★ Validated HERE TOO, so a typo never reaches the helper and the admin page gets an
+        //       immediate answer rather than silence.
+        static const char* kActions[] = { "reboot", "shutdown", "restart", "update-check", "update" };
+        bool known = false;
+        for (const char* a : kActions) if (action == a) { known = true; break; }
+        if (!known) { err = "unknown action: " + action; return false; }
+
+        // ★ The helper is what makes any of this possible; if it is not installed, say that
+        //   plainly instead of writing a request nothing will ever read.
+        if (::access("/usr/lib/vibeserver/vibeserver-maintenance", X_OK) != 0) {
+            err = "maintenance actions are not available on this server "
+                  "(the helper is not installed — reinstalling the package restores it)";
+            return false;
+        }
+
+        const std::string path = "/var/lib/vibeserver/maintenance.request";
+        // ★★ Write to a temp file and rename. systemd's PathExists= fires the moment the name
+        //    appears, so a partially-written file could be read before the action is complete —
+        //    rename is atomic and cannot be seen half-done.
+        const std::string tmp = path + ".tmp";
+        FILE* f = fopen(tmp.c_str(), "w");
+        if (!f) {
+            err = "could not write the maintenance request (is /var/lib/vibeserver writable?)";
+            return false;
+        }
+        fputs(action.c_str(), f);
+        fclose(f);
+        if (rename(tmp.c_str(), path.c_str()) != 0) {
+            remove(tmp.c_str());
+            err = "could not submit the maintenance request";
+            return false;
+        }
+        std::printf("VibeServer: maintenance '%s' requested\n", action.c_str());
+        return true;
+    });
 
     while (!g_stop) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         // ★ The DSP path only raises a FLAG; the write happens here, off that thread.
         LocalSdrShim::instance().saveSpectrogramIfDue();
+        LocalSdrShim::instance().saveConnLogIfDue();
         if (!shim.isRunning()) {
             std::fprintf(stderr, "VibeServer: capture stopped unexpectedly.\n");
             break;

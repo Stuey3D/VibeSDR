@@ -138,6 +138,7 @@ std::string toJson(const Config& c) {
     S("mdnsName", c.mdnsName);
     S("pin", c.pin); S("adminPass", c.adminPass);
     N("sessionLimitMin", c.sessionLimitMin);
+    N("adminIdleMin", c.adminIdleMin);
     N("freq", c.freq); N("rate", c.rate); N("lockFreq", c.lockFreq); N("lockRate", c.lockRate);
     N("gain", c.gain);
     N("lnaState", c.lnaState);
@@ -180,6 +181,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getStr(s, "mdnsName", c.mdnsName);
     getStr(s, "pin", c.pin);       getStr(s, "adminPass", c.adminPass);
     if (getNum(s, "sessionLimitMin", d)) c.sessionLimitMin = (int)d;
+    if (getNum(s, "adminIdleMin", d)) c.adminIdleMin = (int)d;
     if (getNum(s, "freq", d))        c.freq = d;
     if (getNum(s, "rate", d))        c.rate = d;
     if (getNum(s, "lockFreq", d))    c.lockFreq = d;

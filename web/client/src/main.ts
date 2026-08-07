@@ -37,6 +37,7 @@ import {
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
+import { initAdmin, closeAdmin } from './admin';
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
@@ -189,6 +190,10 @@ function initSplash() {
         return;
       }
       sessionStorage.setItem('vsAdminOverride', q);
+      // ★ Keep the password for the admin PAGE, which has to sign its own requests. Without
+      //   this an owner who connected as admin from the splash arrived fully unlocked and
+      //   then could not open the admin page without retyping it.
+      adminPassword = adminPwEl.value;
     }
     $<HTMLButtonElement>('btnConnect').disabled = true;
     $<HTMLButtonElement>('btnSaveConnect').disabled = true;
@@ -259,6 +264,15 @@ let srvLocal = false;
 // ★ Does this server have an admin password at all? Only then is there anything to unlock.
 let srvAdminProtected = false;
 let adminUnlocked = false;
+/** ★★ THE ADMIN PASSWORD, IN MEMORY ONLY, for the duration of this tab.
+ *  The admin API signs every request with HMAC(password, fresh nonce), so the page genuinely
+ *  needs the secret itself — a stored nonce would work exactly once.
+ *  ★★★ NOT localStorage, NOT sessionStorage, NOT a cookie. It lives in this closure and dies
+ *  with the tab, which is the same rule the override credential follows. Anything persisted is
+ *  a credential left lying around on a machine that, by definition, is used by whoever walks
+ *  up to it — which is the very thing the idle re-lock exists to defend against.
+ */
+let adminPassword = '';
 const RAW_AUDIO_KEY = 'vibesdr.rawAudio';
 
 function prefersRawAudio(): boolean {
@@ -318,6 +332,17 @@ function refreshAdminRow() {
   //   receiver being LOCKED (shared front end), not merely on a password existing. Unlocking is
   //   the moment they should appear, so re-apply it here.
   if (radioCaps?.driver === 'sdrplay') applyRspLock();
+  // ★★ The SERVER ADMIN door. Present only for an unlocked owner — a listener has no use for
+  //    it, and a button whose only job is to refuse you is worse than no button.
+  //    ★ It also has to DISAPPEAR on the idle re-lock, which is why this lives here rather than
+  //      being set once when the password is accepted.
+  const srv = document.getElementById('adminServerRow');
+  if (srv) srv.hidden = !adminUnlocked;
+  // ★★★ AND THE PAGE ITSELF MUST CLOSE. Leaving it open after a re-lock would leave DISCONNECT
+  //     and BLOCK buttons on screen that the server will now refuse — the exact "drawn, enabled
+  //     and inert" trap the unlock row's own comment warns about, on the most consequential
+  //     controls in the whole client.
+  if (!adminUnlocked) closeAdmin();
 }
 
 /** ★★ WIRED UP AT LAST. `doAdminUnlock` existed and NOTHING EVER CALLED IT — the UNLOCK button
@@ -348,6 +373,7 @@ async function doAdminUnlock(pw: string) {
     const ch = await fetchAuthChallenge(`http://${currentHost}`);
     const nonce = ch.nonce;
     if (!nonce) { alert('This server did not offer a challenge.'); return; }
+    adminPassword = pw;   // the admin page signs its own requests with it
     spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
   } catch (e) {
     alert(`Could not reach the server to unlock: ${(e as Error).message}`);
@@ -549,6 +575,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       setTimeout(() => location.reload(), 600);
     },
     onEvicted: () => showEvicted(),
+    onBanned: () => showBanned(),
+    // ★ Drop audio that was demodulated at the old frequency. Without this the previous station
+    //   plays on for as long as the buffer is deep — which is what made tuning feel laggy.
+    onRetuneJump: () => audio?.flush(),
+    onAdminRelocked: (idleMin) => showAdminRelocked(idleMin),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
@@ -789,6 +820,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   else initDecoders(host, auth);
   initIdleThrottle();
   initAdminUnlock();
+  initAdmin(() => currentHost, () => adminPassword);
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
   requestAnimationFrame(loop);
@@ -2844,6 +2876,42 @@ async function doAdminOverride(password: string, status: HTMLElement) {
   // visit, and a credential that outlives the tab is a credential left lying around.
   sessionStorage.setItem('vsAdminOverride', q);
   location.reload();
+}
+
+/** ★★ Banned. Say it plainly and DO NOT offer a countdown or a retry — there is nothing to wait
+ *  for, and a "try again later" here would be a lie that costs both ends a reconnect loop.
+ *  ★ No reason is shown even though the server records one: the reason is the owner's note to
+ *    themselves, written in the ban box, and it is quite often blunt. It belongs on the admin
+ *    page, not quoted back at the person. */
+function showBanned() { showRefusal('NO ACCESS',
+  'This receiver\'s operator has blocked access from your address.<br><br>' +
+  'If you believe that is a mistake, contact whoever runs this receiver.'); }
+
+/** ★★★ THE IDLE RE-LOCK, as a PILL — not an overlay, and the difference is the whole point.
+ *  Nothing has stopped: the audio is still playing, the decoder is still decoding, the session
+ *  is still ours. An overlay would say "something has gone wrong and you must deal with it",
+ *  which is exactly the wrong message for a quiet, expected safety step (Stuart, 2026-08-06:
+ *  "simply lock the admin controls with a little pill pop up warning"). */
+function showAdminRelocked(idleMin: number) {
+  const mins = idleMin > 0 ? `${idleMin} minutes` : 'a while';
+  showPill(`Admin controls locked after ${mins} idle — unlock again in the menu`);
+}
+
+/** ★ A small transient notice at the top of the screen. Replaces any pill already showing
+ *  rather than stacking, and clears itself; there is no dismiss button because there is
+ *  nothing here the user must acknowledge. */
+let pillTimer = 0;
+function showPill(text: string, ms = 9000) {
+  let el = document.getElementById('vsPill');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'vsPill';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(pillTimer);
+  pillTimer = window.setTimeout(() => el?.classList.remove('show'), ms);
 }
 
 /** ★ The owner has taken their radio back. Not a fault, and worth saying so — being dropped

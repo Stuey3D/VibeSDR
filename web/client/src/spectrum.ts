@@ -168,6 +168,14 @@ export interface SpectrumCallbacks {
   onCooldown?: (secs: number) => void;
   /** The owner took the radio back using the admin password. */
   onEvicted?: () => void;
+  /** This address is on the receiver's ban list. Terminal — there is no waiting it out. */
+  onBanned?: () => void;
+  /** ★ The dial has JUMPED far enough that anything already buffered is a different signal.
+   *  main.ts uses this to drop queued audio — see AudioPlayer.flush(). */
+  onRetuneJump?: () => void;
+  /** ★ Admin controls were re-locked after an idle period. NOT a disconnection: the session,
+   *  the audio and any decoder are all still running. `idleMin` is how long it waited. */
+  onAdminRelocked?: (idleMin: number) => void;
   onRtt?:    (ms: number) => void;
   /** Bytes received on the spectrum socket — the BIGGER half of the link. */
   onBytes?:  (n: number) => void;
@@ -358,6 +366,13 @@ export class SpectrumClient {
         this.refused = true;
         this.cb.onEvicted?.();
         break;
+      case 'banned':
+        // ★ The most terminal refusal there is: unlike busy or cooldown there is nothing to
+        //   wait for, so retrying is pure noise on both ends. `refused` is what stops the
+        //   auto-reconnect, and it matters most here.
+        this.refused = true;
+        this.cb.onBanned?.();
+        break;
       case 'session_warning':
         // Still connected — this is a countdown, not a refusal. Do NOT set refused.
         this.cb.onSessionWarning?.(Number(msg.secs) || 0);
@@ -389,6 +404,18 @@ export class SpectrumClient {
         if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft >= 0) {
           this.cb.onSessionWarning?.(msg.sessionSecsLeft);
         }
+        // ★★★ ARE WE ALREADY ADMIN? `hwinfo` has carried adminOk since the lock was built and
+        //     NOTHING IN THIS CLIENT EVER READ IT — so an owner who connected as admin from the
+        //     splash screen arrived with the server treating them as admin and the UI drawing
+        //     every protected control greyed out. The only way back was to type the password a
+        //     second time into the menu, which made the splash field look broken.
+        //     ★ Same family as `doAdminUnlock` never being called: the state existed, the
+        //       transport existed, and the two were never joined up.
+        // ★★ ONLY THE POSITIVE. onAdmin(false) means "the password you just typed was refused"
+        //    and pops an alert — but adminOk is false for every ordinary listener, so reporting
+        //    it here would alert "that admin password was not accepted" on every single connect,
+        //    to people who never typed one. Locked is already the default the UI draws.
+        if (msg.adminOk === true) this.cb.onAdmin?.(true, false);
         break;
       case 'rds':
         this.cb.onRds?.({
@@ -404,6 +431,14 @@ export class SpectrumClient {
       case 'admin':
         // ok=true after a correct password; refused=true when a protected control was
         // rejected, which is how a client learns it is locked without having asked.
+        // ★ relocked=true is the idle re-lock. It is NOT a refusal and NOT a failed password,
+        //   so it must not raise the "that password was not accepted" alert — it gets its own
+        //   callback and its own quiet pill.
+        if (msg.relocked === true) {
+          this.cb.onAdminRelocked?.(Number(msg.idleMin) || 0);
+          this.cb.onAdmin?.(false, true);   // grey the controls, without the alert
+          break;
+        }
         this.cb.onAdmin?.(msg.ok === true, msg.refused === true);
         break;
       case 'rdsx':
@@ -505,7 +540,20 @@ export class SpectrumClient {
    * a different band should not inherit the zoom of the one you left.
    */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean; retarget?: boolean }) {
+    // ★★★ A JUMP INVALIDATES BUFFERED AUDIO. Everything in the playout buffer was demodulated at
+    //     the old frequency, so after a big move it is the PREVIOUS station arriving late — up to
+    //     a second of it, which is exactly the "audio lags the waterfall when I tune" report
+    //     (Stuart, 2026-08-07: frequency entry and waterfall clicks).
+    // ★★ ONLY ON A JUMP, and the threshold is the demodulator's own bandwidth. Flushing on every
+    //    call would ruin holding the step button down: each 100 Hz nudge would drop the buffer and
+    //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
+    //    buffered audio is still substantially the signal you are listening to, so it is kept.
+    const prev = this.frequency;
     if (frequency) this.frequency = Math.round(frequency);
+    {
+      const bw = Math.abs(this.bandwidthHigh - this.bandwidthLow) || 3000;
+      if (prev && Math.abs(this.frequency - prev) > bw) this.cb.onRetuneJump?.();
+    }
     if (mode) this.setMode(mode);
     else this._send({
       type: 'tune', frequency: this.frequency, mode: this.mode,

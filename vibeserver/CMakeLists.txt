@@ -18,7 +18,7 @@
 #   ./vibeserver/build/vibeserver --tcp 127.0.0.1:1234
 
 cmake_minimum_required(VERSION 3.20)
-project(vibeserver VERSION 1.0.0 LANGUAGES CXX C)
+project(vibeserver VERSION 2.0.0 LANGUAGES CXX C)
 # ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
 #   so Linux starts level with it rather than inventing a separate number for the same server.
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
@@ -71,6 +71,8 @@ add_library(vibeserver_core STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_config.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/eibi.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/solar.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/geoip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/asndb.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     "${CPP_DIR}/mdns_responder.cpp"
@@ -251,6 +253,14 @@ if(UNIX AND NOT APPLE)
   # ★ /lib/udev/rules.d is the PACKAGE path; /etc/udev/rules.d is for the ADMIN's own overrides.
   #   Shipping into /etc would fight the sysadmin and survive `apt purge`.
   install(FILES linux/99-vibeserver-sdr.rules DESTINATION lib/udev/rules.d)
+  # ★★ THE MAINTENANCE BUTTONS' PRIVILEGE. The service runs unprivileged AND with
+  #    NoNewPrivileges=yes, so it cannot elevate at all — sudo is impossible by design here. The
+  #    daemon writes a request file instead; the .path unit notices it and runs the helper as
+  #    root. See linux/vibeserver-maintenance for the permitted actions.
+  install(PROGRAMS linux/vibeserver-maintenance DESTINATION lib/vibeserver)
+  install(FILES linux/vibeserver-maintenance.path
+                linux/vibeserver-maintenance.service
+          DESTINATION lib/systemd/system)
   # ★ Run as root from the unit's ExecStartPre — the daemon is unprivileged and cannot write
   #   sysfs. See linux/vibeserver-governor for why a wrong governor costs 25% of the machine.
   install(PROGRAMS linux/vibeserver-governor DESTINATION lib/vibeserver)
@@ -287,7 +297,17 @@ if(UNIX AND NOT APPLE)
   #   a failure that looks like a missing feature rather than a missing package.
   #   ★ The general trap: adding a shell-out adds an undeclared dependency, and NOTHING in the
   #     build will tell you. Anything exec()d belongs in this line.
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser, curl")
+  #   ★★ gzip JOINED THE LIST FOR 2.0, and it is the exact trap the paragraph above describes:
+  #      the IP-to-network data (asndb.cpp) is fetched with `curl ... | gunzip -c`. gzip is
+  #      Priority: required on Debian so it is present in practice on every real image — but
+  #      "present in practice" is how an undeclared dependency hides until the one image that
+  #      lacks it, and the failure mode is silent (no country/network data, which reads as a
+  #      missing feature).
+  #   ★ NOT declared, deliberately: systemctl, shutdown and apt-get. Those are exec'd only by the
+  #     admin maintenance buttons, only when running as root, and they belong to systemd and apt —
+  #     which this package already requires by shipping a .service unit. Declaring `systemd` would
+  #     also wrongly refuse to install on a container image where the binary is still useful.
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser, curl, gzip")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postinst"

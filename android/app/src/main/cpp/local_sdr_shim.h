@@ -102,6 +102,89 @@ public:
     /** Seconds until the current listener's limit expires; -1 when there is no limit,
      *  nobody is listening, or the listener is exempt (loopback / admin). */
     int  occupantSecsLeft() const;
+
+    // ── ★★★ THE ADMIN API — monitoring, listeners, bans, maintenance ─────────────────────────
+    //
+    // Serves /vibeserver/admin/*, reached from the SERVER ADMIN button at the bottom of the
+    // client's menu once the admin session is unlocked. Gated on the SAME nonce + HMAC challenge
+    // as the config API — see the routing comment in local_sdr_shim.cpp for why there is no
+    // fourth credential mechanism, and no web terminal.
+
+    /** Where the ban list is persisted (one JSON object per line). Empty = memory only, which is
+     *  every phone: an app has no /var/lib and nobody to ban. Setting a path also LOADS it. */
+    void setBanListPath(const std::string& path);
+
+    /** ★★ Where the connection log is kept. It used to be memory-only, which meant every update
+     *  wiped the history — and an update is the most common reason this server restarts. Empty
+     *  path = memory only (every phone). */
+    void setConnLogPath(const std::string& path);
+    /** Append anything that closed since the last call. Driven from the daemon's 1 Hz loop so
+     *  file I/O never lands on a connection thread — see ConnLog::saveIfDue. */
+    void saveConnLogIfDue();
+
+    /** ★★ Minutes of no interaction after which an admin session's CONTROLS re-lock — the
+     *  session, its audio and any running decode continue. 0 = never. Default 30.
+     *  The case this defends against is an unattended tab left logged in as admin, not a stolen
+     *  password (Stuart, 2026-08-06). */
+    static void setAdminIdleMinutes(int minutes);
+
+    /** Is this address on the ban list right now? Expired entries are pruned as they are found.
+     *  Called on the connection path, so it is cheap when the list is empty (the normal case). */
+    static bool isBanned(const std::string& ip, std::string* reason = nullptr);
+
+    /** Connection log bookkeeping. `reason` is the field that makes the log worth keeping —
+     *  "closed" | "kicked" | "banned" | "busy" | "timeout" | "queue-full". */
+    static void noteConnectionOpened(const std::string& ip, const std::string& session,
+                                     const std::string& agent, const std::string& cc = "");
+    static void noteConnectionClosed(const std::string& ip, const std::string& session,
+                                     const char* reason, uint64_t bytes = 0);
+
+    /** One consistent snapshot of the whole machine: load, temperature, memory, uptime, the
+     *  radio, listeners, uplink rate, and the ban list. One request rather than five, so the
+     *  page's panels cannot disagree about what a moment looked like. */
+    std::string adminStatusJson();
+    /** The live listeners: address, session, frequency, mode, codec, drops, and who holds the
+     *  slot. */
+    std::string adminSessionsJson();
+    /** Close a listener's sockets, telling them why. Empty `session` matches on address.
+     *  @return how many sessions were closed. */
+    int adminKick(const std::string& session, const std::string& ip);
+    /** Kick everyone a ban rule matches — a ban that leaves the banned person connected is not
+     *  a ban, it is a note about future connections. */
+    int adminKickMatching(const std::string& cidr);
+
+    /** ★★★ THE FOUR BUTTONS THAT EXIST INSTEAD OF A TERMINAL: reboot, restart, update-check,
+     *  update (plus shutdown). A FIXED list, deliberately — the need is bounded, so the
+     *  mechanism should be too. Performed by the DAEMON via the handler below; unregistered on a
+     *  phone, where the honest answer is "not supported on this server". */
+    bool adminAction(const std::string& action, std::string& err);
+    using AdminActionFn = std::function<bool(const std::string& action, std::string& err)>;
+    static void setAdminActionHandler(AdminActionFn fn);
+
+    /** ★★ WHAT THE LAST MAINTENANCE ACTION IS PRINTING, so the admin page can show it instead of
+     *  a button that goes quiet for two minutes. Returns the captured output; `running` is false
+     *  once the action has finished (successfully or not).
+     *  ★ Supplied by the DAEMON because only it knows where the helper writes, and because this
+     *    file does not exist on a phone. */
+    using AdminLogFn = std::function<void(std::string& text, bool& running, int& exitCode)>;
+    static void setAdminLogHandler(AdminLogFn fn);
+
+    /** ★★ IP -> ISO-3166 country, for the flags beside listeners and the top-countries tally.
+     *  Registered by the DAEMON, which owns the dataset (see vibeserver/geoip.cpp for why it is
+     *  the RIRs' own published statistics and NOT a geolocation API — nobody's address is sent
+     *  anywhere at runtime). Unregistered on a phone, and on a server that has not downloaded
+     *  the data yet; both cases return empty, which the client must render as NO FLAG rather
+     *  than as a guess. */
+    using GeoIpFn = std::function<std::string(const std::string& ip)>;
+    static void setGeoIpHandler(GeoIpFn fn);
+
+    /** ★★ IP -> ASN and the network's name, for the listener list and for ASN BANS. Registered by
+     *  the daemon (vibeserver/asndb.cpp — iptoasn.com's public-domain BGP table, downloaded once
+     *  and queried locally, so again nothing is asked about a visitor at runtime).
+     *  ★ Unregistered = ASN bans are inert rather than fatal. A server with no data must let
+     *    people in, not refuse everyone it cannot identify. */
+    using AsnFn = std::function<bool(const std::string& ip, uint32_t& asn, std::string& name)>;
+    static void setAsnHandler(AsnFn fn);
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
