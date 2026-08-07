@@ -395,6 +395,12 @@ public:
     void setDecoderFreq(double hz);
 
     // Hardware controls (no-ops if not running). gainTenthDb < 0 = auto gain.
+    /** Let the radio go so another program can open it, keeping the server up. See the .cpp. */
+    bool releaseRadio();
+    /** Take it back. False (with a reason) when something else now holds it — a normal outcome. */
+    bool reacquireRadio(std::string& err);
+    bool radioIsReleased() const;
+
     void setGain(int gainTenthDb);
     void setPpm(int ppm);
     void setBiasTee(bool on);

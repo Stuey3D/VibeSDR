@@ -1081,6 +1081,7 @@ struct LocalSdrShim::Impl {
     std::unique_ptr<vibe::SdrplaySource> sdrp;
     std::unique_ptr<vibe::AirspyHfSource> ahf;   // Airspy HF+ (Discovery / Dual Port)
     int  sdrpIndex = 0;
+    int  ahfIndex  = 0;
     // ★★ One-shot AGC kick, once the stream is genuinely running. Cycling it inside open()
     // — immediately after Init, before any samples have flowed — still left it inert, so
     // the transition evidently has to happen against a LIVE stream rather than a device
@@ -8599,6 +8600,7 @@ int LocalSdrShim::startAirspyHfCommon(int index, int fd,
     const bool opened = (fd >= 0)
         ? impl->ahf->openFd(fd, sampleRate, centerFreq, gainTenthDb, err)
         : impl->ahf->open(index, sampleRate, centerFreq, gainTenthDb, err);
+    impl->ahfIndex = index;   // ★ remembered so releaseRadio can reopen the same one
     if (!opened) { delete impl; return -1; }
     // ★ THE RADIO DECIDES THE RATE, not the caller. An HF+ Discovery tops out near 768 kHz
     // where a dongle does 2.4 MSPS, so a saved preference from a previous radio would ask for
@@ -9168,6 +9170,105 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     else { rtlsdr_set_tuner_gain_mode(p->dev, 1); rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
            LOGI("gain: %.1f dB", gainTenthDb / 10.0); }
 }
+/** ★★★ LET THE RADIO GO WITHOUT STOPPING THE SERVER.
+ *
+ *  For a machine where VibeServer shares one SDR with something else (OpenWebRX, a decoder), the
+ *  existing idle park is no use: it stops CONSUMING samples but never drops the USB claim, and on
+ *  the dongle it deliberately keeps the stream running and throws the buffers away, because
+ *  cancelling and restarting it was what crashed the server. Nothing else can open the device.
+ *
+ *  ★★ ORDER IS COPIED FROM setSampleRate, WHICH IS PROVEN ON ALL THREE RADIOS: quiesce the
+ *     source, join the capture thread, stop the DSP, and only THEN take modeMtx. Taking it any
+ *     earlier deadlocks — stopDspThread() joins a thread that locks modeMtx per buffer.
+ *  ★ The HTTP server, admin page, config and mDNS all stay up. What stops is anything that needs
+ *    IQ: the spectrogram and the band-conditions measurement. That is the honest cost and the
+ *    setup page says so.
+ */
+bool LocalSdrShim::releaseRadio() {
+    if (!p) return false;
+    Impl* impl = p;
+    if (impl->radioReleased.load()) return true;
+    // ★ A network source owns nothing local, so there is nothing to hand over.
+    if (impl->useTcp() || impl->useSpy()) return false;
+    const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf();
+
+    if (rsp)      impl->sdrp->setPaused(true);
+    else if (ahf) impl->ahf->setPaused(true);
+    else if (impl->dev) { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
+    if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    impl->stopDspThread();
+    {
+        std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
+        // ★★ radioReleased goes up INSIDE the lock and BEFORE the close, so a control call that
+        //    is already waiting on modeMtx returns instead of touching a freed handle.
+        impl->radioReleased.store(true);
+        if (rsp)      impl->sdrp->close();
+        else if (ahf) { impl->ahf->stop(); impl->ahf->close(); }
+        else if (impl->dev) { rtlsdr_close(impl->dev); impl->dev = nullptr; }
+        impl->restarting.store(false);
+    }
+    { std::lock_guard<std::mutex> lk(impl->iqMtx);
+      impl->iqQueue.clear(); impl->iqQueuedSamples = 0; impl->iqPrefilled = false; }
+    LOGI("radio RELEASED — another program may open it now (spectrogram and band conditions stop)");
+    impl->notifyDeviceState();
+    return true;
+}
+
+/** Take the radio back. Returns false when something else now holds it — which is a NORMAL
+ *  outcome here, not an error: that is the whole point of having lent it out. The caller turns
+ *  this into a message a listener can act on rather than an empty waterfall. */
+bool LocalSdrShim::radioIsReleased() const { return p && p->radioReleased.load(); }
+
+bool LocalSdrShim::reacquireRadio(std::string& err) {
+    if (!p) { err = "server not running"; return false; }
+    Impl* impl = p;
+    if (!impl->radioReleased.load()) return true;
+    const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf();
+    std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
+
+    bool ok = false;
+    if (rsp) {
+        ok = impl->sdrp->open(impl->sdrpIndex, impl->sampleRate, impl->rtlCenter.load(),
+                              impl->lastGainTenthDb, err);
+    } else if (ahf) {
+        ok = impl->ahf->open(impl->ahfIndex, impl->sampleRate, impl->rtlCenter.load(),
+                             impl->lastGainTenthDb, err);
+    } else {
+        // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
+        //   taken our slot while we were away. With three radios on one machine that matters.
+        const int idx = impl->findOurDevice();
+        if (idx < 0) { err = "the radio is not there"; }
+        else if (rtlsdr_open(&impl->dev, (uint32_t)idx) != 0 || !impl->dev) {
+            impl->dev = nullptr;
+            err = "the radio is in use by another program on this machine";
+        } else {
+            rtlsdr_set_sample_rate(impl->dev, (uint32_t)impl->sampleRate);
+            impl->tuneHw(impl->rtlCenter.load());
+            if (impl->lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
+            else { rtlsdr_set_tuner_gain_mode(impl->dev, 1);
+                   rtlsdr_set_tuner_gain(impl->dev, impl->lastGainTenthDb); }
+            rtlsdr_reset_buffer(impl->dev);
+            ok = true;
+        }
+    }
+    if (!ok) {
+        if (err.empty()) err = "the radio is in use by another program on this machine";
+        LOGI("could not take the radio back — %s", err.c_str());
+        return false;
+    }
+
+    impl->radioReleased.store(false);
+    impl->startEngine();
+    impl->buildAudio();
+    impl->startDspThread();
+    if (rsp)      impl->sdrp->setPaused(false);
+    else if (ahf) { std::string e2; impl->ahf->start(e2); impl->ahf->setPaused(false); }
+    else          impl->launchCapture();
+    LOGI("radio REACQUIRED");
+    impl->notifyDeviceState();
+    return true;
+}
+
 void LocalSdrShim::setPpm(int ppm) {
     if (!p) return;
     // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
