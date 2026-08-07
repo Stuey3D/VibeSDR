@@ -276,20 +276,52 @@ void statusScreen(vsconfig::Config& cfg) {
         mvprintw(9, 2, "All settings live there. Setup from the VibeSDR app is coming soon.");
         attroff(COLOR_PAIR(4));
 
-        attron(A_BOLD); mvprintw(11, 2, "If you are locked out"); attroff(A_BOLD);
-        mvprintw(12, 4, "p   reset the admin password");
-        mvprintw(13, 4, "n   reset or clear the PIN");
-        mvprintw(14, 4, "x   reset to not-set-up  (the browser will ask you to set it up again)");
-        mvprintw(15, 4, "r   restart the server");
-        mvprintw(16, 4, "q   quit");
+        // ★★ CHANGING THE RADIO IS ITS OWN SECTION, not a footnote under "locked out". Swapping
+        //    an RSP for an Airspy is a normal thing to do with a receiver, and the only reason it
+        //    needs help at all is that the SERVICE HOLDS THE DEVICE: unplugging underneath a
+        //    running server is how you get "could not open (is another program using it?)" on the
+        //    way back in. Stop, swap, start — the machine can say that better than a wiki can.
+        attron(A_BOLD); mvprintw(11, 2, "Changing the radio"); attroff(A_BOLD);
+        if (up) {
+            mvprintw(12, 4, "x   stop serving and release the radio  (then unplug it)");
+        } else {
+            attron(COLOR_PAIR(3));
+            mvprintw(12, 4, "s   start serving with the radio that is plugged in now");
+            attroff(COLOR_PAIR(3));
+        }
 
-        if (!msg.empty()) message(18, 3, msg.c_str());
+        attron(A_BOLD); mvprintw(14, 2, "If you are locked out"); attroff(A_BOLD);
+        mvprintw(15, 4, "p   reset the admin password");
+        mvprintw(16, 4, "n   reset or clear the PIN");
+        mvprintw(17, 4, "z   reset to not-set-up  (the browser will ask you to set it up again)");
+        mvprintw(18, 4, "r   restart the server");
+        mvprintw(19, 4, "q   quit");
+
+        if (!msg.empty()) message(21, 3, msg.c_str());
         refresh();
 
         int c = getch();
         msg.clear();
         if (c == 'q') return;
-        if (c == 'r') {
+        if (c == 'x' && up) {
+            // ★ STOP, not restart. The whole point is to let go of the USB device so the user can
+            //   physically unplug it; a restart would grab it straight back.
+            mvprintw(21, 2, "Stopping…"); refresh();
+            run("sudo systemctl stop vibeserver 2>&1");
+            msg = "Stopped. The radio is released — swap it now, then press s.";
+        } else if (c == 's' && !up) {
+            // ★★ LOOK BEFORE STARTING. Starting with nothing plugged in leaves a service that is
+            //    "active" and cannot receive, which reads as a broken install rather than an
+            //    empty USB port. Say what was found, and refuse politely when nothing was.
+            std::string found = radioLine();
+            if (found.empty()) {
+                msg = "No radio found. Plug one in, then press s again.";
+            } else {
+                mvprintw(21, 2, "Starting with %s…", found.c_str()); refresh();
+                run("sudo systemctl start vibeserver 2>&1");
+                msg = "Serving " + found + ".";
+            }
+        } else if (c == 'r') {
             mvprintw(18, 2, "Restarting… (listeners will reconnect)"); refresh();
             run("sudo systemctl restart vibeserver 2>&1");
             msg = "Restarted.";
@@ -321,7 +353,7 @@ void statusScreen(vsconfig::Config& cfg) {
                 { msg = "Save failed: " + err; continue; }
             run("sudo systemctl restart vibeserver 2>&1");
             msg = pin.empty() ? "PIN removed, server restarted." : "PIN changed, server restarted.";
-        } else if (c == 'x') {
+        } else if (c == 'z') {
             header("Reset to not-set-up");
             mvprintw(4, 2, "The next visit in a browser will ask you to set this server up again.");
             attron(COLOR_PAIR(4));
