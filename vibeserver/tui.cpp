@@ -26,6 +26,7 @@
 #include <algorithm>
 
 #include "vibeserver_config.h"
+#include "vibeserver_api.h"
 
 namespace {
 
@@ -42,9 +43,26 @@ std::string run(const char* cmd) {
 }
 
 std::string svcState()  { return run("systemctl is-active vibeserver 2>/dev/null"); }
+/** ★★★ ASK THE DRIVER, NOT `lsusb`.
+ *
+ *  This used to shell out to `lsusb` and grep for likely-looking vendor strings. Two ways that
+ *  lied, and both were reported on the same evening:
+ *
+ *  ★★ `lsusb` LIVES IN usbutils, WHICH WE DO NOT DEPEND ON. On a minimal Debian or Ubuntu the
+ *     command simply does not exist, `run()` returns empty, and the wizard says "No radio
+ *     detected" — while `vibeserver --device 0` opens the very same dongle and runs perfectly,
+ *     because THAT path asks librtlsdr. A setup screen that contradicts the working server sends
+ *     the user hunting through udev rules and USB cables for a fault that is not there.
+ *  ★ And grepping vendor strings can only ever guess. A device we cannot open still matches
+ *    'realtek'; a device we CAN open under an unfamiliar name does not.
+ *
+ *  vs_device_count()/vs_device_name() are the same enumeration the server itself starts from, so
+ *  this screen now agrees with it by construction — including RSPs and Airspy HF+s, which lsusb
+ *  matching handled only by luck. */
 std::string radioLine() {
-    return run("lsusb 2>/dev/null | grep -iE 'airspy|sdrplay|rtl|realtek|1df7' "
-               "| sed 's/.*ID [0-9a-f:]* //' | head -1");
+    if (vs_device_count() <= 0) return "";
+    const char* n = vs_device_name(0);
+    return (n && *n) ? std::string(n) : std::string("SDR");
 }
 std::string myIp() { return run("hostname -I 2>/dev/null | awk '{print $1}'"); }
 
