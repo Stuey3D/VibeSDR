@@ -130,11 +130,30 @@ SDRplay API is SDRplay's own driver, distributed under their licence — we are 
 redistribute it, so it can never be a `Depends:` line. RTL-SDR and Airspy HF+ need nothing extra;
 only the RSP family does.
 
+On a headless box, download it from the command line — there is no browser to use:
+
 ```sh
-# https://www.sdrplay.com/downloads  →  "API/HW Driver for Linux (ARM64)"
-chmod +x SDRplay_RSP_API-*.run && sudo ./SDRplay_RSP_API-*.run
-systemctl status sdrplay_apiService     # should be active
+curl -fLO https://www.sdrplay.com/software/SDRplay_RSP_API-Linux-3.15.2.run
+chmod +x SDRplay_RSP_API-Linux-3.15.2.run
+sudo ./SDRplay_RSP_API-Linux-3.15.2.run
 ```
+
+★ It is INTERACTIVE: it pages a licence (space to scroll), then asks twice for `y`. One file
+covers every architecture including ARM64 — there is no separate Pi download, despite the
+website's wording.
+
+★★ **Then reboot.** The installer asks for it, and it means it: the service and the USB rules both
+need to come up cleanly, and a replug only does half of that.
+
+```sh
+sudo reboot
+# then, once it is back:
+systemctl status sdrplay        # should be active (running)
+```
+
+★ The unit is **`sdrplay`**. It was `sdrplay_apiService` in older API versions, and this document
+said so for a while — checked against a real 3.15 install on 2026-08-07, which is the only way
+that sort of thing gets found.
 
 ★ Do this **before** starting VibeServer. Without it the server runs perfectly and reports no
 radio, which reads as broken hardware rather than a missing driver — so the message it prints

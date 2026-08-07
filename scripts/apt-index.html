@@ -77,9 +77,15 @@ sudo apt install vibeserver</pre>
   <p><code>apt install</code> cannot fetch the SDRplay driver and this is not an oversight:
      SDRplay distribute it under their own licence and we are not permitted to redistribute it.
      RTL-SDR and Airspy HF+ need nothing extra.</p>
-<pre># https://www.sdrplay.com/downloads  &rarr;  "API/HW Driver for Linux (ARM64)"
-chmod +x SDRplay_RSP_API-*.run &amp;&amp; sudo ./SDRplay_RSP_API-*.run
-systemctl status sdrplay_apiService     # should be active</pre>
+<pre>curl -fLO https://www.sdrplay.com/software/SDRplay_RSP_API-Linux-3.15.2.run
+chmod +x SDRplay_RSP_API-Linux-3.15.2.run
+sudo ./SDRplay_RSP_API-Linux-3.15.2.run
+sudo reboot
+# once it is back:
+systemctl status sdrplay        # should be active (running)</pre>
+  <p>The installer is interactive &mdash; it pages a licence (space to scroll), then asks twice
+     for <code>y</code>. One file covers every architecture including ARM64. <strong>Reboot when
+     it finishes</strong>: the installer asks for it, and a replug is not enough.</p>
   <p>Install it whenever you like &mdash; before or after VibeServer. If you add an RSP later,
      <code>sudo systemctl restart vibeserver</code> is enough; the driver is loaded at runtime.</p>
 
