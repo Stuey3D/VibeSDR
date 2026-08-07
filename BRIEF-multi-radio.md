@@ -29,13 +29,37 @@ Process-per-radio gives the product Stuart described with none of that, and more
 The costs are real and small: a port per radio, one copy of the station/EiBi lists per process
 (~1 MB plus 9,360 entries — nothing on this Pi), and a landing page that aggregates.
 
-## Identity: THE USB SERIAL
+## Identity: SERIAL WHEN IT IS UNIQUE, PHYSICAL PORT WHEN IT IS NOT
 
 Settings follow the **physical radio**, never the enumeration order. Plug a fourth dongle in and
 nothing silently inherits another radio's configuration — including its locked frequency range,
 which is the one that would put a receiver somewhere its owner never agreed to.
 
-`findOurDevice()` already matches RTL dongles by serial for exactly this reason.
+★★★ **AND THE SERIAL ALONE IS NOT ENOUGH, WHICH IS THE TRAP IN THIS WHOLE DESIGN.** RTL-SDR dongles
+ship with a factory serial that is NOT unique: stock Realtek ones are all `00000001`, and the
+RTL-SDR Blog V4 on this Pi reports `00000003`. **Two of the same model are indistinguishable by
+serial.** `findOurDevice()` matches by serial and falls back to INDEX when it is empty — so with two
+identical dongles it would cheerfully bind one radio's settings to the other one. That is the worst
+possible failure here, because a locked frequency range is part of those settings.
+
+So identity is resolved in this order:
+
+1. **USB serial, if it is unique among the radios present.** Best case: the radio can be moved to
+   any socket and keeps its settings.
+2. **Physical USB port path otherwise** (`libusb_get_port_numbers()` — `1-2` on this Pi). Unique by
+   construction, since it names a socket. ★ The trade is honest and worth stating in the UI: move
+   that dongle to a different socket and the server treats it as a new radio, because from the
+   outside it is indistinguishable from one.
+3. **Offer to give it a unique serial.** librtlsdr can write the EEPROM (`rtlsdr_write_eeprom`), so
+   the setup page should offer this whenever it detects duplicates — one click, and identity 1
+   applies from then on.
+   ★★ WITH A REAL WARNING, NOT A SHRUG. Writing a dongle's EEPROM can brick it if it is interrupted,
+   and it must not be done while the radio is in use. It is the right fix and it is also the only
+   destructive button in the whole setup page; it should read like one.
+
+★ Detecting the collision is the part that must not be forgotten: if two radios present the same
+serial, SAY SO on the setup page rather than silently falling back to port paths. The owner needs
+to know why their settings are tied to a socket.
 
 ## Configuration: ONE FILE, A `radios` ARRAY
 
@@ -132,7 +156,8 @@ Two ways, and the second is the one to build:
 1. **`--radio N`** — select any driver from the flat list. ✅ done 2026-08-07; until then `--device`
    reached only the dongle and discovery was a preference chain (Airspy → RSP → RTL), so with three
    radios plugged in *which one you got was a lottery*. It moved Stuart's own demo off the RSP.
-2. Config schema: `radios[]`, serial identity, migration from today's single-radio file.
+2. Config schema: `radios[]`, identity resolution (serial → port path), duplicate-serial
+   detection, and migration from today's single-radio file.
    ★ An existing install must come out of this with its current radio configured and enabled —
    the "not configured, so not served" gate must never silently take a working receiver off air.
 3. TUI radio list with the space toggle.
@@ -140,6 +165,7 @@ Two ways, and the second is the one to build:
    enabled+configured radio.
 5. Setup page tabs, per-tab save, footer save-and-reboot.
 6. Landing page aggregation.
+7. EEPROM serial rename in the setup page, offered when duplicates are detected.
 
 ## Related work landing at the same time
 
