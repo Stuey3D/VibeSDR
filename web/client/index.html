@@ -2973,6 +2973,7 @@ select.btn { padding: 6px 8px; }
     <h2>THE LAST HOUR</h2>
     <div id="adminGraphs"></div>
 
+    <div id="secCountries" hidden>
     <h2>WHERE THEY CONNECT FROM <span class="dim">— distinct addresses, last 24 hours</span></h2>
     <div id="adminCountries"></div>
     <!-- ★ Explains its own emptiness. A blank chart otherwise reads as "nobody has connected",
@@ -2982,6 +2983,8 @@ select.btn { padding: 6px 8px; }
       from the internet registries shortly after the server starts, and refreshed weekly.
     </p>
 
+    <div id="secListeners" hidden>
+    </div>
     <h2>LISTENERS <span class="dim" id="adminListenerCount"></span></h2>
     <div class="aTblWrap"><table id="adminSessions">
       <thead><tr><th>Address</th><th>Frequency</th><th>Mode</th><th>For</th>
@@ -2990,6 +2993,8 @@ select.btn { padding: 6px 8px; }
     </table></div>
     <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
 
+    </div>
+    <div id="secBlocking" hidden>
     <h2>BLOCKED ADDRESSES</h2>
     <!-- ★★ CIDR IS OFFERED FIRST-CLASS, not hidden behind an "advanced" toggle. A single
          address is nearly useless against what an owner actually wants to stop — a proxy pool
@@ -3024,6 +3029,8 @@ select.btn { padding: 6px 8px; }
       providers — blocking one blocks everybody behind it.
     </p>
 
+    </div>
+    <div id="secHistory" hidden>
     <h2>CONNECTION HISTORY</h2>
     <div class="aTblWrap"><table id="adminConns">
       <thead><tr><th>When</th><th>Address</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
@@ -3031,13 +3038,53 @@ select.btn { padding: 6px 8px; }
     </table></div>
     <p class="dim" id="adminNoConns" hidden>Nothing yet.</p>
 
+    </div>
+    <!-- ★★ SAY WHY THE PAGE IS SHORT. Without this, a Simple-mode owner who has heard the admin
+         page can block people goes looking, finds nothing, and concludes it is missing or
+         broken — the exact failure that hiding things behind a mode is supposed to avoid. -->
+    <p class="dim wrap aNote" id="adminSimpleNote" hidden>
+      This receiver is set up for <b>local sharing</b>, so the panels for managing strangers —
+      who is connected, blocking, and connection history — are hidden. The server still records
+      all of it, so switching this receiver to <b>public sharing</b> in setup turns them on with
+      the history already there.
+    </p>
+
+    <div id="secMaintenance" hidden>
     <h2>MAINTENANCE</h2>
     <div class="aActions">
       <button class="btn" id="actUpdateCheck">CHECK FOR UPDATES</button>
-      <button class="btn" id="actUpdate">INSTALL UPDATES</button>
+      <!-- ★★ TWO BUTTONS, NOT ONE LABELLED "INSTALL UPDATES". That single button ran
+           `apt-get install --only-upgrade vibeserver` — correct for its scope, and a lie about
+           its label: it walked past 150 pending system packages and reported success. The scope
+           choice existed only in the scheduler, so the manual path had no way to say which you
+           meant (Stuart, 2026-08-07). Now each button names its own scope. -->
+      <button class="btn" id="actUpdate">UPDATE VIBESERVER</button>
+      <button class="btn" id="actUpdateAll">UPDATE ALL PACKAGES</button>
       <button class="btn" id="actRestart">RESTART VIBESERVER</button>
       <button class="btn aWarn" id="actReboot">REBOOT THE MACHINE</button>
     </div>
+    <!-- ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. A VibeServer update is one
+         small package we build and can sensibly be daily; a full system upgrade is bigger and
+         occasionally wants attention, so it suits a weekly slot. One schedule would force the
+         owner to accept the same risk for both. -->
+    <div class="aBanForm" id="updSchedRow">
+      <label class="dim" style="align-self:center;min-width:9em">Update VibeServer</label>
+      <select id="updSrvDay" class="btn"></select>
+      <select id="updSrvHour" class="btn"></select>
+    </div>
+    <div class="aBanForm" id="updSchedAllRow">
+      <label class="dim" style="align-self:center;min-width:9em">Update all packages</label>
+      <select id="updAllDay" class="btn"></select>
+      <select id="updAllHour" class="btn"></select>
+      <button class="btn" id="updSave">SAVE</button>
+    </div>
+    <p class="dim wrap aNote" id="updNote">
+      A receiver in a loft gets logged into roughly never, which makes it the machine most worth
+      updating automatically. <b>Update VibeServer</b> upgrades this one package and is safe to run
+      daily. <b>Update all packages</b> upgrades the whole system unattended — that keeps security
+      fixes current, but an OS upgrade can occasionally need attention and nobody will be watching,
+      so weekly is the sensible choice. Both run at the hour you pick, local time.
+    </p>
     <p class="dim wrap" id="actMsg"></p>
     <!-- ★★ THE OUTPUT, UNDER THE BUTTON THAT CAUSED IT. "Install updates" can run for minutes;
          without this it was a button that went quiet, and quiet is indistinguishable from broken
@@ -3054,6 +3101,7 @@ select.btn { padding: 6px 8px; }
       above cover what a terminal was wanted for. For a real shell from your phone, put this
       machine on Tailscale or WireGuard: proper key authentication, nothing exposed.
     </p>
+    </div>
   </div>
 </div>
 <script type="module" src="./src/main.ts"></script>

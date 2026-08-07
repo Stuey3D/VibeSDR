@@ -848,6 +848,17 @@ static vibeadmin::History  g_vsHistory;
  *  accidental one. The audio keeps playing and the decoder keeps decoding; only the ability to
  *  CHANGE anything goes away, and the menu's existing password box brings it straight back. */
 static std::atomic<int>    g_vsAdminIdleMin{30};
+/** False = a local/household receiver: the admin page hides the panels about managing strangers.
+ *  Default false so an install from before this setting behaves exactly as it always did. */
+static std::atomic<bool>   g_vsPublicSharing{false};
+/** The scheduled-update settings, mirrored here purely so the admin page can DISPLAY them. The
+ *  daemon owns the actual firing (its 1 Hz loop) — this is a readout, not a second scheduler. */
+static std::atomic<int>    g_vsUpdSrvHour{-1}, g_vsUpdSrvDay{-1};
+static std::atomic<int>    g_vsUpdAllHour{-1}, g_vsUpdAllDay{-1};
+static std::mutex          g_vsMaintMtx;
+/** Empty by default: a platform must OPT IN to offering maintenance, so a new one cannot
+ *  accidentally inherit buttons that would strand it. */
+static std::string         g_vsMaintActions;
 
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
@@ -5045,6 +5056,38 @@ struct LocalSdrShim::Impl {
 
     // Returns true if this WS may upgrade: no PIN set, or a valid single-use
     // HMAC token in the query string. On failure sends 401, records backoff.
+    /** ★★★ THE ADMIN CREDENTIAL, for HTTP endpoints that CHANGE something.
+     *
+     *  ★★ vsAuthOk() below is the wrong gate for a write, and the difference is the whole point:
+     *  the PIN is ACCESS (may you listen at all) and the admin password is CONTROL (may you
+     *  change this receiver). They are independent on purpose — the configuration a PUBLIC
+     *  receiver wants is NO PIN and an admin password, and in exactly that configuration
+     *  vsAuthOk returns true for EVERYONE ("if (secret.empty()) return true").
+     *
+     *  ★ Same nonce + HMAC challenge as the config and admin APIs. No fourth mechanism.
+     *  ★ Loopback and "no admin password set" both pass, matching adminGate(): a server with
+     *    nothing to protect must not start refusing its owner. */
+    bool vsAdminHttpOk(const std::shared_ptr<net::Socket>& sock, const std::string& reqLine) {
+        std::string secret;
+        { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+        if (secret.empty()) return true;                 // nothing is protected on this server
+        const std::string ip = sock->peerAddress();
+        if (isLoopback(ip)) return true;                 // the host IS the operator
+        const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
+        const std::string token = queryParam(reqLine, "vs_admin_auth");
+        if (!nonce.empty() && !token.empty()
+            && !g_vsAuthState.blocked(ip)
+            && g_vsAuthState.verify(secret, nonce, token)) {
+            g_vsAuthState.recordOk(ip);
+            return true;
+        }
+        // ★ Only a WRONG guess counts toward the backoff — a request carrying no credential at
+        //   all is not an attempt, and counting it lets a scanner lock the owner out.
+        if (!nonce.empty() && !token.empty()) g_vsAuthState.recordFail(ip);
+        sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        return false;
+    }
+
     bool vsAuthOk(const std::shared_ptr<net::Socket>& sock, const std::string& reqLine) {
         std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
         if (secret.empty()) return true;                 // open access
@@ -5580,6 +5623,36 @@ struct LocalSdrShim::Impl {
                 reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(n) + "}");
                 return;
             }
+            if (isPost && what == "schedule") {
+                // ★★ PERSISTED THROUGH THE CONFIG API's OWN HANDLER, not written here. The daemon
+                //    owns config.json — one writer. A second writer is how a setting saved from
+                //    one place gets clobbered by another, which this project has been bitten by
+                //    already (the TUI vs the server, on gain).
+                double v = 0;
+                auto get = [&](const char* k, int dflt) {
+                    return jsonNum(body, k, v) ? (int)v : dflt;
+                };
+                const int sh = get("updateSrvHour", -1), sd = get("updateSrvDay", -1);
+                const int ah = get("updateAllHour", -1), ad = get("updateAllDay", -1);
+                for (int h : { sh, ah }) if (h > 23 || h < -1) {
+                    reply(400, "Bad Request", "{\"error\":\"hour must be 0-23, or -1 for off\"}");
+                    return;
+                }
+                for (int d : { sd, ad }) if (d > 6 || d < -1) {
+                    reply(400, "Bad Request", "{\"error\":\"day must be 0-6, or -1 for every day\"}");
+                    return;
+                }
+                LocalSdrShim::setUpdateSchedule(sh, sd, ah, ad);
+                LocalSdrShim::ConfigPersistFn pf;
+                { std::lock_guard<std::mutex> lk(g_vsConfigMtx); pf = g_vsConfigPersist; }
+                if (pf) pf("{\"updateSrvHour\":" + std::to_string(sh)
+                         + ",\"updateSrvDay\":"  + std::to_string(sd)
+                         + ",\"updateAllHour\":" + std::to_string(ah)
+                         + ",\"updateAllDay\":"  + std::to_string(ad) + "}");
+                LOGI("update schedule: vibeserver h=%d d=%d, system h=%d d=%d", sh, sd, ah, ad);
+                reply(200, "OK", "{\"ok\":true}");
+                return;
+            }
             if (isPost && what == "action") {
                 const std::string act = jsonStr(body, "action");
                 std::string err;
@@ -5831,11 +5904,16 @@ struct LocalSdrShim::Impl {
                    reqLine.rfind("DELETE /bookmarks", 0) == 0) {
             // WRITE path — "save to server" / "remove from server".
             //
-            // Gated on the SAME PIN that guards the stream today. When public servers
-            // arrive this becomes the admin credential instead: the gate moves, the
-            // shape does not, and the client already hides its write buttons unless
-            // this call would succeed.
-            if (!vsAuthOk(sock, reqLine)) return;        // vsAuthOk already sent 401
+            // ★★★ THE ADMIN CREDENTIAL, NOT THE PIN. This was gated on vsAuthOk with a comment
+            //     promising "when public servers arrive this becomes the admin credential
+            //     instead". They arrived; it never moved. And the gap is not theoretical: the
+            //     configuration a public receiver wants is NO PIN (anyone may listen) plus an
+            //     admin password (nobody may touch the radio) — and with no PIN, vsAuthOk returns
+            //     true for EVERYONE. So on every public server, any listener could add or delete
+            //     the receiver's bookmarks (Stuart, 2026-08-07).
+            //     ★ Writing a bookmark is changing the receiver for everybody who comes after,
+            //       which puts it on the CONTROL side of the line, next to gain and bias-T.
+            if (!vsAdminHttpOk(sock, reqLine)) return;   // it already sent 401
 
             const bool remove = (reqLine.rfind("DELETE", 0) == 0);
             double hz = atof(queryParam(reqLine, "frequency").c_str());
@@ -7845,6 +7923,19 @@ int LocalSdrShim::waitingCount() const {
 void LocalSdrShim::setBanListPath(const std::string& path) { g_vsBans.setPath(path); }
 void LocalSdrShim::setConnLogPath(const std::string& path) { g_vsConnLog.setPath(path); }
 void LocalSdrShim::saveConnLogIfDue() { g_vsConnLog.saveIfDue(); }
+void LocalSdrShim::setMaintenanceActions(const std::string& csv) {
+    std::lock_guard<std::mutex> lk(g_vsMaintMtx);
+    g_vsMaintActions = csv;
+    LOGI("maintenance actions offered: %s", csv.empty() ? "(none)" : csv.c_str());
+}
+void LocalSdrShim::setUpdateSchedule(int srvHour, int srvDay, int allHour, int allDay) {
+    g_vsUpdSrvHour.store(srvHour); g_vsUpdSrvDay.store(srvDay);
+    g_vsUpdAllHour.store(allHour); g_vsUpdAllDay.store(allDay);
+}
+void LocalSdrShim::setPublicSharing(bool on) {
+    g_vsPublicSharing.store(on);
+    LOGI("sharing: %s", on ? "public — full admin tools" : "local — simple admin");
+}
 void LocalSdrShim::setAdminIdleMinutes(int minutes) {
     g_vsAdminIdleMin.store(minutes >= 0 ? minutes : 0);
     LOGI("admin idle re-lock: %d min", g_vsAdminIdleMin.load());
@@ -7971,6 +8062,14 @@ std::string LocalSdrShim::adminStatusJson() {
               j += db;
           } }
     }
+    { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
+      j += ",\"maintenance\":\"" + vibeadmin::esc(g_vsMaintActions) + "\""; }
+    // ★ The schedule, so the page shows what is actually set rather than what it last sent.
+    j += ",\"updateSrvHour\":" + std::to_string(g_vsUpdSrvHour.load())
+       + ",\"updateSrvDay\":"  + std::to_string(g_vsUpdSrvDay.load())
+       + ",\"updateAllHour\":" + std::to_string(g_vsUpdAllHour.load())
+       + ",\"updateAllDay\":"  + std::to_string(g_vsUpdAllDay.load());
+    j += std::string(",\"publicSharing\":") + (g_vsPublicSharing.load() ? "true" : "false");
     j += ",\"adminIdleMin\":" + std::to_string(g_vsAdminIdleMin.load());
     j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
     // ★ Say plainly that there is no shell here, so a page never has to guess whether the
@@ -8098,8 +8197,16 @@ bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
     AdminActionFn fn;
     { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminActionFn; }
     if (!fn) { err = "this server cannot perform maintenance actions"; return false; }
-    if (action != "reboot" && action != "restart" &&
-        action != "update-check" && action != "update" && action != "shutdown") {
+    // ★★ ENFORCED, not merely undrawn. The advertised list is what the page uses to decide what
+    //    to show; this is what makes it true. A client that asks anyway — an old build, a script,
+    //    a curious person — must be refused, not obeyed.
+    { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
+      if (g_vsMaintActions.find(action) == std::string::npos) {
+          err = "this server does not offer that action";
+          return false;
+      } }
+    if (action != "reboot" && action != "restart" && action != "update-check" &&
+        action != "update" && action != "update-all" && action != "shutdown") {
         err = "unknown action: " + action;
         return false;
     }

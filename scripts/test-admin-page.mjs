@@ -56,6 +56,8 @@ const STATUS = {
     { cidr: 'rubbish',      reason: 'typo',    at: 1786000100, until: 0, valid: false, asn: 0 },
   ],
   adminIdleMin: 30, sessionLimitMin: 0, terminal: false,
+  publicSharing: true,   // the fixture is a PUBLIC receiver; Simple mode is tested separately
+  maintenance: "restart,reboot,shutdown,update-check,update,update-all",  // a Linux server
 };
 const SESSIONS = { sessions: [
   { session: 'abc', ip: '192.168.1.9', vfoHz: 7100000, mode: 'lsb', bwHz: 2700,
@@ -237,6 +239,56 @@ console.log('\n8. THE PAGE STATES ITS OWN LIMITS');
   ok(!/VPN|bot detection/i.test(body), 'and does NOT raise VPN or bot detection at all');
   ok(/no web terminal/i.test(body), 'and that there is deliberately no web terminal');
   ok(/Tailscale|WireGuard/.test(body), 'and points at the right answer for a real shell');
+}
+
+console.log('\n8b. SIMPLE MODE HIDES THE STRANGER-MANAGEMENT PANELS');
+{
+  responses.status = { ...STATUS, publicSharing: false };
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  for (const id of ['secListeners', 'secBlocking', 'secHistory', 'secCountries']) {
+    ok($(id).hidden === true, `${id} is hidden`, `(hidden=${$(id).hidden})`);
+  }
+  // ★★ HEALTH AND MAINTENANCE STAY. They are useful on a household receiver too — "your Pi is at
+  //    82 °C" does not care how many people are listening — and removing the maintenance buttons
+  //    would take away the easiest way for a non-technical owner to update.
+  ok(!$('adminHealth').hidden && text('adminHealth').length > 0, 'health is still shown');
+  ok(text('adminPanelBody').includes('CHECK FOR UPDATES'), 'maintenance is still shown');
+  // ★ And it EXPLAINS the shorter page, so nothing reads as missing or broken.
+  ok($('adminSimpleNote').hidden === false, 'the "local sharing" note is shown');
+  ok(/local sharing/i.test(text('adminSimpleNote')), 'and says why');
+  // ★ The header must still update — an early return past it would leave it stale.
+  ok(text('adminHost').includes('127.0.0.1'), 'the header still names the server');
+
+  responses.status = STATUS;
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  ok($('secListeners').hidden === false, 'and Full mode brings them back');
+}
+
+console.log('\n8c. A PLATFORM THAT CANNOT DO MAINTENANCE IS NOT OFFERED IT');
+{
+  // ★ macOS and Android: a reboot needs someone physically present (FileVault / replugging the
+  //   radio), and neither updates through apt. Buttons there would strand the receiver.
+  responses.status = { ...STATUS, maintenance: '' };
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  ok($('secMaintenance').hidden === true, 'the whole maintenance section is hidden');
+
+  // ★ And a platform offering only SOME actions gets only those — per button, not all-or-nothing.
+  responses.status = { ...STATUS, maintenance: 'restart' };
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  ok($('secMaintenance').hidden === false, 'a restart-only platform still gets the section');
+  ok($('actRestart').hidden === false, 'and the restart button');
+  ok($('actReboot').hidden === true, 'but NOT reboot');
+  ok($('actUpdate').hidden === true, 'and NOT update');
+  ok($('updSchedRow').hidden === true, 'and no scheduler, with nothing to schedule');
+
+  responses.status = STATUS;
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  ok($('actReboot').hidden === false, 'a Linux server gets them all back');
 }
 
 console.log('\n9. CLOSING STOPS THE POLLING');

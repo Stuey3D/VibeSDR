@@ -315,10 +315,81 @@ async function refresh() {
     failures = 0;
     renderHealth(st);
     renderGraphs(hist);
-    renderSessions(ses);
-    renderBans(st.bans ?? []);
-    renderCountries(st.countries ?? []);
-    renderConns(conns.connections ?? []);
+    // ★★★ SIMPLE vs FULL. The gated panels are about MANAGING STRANGERS — who is connected,
+    //     blocking them, where they came from. On a household receiver they are noise, and
+    //     plug-and-play is the thing people already like about VibeServer (Stuart, 2026-08-07:
+    //     "Simple mode — recommended for local sharing only").
+    //     ★★ HIDDEN, NOT SWITCHED OFF. The server keeps logging and keeps enforcing bans either
+    //        way, so turning Full on later arrives with history already there instead of starting
+    //        from nothing. That is a display decision; not collecting would be a different
+    //        product — and would make the switch feel broken.
+    //     ★ HEALTH AND MAINTENANCE STAY IN BOTH. "Your Pi is at 82 °C" matters whether one person
+    //       is listening or thirty, and updating from a browser beats SSH more for a simple user,
+    //       not less. Session limits and the queue also stay: they exist today, and taking away
+    //       something people already have is far worse than never adding it.
+    const full = st.publicSharing === true;
+    for (const id of ['secListeners', 'secBlocking', 'secHistory', 'secCountries']) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = !full;
+    }
+    // ★★★ ONLY DRAW WHAT THIS PLATFORM CAN ACTUALLY DO. The server advertises its maintenance
+    //     actions; anything not listed is not shown. On macOS a reboot stops at the FileVault
+    //     login and needs someone physically present, and on Android the USB radio is not
+    //     re-detected until it is replugged — so on those platforms these buttons would not just
+    //     be inert, they would STRAND the receiver (Stuart, 2026-08-07).
+    //     ★ Per-BUTTON, not just per-section, so a platform can offer "restart" without "reboot".
+    {
+      const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
+      const sec = document.getElementById('secMaintenance');
+      if (sec) sec.hidden = offered.length === 0;
+      for (const [id, act] of [['actUpdateCheck', 'update-check'], ['actUpdate', 'update'],
+                               ['actUpdateAll', 'update-all'],
+                               ['actRestart', 'restart'], ['actReboot', 'reboot']] as const) {
+        const el = document.getElementById(id);
+        if (el) el.hidden = !offered.includes(act);
+      }
+      // ★ The scheduler is only meaningful where an update action exists to schedule.
+      const sched = document.getElementById('updSchedRow');
+      const schedAll = document.getElementById('updSchedAllRow');
+      const snote = document.getElementById('updNote');
+      const canUpdate = offered.includes('update') || offered.includes('update-all');
+      if (sched) sched.hidden = !offered.includes('update');
+      if (schedAll) schedAll.hidden = !offered.includes('update-all');
+      if (snote) snote.hidden = !canUpdate;
+
+    }
+
+    const note = document.getElementById('adminSimpleNote');
+    if (note) note.hidden = full;
+
+    // ★ Only render what is on screen. Not an optimisation for its own sake — rendering into a
+    //   hidden panel is how a stale table survives a mode change and reappears wrong.
+    if (full) {
+      renderSessions(ses);
+      renderBans(st.bans ?? []);
+      renderCountries(st.countries ?? []);
+      renderConns(conns.connections ?? []);
+    }
+    // ★ Always, in both modes: the header names which server you are looking at, and an early
+    //   return past it would leave it stale — which on an admin page is the one thing that must
+    //   never be wrong.
+    // ★ Show what is SET, not what was last sent — the same rule as the CPU governor and the
+    //   front end. A control that displays the user's last click rather than the server's state
+    //   will eventually disagree with it, silently.
+    {
+      const show = (daySel: string, hourSel: string, hour: any, day: any) => {
+        const d = document.getElementById(daySel) as HTMLSelectElement | null;
+        const h = document.getElementById(hourSel) as HTMLSelectElement | null;
+        if (!d || !h) return;
+        // ★ Never yank a dropdown the user is currently using.
+        if (document.activeElement === d || document.activeElement === h) return;
+        if (typeof hour !== 'number') return;
+        d.value = hour < 0 ? '-2' : String(day);
+        if (hour >= 0) h.value = String(hour);
+      };
+      show('updSrvDay', 'updSrvHour', st.updateSrvHour, st.updateSrvDay);
+      show('updAllDay', 'updAllHour', st.updateAllHour, st.updateAllDay);
+    }
     $('adminHost').textContent = host;
   } catch (e) {
     // ★ SAY SO IN PLACE rather than silently freezing. A monitoring page that stops updating
@@ -512,8 +583,54 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       msg('actMsg', (e as Error).message);
     }
   };
+  // ── Scheduled updates ───────────────────────────────────────────────────────────────────
+  {
+    const DAYS = [['-2', 'never'], ['-1', 'every day'], ['0', 'Sundays'], ['1', 'Mondays'],
+                  ['2', 'Tuesdays'], ['3', 'Wednesdays'], ['4', 'Thursdays'], ['5', 'Fridays'],
+                  ['6', 'Saturdays']];
+    const fill = (daySel: string, hourSel: string, defDay: string, defHour: string) => {
+      const d = $(daySel) as HTMLSelectElement, h = $(hourSel) as HTMLSelectElement;
+      for (const [v, label] of DAYS) {
+        const o = document.createElement('option'); o.value = v; o.textContent = label; d.appendChild(o);
+      }
+      for (let i = 0; i < 24; i++) {
+        const o = document.createElement('option');
+        o.value = String(i); o.textContent = `${String(i).padStart(2, '0')}:00`;
+        h.appendChild(o);
+      }
+      d.value = defDay; h.value = defHour;
+    };
+    // ★ Small hours by default — least likely to interrupt someone listening.
+    fill('updSrvDay', 'updSrvHour', '-2', '4');
+    fill('updAllDay', 'updAllHour', '-2', '4');
+
+    $('updSave')?.addEventListener('click', async () => {
+      // ★ "never" is day -2 in the UI; the SERVER's definition of off is hour -1. Converting here
+      //   keeps one definition of "off" on the server rather than two that must agree.
+      const read = (daySel: string, hourSel: string) => {
+        const d = Number(($(daySel) as HTMLSelectElement).value);
+        const h = Number(($(hourSel) as HTMLSelectElement).value);
+        return d === -2 ? { hour: -1, day: -1 } : { hour: h, day: d };
+      };
+      const srv = read('updSrvDay', 'updSrvHour');
+      const all = read('updAllDay', 'updAllHour');
+      try {
+        await post('schedule', { updateSrvHour: srv.hour, updateSrvDay: srv.day,
+                                 updateAllHour: all.hour, updateAllDay: all.day });
+        const parts: string[] = [];
+        if (srv.hour >= 0) parts.push(`VibeServer at ${String(srv.hour).padStart(2, '0')}:00`);
+        if (all.hour >= 0) parts.push(`all packages at ${String(all.hour).padStart(2, '0')}:00`);
+        msg('actMsg', parts.length ? `Saved — ${parts.join(', ')}.` : 'Automatic updates turned off.');
+      } catch (e) { msg('actMsg', (e as Error).message); }
+    });
+  }
+
   $('actUpdateCheck')?.addEventListener('click', () => act('update-check'));
-  $('actUpdate')?.addEventListener('click', () => act('update', 'Install available updates?'));
+  $('actUpdate')?.addEventListener('click', () => act('update', 'Update VibeServer to the latest version?'));
+  $('actUpdateAll')?.addEventListener('click', () => act('update-all',
+    'Upgrade EVERY package on this machine?\n\n'
+    + 'This is a full system upgrade, running unattended. It keeps security fixes current, but an '
+    + 'OS upgrade can occasionally need attention and nobody will be watching.'));
   $('actRestart')?.addEventListener('click', () => act('restart', 'Restart VibeServer?'));
   $('actReboot')?.addEventListener('click', () => act('reboot', 'Reboot the whole machine?'));
 }

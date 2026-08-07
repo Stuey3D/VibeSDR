@@ -54,8 +54,34 @@ case "$action" in
   restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
   reboot)       log "rebooting";                 systemctl reboot ;;
   shutdown)     log "powering off";              systemctl poweroff ;;
-  update-check) log "refreshing the package index"
-                apt-get update ;;
+  update-check) log "checking for updates"
+                apt-get update
+                # ★★ THEN SAY WHAT IS ACTUALLY AVAILABLE. Refreshing the index and printing
+                #    nothing about the result is not "checking for updates" — the owner learns
+                #    only that something happened. This is the line they actually want.
+                echo
+                n=$(apt list --upgradable 2>/dev/null | grep -c '^[a-z0-9]' || true)
+                if [ "$n" -gt 0 ]; then
+                  echo "$n package(s) can be upgraded:"
+                  apt list --upgradable 2>/dev/null | grep '^[a-z0-9]' | cut -d/ -f1 | paste -sd' ' -
+                  echo
+                  apt list --upgradable 2>/dev/null | grep -q '^vibeserver/' \
+                    && echo "A NEW VIBESERVER IS AVAILABLE." \
+                    || echo "VibeServer itself is up to date."
+                else
+                  echo "Everything is up to date."
+                fi ;;
+  update-all)   log "installing ALL available system updates"
+                apt-get update
+                # ★★ THE WHOLE SYSTEM, not just us. Offered because an owner who never logs in
+                #    otherwise never gets security updates — but it is genuinely riskier than
+                #    upgrading one package, so it is opt-in and the page says so.
+                #    ★ -o Dpkg::Options 'confold': keep the admin's existing config files on a
+                #      conflict rather than stopping to ask a question nobody is there to answer.
+                #      An unattended upgrade that blocks on a prompt is an upgrade that never ends.
+                DEBIAN_FRONTEND=noninteractive apt-get -y \
+                  -o Dpkg::Options::=--force-confdef \
+                  -o Dpkg::Options::=--force-confold upgrade ;;
   update)       log "installing updates"
                 apt-get update
                 # ★ ONLY this package, and never a fresh install of anything else. `--only-upgrade`

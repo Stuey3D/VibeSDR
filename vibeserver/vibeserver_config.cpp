@@ -132,6 +132,7 @@ std::string toJson(const Config& c) {
 
     B("configured", c.configured);
     S("mode", c.mode == Mode::LockedRange ? "locked" : "single");
+    S("sharing", c.sharing == Sharing::Public ? "public" : "local");
     S("name", c.name); S("place", c.place); S("country", c.country);
     S("locator", c.locator); S("lat", c.lat); S("lon", c.lon);
     B("mdnsAdvertise", c.mdnsAdvertise);
@@ -139,6 +140,10 @@ std::string toJson(const Config& c) {
     S("pin", c.pin); S("adminPass", c.adminPass);
     N("sessionLimitMin", c.sessionLimitMin);
     N("adminIdleMin", c.adminIdleMin);
+    N("updateSrvHour", c.updateSrvHour);
+    N("updateSrvDay",  c.updateSrvDay);
+    N("updateAllHour", c.updateAllHour);
+    N("updateAllDay",  c.updateAllDay);
     N("freq", c.freq); N("rate", c.rate); N("lockFreq", c.lockFreq); N("lockRate", c.lockRate);
     N("gain", c.gain);
     N("lnaState", c.lnaState);
@@ -174,6 +179,9 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     (void)S2; (void)B2; (void)N2;
     if (getBool(s, "configured", c.configured)) seen++;
     if (getStr(s, "mode", t)) c.mode = (t == "locked") ? Mode::LockedRange : Mode::SingleUser;
+    // ★ Anything that is not exactly "public" reads as Local, including a missing field — so an
+    //   existing config from before this setting behaves exactly as it did.
+    if (getStr(s, "sharing", t)) c.sharing = (t == "public") ? Sharing::Public : Sharing::Local;
     getStr(s, "name", c.name);     getStr(s, "place", c.place);
     getStr(s, "country", c.country); getStr(s, "locator", c.locator);
     getStr(s, "lat", c.lat);       getStr(s, "lon", c.lon);
@@ -182,6 +190,22 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getStr(s, "pin", c.pin);       getStr(s, "adminPass", c.adminPass);
     if (getNum(s, "sessionLimitMin", d)) c.sessionLimitMin = (int)d;
     if (getNum(s, "adminIdleMin", d)) c.adminIdleMin = (int)d;
+    if (getNum(s, "updateSrvHour", d)) c.updateSrvHour = (int)d;
+    if (getNum(s, "updateSrvDay",  d)) c.updateSrvDay  = (int)d;
+    if (getNum(s, "updateAllHour", d)) c.updateAllHour = (int)d;
+    if (getNum(s, "updateAllDay",  d)) c.updateAllDay  = (int)d;
+    // ★ Read the SHORT-LIVED earlier shape too (one schedule + an updateAll flag). It only ever
+    //   reached one machine, but a config we wrote is a config we must keep reading — silently
+    //   dropping a setting the owner made is the worst kind of upgrade.
+    {
+        double h = -1, dd = -1; bool all = false;
+        if (getNum(s, "updateHour", h)) {
+            getNum(s, "updateDay", dd);
+            getBool(s, "updateAll", all);
+            if (all) { c.updateAllHour = (int)h; c.updateAllDay = (int)dd; }
+            else     { c.updateSrvHour = (int)h; c.updateSrvDay = (int)dd; }
+        }
+    }
     if (getNum(s, "freq", d))        c.freq = d;
     if (getNum(s, "rate", d))        c.rate = d;
     if (getNum(s, "lockFreq", d))    c.lockFreq = d;

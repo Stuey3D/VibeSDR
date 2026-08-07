@@ -61,6 +61,11 @@ struct Opts {
     std::string adminPass;
     int         sessionLimitMin = 0;     // per-listener minutes; 0 = unlimited
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
+    // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
+    //   must never change what an existing install does.
+    bool        publicSharing = false;
+    int         updateSrvHour = -1, updateSrvDay = -1;   // VibeServer only
+    int         updateAllHour = -1, updateAllDay = -1;   // every package
     bool        forceIdleSaver  = false; // listeners may not switch idle power-saving off
     int         uncompressed    = 0;     // 0 = off, 1 = listener's choice, 2 = compatibility only
     // Receiver identity — published to every listener, and the reason a directory entry is useful.
@@ -186,6 +191,10 @@ void usage() {
         "\nAccess and operator limits\n"
         "  --pin SECRET          who may CONNECT at all\n"
         "  --admin-pass SECRET   who may change settings that can DAMAGE the radio\n"
+        "  --public              this receiver is shared with strangers: the admin page adds\n"
+        "                        listeners, blocking and connection history. Without it the\n"
+        "                        server behaves exactly as before — those panels are about\n"
+        "                        managing people you do not know.\n"
         "  --admin-idle MIN      re-lock admin controls after MIN idle (default 30, 0 = never).\n"
         "                        The session keeps running — only the controls lock.\n"
         "                        (bias-T, direct sampling, calibration). Set this on any\n"
@@ -248,6 +257,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
         else if (a == "--admin-idle")     o.adminIdleMin    = std::atoi(need(i));
+        else if (a == "--public")         o.publicSharing   = true;
         else if (a == "--force-idle-saver") o.forceIdleSaver = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
             o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }
@@ -300,6 +310,9 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.pin = c.pin; o.adminPass = c.adminPass;
     o.sessionLimitMin = c.sessionLimitMin;
     o.adminIdleMin    = c.adminIdleMin;
+    o.publicSharing   = (c.sharing == vsconfig::Sharing::Public);
+    o.updateSrvHour = c.updateSrvHour; o.updateSrvDay = c.updateSrvDay;
+    o.updateAllHour = c.updateAllHour; o.updateAllDay = c.updateAllDay;
     o.freq = c.landingFreq > 0 ? c.landingFreq : c.freq;
     o.rate = c.rate;
     o.lockFreq = c.lockFreq; o.lockRate = c.lockRate;
@@ -322,6 +335,9 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.pin = o.pin; c.adminPass = o.adminPass;
     c.sessionLimitMin = o.sessionLimitMin;
     c.adminIdleMin    = o.adminIdleMin;
+    c.sharing         = o.publicSharing ? vsconfig::Sharing::Public : vsconfig::Sharing::Local;
+    c.updateSrvHour = o.updateSrvHour; c.updateSrvDay = o.updateSrvDay;
+    c.updateAllHour = o.updateAllHour; c.updateAllDay = o.updateAllDay;
     c.freq = o.freq; c.rate = o.rate;
     c.lockFreq = o.lockFreq; c.lockRate = o.lockRate;
     c.gain = o.gain; c.demodMode = o.mode;
@@ -681,6 +697,12 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerAdminSecret(o.adminPass);
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
     LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
+    LocalSdrShim::setPublicSharing(o.publicSharing);
+    LocalSdrShim::setUpdateSchedule(o.updateSrvHour, o.updateSrvDay,
+                                    o.updateAllHour, o.updateAllDay);
+    // ★ Linux offers the lot: it has systemd and apt, and a reboot comes back on its own.
+    //   macOS and Android must NOT — see setMaintenanceActions in local_sdr_shim.h.
+    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all");
     LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
     // ★ Identity, published to every listener — and what makes a directory entry worth anything.
@@ -926,7 +948,8 @@ int main(int argc, char** argv) {
         //        terminal, one layer down.
         //     ★ Validated HERE TOO, so a typo never reaches the helper and the admin page gets an
         //       immediate answer rather than silence.
-        static const char* kActions[] = { "reboot", "shutdown", "restart", "update-check", "update" };
+        static const char* kActions[] = { "reboot", "shutdown", "restart",
+                                          "update-check", "update", "update-all" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
         if (!known) { err = "unknown action: " + action; return false; }
@@ -965,6 +988,39 @@ int main(int argc, char** argv) {
         // ★ The DSP path only raises a FLAG; the write happens here, off that thread.
         LocalSdrShim::instance().saveSpectrogramIfDue();
         LocalSdrShim::instance().saveConnLogIfDue();
+
+        // ── ★★★ SCHEDULED UPDATES ────────────────────────────────────────────────────────
+        // ★★ Two independent schedules. They ask the SAME helper the admin page's buttons ask,
+        //    by writing the same request file — one path to privilege, one action whitelist.
+        // ★★★ THE GUARD IS THE DATE OF THE LAST RUN, not a countdown. A countdown restarts with
+        //     the process, and this process is restarted BY the very update it performs — which
+        //     would loop.
+        {
+            static int lastSrvYday = -1, lastAllYday = -1;
+            const std::time_t now = std::time(nullptr);
+            std::tm lt{};
+            localtime_r(&now, &lt);
+            auto due = [&](int hour, int day, int& lastYday) {
+                if (hour < 0) return false;
+                if (day >= 0 && lt.tm_wday != day) return false;
+                if (lt.tm_hour != hour || lastYday == lt.tm_yday) return false;
+                lastYday = lt.tm_yday;
+                return true;
+            };
+            // ★ VibeServer first when both land on the same hour: it is the small, low-risk one,
+            //   and if the system upgrade then wants a reboot we have already taken ours.
+            std::string err;
+            if (due(o.updateSrvHour, o.updateSrvDay, lastSrvYday)) {
+                if (LocalSdrShim::instance().adminAction("update", err))
+                     std::printf("VibeServer: scheduled VibeServer update started\n");
+                else std::printf("VibeServer: scheduled update failed to start — %s\n", err.c_str());
+            }
+            if (due(o.updateAllHour, o.updateAllDay, lastAllYday)) {
+                if (LocalSdrShim::instance().adminAction("update-all", err))
+                     std::printf("VibeServer: scheduled system update started\n");
+                else std::printf("VibeServer: scheduled system update failed to start — %s\n", err.c_str());
+            }
+        }
         if (!shim.isRunning()) {
             std::fprintf(stderr, "VibeServer: capture stopped unexpectedly.\n");
             break;

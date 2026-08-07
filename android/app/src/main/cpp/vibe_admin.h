@@ -30,6 +30,12 @@
 #include <thread>
 #include <vector>
 
+#if defined(__APPLE__)
+  #include <mach/mach.h>
+  #include <mach/mach_host.h>
+  #include <sys/sysctl.h>
+#endif
+
 namespace vibeadmin {
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -671,7 +677,18 @@ struct CpuSample { unsigned long long busy = 0, total = 0; bool valid = false; }
 
 inline CpuSample readCpuSample() {
     CpuSample s;
-#if defined(__linux__)
+#if defined(__APPLE__)
+    // ★ The same busy/total delta as /proc/stat, from mach. CPU_STATE_IDLE is the not-busy part;
+    //   macOS has no iowait state, so there is no equivalent of the iowait trap here.
+    host_cpu_load_info_data_t info{};
+    mach_msg_type_number_t cnt = HOST_CPU_LOAD_INFO_COUNT;
+    if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
+                        (host_info_t)&info, &cnt) == KERN_SUCCESS) {
+        for (int i = 0; i < CPU_STATE_MAX; i++) s.total += info.cpu_ticks[i];
+        s.busy = s.total - info.cpu_ticks[CPU_STATE_IDLE];
+        s.valid = s.total > 0;
+    }
+#elif defined(__linux__)
     FILE* f = fopen("/proc/stat", "r");
     if (!f) return s;
     char line[512];
@@ -727,7 +744,53 @@ struct SysStats {
 
 inline SysStats readSys() {
     SysStats s;
-#if defined(__linux__)
+#if defined(__APPLE__)
+    // ★★ macOS HAS NO /proc AT ALL, so everything here comes from sysctl and mach. Verified on a
+    //    real machine rather than assumed (2026-08-07).
+    {
+        struct loadavg la;
+        size_t sz = sizeof la;
+        if (sysctlbyname("vm.loadavg", &la, &sz, nullptr, 0) == 0 && la.fscale) {
+            s.load1  = (double)la.ldavg[0] / la.fscale;
+            s.load5  = (double)la.ldavg[1] / la.fscale;
+            s.load15 = (double)la.ldavg[2] / la.fscale;
+            s.haveLoad = true;
+        }
+    }
+    {
+        uint64_t mem = 0; size_t sz = sizeof mem;
+        if (sysctlbyname("hw.memsize", &mem, &sz, nullptr, 0) == 0 && mem) {
+            s.memTotalKB = (long long)(mem / 1024);
+            // ★ "Available" on macOS is free + inactive + speculative: inactive pages are
+            //   reclaimable on demand, so counting only `free` reports a Mac as permanently
+            //   almost-full — which is true of every Mac and useful to nobody.
+            vm_size_t page = 0;
+            vm_statistics64_data_t vm{};
+            mach_msg_type_number_t cnt = HOST_VM_INFO64_COUNT;
+            if (host_page_size(mach_host_self(), &page) == KERN_SUCCESS &&
+                host_statistics64(mach_host_self(), HOST_VM_INFO64,
+                                  (host_info64_t)&vm, &cnt) == KERN_SUCCESS) {
+                const uint64_t avail = (uint64_t)(vm.free_count + vm.inactive_count
+                                                + vm.speculative_count) * page;
+                s.memAvailKB = (long long)(avail / 1024);
+            }
+            s.haveMem = true;
+        }
+    }
+    {
+        struct timeval bt{};
+        size_t sz = sizeof bt;
+        if (sysctlbyname("kern.boottime", &bt, &sz, nullptr, 0) == 0 && bt.tv_sec) {
+            s.uptimeSec = (double)(time(nullptr) - bt.tv_sec);
+            s.haveUptime = s.uptimeSec > 0;
+        }
+    }
+    // ★★★ NO TEMPERATURE ON macOS, DELIBERATELY. There is no public API for it — reading it needs
+    //     private SMC/IOKit calls, which are undocumented, break across releases, and are exactly
+    //     the sort of thing that draws attention during notarisation. The panel already reports a
+    //     missing sensor honestly as "not available", so the cost of leaving it out is a card
+    //     that tells the truth rather than a number that might be a lie.
+#elif defined(__linux__)
     {
         const std::string la = slurp("/proc/loadavg", 128);
         if (!la.empty() && sscanf(la.c_str(), "%lf %lf %lf", &s.load1, &s.load5, &s.load15) == 3)

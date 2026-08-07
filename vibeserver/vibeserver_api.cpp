@@ -2,6 +2,10 @@
 // own. Anything that looks like a decision belongs in the shim, where every host shares it.
 #include "vibeserver_api.h"
 #include "local_sdr_shim.h"
+#include "geoip.h"
+#include "asndb.h"
+#include <sys/stat.h>
+#include <thread>
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
 
@@ -75,6 +79,52 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     LocalSdrShim::setVibeServerUncompressedAudio(cfg->uncompressedAudio);
     if (cfg->locationJson && *cfg->locationJson)
         LocalSdrShim::setLocationJson(cfg->locationJson);
+
+    // ── ★★★ THE ADMIN FEATURES ON macOS ──────────────────────────────────────────────────────
+    // The admin page, the ban list, the connection log and the idle re-lock all live in the
+    // SHARED shim, so they arrive here by recompiling. What has to be registered per platform is
+    // where state is kept and what the machine can actually do.
+    {
+        // ★ Application Support, not /var/lib: a Mac app must keep its state where the OS expects
+        //   it, and a sandboxed or notarised app cannot write outside its container anyway.
+        std::string dir;
+        if (const char* home = getenv("HOME")) {
+            dir = std::string(home) + "/Library/Application Support/VibeServer";
+            // 0700: the ban list is policy and the connection log holds visitors' addresses.
+            ::mkdir((std::string(home) + "/Library/Application Support").c_str(), 0755);
+            ::mkdir(dir.c_str(), 0700);
+        }
+        if (!dir.empty()) {
+            LocalSdrShim::instance().setBanListPath(dir + "/bans.jsonl");
+            LocalSdrShim::instance().setConnLogPath(dir + "/connections.jsonl");
+            LocalSdrShim::instance().setSpectrogramPath(dir + "/spectrogram.bin");
+            geoip::setDir(dir);
+            asndb::setDir(dir);
+        }
+        geoip::load();
+        asndb::load();
+        LocalSdrShim::setGeoIpHandler([](const std::string& ip) { return geoip::lookup(ip); });
+        LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
+            return asndb::lookup(ip, asn, name);
+        });
+        // ★ One background thread for both, off the startup path — the same reasoning as the
+        //   daemon: ~90 MB of downloading and parsing must not delay the radio coming up.
+        if (geoip::stale(7) || asndb::stale(7)) {
+            std::thread([]{
+                std::string e;
+                if (geoip::stale(7)) geoip::refresh(e);
+                if (asndb::stale(7)) asndb::refresh(e);
+            }).detach();
+        }
+
+        // ★★★ NO MAINTENANCE ACTIONS ON macOS, AND THAT IS DELIBERATE (Stuart, 2026-08-07):
+        //     a reboot stops at the FileVault login and needs someone PHYSICALLY PRESENT to
+        //     continue, so a remote reboot would take the receiver off the air until somebody
+        //     walks to it. There is no apt to update through either — a Mac app updates itself.
+        //     ★ Empty means the admin page draws no maintenance section at all, rather than
+        //       buttons that would strand the machine.
+        LocalSdrShim::setMaintenanceActions("");
+    }
 
     std::string err;
     // ★ Route to whichever driver owns this index. See vs_device_count for the flat list.

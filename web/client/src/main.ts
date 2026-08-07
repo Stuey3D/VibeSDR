@@ -34,6 +34,7 @@ import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
   loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer, setTunableWindow,
+  setBookmarkAdminAuth,
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
@@ -194,6 +195,7 @@ function initSplash() {
       //   this an owner who connected as admin from the splash arrived fully unlocked and
       //   then could not open the admin page without retyping it.
       adminPassword = adminPwEl.value;
+      setBookmarkAdminAuth(async () => resolveAdminOverride(`http://${host}`, adminPassword));
     }
     $<HTMLButtonElement>('btnConnect').disabled = true;
     $<HTMLButtonElement>('btnSaveConnect').disabled = true;
@@ -338,6 +340,19 @@ function refreshAdminRow() {
   //      being set once when the password is accepted.
   const srv = document.getElementById('adminServerRow');
   if (srv) srv.hidden = !adminUnlocked;
+  // ★★ THE BOOKMARK WRITE BUTTONS. Saving to the receiver changes it for everyone who connects
+  //    afterwards, so it belongs with the other protected controls. The server enforces this
+  //    (vsAdminHttpOk); hiding them here is so a listener is not offered a button that will be
+  //    refused — an inert control reads as a broken feature.
+  //    ★ Only where there is something to protect: on a server with no admin password nothing is
+  //      gated, and hiding them would remove a working feature from a personal receiver.
+  {
+    const gated = srvAdminProtected && !adminUnlocked;
+    for (const id of ['bmImportServer', 'bmAddServer']) {
+      const el = document.getElementById(id) as HTMLButtonElement | null;
+      if (el) el.hidden = gated;
+    }
+  }
   // ★★★ AND THE PAGE ITSELF MUST CLOSE. Leaving it open after a re-lock would leave DISCONNECT
   //     and BLOCK buttons on screen that the server will now refuse — the exact "drawn, enabled
   //     and inert" trap the unlock row's own comment warns about, on the most consequential
@@ -374,6 +389,8 @@ async function doAdminUnlock(pw: string) {
     const nonce = ch.nonce;
     if (!nonce) { alert('This server did not offer a challenge.'); return; }
     adminPassword = pw;   // the admin page signs its own requests with it
+    // ★ Bookmark writes are admin-gated on the server, so they need the same credential.
+    setBookmarkAdminAuth(async () => resolveAdminOverride(`http://${currentHost}`, adminPassword));
     spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
   } catch (e) {
     alert(`Could not reach the server to unlock: ${(e as Error).message}`);
@@ -597,6 +614,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAdmin: (ok, refused) => {
       if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
       adminUnlocked = ok;
+      // ★ An admin session has no time limit on the server, so it must have no countdown here.
+      if (ok) clearTimeLeft();
       // ★ Never leave the password sitting in the box, whichever way it went.
       const pwIn = document.getElementById('adminPwInput') as HTMLInputElement | null;
       if (pwIn) pwIn.value = '';
@@ -3219,8 +3238,10 @@ function initBookmarks() {
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') { void addNow(); e.preventDefault(); } };
 
   // Save on the RECEIVER — shared with every client, and it survives this browser.
-  // The shim gates the write on the PIN, which is what becomes the admin credential
-  // when public servers arrive.
+  // ★ The shim gates this on the ADMIN credential (vsAdminHttpOk). It used to say the PIN, "which
+  //   is what becomes the admin credential when public servers arrive" — they arrived, it never
+  //   moved, and with no PIN set (the public-receiver configuration) the write was open to every
+  //   listener. Fixed 2026-08-07; this comment is the one that described the old behaviour.
   $('bmAddServer').onclick = async () => {
     if (!spec) return;
     const name = nameEl.value.trim() || rdsName || `${(spec.frequency / 1e6).toFixed(3)} MHz`;
@@ -3539,6 +3560,21 @@ function setTimeLeft(secs: number) {
   sessionDeadline = Date.now() + secs * 1000;
   if (!sessionTicker) sessionTicker = setInterval(paintTimeLeft, 1000);
   paintTimeLeft();
+}
+
+/** ★★★ THE OWNER IS NOT ON THE CLOCK. The server already exempts an admin session from the
+ *  session limit — enforceSessionLimit() returns early on adminOk, and occupantSecsLeft()
+ *  answers -1 — so the countdown on screen was measuring a deadline that no longer existed. It
+ *  ran down to "Your turn ends in 0:00" and then nothing happened, which is worse than either
+ *  outcome on its own: the owner watches a threat that will not be carried out, and learns not to
+ *  trust the readout (Stuart, 2026-08-07).
+ *  ★ Called on EVERY grant of admin, whichever way it arrives — the menu password box, or
+ *    connecting as admin from the splash — because both end in the same server-side state. */
+function clearTimeLeft() {
+  sessionDeadline = 0;
+  if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
+  const el = document.getElementById('rxTimeLeft');
+  if (el) { el.hidden = true; el.textContent = ''; el.className = ''; }
 }
 
 function paintTimeLeft() {

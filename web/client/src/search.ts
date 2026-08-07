@@ -93,6 +93,21 @@ function authQs(): string {
   return bmAuth ? '?' + bmAuth.replace(/^&/, '') : '';
 }
 
+/** ★★★ ADMIN CREDENTIALS FOR THE WRITE PATH. Saving a bookmark changes the receiver for
+ *  everybody who connects after you, so the server gates it on the ADMIN password, not the PIN —
+ *  the PIN is "may you listen", which is a different question (see vsAdminHttpOk in the shim).
+ *  ★ Supplied by main.ts, which is where the password is held for the session. Returns '' when
+ *    we are not admin: the request then goes without credentials and the server refuses it, which
+ *    is correct — the buttons are hidden in that state anyway. */
+let adminAuthProvider: (() => Promise<string>) | null = null;
+export function setBookmarkAdminAuth(fn: (() => Promise<string>) | null) { adminAuthProvider = fn; }
+async function adminQs(existing: string): Promise<string> {
+  if (!adminAuthProvider) return existing;
+  const q = await adminAuthProvider().catch(() => '');
+  if (!q) return existing;
+  return existing ? existing + '&' + q : '?' + q;
+}
+
 /** Save to the RECEIVER, shared with every client. Returns the new list.
  *
  *  The MODE has to go with it. Without one the shim can only assume, and an imported
@@ -103,7 +118,7 @@ export async function saveToServer(
 ): Promise<boolean> {
   if (!bmHost) return false;
   try {
-    const qs = authQs();
+    const qs = await adminQs(authQs());
     const sep = qs ? '&' : '?';
     const r = await fetch(
       `http://${bmHost}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}` +
@@ -122,7 +137,7 @@ export async function saveToServer(
 export async function removeFromServer(frequency: number): Promise<boolean> {
   if (!bmHost) return false;
   try {
-    const qs = authQs();
+    const qs = await adminQs(authQs());   // ★ DELETE is a write too
     const sep = qs ? '&' : '?';
     const r = await fetch(
       `http://${bmHost}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}`,

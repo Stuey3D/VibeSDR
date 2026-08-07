@@ -128,6 +128,19 @@ public:
      *  password (Stuart, 2026-08-06). */
     static void setAdminIdleMinutes(int minutes);
 
+    /** ★★ Is this receiver shared with strangers? Drives WHICH admin panels the page draws —
+     *  listeners, blocking and connection history are about managing people you do not know, and
+     *  are noise on a household receiver.
+     *  ★★★ IT GATES THE DISPLAY ONLY. The log is still kept and bans are still enforced, so
+     *  turning it on later arrives with history already there rather than starting from zero.
+     *  ★ Held HERE rather than read by each client, so a browser and the app cannot disagree
+     *    about what this server is. */
+    static void setPublicSharing(bool on);
+
+    /** Scheduled updates, for DISPLAY on the admin page. The daemon owns the firing — this is a
+     *  readout so the page shows what is set rather than what it last sent. hour -1 = off. */
+    static void setUpdateSchedule(int srvHour, int srvDay, int allHour, int allDay);
+
     /** Is this address on the ban list right now? Expired entries are pruned as they are found.
      *  Called on the connection path, so it is cheap when the list is empty (the normal case). */
     static bool isBanned(const std::string& ip, std::string* reason = nullptr);
@@ -160,6 +173,20 @@ public:
     bool adminAction(const std::string& action, std::string& err);
     using AdminActionFn = std::function<bool(const std::string& action, std::string& err)>;
     static void setAdminActionHandler(AdminActionFn fn);
+
+    /** ★★★ WHICH maintenance actions this platform actually offers, comma-separated. The admin
+     *  page draws only these — a button for something the server cannot do is the "drawn,
+     *  enabled and inert" failure this project keeps re-learning, and here it would be worse
+     *  than inert:
+     *    • macOS: a reboot stops at the FileVault login and needs someone PHYSICALLY THERE to
+     *      continue, so a remote reboot takes the receiver off the air until somebody walks to it.
+     *    • Android: after a reboot the USB radio is not re-detected until it is unplugged and
+     *      plugged back in — again, a person, in the room.
+     *    • Neither updates through apt at all; they update through their app store.
+     *  ★ Empty (the default) = no maintenance section at all, which is right for a phone.
+     *  ★★ Advertised by the SERVER rather than sniffed by the client, so there is no per-platform
+     *     branching in the page — it draws what it is told, and a new platform needs no JS. */
+    static void setMaintenanceActions(const std::string& csv);
 
     /** ★★ WHAT THE LAST MAINTENANCE ACTION IS PRINTING, so the admin page can show it instead of
      *  a button that goes quiet for two minutes. Returns the captured output; `running` is false

@@ -29,6 +29,23 @@ enum class Mode {
     LockedRange,  // owner sets the window and the policy; listeners get a view inside it
 };
 
+/** ★★★ WHO IS THIS RECEIVER FOR? Deliberately SEPARATE from `Mode` above, which is about the
+ *  RADIO's window (does the owner pin it and hand out views inside it). This is about the
+ *  AUDIENCE, and therefore about how much management the owner needs on screen.
+ *
+ *  ★★ WHY IT IS ASKED RATHER THAN INFERRED. The obvious shortcut is `users > 1` — and it is
+ *  wrong: a household sharing a receiver on the LAN is multi-user AND exactly the person who
+ *  wants none of this. Inference about intent can be wrong; asking cannot (Stuart, 2026-08-07).
+ *
+ *  ★★ AND IT HIDES THE UI, NOT THE RECORDING. A Local server still keeps its connection log and
+ *  still honours its ban list — it simply does not put them on screen. So switching to Public
+ *  later is instant and arrives with history already there, instead of starting from nothing.
+ *  Hiding a panel is a display decision; not collecting the data would be a different product. */
+enum class Sharing {
+    Local,    // yourself, your household, a few people on your network — the plug-and-play case
+    Public,   // listed, reachable from the internet: you will need to manage strangers
+};
+
 /** The stored configuration. Mirrors the CLI surface, plus what only a browser page can express. */
 struct Config {
     // ★★★ HAS THE OWNER FINISHED SETUP? Distinct from "is an admin password set" — the wizard
@@ -36,6 +53,9 @@ struct Config {
     // puts the browser on the setup page instead of the receiver.
     bool configured = false;
     Mode mode = Mode::SingleUser;
+    /** ★ Defaults to Local: the mode that behaves exactly as VibeServer always has. A new
+     *  setting must never change what an existing install does. */
+    Sharing sharing = Sharing::Local;
 
     // Identity
     std::string name, place, country, locator, lat, lon;
@@ -51,6 +71,23 @@ struct Config {
     /** ★★ Minutes of no interaction after which an ADMIN session's controls re-lock. The
      *  session, its audio and any decoder keep running — only the ability to CHANGE anything
      *  goes away. 0 = never. Defends against a forgotten admin tab, not a guessed password. */
+    /** ★★ SCHEDULED UPDATES. A receiver in a loft gets logged into roughly never, so without
+     *  this it runs whatever it was installed with for ever — and that is the machine most
+     *  exposed, because it is the one nobody looks at.
+     *  ★ Off by default: installing software on someone's machine on a timer is not something to
+     *    switch on for them. `updateHour` is local time; -1 = disabled.
+     *  ★★ `updateAll` widens it from "just VibeServer" to "every package". Deliberately separate:
+     *     upgrading one package we build is a very different risk from upgrading the OS
+     *     unattended, and the owner should be choosing between them knowingly. */
+    /** ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. They deserve different
+     *  cadences: a VibeServer update is one small package we build and can be daily without
+     *  much thought, while a full system upgrade is bigger, occasionally wants attention, and
+     *  suits a weekly slot. Forcing one schedule would make the owner choose which risk to
+     *  accept for both (Stuart, 2026-08-07: "schedule both types of updates automatically").
+     *  ★ Hour is local time; -1 = that schedule is off. Day 0=Sun..6=Sat; -1 = every day. */
+    int         updateSrvHour = -1, updateSrvDay = -1;   // VibeServer only
+    int         updateAllHour = -1, updateAllDay = -1;   // every package on the machine
+
     int         adminIdleMin = 30;
 
     // Radio / window
