@@ -257,12 +257,16 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
         int row = 6;
         for (size_t i = 0; i < radios.size(); i++) {
             const bool here = ((int)i == cursor);
+            // ★ THE SERIAL ONLY WHEN IT ADDS SOMETHING. The Airspy's own name already ends with
+            //   it ("Airspy HF+ (DD52B980BE4946DA)"), so a fixed serial column printed it twice —
+            //   and collided with any name longer than the column was wide.
+            std::string line = radios[i].name;
+            if (!radios[i].serial.empty() &&
+                line.find(radios[i].serial) == std::string::npos)
+                line += "   " + radios[i].serial;
             if (here) attron(A_REVERSE);
-            mvprintw(row, 2, " [%c] %-34s ", serve[i] ? 'x' : ' ', radios[i].name.c_str());
+            mvprintw(row, 2, " [%c] %-60s", serve[i] ? 'x' : ' ', line.c_str());
             if (here) attroff(A_REVERSE);
-            attron(COLOR_PAIR(4));
-            mvprintw(row, 42, "%s", radios[i].serial.empty() ? "" : radios[i].serial.c_str());
-            attroff(COLOR_PAIR(4));
             row++;
         }
         row++;
