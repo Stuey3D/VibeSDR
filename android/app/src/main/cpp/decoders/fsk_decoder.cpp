@@ -174,7 +174,12 @@ void FskDecoder::updateFilters() {
     biquadLowpass.configure(BiQuad::Lowpass, lowpassFilterF, sampleRate, 1.0 / std::sqrt(2.0));
 }
 void FskDecoder::setState(State s) {
-    if (s != state) { state = s; if (onState) onState((int)s); }
+    if (s == state) return;
+    // ★ Count only the drops INTO NoSignal — that is the event that discards decoder state.
+    //   Sync1/Sync2/ReadData transitions are the normal life of a working decoder.
+    if (s == NoSignal) resyncCount_++;
+    state = s;
+    if (onState) onState((int)s);
 }
 void FskDecoder::process(const int16_t* samples, int count) {
     for (int n = 0; n < count; n++) {

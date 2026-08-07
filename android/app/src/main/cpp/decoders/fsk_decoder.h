@@ -79,6 +79,20 @@ public:
     std::function<void(char32_t)> onChar;   // decoded character
     std::function<void(int)>      onState;  // State change (0..3)
 
+    // ── ★★★ HEALTH, for the admin page ─────────────────────────────────────────────────────
+    // ★★ `resyncs` is the diagnostic that matters. Whenever the envelope falls below
+    //    `audioMinimum` the decoder declares NoSignal and THROWS AWAY its whole state — bit
+    //    count, code bits, sync history — then re-hunts for valid codes. Each one of those costs
+    //    a burst of garbage while it re-acquires, which reads to a user as "it decodes clean for
+    //    a bit then slips out" (Stuart, 2026-08-06) rather than as what it is: the decoder giving
+    //    up and starting again because the signal dipped.
+    // ★ `audioLevel` is what it is actually seeing, on the int16 scale the threshold uses, so the
+    //   two can be compared directly instead of guessed at.
+    unsigned long resyncs() const { return resyncCount_; }
+    double        audioLevel() const { return audioAverage; }
+    double        audioThreshold() const { return audioMinimum; }
+    int           stateNow() const { return (int)state; }
+
 private:
     void updateFilters();
     void setState(State s);
@@ -97,6 +111,7 @@ private:
 
     State state = NoSignal;
     double audioAverage = 0.1;
+    unsigned long resyncCount_ = 0;
     int signalAccumulator = 0, bitDuration = 0, sampleCount = 0, nextEventCount = 0;
     bool averagedMarkState = false, oldMarkState = false, pulseEdgeEvent = false;
 
