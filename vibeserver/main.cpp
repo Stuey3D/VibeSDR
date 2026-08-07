@@ -258,6 +258,14 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
         else if (a == "--admin-idle")     o.adminIdleMin    = std::atoi(need(i));
         else if (a == "--public")         o.publicSharing   = true;
+        // ★★★ "RUN THE SERVER, USING THE STORED CONFIG, AND DO NOT SHOW THE SETUP SCREEN."
+        //     It sets nothing — the config file already has it all. It exists because the ONLY
+        //     way to reach the server was to pass some other flag, and a user on a machine with
+        //     no systemd found that out the hard way: `vibeserver` gave them the setup screen,
+        //     whose "restart the server" does nothing without a service, so no server ever ran —
+        //     while `vibeserver --device 0` worked perfectly and looked like a lucky accident.
+        //     Now there is an honest way to say it, and the setup screen can offer it.
+        else if (a == "--serve")          { /* config supplies everything */ }
         else if (a == "--force-idle-saver") o.forceIdleSaver = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
             o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }

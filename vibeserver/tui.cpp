@@ -43,6 +43,24 @@ std::string run(const char* cmd) {
 }
 
 std::string svcState()  { return run("systemctl is-active vibeserver 2>/dev/null"); }
+
+/** ★★★ RESTART THE SERVICE — IF THERE IS ONE. Returns false when there is not.
+ *
+ *  Five screens told the user "server restarted" after firing `systemctl restart` at a machine
+ *  with no systemd, where it does nothing at all. Changing your admin password and being told the
+ *  server picked it up, when no server is even running, is worse than an error: it is a screen
+ *  that lies, and the user believes it and goes looking elsewhere.
+ *
+ *  ★ Callers append restartNote() so the message matches what actually happened. */
+bool svcRestart() {
+    if (svcState().empty()) return false;
+    run("sudo systemctl restart vibeserver 2>&1");
+    return true;
+}
+const char* restartNote(bool restarted) {
+    return restarted ? " Server restarted."
+                     : " Restart it yourself to pick it up (vibeserver --serve).";
+}
 /** ★★★ ASK THE DRIVER, NOT `lsusb`.
  *
  *  This used to shell out to `lsusb` and grep for likely-looking vendor strings. Two ways that
@@ -309,8 +327,22 @@ void statusScreen(vsconfig::Config& cfg) {
         //    needs help at all is that the SERVICE HOLDS THE DEVICE: unplugging underneath a
         //    running server is how you get "could not open (is another program using it?)" on the
         //    way back in. Stop, swap, start — the machine can say that better than a wiki can.
+        // ★★★ NO SERVICE MEANS NO systemd — AND EVERY KEY HERE ASSUMED ONE. On a machine without
+        //     it (a container, a VM, a phone chroot) `systemctl` silently does nothing, so
+        //     "restart the server" restarted nothing and the user finished setup with no server
+        //     running at all and no clue why. Meanwhile passing any flag ran one perfectly.
+        //     Say plainly that we cannot manage a service here, and run the thing ourselves.
+        const bool svcExists = !st.empty();
         attron(A_BOLD); mvprintw(11, 2, "Changing the radio"); attroff(A_BOLD);
-        if (up) {
+        if (!svcExists) {
+            attron(COLOR_PAIR(3));
+            mvprintw(12, 4, "s   start serving here, in this terminal  (Ctrl-C to stop)");
+            attroff(COLOR_PAIR(3));
+            attron(COLOR_PAIR(4));
+            mvprintw(13, 4, "There is no system service on this machine, so nothing can start it");
+            mvprintw(14, 4, "for you at boot. The same command by hand:  vibeserver --serve");
+            attroff(COLOR_PAIR(4));
+        } else if (up) {
             mvprintw(12, 4, "x   stop serving and release the radio  (then unplug it)");
         } else {
             attron(COLOR_PAIR(3));
@@ -337,6 +369,20 @@ void statusScreen(vsconfig::Config& cfg) {
             mvprintw(21, 2, "Stopping…"); refresh();
             run("sudo systemctl stop vibeserver 2>&1");
             msg = "Stopped. The radio is released — swap it now, then press s.";
+        } else if (c == 's' && !svcExists) {
+            // ★ HAND THE TERMINAL OVER. exec, not fork: the user asked for a server, and a TUI
+            //   sitting in front of one it cannot control is what got us here. Ctrl-C stops it.
+            std::string found = radioLine();
+            if (found.empty()) {
+                msg = "No radio found. Plug one in, then press s again.";
+            } else {
+                endwin();
+                std::printf("Starting VibeServer with %s — Ctrl-C to stop.\n", found.c_str());
+                std::fflush(stdout);
+                execlp("vibeserver", "vibeserver", "--serve", (char*)nullptr);
+                std::fprintf(stderr, "could not start vibeserver — run: vibeserver --serve\n");
+                return;
+            }
         } else if (c == 's' && !up) {
             // ★★ LOOK BEFORE STARTING. Starting with nothing plugged in leaves a service that is
             //    "active" and cannot receive, which reads as a broken install rather than an
@@ -350,9 +396,9 @@ void statusScreen(vsconfig::Config& cfg) {
                 msg = "Serving " + found + ".";
             }
         } else if (c == 'r') {
-            mvprintw(18, 2, "Restarting… (listeners will reconnect)"); refresh();
-            run("sudo systemctl restart vibeserver 2>&1");
-            msg = "Restarted.";
+            mvprintw(21, 2, "Restarting… (listeners will reconnect)"); refresh();
+            msg = svcRestart() ? "Restarted."
+                               : "There is no system service here — press s to serve instead.";
         } else if (c == 'p') {
             header("Reset the admin password");
             attron(COLOR_PAIR(4));
@@ -367,8 +413,8 @@ void statusScreen(vsconfig::Config& cfg) {
             std::string err;
             if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.adminPass = a; }, err))
                 { msg = "Save failed: " + err; continue; }
-            run("sudo systemctl restart vibeserver 2>&1");
-            msg = "Admin password changed, server restarted.";
+            const bool rs = svcRestart();
+            msg = std::string("Admin password changed.") + restartNote(rs);
         } else if (c == 'n') {
             header("Reset the PIN");
             attron(COLOR_PAIR(4));
@@ -379,8 +425,8 @@ void statusScreen(vsconfig::Config& cfg) {
             std::string err;
             if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.pin = pin; }, err))
                 { msg = "Save failed: " + err; continue; }
-            run("sudo systemctl restart vibeserver 2>&1");
-            msg = pin.empty() ? "PIN removed, server restarted." : "PIN changed, server restarted.";
+            const bool rs = svcRestart();
+            msg = std::string(pin.empty() ? "PIN removed." : "PIN changed.") + restartNote(rs);
         } else if (c == 'z') {
             header("Reset to not-set-up");
             mvprintw(4, 2, "The next visit in a browser will ask you to set this server up again.");
@@ -394,7 +440,7 @@ void statusScreen(vsconfig::Config& cfg) {
             std::string err;
             if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.configured = false; }, err))
                 { msg = "Save failed: " + err; continue; }
-            run("sudo systemctl restart vibeserver 2>&1");
+            svcRestart();
             msg = "Reset. Open the address above in a browser to set it up again.";
         }
     }
@@ -460,8 +506,15 @@ int vibeserverTui() {
             std::fprintf(stderr, "VibeServer: could not save the configuration — %s\n", serr.c_str());
             return 1;
         }
-        run("sudo systemctl enable vibeserver 2>&1");
-        run("sudo systemctl restart vibeserver 2>&1");
+        // ★★★ "VibeServer is running" HAD BETTER BE TRUE. This enabled and restarted a service,
+        //     then said so — on a machine with no systemd both commands do nothing, and the user
+        //     was sent to a browser address with no server behind it. They concluded the WEB
+        //     SERVER was broken; in fact nothing had ever been started.
+        const bool haveSvc = !svcState().empty();
+        if (haveSvc) {
+            run("sudo systemctl enable vibeserver 2>&1");
+            run("sudo systemctl restart vibeserver 2>&1");
+        }
 
         // ── Hand over to the browser, and be specific about it ────────────────
         // ★★★ THE FIRST CONNECTION IS BY IP ADDRESS, ALWAYS. No .local, no discovery, no name:
@@ -469,7 +522,10 @@ int vibeserverTui() {
         // friendly name and turns discovery on.
         header("Ready");
         const std::string ip = myIp(), port = listenPort();
-        message(4, 1, "VibeServer is running.");
+        // ★ Without a service we are about to BECOME the server, so say what will be true a line
+        //   from now rather than claiming something is already running in the background.
+        message(4, 1, haveSvc ? "VibeServer is running."
+                              : "VibeServer is ready to start.");
         mvprintw(6, 2, "Finish setting it up in a browser on any machine on this network:");
         attron(A_BOLD | COLOR_PAIR(3));
         mvprintw(8, 4, "http://%s:%s/", ip.c_str(), port.c_str());
@@ -485,8 +541,19 @@ int vibeserverTui() {
         endwin();
         // ★ Print it to the terminal as well: the curses screen vanishes on exit, and the address
         //   is the ONE thing they need to keep.
-        std::printf("\nVibeServer is running.\n  Open  http://%s:%s/  to finish setup.\n\n",
-                    ip.c_str(), port.c_str());
+        std::printf("\nVibeServer is %s.\n  Open  http://%s:%s/  to finish setup.\n\n",
+                    haveSvc ? "running" : "starting", ip.c_str(), port.c_str());
+        std::fflush(stdout);
+        // ★★★ NO SERVICE, SO BE THE SERVER. Otherwise setup ends by handing the user an address
+        //     that answers nothing, which is exactly how this was reported.
+        if (!haveSvc) {
+            std::printf("No system service on this machine, so it runs here. Ctrl-C to stop.\n"
+                        "Start it again later with:  vibeserver --serve\n\n");
+            std::fflush(stdout);
+            execlp("vibeserver", "vibeserver", "--serve", (char*)nullptr);
+            std::fprintf(stderr, "could not start vibeserver — run: vibeserver --serve\n");
+            return 1;
+        }
         return 0;
     }
 
