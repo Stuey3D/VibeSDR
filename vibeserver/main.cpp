@@ -59,6 +59,7 @@ struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
     bool        useUsb  = true;          // default: drive the dongle directly
     int         radio   = 0;             // index into the FLAT list (dongles, then RSPs, then HF+)
+    std::string radioSerial;             // ★ preferred: identity that does not move
     bool        radioGiven = false;
     bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
     // ★★★ THE ADMIN / OPERATOR SETTINGS. Without these a Pi CANNOT SAFELY BE MADE PUBLIC — Stuart,
@@ -237,7 +238,18 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--device") { o.device = std::atoi(need(i)); o.useUsb = true; o.deviceGiven = true; }
         // ★ --radio indexes the FLAT list across all three drivers; --device is the old
         //   dongle-only index, kept because existing installs pass it.
-        else if (a == "--radio")  { o.radio = std::atoi(need(i)); o.useUsb = true; o.radioGiven = true; }
+        // ★★★ A NUMBER OR A SERIAL, and the serial is the one to trust. Indices are positions in
+        //     a list that CHANGES: an SDRplay held by another program does not enumerate at all,
+        //     so the moment the RSP was busy the Airspy moved from 2 to 1 — and `--radio 1` then
+        //     means a different radio than it did a minute earlier. Measured on the Pi, 2026-08-08,
+        //     while the demo itself was pinned to `--radio 1`.
+        //   ★ Anything non-numeric is a serial. Serials are what the config file stores.
+        else if (a == "--radio") {
+            const std::string v = need(i);
+            o.useUsb = true; o.radioGiven = true;
+            if (!v.empty() && v.find_first_not_of("0123456789") == std::string::npos) o.radio = std::atoi(v.c_str());
+            else { o.radioSerial = v; o.radio = -1; }
+        }
         else if (a == "--tcp") {
             o.useUsb = false;
             std::string v = need(i);
@@ -986,6 +998,18 @@ int main(int argc, char** argv) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
     } else if (o.radioGiven) {
+        // ★ Resolve a serial to today's index. Done HERE, at start, so a radio that has moved in
+        //   the list since the config was written still lands on the right hardware.
+        if (!o.radioSerial.empty()) {
+            o.radio = -1;
+            for (const auto& r : vibe::detectRadios())
+                if (r.serial == o.radioSerial) { o.radio = r.index; break; }
+            if (o.radio < 0) {
+                std::fprintf(stderr, "VibeServer: no radio with serial %s is attached\n",
+                             o.radioSerial.c_str());
+                return 1;
+            }
+        }
         // ★★★ PICK A RADIO OUT OF THE FLAT LIST — the SAME list vs_device_count() and
         //     vs_device_name() publish, so "the third radio" means the same thing to the setup
         //     screen, the config API and this. Until now `--device N` reached ONLY the dongle
