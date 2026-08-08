@@ -90,7 +90,8 @@
 #include <poll.h>
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"
-#include "vibe_proxy.h"             // the ban list, the connection log and the machine's vitals
+#include "vibe_proxy.h"
+#include "vibe_admin_ticket.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -1030,6 +1031,52 @@ struct VsAuth {
     }
 };
 VsAuth g_vsAuthState;
+
+/** ★ Adapter so vibe_admin_ticket.h can stay free of this file's internals — it takes the MAC as a
+ *  function so it is testable on its own, and this is the real one. */
+static void vsTicketMac(const void* key, size_t klen, const void* msg, size_t mlen, uint8_t out[32]) {
+    hmacSha256((const uint8_t*)key, klen, (const uint8_t*)msg, mlen, out);
+}
+static int64_t vsNowEpoch() { return (int64_t)::time(nullptr); }
+
+/** Mint an admin ticket that EVERY radio on this machine will accept. See vibe_admin_ticket.h:
+ *  the per-process nonce cannot cross a process boundary, and with a radio per process that is
+ *  every interesting case. */
+static std::string vsMintAdminTicket() {
+    std::string secret;
+    { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+    return vibeadmin::mintTicket(secret, vsNowEpoch() + vibeadmin::kTicketTtlSec, &vsTicketMac);
+}
+/** ★★★ ONE PLACE THAT KNOWS WHAT ADMIN PROOF LOOKS LIKE. There were FIVE copies of
+ *  "nonce + token + not locked out + verify", and adminOkFor's own comment warns why that is
+ *  dangerous: "a second endpoint cannot re-implement it slightly differently — the failure lockout
+ *  and the empty-secret rule are both easy to leave out, and either omission is a hole." Adding
+ *  ticket support to five copies would have been five chances to miss one, and a missed one is an
+ *  endpoint that refuses a legitimate admin (or worse, one that accepts anybody).
+ *  ★ `present` is kept separate from `ok` because a request carrying NO credentials must not count
+ *    as a failed guess — otherwise any scanner locks the owner out of their own server. */
+std::string queryParam(const std::string& reqLine, const char* key);   // defined below
+struct VsAdminProof { bool present = false; bool ok = false; };
+static bool vsTicketOk(const std::string& ticket);
+static VsAdminProof vsAdminProof(const std::string& secret, const std::string& reqLine) {
+    VsAdminProof p;
+    const std::string nonce  = queryParam(reqLine, "vs_admin_nonce");
+    const std::string token  = queryParam(reqLine, "vs_admin_auth");
+    const std::string ticket = queryParam(reqLine, "vs_admin_ticket");
+    p.present = (!nonce.empty() && !token.empty()) || !ticket.empty();
+    if (secret.empty() || !p.present) return p;
+    // A ticket proves the same thing as the handshake and works across processes — see
+    // vibe_admin_ticket.h. Checked first because it is the cheap, stateless one.
+    if (!ticket.empty() && vsTicketOk(ticket)) { p.ok = true; return p; }
+    if (!nonce.empty() && !token.empty()) p.ok = g_vsAuthState.verify(secret, nonce, token);
+    return p;
+}
+
+static bool vsTicketOk(const std::string& ticket) {
+    std::string secret;
+    { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+    return vibeadmin::verifyTicket(secret, ticket, vsNowEpoch(), &vsTicketMac);
+}
 
 /** Is this peer the host itself? IPv4 loopback, IPv6 loopback, and the v4-mapped form. */
 static bool isLoopback(const std::string& ip) {
@@ -2674,13 +2721,10 @@ struct LocalSdrShim::Impl {
         std::string secret;
         { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
         const std::string ip = sock->peerAddress();
-        const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
-        const std::string token = queryParam(reqLine, "vs_admin_auth");
-        const bool ok = !secret.empty() && !nonce.empty() && !token.empty()
-                     && !g_vsAuthState.blocked(ip)
-                     && g_vsAuthState.verify(secret, nonce, token);
+        const VsAdminProof pr = vsAdminProof(secret, reqLine);
+        const bool ok = pr.ok && !g_vsAuthState.blocked(ip);
         if (ok) g_vsAuthState.recordOk(ip);
-        else if (!secret.empty()) g_vsAuthState.recordFail(ip);
+        else if (!secret.empty() && pr.present) g_vsAuthState.recordFail(ip);
         return ok;
     }
 
@@ -5271,17 +5315,14 @@ struct LocalSdrShim::Impl {
         if (secret.empty()) return true;                 // nothing is protected on this server
         const std::string ip = sock->peerAddress();
         if (isLoopback(ip)) return true;                 // the host IS the operator
-        const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
-        const std::string token = queryParam(reqLine, "vs_admin_auth");
-        if (!nonce.empty() && !token.empty()
-            && !g_vsAuthState.blocked(ip)
-            && g_vsAuthState.verify(secret, nonce, token)) {
+        const VsAdminProof pr = vsAdminProof(secret, reqLine);
+        if (pr.ok && !g_vsAuthState.blocked(ip)) {
             g_vsAuthState.recordOk(ip);
             return true;
         }
         // ★ Only a WRONG guess counts toward the backoff — a request carrying no credential at
         //   all is not an attempt, and counting it lets a scanner lock the owner out.
-        if (!nonce.empty() && !token.empty()) g_vsAuthState.recordFail(ip);
+        if (pr.present) g_vsAuthState.recordFail(ip);
         sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
         return false;
     }
@@ -5474,6 +5515,38 @@ struct LocalSdrShim::Impl {
         // VibeServer PIN pre-flight: the client fetches a nonce here, computes
         // HMAC(pin, nonce), then opens the WS with ?vs_nonce=&vs_auth=. When no
         // PIN is set we say so (required:false) and everything behaves as UberSDR.
+        // ★★★ MINT A TICKET THAT EVERY RADIO WILL ACCEPT. The owner authenticates ONCE, here
+        //     (usually at the front door, which owns no radio), and then walks into any radio on
+        //     the machine as admin. Without this the landing page's admin box could not work at
+        //     all: each radio is its own process with its own nonce store, so a credential proved
+        //     here is meaningless there (Stuart, 2026-08-08: "Server refused the connection").
+        // ★★ Getting a ticket requires being admin ALREADY — adminOkFor() applies the same
+        //    handshake, lockout and empty-secret rules as every other admin route. This mints a
+        //    lease on that proof; it never creates it.
+        if (reqLine.find("/vibeserver/admin-ticket") != std::string::npos) {
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            if (secret.empty()) {
+                sock->sendstr("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                sock->close(); return;
+            }
+            if (!adminOkFor(reqLine, sock)) {
+                sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                LOGI("admin ticket refused for %s", sock->peerAddress().c_str());
+                sock->close(); return;
+            }
+            const std::string ticket = vsMintAdminTicket();
+            const std::string body = "{\"ticket\":\"" + ticket + "\",\"ttl\":"
+                                   + std::to_string(vibeadmin::kTicketTtlSec) + "}";
+            // ★ no-store: a cached admin ticket in a shared proxy would outlive the tab it was
+            //   minted for, which is the one thing a short lease is meant to prevent.
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            LOGI("admin ticket issued to %s", sock->peerAddress().c_str());
+            sock->close(); return;
+        }
+
         if (reqLine.find("/vibeserver/auth") != std::string::npos) {
             std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
             std::string body;
@@ -5542,7 +5615,8 @@ struct LocalSdrShim::Impl {
                      queryParam(reqLine, "codec") == "opus",
                      queryParam(reqLine, "channels") == "1", wantBins,
                      queryParam(reqLine, "vs_admin_nonce"),
-                     queryParam(reqLine, "vs_admin_auth"), userAgent);
+                     queryParam(reqLine, "vs_admin_auth"),
+                     queryParam(reqLine, "vs_admin_ticket"), userAgent);
         // ★★ MATCHED ON A PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE. This was
         //    `reqLine.find("/connection") != npos`, which quietly claimed every later route whose
         //    path merely CONTAINS that word — /vibeserver/admin/connections was answered by the
@@ -5732,17 +5806,13 @@ struct LocalSdrShim::Impl {
             std::string secret;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
             const std::string ip = sock->peerAddress();
-            const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
-            const std::string token = queryParam(reqLine, "vs_admin_auth");
-            const bool authed = !secret.empty() && !nonce.empty() && !token.empty()
-                             && !g_vsAuthState.blocked(ip)
-                             && g_vsAuthState.verify(secret, nonce, token);
+            const VsAdminProof pr = vsAdminProof(secret, reqLine);
+            const bool authed = pr.ok && !g_vsAuthState.blocked(ip);
             if (!authed) {
                 // ★★ Same fix as the admin API's gate: a request with no credentials is not a
                 //    failed guess, and counting it lets anyone lock the owner out of their own
                 //    settings by hitting this URL a handful of times without ever guessing.
-                if (!secret.empty() && !nonce.empty() && !token.empty())
-                    g_vsAuthState.recordFail(ip);
+                if (!secret.empty() && pr.present) g_vsAuthState.recordFail(ip);
                 LOGI("config API refused for %s", ip.c_str());
                 reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
                 return;
@@ -5826,11 +5896,8 @@ struct LocalSdrShim::Impl {
             std::string secret;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
             const std::string ip = sock->peerAddress();
-            const std::string nonce = queryParam(reqLine, "vs_admin_nonce");
-            const std::string token = queryParam(reqLine, "vs_admin_auth");
-            const bool authed = !secret.empty() && !nonce.empty() && !token.empty()
-                             && !g_vsAuthState.blocked(ip)
-                             && g_vsAuthState.verify(secret, nonce, token);
+            const VsAdminProof pr = vsAdminProof(secret, reqLine);
+            const bool authed = pr.ok && !g_vsAuthState.blocked(ip);
             if (!authed) {
                 // ★★★ ONLY A WRONG GUESS COUNTS AS A GUESS. Recording a failure for a request
                 //     that carried NO credentials at all turns the brute-force defence into a
@@ -5840,8 +5907,7 @@ struct LocalSdrShim::Impl {
                 //     address the attacker never has to guess anything from.
                 //     ★ Found by the probe in tools/vibeserver-probes/admin-api.mjs: its five
                 //       deliberate no-credential requests locked out its own next real one.
-                if (!secret.empty() && !nonce.empty() && !token.empty())
-                    g_vsAuthState.recordFail(ip);
+                if (!secret.empty() && pr.present) g_vsAuthState.recordFail(ip);
                 LOGI("admin API refused for %s", ip.c_str());
                 reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
                 return;
@@ -6348,6 +6414,10 @@ struct LocalSdrShim::Impl {
                   const std::string& session, bool wantsOpus, bool forceMono = false,
                   int wantBins = 0, const std::string& adminNonce = "",
                   const std::string& adminToken = "",
+                  // ★ A cross-process admin ticket (vibe_admin_ticket.h). The nonce handshake
+                  //   above cannot work here at all when the owner authenticated at the FRONT
+                  //   DOOR: that is a different process with a different nonce store.
+                  const std::string& adminTicket = "",
                   // ★ Carried purely for the connection log. It is the one field that separates
                   //   "a person opened the web client" from "something is scraping us" without
                   //   guessing, and the owner reading the log is the only consumer.
@@ -6473,7 +6543,7 @@ struct LocalSdrShim::Impl {
             //    changes is that ADMIN STATUS no longer rides on somebody else being here.
             bool adminAuthed = false;
             bool override_ = false;
-            if (!adminNonce.empty() && !adminToken.empty()) {
+            if ((!adminNonce.empty() && !adminToken.empty()) || !adminTicket.empty()) {
                 std::string secret;
                 { std::lock_guard<std::mutex> al(g_vsAdminMtx); secret = g_vsAdminSecret; }
                 // ★★★ CHALLENGE-RESPONSE, NEVER THE PASSWORD ITSELF. The first cut of this put
@@ -6487,9 +6557,11 @@ struct LocalSdrShim::Impl {
                 // override endpoint without one is an open guessing gallery, and unlike the PIN
                 // this one displaces a listener on success.
                 const std::string ip = sock->peerAddress();
-                adminAuthed = !secret.empty()
-                           && !g_vsAuthState.blocked(ip)
-                           && g_vsAuthState.verify(secret, adminNonce, adminToken);
+                const bool byTicket = !adminTicket.empty() && vsTicketOk(adminTicket);
+                adminAuthed = !secret.empty() && !g_vsAuthState.blocked(ip)
+                           && (byTicket
+                               || (!adminNonce.empty() && !adminToken.empty()
+                                   && g_vsAuthState.verify(secret, adminNonce, adminToken)));
                 if (adminAuthed) g_vsAuthState.recordOk(ip);
                 else             g_vsAuthState.recordFail(ip);
                 // Evicting only makes sense if somebody is actually in the way.

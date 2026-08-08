@@ -133,6 +133,9 @@ input, textarea, [contenteditable],
    each drifts by a different amount, which is why they looked misaligned with each other rather
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
 #splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
+#splashAdminBanner { display: inline-block; margin: 8px auto 0; padding: 4px 14px; color: var(--amber);
+  border: 1px solid var(--amber); border-radius: 6px; font-size: 12px; letter-spacing: 3px;
+  background: rgba(255,184,51,0.09); }
 #splash form { display: flex; flex-direction: column; gap: 10px; width: 320px; margin-top: 6px; }
 #splash label { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; }
 #hostRow, #pinRow { display: flex; flex-direction: column; gap: 6px; }
@@ -1875,6 +1878,11 @@ select.btn { padding: 6px 8px; }
   <div id="splashSpectroTip"></div>
   <h1>VIBESDR</h1>
   <div class="sub">VIBESERVER · WEB CLIENT</div>
+  <!-- ★★ ADMIN MODE HAS TO BE VISIBLE. Admin here means no time limit, every hardware control
+       unlocked, and the power to take a radio off somebody who is using it. An owner who has
+       forgotten they are still signed in can do all of that by accident, so the page says so
+       until the ticket expires or the tab closes. -->
+  <div id="splashAdminBanner" hidden>ADMIN MODE</div>
   <div id="splashListeners" class="sub" style="margin-top:-4px;opacity:0.8"></div>
   <!-- ★★ SEVERAL RADIOS ON ONE MACHINE. Populated only when there is more than one, so a
        single-radio server's landing page is exactly what it always was. See showSplashRadios(). -->

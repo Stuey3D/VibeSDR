@@ -40,6 +40,11 @@ import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
 import { initAdmin, closeAdmin } from './admin';
 import { httpBase, wsBase } from './origin';
+import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
+
+/** True when THIS process is the front door — it owns no radio, so START and the PIN are
+ *  meaningless here and ADMIN means 'unlock every radio', not 'connect as admin'. */
+let isFrontDoor = false;
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
@@ -133,23 +138,99 @@ function initSplash() {
   }
   if (saved[hostEl.value]) pinEl.value = saved[hostEl.value];
 
+  // ★ Set by showSplashRadios() once it knows what this process is. The front door owns no radio,
+  //   which changes what the ADMIN button means (see adminSignIn).
+  const paintAdminMode = () => {
+    const b = document.getElementById('splashAdminBanner');
+    if (b) (b as HTMLElement).hidden = !inAdminMode();
+    const btn = document.getElementById('btnAdmin');
+    if (btn && inAdminMode()) btn.textContent = 'ADMIN ON';
+  };
+
   // ★★ ADMIN AT THE GATE. Reveals the password field and turns CONNECT into an admin connect.
   //    A second press hides it again, so it cannot be left armed by accident.
   const adminRowEl = $('gateAdminRow');
   const adminPwEl  = $<HTMLInputElement>('gateAdminPw');
   /** Set once the operator has been told they would be displacing a listener. */
   let adminConfirmed = false;
+
+  /**
+   * ★★★ ON THE FRONT DOOR, SIGNING IN AS ADMIN IS NOT A CONNECTION.
+   *
+   *     The door owns no radio, so the old path — resolve the password, then connect() — had
+   *     nothing to connect to and failed with "Server refused the connection" every time. Worse,
+   *     it could not have worked even if it had a radio: the admin handshake is a per-PROCESS
+   *     nonce, so a credential proved at the door is rejected by every radio (see
+   *     vibe_admin_ticket.h).
+   *
+   *     So here the password unlocks the PAGE: prove it once, take a ticket that every radio on
+   *     this machine will accept, and let the owner pick a radio — including one that is in use.
+   */
+  const adminSignIn = async (): Promise<boolean> => {
+    const pw = adminPwEl.value;
+    if (!pw) { msg.className = ''; msg.textContent = 'Enter the admin password.'; return false; }
+    msg.className = 'info'; msg.textContent = 'Checking…';
+    try {
+      const q = await resolveAdminOverride(httpBase(location.host), pw);
+      if (!q) { msg.className = ''; msg.textContent = 'This server has no admin password set.'; return false; }
+      const r = await fetch(`${httpBase(location.host)}/vibeserver/admin-ticket?${q}`, { cache: 'no-store' });
+      if (!r.ok) {
+        msg.className = '';
+        // ★ 401 here means the password was wrong OR this address is in the brute-force lockout.
+        //   Saying "wrong password" during a lockout sends the owner round in circles retyping a
+        //   password that is perfectly correct.
+        msg.textContent = r.status === 401
+          ? 'Wrong admin password — or too many attempts; wait a moment and try again.'
+          : 'This server cannot issue an admin session.';
+        return false;
+      }
+      const j = await r.json();
+      saveAdminTicket(String(j.ticket || ''), Number(j.ttl) || 600);
+      if (!inAdminMode()) { msg.className = ''; msg.textContent = 'The server issued no admin session.'; return false; }
+      // Keep it for the admin PAGE too, which signs its own requests.
+      adminPassword = pw;
+      setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(location.host), adminPassword));
+      paintAdminMode();
+      void showSplashRadios();     // busy radios become reachable the moment we are admin
+      msg.className = 'ok';
+      msg.textContent = 'ADMIN MODE — pick a radio. You can take over one that is in use.';
+      adminRowEl.hidden = true;
+      $('btnAdmin').textContent = 'ADMIN';
+      return true;
+    } catch {
+      msg.className = ''; msg.textContent = 'Could not reach the server.';
+      return false;
+    }
+  };
   $('btnAdmin').addEventListener('click', () => {
+    // ★ Already signed in: the button becomes SIGN OUT. Leaving no way out meant the only way to
+    //   drop admin was to close the tab, and an owner who has finished should not have to.
+    if (inAdminMode()) {
+      clearAdminTicket();
+      adminPassword = '';
+      paintAdminMode();
+      $('btnAdmin').textContent = 'ADMIN';
+      msg.className = ''; msg.textContent = 'Signed out of admin.';
+      void showSplashRadios();
+      return;
+    }
     const showing = !adminRowEl.hidden;
     adminRowEl.hidden = showing;
     $('btnAdmin').textContent = showing ? 'ADMIN' : 'CANCEL ADMIN';
     adminConfirmed = false;
     if (showing) adminPwEl.value = ''; else adminPwEl.focus();
-    msg.textContent = showing ? '' : 'Connecting as admin: no time limit, all controls unlocked.';
+    msg.textContent = showing ? ''
+      : (isFrontDoor ? 'Enter the admin password to unlock every radio on this server.'
+                     : 'Connecting as admin: no time limit, all controls unlocked.');
     msg.className = showing ? '' : 'info';
   });
 
   const go = async (remember: boolean) => {
+    // ★★★ THE FRONT DOOR HAS NOTHING TO CONNECT TO. Pressing Enter in the admin box ran the whole
+    //     connect path against a process that owns no radio, which is why it always ended in
+    //     "Server refused the connection". Here, signing in IS the action: it unlocks the page and
+    //     the radio cards below become the way in.
+    if (isFrontDoor && !adminRowEl.hidden) { await adminSignIn(); return; }
     const host = hostEl.value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
     const pin = pinEl.value.trim();
     if (!host) { msg.textContent = 'Enter a server address'; return; }
@@ -471,6 +552,14 @@ async function connect(host: string, pin: string) {
       sessionStorage.removeItem('vsAdminOverride');
       auth = { ...auth, query: auth.query ? `${auth.query}&${ov}` : ov };
     }
+    // ★★ AND THE ADMIN TICKET, which is how an owner who signed in at the FRONT DOOR arrives here
+    //    as admin — the nonce above was proved to a different process and this radio has never
+    //    heard of it. Folded in the same way so it rides BOTH sockets: the spectrum socket claims
+    //    the slot (evicting an occupant if the owner confirmed that), and the audio socket must be
+    //    recognised as the same admin or it would be refused as a second listener.
+    // ★ NOT consumed: an admin session has to survive moving between radios and reloading.
+    const tq = adminTicketQuery();
+    if (tq) auth = { ...auth, query: auth.query ? `${auth.query}&${tq}` : tq };
   }
 
   // ★ ONE session id, on BOTH sockets. The server treats a session as a single occupant, and a
@@ -2234,6 +2323,7 @@ async function showSplashRadios(): Promise<void> {
   // ★★★ ON THE FRONT DOOR THERE IS NOTHING TO START. It owns no radio, so START has nothing to
   //     connect to — it tried anyway and failed with "enter a server address" — and the listener
   //     count and range above it belong to a radio, not to a door. You pick a radio instead.
+  isFrontDoor = dir?.frontDoor === true;
   if (dir?.frontDoor) {
     const hide = (id: string) => { const e = document.getElementById(id); if (e) e.style.display = 'none'; };
     // ★★ NOT the whole form — ADMIN lives inside it, and ADMIN is the entire reason this process
@@ -2277,7 +2367,12 @@ async function showSplashRadios(): Promise<void> {
     const full = !down && max > 0 && listeners >= max;
 
     let state: string;
+    // ★ The countdown is the difference between waiting and giving up, so it is shown wherever
+    //   the server can supply one — on a single-user radio that is the current listener's time
+    //   left, which is exactly "when can I have it".
     if (down)         state = 'NOT RESPONDING';
+    else if (full && inAdminMode()) state = freeIn >= 0 ? `IN USE ${mmss(freeIn)} · TAKE OVER`
+                                                        : 'IN USE · TAKE OVER';
     else if (full && freeIn >= 0) state = `FULL · FREE IN ${mmss(freeIn)}`;
     else if (full && waiting > 0) state = `FULL · ${waiting} WAITING`;
     else if (full)    state = 'IN USE';
@@ -2290,11 +2385,17 @@ async function showSplashRadios(): Promise<void> {
     const kind = max > 1 ? 'shared' : 'one listener at a time';
     // ★ A radio that is full or down is not a link. Greying it out but leaving it clickable would
     //   send someone to a page that refuses them, which is worse than saying so here.
-    const dim = (full || down) ? 'opacity:.45;cursor:not-allowed' : 'cursor:pointer';
-    const tag = (full || down) ? 'div' : 'a';
+    // ★★★ UNLESS YOU ARE THE ADMIN. The owner can take a radio back off whoever is using it, so a
+    //     full one must stay reachable for them — that is the whole point of signing in here. A
+    //     radio that is DOWN stays unreachable for everybody: there is nothing to take over, and
+    //     offering it would just be a link to a failure.
+    const admin = inAdminMode();
+    const blocked = down || (full && !admin);
+    const dim = blocked ? 'opacity:.45;cursor:not-allowed' : 'cursor:pointer';
+    const tag = blocked ? 'div' : 'a';
     // ★ ?join so the click opens the RECEIVER. Without it the primary's card reloads this very
     //   page, and a secondary's card shows that radio's own copy of this list.
-    const href = (full || down) ? ''
+    const href = blocked ? ''
                : ` href="${location.origin}/r/${encodeURIComponent(r.serial)}/?join=1"`;
     return `<${tag}${href} class="radioCard" data-serial="${r.serial}" style="display:block;text-align:left;`
          + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
@@ -2305,6 +2406,30 @@ async function showSplashRadios(): Promise<void> {
          + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7">${range} · ${kind}</div>`
          + `</${tag}>`;
   }).join('');
+
+  // ★★★ AN ADMIN MUST NOT BOOT SOMEONE WITHOUT MEANING TO. Stuart, 2026-07-28: "some admins may
+  //     be kind and let a user keep a session for longer". Taking over a busy radio disconnects
+  //     whoever is listening, so the click asks first and says how long they had left — the owner
+  //     can then decide to wait. A FREE radio costs nobody anything, so it just opens.
+  if (inAdminMode()) {
+    host.querySelectorAll('a.radioCard').forEach((el) => {
+      const a = el as HTMLAnchorElement;
+      const i = radios.findIndex((r) => r.serial === a.dataset.serial);
+      if (i < 0) return;
+      const st = live[i];
+      const max = Number(st?.maxUsers) || Number(radios[i].users) || 1;
+      const busy = st && max > 0 && (Number(st.listeners) || 0) >= max;
+      if (!busy) return;
+      a.addEventListener('click', (ev) => {
+        const left = typeof st?.freeInSec === 'number' && st.freeInSec >= 0
+          ? ` They have ${mmss(st.freeInSec)} left.` : '';
+        const who = max > 1 ? `${max} listeners are` : 'Someone is';
+        if (!confirm(`${who} using ${radios[i].label}.${left}\n\n`
+                   + `Taking over will disconnect ${max > 1 ? 'one of them' : 'them'}. Continue?`))
+          ev.preventDefault();
+      });
+    });
+  }
 }
 
 /** ★★ WHO IS ALREADY HERE. Stuart asked for the count on the landing page as well as in the
