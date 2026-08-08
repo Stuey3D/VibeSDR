@@ -921,6 +921,24 @@ int main(int argc, char** argv) {
         }
         if (g_isPrimaryRadio) {
             LocalSdrShim::setHandoffRouter([dir](const std::string& path) -> std::string {
+                // ★★★ THE PICTURE COMES FROM A RADIO, AND THE FRONT DOOR HAS NONE.
+                //
+                //     The landing page's spectrogram background and the MEASURED half of the band
+                //     conditions are both read off a live wide FFT. A front door that owns no
+                //     device cannot produce either — so these two requests are handed to whichever
+                //     radio the owner nominated, exactly like a listener's connection.
+                // ★★ ONE RADIO ANSWERS BOTH, because they are one measurement of one window. If
+                //    none qualifies (nothing is locked, or the candidates all release when idle),
+                //    nothing is handed anywhere and the page renders without them — which is the
+                //    honest outcome, not an hour of blank.
+                if (path.rfind("/vibeserver/spectrogram", 0) == 0 ||
+                    path.rfind("/vibeserver/conditions", 0) == 0) {
+                    vsconfig::ServerConfig sc; std::string se;
+                    if (!vsconfig::loadServer(g_configPath, sc, se)) sc = g_serverConfig;
+                    const int idx = vsconfig::spectrogramRadio(sc);
+                    if (idx < 0) return "";
+                    return dir + "/" + sc.radios[(size_t)idx].serial + ".sock";
+                }
                 // Paths are "/r/<serial>/…". Anything else is ours to answer.
                 if (path.rfind("/r/", 0) != 0) return "";
                 const size_t end = path.find('/', 3);
