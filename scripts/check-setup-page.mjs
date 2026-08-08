@@ -110,5 +110,16 @@ if (missing.size) {
   bad++;
 }
 
+
+// ★★ AND THE hidden ATTRIBUTE MUST ACTUALLY HIDE. [hidden] is only display:none in the user-agent
+//    stylesheet, so any author rule setting display beats it — which has now put a modal on screen
+//    over the wrong tab, left an ADMIN MODE banner up for strangers, and needed two per-element
+//    patches before that. The rule is cheap; forgetting it is not.
+if (!/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/.test(html)) {
+  console.error('✗ no global [hidden]{display:none !important} rule — an element with the hidden'
+              + ' attribute can be shown by any author display rule');
+  bad++;
+}
+
 if (bad) process.exit(1);
 console.log(`ok   setup page: JS parses, tags balance, ${ids.size} ids all present`);

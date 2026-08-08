@@ -74,6 +74,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .bar{position:fixed;left:0;right:0;bottom:0;background:#12100c;border-top:1px solid var(--line);
        padding:14px 20px;display:flex;gap:14px;align-items:center;justify-content:flex-end}
   .bar .spacer{flex:1;color:var(--dim);font-size:13px}
+  /* ★★★ THE hidden ATTRIBUTE MUST WIN. [hidden] is only display:none in the USER-AGENT sheet, so
+     ANY author rule that sets display beats it — .modalWrap{display:flex} did, and the serial
+     dialog appeared over the SERVER tab the moment anyone signed in, on a radio they had not even
+     opened (Stuart, 2026-08-08). This is the THIRD element to hit this trap in this project, after
+     #hostRow and the client's ADMIN MODE banner, so it is fixed once here for every element rather
+     than patched per selector — which is the pattern that guarantees a fourth. */
+  [hidden]{display:none !important}
   .hide{display:none}
   .modalWrap{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.72);
              display:flex;align-items:center;justify-content:center;padding:20px}
