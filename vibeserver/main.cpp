@@ -45,6 +45,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "vibeserver_config.h"
+#include "vibe_bands.h"
 #include "eibi.h"
 #include "solar.h"
 #include "geoip.h"
@@ -1308,6 +1309,28 @@ int main(int argc, char** argv) {
     LocalSdrShim::setTrustedProxies(o.trustedProxies);
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
     LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
+    // ★★★ THE BAND PLAN FOLLOWS THE RECEIVER, not the author. A server in the US is in ITU Region
+    //     2, where 40 m runs to 7.300 and 2 m to 148 — shipping Europe's edges everywhere would
+    //     refuse an American operator frequencies they are entitled to.
+    // ★ Position from the coordinates the owner gave; failing that from the first two characters of
+    //   the Maidenhead locator, which is a 20°x10° field and far more precision than a region needs.
+    {
+        double lat = 0, lon = 0; bool have = false;
+        if (!cfg.lat.empty() && !cfg.lon.empty()) {
+            lat = atof(cfg.lat.c_str()); lon = atof(cfg.lon.c_str());
+            have = !(lat == 0 && lon == 0);
+        }
+        if (!have && cfg.locator.size() >= 2) {
+            const char a = (char)toupper(cfg.locator[0]), b = (char)toupper(cfg.locator[1]);
+            if (a >= 'A' && a <= 'R' && b >= 'A' && b <= 'R') {
+                lon = (a - 'A') * 20.0 - 180.0 + 10.0;
+                lat = (b - 'A') * 10.0 -  90.0 +  5.0;
+                have = true;
+            }
+        }
+        vibebands::defaultRegion() = vibebands::ituRegion(lat, lon, have);
+        LocalSdrShim::setBandRegion(vibebands::defaultRegion());
+    }
     LocalSdrShim::setPublicSharing(o.publicSharing);
     // ★ Only meaningful for a single-user radio: a locked range IS the limit in shared mode, so
     //   the lists are not offered there and are not applied here either.

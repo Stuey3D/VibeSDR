@@ -255,6 +255,9 @@ public:
      *  a permitted set that lives only in the browser is decoration, since anyone can send a raw
      *  tune. Same split as the locked window. */
     static void setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv);
+    /** ITU region (1/2/3) for the named band presets — derived from where the owner says the
+     *  receiver is. See vibe_bands.h: the allocations genuinely differ between regions. */
+    static void setBandRegion(int region);
     /** ★★★ SAVE A LIVE SETTING THE ADMIN JUST CHANGED, without restarting.
      *  Distinct from the config SET handler on purpose: that one is the setup page pressing Save,
      *  and it restarts to apply — correct there, absurd for someone nudging the RF gain while

@@ -105,6 +105,43 @@ int main() {
         ok(clamp(Ranges{}, 96600000) == 96600000, "an empty set clamps to nothing");
     }
 
+
+    std::printf("\nThe band plan follows the ITU region\n");
+    {
+        // ★★ A US server given Region 1 edges would refuse 7.25 MHz to an operator entitled to it,
+        //    and a European one given Region 2 edges would offer 147 MHz that is not theirs. The
+        //    differences are small in Hz and large in consequence.
+        ok(ituRegion(52.0,  -0.9, true) == 1, "★ Northampton is Region 1");
+        ok(ituRegion(40.7, -74.0, true) == 2, "★ New York is Region 2");
+        ok(ituRegion(35.7, 139.7, true) == 3, "★ Tokyo is Region 3");
+        ok(ituRegion(-33.9, 151.2, true) == 3, "Sydney is Region 3");
+        ok(ituRegion(-23.5, -46.6, true) == 2, "São Paulo is Region 2");
+        ok(ituRegion(-33.9,  18.4, true) == 1, "Cape Town is Region 1");
+        ok(ituRegion(62.0, 129.7, true) == 1, "★ Siberia is Region 1, not 3 — Russia is R1 throughout");
+        ok(ituRegion(0, 0, false) == 1, "no position falls back to Region 1");
+
+        auto edge = [](int region, const char* id, bool wantLo) {
+            for (const auto& b : namedBands(region)) if (std::string(b.id) == id)
+                return wantLo ? b.lo : b.hi;
+            return -1.0;
+        };
+        ok(edge(1, "40m", false) ==  7200000.0, "★ 40 m ends at 7.200 in Region 1");
+        ok(edge(2, "40m", false) ==  7300000.0, "★ and at 7.300 in Region 2");
+        ok(edge(1, "2m",  false) == 146000000.0, "★ 2 m ends at 146 in Region 1");
+        ok(edge(2, "2m",  false) == 148000000.0, "★ and at 148 in Region 2");
+        ok(edge(2, "mw",  false) == 1705000.0,  "★ medium wave runs to 1705 in Region 2");
+        ok(edge(2, "fm",  true)  == 88000000.0, "FM starts at 88 in Region 2");
+        ok(edge(1, "air", true)  == edge(2, "air", true),
+           "★ where the regions agree there is ONE entry — the airband is the same everywhere");
+        ok(edge(3, "80m", false) == 3900000.0, "80 m ends at 3.900 in Region 3");
+
+        // The parser follows whatever region the server has been told it is in.
+        defaultRegion() = 2;
+        eq(parseList("40m"), "[[7000000,7300000]]", "★ a NAME resolves against the server's region");
+        defaultRegion() = 1;
+        eq(parseList("40m"), "[[7000000,7200000]]", "and back again");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;

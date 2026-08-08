@@ -30,32 +30,54 @@ struct Range {
 };
 using Ranges = std::vector<Range>;
 
-/** ★ Named bands, so an owner can say "VHF airband" instead of looking up 108–137 MHz and getting
- *  it slightly wrong. Region 1 (UK/Europe) where the allocations differ — this server is written
- *  and operated there, and a band edge that is right for the wrong continent is worse than no
- *  preset at all. A typed range always overrides a name. */
+/** ★★★ THE BAND PLAN DEPENDS ON WHERE THE RECEIVER IS. A server in the US is in ITU Region 2 and
+ *  its allocations genuinely differ — 40 m runs to 7.300 not 7.200, 2 m to 148 not 146, medium
+ *  wave to 1705 not 1606.5 — so shipping one continent's edges everywhere would block slices an
+ *  American owner is entitled to and offer slices a European one is not (Stuart, 2026-08-08: "the
+ *  bandplan needs to be ITU related so a server setup in the US gets its correct bandplan rather
+ *  than our European one").
+ *  ★ Only the differences are encoded. Where all three regions agree — the shortwave broadcast
+ *    bands, the airband, DAB — there is one entry and no room for a transcription error. */
 struct NamedBand { const char* id; const char* label; double lo, hi; };
 
-inline const std::vector<NamedBand>& namedBands() {
-    static const std::vector<NamedBand> kBands = {
+/**
+ * ITU region from a position. 1 = Europe/Africa/Middle East, 2 = the Americas, 3 = Asia-Pacific.
+ *
+ * ★★ SIMPLIFIED ON PURPOSE, and here is the seam: the real boundary runs along political borders,
+ *    so longitude alone puts SIBERIA in Region 3 when Russia is Region 1 throughout. The carve-out
+ *    below handles that case because it is the large one; the remaining error is at borders where
+ *    the amateur allocations are the same anyway. A receiver's own operator can always type an
+ *    explicit range, which is the escape hatch that makes an approximation acceptable here.
+ * ★ Unknown position ⇒ Region 1: this server is written and mostly run in Europe, and a default
+ *   that is right most of the time beats refusing to offer any presets at all.
+ */
+inline int ituRegion(double lat, double lon, bool havePos) {
+    if (!havePos) return 1;
+    while (lon >  180.0) lon -= 360.0;
+    while (lon < -180.0) lon += 360.0;
+    if (lon >= -170.0 && lon < -20.0) return 2;             // the Americas
+    if (lon >= -20.0  && lon <  40.0) return 1;             // Europe, Africa, the Middle East
+    if (lon >= 40.0 && lat >= 41.0)   return 1;             // ★ Russia is Region 1 to the Pacific
+    return 3;                                                // Asia-Pacific
+}
+
+inline const std::vector<NamedBand>& namedBands(int region = 1) {
+    // ★ Built once per region and handed out by reference — the caller iterates it on every
+    //   hardware request and every parse.
+    static const std::vector<NamedBand> kCommon = {
         { "lw",       "Long wave broadcast",   148500.0,     283500.0 },
-        { "mw",       "AM (medium wave) broadcast", 526500.0, 1606500.0 },
-        { "160m",     "160 m amateur",        1810000.0,    2000000.0 },
         { "120m",     "120 m broadcast",      2300000.0,    2495000.0 },
         { "90m",      "90 m broadcast",       3200000.0,    3400000.0 },
-        { "80m",      "80 m amateur",         3500000.0,    3800000.0 },
         { "75m",      "75 m broadcast",       3900000.0,    4000000.0 },
         { "60mb",     "60 m broadcast",       4750000.0,    5060000.0 },
         { "60m",      "60 m amateur",         5258500.0,    5406500.0 },
         { "49m",      "49 m broadcast",       5900000.0,    6200000.0 },
-        { "40m",      "40 m amateur",         7000000.0,    7200000.0 },
         { "41m",      "41 m broadcast",       7200000.0,    7450000.0 },
         { "31m",      "31 m broadcast",       9400000.0,    9900000.0 },
         { "30m",      "30 m amateur",        10100000.0,   10150000.0 },
         { "25m",      "25 m broadcast",      11600000.0,   12100000.0 },
         { "22m",      "22 m broadcast",      13570000.0,   13870000.0 },
         { "20m",      "20 m amateur",        14000000.0,   14350000.0 },
-        { "19m",      "19 m broadcast",      15100000.0,   15800000.0 },
         { "17m",      "17 m amateur",        18068000.0,   18168000.0 },
         { "16m",      "16 m broadcast",      17480000.0,   17900000.0 },
         { "15m",      "15 m amateur",        21000000.0,   21450000.0 },
@@ -64,17 +86,57 @@ inline const std::vector<NamedBand>& namedBands() {
         { "11m",      "11 m broadcast",      25670000.0,   26100000.0 },
         { "cb",       "CB (27 MHz)",         26965000.0,   27405000.0 },
         { "10m",      "10 m amateur",        28000000.0,   29700000.0 },
-        { "6m",       "6 m amateur",         50000000.0,   52000000.0 },
-        { "fm",       "FM broadcast",        87500000.0,  108000000.0 },
         { "air",      "VHF airband",        108000000.0,  137000000.0 },
-        { "2m",       "2 m amateur",        144000000.0,  146000000.0 },
         { "marine",   "Marine VHF",         156000000.0,  162050000.0 },
         { "dab",      "DAB (Band III)",     174000000.0,  240000000.0 },
-        { "70cm",     "70 cm amateur",      430000000.0,  440000000.0 },
-        { "pmr446",   "PMR446",             446000000.0,  446200000.0 },
     };
-    return kBands;
+    // Where the regions differ. Sources: ITU Radio Regulations Article 5 allocations.
+    static const std::vector<NamedBand> kR1 = {
+        { "mw",   "AM (medium wave) broadcast", 526500.0, 1606500.0 },
+        { "160m", "160 m amateur",   1810000.0,    2000000.0 },
+        { "80m",  "80 m amateur",    3500000.0,    3800000.0 },
+        { "40m",  "40 m amateur",    7000000.0,    7200000.0 },
+        { "6m",   "6 m amateur",    50000000.0,   52000000.0 },
+        { "fm",   "FM broadcast",   87500000.0,  108000000.0 },
+        { "2m",   "2 m amateur",   144000000.0,  146000000.0 },
+        { "70cm", "70 cm amateur", 430000000.0,  440000000.0 },
+        { "pmr",  "PMR446",        446000000.0,  446200000.0 },
+    };
+    static const std::vector<NamedBand> kR2 = {
+        { "mw",   "AM (medium wave) broadcast", 525000.0, 1705000.0 },
+        { "160m", "160 m amateur",   1800000.0,    2000000.0 },
+        { "80m",  "80 m amateur",    3500000.0,    4000000.0 },
+        { "40m",  "40 m amateur",    7000000.0,    7300000.0 },
+        { "6m",   "6 m amateur",    50000000.0,   54000000.0 },
+        { "fm",   "FM broadcast",   88000000.0,  108000000.0 },
+        { "2m",   "2 m amateur",   144000000.0,  148000000.0 },
+        { "70cm", "70 cm amateur", 420000000.0,  450000000.0 },
+        { "frs",  "FRS/GMRS",      462550000.0,  467725000.0 },
+    };
+    static const std::vector<NamedBand> kR3 = {
+        { "mw",   "AM (medium wave) broadcast", 526500.0, 1606500.0 },
+        { "160m", "160 m amateur",   1800000.0,    2000000.0 },
+        { "80m",  "80 m amateur",    3500000.0,    3900000.0 },
+        { "40m",  "40 m amateur",    7000000.0,    7200000.0 },
+        { "6m",   "6 m amateur",    50000000.0,   54000000.0 },
+        { "fm",   "FM broadcast",   87500000.0,  108000000.0 },
+        { "2m",   "2 m amateur",   144000000.0,  148000000.0 },
+        { "70cm", "70 cm amateur", 430000000.0,  450000000.0 },
+    };
+    static std::vector<NamedBand> built[4];
+    static bool done[4] = { false, false, false, false };
+    const int r = (region >= 1 && region <= 3) ? region : 1;
+    if (!done[r]) {
+        const auto& extra = r == 2 ? kR2 : r == 3 ? kR3 : kR1;
+        built[r] = kCommon;
+        built[r].insert(built[r].end(), extra.begin(), extra.end());
+        done[r] = true;
+    }
+    return built[r];
 }
+
+/** The region every lookup uses when none is given. Set once from the owner's own position. */
+inline int& defaultRegion() { static int r = 1; return r; }
 
 namespace detail {
 
@@ -115,7 +177,7 @@ inline Range parseEntry(const std::string& raw) {
     // A name first — names cannot contain '-', so there is no ambiguity to resolve.
     std::string lower;
     for (char c : t) lower += (char)tolower((unsigned char)c);
-    for (const auto& b : namedBands())
+    for (const auto& b : namedBands(defaultRegion()))
         if (lower == b.id) { r.lo = b.lo; r.hi = b.hi; return r; }
 
     const size_t dash = t.find('-');

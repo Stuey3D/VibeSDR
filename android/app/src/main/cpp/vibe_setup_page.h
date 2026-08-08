@@ -75,6 +75,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
        padding:14px 20px;display:flex;gap:14px;align-items:center;justify-content:flex-end}
   .bar .spacer{flex:1;color:var(--dim);font-size:13px}
   .hide{display:none}
+  .bandList{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .bandChip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:#0a0704}
+  .bandChip button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:14px;padding:0 2px}
+  .bandChip button:hover{color:var(--bad)}
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -110,8 +114,25 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div id="radioTabs" style="display:flex;gap:6px;flex-wrap:wrap"></div>
       <div id="hwScope" class="hide sub" style="margin-top:8px;font-size:12px;opacity:.8"></div>
     </div>
-
-    <div class="card">
+    <!-- ★★★ THE MACHINE, NOT A RADIO. These were interleaved with the per-radio cards, so an owner
+         working through three tabs met the same server-wide questions on each one and could not
+         tell which answers belonged to what. One tab, asked once (Stuart, 2026-08-08: "A Server tab
+         which does all things server related ... anything not specifically radio hardware related").
+         ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
+    <div id="serverPane">
+      <!-- ★★★ ONE DOWNLOAD FOR THE WHOLE MACHINE. The schedule is a single file every radio
+           process reads, so it belongs to the server and not to whichever radio tab happened to be
+           open — where it used to sit, inside a per-radio Range card, implying one copy per radio
+           (Stuart, 2026-08-08: "We only need one lot of eibi downloads for the entire server they
+           can be shared to all radios"). -->
+      <div class="card">
+        <h2>Shortwave schedule</h2>
+        <p class="why">Station names for the search box, shared by every radio on this machine.</p>
+<div class="note" id="eibiNote" style="margin-top:18px">
+          <b>Shortwave schedule (EiBi)</b>
+          <div class="hint" id="eibiState">checking…</div>
+      </div>
+      <div class="card">
       <h2>On your network</h2>
       <p class="why">How people find this server once it is running.</p>
       <label style="display:flex;align-items:center;gap:10px;margin:0">
@@ -130,8 +151,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <input type="text" id="name" placeholder="e.g. Coastal SDR — 60 m vertical"></label>
       <div class="hint" id="addrLine"></div>
     </div>
-
-    <div class="card">
+      <div class="card">
       <h2>Where this receiver is</h2>
       <p class="why">Published to listeners. It sets the flag and the ITU band plan, centres the
          map, and is what lets RDS name a station's country — with no location set, every station
@@ -155,8 +175,47 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div class="hint">Exact coordinates win over the locator. Leave them blank to publish only
         the square.</div>
     </div>
+      <div class="card">
+      <h2>Behind a reverse proxy</h2>
+      <p class="why">Only fill this in if something sits in front of VibeServer.</p>
+      <label><span class="lbl">Trusted proxy addresses</span>
+        <input id="trustedProxies" placeholder="e.g. 127.0.0.1, 10.0.0.0/8">
+        <div class="hint">If you run VibeServer behind nginx, Caddy or a tunnel, every listener
+          arrives from the <em>proxy</em>, so they all share one address: a single ban blocks
+          everybody, every visitor shows the same country, and one wrong admin password can lock
+          out the world. Naming the proxy here lets the server read the real address from the
+          <code>X-Forwarded-For</code> header instead.
+          <br><b>Leave it empty unless you have a proxy.</b> That header is just text the client
+          sends, so a server that believed it from anyone would let a stranger claim any address
+          they liked and walk straight through the ban list. Nothing is read from it until you
+          name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
+    </div>
+      <div class="card">
+      <h2>Processor</h2>
+      <p class="why">How hard this machine is allowed to run.</p>
+      <label><span class="lbl">CPU governor</span>
+        <select id="cpuGovernor">
+          <option value="performance">Full speed — recommended for a receiver</option>
+          <option value="ondemand">On demand — saves a little power</option>
+          <option value="default">Leave the system setting alone</option>
+        </select>
+        <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
+          VibeServer spreads its work across every core, so they all look half-idle and the Pi
+          clocks itself <em>down</em> — measured at 1.9&nbsp;GHz instead of 2.4, cool and
+          un-throttled, while the audio broke up. Full speed costs a couple of watts.
+          <br><b>Choose full speed for a shared receiver</b>, where several people are each being
+          given their own tuner. <b>On demand suits a battery or solar host</b> serving one
+          listener from a dongle — far less work, and the watts matter more than the headroom.</div></label>
+      <div class="hint" id="govNow"></div>
+    </div>
+    </div>
 
-    <div class="card">
+    <!-- ★★★ MODE FIRST, BECAUSE IT DECIDES THE REST. "How will it be used?" changes which of the
+         cards below even apply — a shared radio has a locked range and a listener count, a
+         single-user one has neither and gets the allow/block lists instead. Asking it last, as
+         this page used to, means answering questions that the next answer makes irrelevant. -->
+    <div id="radioPane">
+      <div class="card">
       <h2>How will it be used?</h2>
       <p class="why">This decides what listeners are allowed to change.</p>
       <div class="modes">
@@ -172,13 +231,53 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         </div>
       </div>
     </div>
+      <div id="lockedOnly" class="hide">
+      <div class="card">
+        <h2>Range</h2>
+        <p class="why">The window everyone listens inside. The radio stays here; listeners pan and
+           zoom within it.</p>
+        <div class="row">
+          <label><span class="lbl">Centre frequency (kHz)</span>
+            <input type="number" id="lockFreq" step="1"></label>
+          <!-- moved out of the locked-only block: every radio has a sample rate -->
+        </div>
+        <div class="hint" id="coverage"></div>
+          <div class="hint">Who is broadcasting, where and when — so the search box on this
+            receiver finds stations by name instead of only by frequency. The list is fetched by
+            the server, because a browser is not allowed to fetch it directly, and it refreshes
+            itself once a day.</div>
+          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
+            Download now</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+          <input type="checkbox" id="zoomSpectrum" checked
+                 style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Keep the spectrum sharp when zoomed in</span></label>
+        <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
+          already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
+          what makes a shared receiver worth zooming into.</div>
+      </div>
 
-    <!-- ★★★ EVERY RADIO HAS THESE, whichever mode it is in. They used to sit inside the
-         shared-mode block, which was right when a server had ONE radio: single-user mode means
-         the listener owns the dial, so the owner set nothing. With a tab per radio it is wrong —
-         an Airspy dedicated to FM needs a landing frequency of 96.6 and WFM whether or not its
-         window is locked (Stuart, 2026-08-08: "no sample rate, no landing frequency/demodulator"). -->
-<div class="card">
+      
+
+      <div class="card">
+        <h2>Listeners</h2>
+        <p class="why">How many people at once.</p>
+        <div class="row">
+          <label><span class="lbl">Maximum listeners</span>
+            <input type="number" id="users" min="1" max="50"></label>
+        </div>
+        <div class="note" id="bwNote"></div>
+      </div>
+
+      <div class="card">
+        <h2>Radio</h2>
+        <p class="why">Listeners cannot change these in shared mode, so they are set here or not
+           at all.</p>
+        <div id="hw"></div>
+      </div>
+    </div>
+      <div class="card">
         <h2>Where new listeners start</h2>
         <p class="why">What someone sees the moment they connect.</p>
         <div class="row">
@@ -192,15 +291,74 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             </select></label>
         </div>
       </div>
+      <div class="card">
+      <h2>Time limit</h2>
+      <p class="why">How long one listener may keep this radio.</p>
+      <label><span class="lbl">Minutes (0 = no limit)</span>
+        <input type="number" id="sessionLimit" min="0">
+        <div class="hint">When the limit is reached the listener is warned, then disconnected, and
+          the next person in the queue gets their turn. <b>On a single-user radio this is the only
+          thing that keeps one listener from holding the hardware all day</b> — there is one tuner
+          and whoever has it has all of it. On a shared radio it matters far less: everyone already
+          has their own VFO, so a long session costs nobody else anything.
+          <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
+    </div>
+      <div class="card">
+      <h2>Audio and power</h2>
+      <p class="why">Applies in both modes.</p>
+      <label><span class="lbl">Uncompressed audio</span>
+        <select id="uncompressed">
+          <option value="0">Off — everyone gets Opus</option>
+          <option value="1">Listener's choice</option>
+          <option value="2">Only as a fallback for old browsers</option>
+        </select>
+        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
+          upload.</div></label>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Listeners may not switch off idle power saving</span></label>
+    </div>
+      <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
+           range IS the limit, so offering these there would be two answers to one question
+           (Stuart, 2026-08-08: "blocked bands wont be needed in shared mode as the locked nature
+           of it is the block/allow").
+           ★★ ALLOW says what is reachable; BLOCK carves holes out of it. Leaving ALLOW empty means
+           the whole radio, so somebody who only wants to keep listeners off the airband does not
+           have to enumerate everything else first. -->
+      <div class="card hide" id="bandCard">
+        <h2>Where listeners may tune</h2>
+        <p class="why">Leave both empty and this radio tunes anywhere it can hear.</p>
 
-    <!-- ★★★ THE PROTECTED CONTROLS, PER RADIO AND PER DRIVER.
-         These are what the admin password exists to guard — the ones that leave a receiver broken
-         for the next person. With several radios they must be settable on the radio you MEAN,
-         not only on whichever happens to be running.
-         ★★ Drawn per driver, never all at once: an Airspy has no bias-T and an RTL has no PPB, and
-            offering a control whose every use is a no-op is the fault this project already has a
-            rule about — either branch on the driver or leave it out. -->
-    <div class="card" id="radioHwCard">
+        <label><span class="lbl">Allowed — only these, if you list any</span>
+          <div class="row" style="gap:8px">
+            <select id="allowPick" style="flex:1 1 200px"></select>
+            <input type="text" id="allowType" placeholder="or 87.5MHz - 108MHz" style="flex:1 1 180px">
+            <button type="button" class="ghost" id="allowAdd" style="flex:0 0 auto">Add</button>
+          </div>
+          <div id="allowList" class="bandList"></div></label>
+
+        <label style="margin-top:14px"><span class="lbl">Blocked — never these</span>
+          <div class="row" style="gap:8px">
+            <select id="blockPick" style="flex:1 1 200px"></select>
+            <input type="text" id="blockType" placeholder="or 108MHz - 137MHz" style="flex:1 1 180px">
+            <button type="button" class="ghost" id="blockAdd" style="flex:0 0 auto">Add</button>
+          </div>
+          <div id="blockList" class="bandList"></div></label>
+
+        <div class="note" id="bandNote"></div>
+        <div class="row" id="bandCopyRow" style="gap:8px;margin-top:6px">
+          <select id="bandCopyFrom" style="flex:1 1 200px"></select>
+          <button type="button" class="ghost" id="bandCopy" style="flex:0 0 auto">Copy these lists</button>
+        </div>
+        <div class="hint">A listener who tunes to the edge of an allowed band stops there and is
+          told why; tuning the same way again jumps to the next allowed band. That is exactly how
+          this receiver already handles a gap the hardware cannot cover, so it is one behaviour to
+          learn rather than two.
+          <br><b>The server enforces this as well as the page</b>, so it holds for any client, not
+          just this one.</div>
+      </div>
+
+      <div class="card" id="radioHwCard">
       <h2>This radio's hardware</h2>
       <p class="why">Settings that stay in the radio itself. Listeners never get these.</p>
       <!-- ★ EVERY radio has one, so it is not locked-mode-only. It was, which is why an Airspy
@@ -273,129 +431,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <p class="why">The Airspy HF+ is calibrated in parts per BILLION. 0 unless you have measured it.</p>
       </div>
     </div>
-
-    <!-- Shared-mode only -->
-    <div id="lockedOnly" class="hide">
-      <div class="card">
-        <h2>Range</h2>
-        <p class="why">The window everyone listens inside. The radio stays here; listeners pan and
-           zoom within it.</p>
-        <div class="row">
-          <label><span class="lbl">Centre frequency (kHz)</span>
-            <input type="number" id="lockFreq" step="1"></label>
-          <!-- moved out of the locked-only block: every radio has a sample rate -->
-        </div>
-        <div class="hint" id="coverage"></div>
-        <div class="note" id="eibiNote" style="margin-top:18px">
-          <b>Shortwave schedule (EiBi)</b>
-          <div class="hint" id="eibiState">checking…</div>
-          <div class="hint">Who is broadcasting, where and when — so the search box on this
-            receiver finds stations by name instead of only by frequency. The list is fetched by
-            the server, because a browser is not allowed to fetch it directly, and it refreshes
-            itself once a day.</div>
-          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
-            Download now</button>
-        </div>
-        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
-          <input type="checkbox" id="zoomSpectrum" checked
-                 style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Keep the spectrum sharp when zoomed in</span></label>
-        <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
-          already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
-          what makes a shared receiver worth zooming into.</div>
-      </div>
-
-      
-
-      <div class="card">
-        <h2>Listeners</h2>
-        <p class="why">How many people at once.</p>
-        <div class="row">
-          <label><span class="lbl">Maximum listeners</span>
-            <input type="number" id="users" min="1" max="50"></label>
-        </div>
-        <div class="note" id="bwNote"></div>
-      </div>
-
-      <div class="card">
-        <h2>Radio</h2>
-        <p class="why">Listeners cannot change these in shared mode, so they are set here or not
-           at all.</p>
-        <div id="hw"></div>
-      </div>
     </div>
 
-    <!-- ★★★ A TIME LIMIT IS NOT A SHARED-MODE IDEA. This lived inside the locked-only block with
-         "maximum listeners", which is where it looks like it belongs — and it is exactly backwards.
-         A shared radio gives everyone their own VFO, so a listener who stays all day costs the
-         others nothing. A SINGLE-USER radio is the whole radio: one person holds the hardware and
-         everybody else sits in the queue behind them. That is the case that needs a limit, and it
-         was the one case where the control could not be reached (Stuart, 2026-08-08: "no time
-         limits for the single user radios").
-         ★ Maximum listeners stays locked-only: a single-user radio is one by definition. -->
-    <div class="card">
-      <h2>Time limit</h2>
-      <p class="why">How long one listener may keep this radio.</p>
-      <label><span class="lbl">Minutes (0 = no limit)</span>
-        <input type="number" id="sessionLimit" min="0">
-        <div class="hint">When the limit is reached the listener is warned, then disconnected, and
-          the next person in the queue gets their turn. <b>On a single-user radio this is the only
-          thing that keeps one listener from holding the hardware all day</b> — there is one tuner
-          and whoever has it has all of it. On a shared radio it matters far less: everyone already
-          has their own VFO, so a long session costs nobody else anything.
-          <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
-    </div>
-
-    <div class="card">
-      <h2>Behind a reverse proxy</h2>
-      <p class="why">Only fill this in if something sits in front of VibeServer.</p>
-      <label><span class="lbl">Trusted proxy addresses</span>
-        <input id="trustedProxies" placeholder="e.g. 127.0.0.1, 10.0.0.0/8">
-        <div class="hint">If you run VibeServer behind nginx, Caddy or a tunnel, every listener
-          arrives from the <em>proxy</em>, so they all share one address: a single ban blocks
-          everybody, every visitor shows the same country, and one wrong admin password can lock
-          out the world. Naming the proxy here lets the server read the real address from the
-          <code>X-Forwarded-For</code> header instead.
-          <br><b>Leave it empty unless you have a proxy.</b> That header is just text the client
-          sends, so a server that believed it from anyone would let a stranger claim any address
-          they liked and walk straight through the ban list. Nothing is read from it until you
-          name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
-    </div>
-
-    <div class="card">
-      <h2>Processor</h2>
-      <p class="why">How hard this machine is allowed to run.</p>
-      <label><span class="lbl">CPU governor</span>
-        <select id="cpuGovernor">
-          <option value="performance">Full speed — recommended for a receiver</option>
-          <option value="ondemand">On demand — saves a little power</option>
-          <option value="default">Leave the system setting alone</option>
-        </select>
-        <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
-          VibeServer spreads its work across every core, so they all look half-idle and the Pi
-          clocks itself <em>down</em> — measured at 1.9&nbsp;GHz instead of 2.4, cool and
-          un-throttled, while the audio broke up. Full speed costs a couple of watts.
-          <br><b>Choose full speed for a shared receiver</b>, where several people are each being
-          given their own tuner. <b>On demand suits a battery or solar host</b> serving one
-          listener from a dongle — far less work, and the watts matter more than the headroom.</div></label>
-      <div class="hint" id="govNow"></div>
-    </div>
-
-    <div class="card">
-      <h2>Audio and power</h2>
-      <p class="why">Applies in both modes.</p>
-      <label><span class="lbl">Uncompressed audio</span>
-        <select id="uncompressed">
-          <option value="0">Off — everyone gets Opus</option>
-          <option value="1">Listener's choice</option>
-          <option value="2">Only as a fallback for old browsers</option>
-        </select>
-        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
-          upload.</div></label>
-      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
-        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Listeners may not switch off idle power saving</span></label>
-    </div>
 
     <div class="err" id="saveErr"></div>
   </div>
@@ -908,16 +945,23 @@ function radio()     { return radioList()[curRadio] || {}; }
 function renderTabs() {
   const list = radioList();
   const tabs = $("radioTabs"), hint = $("radioTabHint"), wrap = $("radioTabsWrap");
-  // ★ One radio is not a choice, so it does not get a chooser.
-  if (list.length < 2) { wrap.classList.add("hide"); return; }
+  // ★★ THE CHOOSER IS ALWAYS SHOWN NOW, even with one radio: there is a SERVER tab to reach, and
+  //    a machine with a single receiver still has a name, a location and a schedule.
   wrap.classList.remove("hide");
+  paintPanes();
   // ★★★ THREE STATES, THREE COLOURS — and they answer different questions.
   //     GREEN: set up, and will be served. RED: not set up, so it will NOT be served no matter
   //     how much you tick it elsewhere. AMBER: the tab you are editing right now.
   //     ★ The amber "you are here" has to win, or the tab you are working on becomes the one you
   //       cannot pick out — so the current tab is amber whatever its state, and its readiness is
   //       carried by the dot instead.
-  tabs.innerHTML = list.map((r, i) => {
+  const serverOn = curRadio < 0;
+  const serverTab = `<button type="button" data-i="-1" title="Settings for the whole machine"`
+    + ` style="padding:6px 12px;border-radius:6px;border:1px solid;cursor:pointer;margin-right:6px;`
+    + (serverOn ? `background:var(--amber);color:#000;border-color:var(--amber)`
+                : `background:rgba(255,184,51,.10);color:var(--amber);border-color:var(--line)`)
+    + `">SERVER</button>`;
+  tabs.innerHTML = serverTab + list.map((r, i) => {
     const on = i === curRadio;
     const ready = !!r.configured;
     const dot = ready ? "" : " •";
@@ -935,19 +979,31 @@ function renderTabs() {
       //   compare them does not quietly discard the one you were editing.
       stashRadio();
       curRadio = parseInt(b.getAttribute("data-i"), 10);
-      renderTabs(); fill(); renderHw();
+      renderTabs(); paintPanes();
+      if (curRadio >= 0) { fill(); renderHw(); }
     };
   });
   const unsaved = list.filter(r => !r.configured).length;
+  if (curRadio < 0) { hint.textContent = "Settings that belong to this machine, not to any one radio."; return; }
   hint.textContent = unsaved
     ? `Pick a radio to set it up. ${unsaved} still to do — a radio marked • is not on air yet.`
     : "Pick a radio to change how it is set up.";
 }
 
+/** ★ One tab is showing at a time, and which one is the ONLY thing that decides it. */
+function paintPanes() {
+  const sp = $("serverPane"), rp = $("radioPane");
+  if (sp) sp.classList.toggle("hide", curRadio >= 0);
+  if (rp) rp.classList.toggle("hide", curRadio < 0);
+  const sr = $("saveRadioBtn");
+  // ★ "Save radio settings" is meaningless on the server tab — hidden rather than left to fail.
+  if (sr) sr.classList.toggle("hide", curRadio < 0 || radioList().length < 2);
+}
+
 /** Copy what is on screen into the radio this tab belongs to, without saving to the server. */
 function stashRadio() {
   const list = radioList();
-  if (!list.length) return;
+  if (!list.length || curRadio < 0) return;
   Object.assign(list[curRadio], collectRadio());
 }
 

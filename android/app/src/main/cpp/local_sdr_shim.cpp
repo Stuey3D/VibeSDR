@@ -5893,9 +5893,21 @@ struct LocalSdrShim::Impl {
                           + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
                           + ",\"rates\":[" + supportedRates() + "],\"gains\":[";
+            // ★★ THE BAND NAMES COME FROM THE SERVER, not from a copy in the page. Only the id and
+            //    the label travel: the page never learns an edge, so the two cannot drift into
+            //    disagreeing about where "VHF airband" ends — which is the kind of difference
+            //    nobody notices until a listener is somewhere the owner thought they had blocked.
             if (!rsp && !hf && !lost) {
                 std::vector<int> g = LocalSdrShim::instance().getTunerGains();
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
+            }
+            j += "]";
+            j += ",\"bands\":[";
+            {
+                const auto& bs = vibebands::namedBands();
+                for (size_t i = 0; i < bs.size(); ++i)
+                    j += std::string(i ? "," : "") + "{\"id\":\"" + bs[i].id + "\",\"label\":\""
+                       + vibeadmin::esc(bs[i].label) + "\"}";
             }
             j += "]";
             // ★★ WHAT THE MACHINE IS ACTUALLY DOING, not what was asked for. A governor is applied
@@ -9082,6 +9094,11 @@ void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(o
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
 void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
+
+void LocalSdrShim::setBandRegion(int region) {
+    vibebands::defaultRegion() = (region >= 1 && region <= 3) ? region : 1;
+    LOGI("band plan: ITU region %d", vibebands::defaultRegion());
+}
 
 void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv) {
     std::lock_guard<std::mutex> lk(g_vsTuneLimitMtx);
