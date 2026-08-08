@@ -75,6 +75,9 @@ add_library(vibeserver_core STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/asndb.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
+    # ★ Hands a live connection to another process, so several radios can share one
+    #   forwarded port without anything being proxied. See fd_passing.h.
+    "${CPP_DIR}/fd_passing.cpp"
     "${CPP_DIR}/mdns_responder.cpp"
     "${CPP_DIR}/sdrplay_source.cpp"
     "${CPP_DIR}/airspyhf_source.cpp"
