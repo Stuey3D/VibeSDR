@@ -612,12 +612,25 @@ async function renderHw() {
   let mine = true;
   try {
     const dir = await (await fetch("/vibeserver/radios", {cache:"no-store"})).json();
+    // ★★★ THE FRONT DOOR OWNS NO RADIO, so NOTHING in the directory is "mine" — and this used to
+    //     leave `mine` at its optimistic default and ask the door for hardware it does not have.
+    //     The answer was empty, and because the mine-branch has no driver fallback the Span list
+    //     was left blank on a page reached from the landing page's SETUP button (Stuart,
+    //     2026-08-08: "sample rate has gone for the rsp1b").
+    // ★ With radios listed, "mine" is true only when one of them says so AND it is this one.
     const me = (dir.radios || []).find(x => x.mine);
-    if (me && r.serial) mine = (me.serial === r.serial);
+    if (r.serial && (dir.radios || []).length) mine = !!me && me.serial === r.serial;
   } catch (e) { /* single-radio server: it is always ours */ }
 
   if (mine) {
     try { hw = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json(); } catch (e) {}
+    // ★ Same fallback as the other branch. A control with no options is not "unknown", it is
+    //   BROKEN-looking, and the driver's own list is always better than an empty box.
+    if (!hw || !hw.rates || !hw.rates.length) {
+      const d = DRIVER_HW[r.driver] || DRIVER_HW.rtl;
+      hw = { driver: r.driver, present: hw ? !!hw.present : false, rates: d.rates,
+             gains: (hw && hw.gains) || [], biasT: d.biasT, rfNotch: d.rfNotch, offline: !hw };
+    }
   } else {
     // ★ Ask that radio's own process through the front door, if it is running. If it is not — the
     //   usual case while setting one up — fall back to what its driver can do.

@@ -18,7 +18,7 @@ import { fetchAuthChallenge, vibeAuthToken } from './auth';
 //   countries. Reuse it rather than growing a second copy that renders a different set.
 import { isoToFlag } from '../../../src/services/rdsCountry';
 import { httpBase } from './origin';
-import { adminTicketQuery, inAdminMode } from './adminticket';
+import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 
 let host = '';
 /** Set by initAdmin so closeAdmin can stop the maintenance-log poll too. */
@@ -29,6 +29,14 @@ let open = false;
 
 const $ = (id: string) => document.getElementById(id)!;
 const base = () => httpBase(host);
+
+/** ★★★ THE MACHINE, NOT THIS RADIO. `host` carries the radio's own path prefix when the panel is
+ *  opened from a receiver — the header reads "vibeserver.local:48000/r/DD52B980BE4946DA" — so
+ *  building the fan-out on top of it produced /r/<serial>/r/<serial>/… , which 404s. Every merged
+ *  list came back empty while the single-radio health cards carried on working, so the page said
+ *  "Nobody is listening" directly beneath a LISTENERS card reading 1 (Stuart, 2026-08-08).
+ *  ★ Strips one trailing /r/<serial>; on the front door there is none and this is a no-op. */
+const machineBase = () => httpBase(host).replace(/\/r\/[^/]+\/?$/, '');
 
 /** ★ A FRESH NONCE PER REQUEST. The nonce is single-use on the server, so caching one would
  *  work exactly once and then fail in a way that looks like a wrong password. */
@@ -319,7 +327,7 @@ let radioList: Array<{ serial: string; label: string }> = [];
 
 async function discoverRadios(): Promise<void> {
   try {
-    const r = await fetch(`${base()}/vibeserver/radios`, { cache: 'no-store' });
+    const r = await fetch(`${machineBase()}/vibeserver/radios`, { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     radioList = (Array.isArray(j?.radios) ? j.radios : [])
@@ -336,7 +344,7 @@ async function fromEveryRadio(path: string): Promise<Array<{ radio: string; data
   const q = await qCached();
   const out = await Promise.all(radioList.map(async (r) => {
     try {
-      const resp = await fetch(`${base()}/r/${encodeURIComponent(r.serial)}/vibeserver/admin/${path}?${q}`,
+      const resp = await fetch(`${machineBase()}/r/${encodeURIComponent(r.serial)}/vibeserver/admin/${path}?${q}`,
                                { cache: 'no-store' });
       if (!resp.ok) return null;
       return { radio: r.label, data: await resp.json() };
@@ -345,9 +353,29 @@ async function fromEveryRadio(path: string): Promise<Array<{ radio: string; data
   return out.filter(Boolean) as Array<{ radio: string; data: any }>;
 }
 
-/** ★ One credential for the whole fan-out. q() mints a fresh nonce per call, which is right for a
- *  single request and wrong for a burst of them — the server would see N challenges for one poll. */
-async function qCached(): Promise<string> { return q(); }
+/**
+ * ★★★ THE FAN-OUT MUST CARRY A TICKET, NEVER A NONCE. q() fetches a nonce from THIS process and
+ *     signs it; every other radio is a different process with its own nonce store and rejects it
+ *     out of hand. So a panel opened from a radio with the menu password could talk to that radio
+ *     and to nothing else — the merged view would be silently one radio wide.
+ * ★ If there is no ticket yet (opened with a password rather than from the landing page), mint one
+ *   here: the admin-ticket endpoint takes ordinary admin proof, and what it returns every process
+ *   on the machine accepts. One credential, one poll.
+ */
+async function qCached(): Promise<string> {
+  const have = adminTicketQuery();
+  if (have) return have;
+  try {
+    const r = await fetch(`${base()}/vibeserver/admin-ticket?${await q()}`, { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      saveAdminTicket(String(j.ticket || ''), Number(j.ttl) || 600);
+      const t = adminTicketQuery();
+      if (t) return t;
+    }
+  } catch { /* fall through — a single-radio server needs no ticket at all */ }
+  return q();
+}
 
 // ── Listeners ─────────────────────────────────────────────────────────────────────────────────
 
@@ -401,7 +429,7 @@ function renderSessions(s: any) {
     <td>${esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}</td>
     <td>${c.decoder ? esc(String(c.decoder).toUpperCase()) : '<span class="dim">—</span>'}</td>
     <td>${esc(c.secs ? dur(c.secs) : '—')}</td>
-    <td>${rate(c.cpu, '%')}</td>
+    <td title="Share of ONE core: 100% = a core fully busy keeping up with this listener's stream. Not a share of the whole machine — the HEALTH card above is that.">${rate(c.cpu, '% core')}</td>
     <td>${rate(c.kbps, 'k')}</td>
     <td>${c.dropped > 0 ? esc(String(c.dropped)) : '<span class="dim">0</span>'}</td>
     <td class="agent">${clientLabel(c.agent)}</td>
