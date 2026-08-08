@@ -15,6 +15,7 @@
 // ★★★ THE TUI IS NOT THE SERVER. systemd owns the daemon's lifetime; closing the SSH session must
 // never stop the radio. This only edits config and asks systemd to restart.
 
+#include <locale.h>
 #include <ncurses.h>
 #include <unistd.h>
 #include <cstdio>
@@ -625,6 +626,14 @@ int vibeserverTui() {
         return 1;
     }
 
+    // ★★★ TELL ncurses WE SPEAK UTF-8, BEFORE initscr(). Without this it runs in the C locale, cannot
+    //     interpret a multibyte sequence, and escapes each BYTE separately — so an em-dash came out
+    //     as "?~@~T" in the middle of a status line (Stuart, 2026-08-08). It looks like corrupted
+    //     memory rather than a text-encoding problem, which is a bad first impression from the
+    //     first screen anyone sees.
+    // ★ LC_ALL, "" honours the user's own environment rather than forcing one on them: a terminal
+    //   that genuinely is not UTF-8 then keeps working, it simply gets the plain-ASCII fallback.
+    setlocale(LC_ALL, "");
     initscr(); noecho(); cbreak(); keypad(stdscr, TRUE); curs_set(0);
     start_color(); use_default_colors();
     init_pair(1, COLOR_GREEN,  -1);
