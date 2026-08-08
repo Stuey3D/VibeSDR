@@ -5150,6 +5150,11 @@ struct LocalSdrShim::Impl {
                     if (sp != std::string::npos && sp2 != std::string::npos) {
                         const std::string path = head.substr(sp + 1, sp2 - sp - 1);
                         const std::string dest = router(path);
+                        // ★ Routing decisions are invisible when they go wrong: the listener just
+                        //   gets an answer from the wrong process, or none. Say what was decided.
+                        if (path.rfind("/r/", 0) == 0)
+                            LOGI("route %s -> %s", path.c_str(),
+                                 dest.empty() ? "(here)" : dest.c_str());
                         if (!dest.empty()) {
                             std::string err;
                             if (vibe::sendFdTo(dest, sock->rawFd(), err)) {
