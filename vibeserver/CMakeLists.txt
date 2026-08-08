@@ -117,6 +117,25 @@ if(CURSES_FOUND)
   target_include_directories(vibeserver PRIVATE ${CURSES_INCLUDE_DIRS})
   target_link_libraries(vibeserver PRIVATE ${CURSES_LIBRARIES})
   message(STATUS "TUI: enabled (ncurses)")
+elseif(VIBESERVER_STRICT_RADIOS)
+  # ★★★ A RELEASE WITHOUT THE WIZARD IS NOT A RELEASE. Losing ncurses does not fail the build, it
+  #     quietly removes the ONE command the setup instructions tell a new owner to type: `vibeserver`
+  #     then falls through to daemon mode, prints a wall of server startup lines, and fights the
+  #     running service for the radio. The owner sees "could not open the Airspy HF+ (is another
+  #     program using it?)" and concludes their hardware or their install is broken.
+  #
+  # ★★ SHIPPED EXACTLY THAT as 3.0.0-2 (2026-08-08). The build root had been rebuilt from scratch
+  #    that evening and libncursesw-dev was not among the packages put back — the only trace was a
+  #    cmake STATUS line in a build nobody was reading. Same failure as the SDRplay headers, which
+  #    is what this flag was added for; it simply did not cover the TUI.
+  #
+  # ★ So the strict flag now means "a release build contains everything a release contains", not
+  #   just the radios. Anything else that can be silently omitted belongs under it too.
+  message(FATAL_ERROR
+          "ncurses (wide) not found, and VIBESERVER_STRICT_RADIOS is on.\n"
+          "  The settings wizard would be silently omitted and `vibeserver` would start a daemon\n"
+          "  instead of the setup screen. In the build root:\n"
+          "    apt-get install libncursesw5-dev")
 else()
   message(STATUS "TUI: not built (ncurses not found)")
 endif()

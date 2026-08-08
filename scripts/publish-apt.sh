@@ -100,7 +100,10 @@ echo "==> publishing vibeserver $FULLVER ($ARCH)"
 #     sudo apt install mmdebstrap
 #     sudo mmdebstrap --arch=arm64 --variant=buildd bookworm "$BUILD_ROOT"
 #     sudo chroot "$BUILD_ROOT" apt-get install -y cmake librtlsdr-dev libusb-1.0-0-dev \
-#                                                  libopus-dev libfftw3-dev pkg-config file
+#                    libopus-dev libfftw3-dev libncursesw5-dev pkg-config file
+#     # ★★ libncursesw5-dev is NOT optional for a release: without it the settings WIZARD is
+#     #    silently dropped and `vibeserver` starts a daemon instead. Shipped that way once, as
+#     #    3.0.0-2. CMake now refuses under VIBESERVER_STRICT_RADIOS rather than warning.
 #     # SDRplay headers — extracted, NOT installed (the API is dlopen'd, so headers are all we
 #     # need, and VIBESERVER_STRICT_RADIOS below fails the build without them):
 #     ./SDRplay_RSP_API-Linux-3.15.2.run --noexec --target /tmp/sdrplay-x
