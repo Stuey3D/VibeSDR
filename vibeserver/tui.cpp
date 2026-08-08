@@ -682,6 +682,9 @@ int vibeserverTui() {
         vsconfig::ServerConfig srv;
         loadServerViaSudo(srv, serr);
         srv.configured = false;   // ★★ The BROWSER finishes setup; this only makes it reachable.
+        // ★ Written, not assumed: a headless server has no GUI to offer Simple in, so it is always
+        //   Full — and the file should say so rather than leaving the daemon to infer it.
+        srv.fullMode = true;
         srv.adminPass  = cfg.adminPass;
         srv.pin        = cfg.pin;
 

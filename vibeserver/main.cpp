@@ -699,6 +699,14 @@ int main(int argc, char** argv) {
                 g_isPrimaryRadio = ((int)idx == vsconfig::primaryRadio(srv));
                 g_myRadioSerial = mine->serial;
             }
+            // ★★★ A HEADLESS SERVER IS ALWAYS FULL. Simple mode is a GUI idea — plug a radio into
+            //     a Mac or a phone, press start, share it on the network — and this build has no
+            //     GUI to offer it in (Stuart, 2026-08-08: "only MacOS and Android with proper
+            //     GUI's get the simple mode ... headless pi will always follow the full mode").
+            // ★ So the front door is unconditional here: 48000 lists the radios and serves setup
+            //   and admin, every radio sits behind it, and there is no "primary" special case to
+            //   reason about anywhere. One shape, whether the machine has one radio or four.
+            srv.fullMode = true;
             g_serverConfig = srv;
             hadConfigFile = true;
         } else if (!err.empty()) {

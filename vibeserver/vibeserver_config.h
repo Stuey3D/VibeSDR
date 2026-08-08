@@ -281,7 +281,10 @@ bool canDrawSpectrogram(const RadioConfig& r);
 /** Which radio draws it, or -1 when none can — which is a real answer, not a failure. */
 int spectrogramRadio(const ServerConfig& cfg);
 
-/** ★★★ WHICH RADIO ANSWERS ON THE MACHINE'S MAIN PORT. The first one that is both enabled and
+/** ★★★ WHICH RADIO ANSWERS ON THE MACHINE'S MAIN PORT — only meaningful in SIMPLE mode.
+ *  In FULL mode the front door has that port and no radio is special, so this returns -1's
+ *  meaning by construction: nothing to single out.
+ *  ★ Kept because the GUI builds (macOS, Android) still offer Simple. The first one that is both enabled and
  *  configured. Returns -1 when none is ready — a real state, and not an error: the machine still
  *  runs and serves the setup page, which is where the owner goes to make one ready.
  *  ★ For every existing single-radio install this is radio 0, so nothing moves. */
