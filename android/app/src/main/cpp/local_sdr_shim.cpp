@@ -5290,7 +5290,13 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/vibeserver/conditions", 0) == 0
                 || path0.rfind("/vibeserver/spectrogram", 0) == 0
                 || path0.rfind("/bookmarks", 0) == 0
-                || path0.rfind("/favicon", 0) == 0;
+                || path0.rfind("/favicon", 0) == 0
+                // ★ The page's own furniture. A 503 for the web manifest put a red error in every
+                //   listener's console on a page that was working perfectly — noise that makes the
+                //   real errors beside it easy to miss.
+                || path0.rfind("/manifest", 0) == 0
+                || path0.rfind("/icon", 0) == 0
+                || path0.rfind("/apple-touch-icon", 0) == 0;
             if (!ok) {
                 // ★★★ A DEAD END IS NOT AN ANSWER. This used to reply with a bare JSON error, so a
                 //     listener who simply refreshed their tab — the first thing anyone tries when
