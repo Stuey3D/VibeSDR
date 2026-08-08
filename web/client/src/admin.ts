@@ -558,9 +558,21 @@ function renderConns(list: any[]) {
 // ── The refresh cycle ─────────────────────────────────────────────────────────────────────────
 
 let failures = 0;
+let lastRenew = 0;
+
 async function refresh() {
   if (!open) return;
   try {
+    // ★ Keep the lease alive while the panel is OPEN. Renewal used to happen only on the page that
+    //   signed in, so opening the panel and then walking into a radio let the ticket lapse under
+    //   the operator's feet — see the 401 note below for what that then cost.
+    if (adminTicketQuery() && Date.now() - lastRenew > 4 * 60 * 1000) {
+      lastRenew = Date.now();
+      void fetch(`${base()}/vibeserver/admin-ticket?${adminTicketQuery()}`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (j?.ticket) saveAdminTicket(String(j.ticket), Number(j.ttl) || 600); })
+        .catch(() => { /* a blip must not end the session */ });
+    }
     if (!radioList.length) await discoverRadios();
     const [st, hist, sesAll, connsAll] = await Promise.all([
       get('status'), get('history'), fromEveryRadio('sessions'), fromEveryRadio('connections'),
@@ -749,6 +761,17 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       ($('banReason') as HTMLInputElement).value = '';
       void refresh();
     } catch (e) {
+      // ★★★ A 401 MEANS THE SESSION HAS GONE, NOT THAT IT SHOULD BE RETRIED. Re-polling an expired
+      //     ticket every two seconds was scored server-side as a wrong password each time, and the
+      //     brute-force backoff then refused the OWNER's correct password in the menu — the page
+      //     locked its own operator out of the machine it is for (Stuart, 2026-08-08). Stop, say
+      //     so, and let them sign in again.
+      if (/HTTP 401/.test((e as Error).message)) {
+        window.clearInterval(timer); timer = 0;
+        $('adminHost').textContent = `${host} — admin session expired, sign in again`;
+        return;
+      }
+
       msg('banMsg', (e as Error).message);
     }
   });

@@ -1073,14 +1073,23 @@ static std::string vsMintAdminTicket() {
  *  ★ `present` is kept separate from `ok` because a request carrying NO credentials must not count
  *    as a failed guess — otherwise any scanner locks the owner out of their own server. */
 std::string queryParam(const std::string& reqLine, const char* key);   // defined below
-struct VsAdminProof { bool present = false; bool ok = false; };
+/** `present` = credentials were offered at all. `guessable` = they were of a kind an attacker
+ *  could be TRYING — i.e. a password-derived token. A TICKET is neither guessed nor typed: it is
+ *  an HMAC over the admin secret, so a bad one means expired or stale, never "someone is having a
+ *  go". Counting those as failures locked the OWNER out of their own server: an admin page whose
+ *  ticket had lapsed re-polled every two seconds, each poll scored as a wrong password, and the
+ *  backoff then refused the correct password typed into the menu (Stuart, 2026-08-08: "refusing
+ *  my admin password in this menu now ... so I cannot get my admin session back").
+ *  ★ Same principle the no-credential rule already encodes: only a real guess counts as a guess. */
+struct VsAdminProof { bool present = false; bool ok = false; bool guessable = false; };
 static bool vsTicketOk(const std::string& ticket);
 static VsAdminProof vsAdminProof(const std::string& secret, const std::string& reqLine) {
     VsAdminProof p;
     const std::string nonce  = queryParam(reqLine, "vs_admin_nonce");
     const std::string token  = queryParam(reqLine, "vs_admin_auth");
     const std::string ticket = queryParam(reqLine, "vs_admin_ticket");
-    p.present = (!nonce.empty() && !token.empty()) || !ticket.empty();
+    p.present   = (!nonce.empty() && !token.empty()) || !ticket.empty();
+    p.guessable = (!nonce.empty() && !token.empty());
     if (secret.empty() || !p.present) return p;
     // A ticket proves the same thing as the handshake and works across processes — see
     // vibe_admin_ticket.h. Checked first because it is the cheap, stateless one.
@@ -2254,13 +2263,21 @@ struct LocalSdrShim::Impl {
             }
             // ★ Time the work this listener costs. Measured around feedOneClient only: that IS
             //   this listener's private pipeline (channelise, demodulate, decode, encode), and
-            //   nothing shared is inside it. Monotonic clock, and the counter only ever rises —
-            //   the reader turns two samples into a percentage.
-            const auto t0 = std::chrono::steady_clock::now();
+            //   nothing shared is inside it.
+            // ★★★ CPU TIME, NOT WALL TIME. steady_clock measured ELAPSED time, which includes
+            //     every moment this thread sat descheduled — so under load the figure inflated
+            //     with the machine's own contention rather than with this listener's work. A
+            //     stress test made that plain: an Airspy doing exactly one WFM stream read 17%
+            //     idle and 106% while the other radios were hammered, having done no more work at
+            //     all (2026-08-08). A capacity number that rises when OTHER people arrive is worse
+            //     than none, because it is the number an owner sizes their server with.
+            timespec c0{}, c1{};
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
             feedOneClient(c, blk->bins.data(), blk->index);
-            const auto t1 = std::chrono::steady_clock::now();
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
             c->dspNanos.fetch_add(
-                (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(),
+                (unsigned long long)((c1.tv_sec - c0.tv_sec) * 1000000000LL
+                                     + (c1.tv_nsec - c0.tv_nsec)),
                 std::memory_order_relaxed);
         }
     }
@@ -2762,7 +2779,7 @@ struct LocalSdrShim::Impl {
         const VsAdminProof pr = vsAdminProof(secret, reqLine);
         const bool ok = pr.ok && !g_vsAuthState.blocked(ip);
         if (ok) g_vsAuthState.recordOk(ip);
-        else if (!secret.empty() && pr.present) g_vsAuthState.recordFail(ip);
+        else if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
         return ok;
     }
 
@@ -5371,7 +5388,7 @@ struct LocalSdrShim::Impl {
         }
         // ★ Only a WRONG guess counts toward the backoff — a request carrying no credential at
         //   all is not an attempt, and counting it lets a scanner lock the owner out.
-        if (pr.present) g_vsAuthState.recordFail(ip);
+        if (pr.guessable) g_vsAuthState.recordFail(ip);
         sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
         return false;
     }
@@ -5862,7 +5879,7 @@ struct LocalSdrShim::Impl {
                 // ★★ Same fix as the admin API's gate: a request with no credentials is not a
                 //    failed guess, and counting it lets anyone lock the owner out of their own
                 //    settings by hitting this URL a handful of times without ever guessing.
-                if (!secret.empty() && pr.present) g_vsAuthState.recordFail(ip);
+                if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
                 LOGI("config API refused for %s", ip.c_str());
                 reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
                 return;
@@ -5957,7 +5974,7 @@ struct LocalSdrShim::Impl {
                 //     address the attacker never has to guess anything from.
                 //     ★ Found by the probe in tools/vibeserver-probes/admin-api.mjs: its five
                 //       deliberate no-credential requests locked out its own next real one.
-                if (!secret.empty() && pr.present) g_vsAuthState.recordFail(ip);
+                if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
                 LOGI("admin API refused for %s", ip.c_str());
                 reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
                 return;

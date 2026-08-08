@@ -874,8 +874,29 @@ inline SysStats readSys() {
     }
     s.governor = slurp("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", 64);
     {
-        const std::string f = slurp("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", 64);
-        if (!f.empty()) s.cpuKHz = atoll(f.c_str());
+        // ★★ AVERAGE EVERY CORE, NOT cpu0. Reading one core reported 2400 MHz while btop showed
+        //    2.3 GHz across the four — ours was the optimistic number, and on a machine being
+        //    watched for supply dips the optimistic number is the useless one. The cores clock
+        //    independently, so one of them is not the machine (Stuart, 2026-08-08: "our clock
+        //    speed report is more optimistic").
+        // ★ cpuinfo_cur_freq is what the hardware IS doing; scaling_cur_freq is what the governor
+        //   ASKED for. Prefer the former where the kernel exposes it, per core.
+        long long sum = 0; int n = 0;
+        for (int c = 0; c < 64; ++c) {
+            char path[128];
+            snprintf(path, sizeof path,
+                     "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_cur_freq", c);
+            std::string f = slurp(path, 64);
+            if (f.empty()) {
+                snprintf(path, sizeof path,
+                         "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", c);
+                f = slurp(path, 64);
+            }
+            if (f.empty()) { if (c == 0) continue; else break; }
+            const long long khz = atoll(f.c_str());
+            if (khz > 0) { sum += khz; n++; }
+        }
+        if (n > 0) s.cpuKHz = sum / n;
     }
 #endif
     s.cpuPct = cpuUsagePct();
