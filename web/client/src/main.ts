@@ -944,6 +944,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   //    while the context was still reporting `suspended` — the badge stayed up for ever even
   //    though the click had worked, and only vanished if you clicked the badge itself (Stuart,
   //    2026-08-08: "I clicked on the screen but the pill stayed until I clicked it").
+  // ★★★ THE GATE MUST NOT VANISH BETWEEN PRESS AND RELEASE. kick() runs on POINTERDOWN and ends
+  //     by re-checking, which REMOVES the overlay the moment the context resumes — so the mouseup
+  //     and click that complete the very same gesture landed on the waterfall underneath and moved
+  //     the dial (Stuart, 2026-08-08: "you click start audio and it nudges the waterfall"). The
+  //     shield was being taken away halfway through the gesture it exists to absorb.
+  // ★★ So a gesture on the gate HOLDS it up until the gesture is over. This is not a delay for
+  //    appearance's sake: the overlay is the only thing standing between that click and the dial.
+  let gateGestureActive = false;
   const kick = () => { void (async () => { await audio?.resume(); showAudioGate(); })(); };
   for (const ev of ['pointerdown', 'keydown', 'focus'] as const) {
     window.addEventListener(ev, kick);
@@ -965,7 +973,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   function showAudioGate() {
     const need = !!audio && audio.suspended && !NO_AUDIO;
     let el = document.getElementById('audioGate');
-    if (!need) { if (el) el.remove(); return; }
+    // ★ Never mid-gesture — see gateGestureActive. The pointerup that follows is swallowed by the
+    //   overlay's own handler, which then takes it down.
+    if (!need) { if (el && !gateGestureActive) el.remove(); return; }
     if (el) return;
 
     // ★★ A GATE, NOT A HINT. A small badge left the receiver looking live while it was silent, and
@@ -1023,11 +1033,35 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       el.addEventListener(ev, (e) => {
         swallow(e);
         if (ev === 'wheel' || ev === 'dblclick') e.preventDefault();   // scroll/zoom, not a gesture
+        // Hold the shield up from the first press of the gesture...
+        if (ev === 'pointerdown' || ev === 'mousedown' || ev === 'touchstart') gateGestureActive = true;
         if (kickers.has(ev)) kick();
+        // ...and only let it go once the gesture is finished, on the NEXT tick so the rest of this
+        // gesture is still swallowed by an overlay that is still there.
+        if (ev === 'click' || ev === 'pointerup' || ev === 'mouseup' || ev === 'touchend') {
+          setTimeout(() => { gateGestureActive = false; showAudioGate(); }, 0);
+        }
       }, { capture: true, passive: false });
     }
     document.body.appendChild(el);
   }
+  // ★★★ AN ADMIN SESSION MUST NOT DIE IN THE OWNER'S HANDS. The ticket is deliberately short
+  //     (ten minutes), but the menu hides its password box once the controls are unlocked, so an
+  //     expiry mid-session would leave the owner unlocked-but-powerless with no way to prove
+  //     themselves again short of going back to the landing page.
+  // ★★ RENEWING REQUIRES A VALID TICKET, so this is a sliding session, not an unlimited one: it
+  //    survives only while the tab is open and the current lease is still good. The server's own
+  //    admin idle re-lock is unaffected and still governs.
+  setInterval(() => {
+    if (!inAdminMode()) return;
+    const t = adminTicketQuery();
+    if (!t) return;
+    void fetch(`${httpBase(location.host)}/vibeserver/admin-ticket?${t}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (j?.ticket) saveAdminTicket(String(j.ticket), Number(j.ttl) || 600); })
+      .catch(() => { /* a blip must not end the session; the next tick tries again */ });
+  }, 4 * 60 * 1000);
+
   setTimeout(showAudioGate, 600);
   // ★ And keep watching. Anything can suspend a context again — a tab switch, the OS, a phone
   //   call — so the badge has to be able to come BACK as well as go away. Cheap, and it means the

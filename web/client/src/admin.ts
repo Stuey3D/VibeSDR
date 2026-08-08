@@ -18,6 +18,7 @@ import { fetchAuthChallenge, vibeAuthToken } from './auth';
 //   countries. Reuse it rather than growing a second copy that renders a different set.
 import { isoToFlag } from '../../../src/services/rdsCountry';
 import { httpBase } from './origin';
+import { adminTicketQuery, inAdminMode } from './adminticket';
 
 let host = '';
 /** Set by initAdmin so closeAdmin can stop the maintenance-log poll too. */
@@ -32,6 +33,15 @@ const base = () => httpBase(host);
 /** ★ A FRESH NONCE PER REQUEST. The nonce is single-use on the server, so caching one would
  *  work exactly once and then fail in a way that looks like a wrong password. */
 async function q(): Promise<string> {
+  // ★★★ A TICKET IS ADMIN PROOF TOO, and on this page it is often the ONLY proof there is. An
+  //     owner who signed in at the landing page arrived here through a fresh page load, so the
+  //     password they typed is long gone — it lived in a variable on a page that no longer exists.
+  //     Every hardware control was correctly unlocked (the server had the ticket) while this panel
+  //     insisted on a password nothing could supply, and the menu hides its password box once
+  //     unlocked, so there was no way back in either (Stuart, 2026-08-08: "unlocked the radio
+  //     controls but didnt unlock the admin controls ... no way of entering the password").
+  const t = adminTicketQuery();
+  if (t && !password) return t;
   const { nonce } = await fetchAuthChallenge(base());
   if (!nonce) throw new Error('this server did not offer a challenge');
   return `vs_admin_nonce=${encodeURIComponent(nonce)}&vs_admin_auth=${vibeAuthToken(password, nonce)}`;
@@ -460,9 +470,8 @@ export function isAdminOpen() { return open; }
 export function initAdmin(getHost: () => string, getPassword: () => string) {
   $('btnServerAdmin')?.addEventListener('click', () => {
     const pw = getPassword();
-    if (!pw) {
-      // ★ Should not happen — the button only exists once unlocked — but the page needs the
-      //   password itself to sign its own requests, so say why rather than opening a dead panel.
+    // ★ A ticket is enough on its own — see q(). Only refuse when there is NEITHER.
+    if (!pw && !inAdminMode()) {
       alert('Enter the admin password in the menu first.');
       return;
     }
