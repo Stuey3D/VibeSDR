@@ -5222,16 +5222,16 @@ struct LocalSdrShim::Impl {
             }
             if (hw.empty()) hw.push_back({ 0.0, 2.0e9 });
             const vibebands::Ranges perm = vsPermittedRanges(hw);
+            // ★★★ BOTH SETS TRAVEL, and that is the point. `ranges` stays the HARDWARE's coverage
+            //     and `allowed` carries the owner's limit, so the client can say WHICH wall a
+            //     listener has hit — "the operator does not allow this" and "this radio cannot
+            //     hear it" are completely different messages to receive, and telling somebody
+            //     their radio is broken when in fact it is policy is the worse of the two
+            //     mistakes (Stuart, 2026-08-08).
             if (!perm.empty()) {
-                const std::string want = "\"ranges\":" + vibebands::toJson(perm);
-                const size_t k = caps.find("\"ranges\":[");
-                if (k == std::string::npos) {
-                    const size_t close = caps.rfind('}');
-                    if (close != std::string::npos) caps.insert(close, "," + want);
-                } else {
-                    const size_t end = caps.find("]]", k);
-                    if (end != std::string::npos) caps.replace(k, end + 2 - k, want);
-                }
+                const std::string want = ",\"allowed\":" + vibebands::toJson(perm);
+                const size_t close = caps.rfind('}');
+                if (close != std::string::npos) caps.insert(close, want);
             }
             j += caps;
         }

@@ -536,12 +536,45 @@ function renderClientMix(list: any[]) {
 /** ★★ The `Ended` column is the reason this table is worth keeping. "127 connections yesterday"
  *  tells an owner nothing; "41 of them ended in `banned`, all from one range" tells them what to
  *  do next. */
+/** ★★ A PAGE AT A TIME. The log keeps hundreds of rows — 406 on this Pi after an afternoon — and
+ *  rendering them all put the maintenance buttons a very long scroll below the thing an owner came
+ *  to look at (Stuart, 2026-08-08: "maybe make pages here so that we dont end up scrolling for
+ *  ages"). The newest are what matter, so page 1 is the newest.
+ *  ★ The page number survives a refresh: this panel repaints every two seconds, and a list that
+ *    jumped back to page 1 under you would be unusable for reading anything but the top. */
+let connPage = 0;
+const CONNS_PER_PAGE = 100;
+
 function renderConns(list: any[]) {
   renderClientMix(list);
   const tb = $('adminConns').querySelector('tbody')!;
   $('adminNoConns').hidden = list.length > 0;
   ($('adminConns').parentElement as HTMLElement).hidden = list.length === 0;
-  tb.innerHTML = list.map((c) => {
+
+  const pages = Math.max(1, Math.ceil(list.length / CONNS_PER_PAGE));
+  if (connPage >= pages) connPage = pages - 1;      // the log shrank under us
+  const from = connPage * CONNS_PER_PAGE;
+  const shown = list.slice(from, from + CONNS_PER_PAGE);
+  const pager = document.getElementById('adminConnsPager');
+  if (pager) {
+    pager.hidden = pages < 2;
+    if (pages > 1) {
+      pager.innerHTML =
+        `<button class="btn" data-conn="prev"${connPage === 0 ? ' disabled' : ''}>◀ newer</button>`
+        + `<span class="dim"> ${from + 1}–${Math.min(from + CONNS_PER_PAGE, list.length)} `
+        + `of ${list.length} </span>`
+        + `<button class="btn" data-conn="next"${connPage >= pages - 1 ? ' disabled' : ''}>older ▶</button>`;
+      Array.from(pager.querySelectorAll('button')).forEach((b) => {
+        (b as HTMLButtonElement).onclick = () => {
+          connPage += b.getAttribute('data-conn') === 'next' ? 1 : -1;
+          connPage = Math.max(0, Math.min(pages - 1, connPage));
+          renderConns(list);
+        };
+      });
+    }
+  }
+
+  tb.innerHTML = shown.map((c) => {
     const live = !c.end;
     return `<tr>
       <td>${esc(when(c.at))}</td>

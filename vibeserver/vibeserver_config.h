@@ -266,6 +266,12 @@ struct ServerConfig {
      *  ★ RadioConfig::uncompressed is kept only so an older file still loads; the machine value is
      *    what is applied. */
     int         uncompressed = 0;
+    /** ★★★ THE SPECTRUM SLOWDOWN WHEN NOBODY IS LOOKING, and it belongs to the MACHINE: it is
+     *  about the CPU and the uplink this server has, both of which are shared by every radio on
+     *  it. Not to be confused with RadioConfig::releaseWhenIdle, which hands a DEVICE to another
+     *  program and is per radio by nature (Stuart, 2026-08-08: "This is the spectrum slowdown and
+     *  not the radio releasing when not in use, that one needs to stay per radio"). */
+    bool        forceIdleSaver = false;
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe — comma separated, addresses or
      *  CIDRs ("127.0.0.1, 10.0.0.0/8"). EMPTY BY DEFAULT and empty means "read no headers":
      *  the header is client-supplied text, so trusting it from anyone would let a stranger forge

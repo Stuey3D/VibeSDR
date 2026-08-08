@@ -143,7 +143,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            can carry, and there is one uplink however many radios are plugged in — asking per radio
            invited three answers to a question that has one, and three ways to get it wrong
            (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
-      <div class="card">
+<div class="card">
+      <h2>Power saving</h2>
+        <p class="why">Applies to every radio on this machine.</p>
+      <p class="why">Applies in both modes.</p>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Listeners may not switch off idle power saving</span></label>
+    </div>
+
+            <div class="card">
         <h2>Audio</h2>
         <p class="why">How listeners receive sound, on every radio.</p>
       <label><span class="lbl">Uncompressed audio</span>
@@ -319,13 +328,6 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           and whoever has it has all of it. On a shared radio it matters far less: everyone already
           has their own VFO, so a long session costs nobody else anything.
           <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
-    </div>
-      <div class="card">
-      <h2>Power saving</h2>
-      <p class="why">Applies in both modes.</p>
-      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
-        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Listeners may not switch off idle power saving</span></label>
     </div>
       <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
            range IS the limit, so offering these there would be two answers to one question
@@ -1140,6 +1142,7 @@ function fill() {
 
   $("cpuGovernor").value = cfg.cpuGovernor || "performance";
   $("uncompressed").value = String(cfg.uncompressed || 0);
+  $("forceIdle").checked = !!cfg.forceIdleSaver;
   $("trustedProxies").value = cfg.trustedProxies || "";
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
@@ -1158,7 +1161,6 @@ function fill() {
   $("demodMode").value = r.demodMode || "am";
   $("users").value = r.users || 1;
 
-  $("forceIdle").checked = !!r.forceIdleSaver;
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
@@ -1219,7 +1221,7 @@ function collectRadio() {
     demodMode: $("demodMode").value,
     users: locked ? parseInt($("users").value || "1", 10) : 1,
 
-    forceIdleSaver: $("forceIdle").checked,
+
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
@@ -1256,6 +1258,7 @@ function collect() {
 
     cpuGovernor: $("cpuGovernor").value,
     uncompressed: parseInt($("uncompressed").value, 10),
+    forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };

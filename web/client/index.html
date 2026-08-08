@@ -133,6 +133,7 @@ input, textarea, [contenteditable],
    each drifts by a different amount, which is why they looked misaligned with each other rather
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
 #splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
+.connPager { margin: 6px 0; display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .adminQueue { margin: 8px 0 4px; font-size: 12px; }
 .adminQueue .qHead { letter-spacing: .18em; opacity: .7; margin-bottom: 4px; }
 .adminQueue .qRow { padding: 2px 0; }
@@ -2412,6 +2413,7 @@ select.btn { padding: 6px 8px; }
     <div id="secHistory" hidden>
     <h2>CONNECTION HISTORY</h2>
     <div id="adminClientMix" class="clientMix"></div>
+    <div id="adminConnsPager" class="connPager" hidden></div>
     <div class="aTblWrap"><table id="adminConns">
       <thead><tr><th>When</th><th>Address</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
       <tbody></tbody>

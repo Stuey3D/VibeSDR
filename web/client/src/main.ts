@@ -6336,6 +6336,23 @@ function lockedWindow(): [number, number] | null {
   return [hwLockedCentre - fs / 2, hwLockedCentre + fs / 2];
 }
 
+/** ★★ WHAT THE OWNER PERMITS, as opposed to what the hardware can reach. Absent unless they have
+ *  set a limit, in which case it is always a subset of `ranges`. Kept separate so a listener who
+ *  hits a wall can be told WHICH wall: "the operator does not allow this" and "this radio cannot
+ *  hear it" call for completely different reactions, and telling somebody their radio is broken
+ *  when it is policy is the worse mistake of the two. */
+function allowedRanges(): Array<[number, number]> | null {
+  const a = (radioCaps as any)?.allowed;
+  return Array.isArray(a) && a.length ? a : null;
+}
+
+/** True when the hardware could reach this, so any refusal is the OPERATOR's doing. */
+function hardwareCanReach(hz: number): boolean {
+  const r = radioCaps?.ranges;
+  if (!Array.isArray(r) || !r.length) return true;
+  return r.some(([lo, hi]: [number, number]) => hz >= lo && hz <= hi);
+}
+
 function clampTune(hz: number): number {
   const want = Math.round(hz);
   // ★★★ THE LOCKED WINDOW WINS, AND IS CHECKED FIRST. The server clamps a request outside it
@@ -6351,7 +6368,9 @@ function clampTune(hz: number): number {
     gapNudgeDir = 0;
     return Math.max(win[0], Math.min(win[1], want));
   }
-  const ranges = tuneRanges();
+  // ★ The owner's limit wins where it exists; it is always inside the hardware's coverage, so
+  //   using it alone cannot offer a frequency the radio cannot hear.
+  const ranges = allowedRanges() ?? tuneRanges();
   if (!ranges) { gapNudgeDir = 0; return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want)); }
 
   // Inside a real window: nothing to do, and any pending bounce is cancelled.
@@ -6380,9 +6399,12 @@ function clampTune(hz: number): number {
   const edge = dir > 0 ? below : above;
   if (!Number.isFinite(edge)) return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want));
   const other = dir > 0 ? above : below;
+  const why = hardwareCanReach(want)
+    ? 'the server operator does not allow tuning here'
+    : 'this radio cannot receive here';
   showTuneGapMsg(Number.isFinite(other)
-    ? `${(edge / 1e6).toFixed(3)} MHz is the edge of this radio's range — tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
-    : `${(edge / 1e6).toFixed(3)} MHz is the edge of this radio's range`);
+    ? `${(edge / 1e6).toFixed(3)} MHz — ${why}. Tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
+    : `${(edge / 1e6).toFixed(3)} MHz — ${why}`);
   return edge;
 }
 
@@ -6392,12 +6414,13 @@ function clampTune(hz: number): number {
 function updateRangeGap(centerHz: number, bwHz: number) {
   const el = document.getElementById('rangeGap');
   const note = document.getElementById('rangeGapNote');
-  const ranges = tuneRanges();
+  // ★ The same set the clamp uses, or the shading marks a wall the listener will not meet.
+  const ranges = allowedRanges() ?? tuneRanges();
   if (!el || !note || !ranges || bwHz <= 0) { el?.classList.remove('show'); return; }
 
   const lo = centerHz - bwHz / 2, hi = centerHz + bwHz / 2;
   // The window's own edges, and the range that contains the middle of it.
-  const inRange = ranges.find(([a, b]) => centerHz >= a && centerHz <= b);
+  const inRange = ranges.find(([a, b]: [number, number]) => centerHz >= a && centerHz <= b);
   if (!inRange) { el.classList.remove('show'); return; }
   const [rLo, rHi] = inRange;
 
@@ -6405,15 +6428,22 @@ function updateRangeGap(centerHz: number, bwHz: number) {
   if (hi > rHi) {                       // dead space on the RIGHT
     x0 = (rHi - lo) / bwHz; x1 = 1;
     const next = ranges.filter(([a]) => a > rHi).sort((p, q) => p[0] - q[0])[0];
+    // ★ Say WHY, not just where. A wall the operator put up and a wall the hardware imposes look
+    //   identical on a waterfall, and a listener told "this radio's range" when the truth is
+    //   "the operator blocked it" goes away believing the receiver is faulty.
+    const whyHi = hardwareCanReach(rHi + 1) ? 'the server operator allows no further'
+                                            : 'this radio receives no higher';
     msg = next
-      ? `${(rHi / 1e6).toFixed(3)} MHz is the top of this range.\nTune up again to jump to ${(next[0] / 1e6).toFixed(3)} MHz.`
-      : `${(rHi / 1e6).toFixed(3)} MHz is the top of this radio's range.`;
+      ? `${(rHi / 1e6).toFixed(3)} MHz — ${whyHi}.\nTune up again to jump to ${(next[0] / 1e6).toFixed(3)} MHz.`
+      : `${(rHi / 1e6).toFixed(3)} MHz — ${whyHi}.`;
   } else if (lo < rLo) {                // dead space on the LEFT
     x0 = 0; x1 = (rLo - lo) / bwHz;
     const prev = ranges.filter(([, b]) => b < rLo).sort((p, q) => q[1] - p[1])[0];
+    const whyLo = hardwareCanReach(rLo - 1) ? 'the server operator allows no lower'
+                                           : 'this radio receives no lower';
     msg = prev
-      ? `${(rLo / 1e6).toFixed(3)} MHz is the bottom of this range.\nTune down again to jump to ${(prev[1] / 1e6).toFixed(3)} MHz.`
-      : `${(rLo / 1e6).toFixed(3)} MHz is the bottom of this radio's range.`;
+      ? `${(rLo / 1e6).toFixed(3)} MHz — ${whyLo}.\nTune down again to jump to ${(prev[1] / 1e6).toFixed(3)} MHz.`
+      : `${(rLo / 1e6).toFixed(3)} MHz — ${whyLo}.`;
   } else { el.classList.remove('show'); return; }
 
   x0 = Math.max(0, Math.min(1, x0)); x1 = Math.max(0, Math.min(1, x1));

@@ -268,6 +268,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "fftRate", d))     c.fftRate = d;
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     getBool(s, "forceIdleSaver", c.forceIdleSaver);
+    getBool(s, "forceIdleSaver", c.forceIdleSaver);
     getBool(s, "releaseWhenIdle", c.releaseWhenIdle);
     if (getNum(s, "idleGrace", d))   c.idleGrace = d;
     getBool(s, "rfNotch", c.rfNotch);
@@ -276,6 +277,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
+    getBool(s, "forceIdleSaver", c.forceIdleSaver);
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
 
@@ -530,6 +532,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
     I("uncompressed", c.uncompressed);
+    B("forceIdleSaver", c.forceIdleSaver);
     I("port", c.port); B("web", c.web);
 
     if (haveRadios) {
@@ -640,7 +643,9 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     // ★ The MACHINE's choice wins — one uplink, one answer. A file that only carries the old
     //   per-radio value still works and is migrated up on the next save.
     c.uncompressed = s.uncompressed ? s.uncompressed : r.uncompressed;
-    c.forceIdleSaver = r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;
+    // ★ The MACHINE's setting — see ServerConfig::forceIdleSaver. An older per-radio value
+    //   still counts, so an upgrade does not quietly switch it off.
+    c.forceIdleSaver = s.forceIdleSaver || r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
