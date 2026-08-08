@@ -364,11 +364,14 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     N("freq", r.freq); N("rate", r.rate); N("lockFreq", r.lockFreq); N("lockRate", r.lockRate);
     I("gain", r.gain); I("lnaState", r.lnaState); I("ifGr", r.ifGr); I("ifAgc", r.ifAgc);
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
+    S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     I("uncompressed", r.uncompressed);
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
-    B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
+    B("rfNotch", r.rfNotch);
+    S("allowRanges", r.allowRanges);
+    S("blockRanges", r.blockRanges); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
     B("spectrogram", r.spectrogram);
@@ -446,6 +449,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.forceIdleSaver = one.forceIdleSaver; r.releaseWhenIdle = one.releaseWhenIdle;
     r.idleGrace = one.idleGrace;
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
+    r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
@@ -630,6 +634,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.forceIdleSaver = r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
+    c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
     c.biasT = r.biasT;
     c.ppm = r.ppm; c.ppb = r.ppb; c.directSampling = r.directSampling;
     c.port = r.port;

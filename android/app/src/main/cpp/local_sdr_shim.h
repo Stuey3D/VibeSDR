@@ -249,6 +249,12 @@ public:
      *  0 parks immediately, i.e. the old behaviour. */
     static void setVibeServerIdleGrace(double sec);
     static void setVibeServerRfNotch(bool on);
+    /** ★★★ WHERE LISTENERS MAY TUNE. Two owner-written lists (see vibe_bands.h) collapsed against
+     *  the hardware's own coverage into ONE permitted set. Published to clients so the dial can
+     *  bounce and jump exactly as it does at the Airspy's tuning hole, and enforced HERE as well:
+     *  a permitted set that lives only in the browser is decoration, since anyone can send a raw
+     *  tune. Same split as the locked window. */
+    static void setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv);
     /** ★★★ SAVE A LIVE SETTING THE ADMIN JUST CHANGED, without restarting.
      *  Distinct from the config SET handler on purpose: that one is the setup page pressing Save,
      *  and it restarts to apply — correct there, absurd for someone nudging the RF gain while

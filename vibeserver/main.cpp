@@ -1309,6 +1309,11 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
     LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
     LocalSdrShim::setPublicSharing(o.publicSharing);
+    // ★ Only meaningful for a single-user radio: a locked range IS the limit in shared mode, so
+    //   the lists are not offered there and are not applied here either.
+    LocalSdrShim::setVibeServerTuneLimits(
+        cfg.mode == vsconfig::Mode::LockedRange ? "" : cfg.allowRanges,
+        cfg.mode == vsconfig::Mode::LockedRange ? "" : cfg.blockRanges);
     LocalSdrShim::setUpdateSchedule(o.updateSrvHour, o.updateSrvDay,
                                     o.updateAllHour, o.updateAllDay);
     // ★ Linux offers the lot: it has systemd and apt, and a reboot comes back on its own.

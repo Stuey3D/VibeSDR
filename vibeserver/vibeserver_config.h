@@ -68,6 +68,7 @@ struct Config {
 
     // Access
     std::string trustedProxies;   ///< see ServerConfig::trustedProxies
+    std::string allowRanges, blockRanges;   ///< see RadioConfig::allowRanges
     std::string pin, adminPass;
     int         sessionLimitMin = 0;
     /** ★★ Minutes of no interaction after which an ADMIN session's controls re-lock. The
@@ -184,6 +185,14 @@ struct RadioConfig {
     int    uncompressed = 0;
     bool   forceIdleSaver = false, releaseWhenIdle = false;
     double idleGrace = 300;
+    /** ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Comma separated, each entry either a named band
+     *  ("fm", "air", "mw") or a range in any unit ("87.5MHz-108MHz"). See vibe_bands.h.
+     *  ★★ An EMPTY allow list means "everything the hardware can reach", never "nothing" — an
+     *  owner who only wanted to block the airband must not take their receiver off the air.
+     *  ★ Only meaningful in single-user mode: a locked range IS the constraint in shared mode, so
+     *  the setup page does not offer these there (Stuart, 2026-08-08: "blocked bands wont be
+     *  needed in shared mode as the locked nature of it is the block/allow"). */
+    std::string allowRanges, blockRanges;
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
      *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that

@@ -91,7 +91,8 @@
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"
 #include "vibe_proxy.h"
-#include "vibe_admin_ticket.h"             // the ban list, the connection log and the machine's vitals
+#include "vibe_admin_ticket.h"
+#include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -436,6 +437,11 @@ static std::atomic<bool>   g_vsZoomSpectrum{true};
  *  entirely (Stuart, 2026-08-07: "just dont enable it by default"). */
 std::atomic<bool> g_vsReleaseWhenIdle{false};
 static std::atomic<double> g_vsIdleGraceSec{300.0};
+static std::mutex          g_vsTuneLimitMtx;
+static std::string         g_vsAllowCsv, g_vsBlockCsv;
+static vibebands::Ranges   g_vsPermitted;      // empty = no restriction beyond the hardware
+static vibebands::Ranges vsPermittedRanges(const vibebands::Ranges& hardware);   // defined below
+
 static std::atomic<bool>   g_vsRfNotch{false};
 static std::atomic<bool>   g_vsDabNotch{false};
 // ★ How many spectrum listeners may attach at once. 1 = the old single-occupant behaviour.
@@ -4410,6 +4416,24 @@ struct LocalSdrShim::Impl {
             return;
         }
 
+        // ★★★ THE OWNER'S LIMITS ARE ENFORCED HERE, NOT ONLY IN THE BROWSER. The client bounces and
+        //     jumps at the edges because that feels right; this exists because a permitted set that
+        //     lives only in the page is decoration — a hand-rolled client can send any frequency it
+        //     likes, and "we asked the browser nicely" is not a limit an owner can rely on for a
+        //     band they are blocking for legal reasons. Same split as the locked window above.
+        // ★ Clamped rather than refused, matching the locked window: a listener is put at the edge
+        //   of what they may hear, not left in silence wondering.
+        {
+            vibebands::Ranges hw;
+            const vibebands::Ranges perm = vsPermittedRanges(hw.empty() ? vibebands::Ranges{{0.0, 2.0e9}} : hw);
+            if (!perm.empty() && !vibebands::allows(perm, freq)) {
+                const double was = freq;
+                freq = vibebands::clamp(perm, freq);
+                LOGI("retune %.3f MHz is outside the permitted bands — moved to %.3f MHz",
+                     was / 1e6, freq / 1e6);
+            }
+        }
+
         audioFreq.store(freq);
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             // The VFO has tuned outside the captured window — recentre the capture
@@ -5169,7 +5193,48 @@ struct LocalSdrShim::Impl {
         // the LNA that decides whether the front end overloads — the very thing that has been
         // destroying RDS all evening. A client cannot present that honestly unless it is
         // told, so it is told.
-        j += LocalSdrShim::instance().radioCapsJson();
+        {
+            std::string caps = LocalSdrShim::instance().radioCapsJson();
+            // ★★★ THE OWNER'S LIMITS, PUBLISHED AS THE RADIO'S RANGES. The client already knows how
+            //     to live inside a set of ranges — it is how the Airspy's 31-60 MHz hole works, and
+            //     it gives the bounce-then-jump for free. Publishing the owner's permitted set the
+            //     same way means one behaviour to reason about, not two.
+            // ★★ The hardware's own ranges are the starting point, so a limit can never OFFER a
+            //    frequency the radio cannot hear. Where a driver publishes none, its whole span is
+            //    assumed and the owner's list is what narrows it.
+            vibebands::Ranges hw;
+            {
+                const size_t k = caps.find("\"ranges\":[");
+                if (k != std::string::npos) {
+                    const size_t a = caps.find('[', k + 9), b = caps.find(']', a);
+                    // "[[500,31000000],[60000000,260000000]]" — read the pairs back out.
+                    const std::string body = caps.substr(k + 10, caps.find("]]", k) - k - 9);
+                    size_t pos = 0;
+                    while ((pos = body.find('[', pos)) != std::string::npos) {
+                        const double lo = atof(body.c_str() + pos + 1);
+                        const size_t c = body.find(',', pos);
+                        const double hi = c == std::string::npos ? 0 : atof(body.c_str() + c + 1);
+                        if (hi > lo) hw.push_back({ lo, hi });
+                        pos = c == std::string::npos ? body.size() : c + 1;
+                    }
+                    (void)a; (void)b;
+                }
+            }
+            if (hw.empty()) hw.push_back({ 0.0, 2.0e9 });
+            const vibebands::Ranges perm = vsPermittedRanges(hw);
+            if (!perm.empty()) {
+                const std::string want = "\"ranges\":" + vibebands::toJson(perm);
+                const size_t k = caps.find("\"ranges\":[");
+                if (k == std::string::npos) {
+                    const size_t close = caps.rfind('}');
+                    if (close != std::string::npos) caps.insert(close, "," + want);
+                } else {
+                    const size_t end = caps.find("]]", k);
+                    if (end != std::string::npos) caps.replace(k, end + 2 - k, want);
+                }
+            }
+            j += caps;
+        }
         // ★★ IS THERE AN ADMIN PASSWORD, AND ARE WE THROUGH IT? Advertised for the same reason
         // as everything else here: the server ENFORCES the lock (bias-T, PPM, direct sampling
         // and calibration all go through adminGate), but a client that is not told simply draws
@@ -9017,6 +9082,27 @@ void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(o
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
 void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
+
+void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv) {
+    std::lock_guard<std::mutex> lk(g_vsTuneLimitMtx);
+    g_vsAllowCsv = allowCsv;
+    g_vsBlockCsv = blockCsv;
+    g_vsPermitted.clear();          // recomputed against the hardware's coverage on first use
+    if (!allowCsv.empty() || !blockCsv.empty())
+        LOGI("tuning limits: allow[%s] block[%s]",
+             allowCsv.empty() ? "everything" : allowCsv.c_str(),
+             blockCsv.empty() ? "nothing" : blockCsv.c_str());
+}
+
+/** The permitted set for THIS radio, hardware coverage included. Recomputed when the lists change
+ *  or the coverage is first known — the driver may not have reported it when the lists arrived. */
+static vibebands::Ranges vsPermittedRanges(const vibebands::Ranges& hardware) {
+    std::lock_guard<std::mutex> lk(g_vsTuneLimitMtx);
+    if (g_vsAllowCsv.empty() && g_vsBlockCsv.empty()) return {};
+    if (g_vsPermitted.empty())
+        g_vsPermitted = vibebands::permitted(hardware, g_vsAllowCsv, g_vsBlockCsv);
+    return g_vsPermitted;
+}
 void LocalSdrShim::setVibeServerDabNotch(bool on) { g_vsDabNotch.store(on); }
 void LocalSdrShim::setVibeServerMaxUsers(int n) { g_vsMaxUsers.store(n > 1 ? n : 1); }
 
