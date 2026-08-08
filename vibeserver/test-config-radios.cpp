@@ -188,6 +188,48 @@ int main() {
         ok(s.adminPass == "pw", "the admin password survived a patch");
     }
 
+    std::printf("\n★ SIMPLE keeps the port it has always had; FULL gets a front door\n");
+    {
+        // A plain single-radio receiver, exactly as thousands were set up: no lock, one listener.
+        const std::string simpleOld = R"({"configured":true,"mode":"single","users":1,
+            "name":"Loft","adminPass":"x","freq":9410000,"rate":2400000})";
+        ServerConfig s;
+        ok(fromJson(simpleOld, s, err), "an old SIMPLE config loads", err);
+        ok(!s.fullMode, "★ it stays SIMPLE — the switch did not exist, so it was never chosen");
+        ok(!needsFrontDoor(s), "★ no front door");
+        ok(portForRadio(s, 0) == 48000,
+           "★ its receiver is on 48000, exactly where it has always been",
+           std::to_string(portForRadio(s, 0)));
+
+        // The demo Pi: one radio, but locked and shared — a FULL server by any reading.
+        const std::string fullOld = R"({"configured":true,"mode":"locked","users":30,
+            "name":"Pi500","adminPass":"x","freq":6800000,"lockFreq":6800000,"rate":8000000})";
+        ServerConfig f;
+        ok(fromJson(fullOld, f, err), "an old FULL config loads", err);
+        ok(f.fullMode, "★ a locked, many-listener server is recognised as FULL");
+        ok(needsFrontDoor(f), "★ and gets a front door — with ONE radio");
+        ok(portForRadio(f, 0) == 48001, "★ its radio moves behind the front door",
+           std::to_string(portForRadio(f, 0)));
+    }
+
+    std::printf("\n★ Three radios in FULL mode queue behind the front door\n");
+    {
+        ServerConfig s; s.configured = true; s.fullMode = true; s.port = 48000;
+        RadioConfig a; a.serial="A"; a.enabled=true; a.configured=true;
+        RadioConfig b; b.serial="B"; b.enabled=true; b.configured=true;
+        RadioConfig c; c.serial="C"; c.enabled=true; c.configured=true;
+        s.radios = {a,b,c};
+        ok(portForRadio(s,0) == 48001 && portForRadio(s,1) == 48002 && portForRadio(s,2) == 48003,
+           "★ 48001, 48002, 48003 — and nothing on 48000 but the front door",
+           std::to_string(portForRadio(s,0)) + "," + std::to_string(portForRadio(s,1))
+           + "," + std::to_string(portForRadio(s,2)));
+
+        // ★ And the same three radios in SIMPLE mode keep the old shape.
+        s.fullMode = false;
+        ok(portForRadio(s,0) == 48000, "★ in SIMPLE the first radio still owns 48000",
+           std::to_string(portForRadio(s,0)));
+    }
+
     std::printf("\nA machine with no radios is a valid answer, not an error\n");
     {
         ServerConfig s; s.configured = true;

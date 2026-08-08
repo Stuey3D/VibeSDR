@@ -406,6 +406,12 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     fromJson(json, one, ignored, /*validate=*/false);
 
     out.configured   = one.configured;
+    // ★★★ DECIDE THE MODE FROM WHAT THE SERVER WAS ALREADY DOING. The switch did not exist when
+    //     this file was written, so it cannot have been chosen — and defaulting every install to
+    //     one answer would change what half of them do. A pinned window, several listeners, or a
+    //     public listing are all things a SIMPLE receiver never has.
+    out.fullMode     = (one.mode == Mode::LockedRange) || (one.users > 1)
+                       || (one.sharing == Sharing::Public);
     out.sharing      = one.sharing;
     out.name         = one.name;
     out.place        = one.place;   out.country = one.country;
@@ -447,6 +453,7 @@ std::string toJson(const ServerConfig& c) {
     auto N = [&](const char* k, double v) { o += "  \"" + std::string(k) + "\": " + num(v) + ",\n"; };
     auto B = [&](const char* k, bool v)   { o += "  \"" + std::string(k) + "\": " + (v ? "true" : "false") + ",\n"; };
     B("configured", c.configured);
+    B("fullMode", c.fullMode);
     S("sharing", c.sharing == Sharing::Public ? "public" : "local");
     S("name", c.name); S("place", c.place); S("country", c.country);
     S("locator", c.locator); S("lat", c.lat); S("lon", c.lon);
@@ -491,6 +498,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     auto I = [&](const char* k, int& dst)         { if (getNum(j, k, n)) dst = (int)n; };
     auto B = [&](const char* k, bool& dst)        { if (getBool(j, k, b)) dst = b; };
     B("configured", c.configured);
+    B("fullMode", c.fullMode);
     if (getStr(j, "sharing", t)) c.sharing = (t == "public") ? Sharing::Public : Sharing::Local;
     S("name", c.name); S("place", c.place); S("country", c.country);
     S("locator", c.locator); S("lat", c.lat); S("lon", c.lon);
@@ -511,6 +519,8 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     return true;
 }
 
+bool needsFrontDoor(const ServerConfig& cfg) { return cfg.fullMode; }
+
 int primaryRadio(const ServerConfig& cfg) {
     for (size_t i = 0; i < cfg.radios.size(); i++)
         if (cfg.radios[i].enabled && cfg.radios[i].configured) return (int)i;
@@ -522,6 +532,17 @@ int portForRadio(const ServerConfig& cfg, size_t index) {
     if (index >= cfg.radios.size()) return base;
     // ★ An explicit per-radio port always wins — an owner who pinned one did it for a router rule.
     if (cfg.radios[index].port > 0) return cfg.radios[index].port;
+
+    // ★★ WITH A FRONT DOOR, NO RADIO TAKES THE PUBLIC PORT. The front door has it, and every radio
+    //    queues behind: 48001, 48002, 48003. There is no "primary" to be special about, which is
+    //    the whole reason this is cleaner — one shape for every radio.
+    if (needsFrontDoor(cfg)) {
+        int offset = 1;
+        for (size_t i = 0; i < index && i < cfg.radios.size(); i++)
+            if (cfg.radios[i].enabled && cfg.radios[i].configured) offset++;
+        return base + offset;
+    }
+
     const int primary = primaryRadio(cfg);
     if ((int)index == primary) return base;
     // Everyone else takes base+1, base+2 … in ARRAY order, skipping the primary. Counting only

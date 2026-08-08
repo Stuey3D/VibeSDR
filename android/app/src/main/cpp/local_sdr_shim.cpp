@@ -5261,6 +5261,35 @@ struct LocalSdrShim::Impl {
         //     the first one forgotten is a 404 that only appears on multi-radio machines.
         // ★★ ONLY OUR OWN. A prefix naming a DIFFERENT radio must not be quietly served by us —
         //    that would answer for a receiver we are not, with our frequency and our listeners.
+        // ★★ A FRONT DOOR CANNOT ANSWER RADIO QUESTIONS, so it says so rather than reaching for a
+        //    device it does not have. Everything a listener needs BEFORE choosing a radio — the
+        //    landing page, the radio list, setup, admin — is served; anything that needs IQ is a
+        //    503 with a reason, which is what an honest "ask a radio, not me" looks like.
+        if (frontDoorOnly) {
+            const size_t sp0 = reqLine.find(' ');
+            const std::string path0 = sp0 == std::string::npos ? "/" :
+                reqLine.substr(sp0 + 1, reqLine.find(' ', sp0 + 1) - sp0 - 1);
+            const bool ok =
+                   path0 == "/" || path0.rfind("/?", 0) == 0
+                || path0.rfind("/setup", 0) == 0
+                || path0.rfind("/vibeserver.json", 0) == 0
+                || path0.rfind("/vibeserver/radios", 0) == 0
+                || path0.rfind("/vibeserver/auth", 0) == 0
+                || path0.rfind("/vibeserver/config", 0) == 0
+                || path0.rfind("/vibeserver/admin", 0) == 0
+                || path0.rfind("/vibeserver/conditions", 0) == 0
+                || path0.rfind("/vibeserver/spectrogram", 0) == 0
+                || path0.rfind("/bookmarks", 0) == 0
+                || path0.rfind("/favicon", 0) == 0;
+            if (!ok) {
+                const std::string body =
+                    "{\"error\":\"this is the front door — pick a radio first\"}";
+                sock->sendstr("HTTP/1.1 503 Service Unavailable\r\n"
+                              "Content-Type: application/json\r\nConnection: close\r\n"
+                              "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close(); return;
+            }
+        }
         if (!g_vsPathPrefix.empty()) {
             std::lock_guard<std::mutex> lk(g_vsConfigMtx);
             const size_t sp = reqLine.find(' ');
@@ -7315,6 +7344,8 @@ struct LocalSdrShim::Impl {
     std::atomic<double> idleParkDueAt{0.0};
     /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
     /// The unix socket other VibeServer processes hand connections to us on.
+    /// True for the process that owns the public port and owns no radio.
+    bool        frontDoorOnly = false;
     int         handoffFd = -1;
     std::string handoffPath;
     std::thread handoffThread;
@@ -8513,6 +8544,51 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     g_vsConfigGet = std::move(get);
     g_vsConfigSet = std::move(set);
 }
+/** ★★★ A SERVER WITH NO RADIO — THE FRONT DOOR.
+ *
+ *  It holds the one port that leaves the machine, lists the radios, serves the setup and admin
+ *  pages, and hands every listener's connection to the radio process they asked for. It owns no
+ *  device at all.
+ *
+ *  ★★ AND THAT IS THE POINT, not a side effect. Stuart, 2026-08-08: "the 48000 page can still
+ *     serve if for some reason all the radios fail, an admin can still gain entry and reboot the
+ *     system". A front door that dies with the radios is exactly no use on the day you need it —
+ *     an appliance in a cupboard whose every receiver has failed is precisely when someone needs
+ *     to get in and restart it.
+ *
+ *  ★ Whitelisted, deliberately. Almost every handler below assumes a device: they read gain, span,
+ *    the FFT, the front end. Serving them here would mean auditing each one for a null radio and
+ *    getting it right for ever. Answering 503 for anything that needs a radio is smaller, safer,
+ *    and honest — this process genuinely cannot answer those.
+ */
+int LocalSdrShim::startFrontDoor(int port, std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (instance().p) { err = "already running"; return -1; }
+    Impl* impl = new Impl();
+    impl->frontDoorOnly = true;
+
+    int chosen = -1;
+    if (port > 0) {
+        try { impl->listener = net::listen(bindHost(), port); chosen = port; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = port > 0 ? "port " + std::to_string(port) + " is already in use — choose another"
+                       : "no free port in 48000-48049";
+        delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    instance().p = impl;
+    return chosen;
+}
+
 void LocalSdrShim::setHandoffRouter(HandoffFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsHandoffFn = std::move(fn);

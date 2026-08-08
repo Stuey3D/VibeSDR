@@ -205,6 +205,12 @@ struct RadioConfig {
 /** The whole machine: what every radio shares, plus the radios themselves. */
 struct ServerConfig {
     bool configured = false;
+    /** ★★★ SIMPLE or FULL — see needsFrontDoor(). Simple is the original plug-in-and-share
+     *  receiver; Full is the shared-server product with a landing page and a front door.
+     *  ★ Defaults to FALSE so a config that predates the switch stays Simple unless it plainly is
+     *    not — the migration below decides that from what the server was ALREADY doing, because a
+     *    setting that did not exist cannot have been chosen. */
+    bool fullMode = false;
     Sharing sharing = Sharing::Local;
     std::string place, country, locator, lat, lon;   // ★ the SITE — one machine, one location
     std::string name;                                // the machine's name, shown above the list
@@ -228,6 +234,26 @@ bool loadServer(const std::string& path, ServerConfig& cfg, std::string& err);
 bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& err);
 std::string toJson(const ServerConfig& cfg);
 bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
+
+/** ★★★ DOES THIS MACHINE NEED A FRONT DOOR? It is the SIMPLE/FULL switch that decides — NOT how
+ *  many radios are attached, which is what this first tried and got wrong.
+ *
+ *  ★★ THE TWO MODES ARE DIFFERENT PRODUCTS, and Stuart put it best (2026-08-08):
+ *
+ *      SIMPLE is "more akin to Spy Server / rtl_tcp — designed for speed and ease of use,
+ *      primarily for a user to quickly hook up a radio to a device and share it on the local
+ *      network. Like it already did." Plug in, press start. No front door, no extra process, the
+ *      receiver on the port it has always been on. This is what people love and it must not move.
+ *
+ *      FULL is "more akin to UberSDR / OWRX — a full server interface". Locked ranges, many
+ *      listeners, a landing page, admin. That is worth a front door EVEN WITH ONE RADIO, which is
+ *      exactly what the demo Pi has been running all along: one RSP, 2.8-10.8 MHz locked, 30
+ *      listeners.
+ *
+ *  ★ So the radio count decides nothing. A Full single-radio server gets the front door; a Simple
+ *    three-radio server does not.
+ */
+bool needsFrontDoor(const ServerConfig& cfg);
 
 /** ★★★ WHICH RADIO ANSWERS ON THE MACHINE'S MAIN PORT. The first one that is both enabled and
  *  configured. Returns -1 when none is ready — a real state, and not an error: the machine still

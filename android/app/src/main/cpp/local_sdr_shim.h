@@ -275,6 +275,11 @@ public:
      *  keeps matching bare paths. "" (the default) means no prefix, i.e. a single-radio server. */
     static void setPathPrefix(const std::string& prefix);
 
+    /** ★★ Run a server that owns NO radio: the front door. It lists the radios, serves setup and
+     *  admin, and hands connections on. It stays up when every radio has failed, which is exactly
+     *  when an admin needs to get in. Returns the port, or -1 with `err`. */
+    static int startFrontDoor(int port, std::string& err);
+
     /** Accept connections handed to us by the process holding the public port. */
     static bool listenForHandoff(const std::string& socketPath, std::string& err);
     using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
