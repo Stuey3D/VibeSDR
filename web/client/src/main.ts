@@ -865,18 +865,38 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // ★ It disappears the moment audio runs, and never appears at all where the browser allows
   //   audio without a gesture.
   function showAudioGate() {
-    let el = document.getElementById('audioGate');
     const need = !!audio && audio.suspended && !NO_AUDIO;
+    let el = document.getElementById('audioGate');
     if (!need) { if (el) el.remove(); return; }
     if (el) return;
+
+    // ★★ A GATE, NOT A HINT. A small badge left the receiver looking live while it was silent, and
+    //    a listener reads that as a broken radio rather than as something to click. Dimming the
+    //    spectrum says "not started yet" before a word is read, and puts the one action needed in
+    //    the middle of the screen where it cannot be missed (Stuart, 2026-08-08, after UberSDR).
     el = document.createElement('div');
     el.id = 'audioGate';
-    el.textContent = 'CLICK ANYWHERE TO START AUDIO';
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:60;'
-      + 'background:rgba(0,0,0,.82);border:1px solid var(--amber,#ffb000);color:var(--amber,#ffb000);'
-      + 'padding:10px 18px;border-radius:8px;font:12px/1 ui-monospace,monospace;letter-spacing:.08em;'
-      + 'cursor:pointer;pointer-events:auto';
-    el.addEventListener('click', kick);
+    el.style.cssText = 'position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;'
+      + 'align-items:center;justify-content:center;gap:14px;background:rgba(0,0,0,.62);'
+      + 'backdrop-filter:blur(1.5px);cursor:pointer';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'START';
+    btn.style.cssText = 'font:600 15px/1 ui-monospace,monospace;letter-spacing:.22em;'
+      + 'padding:16px 52px;border-radius:10px;cursor:pointer;'
+      + 'color:var(--amber,#ffb000);background:rgba(0,0,0,.55);'
+      + 'border:1px solid var(--amber,#ffb000);box-shadow:0 0 24px rgba(255,176,0,.25)';
+
+    const why = document.createElement('div');
+    why.textContent = 'Your browser needs a click before it will play audio';
+    why.style.cssText = 'font:11px/1.5 ui-monospace,monospace;letter-spacing:.06em;'
+      + 'color:var(--amber,#ffb000);opacity:.7;text-align:center;padding:0 1em';
+
+    el.appendChild(btn); el.appendChild(why);
+    // ★ The whole overlay is the target, not just the button — anywhere is a fair place to click
+    //   when the instruction is "click to start".
+    el.addEventListener('pointerdown', kick);
     document.body.appendChild(el);
   }
   setTimeout(showAudioGate, 600);
