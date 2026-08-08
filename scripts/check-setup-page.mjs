@@ -26,19 +26,68 @@ try {
   process.exit(1);
 }
 
-// 2. Tags must balance. An unclosed <div> silently swallows everything after it — the cards are
-//    still "there" and the owner simply cannot see them.
+// 2. Tags must NEST, not merely balance. This started as a count of opens against closes and it
+//    let a real fault straight through: a card lost its closing tag while the totals still
+//    matched, so #serverPane swallowed #radioPane and every radio setting appeared under the
+//    server tab. Equal counts say nothing about STRUCTURE — a stack does.
 let bad = 0;
-for (const tag of ['div', 'label', 'select', 'button']) {
-  const open = (html.match(new RegExp(`<${tag}\\b`, 'g')) || []).length;
-  const close = (html.match(new RegExp(`</${tag}>`, 'g')) || []).length;
-  // <select> and <button> appear inside JS template strings and comments too, so only flag a
-  // tag with MORE closes than opens, which is unambiguous, plus div/label which are structural.
-  const structural = tag === 'div' || tag === 'label';
-  if ((structural && open !== close) || close > open) {
-    console.error(`✗ <${tag}>: ${open} opened, ${close} closed`);
+{
+  const stack = [];
+  const tagRe = /<(\/?)(div|label|select)\b[^>]*?(\/?)>/g;
+  // ★ Comments are skipped: the file explains itself heavily, and a <div> mentioned in prose is
+  //   not markup. Same reasoning as the id scan below.
+  // ★★ SCRIPT IS NOT MARKUP. The page builds rows and chips as HTML strings in JavaScript, so a
+  //    scan of the whole file sees <div> that never belonged to the document at all. Stripping the
+  //    scripts first is what makes a nesting check possible; without it the counts are noise —
+  //    which is precisely why the old count-based check could not have caught this.
+  const markup = html.replace(/<script>[\s\S]*?<\/script>/g, '')
+                     .replace(/<!--[\s\S]*?-->/g, '');
+  let m;
+  while ((m = tagRe.exec(markup))) {
+    const [, closing, tag, selfClose] = m;
+    if (selfClose) continue;
+    if (!closing) { stack.push({ tag, at: m.index }); continue; }
+    const top = stack.pop();
+    if (!top) { console.error(`✗ </${tag}> with nothing open`); bad++; break; }
+    if (top.tag !== tag) {
+      const near = markup.slice(Math.max(0, top.at), top.at + 70).replace(/\s+/g, ' ');
+      console.error(`✗ <${top.tag}> is closed by </${tag}> — near: ${near}`);
+      bad++; break;
+    }
+  }
+  if (!bad && stack.length) {
+    // ★ Report the INNERMOST unclosed tag, not the outermost. A missing close cascades, so the
+    //   first thing left on the stack is usually <div class="wrap"> — the outermost casualty, and
+    //   the least useful place to start looking. The last one is where the tag actually went.
+    const f = stack[stack.length - 1];
+    console.error(`✗ ${stack.length} unclosed tag(s); the innermost <${f.tag}> is near: `
+                  + markup.slice(f.at, f.at + 100).replace(/\s+/g, ' '));
     bad++;
   }
+}
+
+// ★★ AND THE PANES MUST HOLD THE CARDS THEY ARE NAMED FOR. Valid structure is not the same as
+//    RIGHT structure: the fault above produced perfectly well-formed HTML in which the radio pane
+//    was simply empty and every radio setting sat under the server tab.
+{
+  const paneCards = (id) => {
+    const i = html.indexOf(`id="${id}"`);
+    if (i < 0) return null;
+    const start = html.lastIndexOf('<div', i);
+    let d = 0;
+    const re = /<div\b|<\/div>/g;
+    re.lastIndex = start;
+    let m;
+    while ((m = re.exec(html))) {
+      d += m[0] === '</div>' ? -1 : 1;
+      if (d === 0) return (html.slice(start, m.index).match(/<h2>/g) || []).length;
+    }
+    return null;
+  };
+  const sp = paneCards('serverPane'), rp = paneCards('radioPane');
+  if (sp === null || rp === null) { console.error('✗ a pane is missing entirely'); bad++; }
+  else if (rp < 4) { console.error(`✗ the radio pane holds only ${rp} card(s) — the per-radio settings are not inside it`); bad++; }
+  else if (sp > 8) { console.error(`✗ the server pane holds ${sp} cards — it has swallowed the radio pane`); bad++; }
 }
 
 // 3. Every element the script reaches for by id must exist in the markup. This is the mistake

@@ -128,9 +128,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div class="card">
         <h2>Shortwave schedule</h2>
         <p class="why">Station names for the search box, shared by every radio on this machine.</p>
-<div class="note" id="eibiNote" style="margin-top:18px">
+        <div class="note" id="eibiNote" style="margin-top:18px">
           <b>Shortwave schedule (EiBi)</b>
           <div class="hint" id="eibiState">checking…</div>
+          <div class="hint">Who is broadcasting, where and when — so the search box on this
+            receiver finds stations by name instead of only by frequency. The list is fetched by
+            the server, because a browser is not allowed to fetch it directly, and it refreshes
+            itself once a day.</div>
+          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
+            Download now</button>
+        </div>
       </div>
       <div class="card">
       <h2>On your network</h2>
@@ -242,13 +249,6 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <!-- moved out of the locked-only block: every radio has a sample rate -->
         </div>
         <div class="hint" id="coverage"></div>
-          <div class="hint">Who is broadcasting, where and when — so the search box on this
-            receiver finds stations by name instead of only by frequency. The list is fetched by
-            the server, because a browser is not allowed to fetch it directly, and it refreshes
-            itself once a day.</div>
-          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
-            Download now</button>
-        </div>
         <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
           <input type="checkbox" id="zoomSpectrum" checked
                  style="width:16px;height:16px;accent-color:var(--amber)">
