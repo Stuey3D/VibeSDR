@@ -815,7 +815,6 @@ async function serialStatus() {
     const j = await r.json();
     SERIAL_PENDING = j.pending ? {old: j.old, new: j.new, took: j.took} : null;
     if (!el) return;
-    if ($("rtlSerialNow")) $("rtlSerialNow").value = (radio().serial || "").trim();
     if (j.pending && j.took) {
       // ★ Proven, not assumed: the server clears the marker only when it SEES the new serial on
       //   the bus and the old one gone.
@@ -1035,6 +1034,11 @@ async function renderHw() {
     show("hwBiasT", !!cap.biasT);
     show("hwPpm",   drv === "rtl" || drv === "rtlsdr");
     show("hwSerial", drv === "rtl" || drv === "rtlsdr");
+    // ★ FROM WHAT WE ALREADY KNOW, not from the status request. It was filled inside that fetch,
+    //   so any failure or 401 left the box blank while the dialog — which reads the radio directly
+    //   — showed the name perfectly well: the same value looking absent in one place and present
+    //   in another (Stuart, 2026-08-08). The request only ever refreshes what is beneath it.
+    if ($("rtlSerialNow")) $("rtlSerialNow").value = (radio().serial || "").trim();
     show("hwPpb",   drv === "airspyhf");
   }
 
