@@ -46,6 +46,12 @@ PrivateTmp=yes
 # otherwise healthy (2026-08-08).
 RuntimeDirectory=vibeserver
 RuntimeDirectoryMode=0700
+# ★★★ PRESERVE IT, or stopping ONE unit deletes the directory for ALL of them. systemd removes a
+# RuntimeDirectory when the unit stops, so restarting the front door wiped /run/vibeserver out from
+# under two radios that were still running: they kept serving on their own ports and became
+# unreachable through the front door, with "no such file or directory" as the only clue.
+# ★ Every unit here shares this directory, so no single unit owns its lifetime.
+RuntimeDirectoryPreserve=yes
 StateDirectory=vibeserver
 # ★★★ /etc/vibeserver MUST BE WRITABLE — the server now writes its own config.
 # ProtectSystem=strict makes /etc read-only, which is right for a daemon whose settings a human
