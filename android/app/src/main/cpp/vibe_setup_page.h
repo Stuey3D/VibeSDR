@@ -101,8 +101,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          setup page is exactly the page it has always been. Each tab is the whole settings form for
          that radio; what the MACHINE shares — where it is, its name, the admin password — is the
          same on every tab and stored once. -->
-    <div id="radioTabs" class="hide" style="display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 4px"></div>
-    <div id="radioTabHint" class="hide sub" style="margin:0 0 10px;font-size:12px;opacity:.75"></div>
+    <!-- ★ SAY WHAT THEY ARE. Three unlabelled buttons reading HF / FM / VHF look like BAND
+         buttons, not radios — which is exactly how they were read (Stuart, 2026-08-08: "3 random
+         buttons at the top ... nothing to do with the radios"). A heading costs one line. -->
+    <div id="radioTabsWrap" class="hide" style="margin:16px 0 10px">
+      <div style="font-weight:600;letter-spacing:.06em;font-size:12px;opacity:.8">RADIOS ON THIS MACHINE</div>
+      <div id="radioTabHint" class="sub" style="margin:2px 0 8px;font-size:12px;opacity:.75"></div>
+      <div id="radioTabs" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
 
     <div class="card">
       <h2>On your network</h2>
@@ -568,10 +574,10 @@ function radio()     { return radioList()[curRadio] || {}; }
 
 function renderTabs() {
   const list = radioList();
-  const tabs = $("radioTabs"), hint = $("radioTabHint");
+  const tabs = $("radioTabs"), hint = $("radioTabHint"), wrap = $("radioTabsWrap");
   // ★ One radio is not a choice, so it does not get a chooser.
-  if (list.length < 2) { tabs.classList.add("hide"); hint.classList.add("hide"); return; }
-  tabs.classList.remove("hide"); hint.classList.remove("hide");
+  if (list.length < 2) { wrap.classList.add("hide"); return; }
+  wrap.classList.remove("hide");
   tabs.innerHTML = list.map((r, i) => {
     const on = i === curRadio;
     // ★★ A radio whose tab has never been saved is marked, because an unmarked one looks finished
@@ -595,8 +601,8 @@ function renderTabs() {
   });
   const unsaved = list.filter(r => !r.configured).length;
   hint.textContent = unsaved
-    ? `Each radio is set up on its own tab. ${unsaved} still to do — a radio marked • is not served yet.`
-    : "Each radio is set up on its own tab.";
+    ? `Pick a radio to set it up. ${unsaved} still to do — a radio marked • is not on air yet.`
+    : "Pick a radio to change how it is set up.";
 }
 
 /** Copy what is on screen into the radio this tab belongs to, without saving to the server. */
