@@ -7221,6 +7221,8 @@ struct LocalSdrShim::Impl {
     std::atomic<double> idleParkDueAt{0.0};
     /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
     std::atomic<bool> idleDiscard{false};
+    /// When we last tried to reopen a dongle whose stream died — see the watchdog.
+    double lastReopenAt_ = 0.0;
     void pauseCaptureIdle() {
         // ★★★ A SHARED RECEIVER NEVER IDLE-PARKS. Parking costs the AGC: the RSP's loop only
         //     starts on a TRANSITION (see the sdrpAgcKick note), so every pause/resume cycle makes
@@ -7735,6 +7737,44 @@ struct LocalSdrShim::Impl {
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);
                     notifyDeviceState();
+                }
+
+                // ★★★ AND NOW WE CAN ACTUALLY REOPEN IT. The note above says why this used to be
+                //     impossible: `dev` had no lock, so closing it here raced every rtlsdr_set_gain
+                //     and tuneHw on the control threads and crashed the server on replug. Those
+                //     call sites now take the same recursive lock the RSP and Airspy setters
+                //     always did (VIBE_HW_LOCK), which is the refactor that note was waiting for.
+                //
+                // ★★ WHY IT MATTERS BEYOND UNPLUGGING. An RTL stream can be knocked over by
+                //    something else entirely: with an Airspy HF+ STREAMING on this machine, the
+                //    dongle's transfers fail ("cb transfer status: 1") within seconds of starting,
+                //    and the server then sat there logging "restarting" while restarting nothing.
+                //    Measured 2026-08-08 — any two of three radios ran fine, all three did not,
+                //    and it was NOT bandwidth (the dongle survives beside an RSP at 8 MSPS, and
+                //    still fails beside one at 2 MSPS). Whatever disturbs it, recovering is ours.
+                //
+                // ★ DONGLES ONLY. An RSP or an Airspy that has stopped is handled by its own
+                //   source object; reopenDevice() is librtlsdr all the way down.
+                if (back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf()
+                         && !radioReleased.load() && !captureIdle.load()) {
+                    // ★ Backed off, not hammered. A dongle that cannot hold a stream would
+                    //   otherwise be reopened every two seconds for ever, and each attempt is USB
+                    //   traffic that makes the contention it is recovering from slightly worse.
+                    const double now = nowSecs();
+                    if (now - lastReopenAt_ >= 5.0) {
+                        lastReopenAt_ = now;
+                        // ★ modeMtx directly: VIBE_HW_LOCK is written for LocalSdrShim methods,
+                        //   which reach it through `p`. We ARE the Impl.
+                        // ★★ Joining the capture thread under this lock is safe, and checked: the
+                        //    capture callback takes iqMtx only and never modeMtx, so it cannot be
+                        //    waiting on what we hold. That is the difference between this and
+                        //    stopDspThread(), which joins a thread that DOES take modeMtx.
+                        std::lock_guard<std::recursive_mutex> hw(modeMtx);
+                        if (reopenDevice()) {
+                            captureDown.store(false);
+                            LOGI("RTL-SDR capture recovered");
+                        }
+                    }
                 }
             }
         });
