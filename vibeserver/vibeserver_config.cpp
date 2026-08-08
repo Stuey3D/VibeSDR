@@ -517,8 +517,24 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("port", c.port); B("web", c.web);
 
     if (haveRadios) {
-        c.radios.clear();
-        for (const auto& o : objs) { RadioConfig r; radioFromJson(o, r); c.radios.push_back(r); }
+        // ★★★ MERGE BY SERIAL — NEVER REPLACE THE LIST. Replacing it meant one bad save could
+        //     delete every radio on the machine, and one did: a page holding a stale (or empty)
+        //     view posted `radios: []` and the config came back with NOTHING in it. The receiver
+        //     then had no radios at all and the landing page had nothing to show.
+        //
+        // ★★ A CONFIG API UPDATES RADIOS; IT DOES NOT DEFINE WHICH EXIST. What exists is decided by
+        //    the hardware and by the owner in the setup screen. Removal is a deliberate act there,
+        //    not a side effect of a settings save that happened to omit one.
+        // ★ An entry we have never seen is still ADDED — that is how a newly attached radio
+        //   arrives — so this is not "ignore the client", it is "do not let it delete".
+        for (const auto& o : objs) {
+            RadioConfig incoming; radioFromJson(o, incoming);
+            if (incoming.serial.empty()) continue;      // cannot be matched, cannot be trusted
+            bool merged = false;
+            for (auto& existing : c.radios)
+                if (existing.serial == incoming.serial) { existing = incoming; merged = true; break; }
+            if (!merged) c.radios.push_back(incoming);
+        }
     }
     (void)err;
     return true;

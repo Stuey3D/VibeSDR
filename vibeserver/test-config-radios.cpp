@@ -230,6 +230,33 @@ int main() {
            std::to_string(portForRadio(s,0)));
     }
 
+    std::printf("\n★ A save must NEVER be able to delete radios\n");
+    {
+        ServerConfig s; s.configured = true; s.adminPass = "pw";
+        RadioConfig a; a.serial="A"; a.label="HF"; a.enabled=true; a.configured=true;
+        RadioConfig b; b.serial="B"; b.label="FM"; b.enabled=true; b.configured=true;
+        s.radios = {a, b};
+
+        // Exactly what a stale page posted, and it emptied the machine.
+        ok(fromJson("{\"radios\":[]}", s, err), "an empty radios array is accepted", err);
+        ok(s.radios.size() == 2, "★ but BOTH radios are still there",
+           std::to_string(s.radios.size()));
+
+        // A save that mentions only one radio must not remove the other.
+        ok(fromJson("{\"radios\":[{\"serial\":\"A\",\"label\":\"HF\",\"users\":9}]}", s, err),
+           "a save mentioning one radio applies", err);
+        ok(s.radios.size() == 2, "★ the unmentioned radio survives", std::to_string(s.radios.size()));
+        if (s.radios.size() == 2) {
+            ok(s.radios[0].users == 9, "★ and the mentioned one was updated",
+               std::to_string(s.radios[0].users));
+            ok(s.radios[1].label == "FM", "★ while the other is untouched", s.radios[1].label);
+        }
+
+        // A radio we have never seen IS added — that is how new hardware arrives.
+        ok(fromJson("{\"radios\":[{\"serial\":\"C\",\"label\":\"VHF\"}]}", s, err), "a new radio applies", err);
+        ok(s.radios.size() == 3, "★ a genuinely new radio is added", std::to_string(s.radios.size()));
+    }
+
     std::printf("\nA machine with no radios is a valid answer, not an error\n");
     {
         ServerConfig s; s.configured = true;
