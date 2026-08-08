@@ -842,16 +842,46 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // the OS — can suspend the AudioContext, and an unsuspend handler that removes
   // itself once it has worked ONCE leaves you stuck with no audio and no way back
   // except a page reload. On a desktop there is no reason to ever sit suspended.
-  const kick = () => { void audio?.resume(); };
+  const kick = () => { void audio?.resume(); setTimeout(showAudioGate, 150); };
   for (const ev of ['pointerdown', 'keydown', 'focus'] as const) {
     window.addEventListener(ev, kick);
   }
+
+  // ★★★ SAY WHY THERE IS NO SOUND YET.
+  //
+  //     A browser will not start audio until the user has interacted with THIS page. Pressing
+  //     START used to be that interaction, so audio began with the waterfall and nobody ever saw
+  //     this. Opening a receiver straight from a radio card (?join) arrives with no gesture on the
+  //     new page — so the waterfall runs, the controls look right, and it is SILENT until you
+  //     happen to touch something. Stuart, 2026-08-08: "no audio yet the now playing controls are
+  //     correct", then "ahh now I've tuned it restored".
+  //
+  // ★★ A SILENT RECEIVER THAT LOOKS FINE IS THE WORST OUTCOME — the listener concludes the RADIO
+  //    is broken. One line on screen turns a mystery into a click.
+  // ★ It disappears the moment audio runs, and never appears at all where the browser allows
+  //   audio without a gesture.
+  function showAudioGate() {
+    let el = document.getElementById('audioGate');
+    const need = !!audio && audio.suspended && !NO_AUDIO;
+    if (!need) { if (el) el.remove(); return; }
+    if (el) return;
+    el = document.createElement('div');
+    el.id = 'audioGate';
+    el.textContent = 'CLICK ANYWHERE TO START AUDIO';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:60;'
+      + 'background:rgba(0,0,0,.82);border:1px solid var(--amber,#ffb000);color:var(--amber,#ffb000);'
+      + 'padding:10px 18px;border-radius:8px;font:12px/1 ui-monospace,monospace;letter-spacing:.08em;'
+      + 'cursor:pointer;pointer-events:auto';
+    el.addEventListener('click', kick);
+    document.body.appendChild(el);
+  }
+  setTimeout(showAudioGate, 600);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
 
   // Register the service worker — Chromium will not offer "install" without one. It caches
   // nothing (see /sw.js); it exists purely to satisfy the installability rule.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => { /* http:// LAN, or unsupported */ });
+    navigator.serviceWorker.register(P('/sw.js')).catch(() => { /* http:// LAN, or unsupported */ });
   }
 
   buildControls();
