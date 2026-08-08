@@ -5157,7 +5157,9 @@ struct LocalSdrShim::Impl {
                                  dest.empty() ? "(here)" : dest.c_str());
                         if (!dest.empty()) {
                             std::string err;
+                            LOGI("handing fd %d to %s", sock->rawFd(), dest.c_str());
                             if (vibe::sendFdTo(dest, sock->rawFd(), err)) {
+                                LOGI("handed over ok");
                                 // ★ The other process owns it now. Closing our copy is not
                                 //   optional: leave it open and the connection never ends when
                                 //   they finish with it, because a socket dies when the LAST
