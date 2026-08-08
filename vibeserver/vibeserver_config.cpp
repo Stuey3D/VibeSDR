@@ -371,8 +371,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch);
-    S("allowRanges", r.allowRanges);
-    S("blockRanges", r.blockRanges); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
+    B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
     B("spectrogram", r.spectrogram);

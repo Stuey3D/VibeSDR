@@ -1038,9 +1038,19 @@ async function renderHw() {
     this receiver sounds to everyone who visits it, and the default is only ever a starting point.</div>`;
 
   // Restore stored values into whichever controls we just drew.
-  if ($("rfNotch")) $("rfNotch").checked = !!cfg.rfNotch;
-  if ($("dabNotch")) $("dabNotch").checked = !!cfg.dabNotch;
+  // ★★★ FROM THE RADIO, NOT FROM THE MACHINE. These two read `cfg` — the machine-wide config —
+  //     while the line below them correctly reads radio(). On a multi-radio server cfg has no
+  //     notches, so every render reset them to off and the next save wrote that back: tick it,
+  //     save, and it was gone (Stuart, 2026-08-08: "SDRPlay notches are not saving either").
+  //     The notches belong to the radio that HAS them, and the inconsistency sat one line apart.
+  if ($("rfNotch")) $("rfNotch").checked = !!radio().rfNotch;
+  if ($("dabNotch")) $("dabNotch").checked = !!radio().dabNotch;
   if ($("gain")) $("gain").value = String(radio().gain != null ? radio().gain : -1);
+
+  // ★ And the dongle's own serial, refreshed for THIS tab. It was read once at sign-in, so
+  //   switching to another radio left the line underneath describing the previous one — or
+  //   nothing at all (Stuart: "RTL not showing its current serial number below the box any more").
+  serialStatus();
 }
 
 // ── Several radios ───────────────────────────────────────────────────────────────────────────
