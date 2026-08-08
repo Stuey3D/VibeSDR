@@ -96,7 +96,22 @@ echo "==> publishing vibeserver $FULLVER ($ARCH)"
 # ★ The build root is the OLDEST distribution we intend to support, and that is the whole trick:
 #   glibc and libstdc++ are backward compatible, so a binary built against 2.36 runs on 2.41,
 #   but never the other way round. Create it once with:
-#     sudo debootstrap --arch=arm64 --variant=buildd bookworm "$BUILD_ROOT"
+#
+#     sudo apt install mmdebstrap
+#     sudo mmdebstrap --arch=arm64 --variant=buildd bookworm "$BUILD_ROOT"
+#     sudo chroot "$BUILD_ROOT" apt-get install -y cmake librtlsdr-dev libusb-1.0-0-dev \
+#                                                  libopus-dev libfftw3-dev pkg-config file
+#     # SDRplay headers — extracted, NOT installed (the API is dlopen'd, so headers are all we
+#     # need, and VIBESERVER_STRICT_RADIOS below fails the build without them):
+#     ./SDRplay_RSP_API-Linux-3.15.2.run --noexec --target /tmp/sdrplay-x
+#     sudo cp /tmp/sdrplay-x/inc/sdrplay_api*.h "$BUILD_ROOT/usr/local/include/"
+#
+# ★★ mmdebstrap, NOT debootstrap. debootstrap fetches one package at a time with its own serial
+#    wget, and on the Pi it repeatedly WEDGED — 111 packages downloaded, then no progress at all
+#    for minutes with every core idle and no disk activity. Raw throughput to the same mirror
+#    measured 10.9 MB/s at the time, and IPv6 and Wi-Fi power save were both ruled out, so this
+#    is not the network. mmdebstrap goes through apt, downloads in parallel, and built the same
+#    root in 61 SECONDS after debootstrap had failed to finish in fifteen minutes (2026-08-08).
 BUILD_ROOT="${VIBESERVER_BUILD_ROOT:-/srv/bookworm}"
 if [ ! -x "$BUILD_ROOT/usr/bin/g++" ]; then
   echo "!! no build root at $BUILD_ROOT — see the comment above; refusing to build against"
