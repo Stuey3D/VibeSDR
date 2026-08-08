@@ -10570,10 +10570,14 @@ std::string LocalSdrShim::radioCapsJson() const {
         // ★ THE TUNING HOLE, published. 31-60 MHz does not exist on this hardware, and a client
         // that does not know cannot stop a user parking on a dead frequency and blaming us.
         j += ",\"ranges\":[[500,31000000],[60000000,260000000]]";
+        // ★★★ THE SAME ONE RATE AS supportedRates(). This is the SECOND list — the apps read this
+        //     one, the setup page reads the other — and fixing only one would leave the phone
+        //     still offering spans that misalign the spectrum. The file says it plainly a few
+        //     hundred lines up: "the hwinfo rates list, radioCapsJson and resumeCaptureIdle. NAME
+        //     EVERY SOURCE." I fixed one of the three in 3.0.0-5 and this was still wrong.
         j += ",\"rates\":[";
         const auto& rl = a.sampleRates();
-        for (size_t i = 0; i < rl.size(); ++i)
-            j += (i ? "," : "") + std::to_string(rl[i]);
+        if (!rl.empty()) j += std::to_string(*std::max_element(rl.begin(), rl.end()));
         j += "]}";
         return j;
     }
