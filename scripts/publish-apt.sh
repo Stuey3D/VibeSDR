@@ -115,25 +115,77 @@ echo "==> publishing vibeserver $FULLVER ($ARCH)"
 #    measured 10.9 MB/s at the time, and IPv6 and Wi-Fi power save were both ruled out, so this
 #    is not the network. mmdebstrap goes through apt, downloads in parallel, and built the same
 #    root in 61 SECONDS after debootstrap had failed to finish in fifteen minutes (2026-08-08).
-BUILD_ROOT="${VIBESERVER_BUILD_ROOT:-/srv/bookworm}"
-if [ ! -x "$BUILD_ROOT/usr/bin/g++" ]; then
-  echo "!! no build root at $BUILD_ROOT — see the comment above; refusing to build against"
-  echo "   this machine's libraries, which is what shipped an uninstallable package before."
-  exit 1
+# ★★★ OR BE THE BUILD ROOT ALREADY. scripts/publish-apt-docker.sh runs this same script inside a
+#     bookworm container on the Mac, and there a chroot would be a build root inside a build root.
+#     The reason that exists: the Pi is both the build box AND the machine being wiped to test
+#     fresh installs, so every format destroyed the chroot, the signing key and the source — twice
+#     in one evening, and the second rebuild is what shipped a release with no setup wizard,
+#     because the dependency list only existed in somebody's memory. A build box you can format by
+#     accident is not a build box. (2026-08-08)
+# ★ The test is the DISTRIBUTION, not "am I in a container" — what matters for the Depends: line
+#   is being bookworm, however we got here.
+if [ -r /etc/os-release ] && grep -q 'VERSION_CODENAME=bookworm' /etc/os-release; then
+  NATIVE_BUILD=1
+  BUILD_ROOT=""
+  echo "==> building natively — this machine IS bookworm"
+  # ★★ COPY THE SOURCE, exactly as the chroot path does, and for the same two reasons. The source
+  #    arrives as a MOUNT of the Mac's working tree, so building in place would (a) drop a Linux
+  #    build/ directory into the tree the developer is editing and (b) pick up whatever is already
+  #    there — a stale CMakeCache.txt from a macOS configure names /opt/homebrew/bin/cmake, and the
+  #    build dies with "No such file or directory" pointing at a path that cannot exist here.
+  # ★ --exclude build is the line that matters; .git is excluded only for speed.
+  mkdir -p /build
+  rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" /build/VibeSDR/
+else
+  NATIVE_BUILD=0
+  BUILD_ROOT="${VIBESERVER_BUILD_ROOT:-/srv/bookworm}"
+  if [ ! -x "$BUILD_ROOT/usr/bin/g++" ]; then
+    echo "!! no build root at $BUILD_ROOT — see the comment above; refusing to build against"
+    echo "   this machine's libraries, which is what shipped an uninstallable package before."
+    exit 1
+  fi
+  sudo mkdir -p "$BUILD_ROOT/build"
+  sudo cp /etc/resolv.conf "$BUILD_ROOT/etc/resolv.conf"
+  for d in proc sys dev dev/pts; do
+    sudo mountpoint -q "$BUILD_ROOT/$d" || sudo mount --bind "/$d" "$BUILD_ROOT/$d"
+  done
+  sudo rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
 fi
-sudo mkdir -p "$BUILD_ROOT/build"
-sudo cp /etc/resolv.conf "$BUILD_ROOT/etc/resolv.conf"
-for d in proc sys dev dev/pts; do
-  sudo mountpoint -q "$BUILD_ROOT/$d" || sudo mount --bind "/$d" "$BUILD_ROOT/$d"
-done
-sudo rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
-sudo chroot "$BUILD_ROOT" /bin/bash -c "
-  cd /build/VibeSDR/vibeserver
+
+# ★ One command, run either through the chroot or straight. Keeping a single copy of the cmake
+#   invocation matters more than it looks: two copies drift, and the one that drifts is the one
+#   that quietly stops passing VIBESERVER_STRICT_RADIOS.
+BUILD_SRC="/build/VibeSDR"
+runbuild() { sudo chroot "$BUILD_ROOT" /bin/bash -c "$1"; }
+if [ "$NATIVE_BUILD" = "1" ]; then
+  runbuild() { /bin/bash -c "$1"; }   # ★ BUILD_SRC stays /build/VibeSDR — the copy, not the mount
+fi
+runbuild "
+  cd $BUILD_SRC/vibeserver
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
   cmake --build build -j$(nproc) | tail -1
   cd build && cpack >/dev/null"
-DEB="$(ls -t "$BUILD_ROOT/build/VibeSDR/vibeserver/build"/vibeserver_*.deb | head -1)"
+DEB="$(ls -t "$BUILD_ROOT$BUILD_SRC/vibeserver/build"/vibeserver_*.deb | head -1)"
+
+# ★★★ AND THE BUILD MUST CONTAIN WHAT A RELEASE CONTAINS. CMake now refuses outright when a
+#     release feature is missing, but only for the ones anybody thought to guard — so check the
+#     shipped binary too, against the thing a new owner actually does. 3.0.0-2 went out with the
+#     settings wizard compiled out because the rebuilt build root had no ncurses; the package was
+#     valid, installed cleanly, and answered `vibeserver` by starting a daemon.
+# ★ Asking the BINARY, not the build log: the log is what nobody read the first time.
+# ★★★ grep -c, NOT grep -q, AND THE REASON IS `set -o pipefail`. With -q, grep exits the moment it
+#     matches, dpkg-deb upstream dies of SIGPIPE, and pipefail reports the PIPELINE as failed — so
+#     a package that DOES contain the wizard fails the check that exists to prove it does. A guard
+#     that cries wolf gets deleted, which would have cost us the guard AND the bug it catches.
+# ★ Verified both ways against a known-good package before being trusted: this probe said "no
+#   wizard" about a binary whose wizard string I had just counted three times.
+WIZARD="$(dpkg-deb --fsys-tarfile "$DEB" 2>/dev/null | grep -ca 'First-time setup' || true)"
+if [ "${WIZARD:-0}" -eq 0 ]; then
+  echo "!! the packaged binary has no settings wizard in it — ncurses was missing from the build"
+  echo "   root. \`vibeserver\` would start a daemon instead of the setup screen."
+  exit 1
+fi
 
 # ★★ ASSERT THE BASELINE, every publish. The point of the build root is the Depends: line it
 #    produces, so a silent regression to a newer libc is the one failure that must never ship.

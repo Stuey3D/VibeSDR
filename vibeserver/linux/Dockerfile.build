@@ -1,0 +1,49 @@
+# ★★★ THE BUILD ROOT, AS A FILE RATHER THAN AS FOLKLORE.
+#
+#     The build root used to be a chroot on the Pi, created once by hand and never written down.
+#     That was survivable until the Pi became the machine we WIPE to test fresh installs: two
+#     formats in one evening took the chroot, the signing key and the source with them, and the
+#     rebuild-from-memory shipped 3.0.0-2 with the settings wizard compiled out, because
+#     libncursesw-dev was not on the list anyone remembered. A build environment that only exists
+#     in somebody's head is one bad evening from shipping a broken release. (2026-08-08)
+#
+# ★★ BOOKWORM, AND THAT IS THE ENTIRE POINT. CPack derives Depends: from whatever the build
+#    machine links against, so building on trixie stamped `libc6 (>= 2.38)` and made the package
+#    uninstallable on Debian 12 and Ubuntu 22.04 — it cost a user their working OpenWebRX. glibc
+#    is backward compatible, so a binary built against 2.36 runs on 2.41 but never the reverse.
+#    Do not "update" this to a newer base image.
+#
+# ★ arm64 native on Apple Silicon, so this is a real build and not emulation.
+FROM debian:bookworm-slim
+
+# ★★★ EVERY ONE OF THESE IS LOAD-BEARING, and the ones that look optional are the dangerous ones:
+#     CMake does not fail without them, it QUIETLY DROPS THE FEATURE and prints a status line.
+#       libncursesw5-dev  → the settings wizard. Without it `vibeserver` starts a daemon instead
+#                           of the setup screen, which is the one command new owners are told to
+#                           type. This is what 3.0.0-2 shipped without.
+#       libopus-dev       → compressed audio.
+#       libfftw3-dev      → the DSP.
+#       librtlsdr/libusb  → the dongle, driven directly.
+#     VIBESERVER_STRICT_RADIOS=ON now turns the silent ones into hard errors, but the real fix is
+#     that the list lives here instead of in a memory.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config file ca-certificates curl \
+      librtlsdr-dev libusb-1.0-0-dev libopus-dev libfftw3-dev libncursesw5-dev \
+      dpkg-dev apt-utils gnupg git rsync xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ★★ SDRplay headers: EXTRACTED, never installed. The API is dlopen'd at runtime, so the headers
+#    are all the build needs — and SDRplay's licence is theirs, which is why the library itself can
+#    never be a dependency of our package. The .run is a makeself archive; --noexec unpacks it
+#    without executing the interactive installer.
+# ★ Without these, RSP support compiles out silently — which shipped once already, and is why
+#   VIBESERVER_STRICT_RADIOS exists.
+ARG SDRPLAY_RUN=SDRplay_RSP_API-Linux-3.15.2.run
+RUN curl -fsSLO "https://www.sdrplay.com/software/${SDRPLAY_RUN}" \
+    && chmod +x "${SDRPLAY_RUN}" \
+    && ./"${SDRPLAY_RUN}" --noexec --target /tmp/sdrplay \
+    && cp /tmp/sdrplay/inc/sdrplay_api*.h /usr/local/include/ \
+    && rm -rf /tmp/sdrplay "${SDRPLAY_RUN}" \
+    && ls /usr/local/include/sdrplay_api.h
+
+WORKDIR /work
