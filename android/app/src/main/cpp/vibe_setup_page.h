@@ -139,6 +139,23 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             Download now</button>
         </div>
       </div>
+      <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK
+           can carry, and there is one uplink however many radios are plugged in — asking per radio
+           invited three answers to a question that has one, and three ways to get it wrong
+           (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
+      <div class="card">
+        <h2>Audio</h2>
+        <p class="why">How listeners receive sound, on every radio.</p>
+      <label><span class="lbl">Uncompressed audio</span>
+        <select id="uncompressed">
+          <option value="0">Off — everyone gets Opus</option>
+          <option value="1">Listener's choice</option>
+          <option value="2">Only as a fallback for old browsers</option>
+        </select>
+        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
+          upload.</div></label>
+      </div>
+
       <div class="card">
       <h2>On your network</h2>
       <p class="why">How people find this server once it is running.</p>
@@ -304,16 +321,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
     </div>
       <div class="card">
-      <h2>Audio and power</h2>
+      <h2>Power saving</h2>
       <p class="why">Applies in both modes.</p>
-      <label><span class="lbl">Uncompressed audio</span>
-        <select id="uncompressed">
-          <option value="0">Off — everyone gets Opus</option>
-          <option value="1">Listener's choice</option>
-          <option value="2">Only as a fallback for old browsers</option>
-        </select>
-        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
-          upload.</div></label>
       <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
         <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Listeners may not switch off idle power saving</span></label>
@@ -719,10 +728,22 @@ function renderBands() {
   bandSummary();
 }
 
+
+/** ★★★ THE REQUEST MUST REACH THE PROCESS THAT HOLDS THE DONGLE. This page is served by the FRONT
+ *  DOOR, which owns no radio — so a relative /vibeserver/rtl-serial went there, released nothing
+ *  (it had nothing to release), and then failed to open a dongle the RADIO's own process was still
+ *  holding: "something else is using it", where the something else was VibeServer (Stuart,
+ *  2026-08-08, with the radio not in use at all).
+ *  ★ Only the owning process can let go of its own device, which is exactly what its handler does. */
+function radioPath() {
+  const r = radio();
+  return (r && r.serial) ? "/r/" + encodeURIComponent(r.serial) : "";
+}
+
 async function serialStatus() {
   const el = $("rtlSerialState");
   try {
-    const r = await fetch("/vibeserver/rtl-serial?" + await authQuery(), {cache:"no-store"});
+    const r = await fetch(radioPath() + "/vibeserver/rtl-serial?" + await authQuery(), {cache:"no-store"});
     if (!r.ok) { if (el) el.textContent = ""; return; }
     const j = await r.json();
     SERIAL_PENDING = j.pending ? {old: j.old, new: j.new, took: j.took} : null;
@@ -756,7 +777,7 @@ async function serialChange() {
   b.disabled = true;
   el.textContent = "writing…"; el.style.color = "var(--dim)";
   try {
-    const r = await fetch("/vibeserver/rtl-serial?" + await authQuery(), {
+    const r = await fetch(radioPath() + "/vibeserver/rtl-serial?" + await authQuery(), {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({serial: want}),
     });
@@ -1108,6 +1129,7 @@ function fill() {
   $("mdns").checked = cfg.mdnsAdvertise !== false;
 
   $("cpuGovernor").value = cfg.cpuGovernor || "performance";
+  $("uncompressed").value = String(cfg.uncompressed || 0);
   $("trustedProxies").value = cfg.trustedProxies || "";
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
@@ -1125,7 +1147,7 @@ function fill() {
   $("landingFreq").value = ((r.landingFreq || r.freq || 0) / 1e3).toFixed(1);
   $("demodMode").value = r.demodMode || "am";
   $("users").value = r.users || 1;
-  $("uncompressed").value = String(r.uncompressed || 0);
+
   $("forceIdle").checked = !!r.forceIdleSaver;
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
@@ -1186,7 +1208,7 @@ function collectRadio() {
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     demodMode: $("demodMode").value,
     users: locked ? parseInt($("users").value || "1", 10) : 1,
-    uncompressed: parseInt($("uncompressed").value, 10),
+
     forceIdleSaver: $("forceIdle").checked,
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.
@@ -1223,6 +1245,7 @@ function collect() {
     mdnsName: $("name").value.trim(),
 
     cpuGovernor: $("cpuGovernor").value,
+    uncompressed: parseInt($("uncompressed").value, 10),
     trustedProxies: $("trustedProxies").value.trim(),
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };

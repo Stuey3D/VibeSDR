@@ -259,6 +259,13 @@ struct ServerConfig {
     int         updateAllHour = -1, updateAllDay = -1;
     int         adminIdleMin = 30;
     std::string cpuGovernor = "performance";
+    /** ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK can
+     *  carry, and the uplink is shared by every radio on it — asking per radio invited three
+     *  answers to a question that has one, and three ways to get it wrong (Stuart, 2026-08-08:
+     *  "only one selection Opus applies to all radios doesnt need to be every radio").
+     *  ★ RadioConfig::uncompressed is kept only so an older file still loads; the machine value is
+     *    what is applied. */
+    int         uncompressed = 0;
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe — comma separated, addresses or
      *  CIDRs ("127.0.0.1, 10.0.0.0/8"). EMPTY BY DEFAULT and empty means "read no headers":
      *  the header is client-supplied text, so trusting it from anyone would let a stranger forge

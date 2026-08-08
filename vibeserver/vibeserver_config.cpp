@@ -275,6 +275,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
+    if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
 
@@ -390,6 +391,12 @@ std::string radioToJson(const RadioConfig& r) {
     N("freq", r.freq); N("rate", r.rate); N("lockFreq", r.lockFreq); N("lockRate", r.lockRate);
     N("gain", r.gain); N("lnaState", r.lnaState); N("ifGr", r.ifGr); N("ifAgc", r.ifAgc);
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
+    // ★★★ THE BAND LISTS MUST TRAVEL. There are TWO radio writers — one for the file and one for
+    //     the config API — and only the file one had these. The setup page reads the API, so the
+    //     lists it showed were always empty and the ones it saved were always blank: an owner set
+    //     "FM and AM broadcast only" and got a receiver that tuned anywhere (Stuart, 2026-08-08).
+    //     A field added to one writer and not the other is invisible until someone trusts it.
+    S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     N("uncompressed", r.uncompressed);
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
@@ -523,6 +530,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
+    I("uncompressed", c.uncompressed);
     I("port", c.port); B("web", c.web);
 
     if (haveRadios) {
@@ -630,7 +638,9 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     // ★ Only when the owner actually set one: 0 means "same as freq", which is already true.
     if (r.mode != Mode::LockedRange && r.landingFreq > 0) c.freq = r.landingFreq;
     c.users = r.users; c.maxBw = r.maxBw; c.maxFps = r.maxFps; c.fftRate = r.fftRate;
-    c.uncompressed = r.uncompressed;
+    // ★ The MACHINE's choice wins — one uplink, one answer. A file that only carries the old
+    //   per-radio value still works and is migrated up on the next save.
+    c.uncompressed = s.uncompressed ? s.uncompressed : r.uncompressed;
     c.forceIdleSaver = r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
