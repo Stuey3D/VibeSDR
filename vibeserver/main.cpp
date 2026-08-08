@@ -1093,18 +1093,47 @@ int main(int argc, char** argv) {
     //    all that is left is to remember it. Merge, write, carry on.
     LocalSdrShim::setConfigPersistHandler([](const std::string& patch) {
         std::string err;
+        // ★★★ WRITE THE MACHINE, NOT A SINGLE-RADIO FILE. This used to call vsconfig::save() with
+        //     a Config — the OLD one-radio shape, which has no `radios` array — so every gain
+        //     nudge rewrote config.json in that shape and DELETED EVERY RADIO ON THE MACHINE. It
+        //     destroyed the demo Pi's configuration three times before it was found, each time
+        //     looking like a different bug: radios vanishing from the landing page, the router
+        //     answering "(here)" for everything, the front door taking the wrong port.
+        // ★★ The giveaway was `port: 48003` appearing in the file — a value only the running
+        //    process knew, which is what proved a Config, not a ServerConfig, had been written.
+        vsconfig::ServerConfig srv;
+        if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
+
         vsconfig::Config next = g_runtimeConfig;
         if (!vsconfig::fromJson(patch, next, err, /*validate=*/false)) {
             std::fprintf(stderr, "VibeServer: could not apply setting (%s)\n", err.c_str());
             return;
         }
+        // ★ Fold the result back into OUR radio's entry and nobody else's. `next` began as this
+        //   radio's effective settings, so copying the per-radio fields across is exactly right.
+        for (auto& r : srv.radios) {
+            if (g_myRadioSerial.empty() || r.serial != g_myRadioSerial) continue;
+            r.mode = next.mode; r.freq = next.freq; r.rate = next.rate;
+            r.lockFreq = next.lockFreq; r.lockRate = next.lockRate;
+            r.gain = next.gain; r.lnaState = next.lnaState; r.ifGr = next.ifGr; r.ifAgc = next.ifAgc;
+            r.demodMode = next.demodMode; r.landingFreq = next.landingFreq;
+            r.users = next.users; r.maxBw = next.maxBw; r.maxFps = next.maxFps;
+            r.fftRate = next.fftRate; r.uncompressed = next.uncompressed;
+            r.forceIdleSaver = next.forceIdleSaver; r.releaseWhenIdle = next.releaseWhenIdle;
+            r.idleGrace = next.idleGrace;
+            r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
+            r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
+            r.directSampling = next.directSampling;
+            break;
+        }
         // ★ Do NOT touch `configured` here. Only the setup page finishing means "set up"; a gain
         //   tweak on a half-configured server must not silently declare it done.
-        if (!vsconfig::save(g_configPath, next, err)) {
+        if (!vsconfig::saveServer(g_configPath, srv, err)) {
             std::fprintf(stderr, "VibeServer: could not save setting (%s)\n", err.c_str());
             return;
         }
         g_runtimeConfig = next;
+        g_serverConfig  = srv;
     });
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
                 shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");

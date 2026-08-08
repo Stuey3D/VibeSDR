@@ -2307,7 +2307,7 @@ async function drawSplashSpectrogram(): Promise<void> {
   const wantH = Math.min(1440, Math.max(180, Math.floor(cv.clientHeight * devicePixelRatio)));
   let buf: ArrayBuffer;
   try {
-    const r = await fetch(`/vibeserver/spectrogram?bins=${wantW}&rows=${wantH}`, { cache: 'no-store' });
+    const r = await fetch(P(`/vibeserver/spectrogram?bins=${wantW}&rows=${wantH}`), { cache: 'no-store' });
     if (!r.ok) return;
     buf = await r.arrayBuffer();
   } catch { return; }
