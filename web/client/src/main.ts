@@ -38,7 +38,7 @@ import {
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
-import { initAdmin, closeAdmin } from './admin';
+import { initAdmin, closeAdmin, openAdmin } from './admin';
 import { httpBase, wsBase } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
 
@@ -141,10 +141,13 @@ function initSplash() {
   // ★ Set by showSplashRadios() once it knows what this process is. The front door owns no radio,
   //   which changes what the ADMIN button means (see adminSignIn).
   const paintAdminMode = () => {
+    const on = inAdminMode();
     const b = document.getElementById('splashAdminBanner');
-    if (b) (b as HTMLElement).hidden = !inAdminMode();
+    if (b) (b as HTMLElement).hidden = !on;
+    const tools = document.getElementById('splashAdminTools');
+    if (tools) (tools as HTMLElement).hidden = !on;
     const btn = document.getElementById('btnAdmin');
-    if (btn && inAdminMode()) btn.textContent = 'ADMIN ON';
+    if (btn) btn.textContent = on ? 'SIGN OUT' : (btn.textContent === 'CANCEL ADMIN' ? 'CANCEL ADMIN' : 'ADMIN');
   };
 
   // ★★ ADMIN AT THE GATE. Reveals the password field and turns CONNECT into an admin connect.
@@ -202,6 +205,17 @@ function initSplash() {
       return false;
     }
   };
+  // ★ Straight to the tools, without taking a radio. Both work from the ticket alone — the admin
+  //   API accepts it (see vibe_admin_ticket.h), and the setup page is served by this same process.
+  document.getElementById('btnSplashAdmin')?.addEventListener('click', () => {
+    if (!inAdminMode()) return;
+    openAdmin(location.host, adminPassword);
+  });
+  document.getElementById('btnSplashSetup')?.addEventListener('click', () => {
+    if (!inAdminMode()) return;
+    location.href = `${location.origin}/setup`;
+  });
+
   $('btnAdmin').addEventListener('click', () => {
     // ★ Already signed in: the button becomes SIGN OUT. Leaving no way out meant the only way to
     //   drop admin was to close the tab, and an owner who has finished should not have to.
@@ -1061,6 +1075,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       .then((j) => { if (j?.ticket) saveAdminTicket(String(j.ticket), Number(j.ttl) || 600); })
       .catch(() => { /* a blip must not end the session; the next tick tries again */ });
   }, 4 * 60 * 1000);
+
+  // ★★★ THE BANNER MUST FOLLOW THE TRUTH, NOT THE LAST BUTTON PRESS. It was painted only when
+  //     signing in or out, so it was stale in both directions: still saying ADMIN MODE after the
+  //     ticket had expired, and — because sessionStorage survives a reload — announcing admin on a
+  //     page load where nothing had been unlocked yet (Stuart, 2026-08-08: "it has the admin mode
+  //     title on the splash screen when not in admin mode"). It claims real powers, so it has to
+  //     go away by itself the moment they lapse.
+  paintAdminMode();
+  setInterval(paintAdminMode, 5000);
 
   setTimeout(showAudioGate, 600);
   // ★ And keep watching. Anything can suspend a context again — a tab switch, the OS, a phone

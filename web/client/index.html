@@ -133,6 +133,8 @@ input, textarea, [contenteditable],
    each drifts by a different amount, which is why they looked misaligned with each other rather
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
 #splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
+.clientMix { margin: 6px 0 10px; font-size: 12px; letter-spacing: .04em; }
+.clientMix .mixItem { margin-right: 14px; }
 #splashAdminBanner { display: inline-block; margin: 8px auto 0; padding: 4px 14px; color: var(--amber);
   border: 1px solid var(--amber); border-radius: 6px; font-size: 12px; letter-spacing: 3px;
   background: rgba(255,184,51,0.09); }
@@ -1921,6 +1923,15 @@ select.btn { padding: 6px 8px; }
     <div class="row">
       <button type="button" id="btnAdmin" hidden>ADMIN</button>
     </div>
+    <!-- ★★ WHAT AN ADMIN CAME HERE TO DO. Signing in unlocked the radios, but the two things an
+         owner most often wants — look at who is connected and ban somebody, or change the setup —
+         both needed them to TAKE A RADIO first, which on a single-user receiver means kicking a
+         listener just to read a table (Stuart, 2026-08-08: "so an admin can view and ban IP's
+         without connecting to a radio themselves"). These appear only in admin mode. -->
+    <div class="row" id="splashAdminTools" hidden>
+      <button type="button" id="btnSplashAdmin">ADMIN CONTROLS</button>
+      <button type="button" id="btnSplashSetup">SETUP</button>
+    </div>
   </form>
   <div id="splashMsg"></div>
 </div>
@@ -2999,7 +3010,7 @@ select.btn { padding: 6px 8px; }
     <h2>LISTENERS <span class="dim" id="adminListenerCount"></span></h2>
     <div class="aTblWrap"><table id="adminSessions">
       <thead><tr><th>Address</th><th>Frequency</th><th>Mode</th><th>For</th>
-                 <th>Drops</th><th>Network</th><th></th></tr></thead>
+                 <th>Drops</th><th>Client</th><th>Network</th><th></th></tr></thead>
       <tbody></tbody>
     </table></div>
     <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
@@ -3043,6 +3054,7 @@ select.btn { padding: 6px 8px; }
     </div>
     <div id="secHistory" hidden>
     <h2>CONNECTION HISTORY</h2>
+    <div id="adminClientMix" class="clientMix"></div>
     <div class="aTblWrap"><table id="adminConns">
       <thead><tr><th>When</th><th>Address</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
       <tbody></tbody>

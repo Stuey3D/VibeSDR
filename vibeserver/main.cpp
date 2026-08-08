@@ -706,6 +706,27 @@ int main(int argc, char** argv) {
 
         vsconfig::ServerConfig srv;
         if (vsconfig::loadServer(g_configPath, srv, err)) {
+            // ★★★ AND A HEADLESS SERVER IS A SERVER FOR OTHER PEOPLE. `sharing` decides whether
+            //     the admin page offers the tools for managing strangers — who is connected and
+            //     from where, the ban list, the connection history. It defaulted to Local, which
+            //     is the right default for a Mac or a phone on someone's own network and is
+            //     nonsense here: nobody installs a headless receiver package for an audience of
+            //     themselves, and Linux has no simple/local product at all (Stuart, 2026-08-08:
+            //     "it shouldnt be in local sharing mode there isnt even an option for that in
+            //     Linux"). The result was a public receiver whose admin page hid the IP addresses,
+            //     the bans and the history — precisely the panels it exists to need.
+            // ★ Recorded in the FILE for the same reason as fullMode above: forcing it in memory
+            //   alone leaves two readers with two answers.
+            const bool wantPublic = srv.sharing != vsconfig::Sharing::Public;
+            if (!srv.fullMode || wantPublic) {
+                srv.fullMode = true;
+                srv.sharing  = vsconfig::Sharing::Public;
+                std::string werr;
+                if (!vsconfig::saveServer(g_configPath, srv, werr))
+                    std::fprintf(stderr, "VibeServer: could not record full mode — %s\n",
+                                 werr.c_str());
+            }
+
             const vsconfig::RadioConfig* mine = nullptr;
             if (!wantSerial.empty()) {
                 for (const auto& r : srv.radios) if (r.serial == wantSerial) { mine = &r; break; }
@@ -742,13 +763,6 @@ int main(int argc, char** argv) {
             //     came up and nothing said why (2026-08-08).
             // ★ Every other reader — the supervisor, the router, portForRadio — takes it from the
             //   file, so the file is where the truth has to live.
-            if (!srv.fullMode) {
-                srv.fullMode = true;
-                std::string werr;
-                if (!vsconfig::saveServer(g_configPath, srv, werr))
-                    std::fprintf(stderr, "VibeServer: could not record full mode — %s\n",
-                                 werr.c_str());
-            }
             g_serverConfig = srv;
             hadConfigFile = true;
         } else if (!err.empty()) {

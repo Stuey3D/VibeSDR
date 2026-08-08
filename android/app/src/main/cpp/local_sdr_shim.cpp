@@ -1759,6 +1759,11 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<net::Socket> spec;      // whose channel this is
         std::shared_ptr<net::Socket> audio;     // its own audio socket, or null until one opens
         std::string session;
+        /** ★ What connected — app, watch, browser or bot. Already recorded in the connection LOG;
+         *  kept here too so the LIVE listener list can show it, which is where an owner looks when
+         *  deciding whether the address they are about to block is a person (Stuart, 2026-08-08:
+         *  "in the ip can we show the user Agent please"). */
+        std::string agent;
         double vfoHz = 0;                       // ABSOLUTE, like audioFreq
         std::string mode = "am";
         double bwHz = 0;
@@ -6742,6 +6747,7 @@ struct LocalSdrShim::Impl {
                 c->owner = this;
                 c->spec = sock;
                 c->session = session;
+                c->agent = userAgent;
                 c->vfoHz = g_vsLandingHz.load() > 0 ? g_vsLandingHz.load() : audioFreq.load();
                 { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
                   c->mode = g_vsLandingMode.empty() ? mode : g_vsLandingMode; }
@@ -8588,6 +8594,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"zoomed\":" + (c->ownView ? "true" : "false")
            + ",\"cc\":\"" + vibeadmin::esc(vsCountry(c->spec->peerAddress())) + "\""
            + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(c->spec->peerAddress())) + "\""
+           + ",\"agent\":\"" + vibeadmin::esc(c->agent.substr(0, 160)) + "\""
            + ",\"occupant\":" + (isOccupant ? "true" : "false");
         if (isOccupant && p->occupantSince > 0)
             j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));

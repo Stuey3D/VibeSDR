@@ -278,6 +278,33 @@ function renderCountries(list: any[]) {
     </div>`).join('');
 }
 
+
+/**
+ * What connected, in two words. The raw User-Agent is long and mostly boilerplate, and an owner
+ * scanning a listener list wants "is this a person, and which of my apps" — not a version string.
+ * ★ VibeSDR Jr MUST be tested first: its agent ("VibeSDR Jr/1.0 (watchOS)") contains "VibeSDR",
+ *   so the obvious order silently counts every watch as a phone.
+ * ★ An empty agent is normal, not suspicious: a browser cannot set one on a WebSocket.
+ */
+export function clientKind(agent: string | undefined): string {
+  const a = (agent || '').trim();
+  if (!a) return 'browser';
+  if (/vibesdr\s*jr/i.test(a)) return 'VibeSDR Jr';
+  if (/vibesdr/i.test(a)) return 'VibeSDR';
+  if (/mozilla|safari|chrome|firefox|edg\//i.test(a)) return 'browser';
+  if (/bot|crawl|spider|curl|wget|python|scan/i.test(a)) return 'bot';
+  return 'other';
+}
+
+function clientLabel(agent: string | undefined): string {
+  const k = clientKind(agent);
+  const raw = (agent || '').slice(0, 90);
+  // ★ The full agent stays available on hover — the short label is for scanning, not for hiding.
+  return k === 'browser' && !raw
+    ? '<span class="dim">browser</span>'
+    : `<span title="${esc(raw)}">${esc(k)}</span>`;
+}
+
 // ── Listeners ─────────────────────────────────────────────────────────────────────────────────
 
 function renderSessions(s: any) {
@@ -292,6 +319,7 @@ function renderSessions(s: any) {
     <td>${esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}</td>
     <td>${esc(c.secs ? dur(c.secs) : '—')}</td>
     <td>${c.dropped > 0 ? esc(String(c.dropped)) : '<span class="dim">0</span>'}</td>
+    <td class="agent">${clientLabel(c.agent)}</td>
     <td class="agent">${c.net ? esc(c.net) : '<span class="dim">unknown</span>'}</td>
     <td>
       <button class="btn" data-kick="${esc(c.session)}">DISCONNECT</button>
@@ -317,12 +345,44 @@ function renderBans(bans: any[]) {
   </tr>`).join('');
 }
 
+
+/**
+ * ★★ WHICH CLIENTS PEOPLE ACTUALLY USE. Stuart, 2026-08-08: "be interesting to know how many
+ *    people connect with VibeSDR and VibeSDR Jr". Counted over the connection history the page
+ *    already has, and by DISTINCT ADDRESS rather than by connection — one person who reconnects
+ *    forty times through a flaky link is one user of that client, and counting sessions would say
+ *    they were forty.
+ * ★ The sample size is stated, because this is "the last N connections on record", not all time,
+ *   and a percentage with no denominator invites exactly the wrong conclusion.
+ */
+function renderClientMix(list: any[]) {
+  const el = document.getElementById('adminClientMix');
+  if (!el) return;
+  if (!list.length) { el.textContent = ''; return; }
+  const seen = new Map<string, Set<string>>();
+  for (const c of list) {
+    const k = clientKind(c.agent);
+    if (!seen.has(k)) seen.set(k, new Set());
+    seen.get(k)!.add(String(c.ip || '?'));
+  }
+  const rows = [...seen.entries()]
+    .map(([k, ips]) => ({ k, n: ips.size }))
+    .sort((a, b) => b.n - a.n);
+  const people = rows.reduce((t, r) => t + r.n, 0);
+  el.innerHTML = rows.map((r) =>
+    `<span class="mixItem"><b>${esc(String(r.n))}</b> ${esc(r.k)}</span>`).join('')
+    + `<span class="dim"> — distinct addresses across the last ${esc(String(list.length))} `
+    + `connection${list.length === 1 ? '' : 's'} on record`
+    + (people ? '' : '') + `</span>`;
+}
+
 // ── Connection history ────────────────────────────────────────────────────────────────────────
 
 /** ★★ The `Ended` column is the reason this table is worth keeping. "127 connections yesterday"
  *  tells an owner nothing; "41 of them ended in `banned`, all from one range" tells them what to
  *  do next. */
 function renderConns(list: any[]) {
+  renderClientMix(list);
   const tb = $('adminConns').querySelector('tbody')!;
   $('adminNoConns').hidden = list.length > 0;
   ($('adminConns').parentElement as HTMLElement).hidden = list.length === 0;
