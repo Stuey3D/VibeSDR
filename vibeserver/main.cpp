@@ -401,6 +401,18 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
 
 }  // namespace
 
+/** ★ Small and local on purpose: the shim has one, but it is a private member of an internal
+ *  class, and reaching into that to save nine lines would couple the daemon to its internals. */
+static std::string jsonEscape(const std::string& in) {
+    std::string o;
+    for (char c : in) {
+        if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if ((unsigned char)c < 0x20)  o += ' ';
+        else o += c;
+    }
+    return o;
+}
+
 namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             /** ★ The WHOLE machine, so the setup page can show a tab per radio. This process runs
              *  exactly one of them (g_myRadioSerial); the rest it only reads and writes on their
@@ -874,19 +886,6 @@ int main(int argc, char** argv) {
             if (wantRestart) g_restartRequested.store(true);
             return true;
         });
-
-    // ★ Local, small, and deliberately not borrowed from the shim: that one is a private member
-    //   of an internal class, and reaching into it to save nine lines would couple the daemon to
-    //   the shim's internals for no benefit.
-    auto jsonEscape = [](const std::string& in) {
-        std::string o;
-        for (char c : in) {
-            if (c == '"' || c == '\\') { o += '\\'; o += c; }
-            else if ((unsigned char)c < 0x20)  o += ' ';
-            else o += c;
-        }
-        return o;
-    };
 
     // ── Which radios this machine offers ────────────────────────────────────────────────────
     // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
