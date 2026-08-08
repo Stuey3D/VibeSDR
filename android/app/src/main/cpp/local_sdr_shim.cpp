@@ -5181,9 +5181,11 @@ struct LocalSdrShim::Impl {
     /** Adopt connections handed to us by the process holding the public port. */
     void handoffLoop() {
         vibeThreadName("vibe-handoff");
+        LOGI("ready to accept handed-over connections");
         while (serverRunning.load()) {
             const int fd = vibe::fdAccept(handoffFd, 500);
             if (fd < 0) continue;
+            LOGI("adopted a handed-over connection");
             auto sock = std::make_shared<net::Socket>(fd);
             std::lock_guard<std::mutex> lk(connMtx);
             connThreads.emplace_back([this, sock]{ handleConnection(sock); });
@@ -8611,6 +8613,7 @@ bool LocalSdrShim::listenForHandoff(const std::string& socketPath, std::string& 
     if (impl->handoffFd < 0) return false;
     impl->handoffPath = socketPath;
     impl->handoffThread = std::thread([impl]{ impl->handoffLoop(); });
+    LOGI("hand-off socket: %s", socketPath.c_str());
     return true;
 }
 
