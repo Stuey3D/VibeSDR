@@ -255,6 +255,11 @@ public:
      *  a permitted set that lives only in the browser is decoration, since anyone can send a raw
      *  tune. Same split as the locked window. */
     static void setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv);
+    /** ★ True when THIS radio is the one drawing the landing page's spectrogram and measuring the
+     *  band conditions. It must keep capturing with nobody listening — that is the entire point of
+     *  a 24-hour picture — so it is exempt from the idle PAUSE. It is not exempt from RELEASE,
+     *  because letting the device go already means giving those up. */
+    static void setProvidesSpectrogram(bool on);
     /** ITU region (1/2/3) for the named band presets — derived from where the owner says the
      *  receiver is. See vibe_bands.h: the allocations genuinely differ between regions. */
     static void setBandRegion(int region);

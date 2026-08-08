@@ -442,6 +442,7 @@ static std::string         g_vsAllowCsv, g_vsBlockCsv;
 static vibebands::Ranges   g_vsPermitted;      // empty = no restriction beyond the hardware
 static vibebands::Ranges vsPermittedRanges(const vibebands::Ranges& hardware);   // defined below
 
+static std::atomic<bool>   g_vsProvidesSpectrogram{false};
 static std::atomic<bool>   g_vsRfNotch{false};
 static std::atomic<bool>   g_vsDabNotch{false};
 // ★ How many spectrum listeners may attach at once. 1 = the old single-occupant behaviour.
@@ -8152,6 +8153,33 @@ struct LocalSdrShim::Impl {
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
                 //   happened during the grace period, so the decision is taken against the state
                 //   NOW: a listener may have returned, and the AGC settle may still be running.
+                // ★★★ ARM IT HERE TOO, NOT ONLY ON A DISCONNECT. armIdlePark() was reached only
+                //     from the WebSocket close path, so a radio that came up with nobody listening
+                //     never armed anything and streamed IQ for ever: the Airspy's IQ light stayed
+                //     on with no listeners, and the RTL never let go however short its grace was
+                //     set (Stuart, 2026-08-08 — "seems like a waste of power", and the OWRX probe
+                //     confirmed it: usb_claim_interface error -6). A server that boots idle is the
+                //     NORMAL state of an unattended receiver, and it was the one state that never
+                //     parked.
+                // ★★ The spectrogram radio is exempt from PAUSING — its whole job is to keep
+                //    listening when nobody else is — but not from releasing, since letting the
+                //    device go already means giving the spectrogram up.
+                // ★★ THE SPECTROGRAM RADIO IS EXEMPT. Its whole job is to keep listening when
+                //    nobody else is — a 24-hour picture of the band cannot be drawn by a receiver
+                //    that sleeps through it. A duty cycle was tried and taken back out: waking,
+                //    waiting for the RSP's AGC to settle and sampling is more moving parts than a
+                //    working picture is worth risking (Stuart, 2026-08-08: "I'd rather not break
+                //    something that works"). The COST is real and is now stated on the toggle that
+                //    chooses it, which is where an owner can weigh it.
+                if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load()
+                    && !(g_vsProvidesSpectrogram.load() && !g_vsReleaseWhenIdle.load())) {
+                    bool empty;
+                    { std::lock_guard<std::mutex> lk(clientMtx);
+                      empty = (!specClient  || !specClient->isOpen())
+                           && (!audioClient || !audioClient->isOpen()); }
+                    if (empty) armIdlePark();
+                }
+
                 if (const double due = idleParkDueAt.load(); due > 0.0 && nowSecs() >= due) {
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx);
@@ -9094,6 +9122,7 @@ void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(o
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
 void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
+void LocalSdrShim::setProvidesSpectrogram(bool on) { g_vsProvidesSpectrogram.store(on); }
 
 void LocalSdrShim::setBandRegion(int region) {
     vibebands::defaultRegion() = (region >= 1 && region <= 3) ? region : 1;

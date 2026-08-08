@@ -437,7 +437,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <input type="checkbox" id="spectrogram" style="width:16px;height:16px;accent-color:var(--amber)">
           <span>Use this radio for the spectrogram and band conditions</span></label>
         <p class="why" id="spectroWhy">The landing page's background, and the measured half of the
-           band conditions table — both read the same window, so one radio provides both.</p>
+           band conditions table — both read the same window, so one radio provides both.
+           <br><strong>This radio then never idles.</strong> A picture of the last 24 hours cannot
+           be drawn by a receiver that sleeps through them, so it keeps capturing with nobody
+           listening: it will not park to save power, and it cannot be released to another program.
+           Expect it to use a core and a few watts around the clock. Every other radio on this
+           machine still parks when idle — so on a multi-radio server this is one radio's power,
+           not the whole machine's.</p>
       </div>
       <div id="hwRelease" style="margin-top:10px">
         <label style="display:flex;gap:8px;align-items:center">

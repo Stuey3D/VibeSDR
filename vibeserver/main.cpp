@@ -1331,6 +1331,19 @@ int main(int argc, char** argv) {
         vibebands::defaultRegion() = vibebands::ituRegion(lat, lon, have);
         LocalSdrShim::setBandRegion(vibebands::defaultRegion());
     }
+    // ★ Tell the shim whether THIS radio is the one drawing the spectrogram, so the idle park can
+    //   leave it alone. The nomination lives in the machine config; a radio that is releasing when
+    //   idle cannot provide it anyway (canDrawSpectrogram says so), which is why the shim only
+    //   uses this to skip PAUSING.
+    {
+        vsconfig::ServerConfig sc; std::string se;
+        bool mine = false;
+        if (vsconfig::loadServer(g_configPath, sc, se)) {
+            const int idx = vsconfig::spectrogramRadio(sc);
+            mine = idx >= 0 && sc.radios[(size_t)idx].serial == g_myRadioSerial;
+        }
+        LocalSdrShim::setProvidesSpectrogram(mine);
+    }
     LocalSdrShim::setPublicSharing(o.publicSharing);
     // ★ Only meaningful for a single-user radio: a locked range IS the limit in shared mode, so
     //   the lists are not offered there and are not applied here either.
