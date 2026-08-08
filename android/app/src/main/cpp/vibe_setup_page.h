@@ -1070,12 +1070,25 @@ async function renderHw() {
     coverage();
   }
 
-  if (!hw || !hw.present) {
+  // ★★★ `present` MEANS "THIS PROCESS HAS THE RADIO OPEN", NOT "THE RADIO EXISTS" — and bailing on
+  //     it here threw away the whole point of the driver tables above. During FIRST-TIME SETUP
+  //     nothing has opened the radio yet, so `present` is false and this returned "No radio
+  //     detected" for a radio sitting plugged in six inches away: the RSP's notches simply were not
+  //     on the page. Start the server once, come back, and there they were (Stuart, 2026-08-08).
+  //
+  // ★★ The comment on DRIVER_HW says it exactly — "that is exactly when the owner is setting it up
+  //    … properties of the MODEL, not of a live handle" — and then this line defeated it. A
+  //    fallback that an early return skips is not a fallback.
+  //
+  // ★ So the only thing that makes this page useless is not knowing WHICH RADIO it is. Everything
+  //   below branches on the driver, and the driver is in the config the moment one is detected.
+  const drv = (hw && hw.driver) || r.driver || "";
+  if (!drv) {
     el.innerHTML = `<p class="hint">No radio detected, so there is nothing to set here.
       Plug one in and reload this page.</p>`;
     return;
   }
-  if (hw.driver === "sdrplay") {
+  if (drv === "sdrplay") {
     el.innerHTML = `
       <label style="display:flex;align-items:center;gap:10px;margin:0">
         <input type="checkbox" id="rfNotch" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -1089,7 +1102,7 @@ async function renderHw() {
       <div class="hint">Same idea, for the DAB band.</div>
       <div class="hint">The RSP manages its own gain by default. To set it by hand, see the note
         below.</div>`;
-  } else if (hw.driver === "airspyhf") {
+  } else if (drv === "airspyhf") {
     el.innerHTML = `<p class="hint">The Airspy HF+ has no variable gain &mdash; it manages its own
       attenuator and preamp &mdash; so there is nothing to set here.</p>`;
   } else {
@@ -1119,13 +1132,13 @@ async function renderHw() {
   //    its own automatic mode; the HF+ has no variable gain to start anywhere. Printing the RSP's
   //    story for all three would be the same misdescription this project keeps having to fix —
   //    see the note on branching by driver in AGENTS.md.
-  const startState = hw.driver === "sdrplay"
+  const startState = drv === "sdrplay"
     ? `<b>Signals will look weak until you do.</b> This receiver starts with the tuner at
        <b>minimum gain and maximum attenuation</b>, deliberately: we know nothing about your
        aerial yet, and coming UP to a working gain is the only safe direction — the alternative
        risks overloading the front end on the way down. A near-empty waterfall on a brand-new
        server is this protection working, not a fault in the hardware or the software.`
-    : hw.driver === "airspyhf"
+    : drv === "airspyhf"
     ? `The HF+ has no variable gain to set &mdash; it manages its own attenuator and preamp &mdash;
        so there is nothing to protect here and nothing to adjust.`
     : `<b>Signals will look weak until you do.</b> This receiver starts at the tuner's
