@@ -289,6 +289,22 @@ public:
     static bool listenForHandoff(const std::string& socketPath, std::string& err);
     using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
     static void setEibiHandler(EibiFn fn);
+
+    /** ★★★ REWRITE AN RTL DONGLE'S SERIAL. The daemon owns this because it owns the filesystem
+     *  (the mandatory backup) and the device; the shim only exposes it, exactly like the config
+     *  and EiBi handlers. On a phone no handler is registered and the endpoint says so rather
+     *  than pretending.
+     *  ★★ It is in the WEB UI because the alternative is a shell command, and the owner most
+     *  likely to need it — somebody who has just plugged in four identical dongles — is the least
+     *  likely to want to type one (Stuart, 2026-08-08: "I would be nervous to use CLI to do it").
+     *  @return true on success; `msg` always carries something worth showing either way. */
+    using RtlSerialFn = std::function<bool(const std::string& newSerial, std::string& msg)>;
+    static void setRtlSerialHandler(RtlSerialFn fn);
+    /** JSON: what is pending, what the bus reports, and whether the change has taken. The page
+     *  uses it to VERIFY after the reboot rather than assuming a verified write was enough — a
+     *  write is confirmed against the chip, not against what USB is still announcing. */
+    using RtlSerialStatusFn = std::function<std::string()>;
+    static void setRtlSerialStatusHandler(RtlSerialStatusFn fn);
     using ConfigPersistFn = std::function<void(const std::string& patch)>;
     static void setConfigPersistHandler(ConfigPersistFn fn);
     /** The RSP front end as the owner last left it, applied AFTER the start-up AGC sequence.

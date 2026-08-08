@@ -939,6 +939,9 @@ static void vsNoteVisitor(const std::string& ip) {
         it = (now - it->second > 60.0) ? g_vsVisitors.erase(it) : std::next(it);
 }
 
+static LocalSdrShim::RtlSerialFn g_vsRtlSerialFn;
+static LocalSdrShim::RtlSerialStatusFn g_vsRtlSerialStatusFn;
+
 static vibeproxy::TrustedProxies g_vsTrustedProxies;
 static std::mutex                g_vsTrustedProxiesMtx;
 
@@ -5457,6 +5460,7 @@ struct LocalSdrShim::Impl {
                 //   by this door. Refusing it here made the page report "could not reach the
                 //   server" about a server it was talking to (Stuart, 2026-08-08).
                 || path0.rfind("/vibeserver/eibi", 0) == 0
+                || path0.rfind("/vibeserver/rtl-serial", 0) == 0
                 || path0.rfind("/vibeserver/spectrogram", 0) == 0
                 || path0.rfind("/bookmarks", 0) == 0
                 || path0.rfind("/favicon", 0) == 0
@@ -6244,6 +6248,56 @@ struct LocalSdrShim::Impl {
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close(); return;
 
+        } else if (reqLine.rfind("GET /vibeserver/rtl-serial", 0) == 0) {
+            // ★ Admin-gated like the write: it names the hardware on this machine, which is not a
+            //   visitor's business, and the page that asks is already signed in.
+            if (!adminOkFor(reqLine, sock)) {
+                sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                sock->close(); return;
+            }
+            LocalSdrShim::RtlSerialStatusFn sf;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); sf = g_vsRtlSerialStatusFn; }
+            const std::string j = sf ? sf() : std::string("{\"pending\":false,\"bus\":[]}");
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(j.size()) + "\r\n\r\n" + j);
+            sock->close(); return;
+        } else if (reqLine.rfind("POST /vibeserver/rtl-serial", 0) == 0) {
+            // ★★★ ADMIN ONLY, AND NOT MERELY BECAUSE IT IS A SETTING. This writes to a dongle's
+            //     EEPROM: interrupted, it can leave the device unusable. Everything protective the
+            //     command-line version does — refuse a chip we cannot fully parse, take a backup
+            //     first, verify afterwards — is in the daemon handler and is NOT re-implemented
+            //     here. The browser supplies the confirmation the terminal asked for by typing.
+            if (!adminOkFor(reqLine, sock)) {
+                sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                sock->close(); return;
+            }
+            std::string body;
+            if (contentLength > 0 && contentLength < 4096) {
+                std::vector<char> buf((size_t)contentLength + 1, 0);
+                int got = 0;
+                while (got < (int)contentLength) {
+                    const int n = sock->recv((uint8_t*)buf.data() + got, (size_t)contentLength - got, 5000);
+                    if (n <= 0) break;
+                    got += n;
+                }
+                body.assign(buf.data(), (size_t)got);
+            }
+            const std::string want = jsonStr(body, "serial");
+            LocalSdrShim::RtlSerialFn fn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsRtlSerialFn; }
+            std::string msg;
+            bool ok = false;
+            if (!fn) msg = "not available on this server";
+            else     ok  = fn(want, msg);
+            const std::string j = std::string("{\"ok\":") + (ok ? "true" : "false")
+                                + ",\"message\":\"" + vibeadmin::esc(msg) + "\"}";
+            sock->sendstr(std::string("HTTP/1.1 ") + (ok ? "200 OK" : "400 Bad Request")
+                          + "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                          "\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(j.size()) + "\r\n\r\n" + j);
+            LOGI("rtl serial change requested by %s — %s", sock->peerAddress().c_str(), msg.c_str());
+            sock->close(); return;
         } else if (reqLine.rfind("GET /vibeserver/eibi", 0) == 0) {
             // ★ The daemon owns the fetching (it has the filesystem and the network); the shim
             //   only exposes it, and on a phone no handler is registered so this reports
@@ -9050,6 +9104,16 @@ void LocalSdrShim::setEibiHandler(EibiFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsEibiFn = std::move(fn);
 }
+void LocalSdrShim::setRtlSerialHandler(RtlSerialFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsRtlSerialFn = std::move(fn);
+}
+
+void LocalSdrShim::setRtlSerialStatusHandler(RtlSerialStatusFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsRtlSerialStatusFn = std::move(fn);
+}
+
 void LocalSdrShim::setTrustedProxies(const std::string& csv) {
     std::vector<std::string> entries;
     size_t start = 0;

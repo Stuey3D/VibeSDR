@@ -468,47 +468,118 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
  *  The rebuild itself is covered by test-rtl-eeprom against a real dumped image, so by the time we
  *  get here the bytes are the part we are least worried about.
  */
-static int setRtlSerial(int index, const std::string& newSerial) {
-    std::string err;
-    if (!vibe::rtlSerialAcceptable(newSerial, err)) {
-        std::fprintf(stderr, "VibeServer: %s\n", err.c_str());
-        return 1;
+// ── A serial change is not finished until the dongle has lost power ─────────────────────────
+//
+// ★★★ THE WINDOW THIS EXISTS TO SURVIVE. Between the EEPROM write and the power cycle, config.json
+//     names the NEW serial while the dongle on the bus still reports the OLD one — the RTL2832U
+//     only re-reads its EEPROM at power-on. Anything that reconciles units in that window
+//     (`vibeserver-radios`, a service restart, an admin pressing RESTART) would look for hardware
+//     that does not exist yet and quietly leave the radio down. The marker makes that window
+//     explicit so every reader can honour BOTH names until the reboot happens.
+// ★★ On disk, not in memory: the whole point is that it must outlive this process, including a
+//    reboot it did not schedule and a crash it did not expect.
+static std::string pendingSerialPath() { return "/var/lib/vibeserver/pending-serial.json"; }
+
+static void pendingSerialWrite(const std::string& oldSerial, const std::string& newSerial) {
+    ::mkdir("/var/lib/vibeserver", 0755);
+    if (FILE* f = std::fopen(pendingSerialPath().c_str(), "w")) {
+        std::fprintf(f, "{\"old\":\"%s\",\"new\":\"%s\",\"at\":%lld}\n",
+                     oldSerial.c_str(), newSerial.c_str(), (long long)std::time(nullptr));
+        std::fclose(f);
     }
+}
+
+static bool pendingSerialRead(std::string& oldSerial, std::string& newSerial) {
+    FILE* f = std::fopen(pendingSerialPath().c_str(), "r");
+    if (!f) return false;
+    char buf[512] = {0};
+    const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+    std::fclose(f);
+    if (!n) return false;
+    const std::string j(buf, n);
+    auto field = [&](const char* key) {
+        const std::string k = std::string("\"") + key + "\":\"";
+        const size_t a = j.find(k);
+        if (a == std::string::npos) return std::string();
+        const size_t b = j.find('"', a + k.size());
+        return b == std::string::npos ? std::string() : j.substr(a + k.size(), b - a - k.size());
+    };
+    oldSerial = field("old");
+    newSerial = field("new");
+    return !newSerial.empty();
+}
+
+static void pendingSerialClear() { ::unlink(pendingSerialPath().c_str()); }
+
+/** What the USB bus reports right now, so the page can PROVE the change took rather than assuming
+ *  it did. A verified write to a chip that never lost power still reads the old serial. */
+static std::vector<std::string> rtlSerialsOnBus() {
+    std::vector<std::string> out;
+    const uint32_t n = rtlsdr_get_device_count();
+    for (uint32_t i = 0; i < n; ++i) {
+        char sn[256] = {0};
+        if (rtlsdr_get_device_usb_strings(i, nullptr, nullptr, sn) == 0) out.push_back(sn);
+    }
+    return out;
+}
+
+/**
+ * Rewrite an RTL dongle's serial, with every guard the operation deserves.
+ *
+ * ★★★ ONE IMPLEMENTATION, TWO FRONT ENDS. The terminal asks the operator to type the new serial;
+ *     the browser asks them to confirm in a dialog. Everything BETWEEN those two moments — refuse
+ *     a chip we cannot fully parse, take a backup before touching anything, verify by re-reading
+ *     from a fresh handle — is identical, and must stay identical: this is the one operation here
+ *     that can leave a device unusable, so a second copy that drifts is not an option.
+ *
+ * @param confirm  the operator's confirmation, which must equal `newSerial`. The CLI reads it from
+ *                 the terminal; the web endpoint takes it from the request. Deliberately NOT a
+ *                 bool: "are you sure?" is answered by typing the thing, not by clicking yes.
+ * @param out      every message worth showing, success or failure. Also printed when `verbose`.
+ */
+static bool rtlSerialWrite(int index, const std::string& newSerial, const std::string& confirm,
+                           bool verbose, std::string& out) {
+    auto say = [&](const std::string& m) {
+        if (!out.empty()) out += " ";
+        out += m;
+        if (verbose) std::fprintf(stderr, "VibeServer: %s\n", m.c_str());
+    };
+
+    std::string err;
+    if (!vibe::rtlSerialAcceptable(newSerial, err)) { say(err); return false; }
+
     const uint32_t n = rtlsdr_get_device_count();
     if (index < 0 || (uint32_t)index >= n) {
-        std::fprintf(stderr, "VibeServer: there is no RTL-SDR %d (%u found)\n", index, n);
-        return 1;
+        say("there is no RTL-SDR " + std::to_string(index) + " (" + std::to_string(n) + " found)");
+        return false;
     }
     rtlsdr_dev_t* dev = nullptr;
     if (rtlsdr_open(&dev, (uint32_t)index) != 0 || !dev) {
-        std::fprintf(stderr,
-            "VibeServer: could not open that dongle — something else is using it.\n"
-            "            Stop the server first:  sudo systemctl stop vibeserver\n");
-        return 1;
+        say("could not open that dongle — something else is using it. Stop the radio first.");
+        return false;
     }
     uint8_t buf[vibe::RTL_EEPROM_SIZE] = {0};
     if (rtlsdr_read_eeprom(dev, buf, 0, sizeof buf) < 0) {
-        std::fprintf(stderr, "VibeServer: could not read the dongle's memory — nothing was changed.\n");
-        rtlsdr_close(dev); return 1;
+        say("could not read the dongle's memory — nothing was changed.");
+        rtlsdr_close(dev); return false;
     }
     vibe::RtlEeprom cur;
     if (!vibe::rtlEepromParse(buf, sizeof buf, cur, err)) {
-        std::fprintf(stderr,
-            "VibeServer: %s\n"
-            "            Refusing to write to a chip we do not fully understand — the parts we\n"
-            "            could not read are exactly the parts we would destroy. Nothing changed.\n",
-            err.c_str());
-        rtlsdr_close(dev); return 1;
+        // ★ The parts we could not read are exactly the parts we would destroy.
+        say(err + " — refusing to write to a chip we do not fully understand. Nothing changed.");
+        rtlsdr_close(dev); return false;
     }
     std::vector<uint8_t> want;
     if (!vibe::rtlEepromWithSerial(cur, newSerial, want, err)) {
-        std::fprintf(stderr, "VibeServer: %s — nothing was changed.\n", err.c_str());
-        rtlsdr_close(dev); return 1;
+        say(err + " — nothing was changed.");
+        rtlsdr_close(dev); return false;
     }
 
-    // ── 3. The backup, before anything is written ───────────────────────────────────────────
-    std::string dir = "/var/lib/vibeserver/eeprom";
+    // ── The backup, before anything is written ──────────────────────────────────────────────
+    // ★ NO BACKUP, NO WRITE. Without it a failed write leaves nothing to restore from, and this is
+    //   the operation where that matters most.
     ::mkdir("/var/lib/vibeserver", 0755);
+    const std::string dir = "/var/lib/vibeserver/eeprom";
     ::mkdir(dir.c_str(), 0755);
     char stamp[32]; const std::time_t t = std::time(nullptr);
     std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&t));
@@ -517,42 +588,27 @@ static int setRtlSerial(int index, const std::string& newSerial) {
     if (FILE* f = std::fopen(backup.c_str(), "wb")) {
         const bool wrote = std::fwrite(buf, 1, sizeof buf, f) == sizeof buf;
         std::fclose(f);
-        if (!wrote) {
-            std::fprintf(stderr, "VibeServer: the backup did not write fully — stopping here.\n");
-            rtlsdr_close(dev); return 1;
-        }
+        if (!wrote) { say("the backup did not write fully — stopping here."); rtlsdr_close(dev); return false; }
     } else {
-        // ★ NO BACKUP, NO WRITE. Without it a failed write leaves nothing to restore from, and
-        //   this is the operation where that matters most.
-        std::fprintf(stderr, "VibeServer: could not save a backup to %s — stopping here.\n"
-                             "            (try again with sudo)\n", backup.c_str());
-        rtlsdr_close(dev); return 1;
+        say("could not save a backup to " + backup + " — stopping here.");
+        rtlsdr_close(dev); return false;
     }
 
-    // ── 4. Say exactly what is about to happen, and make them type it ──────────────────────
-    std::printf("\n  Dongle %d:  %s %s\n", index, cur.manufacturer.c_str(), cur.product.c_str());
-    std::printf("  Serial:    %s  ->  %s\n", cur.serial.c_str(), newSerial.c_str());
-    std::printf("  Backup:    %s\n\n", backup.c_str());
-    std::printf("  This writes to the dongle's memory. If it is interrupted the dongle can be\n"
-                "  left unusable. Do not unplug it, and do not do this on a machine that might\n"
-                "  lose power.\n\n");
-    std::printf("  Type the new serial to confirm, or anything else to cancel: ");
-    std::fflush(stdout);
-    char typed[128] = {0};
-    if (!std::fgets(typed, sizeof typed, stdin)) { rtlsdr_close(dev); return 1; }
-    std::string confirm(typed);
-    while (!confirm.empty() && (confirm.back() == '\n' || confirm.back() == '\r')) confirm.pop_back();
+    if (verbose) {
+        std::printf("\n  Dongle %d:  %s %s\n", index, cur.manufacturer.c_str(), cur.product.c_str());
+        std::printf("  Serial:    %s  ->  %s\n", cur.serial.c_str(), newSerial.c_str());
+        std::printf("  Backup:    %s\n\n", backup.c_str());
+    }
     if (confirm != newSerial) {
-        std::printf("\n  Cancelled. Nothing was changed.\n");
-        rtlsdr_close(dev); return 1;
+        say("cancelled — nothing was changed.");
+        rtlsdr_close(dev); return false;
     }
 
-    // ── 5. Write, then prove it ────────────────────────────────────────────────────────────
+    // ── Write, then prove it ────────────────────────────────────────────────────────────────
     if (rtlsdr_write_eeprom(dev, want.data(), 0, (uint16_t)want.size()) < 0) {
-        std::fprintf(stderr,
-            "\nVibeServer: the write failed. The dongle is probably untouched, but if it now\n"
-            "            misbehaves, restore it from:  %s\n", backup.c_str());
-        rtlsdr_close(dev); return 1;
+        say("the write failed. The dongle is probably untouched; if it now misbehaves, restore "
+            "from " + backup);
+        rtlsdr_close(dev); return false;
     }
     rtlsdr_close(dev);
 
@@ -563,29 +619,48 @@ static int setRtlSerial(int index, const std::string& newSerial) {
         uint8_t check[vibe::RTL_EEPROM_SIZE] = {0};
         const bool readOk = rtlsdr_read_eeprom(dev, check, 0, sizeof check) >= 0;
         rtlsdr_close(dev);
-        if (readOk && std::memcmp(check, want.data(), want.size()) == 0) {
-            // ★★ SAYING THIS MATTERS, because the write looks like it failed otherwise. The
-            //    RTL2832U reads its EEPROM at POWER-ON, so the new serial does not appear until
-            //    the device loses power. Measured on the Pi 2026-08-07: after a verified write the
-            //    chip read back the new serial while USB still reported the old one. A REBOOT
-            //    clears it (the Pi drops port power); unbind/bind and toggling `authorized` do
-            //    NOT, because neither removes power — so "re-enumerate it in software" is advice
-            //    that quietly does nothing. Anyone checking with lsusb in between sees the old
-            //    serial and concludes the write silently failed.
-            std::printf("\n  Done, and verified by reading it back.\n\n"
-                        "  Unplug the dongle and plug it back in — or reboot — for the new serial\n"
-                        "  to take effect. Until then it still reports the old one (%s).\n\n",
-                        cur.serial.c_str());
-            return 0;
+        if (!readOk || std::memcmp(check, want.data(), want.size()) != 0) {
+            say("the dongle did not read back what we wrote. Restore it from " + backup
+                + " before using it.");
+            return false;
         }
-        std::fprintf(stderr,
-            "\nVibeServer: the dongle did not read back what we wrote.\n"
-            "            Restore it with the backup before using it:  %s\n", backup.c_str());
+        // ★★ SAYING THIS MATTERS, because otherwise the write looks like it failed. The RTL2832U
+        //    reads its EEPROM at POWER-ON, so the new serial does not appear until the device
+        //    loses power. Measured on the Pi 2026-08-07: after a verified write the chip read back
+        //    the new serial while USB still reported the old one. A REBOOT clears it (the Pi drops
+        //    port power); unbind/bind and toggling `authorized` do NOT, because neither removes
+        //    power — so "re-enumerate it in software" is advice that quietly does nothing.
+        say("Done, and verified by reading it back. Unplug the dongle and plug it back in — or "
+            "reboot — for the new serial to take effect. Until then it still reports the old one ("
+            + cur.serial + ").");
+        return true;
+    }
+    say("Written, but it could not be reopened to verify. Unplug it and plug it in again, then "
+        "check the serial. Backup: " + backup);
+    return true;
+}
+
+/** The command-line front end: confirmation is typed at the terminal. */
+static int setRtlSerial(int index, const std::string& newSerial) {
+    std::string err;
+    if (!vibe::rtlSerialAcceptable(newSerial, err)) {
+        std::fprintf(stderr, "VibeServer: %s\n", err.c_str());
         return 1;
     }
-    std::printf("\n  Written. Unplug the dongle and plug it in again, then check the serial.\n"
-                "  Backup, if you need it: %s\n\n", backup.c_str());
-    return 0;
+    std::printf("\n  This writes to the dongle's memory. If it is interrupted the dongle can be\n"
+                "  left unusable. Do not unplug it, and do not do this on a machine that might\n"
+                "  lose power.\n\n");
+    std::printf("  Type the new serial to confirm, or anything else to cancel: ");
+    std::fflush(stdout);
+    char typed[128] = {0};
+    if (!std::fgets(typed, sizeof typed, stdin)) return 1;
+    std::string confirm(typed);
+    while (!confirm.empty() && (confirm.back() == '\n' || confirm.back() == '\r')) confirm.pop_back();
+
+    std::string out;
+    const bool ok = rtlSerialWrite(index, newSerial, confirm, /*verbose=*/true, out);
+    std::printf("\n  %s\n\n", out.c_str());
+    return ok ? 0 : 1;
 }
 
 /** True when this process owns the machine's main port — it serves the landing page and
@@ -1062,6 +1137,72 @@ int main(int argc, char** argv) {
     // ── EiBi ────────────────────────────────────────────────────────────────────────────────
     // ★ Published from the cache at start-up so search works immediately, then refreshed in the
     //   BACKGROUND: a receiver must not wait on eibispace.de to start serving listeners.
+    // ★★★ WRITE, THEN REMEMBER THAT IT IS NOT DONE YET. The dongle must be let go before it can
+    //     be written — this process has it open, and rtlsdr_open() from here would simply fail, so
+    //     the GUI would report "something else is using it" and the something else would be us.
+    //     Released with the same mechanism that shares an SDR with OpenWebRX, and taken back after.
+    // ★★ THE CONFIG FOLLOWS THE SERIAL, because a radio's identity in config.json IS its serial: a
+    //    rename would otherwise orphan every setting on that tab and the dongle would come back
+    //    looking like brand new hardware. Renamed in the same breath as the write that caused it,
+    //    and the pending marker keeps the OLD name working until the power cycle.
+    LocalSdrShim::setRtlSerialHandler([](const std::string& newSerial, std::string& msg) -> bool {
+        const std::string oldSerial = g_myRadioSerial;
+        const bool wasRunning = LocalSdrShim::instance().releaseRadio();
+
+        int index = -1;
+        const uint32_t n = rtlsdr_get_device_count();
+        for (uint32_t i = 0; i < n; ++i) {
+            char sn[256] = {0};
+            if (rtlsdr_get_device_usb_strings(i, nullptr, nullptr, sn) == 0
+                && (oldSerial.empty() || oldSerial == sn)) { index = (int)i; break; }
+        }
+        bool ok = false;
+        if (index < 0) msg = "could not find this dongle on the USB bus.";
+        else ok = rtlSerialWrite(index, newSerial, newSerial, /*verbose=*/false, msg);
+
+        if (ok) {
+            pendingSerialWrite(oldSerial, newSerial);
+            if (!oldSerial.empty() && oldSerial != newSerial) {
+                vsconfig::ServerConfig srv;
+                std::string err;
+                if (vsconfig::loadServer(g_configPath, srv, err)) {
+                    for (auto& r : srv.radios)
+                        if (r.serial == oldSerial) { r.serial = newSerial; break; }
+                    if (!vsconfig::saveServer(g_configPath, srv, err))
+                        msg += " (this radio's settings could not be renamed: " + err + ")";
+                    else
+                        msg += " Its settings have been moved to the new serial.";
+                }
+            }
+        }
+        if (wasRunning) {
+            std::string err;
+            if (!LocalSdrShim::instance().reacquireRadio(err))
+                msg += " The radio could not be restarted (" + err + ").";
+        }
+        return ok;
+    });
+
+    LocalSdrShim::setRtlSerialStatusHandler([]() -> std::string {
+        std::string oldS, newS;
+        const bool pending = pendingSerialRead(oldS, newS);
+        const auto bus = rtlSerialsOnBus();
+        // ★ TOOK = the new serial is on the bus and the old one is not. Checking only for the new
+        //   one would call it done on a machine where a SECOND dongle already had that serial.
+        bool hasNew = false, hasOld = false;
+        for (const auto& s : bus) { if (s == newS) hasNew = true; if (!oldS.empty() && s == oldS) hasOld = true; }
+        std::string j = "{\"pending\":" + std::string(pending ? "true" : "false");
+        if (pending) j += ",\"old\":\"" + oldS + "\",\"new\":\"" + newS + "\""
+                        + ",\"took\":" + std::string((hasNew && !hasOld) ? "true" : "false");
+        j += ",\"bus\":[";
+        for (size_t i = 0; i < bus.size(); ++i) j += (i ? ",\"" : "\"") + bus[i] + "\"";
+        j += "]}";
+        // ★ Cleared only once PROVEN, never on a timer: a marker that expires on its own would let
+        //   the reconciliation forget the old name while the dongle still answers to it.
+        if (pending && hasNew && !hasOld) pendingSerialClear();
+        return j;
+    });
+
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;
         if (!refresh || n == 0) { const int c = vseibi::loadFromCache(); if (c > n) n = c; }

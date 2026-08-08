@@ -214,6 +214,33 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <p class="why" style="color:var(--warn)">Only switch this on if you know what is connected.
            It can damage equipment that is not expecting it.</p>
       </div>
+      <!-- ★★★ THE DONGLE'S NAME, CHANGEABLE HERE BECAUSE THE ALTERNATIVE IS A SHELL COMMAND.
+           Four identical RTL dongles all arrive calling themselves 00000001, and until they have
+           different names the server cannot tell which is which — so this is the FIRST thing an
+           owner of several needs, and the person who needs it most is the least likely to want to
+           type a command (Stuart, 2026-08-08: "I would be nervous to use CLI to do it ... which is
+           why I used SDR Console on windows").
+           ★★ It writes to the dongle's EEPROM. Everything protective lives on the server — refuse
+           a chip it cannot fully parse, take a backup first, verify by reading back — and the one
+           thing a browser can add is making the operator say the name out loud before it happens.
+           ★ RTL only: an Airspy's serial is factory-burned and an SDRplay has none at all. -->
+      <div id="hwSerial" class="hide" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+        <label><span class="lbl">This dongle's serial</span>
+          <div class="row" style="gap:8px">
+            <input type="text" id="rtlSerialNew" placeholder="e.g. RTL-FM-01" maxlength="32"
+                   style="flex:2 1 220px">
+            <button type="button" id="rtlSerialGo" class="ghost" style="flex:0 0 auto">Change serial</button>
+          </div>
+          <div class="hint" id="rtlSerialState"></div>
+          <div class="hint">Gives this dongle a name of its own, so the server can tell it apart
+            from an identical one. <b>It writes to the dongle's memory.</b> A backup is taken first
+            and the result is read back and checked, but do not do this on a machine that might
+            lose power mid-write.
+            <br><b>The change only takes effect when the dongle loses power</b> — the chip reads its
+            memory at power-on, so a reboot is needed. Nothing else does it: restarting the service
+            or re-plugging in software leaves the old name in place.</div></label>
+      </div>
+
       <div id="hwPpm" class="hide">
         <label><span class="lbl">Frequency correction (ppm)</span>
           <input type="number" id="ppm" step="1" placeholder="0"></label>
@@ -551,6 +578,90 @@ let BOOT_ID = "";
   catch (e) { /* the compare simply falls back to the timed rule */ }
 })();
 
+
+// ── The dongle's serial ─────────────────────────────────────────────────────────────────────
+//
+// ★★★ A CHANGE HERE IS NOT FINISHED UNTIL THE MACHINE REBOOTS, so the page carries that fact
+//     forward instead of leaving the owner to remember it. The RTL2832U reads its EEPROM at
+//     power-on, and on a Pi only a reboot drops USB port power — restarting the service or
+//     re-plugging in software leaves the old name in place, which reads as "the write failed".
+//     ★★ The unit name contains the serial too (vibeserver@<serial>.service), and the boot-time
+//        reconciliation renames it from the config. So the reboot is the correct action, not a
+//        workaround for a stubborn chip.
+let SERIAL_PENDING = null;   // {old,new} while a change is written but not yet powered off
+
+/** ★ The serial is operator-supplied text that lands in innerHTML — escape it. Short, but this is
+ *  the one string on this page that a person types and the page then renders as markup. */
+function esc(t) {
+  return String(t == null ? "" : t).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+async function serialStatus() {
+  const el = $("rtlSerialState");
+  try {
+    const r = await fetch("/vibeserver/rtl-serial?" + await authQuery(), {cache:"no-store"});
+    if (!r.ok) { if (el) el.textContent = ""; return; }
+    const j = await r.json();
+    SERIAL_PENDING = j.pending ? {old: j.old, new: j.new, took: j.took} : null;
+    if (!el) return;
+    if (j.pending && j.took) {
+      // ★ Proven, not assumed: the server clears the marker only when it SEES the new serial on
+      //   the bus and the old one gone.
+      el.innerHTML = '<span class="ok">Confirmed — this dongle now reports ' + esc(j.new) + '.</span>';
+    } else if (j.pending) {
+      el.innerHTML = '<span style="color:var(--amber)">Written, but not in effect yet: still '
+        + 'reporting ' + esc(j.old || "its old serial") + '. Reboot to finish.</span>';
+    } else {
+      el.textContent = j.bus && j.bus.length
+        ? "Currently: " + j.bus.map(esc).join(", ")
+        : "";
+      el.style.color = "var(--dim)";
+    }
+    paintSaveButton();
+  } catch (e) { /* an older server has no such endpoint; the card simply stays quiet */ }
+}
+
+async function serialChange() {
+  const el = $("rtlSerialState"), b = $("rtlSerialGo");
+  const want = ($("rtlSerialNew").value || "").trim();
+  if (!want) { el.textContent = "Type the new serial first."; el.style.color = "var(--bad)"; return; }
+  // ★★ SAY THE NAME OUT LOUD. The terminal version makes the operator TYPE the new serial to
+  //    confirm; a dialog that only asks "are you sure?" is a click people make without reading.
+  if (prompt("This writes to the dongle's memory.\n\nType the new serial again to confirm:") !== want) {
+    el.textContent = "Cancelled — nothing was changed."; el.style.color = "var(--dim)"; return;
+  }
+  b.disabled = true;
+  el.textContent = "writing…"; el.style.color = "var(--dim)";
+  try {
+    const r = await fetch("/vibeserver/rtl-serial?" + await authQuery(), {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({serial: want}),
+    });
+    const j = await r.json();
+    el.textContent = j.message || (j.ok ? "Done." : "It did not work.");
+    el.style.color = j.ok ? "var(--good)" : "var(--bad)";
+    if (j.ok) { await serialStatus(); }
+  } catch (e) {
+    el.textContent = "Could not reach the server."; el.style.color = "var(--bad)";
+  }
+  b.disabled = false;
+}
+
+/** ★ The master button changes JOB when a serial is waiting on a power cycle: a restart would not
+ *  finish it, and offering one would look like it had. */
+function paintSaveButton() {
+  const b = $("saveBtn");
+  if (!b) return;
+  if (SERIAL_PENDING && !SERIAL_PENDING.took) {
+    b.textContent = "Save and reboot";
+    b.title = "A dongle's serial has been changed. Only a reboot puts it into effect.";
+  } else if (b.textContent === "Save and reboot") {
+    b.textContent = cfg && cfg.configured ? "Save changes" : "Save and start";
+    b.title = "";
+  }
+}
+
 async function eibiStatus() {
   const el = $("eibiState");
   if (!el) return;
@@ -672,6 +783,7 @@ async function renderHw() {
     const show = (id, yes) => { const e = $(id); if (e) e.classList.toggle("hide", !yes); };
     show("hwBiasT", !!cap.biasT);
     show("hwPpm",   drv === "rtl" || drv === "rtlsdr");
+    show("hwSerial", drv === "rtl" || drv === "rtlsdr");
     show("hwPpb",   drv === "airspyhf");
   }
 
@@ -878,6 +990,7 @@ function fill() {
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
+  $("rtlSerialGo").addEventListener("click", serialChange);
 }
 
 function addr() {
@@ -988,6 +1101,9 @@ async function signIn(fromTicket) {
     if (list.length > 1) $("saveRadioBtn").classList.remove("hide");
     renderTabs();
     fill();
+    // ★ Also picks up a change written BEFORE a reboot that has since happened — the page can
+    //   then confirm it took, which is the whole point of keeping the marker on disk.
+    serialStatus();
   } catch (e) { $("signinErr").textContent = "Could not reach the server."; }
 }
 
@@ -1057,7 +1173,19 @@ $("saveBtn").onclick = async () => {
     }
     // ★ The server restarts to apply this, so the honest thing is to say so and then WAIT for it
     //   to come back rather than reloading into a connection error.
-    $("barMsg").innerHTML = '<span class="ok">Saved. Restarting the receiver…</span>';
+    // ★★★ A PENDING SERIAL NEEDS A REBOOT, NOT A RESTART. Restarting the service cannot power-
+    //     cycle a USB port, so the dongle would still answer to its old name and the change would
+    //     look like it had silently failed. The reboot also lets the boot-time reconciliation
+    //     rename vibeserver@<serial>.service, which a restart cannot do either.
+    const needReboot = SERIAL_PENDING && !SERIAL_PENDING.took;
+    if (needReboot) {
+      try {
+        await fetch("/vibeserver/admin/reboot?" + await authQuery(), {method: "POST"});
+      } catch (e) { /* the machine going down mid-request is the expected outcome */ }
+    }
+    $("barMsg").innerHTML = needReboot
+      ? '<span class="ok">Saved. Rebooting so the new serial takes effect…</span>'
+      : '<span class="ok">Saved. Restarting the receiver…</span>';
     // ★★★ WAIT FOR A DIFFERENT PROCESS, NOT MERELY A LIVE ONE. The old server keeps answering for
     //     the moment between our POST and its exit, so "is it up?" says yes immediately — the
     //     button appeared at once and then led to a dead page (Stuart, 2026-08-06). `instance`
@@ -1073,7 +1201,13 @@ $("saveBtn").onclick = async () => {
           // ★ An older server sends no `instance`. Rather than never showing the button, fall back
           //   to the old rule but only after a few seconds, by which time the restart has begun.
           const isNew = j.instance ? (j.instance !== BOOT_ID) : (i >= 4);
-          if (isNew && j.configured) { backUp(); return; }
+          if (isNew && j.configured) {
+            // ★ Verify rather than celebrate: a reboot that happened is not the same as a serial
+            //   that changed, and the owner should be told which of those they got.
+            await serialStatus();
+            backUp();
+            return;
+          }
         } catch (e) { /* still down — expected, and the point */ }
       }
       $("barMsg").textContent = "Saved, but the server has not come back. Check it on the machine.";

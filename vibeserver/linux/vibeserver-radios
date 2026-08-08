@@ -33,6 +33,24 @@ done
 mapfile -t RUNNING < <(systemctl list-units --plain --no-legend --all 'vibeserver@*.service' 2>/dev/null \
                        | awk '{print $1}' | sed 's/^vibeserver@//; s/\.service$//')
 
+# ── A serial change that has not been power-cycled yet ───────────────────────────────────────
+# ★★★ THE ONE WINDOW WHERE THE CONFIG AND THE HARDWARE DISAGREE ON PURPOSE. After an EEPROM
+#     rewrite, config.json names the NEW serial while the dongle on the bus still answers to the
+#     OLD one — an RTL2832U only re-reads its EEPROM at power-on. Reconciling naively in that
+#     window stops a radio that is running perfectly and then fails to start its replacement,
+#     because the replacement does not exist until the machine reboots. So the old name is treated
+#     as still wanted until the change has demonstrably taken.
+# ★ The marker is removed by the server itself, and only once it has SEEN the new serial on the
+#   bus — never on a timer, so this cannot expire while the dongle still answers to the old name.
+PENDING=/var/lib/vibeserver/pending-serial.json
+if [ -r "$PENDING" ]; then
+    old_serial=$(sed -n 's/.*"old":"\([^"]*\)".*/\1/p' "$PENDING")
+    if [ -n "$old_serial" ]; then
+        echo "vibeserver-radios: serial change pending — keeping $old_serial until the reboot"
+        want_set["$old_serial"]=1
+    fi
+fi
+
 # ── Stop what is no longer wanted ────────────────────────────────────────────────────────────
 # ★ Before starting anything: a radio that has been switched off is still HOLDING its USB device,
 #   and a newly enabled radio may be the same physical one under a different setting.
