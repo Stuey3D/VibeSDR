@@ -121,6 +121,7 @@ struct Config {
     bool rfNotch = false, dabNotch = false, zoomSpectrum = false;
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
+    int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
 
     /** ★★★ CPU GOVERNOR — a SETTING, because the wrong one costs 25% of the machine silently.
      *  Raspberry Pi OS defaults to `ondemand`, which decides how hard to run from how busy each
@@ -190,6 +191,15 @@ struct RadioConfig {
      *  (2026-08-08). Default false, and applied at every start so the answer is never "whatever
      *  the last program left". Same principle as starting at minimum gain. */
     bool   biasT = false;
+    /** ★★ THE REST OF THE PROTECTED SET, per radio. These are the controls the admin password
+     *  exists to guard — the ones that can leave a receiver broken for the next person — so with
+     *  several radios they must be settable per radio and not only on whichever one happens to be
+     *  running. -1 / 0 mean "not set": leave the radio's own default alone.
+     *  ★ Which of them a radio HAS differs by driver, and offering one that can never apply is
+     *    the "control that only works on one radio" fault. The page draws them per driver. */
+    int    ppm = 0;             // RTL frequency correction, parts per million
+    int    ppb = 0;             // Airspy HF+ calibration, parts per billion
+    int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */

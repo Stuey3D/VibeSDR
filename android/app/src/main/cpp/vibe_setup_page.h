@@ -173,6 +173,59 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       </div>
     </div>
 
+    <!-- ★★★ EVERY RADIO HAS THESE, whichever mode it is in. They used to sit inside the
+         shared-mode block, which was right when a server had ONE radio: single-user mode means
+         the listener owns the dial, so the owner set nothing. With a tab per radio it is wrong —
+         an Airspy dedicated to FM needs a landing frequency of 96.6 and WFM whether or not its
+         window is locked (Stuart, 2026-08-08: "no sample rate, no landing frequency/demodulator"). -->
+<div class="card">
+        <h2>Where new listeners start</h2>
+        <p class="why">What someone sees the moment they connect.</p>
+        <div class="row">
+          <label><span class="lbl">Frequency (kHz)</span>
+            <input type="number" id="landingFreq" step="0.1"></label>
+          <label><span class="lbl">Mode</span>
+            <select id="demodMode">
+              <option value="am">AM</option><option value="lsb">LSB</option>
+              <option value="usb">USB</option><option value="nfm">NFM</option>
+              <option value="wfm">WFM</option><option value="cw">CW</option>
+            </select></label>
+        </div>
+      </div>
+
+    <!-- ★★★ THE PROTECTED CONTROLS, PER RADIO AND PER DRIVER.
+         These are what the admin password exists to guard — the ones that leave a receiver broken
+         for the next person. With several radios they must be settable on the radio you MEAN,
+         not only on whichever happens to be running.
+         ★★ Drawn per driver, never all at once: an Airspy has no bias-T and an RTL has no PPB, and
+            offering a control whose every use is a no-op is the fault this project already has a
+            rule about — either branch on the driver or leave it out. -->
+    <div class="card" id="radioHwCard">
+      <h2>This radio's hardware</h2>
+      <p class="why">Settings that stay in the radio itself. Listeners never get these.</p>
+      <!-- ★ EVERY radio has one, so it is not locked-mode-only. It was, which is why an Airspy
+           being set up for FM had no way to choose 768 kSPS. -->
+      <label><span class="lbl">Span (sample rate)</span>
+        <select id="rate"></select></label>
+      <div id="hwBiasT" class="hide">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="biasT" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Bias-T — put DC on the feedline to power an antenna amplifier</span></label>
+        <p class="why" style="color:var(--warn)">Only switch this on if you know what is connected.
+           It can damage equipment that is not expecting it.</p>
+      </div>
+      <div id="hwPpm" class="hide">
+        <label><span class="lbl">Frequency correction (ppm)</span>
+          <input type="number" id="ppm" step="1" placeholder="0"></label>
+        <p class="why">Corrects a dongle whose crystal is slightly off. 0 unless you have measured it.</p>
+      </div>
+      <div id="hwPpb" class="hide">
+        <label><span class="lbl">Calibration (ppb)</span>
+          <input type="number" id="ppb" step="1" placeholder="0"></label>
+        <p class="why">The Airspy HF+ is calibrated in parts per BILLION. 0 unless you have measured it.</p>
+      </div>
+    </div>
+
     <!-- Shared-mode only -->
     <div id="lockedOnly" class="hide">
       <div class="card">
@@ -182,8 +235,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <div class="row">
           <label><span class="lbl">Centre frequency (kHz)</span>
             <input type="number" id="lockFreq" step="1"></label>
-          <label><span class="lbl">Span (sample rate)</span>
-            <select id="rate"></select></label>
+          <!-- moved out of the locked-only block: every radio has a sample rate -->
         </div>
         <div class="hint" id="coverage"></div>
         <div class="note" id="eibiNote" style="margin-top:18px">
@@ -205,20 +257,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           what makes a shared receiver worth zooming into.</div>
       </div>
 
-      <div class="card">
-        <h2>Where new listeners start</h2>
-        <p class="why">What someone sees the moment they connect.</p>
-        <div class="row">
-          <label><span class="lbl">Frequency (kHz)</span>
-            <input type="number" id="landingFreq" step="0.1"></label>
-          <label><span class="lbl">Mode</span>
-            <select id="demodMode">
-              <option value="am">AM</option><option value="lsb">LSB</option>
-              <option value="usb">USB</option><option value="nfm">NFM</option>
-              <option value="wfm">WFM</option><option value="cw">CW</option>
-            </select></label>
-        </div>
-      </div>
+      
 
       <div class="card">
         <h2>Listeners</h2>
@@ -520,6 +559,19 @@ async function renderHw() {
     }
   }
 
+  // ★★ DRAW ONLY WHAT THIS RADIO HAS. An Airspy has no bias-T and no ppm; a dongle has no ppb.
+  //    Showing a control whose every use is a no-op is the fault this project has a rule about:
+  //    branch on the driver or leave it out, because a user concludes the FEATURE is broken, not
+  //    the control.
+  {
+    const cap = DRIVER_HW[(hw && hw.driver) || r.driver] || {};
+    const drv = (hw && hw.driver) || r.driver || "";
+    const show = (id, yes) => { const e = $(id); if (e) e.classList.toggle("hide", !yes); };
+    show("hwBiasT", !!cap.biasT);
+    show("hwPpm",   drv === "rtl" || drv === "rtlsdr");
+    show("hwPpb",   drv === "airspyhf");
+  }
+
   // ★ Show what the processor is ACTUALLY doing, next to the control that asks for it.
   const gv = document.getElementById("govNow");
   if (gv && hw && hw.governor) {
@@ -644,17 +696,23 @@ function renderTabs() {
   // ★ One radio is not a choice, so it does not get a chooser.
   if (list.length < 2) { wrap.classList.add("hide"); return; }
   wrap.classList.remove("hide");
+  // ★★★ THREE STATES, THREE COLOURS — and they answer different questions.
+  //     GREEN: set up, and will be served. RED: not set up, so it will NOT be served no matter
+  //     how much you tick it elsewhere. AMBER: the tab you are editing right now.
+  //     ★ The amber "you are here" has to win, or the tab you are working on becomes the one you
+  //       cannot pick out — so the current tab is amber whatever its state, and its readiness is
+  //       carried by the dot instead.
   tabs.innerHTML = list.map((r, i) => {
     const on = i === curRadio;
-    // ★★ A radio whose tab has never been saved is marked, because an unmarked one looks finished
-    //    — and an unconfigured radio is NOT served, which is a silence the owner would otherwise
-    //    have to work out for themselves.
-    const done = r.configured ? "" : " •";
-    return `<button type="button" data-i="${i}" style="padding:6px 12px;border-radius:6px;`
-         + `border:1px solid var(--amber);cursor:pointer;`
-         + (on ? "background:var(--amber);color:#000"
-               : "background:transparent;color:var(--amber)")
-         + `">${(r.label || r.driver || "Radio " + (i + 1))}${done}</button>`;
+    const ready = !!r.configured;
+    const dot = ready ? "" : " •";
+    const colour = on     ? "background:var(--amber);color:#000;border-color:var(--amber)"
+                 : ready  ? "background:rgba(60,200,90,.14);color:#6ede8a;border-color:#3c9a55"
+                          : "background:rgba(230,80,80,.14);color:#ff9b9b;border-color:#b04a4a";
+    return `<button type="button" data-i="${i}" title="${ready ? "Set up — will be served"
+                                                              : "Not set up yet — will not be served"}"`
+         + ` style="padding:6px 12px;border-radius:6px;border:1px solid;cursor:pointer;${colour}">`
+         + `${(r.label || r.driver || "Radio " + (i + 1))}${dot}</button>`;
   }).join("");
   Array.from(tabs.querySelectorAll("button")).forEach(b => {
     b.onclick = () => {
@@ -707,6 +765,9 @@ function fill() {
   $("users").value = r.users || 1;
   $("uncompressed").value = String(r.uncompressed || 0);
   $("forceIdle").checked = !!r.forceIdleSaver;
+  if ($("biasT")) $("biasT").checked = !!r.biasT;
+  if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
+  if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
@@ -741,7 +802,12 @@ function collectRadio() {
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
-    ...($("gain")     ? {gain: parseInt($("gain").value, 10)} : {})
+    ...($("gain")     ? {gain: parseInt($("gain").value, 10)} : {}),
+    // ★ Only what this radio HAS. Sending ppb for a dongle would store a setting that can never
+    //   apply — the config would then describe a radio we are not.
+    ...($("hwBiasT").classList.contains("hide") ? {} : {biasT: $("biasT").checked}),
+    ...($("hwPpm").classList.contains("hide")   ? {} : {ppm: parseInt($("ppm").value || "0", 10)}),
+    ...($("hwPpb").classList.contains("hide")   ? {} : {ppb: parseInt($("ppb").value || "0", 10)})
   };
 }
 

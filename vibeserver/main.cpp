@@ -1300,6 +1300,13 @@ int main(int argc, char** argv) {
     // ★ Same principle as starting at minimum gain: assert a known safe state rather than
     //   discovering one. Off unless this radio's config asks for it.
     LocalSdrShim::instance().setBiasTee(g_runtimeConfig.biasT);
+    // ★ The rest of the protected set, asserted for the same reason: these all persist in the
+    //   RADIO, so a value left by another program (or by this owner on a different radio) would
+    //   otherwise be inherited silently. 0 / -1 mean "leave the radio's default alone".
+    if (g_runtimeConfig.ppm != 0) LocalSdrShim::instance().setPpm(g_runtimeConfig.ppm);
+    if (g_runtimeConfig.ppb != 0) LocalSdrShim::instance().setAhfCalibrationPpb(g_runtimeConfig.ppb);
+    if (g_runtimeConfig.directSampling >= 0)
+        LocalSdrShim::instance().setDirectSampling(g_runtimeConfig.directSampling);
     if (g_runtimeConfig.biasT)
         std::printf("  bias-T: ON — this radio is putting DC on its feedline (from your settings)\n");
 
