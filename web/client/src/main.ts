@@ -842,7 +842,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // the OS — can suspend the AudioContext, and an unsuspend handler that removes
   // itself once it has worked ONCE leaves you stuck with no audio and no way back
   // except a page reload. On a desktop there is no reason to ever sit suspended.
-  const kick = () => { void audio?.resume(); setTimeout(showAudioGate, 150); };
+  // ★★ AWAIT THE RESUME, THEN RE-CHECK. resume() is asynchronous, so a fixed 150 ms re-check ran
+  //    while the context was still reporting `suspended` — the badge stayed up for ever even
+  //    though the click had worked, and only vanished if you clicked the badge itself (Stuart,
+  //    2026-08-08: "I clicked on the screen but the pill stayed until I clicked it").
+  const kick = () => { void (async () => { await audio?.resume(); showAudioGate(); })(); };
   for (const ev of ['pointerdown', 'keydown', 'focus'] as const) {
     window.addEventListener(ev, kick);
   }
@@ -876,6 +880,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     document.body.appendChild(el);
   }
   setTimeout(showAudioGate, 600);
+  // ★ And keep watching. Anything can suspend a context again — a tab switch, the OS, a phone
+  //   call — so the badge has to be able to come BACK as well as go away. Cheap, and it means the
+  //   badge can never be left saying something that is no longer true.
+  setInterval(showAudioGate, 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
 
   // Register the service worker — Chromium will not offer "install" without one. It caches
