@@ -434,8 +434,17 @@ function refreshRawAudioRow() {
 
 async function connect(host: string, pin: string) {
   currentHost = host;
-  const httpBase = `http://${host}`;
-  const wsBase = `ws://${host}`;
+  // ★★★ FOLLOW THE PAGE'S OWN SCHEME. These were hardcoded to http:// and ws://, so a server put
+  //     behind an HTTPS reverse proxy served an https page whose auth fetch, config fetch and
+  //     every WebSocket were plain http/ws — which the browser BLOCKS as mixed content. The
+  //     receiver then failed to connect with nothing wrong at the proxy, and it reads as a broken
+  //     server (Saber, 2026-08-08: "cant use my vibeserver publicly ... doesnt follow the http
+  //     scheme from the URL already set").
+  // ★★ The test is the PAGE's protocol, not the host's: an https page may not load ANY http
+  //    subresource, wherever it points. On a plain http page both stay as they were.
+  const secure = location.protocol === 'https:';
+  const httpBase = `${secure ? 'https' : 'http'}://${host}`;
+  const wsBase = `${secure ? 'wss' : 'ws'}://${host}`;
 
   let auth: AuthState;
   try {
@@ -905,15 +914,28 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //    only the first of them leaves the rest to land on the dial.
     // ★ The whole overlay is the target, not just the button — anywhere is a fair place to click
     //   when the instruction is "click to start".
+    // ★★★ STOP IT PROPAGATING, DO NOT preventDefault() IT. stopPropagation alone keeps the
+    //     gesture off the waterfall — the tuning handlers listen on `window`, so a captured stop
+    //     here never reaches them. preventDefault() does something else entirely: it CANCELS the
+    //     click that a pointerdown/touchstart would have produced, which killed the gate's own
+    //     gesture. The badge then sat there until the listener poked something underneath, i.e.
+    //     exactly the click-through we added it to prevent (Stuart, 2026-08-08: "the audio doesnt
+    //     start when you press start it still requires interaction underneath").
     const swallow = (e: Event) => {
-      e.preventDefault();
       e.stopPropagation();
       (e as Event & { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.();
     };
+    // ★★ RESUME ON THE EVENTS THAT ACTUALLY CARRY USER ACTIVATION. `pointerdown` only counts for
+    //    a MOUSE — on touch the browser grants activation on pointerup/touchend/click, so a
+    //    phone tapping the gate got no activation at all and resume() was rejected silently.
+    const kickers = new Set<string>(['pointerdown', 'pointerup', 'mouseup', 'touchend', 'click']);
     for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click',
                       'touchstart', 'touchend', 'dblclick', 'wheel'] as const) {
-      el.addEventListener(ev, (e) => { swallow(e); if (ev === 'pointerdown') kick(); },
-                          { capture: true });
+      el.addEventListener(ev, (e) => {
+        swallow(e);
+        if (ev === 'wheel' || ev === 'dblclick') e.preventDefault();   // scroll/zoom, not a gesture
+        if (kickers.has(ev)) kick();
+      }, { capture: true, passive: false });
     }
     document.body.appendChild(el);
   }

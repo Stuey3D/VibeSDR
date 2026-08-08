@@ -106,7 +106,9 @@ export class DecoderClient {
   private spotsOn = false;
 
   constructor(host: string, auth: AuthState, cb: DecoderCallbacks) {
-    this.url = `ws://${host}${withAuth('/ws/dxcluster', auth)}`;
+    // ★ Same rule as the other sockets: an https page cannot open a ws:// socket. See connect().
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    this.url = `${scheme}://${host}${withAuth('/ws/dxcluster', auth)}`;
     this.cb = cb;
   }
 
