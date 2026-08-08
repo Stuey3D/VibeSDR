@@ -168,6 +168,26 @@ int main() {
            std::to_string(portForRadio(s,0)));
     }
 
+    std::printf("\n★ A live PATCH must not be mistaken for an old-format file\n");
+    {
+        // The server persists live changes as fragments — {"gain":123} when an admin nudges it.
+        ServerConfig s;
+        s.configured = true; s.adminPass = "pw";
+        RadioConfig a; a.serial="A"; a.label="HF"; a.enabled=true;  a.configured=true;
+        RadioConfig b; b.serial="B"; b.label="FM"; b.enabled=true;  b.configured=false;
+        s.radios = {a, b};
+
+        ok(fromJson("{\"gain\":123}", s, err), "a one-field patch applies", err);
+        ok(s.radios.size() == 2, "★ it did not invent a radio", std::to_string(s.radios.size()));
+        if (s.radios.size() == 2) {
+            ok(!s.radios[1].configured,
+               "★ a radio that was NOT set up is still not set up");
+            ok(s.radios[0].label == "HF" && s.radios[1].label == "FM",
+               "★ and neither radio was rewritten");
+        }
+        ok(s.adminPass == "pw", "the admin password survived a patch");
+    }
+
     std::printf("\nA machine with no radios is a valid answer, not an error\n");
     {
         ServerConfig s; s.configured = true;

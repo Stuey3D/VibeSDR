@@ -441,18 +441,26 @@ void statusScreen(vsconfig::Config& cfg) {
                 attroff(COLOR_PAIR(r.enabled && r.configured ? 1 : 4));
                 row++;
             }
+            attron(COLOR_PAIR(4));
+            mvprintw(row++, 12, "up/down to choose, space to serve it or not");
+            attroff(COLOR_PAIR(4));
         }
-        mvprintw(6, 2, "Settings: %s", cfg.configured ? "configured" : "NOT set up yet");
+        // ★ FLOWING, not fixed. These were rows 6, 8 and 9 — correct while the radio above them
+        //   was one line, and overlapping the moment it became a LIST: the radios drew straight
+        //   through "Settings:" and the browser address (Stuart, 2026-08-08: "the TUI is all
+        //   mashed up"). Nothing on this screen may assume the height of what is above it.
+        mvprintw(row++, 2, "Settings: %s", cfg.configured ? "configured" : "NOT set up yet");
+        row++;
 
         const std::string ip = myIp(), port = listenPort();
         attron(A_BOLD);
-        mvprintw(8, 2, "Open this in a browser:");
+        mvprintw(row, 2, "Open this in a browser:");
         attron(COLOR_PAIR(3));
-        mvprintw(8, 27, "http://%s:%s/", ip.c_str(), port.c_str());
+        mvprintw(row++, 27, "http://%s:%s/", ip.c_str(), port.c_str());
         attroff(COLOR_PAIR(3));
         attroff(A_BOLD);
         attron(COLOR_PAIR(4));
-        mvprintw(9, 2, "All settings live there. Setup from the VibeSDR app is coming soon.");
+        mvprintw(row++, 2, "All settings live there. Setup from the VibeSDR app is coming soon.");
         attroff(COLOR_PAIR(4));
 
         // ★★ CHANGING THE RADIO IS ITS OWN SECTION, not a footnote under "locked out". Swapping
@@ -466,11 +474,6 @@ void statusScreen(vsconfig::Config& cfg) {
         //     running at all and no clue why. Meanwhile passing any flag ran one perfectly.
         //     Say plainly that we cannot manage a service here, and run the thing ourselves.
         const bool svcExists = !st.empty();
-        if (!srvCfg.radios.empty()) {
-            attron(COLOR_PAIR(4));
-            mvprintw(row++, 2, "up/down to choose a radio, space to serve it or not.");
-            attroff(COLOR_PAIR(4));
-        }
         row++;
         attron(A_BOLD); mvprintw(row++, 2, "Changing the radio"); attroff(A_BOLD);
         // ★ EVERY ROW FLOWS FROM HERE. These were fixed line numbers, which was fine while the

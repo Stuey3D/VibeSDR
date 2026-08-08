@@ -466,11 +466,23 @@ std::string toJson(const ServerConfig& c) {
 
 bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     std::vector<std::string> objs;
-    if (!getObjectArray(j, "radios", objs)) {
-        // ★ No array at all: this is today's single-radio file. See migrateSingleRadio.
+    const bool haveRadios = getObjectArray(j, "radios", objs);
+    if (!haveRadios && c.radios.empty()) {
+        // ★ No array, and we hold none: this is today's single-radio FILE. See migrateSingleRadio.
         migrateSingleRadio(j, c);
         return true;
     }
+    // ★★★ NO RADIOS IN THE DOCUMENT, BUT WE ALREADY HAVE SOME — THIS IS A PATCH, NOT A FILE.
+    //
+    //     The server persists live changes as fragments: an admin nudges the gain and the daemon
+    //     writes {"gain":123}. That has no radios array, and treating it as an old-format config
+    //     ran the migration over a machine that already had three — inventing a radio from the
+    //     fragment's DEFAULTS and marking every radio `configured`, which put two receivers that
+    //     had never been set up onto the landing page claiming to be serving.
+    //
+    // ★★ A PATCH MUST NOT HAVE AN OPINION ABOUT FIELDS IT DOES NOT MENTION. Exactly the lesson
+    //    the live-persist path learned from the other side, and the same one the TUI learned:
+    //    re-read, change only what you were told, write back.
     double n = 0; bool b = false; std::string t;
     auto S = [&](const char* k, std::string& dst) { if (getStr(j, k, t)) dst = t; };
     auto I = [&](const char* k, int& dst)         { if (getNum(j, k, n)) dst = (int)n; };
@@ -488,8 +500,10 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     S("cpuGovernor", c.cpuGovernor);
     I("port", c.port); B("web", c.web);
 
-    c.radios.clear();
-    for (const auto& o : objs) { RadioConfig r; radioFromJson(o, r); c.radios.push_back(r); }
+    if (haveRadios) {
+        c.radios.clear();
+        for (const auto& o : objs) { RadioConfig r; radioFromJson(o, r); c.radios.push_back(r); }
+    }
     (void)err;
     return true;
 }
