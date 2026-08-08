@@ -329,6 +329,13 @@ void RxPipeline::feed(const cf32* iq, int n) {
         deemphR_.reset();
         dirty_ = true;                       // and rebuild the audio chain around them
     }
+    // ★ Narrow resync: drop the previous station's RDS state and re-seed the pilot, but leave
+    //   the audio chain (and its AGC) alone. Ordered after the full reset above so the two do not
+    //   fight, and guarded on chFs_ because the pilot cannot be configured before the first build.
+    if (rdsResyncReq_.exchange(false, std::memory_order_relaxed) && chFs_ > 0.0) {
+        rdsDemod_.reset();
+        pll_.configure(19000.0, chFs_);
+    }
     if (dirty_) rebuildAudio();          // rebuildAudio() re-points the NCO itself
     // A same-chain retune: nothing to rebuild, just move the oscillator. Skipped when a
     // rebuild already ran this block, since that has applied the newer offset anyway.
@@ -592,7 +599,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 interleave2(audioBuf_.data(), rOutBuf_.data(), ilvBuf_.data(), no);
                 cb_.audio(cb_.ctx, ilvBuf_.data(), no, 2, outRate_);
             }
-            if (cb_.stereo && lk != lastStereo_) { lastStereo_ = lk; cb_.stereo(cb_.ctx, lk); }
+            const bool forced = stereoReport_.exchange(false, std::memory_order_relaxed);
+            if (cb_.stereo && (lk != lastStereo_ || forced)) { lastStereo_ = lk; cb_.stereo(cb_.ctx, lk); }
         } else {
             // ── Mono post-chain (AM/SSB/CW/NFM + WFM-mono fallback) ───────────
             int nd = nc;

@@ -1276,6 +1276,16 @@ public:
     // blended in by pilot-lock confidence so weak/edge signals fade smoothly
     // instead of screeching as lock flickers. Thread-safe to call any time.
     void setStereoEnabled(bool on) { stereoEnabled_ = on; }
+    /** ★★★ RE-ANNOUNCE THE STEREO STATE EVEN THOUGH IT HAS NOT CHANGED.
+     *  The stereo report is edge-triggered, which is right: it drives a UI indicator and nobody
+     *  wants it every block. But the CALLER caches it, and the shim clears its cache on every
+     *  retune (the next station may be mono). A retune inside the same mode deliberately does not
+     *  rebuild the chain — that is what keeps the audio from breaking — so the pilot never
+     *  unlocks, there is no edge, and the cleared cache is never refilled. The listener then sees
+     *  mono on an obviously-stereo station until something else rebuilds the chain, which is why
+     *  opening and closing the Advanced RDS box "fixed" it (Stuart, 2026-08-08).
+     *  ★ Whoever clears a cached state must be able to ask for it again. */
+    void requestStereoReport() { stereoReport_.store(true, std::memory_order_relaxed); }
     /** ★★★ RUN THE RDS DEMOD, OR DO NOT. Generating the 57 kHz reference and the bit clock is
      *  about a third of the stereo PLL's per-sample work, and on a SHARED receiver most listeners
      *  do not need it done AGAIN: RDS is a property of the CARRIER, so everyone on one station
@@ -1323,6 +1333,17 @@ public:
      *  discipline as `dirty_`.
      */
     void requestReset() { resetReq_.store(true, std::memory_order_relaxed); }
+    /** ★★★ A NEW CARRIER INVALIDATES WHAT THE RDS DECODER LEARNED — WITHOUT REBUILDING THE AUDIO.
+     *  requestReset() would do it, but it also sets `dirty_`, and a full rebuildAudio() resets the
+     *  audio AGC: that is the "tuning attenuates the audio" bug, so it must not run on every
+     *  retune. This resets ONLY the RDS decoder and re-seeds the pilot loop.
+     *  ★★ Why it matters on WEAK stations specifically: the decoder scores competing timing
+     *  hypotheses, and those scores SURVIVED a retune. A hypothesis that fitted the previous
+     *  (strong) station could out-score the correct one on the new (weak) one indefinitely, so
+     *  RDS and stereo never arrived until something forced a rebuild — which is what opening and
+     *  closing the Advanced RDS box did (Stuart, 2026-08-08: "it works on the stronger signals
+     *  but the weaker ones ... are struggling"). */
+    void requestRdsResync() { rdsResyncReq_.store(true, std::memory_order_relaxed); }
     /** How many times the audio chain has been rebuilt. Diagnostics only — but it is what
      *  the retune test asserts on, because "did tuning tear the chain down?" is otherwise
      *  only observable as a level/continuity artefact that varies with the signal. */
@@ -1436,11 +1457,13 @@ private:
     std::unique_ptr<RationalResampler> resampR_;    // right channel
     std::vector<float> lprBuf_, lmrBuf_, leftBuf_, rightBuf_, rOutBuf_, ilvBuf_;
     bool lastStereo_ = false;
+    std::atomic<bool> stereoReport_{false};  // force one report even with no edge
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     std::atomic<bool> rdsEnabled_{true};     // see setRdsEnabled — shared-receiver economy
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()
+    std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()
     std::atomic<bool> tuneReq_{false};       // same-chain retune: move the NCO, rebuild nothing
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
