@@ -894,9 +894,27 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       + 'color:var(--amber,#ffb000);opacity:.7;text-align:center;padding:0 1em';
 
     el.appendChild(btn); el.appendChild(why);
+
+    // ★★★ THE GATE MUST EAT THE CLICK. Being on top is not enough: the waterfall listens for
+    //     pointer events on the window, so the click that started audio ALSO fell through and
+    //     retuned the radio — the listener's first act on the page moved the dial without them
+    //     asking (Stuart, 2026-08-08: "clicking through to the waterfall underneath and is
+    //     tuning").
+    // ★★ Captured and stopped on EVERY pointer and mouse event of the gesture, not just
+    //    pointerdown: the tuning handler may key off click, mouseup or touchend, and swallowing
+    //    only the first of them leaves the rest to land on the dial.
     // ★ The whole overlay is the target, not just the button — anywhere is a fair place to click
     //   when the instruction is "click to start".
-    el.addEventListener('pointerdown', kick);
+    const swallow = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      (e as Event & { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.();
+    };
+    for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click',
+                      'touchstart', 'touchend', 'dblclick', 'wheel'] as const) {
+      el.addEventListener(ev, (e) => { swallow(e); if (ev === 'pointerdown') kick(); },
+                          { capture: true });
+    }
     document.body.appendChild(el);
   }
   setTimeout(showAudioGate, 600);
