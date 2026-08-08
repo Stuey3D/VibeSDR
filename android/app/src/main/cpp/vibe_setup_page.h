@@ -282,12 +282,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 
       <div class="card">
         <h2>Listeners</h2>
-        <p class="why">How many people at once, and for how long.</p>
+        <p class="why">How many people at once.</p>
         <div class="row">
           <label><span class="lbl">Maximum listeners</span>
             <input type="number" id="users" min="1" max="50"></label>
-          <label><span class="lbl">Time limit (minutes, 0 = none)</span>
-            <input type="number" id="sessionLimit" min="0"></label>
         </div>
         <div class="note" id="bwNote"></div>
       </div>
@@ -298,6 +296,27 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            at all.</p>
         <div id="hw"></div>
       </div>
+    </div>
+
+    <!-- ★★★ A TIME LIMIT IS NOT A SHARED-MODE IDEA. This lived inside the locked-only block with
+         "maximum listeners", which is where it looks like it belongs — and it is exactly backwards.
+         A shared radio gives everyone their own VFO, so a listener who stays all day costs the
+         others nothing. A SINGLE-USER radio is the whole radio: one person holds the hardware and
+         everybody else sits in the queue behind them. That is the case that needs a limit, and it
+         was the one case where the control could not be reached (Stuart, 2026-08-08: "no time
+         limits for the single user radios").
+         ★ Maximum listeners stays locked-only: a single-user radio is one by definition. -->
+    <div class="card">
+      <h2>Time limit</h2>
+      <p class="why">How long one listener may keep this radio.</p>
+      <label><span class="lbl">Minutes (0 = no limit)</span>
+        <input type="number" id="sessionLimit" min="0">
+        <div class="hint">When the limit is reached the listener is warned, then disconnected, and
+          the next person in the queue gets their turn. <b>On a single-user radio this is the only
+          thing that keeps one listener from holding the hardware all day</b> — there is one tuner
+          and whoever has it has all of it. On a shared radio it matters far less: everyone already
+          has their own VFO, so a long session costs nobody else anything.
+          <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
     </div>
 
     <div class="card">
