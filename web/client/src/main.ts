@@ -220,6 +220,8 @@ function initSplash() {
   //   API accepts it (see vibe_admin_ticket.h), and the setup page is served by this same process.
   document.getElementById('btnSplashAdmin')?.addEventListener('click', () => {
     if (!adminSignedInThisView || !inAdminMode()) return;
+    // ★ The landing page never runs startApp(), so nothing has wired the panel yet. Idempotent.
+    initAdmin(() => location.host, () => adminPassword);
     openAdmin(location.host, adminPassword);
   });
   document.getElementById('btnSplashSetup')?.addEventListener('click', () => {

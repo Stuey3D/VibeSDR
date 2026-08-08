@@ -116,7 +116,7 @@ function card(k: string, v: string, sub: string, status = 'ok'): string {
        + `<div class="v">${esc(v)}</div><div class="s">${esc(sub)}</div></div>`;
 }
 
-function renderHealth(st: any) {
+function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = []) {
   const sys = st.sys ?? {};
   const out: string[] = [];
 
@@ -192,17 +192,46 @@ function renderHealth(st: any) {
   if (st.sys?.cpuKHz > 0)
     out.push(card('CPU CLOCK', `${Math.round(st.sys.cpuKHz / 1000)} MHz`,
                   st.sys.governor ? `governor: ${st.sys.governor}` : ''));
-  out.push(card('LISTENERS', `${st.listeners ?? 0}${st.maxUsers > 1 ? ` / ${st.maxUsers}` : ''}`,
-    st.waiting ? `${st.waiting} waiting` : 'nobody waiting'));
+  // ★★★ ONE CARD PER RADIO, NOT ONE CARD FOR "THE" RADIO. Health above this line is about the
+  //     MACHINE — one CPU, one supply, one clock — but listeners, uplink and the radio itself
+  //     belong to a process each. Read from a single status they were not merely incomplete but
+  //     WRONG: the front door showed one radio's name beside another's listener limit, because
+  //     the numbers came from whichever process happened to answer (Stuart, 2026-08-08: "you have
+  //     the RTL stats at the top but not the SDRPlay or Airspy").
+  // ★ Falls back to the single status when there is only one radio, so a one-radio server's page
+  //   is exactly what it always was.
+  const radios = perRadio.length ? perRadio : [{ radio: '', data: st }];
 
-  out.push(card('UPLINK', `${(st.txKbps ?? 0).toFixed(0)} kbps`,
-    `${st.uniqueHour ?? 0} addresses this hour`));
-
-  const radio = st.radio ?? {};
-  out.push(card('RADIO', radio.present ? String(radio.driver).toUpperCase() : 'MISSING',
-    radio.present ? `${mhz(radio.centreHz)} · ${(radio.spanHz / 1e6).toFixed(1)} MHz span`
-                  : 'the receiver was unplugged or has failed',
-    radio.present ? 'ok' : 'critical'));
+  // ★★ THE MACHINE'S TOTAL, not the biggest radio's. Reading one status made this card show
+  //    whichever radio answered — "0 / 30" on a server that can actually take 32, because the
+  //    Airspy and the dongle contribute one slot each (Stuart, 2026-08-08). Capacity is a property
+  //    of the whole machine, and it is the number an owner sizes their uplink against.
+  {
+    const tot = radios.reduce((a, r) => ({
+      now:  a.now  + (Number(r.data?.listeners) || 0),
+      max:  a.max  + (Number(r.data?.maxUsers)  || 0),
+      wait: a.wait + (Number(r.data?.waiting)   || 0),
+      kbps: a.kbps + (Number(r.data?.txKbps)    || 0),
+    }), { now: 0, max: 0, wait: 0, kbps: 0 });
+    out.push(card('LISTENERS', `${tot.now}${tot.max ? ` / ${tot.max}` : ''}`,
+      tot.wait ? `${tot.wait} waiting` : 'nobody waiting'));
+    out.push(card('UPLINK', `${tot.kbps.toFixed(0)} kbps`,
+      `${st.uniqueHour ?? 0} addresses this hour`));
+  }
+  for (const r of radios) {
+    const d = r.data ?? {};
+    const radio = d.radio ?? {};
+    const name = r.radio || (radio.present ? String(radio.driver).toUpperCase() : 'RADIO');
+    out.push(card(name,
+      radio.present ? `${d.listeners ?? 0}${d.maxUsers > 1 ? ` / ${d.maxUsers}` : ''} listening`
+                    : 'MISSING',
+      radio.present
+        ? `${mhz(radio.centreHz)} · ${(radio.spanHz / 1e6).toFixed(1)} MHz span`
+          + ` · ${(d.txKbps ?? 0).toFixed(0)} kbps`
+          + (d.waiting ? ` · ${d.waiting} waiting` : '')
+        : 'the receiver was unplugged or has failed',
+      radio.present ? 'ok' : 'critical'));
+  }
 
   // ★★ THE FRONT END, because a gain problem is invisible on a waterfall — auto-contrast
   //    normalises it away, so the picture looks identical whether the radio is wide open or
@@ -536,6 +565,9 @@ async function refresh() {
     const [st, hist, sesAll, connsAll] = await Promise.all([
       get('status'), get('history'), fromEveryRadio('sessions'), fromEveryRadio('connections'),
     ]);
+    // ★ The machine's health comes from whichever process we asked (they all read the same /proc);
+    //   the per-RADIO numbers have to come from each radio.
+    const statAll = await fromEveryRadio('status');
     // Merge, tagging every row with the radio it belongs to.
     const ses = {
       sessions: sesAll.flatMap((r) => (r.data?.sessions ?? []).map((x: any) => ({ ...x, radio: r.radio }))),
@@ -552,7 +584,7 @@ async function refresh() {
         .sort((a: any, b: any) => (b.at || 0) - (a.at || 0)),
     };
     failures = 0;
-    renderHealth(st);
+    renderHealth(st, statAll);
     renderGraphs(hist);
     // ★★★ SIMPLE vs FULL. The gated panels are about MANAGING STRANGERS — who is connected,
     //     blocking them, where they came from. On a household receiver they are noise, and
@@ -669,7 +701,19 @@ export function isAdminOpen() { return open; }
 
 /** Wire the buttons once. The tables are re-rendered constantly, so their buttons are handled by
  *  DELEGATION — per-row listeners would leak on every refresh. */
+let wired = false;
+
+/** Wire the panel once, from whichever entry point gets there first.
+ *  ★★★ IT USED TO BE CALLED ONLY FROM startApp(), which runs only after connecting to a RADIO. So
+ *      on the landing page — where an owner opens this precisely BECAUSE they do not want to take
+ *      a radio — nothing was wired: every maintenance button was inert and the update-schedule
+ *      selects were empty boxes, because the options are built in here too (Stuart, 2026-08-08:
+ *      "these buttons at the bottom also dont work on this combined screen").
+ *  ★ Guarded rather than moved: both entry points are legitimate, and wiring twice would give
+ *    every button two handlers — one press, two reboots. */
 export function initAdmin(getHost: () => string, getPassword: () => string) {
+  if (wired) return;
+  wired = true;
   $('btnServerAdmin')?.addEventListener('click', () => {
     const pw = getPassword();
     // ★ A ticket is enough on its own — see q(). Only refuse when there is NEITHER.
