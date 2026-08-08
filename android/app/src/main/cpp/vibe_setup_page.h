@@ -574,6 +574,7 @@ function setMode(locked) {
   radio().mode = locked ? "locked" : "single";   // ★ the OPEN tab, not the machine
   $("modeLocked").classList.toggle("sel", locked);
   $("modeSingle").classList.toggle("sel", !locked);
+  if (typeof renderBands === "function") renderBands();
   $("lockedOnly").classList.toggle("hide", !locked);
   syncSpectroOffer();
 }
@@ -632,6 +633,90 @@ let SERIAL_PENDING = null;   // {old,new} while a change is written but not yet 
 function esc(t) {
   return String(t == null ? "" : t).replace(/[&<>"']/g,
     c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+
+// ── Where listeners may tune ────────────────────────────────────────────────────────────────
+//
+// ★★ THE LISTS ARE EDITED AS CHIPS, not as a comma-separated string in a text box. An owner who
+//    mistypes one entry in a string loses the whole line to a parse they cannot see; a chip they
+//    can add and remove one at a time is a thing they can check at a glance, which matters for a
+//    setting whose whole job is to be exactly right.
+let BANDS = [];              // [{id,label}] — from the server, never a copy in this page
+
+function bandLabel(entry) {
+  const b = BANDS.find(x => x.id === entry);
+  return b ? b.label : entry;
+}
+
+function bandChips(which) {
+  const list = (radio()[which === "allow" ? "allowRanges" : "blockRanges"] || "")
+    .split(",").map(t => t.trim()).filter(Boolean);
+  const host = $(which + "List");
+  host.innerHTML = list.map((e, i) =>
+    `<span class="bandChip">${esc(bandLabel(e))}<button type="button" data-w="${which}" data-i="${i}"
+       title="Remove">&times;</button></span>`).join("")
+    || `<span class="hint">${which === "allow"
+          ? "Empty — this radio can tune anywhere it hears."
+          : "Empty — nothing is blocked."}</span>`;
+  Array.from(host.querySelectorAll("button")).forEach(b => {
+    b.onclick = () => {
+      const arr = list.slice(); arr.splice(parseInt(b.getAttribute("data-i"), 10), 1);
+      radio()[which === "allow" ? "allowRanges" : "blockRanges"] = arr.join(",");
+      bandChips(which); bandSummary();
+    };
+  });
+}
+
+function bandAdd(which) {
+  const typed = ($(which + "Type").value || "").trim();
+  const picked = $(which + "Pick").value;
+  const entry = typed || picked;
+  if (!entry) return;
+  const key = which === "allow" ? "allowRanges" : "blockRanges";
+  const cur = (radio()[key] || "").split(",").map(t => t.trim()).filter(Boolean);
+  // ★ No duplicates: the server would merge them anyway, and a list showing the same band twice
+  //   makes an owner doubt which one is in force.
+  if (!cur.includes(entry)) cur.push(entry);
+  radio()[key] = cur.join(",");
+  $(which + "Type").value = "";
+  bandChips(which); bandSummary();
+}
+
+/** ★ Say what the two lists ADD UP TO, because that is the question an owner actually has and it
+ *  is not obvious from two lists — especially "you have blocked everything you allowed". */
+function bandSummary() {
+  const el = $("bandNote");
+  const a = (radio().allowRanges || "").split(",").filter(t => t.trim());
+  const b = (radio().blockRanges || "").split(",").filter(t => t.trim());
+  if (!a.length && !b.length) { el.textContent = "Listeners can tune anywhere this radio hears."; return; }
+  el.textContent = (a.length ? `Only ${a.map(bandLabel).join(", ")}` : "Everything this radio hears")
+    + (b.length ? `, except ${b.map(bandLabel).join(", ")}.` : ".");
+}
+
+function renderBands() {
+  // ★ Mode is chosen by two CARDS here, not a <select> — read it from the radio itself rather than
+  //   from a control that does not exist. (Caught by scripts/check-setup-page.mjs, which is the
+  //   whole reason that check exists: $("mode") parsed perfectly and would have been null at run
+  //   time, taking the rest of the function with it.)
+  const single = radio().mode !== "locked";
+  // ★ Shared mode has a locked range, which IS the limit — two answers to one question.
+  $("bandCard").classList.toggle("hide", !single);
+  if (!single) return;
+  for (const w of ["allow", "block"]) {
+    const sel = $(w + "Pick");
+    sel.innerHTML = '<option value="">— pick a band —</option>'
+      + BANDS.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
+    bandChips(w);
+  }
+  // Copy from another radio — the lists only, which is all that was asked for and sidesteps
+  // carrying a per-device calibration (or a bias-T) onto hardware it does not suit.
+  const list = radioList();
+  const others = list.map((r, i) => ({r, i})).filter(x => x.i !== curRadio);
+  $("bandCopyRow").classList.toggle("hide", others.length === 0);
+  $("bandCopyFrom").innerHTML = others.map(x =>
+    `<option value="${x.i}">${esc(x.r.label || x.r.driver || ("Radio " + (x.i + 1)))}</option>`).join("");
+  bandSummary();
 }
 
 async function serialStatus() {
@@ -792,6 +877,11 @@ async function renderHw() {
              biasT: d.biasT, rfNotch: d.rfNotch, offline: true };
     }
   }
+  // ★ The band names ride along with the hardware description — one fetch, and they are the
+  //   server's own list rather than a copy that could drift from it.
+  if (hw && Array.isArray(hw.bands) && hw.bands.length) BANDS = hw.bands;
+  renderBands();
+
   const el = $("hw");
   // ★★ SAY WHICH RADIO THESE OPTIONS BELONG TO when it is not the one running. Otherwise the page
   //    quietly shows one radio's capabilities under another radio's name, and the owner has no way
@@ -1047,6 +1137,16 @@ function fill() {
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
   $("rtlSerialGo").addEventListener("click", serialChange);
+  $("allowAdd").addEventListener("click", () => bandAdd("allow"));
+  $("blockAdd").addEventListener("click", () => bandAdd("block"));
+  $("bandCopy").addEventListener("click", () => {
+    const from = radioList()[parseInt($("bandCopyFrom").value, 10)];
+    if (!from) return;
+    radio().allowRanges = from.allowRanges || "";
+    radio().blockRanges = from.blockRanges || "";
+    renderBands();
+  });
+
 }
 
 function addr() {
@@ -1066,6 +1166,12 @@ function collectRadio() {
   const locked = radio().mode === "locked";
   return {
     mode: radio().mode,
+    // ★ The band lists are edited as chips straight onto the radio object, so they are carried
+    //   through here rather than read back off a form field that does not exist. Blank in shared
+    //   mode, because a locked range is already the limit and a stale list left behind would be
+    //   enforced invisibly if the owner switched back.
+    allowRanges: locked ? "" : (radio().allowRanges || ""),
+    blockRanges: locked ? "" : (radio().blockRanges || ""),
     zoomSpectrum: $("zoomSpectrum").checked,
     lockFreq: locked ? Math.round(parseFloat($("lockFreq").value || "0") * 1e3) : 0,
     rate: parseFloat($("rate").value || "2400000"),

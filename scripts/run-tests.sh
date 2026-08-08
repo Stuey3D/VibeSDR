@@ -59,5 +59,11 @@ for t in "$SRC"/test-*.cpp; do
   if "$OUT/$name"; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
 
+# ★ The setup page is a C++ raw string, so no compiler ever looks at its JavaScript. A syntax
+#   error there ships silently and the page simply does nothing — the worst failure this tree has,
+#   because that page is what a new owner meets first.
+printf '\n\033[1m── setup page ──\033[0m\n'
+if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build\033[0m\n' "$pass" "$fail" "$broke"
 [ "$fail" -eq 0 ] && [ "$broke" -eq 0 ]
