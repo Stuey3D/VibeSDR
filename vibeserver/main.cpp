@@ -585,7 +585,10 @@ int main(int argc, char** argv) {
             const std::string path = (e && *e) ? e : vsconfig::defaultPath();
             vsconfig::ServerConfig srv; std::string err;
             if (!vsconfig::loadServer(path, srv, err)) return 0;   // nothing configured yet
-            const int primary = vsconfig::primaryRadio(srv);
+            // ★★ IN FULL MODE THERE IS NO PRIMARY — the front door holds the public port and owns
+            //    no radio, so EVERY radio needs its own process. In Simple mode the one radio is
+            //    served by the main service itself, so there is nothing for the supervisor to do.
+            const int primary = vsconfig::needsFrontDoor(srv) ? -1 : vsconfig::primaryRadio(srv);
             for (size_t k = 0; k < srv.radios.size(); k++) {
                 const auto& r = srv.radios[k];
                 if ((int)k == primary) continue;
