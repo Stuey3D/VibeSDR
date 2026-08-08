@@ -955,7 +955,19 @@ const DRIVER_HW = {
               biasT: true,  rfNotch: false, lnaState: false },
   rtlsdr:   { rates: [250000, 1024000, 1536000, 1792000, 1920000, 2048000, 2160000, 2400000],
               biasT: true,  rfNotch: false, lnaState: false },
-  airspyhf: { rates: [768000, 456000, 228000],
+  // ★★★ ONE RATE, AND IT IS THE RADIO'S OWN DEFAULT — the highest it offers. This listed
+  //     768/456/228 and NOT 912, which is precisely backwards: 912 is the only rate the HF+ is
+  //     supported at here, and every rate that WAS offered is one the source says breaks. See
+  //     nearestRate() in airspyhf_source.cpp: the dead-lobe crop is a per-rate table whose numbers
+  //     are MEASURED AT 912, and 228 kHz tunes about 7.8 kHz off frequency on this firmware.
+  //     Stuart, 2026-08-02: "I think we just offer the default on the server too otherwise that
+  //     breaks all the dead space fix we added." The server does exactly that; this page did not.
+  // ★★ WHAT IT COST: changing the landing frequency re-applied a rate from this list, the crop
+  //    was then computed for the wrong span, and Radio Caroline read 665 kHz instead of 648 — a
+  //    receiver that is simply wrong about where it is listening (Stuart, 2026-08-09). Offering a
+  //    choice whose every option is broken is worse than offering none: it reads as a setting the
+  //    owner got wrong.
+  airspyhf: { rates: [912000],
               biasT: false, rfNotch: false, lnaState: false },
   sdrplay:  { rates: [2000000, 3000000, 4000000, 5000000, 6000000, 8000000, 10000000],
               biasT: true,  rfNotch: true,  lnaState: true },

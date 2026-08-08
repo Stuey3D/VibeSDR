@@ -25,8 +25,21 @@ IMAGE="vibeserver-build:bookworm"
 DRY_RUN=""
 if [ "${1:-}" = "--dry-run" ]; then DRY_RUN="--dry-run"; fi
 
-command -v docker >/dev/null || { echo "docker not found (brew install colima docker; colima start)"; exit 1; }
-docker info >/dev/null 2>&1 || { echo "no docker daemon — run: colima start"; exit 1; }
+command -v docker >/dev/null || { echo "docker not found (brew install colima docker)"; exit 1; }
+# ★★★ START IT SMALL, AND SAY HOW TO REMOVE IT. `colima start --disk 40` allocates a 40 GB image
+#     under ~/.colima and it GROWS to its ceiling as builds fill it — it took this Mac to 134 MB
+#     free, at which point nothing could run at all, not even `df`. A build box for one 1 MB .deb
+#     does not need 40 GB.
+# ★★★ AND `colima delete` DOES NOT REMOVE IT. It deletes the instance and leaves the named data
+#     disk at ~/.colima/_lima/_disks/colima/datadisk, so the cleanup that looks like it worked
+#     reclaims about 1 GB of 38. To remove it completely:
+#         colima stop && colima delete -f && rm -rf ~/.colima/_lima/_disks
+# ★ 12 GB is comfortably more than the base image, the source copy and the build tree need.
+if ! docker info >/dev/null 2>&1; then
+  echo "==> starting the build VM (colima)"
+  colima start --cpu 4 --memory 4 --disk 12 || {
+    echo "could not start colima — run 'colima start --disk 12' yourself"; exit 1; }
+fi
 
 # ★★ THE KEY IS THE ONE THING THAT CANNOT BE REBUILT. Check it before a long build, and say where
 #    it should be rather than just that it is absent.

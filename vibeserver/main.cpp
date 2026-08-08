@@ -488,7 +488,21 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
             //    child (it only runs when no radio was named), so this cannot recurse.
             // ★ The config path rides along explicitly: the child must read the same file we did,
             //   and VIBESERVER_CONFIG may have pointed us somewhere non-default.
-            ::execl(self, self, "--radio", serial.c_str(), "--serve", (char*)nullptr);
+            // ★★★ /proc/self/exe FIRST, AND argv[0] IS NOT A PATH. This was `execl(argv[0], …)`,
+            //     which shipped in 3.0.0-4 and failed for every user who does the normal thing:
+            //     run `vibeserver` from PATH, where argv[0] is the bare word "vibeserver" and
+            //     execl — which does NOT search PATH — returns ENOENT. The log then reads
+            //     "started radio 4 (pid 2601)" immediately followed by "could not start the
+            //     process for 4: No such file or directory", which is exactly as confusing as it
+            //     sounds. (Saber, 2026-08-09.)
+            // ★★ MY TEST PASSED BECAUSE I RAN `./build/vibeserver` — argv[0] was a path, which is
+            //    the one way a user never starts it. A test whose invocation differs from the
+            //    real one is testing a different program.
+            // ★ /proc/self/exe is exact: immune to PATH, to cwd, and to a renamed argv[0]. execvp
+            //   is the fallback for anything without /proc, and it DOES search PATH.
+            ::execl("/proc/self/exe", "vibeserver", "--radio", serial.c_str(), "--serve",
+                    (char*)nullptr);
+            ::execlp(self, self, "--radio", serial.c_str(), "--serve", (char*)nullptr);
             std::fprintf(stderr, "VibeServer: could not start the process for %s: %s\n",
                          serial.c_str(), strerror(errno));
             ::_exit(127);

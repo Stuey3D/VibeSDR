@@ -2796,12 +2796,26 @@ struct LocalSdrShim::Impl {
     std::string supportedRates() {
         if (useSdrplay()) return "8000000,6000000,5000000,4000000,3000000,2048000,2000000";
         if (useAirspyHf()) {
-            std::string out;
+            // ★★★ THE HF+ GETS ONE RATE — ITS HIGHEST, WHICH IS ITS DEFAULT. This returned every
+            //     rate the radio ADVERTISES, and most of them do not work here: the dead-lobe crop
+            //     is a per-rate table whose numbers are measured at 912 kHz, and 228 kHz tunes
+            //     about 7.8 kHz off frequency on this firmware (see nearestRate() in
+            //     airspyhf_source.cpp, which has opened the radio at exactly one rate for months).
+            //     So the radio was already running at one rate while this told every client it had
+            //     seven — and the setup page, which offers what this returns, invited the owner to
+            //     pick one of the broken ones.
+            // ★★★ WHAT IT COST: choosing another rate left the crop computed for the wrong span,
+            //     and Radio Caroline appeared at 665 kHz instead of 648. A receiver that is wrong
+            //     about where it is listening is worse than one that offers no choice at all
+            //     (Stuart, 2026-08-09 — and 2026-08-02: "I think we just offer the default on the
+            //     server too otherwise that breaks all the dead space fix we added").
+            // ★ Asked of the RADIO, not hard-coded: an HF+ Dual Port is not a Discovery, and the
+            //   highest rate it reports is the right answer for whichever one is plugged in.
             if (auto* a = ahf.get()) {
                 const auto& rl = a->sampleRates();
-                for (size_t i = rl.size(); i-- > 0; ) out += std::to_string(rl[i]) + (i ? "," : "");
+                if (!rl.empty()) return std::to_string(*std::max_element(rl.begin(), rl.end()));
             }
-            return out;
+            return "";
         }
         return "2560000,2400000,1800000,1200000,960000";
     }
