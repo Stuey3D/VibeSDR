@@ -18,7 +18,7 @@
 #   ./vibeserver/build/vibeserver --tcp 127.0.0.1:1234
 
 cmake_minimum_required(VERSION 3.20)
-project(vibeserver VERSION 2.0.0 LANGUAGES CXX C)
+project(vibeserver VERSION 3.0.0 LANGUAGES CXX C)
 # ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
 #   so Linux starts level with it rather than inventing a separate number for the same server.
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
