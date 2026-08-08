@@ -305,19 +305,88 @@ function clientLabel(agent: string | undefined): string {
     : `<span title="${esc(raw)}">${esc(k)}</span>`;
 }
 
+
+// ── The whole machine, not one radio ─────────────────────────────────────────────────────────
+//
+// ★★★ AN OWNER ASKS ABOUT THE SERVER, NOT ABOUT A PROCESS. With a radio per process, opening the
+//     admin page from the RTL showed only the RTL — "no point me being on the RTL and not seeing
+//     what is going on with the airspy or SDRplay" (Stuart, 2026-08-08). Every radio's admin API
+//     is reachable through the front door at /r/<serial>/…, and the admin TICKET is valid across
+//     processes, so this needs no new server plumbing: ask each one and merge.
+// ★★ One slow or dead radio must not blank the page. Each is fetched independently and a failure
+//    contributes nothing rather than throwing the whole refresh away.
+let radioList: Array<{ serial: string; label: string }> = [];
+
+async function discoverRadios(): Promise<void> {
+  try {
+    const r = await fetch(`${base()}/vibeserver/radios`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    radioList = (Array.isArray(j?.radios) ? j.radios : [])
+      .map((x: any) => ({ serial: String(x.serial || ''), label: String(x.label || x.serial || '') }))
+      .filter((x: { serial: string }) => x.serial);
+  } catch { /* one radio, or an older server: fall back to just this process */ }
+}
+
+/** Ask every radio the same question at once, tagging each answer with the radio it came from. */
+async function fromEveryRadio(path: string): Promise<Array<{ radio: string; data: any }>> {
+  if (!radioList.length) {
+    try { return [{ radio: '', data: await get(path) }]; } catch { return []; }
+  }
+  const q = await qCached();
+  const out = await Promise.all(radioList.map(async (r) => {
+    try {
+      const resp = await fetch(`${base()}/r/${encodeURIComponent(r.serial)}/vibeserver/admin/${path}?${q}`,
+                               { cache: 'no-store' });
+      if (!resp.ok) return null;
+      return { radio: r.label, data: await resp.json() };
+    } catch { return null; }
+  }));
+  return out.filter(Boolean) as Array<{ radio: string; data: any }>;
+}
+
+/** ★ One credential for the whole fan-out. q() mints a fresh nonce per call, which is right for a
+ *  single request and wrong for a burst of them — the server would see N challenges for one poll. */
+async function qCached(): Promise<string> { return q(); }
+
 // ── Listeners ─────────────────────────────────────────────────────────────────────────────────
 
+function renderQueue(list: any[]) {
+  const el = document.getElementById('adminQueue');
+  if (!el) return;
+  if (!list.length) { el.innerHTML = ''; el.hidden = true; return; }
+  el.hidden = false;
+  // ★ Ordered by position, because the order IS the promise the server makes to them.
+  el.innerHTML = '<div class="qHead">WAITING</div>' + list
+    .slice()
+    .sort((a, b) => (a.pos || 0) - (b.pos || 0))
+    .map((w) => `<div class="qRow"><b>${esc(String(w.pos ?? '?'))}</b> `
+              + `${withFlag(w.cc, w.ip || '—')}`
+              + `${w.radio ? ` <span class="dim">for ${esc(w.radio)}</span>` : ''}`
+              + ` <span class="dim">waiting ${esc(dur(w.secs || 0))}</span></div>`).join('');
+}
+
 function renderSessions(s: any) {
+  renderQueue(s.queue ?? []);
   const list: any[] = s.sessions ?? [];
   const tb = $('adminSessions').querySelector('tbody')!;
   $('adminNoSessions').hidden = list.length > 0;
   ($('adminSessions').parentElement as HTMLElement).hidden = list.length === 0;
   $('adminListenerCount').textContent = list.length ? `— ${list.length}` : '';
+  // ★ Costs are a rate from two samples, so the FIRST poll after connecting has nothing to show.
+  //   A dash is the honest answer there; a 0 would read as "this listener is free".
+  const rate = (v: any, unit: string) =>
+    typeof v === 'number' && v >= 0 ? `${esc(String(v))}<span class="dim">${unit}</span>`
+                                    : '<span class="dim">—</span>';
   tb.innerHTML = list.map((c) => `<tr>
     <td>${withFlag(c.cc, c.ip || '—')}</td>
+    <td>${c.radio ? esc(c.radio) : '<span class="dim">—</span>'}</td>
     <td>${esc(mhz(c.vfoHz))}</td>
     <td>${esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}</td>
+    <td>${c.decoder ? esc(String(c.decoder).toUpperCase()) : '<span class="dim">—</span>'}</td>
     <td>${esc(c.secs ? dur(c.secs) : '—')}</td>
+    <td>${rate(c.cpu, '%')}</td>
+    <td>${rate(c.kbps, 'k')}</td>
     <td>${c.dropped > 0 ? esc(String(c.dropped)) : '<span class="dim">0</span>'}</td>
     <td class="agent">${clientLabel(c.agent)}</td>
     <td class="agent">${c.net ? esc(c.net) : '<span class="dim">unknown</span>'}</td>
@@ -406,9 +475,20 @@ let failures = 0;
 async function refresh() {
   if (!open) return;
   try {
-    const [st, ses, conns, hist] = await Promise.all([
-      get('status'), get('sessions'), get('connections'), get('history'),
+    if (!radioList.length) await discoverRadios();
+    const [st, hist, sesAll, connsAll] = await Promise.all([
+      get('status'), get('history'), fromEveryRadio('sessions'), fromEveryRadio('connections'),
     ]);
+    // Merge, tagging every row with the radio it belongs to.
+    const ses = {
+      sessions: sesAll.flatMap((r) => (r.data?.sessions ?? []).map((x: any) => ({ ...x, radio: r.radio }))),
+      queue:    sesAll.flatMap((r) => (r.data?.queue ?? []).map((x: any) => ({ ...x, radio: r.radio }))),
+    };
+    const conns = {
+      connections: connsAll
+        .flatMap((r) => (r.data?.connections ?? []).map((x: any) => ({ ...x, radio: r.radio })))
+        .sort((a: any, b: any) => (b.at || 0) - (a.at || 0)),
+    };
     failures = 0;
     renderHealth(st);
     renderGraphs(hist);

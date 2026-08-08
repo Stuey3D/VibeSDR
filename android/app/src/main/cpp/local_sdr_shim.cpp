@@ -1671,6 +1671,9 @@ struct LocalSdrShim::Impl {
     std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB), centre vs edges
 
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
+    /** ★ What is attached, for the admin view — "RTTY" reads better than a null pointer check,
+     *  and it is the one thing that says WHY a listener is costing more than the others. */
+    std::string currentDecoder;
     std::mutex decoderMtx;
     FskDecoder* decoder = nullptr;
     WefaxDecoder* wefax = nullptr;          // active image decoder (WEFAX), or null
@@ -2668,7 +2671,7 @@ struct LocalSdrShim::Impl {
                 outboxClose(sock);
                 return;
             }
-            waitQueue.push_back({sock.get(), me, Impl::nowSecs()});
+            waitQueue.push_back({sock.get(), me, Impl::nowSecs(), sock->peerAddress()});
         }
         int lastPos = -1, lastFree = -2;
         while (serverRunning.load() && sock->isOpen()) {
@@ -2776,6 +2779,10 @@ struct LocalSdrShim::Impl {
     /** When the current occupant claimed the slot (seconds, monotonic). 0 = nobody. Guarded by
      *  clientMtx alongside occupantSession — one lock for one piece of state. */
     double occupantSince = 0;
+    std::string occupantAgent;          ///< User-Agent of the single-user occupant, for the admin view
+    unsigned long long soleLastBytes = 0;   ///< previous sample, for the uplink rate
+    double soleLastAt = 0;
+    double dspLoadPct = 0;              ///< last measured total DSP load, %
     /** The occupant's address, so a timeout can put THAT address on cooldown. */
     std::string occupantAddr;
     /** Warnings already sent this session, so each fires once: bit 0 = 2 min, bit 1 = 30 s.
@@ -2796,7 +2803,7 @@ struct LocalSdrShim::Impl {
     //     notices a free slot it takes a short RESERVATION on its own address; every other
     //     connection is refused for its duration. A promised order the server does not keep is
     //     worse than telling them nothing (Stuart, 2026-08-04).
-    struct Waiter { const net::Socket* sock; std::string who; double since; };
+    struct Waiter { const net::Socket* sock; std::string who; double since; std::string ip; };
     std::vector<Waiter> waitQueue;              // arrival order; front = next served
     // ★★★ KEYED BY SESSION, NOT BY ADDRESS. The very same trap the occupancy check already
     //     documents: "browsers on the SAME machine share an IP but have different ids — which is
@@ -6623,6 +6630,7 @@ struct LocalSdrShim::Impl {
                 occupantSince   = Impl::nowSecs();
                 occupantWarned  = 0;
                 occupantAddr    = sock->peerAddress();
+                occupantAgent   = userAgent;   // for the admin view, same as ClientDsp::agent
             }
             occupantSession = me;   // claim (or re-affirm) the slot for this client
             // ★ A NEW CLIENT IS NOT THE ADMIN. Clearing here means an unlock cannot outlive the
@@ -6912,6 +6920,7 @@ struct LocalSdrShim::Impl {
 
     void startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
+        { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder = ext; }
         // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
         // fields we normally discard, plus the constellation). It attaches through the same
         // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
@@ -7074,6 +7083,7 @@ struct LocalSdrShim::Impl {
     }
     void stopDecoder() {
         rdsxOn.store(false);
+        { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder.clear(); }
         rx.setRdsNoiseCorrection(false);   // nobody looking: stop paying for it
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
@@ -7527,6 +7537,7 @@ struct LocalSdrShim::Impl {
                     size_t q; { std::lock_guard<std::mutex> lk(iqMtx); q = iqQueuedSamples; }
                     // ★ >100% means the DSP cannot keep up and the backlog will grow until
                     //   something drops — the audible symptom is everyone stuttering at once.
+                    dspLoadPct = (dspWideMs_ + dspPerMs_) / dspRealMs_ * 100.0;
                     LOGI("dsp load: wide %.0f%% + per-client %.0f%% = %.0f%% of real time "
                          "(backlog %.0f ms)",
                          dspWideMs_ / dspRealMs_ * 100.0, dspPerMs_ / dspRealMs_ * 100.0,
@@ -8593,6 +8604,26 @@ std::string LocalSdrShim::adminSessionsJson() {
     if (!p) return "{\"sessions\":[]}";
     std::string j = "{\"sessions\":[";
     bool first = true;
+    // ★★★ SNAPSHOT THE BYTE COUNTERS BEFORE TAKING clientMtx, NEVER UNDER IT. Reading them inside
+    //     the loop meant holding clientMtx and then taking outboxMtx — a nesting order nothing
+    //     else in this file uses, and this codebase has already lost an afternoon to a clientMtx
+    //     deadlock that only appeared with more than one listener. Nothing here is worth a lock
+    //     order that has to be reasoned about: one pass, then let go.
+    // ★★★ EVERY LOOKUP THIS FUNCTION NEEDS IS DONE BEFORE clientMtx IS TAKEN, AND NOTHING IS
+    //     CALLED WHILE HOLDING IT. Calling decoderOwner() from inside the loop SELF-DEADLOCKED —
+    //     it takes clientMtx itself, and std::mutex is not recursive. It only fired with a
+    //     per-client pipeline present, so the two single-user radios looked fine while the shared
+    //     one wedged the moment somebody listened: every path touching clientMtx hung, and the
+    //     process stayed "active" and kept accepting connections, which is the same disguise the
+    //     LAST clientMtx deadlock wore (see BUG-vibeserver-broadcast-blocks / multiuser_was_three_bugs).
+    std::string curDecoder;
+    { std::lock_guard<std::mutex> dl(p->decoderMtx); curDecoder = p->currentDecoder; }
+    std::map<net::Socket*, unsigned long long> sentBySock;
+    {
+        std::lock_guard<std::mutex> ol(p->outboxMtx);
+        for (auto& kv : p->outboxes)
+            if (kv.second) sentBySock[kv.first] = kv.second->sentTotal.load(std::memory_order_relaxed);
+    }
     std::lock_guard<std::mutex> lk(p->clientMtx);
     const double now = Impl::nowSecs();
     for (auto& kv : p->clientDsp) {
@@ -8601,6 +8632,37 @@ std::string LocalSdrShim::adminSessionsJson() {
         if (!first) j += ',';
         first = false;
         const bool isOccupant = !p->occupantSession.empty() && p->occupantSession == c->session;
+
+        // ── What this listener costs, as a RATE ────────────────────────────────────────────
+        const unsigned long long nowNanos = c->dspNanos.load(std::memory_order_relaxed);
+        unsigned long long nowBytes = 0;
+        for (auto* sk : { c->spec.get(), c->audio.get() }) {
+            if (!sk) continue;
+            auto it = sentBySock.find(sk);
+            if (it != sentBySock.end()) nowBytes += it->second;
+        }
+        int cpuPct = -1, kbps = -1;
+        if (c->lastSampleAt > 0) {
+            const double dt = now - c->lastSampleAt;
+            if (dt > 0.2) {
+                cpuPct = (int)(((double)(nowNanos - c->lastDspNanos) / 1e9) / dt * 100.0 + 0.5);
+                kbps   = (int)(((double)(nowBytes - c->lastSentBytes) * 8.0 / 1000.0) / dt + 0.5);
+                c->lastDspNanos = nowNanos; c->lastSentBytes = nowBytes; c->lastSampleAt = now;
+            }
+        } else {
+            c->lastDspNanos = nowNanos; c->lastSentBytes = nowBytes; c->lastSampleAt = now;
+        }
+        // ★ Only the decoder OWNER is actually decoding — the rest pay nothing for it, and saying
+        //   otherwise would make every listener look like they had one running.
+        //   ★★ Decided from state we ALREADY hold the lock for (decoderSession is guarded by
+        //      clientMtx), not by calling decoderOwner() — see the note above.
+        std::string dec;
+        if (!curDecoder.empty()) {
+            const bool owns = !p->decoderSession.empty()
+                                ? (c->session == p->decoderSession)
+                                : (p->specClient && p->specClient.get() == kv.first);
+            if (owns) dec = curDecoder;
+        }
         j += "{\"session\":\"" + vibeadmin::esc(c->session) + "\""
            + ",\"ip\":\"" + vibeadmin::esc(c->spec->peerAddress()) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
@@ -8615,10 +8677,73 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"cc\":\"" + vibeadmin::esc(vsCountry(c->spec->peerAddress())) + "\""
            + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(c->spec->peerAddress())) + "\""
            + ",\"agent\":\"" + vibeadmin::esc(c->agent.substr(0, 160)) + "\""
+           // ★★ WHAT THIS ONE LISTENER COSTS. Both are rates derived from two samples of a
+           //    monotonic counter — the first poll shows nothing, which is honest, rather than an
+           //    average since connect that hides what is happening NOW.
+           + ",\"cpu\":" + std::to_string(cpuPct)
+           + ",\"kbps\":" + std::to_string(kbps)
+           + ",\"decoder\":\"" + vibeadmin::esc(dec) + "\""
            + ",\"occupant\":" + (isOccupant ? "true" : "false");
         if (isOccupant && p->occupantSince > 0)
             j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
         j += "}";
+    }
+    // ★★★ A SINGLE-USER RADIO HAS NO ClientDsp AT ALL. Per-client pipelines only exist when the
+    //     centre is locked AND more than one listener is allowed, so on the Airspy and the dongle
+    //     the loop above iterates an empty map and the radio reports "nobody listening" while
+    //     somebody is plainly listening. Their occupant lives in the Impl's own state instead, so
+    //     it is reported here — the owner is asking about PEOPLE, and should not have to know
+    //     which DSP shape a radio happens to use.
+    // ★ CPU is the whole process's DSP load, and on a single-user radio that is honest: all of it
+    //   is being spent on this one listener.
+    if (p->clientDsp.empty() && p->specClient && p->specClient->isOpen()) {
+        unsigned long long bytes = 0;
+        for (auto* sk : { p->specClient.get(), p->audioClient.get() }) {
+            if (!sk) continue;
+            auto it = sentBySock.find(sk);
+            if (it != sentBySock.end()) bytes += it->second;
+        }
+        int kbps = -1;
+        if (p->soleLastAt > 0) {
+            const double dt = now - p->soleLastAt;
+            if (dt > 0.2) {
+                kbps = (int)(((double)(bytes - p->soleLastBytes) * 8.0 / 1000.0) / dt + 0.5);
+                p->soleLastBytes = bytes; p->soleLastAt = now;
+            }
+        } else { p->soleLastBytes = bytes; p->soleLastAt = now; }
+
+        const std::string ip = p->occupantAddr.empty() ? p->specClient->peerAddress() : p->occupantAddr;
+        if (!first) j += ',';
+        first = false;
+        j += "{\"session\":\"" + vibeadmin::esc(p->occupantSession) + "\""
+           + ",\"ip\":\"" + vibeadmin::esc(ip) + "\""
+           + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
+           + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
+           + ",\"audio\":" + ((p->audioClient && p->audioClient->isOpen()) ? "true" : "false")
+           + ",\"dropped\":0,\"zoomed\":false"
+           + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""
+           + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(ip)) + "\""
+           + ",\"agent\":\"" + vibeadmin::esc(p->occupantAgent.substr(0, 160)) + "\""
+           + ",\"cpu\":" + std::to_string((int)(p->dspLoadPct + 0.5))
+           + ",\"kbps\":" + std::to_string(kbps)
+           + ",\"decoder\":\"" + vibeadmin::esc(curDecoder) + "\""
+           + ",\"occupant\":true";
+        if (p->occupantSince > 0)
+            j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
+        j += "}";
+    }
+
+    // ★★ THE PEOPLE WHO ARE NOT ON YET. A queue is invisible in a listener list by definition, and
+    //    "nobody is listening" reads very differently from "nobody is listening and four are
+    //    waiting". Position is 1-based and is the order that will actually be honoured.
+    j += "],\"queue\":[";
+    for (size_t i = 0; i < p->waitQueue.size(); ++i) {
+        const auto& w = p->waitQueue[i];
+        if (i) j += ',';
+        j += "{\"pos\":" + std::to_string(i + 1)
+           + ",\"ip\":\"" + vibeadmin::esc(w.ip) + "\""
+           + ",\"cc\":\"" + vibeadmin::esc(vsCountry(w.ip)) + "\""
+           + ",\"secs\":" + std::to_string((long long)(now - w.since)) + "}";
     }
     j += "],\"adminOk\":" + std::string(p->adminOk.load() ? "true" : "false");
     return j + "}";

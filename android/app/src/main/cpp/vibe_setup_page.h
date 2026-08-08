@@ -451,7 +451,21 @@ const toHex=b=>Array.from(b, x=>x.toString(16).padStart(2,"0")).join("");
 
 // The server issues a single-use nonce; we return HMAC-SHA256(password, nonce). The password
 // itself never crosses the wire, so each request fetches a fresh nonce.
+// ★★★ AN ADMIN WHO JUST SIGNED IN MUST NOT BE ASKED AGAIN. Arriving here from the landing page's
+//     SETUP button is a fresh page load, so the password they typed a second ago is gone with the
+//     page that held it — and they were made to type it twice (Stuart, 2026-08-08: "setup works
+//     but I have to enter the admin password again"). The landing page passes a TICKET instead,
+//     which every process on this machine accepts (vibe_admin_ticket.h).
+// ★★ Taken from the URL and then REMOVED from it with replaceState: an admin credential has no
+//    business sitting in the address bar, the history, or a copied link.
+const TICKET = (() => {
+  const t = new URLSearchParams(location.search).get("vs_admin_ticket") || "";
+  if (t) history.replaceState(null, "", location.pathname);
+  return t;
+})();
+
 async function authQuery() {
+  if (TICKET) return `vs_admin_ticket=${encodeURIComponent(TICKET)}`;
   const r = await fetch("/vibeserver/auth", {cache:"no-store"});
   const nonce = (await r.json()).nonce;
   const tok = toHex(hmacSha256(bytesOf(PASS), bytesOf(nonce)));
@@ -932,10 +946,12 @@ document.addEventListener("change", (e) => {
   if (t && (t.id === "releaseWhenIdle")) syncSpectroOffer();
 });
 
-$("signinBtn").onclick = async () => {
-  PASS = $("pass").value;
+async function signIn(fromTicket) {
   $("signinErr").textContent = "";
-  if (!PASS) { $("signinErr").textContent = "Enter the admin password."; return; }
+  if (!fromTicket) {
+    PASS = $("pass").value;
+    if (!PASS) { $("signinErr").textContent = "Enter the admin password."; return; }
+  }
   try {
     const r = await fetch("/vibeserver/config?" + await authQuery(), {cache:"no-store"});
     if (r.status === 401) { $("signinErr").textContent = "That password was not accepted."; return; }
@@ -960,7 +976,12 @@ $("signinBtn").onclick = async () => {
     renderTabs();
     fill();
   } catch (e) { $("signinErr").textContent = "Could not reach the server."; }
-};
+}
+
+$("signinBtn").onclick = () => signIn(false);
+
+// ★ Arrived from the landing page already signed in — go straight in rather than asking again.
+if (TICKET) signIn(true);
 $("pass").addEventListener("keydown", e => { if (e.key === "Enter") $("signinBtn").click(); });
 
 $("modeSingle").onclick = () => setMode(false);

@@ -133,6 +133,9 @@ input, textarea, [contenteditable],
    each drifts by a different amount, which is why they looked misaligned with each other rather
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
 #splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
+.adminQueue { margin: 8px 0 4px; font-size: 12px; }
+.adminQueue .qHead { letter-spacing: .18em; opacity: .7; margin-bottom: 4px; }
+.adminQueue .qRow { padding: 2px 0; }
 .clientMix { margin: 6px 0 10px; font-size: 12px; letter-spacing: .04em; }
 .clientMix .mixItem { margin-right: 14px; }
 #splashAdminBanner { display: inline-block; margin: 8px auto 0; padding: 4px 14px; color: var(--amber);
@@ -3009,10 +3012,12 @@ select.btn { padding: 6px 8px; }
     </div>
     <h2>LISTENERS <span class="dim" id="adminListenerCount"></span></h2>
     <div class="aTblWrap"><table id="adminSessions">
-      <thead><tr><th>Address</th><th>Frequency</th><th>Mode</th><th>For</th>
-                 <th>Drops</th><th>Client</th><th>Network</th><th></th></tr></thead>
+      <thead><tr><th>Address</th><th>Radio</th><th>Frequency</th><th>Mode</th><th>Decoder</th>
+                 <th>For</th><th>CPU</th><th>Uplink</th><th>Drops</th><th>Client</th>
+                 <th>Network</th><th></th></tr></thead>
       <tbody></tbody>
     </table></div>
+    <div id="adminQueue" class="adminQueue" hidden></div>
     <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
 
     </div>

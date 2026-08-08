@@ -224,7 +224,8 @@ function initSplash() {
   });
   document.getElementById('btnSplashSetup')?.addEventListener('click', () => {
     if (!adminSignedInThisView || !inAdminMode()) return;
-    location.href = `${location.origin}/setup`;
+    // ★ Hand the ticket over so setup does not ask for a password that was typed seconds ago.
+    location.href = `${location.origin}/setup?${adminTicketQuery()}`;
   });
 
   $('btnAdmin').addEventListener('click', () => {
