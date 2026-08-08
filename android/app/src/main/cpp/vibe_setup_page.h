@@ -120,51 +120,6 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
-      <!-- ★★★ ONE DOWNLOAD FOR THE WHOLE MACHINE. The schedule is a single file every radio
-           process reads, so it belongs to the server and not to whichever radio tab happened to be
-           open — where it used to sit, inside a per-radio Range card, implying one copy per radio
-           (Stuart, 2026-08-08: "We only need one lot of eibi downloads for the entire server they
-           can be shared to all radios"). -->
-      <div class="card">
-        <h2>Shortwave schedule</h2>
-        <p class="why">Station names for the search box, shared by every radio on this machine.</p>
-        <div class="note" id="eibiNote" style="margin-top:18px">
-          <b>Shortwave schedule (EiBi)</b>
-          <div class="hint" id="eibiState">checking…</div>
-          <div class="hint">Who is broadcasting, where and when — so the search box on this
-            receiver finds stations by name instead of only by frequency. The list is fetched by
-            the server, because a browser is not allowed to fetch it directly, and it refreshes
-            itself once a day.</div>
-          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
-            Download now</button>
-        </div>
-      </div>
-      <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK
-           can carry, and there is one uplink however many radios are plugged in — asking per radio
-           invited three answers to a question that has one, and three ways to get it wrong
-           (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
-<div class="card">
-      <h2>Power saving</h2>
-        <p class="why">Applies to every radio on this machine.</p>
-      <p class="why">Applies in both modes.</p>
-      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
-        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Listeners may not switch off idle power saving</span></label>
-    </div>
-
-            <div class="card">
-        <h2>Audio</h2>
-        <p class="why">How listeners receive sound, on every radio.</p>
-      <label><span class="lbl">Uncompressed audio</span>
-        <select id="uncompressed">
-          <option value="0">Off — everyone gets Opus</option>
-          <option value="1">Listener's choice</option>
-          <option value="2">Only as a fallback for old browsers</option>
-        </select>
-        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
-          upload.</div></label>
-      </div>
-
       <div class="card">
       <h2>On your network</h2>
       <p class="why">How people find this server once it is running.</p>
@@ -184,6 +139,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <input type="text" id="name" placeholder="e.g. Coastal SDR — 60 m vertical"></label>
       <div class="hint" id="addrLine"></div>
     </div>
+
       <div class="card">
       <h2>Where this receiver is</h2>
       <p class="why">Published to listeners. It sets the flag and the ITU band plan, centres the
@@ -208,6 +164,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div class="hint">Exact coordinates win over the locator. Leave them blank to publish only
         the square.</div>
     </div>
+
       <div class="card">
       <h2>Behind a reverse proxy</h2>
       <p class="why">Only fill this in if something sits in front of VibeServer.</p>
@@ -223,6 +180,33 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           they liked and walk straight through the ban list. Nothing is read from it until you
           name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
     </div>
+
+      <div class="card">
+        <h2>Audio</h2>
+        <p class="why">How listeners receive sound, on every radio.</p>
+      <label><span class="lbl">Uncompressed audio</span>
+        <select id="uncompressed">
+          <option value="0">Off — everyone gets Opus</option>
+          <option value="1">Listener's choice</option>
+          <option value="2">Only as a fallback for old browsers</option>
+        </select>
+        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
+          upload.</div></label>
+      </div>
+
+      <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK
+           can carry, and there is one uplink however many radios are plugged in — asking per radio
+           invited three answers to a question that has one, and three ways to get it wrong
+           (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
+<div class="card">
+      <h2>Power saving</h2>
+        <p class="why">Applies to every radio on this machine.</p>
+      <p class="why">Applies in both modes.</p>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Listeners may not switch off idle power saving</span></label>
+    </div>
+
       <div class="card">
       <h2>Processor</h2>
       <p class="why">How hard this machine is allowed to run.</p>
@@ -241,6 +225,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           listener from a dongle — far less work, and the watts matter more than the headroom.</div></label>
       <div class="hint" id="govNow"></div>
     </div>
+
+      <!-- ★★★ ONE DOWNLOAD FOR THE WHOLE MACHINE. The schedule is a single file every radio
+           process reads, so it belongs to the server and not to whichever radio tab happened to be
+           open — where it used to sit, inside a per-radio Range card, implying one copy per radio
+           (Stuart, 2026-08-08: "We only need one lot of eibi downloads for the entire server they
+           can be shared to all radios"). -->
+      <div class="card">
+        <h2>Shortwave schedule</h2>
+        <p class="why">Station names for the search box, shared by every radio on this machine.</p>
+        <div class="note" id="eibiNote" style="margin-top:18px">
+          <b>Shortwave schedule (EiBi)</b>
+          <div class="hint" id="eibiState">checking…</div>
+          <div class="hint">Who is broadcasting, where and when — so the search box on this
+            receiver finds stations by name instead of only by frequency. The list is fetched by
+            the server, because a browser is not allowed to fetch it directly, and it refreshes
+            itself once a day.</div>
+          <button type="button" id="eibiGet" class="ghost" style="margin-top:10px">
+            Download now</button>
+        </div>
+      </div>
     </div>
 
     <!-- ★★★ MODE FIRST, BECAUSE IT DECIDES THE REST. "How will it be used?" changes which of the
@@ -1291,11 +1295,14 @@ async function signIn(fromTicket) {
     $("signin").classList.add("hide");
     $("setup").classList.remove("hide");
     $("bar").classList.remove("hide");
-    // ★ Open the first radio that has NOT been set up yet — that is the one the owner came here
-    //   for. Falling back to the first tab when they are all done.
+    // ★★ THE SERVER TAB FIRST, ALWAYS. It used to open whichever radio was not set up yet, which
+    //    reads as "start here" — but the machine's own name and location come before any radio,
+    //    and on a server that is already running it dropped the owner into a radio they had not
+    //    asked about (Stuart, 2026-08-08: "the server tab needs to be the first tab you see").
+    // ★ The radios still show their own state on the tabs, so a half-finished one is not hidden by
+    //   this — a red tab with a dot is a better prompt than being teleported to it.
     const list = radioList();
-    const todo = list.findIndex(r => !r.configured);
-    curRadio = todo >= 0 ? todo : 0;
+    curRadio = -1;
     if (list.length > 1) $("saveRadioBtn").classList.remove("hide");
     renderTabs();
     fill();
