@@ -96,6 +96,40 @@ int main() {
         ok(c.configured, "configured, because BOTH the machine and the radio are");
     }
 
+    std::printf("\nWhere an unlocked radio starts\n");
+    {
+        // ★★★ The owner types a landing frequency; the radio must OPEN there. It used to open on
+        //     `freq` regardless, so an RTL told to land on 648 kHz still came up at 145 MHz — the
+        //     waterfall, the spectrogram and the landing page all showed a band nobody wanted, and
+        //     the first listener paid for a 144 MHz retune to reach where the owner had already
+        //     said (Stuart, 2026-08-08: "it always keeps going back to 145MHz").
+        ServerConfig s; s.configured = true;
+        RadioConfig r; r.configured = true; r.mode = Mode::SingleUser;
+        r.freq = 145000000; r.landingFreq = 648000; r.demodMode = "am";
+        s.radios.push_back(r);
+        const Config c = effectiveFor(s, s.radios[0]);
+        ok(c.freq == 648000, "★ an unlocked radio opens on its landing frequency",
+           std::to_string((long long)c.freq));
+        ok(c.landingFreq == 648000, "and still lands listeners there");
+
+        // ★★ A LOCKED radio's centre is the owner's window and must NOT be dragged about by a
+        //    landing frequency inside it — that would move the whole band under every listener.
+        ServerConfig s2; s2.configured = true;
+        RadioConfig r2; r2.configured = true; r2.mode = Mode::LockedRange;
+        r2.freq = 6500000; r2.landingFreq = 7074000;
+        s2.radios.push_back(r2);
+        ok(effectiveFor(s2, s2.radios[0]).freq == 6500000,
+           "★ a LOCKED radio keeps its own centre");
+
+        // 0 means "same as freq" and must not be read as "tune to DC".
+        ServerConfig s3; s3.configured = true;
+        RadioConfig r3; r3.configured = true; r3.mode = Mode::SingleUser;
+        r3.freq = 145000000; r3.landingFreq = 0;
+        s3.radios.push_back(r3);
+        ok(effectiveFor(s3, s3.radios[0]).freq == 145000000,
+           "★ no landing frequency set leaves the centre alone");
+    }
+
     std::printf("\n★ BOTH gates must hold, and they mean different things\n");
     {
         ServerConfig s; s.configured = true;

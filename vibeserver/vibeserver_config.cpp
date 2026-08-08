@@ -617,6 +617,14 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.freq = r.freq; c.rate = r.rate; c.lockFreq = r.lockFreq; c.lockRate = r.lockRate;
     c.gain = r.gain; c.lnaState = r.lnaState; c.ifGr = r.ifGr; c.ifAgc = r.ifAgc;
     c.demodMode = r.demodMode; c.landingFreq = r.landingFreq;
+    // ★★★ AN UNLOCKED RADIO STARTS WHERE ITS LISTENERS WILL. A locked radio's centre is the
+    //     owner's fixed window and must not move. An unlocked one has no window to protect, and
+    //     leaving the capture on `freq` meant the radio sat on a band nobody was going to use —
+    //     an RTL with a landing of 648 kHz still opened at 145 MHz, so before anyone connected the
+    //     waterfall, the spectrogram and the landing page all showed the wrong band, and the first
+    //     listener paid for a retune across 144 MHz to get where the owner had already said.
+    // ★ Only when the owner actually set one: 0 means "same as freq", which is already true.
+    if (r.mode != Mode::LockedRange && r.landingFreq > 0) c.freq = r.landingFreq;
     c.users = r.users; c.maxBw = r.maxBw; c.maxFps = r.maxFps; c.fftRate = r.fftRate;
     c.uncompressed = r.uncompressed;
     c.forceIdleSaver = r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;

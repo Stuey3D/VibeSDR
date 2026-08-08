@@ -854,7 +854,15 @@ function collectRadio() {
     zoomSpectrum: $("zoomSpectrum").checked,
     lockFreq: locked ? Math.round(parseFloat($("lockFreq").value || "0") * 1e3) : 0,
     rate: parseFloat($("rate").value || "2400000"),
-    landingFreq: locked ? Math.round(parseFloat($("landingFreq").value || "0") * 1e3) : 0,
+    // ★★★ SAVED FOR EVERY RADIO, NOT ONLY A LOCKED ONE. The card above says so in its own comment
+    //     ("EVERY RADIO HAS THESE, whichever mode it is in") and the input is drawn for every
+    //     radio — but this line still threw the value away unless the window was locked. So an
+    //     unlocked radio silently kept landingFreq: 0, which means "same as freq", and every
+    //     listener landed on the capture centre no matter what the owner typed (Stuart,
+    //     2026-08-08: "I set the RTL-SDR to 648AM but it always keeps going back to 145MHz" —
+    //     the MODE stuck, because demodMode below was never gated, and the frequency did not).
+    // ★ lockFreq and users stay gated: those genuinely only exist for a locked radio.
+    landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     demodMode: $("demodMode").value,
     users: locked ? parseInt($("users").value || "1", 10) : 1,
     uncompressed: parseInt($("uncompressed").value, 10),
