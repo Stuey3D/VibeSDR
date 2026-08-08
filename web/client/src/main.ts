@@ -2066,12 +2066,97 @@ function updateStatus() {
 // megabytes for a picture):
 //   "VSPG" | u8 ver | u16 bins | u16 rows | f64 centreHz | f64 spanHz
 //   then per row: i64 epoch-ms, then `bins` bytes of dB
+/** ★★★ EVERY RADIO ON THIS MACHINE, WITH ITS LIVE STATE.
+ *
+ *  The directory (`/vibeserver/radios`) comes from the config file and is honest about being a
+ *  directory: it knows what exists and on which port, not who is listening. Each radio is its own
+ *  PROCESS, so only that process knows whether it is busy — which is why the live half is fetched
+ *  from each radio's own `/vibeserver.json` rather than aggregated on the server. It also means a
+ *  radio that is down simply does not answer, and says so, instead of the directory claiming it is
+ *  fine.
+ *
+ *  ★★ FULL MEANS GREYED OUT, AND SAYING WHEN. A receiver you cannot have is worth showing — but
+ *     only if the page says why and for how long. Every server already publishes `freeInSec` for
+ *     its own queue, so the countdown here is the same number the queue screen uses rather than a
+ *     second guess at it.
+ *  ★ Nothing renders for a single-radio machine: the landing page it has always had is correct,
+ *    and a list of one is just noise.
+ */
+async function showSplashRadios(): Promise<void> {
+  const host = document.getElementById('splashRadios');
+  if (!host) return;
+  let dir: any;
+  try {
+    const r = await fetch('/vibeserver/radios', { cache: 'no-store' });
+    if (!r.ok) return;
+    dir = await r.json();
+  } catch { return; }
+  const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
+  if (radios.length < 2) { host.innerHTML = ''; return; }
+
+  // ★ Ask every radio at once. One slow or dead radio must not hold up the others: each entry
+  //   resolves independently and an unreachable one is rendered as unreachable.
+  const live = await Promise.all(radios.map(async (r) => {
+    try {
+      const base = `${location.protocol}//${location.hostname}:${r.port}`;
+      const resp = await fetch(`${base}/vibeserver.json`, { cache: 'no-store' });
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch { return null; }
+  }));
+
+  const mhz = (v: number) => (v / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+  const mmss = (sec: number) => {
+    const m = Math.floor(sec / 60), s = Math.max(0, Math.floor(sec % 60));
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  host.innerHTML = radios.map((r, i) => {
+    const st = live[i];
+    const listeners = Number(st?.listeners) || 0;
+    const max = Number(st?.maxUsers) || Number(r.users) || 1;
+    const waiting = Number(st?.waiting) || 0;
+    const freeIn = typeof st?.freeInSec === 'number' ? st.freeInSec : -1;
+    const down = !st;
+    const full = !down && max > 0 && listeners >= max;
+
+    let state: string;
+    if (down)         state = 'NOT RESPONDING';
+    else if (full && freeIn >= 0) state = `FULL · FREE IN ${mmss(freeIn)}`;
+    else if (full && waiting > 0) state = `FULL · ${waiting} WAITING`;
+    else if (full)    state = 'IN USE';
+    else if (max > 1) state = `${listeners} OF ${max} LISTENING`;
+    else              state = 'FREE';
+
+    const lo = Number(st?.rangeLo) || 0, hi = Number(st?.rangeHi) || 0;
+    const range = (lo > 0 && hi > lo) ? `${mhz(lo)} – ${mhz(hi)} MHz`
+                                      : `${mhz(Number(r.centreHz) || 0)} MHz`;
+    const kind = max > 1 ? 'shared' : 'one listener at a time';
+    // ★ A radio that is full or down is not a link. Greying it out but leaving it clickable would
+    //   send someone to a page that refuses them, which is worse than saying so here.
+    const dim = (full || down) ? 'opacity:.45;cursor:not-allowed' : 'cursor:pointer';
+    const tag = (full || down) ? 'div' : 'a';
+    const href = (full || down) ? '' : ` href="${location.protocol}//${location.hostname}:${r.port}/"`;
+    return `<${tag}${href} class="radioCard" data-serial="${r.serial}" style="display:block;text-align:left;`
+         + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
+         + `text-decoration:none;color:inherit;${dim}">`
+         + `<div style="display:flex;justify-content:space-between;gap:12px">`
+         + `<strong style="letter-spacing:.05em">${r.label}</strong>`
+         + `<span style="font-size:11px;opacity:.85">${state}</span></div>`
+         + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7">${range} · ${kind}</div>`
+         + `</${tag}>`;
+  }).join('');
+}
+
 /** ★★ WHO IS ALREADY HERE. Stuart asked for the count on the landing page as well as in the
  *  status bar — and it is the same question the queue answers: a visitor deciding whether to
  *  bother wants to know there is room BEFORE they press START, not after they are refused.
  *  ★ Silent on failure. This is decoration on a page that must work without it; a server that
  *    does not answer (or an older one with no `waiting` field) simply shows nothing. */
 async function showSplashListeners(): Promise<void> {
+  // ★ The per-radio list refreshes on the same beat, so a countdown on the landing page ticks
+  //   rather than freezing at whatever it was when the page opened.
+  void showSplashRadios();
   const el = document.getElementById('splashListeners');
   if (!el) return;
   try {

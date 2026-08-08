@@ -97,6 +97,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   <div id="setup" class="hide">
     <p class="sub">Set this receiver up. You can change any of it later from Admin.</p>
 
+    <!-- ★★★ ONE TAB PER RADIO. Hidden entirely when there is only one, so a single-radio server's
+         setup page is exactly the page it has always been. Each tab is the whole settings form for
+         that radio; what the MACHINE shares — where it is, its name, the admin password — is the
+         same on every tab and stored once. -->
+    <div id="radioTabs" class="hide" style="display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 4px"></div>
+    <div id="radioTabHint" class="hide sub" style="margin:0 0 10px;font-size:12px;opacity:.75"></div>
+
     <div class="card">
       <h2>On your network</h2>
       <p class="why">How people find this server once it is running.</p>
@@ -265,8 +272,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   </div>
 </div>
 
-<div class="bar hide" id="bar">
+<!-- ★★ TWO ACTIONS, AND THEY ARE NOT THE SAME. Saving a radio's tab writes that radio's settings
+     and leaves everyone listening exactly where they are. Restarting the server applies everything
+     and drops every listener on every radio — so it is its own control, in its own row, and it
+     says what it does. Stuart, 2026-08-07: "at the bottom of each tab is a save radio settings
+     button. Underneath that in its own distinct footer section a save and reboot server button". -->
+<div class="bar hide" id="bar" style="flex-wrap:wrap;row-gap:8px">
   <span class="spacer" id="barMsg"></span>
+  <button id="saveRadioBtn" class="hide" style="background:transparent;border:1px solid var(--amber);color:var(--amber)">Save radio settings</button>
   <button id="saveBtn">Save and start</button>
 </div>
 
@@ -378,7 +391,7 @@ function bwNote() {
 }
 
 function setMode(locked) {
-  cfg.mode = locked ? "locked" : "single";
+  radio().mode = locked ? "locked" : "single";   // ★ the OPEN tab, not the machine
   $("modeLocked").classList.toggle("sel", locked);
   $("modeSingle").classList.toggle("sel", !locked);
   $("lockedOnly").classList.toggle("hide", !locked);
@@ -452,7 +465,7 @@ async function renderHw() {
   //       save it back. Marked so it is obvious.
   const rateSel = $("rate");
   if (rateSel && hw && hw.rates && hw.rates.length) {
-    const want = String(cfg.rate || hw.rates[0]);
+    const want = String(radio().rate || hw.rates[0]);
     rateSel.innerHTML = hw.rates.map(r =>
       `<option value="${r}">${(r / 1e6).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} MHz` +
       ` &nbsp;(${(r / 1e6).toFixed(2)} MS/s)</option>`).join("");
@@ -540,34 +553,89 @@ async function renderHw() {
   // Restore stored values into whichever controls we just drew.
   if ($("rfNotch")) $("rfNotch").checked = !!cfg.rfNotch;
   if ($("dabNotch")) $("dabNotch").checked = !!cfg.dabNotch;
-  if ($("gain")) $("gain").value = String(cfg.gain != null ? cfg.gain : -1);
+  if ($("gain")) $("gain").value = String(radio().gain != null ? radio().gain : -1);
+}
+
+// ── Several radios ───────────────────────────────────────────────────────────────────────────
+// ★★★ WHICH TAB IS OPEN. Everything below reads and writes cfg.radios[curRadio]; the shared
+//     settings live on cfg itself and are the same whichever tab you are on.
+let curRadio = 0;
+
+/** The radios the owner ticked in the setup screen. A radio that was NOT ticked has no tab: it is
+ *  not going to be served, and offering somewhere to configure it would say otherwise. */
+function radioList() { return Array.isArray(cfg.radios) ? cfg.radios.filter(r => r.enabled !== false) : []; }
+function radio()     { return radioList()[curRadio] || {}; }
+
+function renderTabs() {
+  const list = radioList();
+  const tabs = $("radioTabs"), hint = $("radioTabHint");
+  // ★ One radio is not a choice, so it does not get a chooser.
+  if (list.length < 2) { tabs.classList.add("hide"); hint.classList.add("hide"); return; }
+  tabs.classList.remove("hide"); hint.classList.remove("hide");
+  tabs.innerHTML = list.map((r, i) => {
+    const on = i === curRadio;
+    // ★★ A radio whose tab has never been saved is marked, because an unmarked one looks finished
+    //    — and an unconfigured radio is NOT served, which is a silence the owner would otherwise
+    //    have to work out for themselves.
+    const done = r.configured ? "" : " •";
+    return `<button type="button" data-i="${i}" style="padding:6px 12px;border-radius:6px;`
+         + `border:1px solid var(--amber);cursor:pointer;`
+         + (on ? "background:var(--amber);color:#000"
+               : "background:transparent;color:var(--amber)")
+         + `">${(r.label || r.driver || "Radio " + (i + 1))}${done}</button>`;
+  }).join("");
+  Array.from(tabs.querySelectorAll("button")).forEach(b => {
+    b.onclick = () => {
+      // ★ Switching tabs KEEPS what you typed, in memory, so flipping between two radios to
+      //   compare them does not quietly discard the one you were editing.
+      stashRadio();
+      curRadio = parseInt(b.getAttribute("data-i"), 10);
+      renderTabs(); fill(); renderHw();
+    };
+  });
+  const unsaved = list.filter(r => !r.configured).length;
+  hint.textContent = unsaved
+    ? `Each radio is set up on its own tab. ${unsaved} still to do — a radio marked • is not served yet.`
+    : "Each radio is set up on its own tab.";
+}
+
+/** Copy what is on screen into the radio this tab belongs to, without saving to the server. */
+function stashRadio() {
+  const list = radioList();
+  if (!list.length) return;
+  Object.assign(list[curRadio], collectRadio());
 }
 
 function fill() {
+  // ★ The MACHINE — the same on every tab.
   $("name").value = cfg.name || "";
   $("place").value = cfg.place || "";
   $("country").value = cfg.country || "";
   $("locator").value = cfg.locator || "";
   $("lat").value = cfg.lat || "";
   $("lon").value = cfg.lon || "";
+  $("mdns").checked = cfg.mdnsAdvertise !== false;
+  $("sessionLimit").value = cfg.sessionLimitMin || 0;
+  $("cpuGovernor").value = cfg.cpuGovernor || "performance";
+
+  // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
+  //    machine is how every receiver would show the first one's frequency.
+  const r = radio();
   // ★ Default ON for a shared receiver. The 1024-bin window only stays sharp BECAUSE of the zoom
   //   resampling — without it, deep zoom interpolates and looks blocky, which is what a listener
   //   reads as a poor receiver. Off by default was right when this was experimental; it is not
   //   right for the model a shared server is built on.
-  $("zoomSpectrum").checked = cfg.zoomSpectrum !== false;
-  $("mdns").checked = cfg.mdnsAdvertise !== false;
-  $("lockFreq").value = Math.round((cfg.lockFreq || cfg.freq || 0) / 1e3);
+  $("zoomSpectrum").checked = r.zoomSpectrum !== false;
+  $("lockFreq").value = Math.round((r.lockFreq || r.freq || 0) / 1e3);
   // ★ NOT set here: the options do not exist until renderHw() has heard back from the
   //   radio, and assigning a value to an empty <select> silently selects nothing.
-  //   renderHw() applies cfg.rate once it has built the list.
-  $("landingFreq").value = ((cfg.landingFreq || cfg.freq || 0) / 1e3).toFixed(1);
-  $("demodMode").value = cfg.demodMode || "am";
-  $("users").value = cfg.users || 1;
-  $("sessionLimit").value = cfg.sessionLimitMin || 0;
-  $("uncompressed").value = String(cfg.uncompressed || 0);
-  $("cpuGovernor").value = cfg.cpuGovernor || "performance";
-  $("forceIdle").checked = !!cfg.forceIdleSaver;
-  setMode((cfg.mode || "single") === "locked");
+  //   renderHw() applies the rate once it has built the list.
+  $("landingFreq").value = ((r.landingFreq || r.freq || 0) / 1e3).toFixed(1);
+  $("demodMode").value = r.demodMode || "am";
+  $("users").value = r.users || 1;
+  $("uncompressed").value = String(r.uncompressed || 0);
+  $("forceIdle").checked = !!r.forceIdleSaver;
+  setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
 }
@@ -582,33 +650,45 @@ function addr() {
       + ` <span class="addr">${location.host}</span>.`;
 }
 
-function collect() {
-  const locked = cfg.mode === "locked";
+/** ★★ WHAT BELONGS TO THIS RADIO. Split from the machine's own settings deliberately: posting a
+ *  radio's locked frequency as though it were a property of the SERVER is how three receivers
+ *  would end up sharing one window. */
+function collectRadio() {
+  const locked = radio().mode === "locked";
   return {
-    mode: cfg.mode,
-    name: $("name").value.trim(),
-    place: $("place").value.trim(),
-    country: $("country").value.trim().toUpperCase(),
-    locator: $("locator").value.trim(),
-    lat: $("lat").value.trim(),
-    lon: $("lon").value.trim(),
+    mode: radio().mode,
     zoomSpectrum: $("zoomSpectrum").checked,
-    mdnsAdvertise: $("mdns").checked,
-    mdnsName: $("name").value.trim(),
     lockFreq: locked ? Math.round(parseFloat($("lockFreq").value || "0") * 1e3) : 0,
     rate: parseFloat($("rate").value || "2400000"),
     landingFreq: locked ? Math.round(parseFloat($("landingFreq").value || "0") * 1e3) : 0,
     demodMode: $("demodMode").value,
     users: locked ? parseInt($("users").value || "1", 10) : 1,
-    sessionLimitMin: locked ? parseInt($("sessionLimit").value || "0", 10) : 0,
     uncompressed: parseInt($("uncompressed").value, 10),
-    cpuGovernor: $("cpuGovernor").value,
     forceIdleSaver: $("forceIdle").checked,
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
     ...($("gain")     ? {gain: parseInt($("gain").value, 10)} : {})
+  };
+}
+
+/** The machine: stated once, the same on every tab. */
+function collect() {
+  stashRadio();
+  const locked = radio().mode === "locked";
+  return {
+    name: $("name").value.trim(),
+    place: $("place").value.trim(),
+    country: $("country").value.trim().toUpperCase(),
+    locator: $("locator").value.trim(),
+    lat: $("lat").value.trim(),
+    lon: $("lon").value.trim(),
+    mdnsAdvertise: $("mdns").checked,
+    mdnsName: $("name").value.trim(),
+    sessionLimitMin: locked ? parseInt($("sessionLimit").value || "0", 10) : 0,
+    cpuGovernor: $("cpuGovernor").value,
+    radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
 }
 
@@ -631,6 +711,13 @@ $("signinBtn").onclick = async () => {
     $("signin").classList.add("hide");
     $("setup").classList.remove("hide");
     $("bar").classList.remove("hide");
+    // ★ Open the first radio that has NOT been set up yet — that is the one the owner came here
+    //   for. Falling back to the first tab when they are all done.
+    const list = radioList();
+    const todo = list.findIndex(r => !r.configured);
+    curRadio = todo >= 0 ? todo : 0;
+    if (list.length > 1) $("saveRadioBtn").classList.remove("hide");
+    renderTabs();
     fill();
   } catch (e) { $("signinErr").textContent = "Could not reach the server."; }
 };
@@ -643,13 +730,50 @@ $("mdns").addEventListener("change", addr);
 for (const id of ["lockFreq","rate"]) $(id).addEventListener("input", coverage);
 for (const id of ["users","uncompressed"]) $(id).addEventListener("input", bwNote);
 
+// ★★★ SAVE THIS RADIO, AND ONLY THIS RADIO. No restart: the owner is working through three tabs,
+//     and bouncing every listener on every radio after each one would make the page unusable. The
+//     settings are stored; they take effect when the server is restarted from the footer below.
+$("saveRadioBtn").onclick = async () => {
+  $("saveErr").textContent = "";
+  const list = radioList();
+  if (!list.length) return;
+  stashRadio();
+  list[curRadio].configured = true;   // ★ THIS is what puts the radio on air after a restart
+  $("saveRadioBtn").disabled = true;
+  $("barMsg").textContent = "Saving " + (list[curRadio].label || "radio") + "…";
+  try {
+    const r = await fetch("/vibeserver/config?" + await authQuery(),
+                          {method:"POST", body: JSON.stringify(collect())});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      list[curRadio].configured = false;
+      $("saveErr").textContent = j.error || ("Save failed (" + r.status + ").");
+      $("barMsg").textContent = "";
+    } else {
+      $("barMsg").textContent = "Saved. Restart the server below to put it on air.";
+      renderTabs();
+    }
+  } catch (e) {
+    list[curRadio].configured = false;
+    $("saveErr").textContent = "Could not reach the server.";
+    $("barMsg").textContent = "";
+  }
+  $("saveRadioBtn").disabled = false;
+};
+
 $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
   try {
+    // ★ restart:true is what separates this from the per-radio save above — see the server's
+    //   config handler, which only bounces the receiver when it is asked to.
+    const body = collect();
+    if (radioList().length) radioList()[curRadio].configured = true;
+    body.radios = cfg.radios;
+    body.restart = true;
     const r = await fetch("/vibeserver/config?" + await authQuery(),
-                          {method:"POST", body: JSON.stringify(collect())});
+                          {method:"POST", body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       $("saveErr").textContent = j.error || ("Save failed (" + r.status + ").");
