@@ -6153,7 +6153,16 @@ struct LocalSdrShim::Impl {
             sock->close();
             return;
 
-        } else if (reqLine.rfind("GET / ", 0) == 0 || reqLine.rfind("GET /index.htm", 0) == 0) {
+        // ★★★ "GET / " REQUIRED A LITERAL SPACE, so the root page 404'd for ANY query string.
+        //     `/?join=1` — the link every radio card uses to open a receiver — was a 404, and the
+        //     browser showed nothing at all. It looked like the routing, then the hand-off, then
+        //     the prefix; it was none of those. A path and its query are separate things and the
+        //     match has to say so (2026-08-08).
+        // ★ Kept as a prefix test rather than a full parse: everything else here matches the same
+        //   way, and one route parsing the request differently from its neighbours is its own trap.
+        } else if ((reqLine.rfind("GET /", 0) == 0 &&
+                    (reqLine.size() == 5 || reqLine[5] == ' ' || reqLine[5] == '?')) ||
+                   reqLine.rfind("GET /index.htm", 0) == 0) {
             // ★★★ NOT SET UP YET ⇒ THE SETUP PAGE, NOT THE RECEIVER.
             // A fresh install has a radio and an admin password but no POLICY — no range, no
             // listener cap, no decision about what may be changed — and until the owner sets one
