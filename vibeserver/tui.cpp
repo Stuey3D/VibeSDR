@@ -388,6 +388,7 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
 // actions, confirm each, say what happened. The design effort goes into the browser page.
 void statusScreen(vsconfig::Config& cfg) {
     std::string msg;
+    int radioCursor = 0;
     while (true) {
         header("Status and recovery");
         const std::string st = svcState();
@@ -403,11 +404,44 @@ void statusScreen(vsconfig::Config& cfg) {
         //     what we cannot do is name it, so say that instead of guessing.
         // ★ Stop serving (x) and this line fills in — which is also exactly when you need it, in
         //   the middle of swapping one radio for another.
-        std::string radio = radioLine();
-        const char* radioTxt = !radio.empty() ? radio.c_str()
-                             : up             ? "in use by the running server"
-                                              : "none detected";
-        mvprintw(5, 2, "Radio   : %s", radioTxt);
+        // ★★★ EVERY RADIO THIS MACHINE KNOWS ABOUT, not just the one we can enumerate right now.
+        //
+        //     The list used to exist ONLY in the first-run wizard, so on a server that was already
+        //     set up there was no way to see or change which radios are served — and the one line
+        //     that was here showed a single radio, which on a three-radio machine is simply wrong
+        //     (Stuart, 2026-08-08: "the TUI cannot see all 3 and only shows the RTL").
+        //
+        // ★★ FROM THE CONFIG, not from enumeration. A running server HOLDS its device, so
+        //    enumerating finds everything except the radio you most want to see. The config knows
+        //    what the owner chose; enumeration only says what is unclaimed this second.
+        vsconfig::ServerConfig srvCfg;
+        { std::string e; loadServerViaSudo(srvCfg, e); }
+        int row = 5;
+        if (srvCfg.radios.empty()) {
+            std::string radio = radioLine();
+            const char* radioTxt = !radio.empty() ? radio.c_str()
+                                 : up             ? "in use by the running server"
+                                                  : "none detected";
+            mvprintw(row++, 2, "Radio   : %s", radioTxt);
+        } else {
+            mvprintw(row++, 2, "Radios  :");
+            for (size_t i = 0; i < srvCfg.radios.size(); i++) {
+                const auto& r = srvCfg.radios[i];
+                const bool sel = ((int)i == radioCursor);
+                if (sel) attron(A_REVERSE);
+                mvprintw(row, 12, " [%c] %-24s ", r.enabled ? 'x' : ' ',
+                         (r.label.empty() ? r.driver : r.label).c_str());
+                if (sel) attroff(A_REVERSE);
+                attron(COLOR_PAIR(r.enabled && r.configured ? 1 : 4));
+                // ★ THREE STATES, and they are not the same. Not ticked = the owner does not want
+                //   it. Ticked but never set up = it will not be served until its tab is saved,
+                //   which is invisible unless said here.
+                mvprintw(row, 40, "%s", !r.enabled ? "not served"
+                                      : !r.configured ? "set up in the browser" : "serving");
+                attroff(COLOR_PAIR(r.enabled && r.configured ? 1 : 4));
+                row++;
+            }
+        }
         mvprintw(6, 2, "Settings: %s", cfg.configured ? "configured" : "NOT set up yet");
 
         const std::string ip = myIp(), port = listenPort();
@@ -432,37 +466,64 @@ void statusScreen(vsconfig::Config& cfg) {
         //     running at all and no clue why. Meanwhile passing any flag ran one perfectly.
         //     Say plainly that we cannot manage a service here, and run the thing ourselves.
         const bool svcExists = !st.empty();
-        attron(A_BOLD); mvprintw(11, 2, "Changing the radio"); attroff(A_BOLD);
+        if (!srvCfg.radios.empty()) {
+            attron(COLOR_PAIR(4));
+            mvprintw(row++, 2, "up/down to choose a radio, space to serve it or not.");
+            attroff(COLOR_PAIR(4));
+        }
+        row++;
+        attron(A_BOLD); mvprintw(row++, 2, "Changing the radio"); attroff(A_BOLD);
+        // ★ EVERY ROW FLOWS FROM HERE. These were fixed line numbers, which was fine while the
+        //   screen above them was one line tall — and wrong the moment it became a list of radios.
         if (!svcExists) {
             attron(COLOR_PAIR(3));
-            mvprintw(12, 4, "s   start serving here, in this terminal  (Ctrl-C to stop)");
+            mvprintw(row++, 4, "s   start serving here, in this terminal  (Ctrl-C to stop)");
             attroff(COLOR_PAIR(3));
             attron(COLOR_PAIR(4));
-            mvprintw(13, 4, "There is no system service on this machine, so nothing can start it");
-            mvprintw(14, 4, "for you at boot. The same command by hand:  vibeserver --serve");
+            mvprintw(row++, 4, "There is no system service on this machine, so nothing can start it");
+            mvprintw(row++, 4, "for you at boot. The same command by hand:  vibeserver --serve");
             attroff(COLOR_PAIR(4));
         } else if (up) {
-            mvprintw(12, 4, "x   stop serving and release the radio  (then unplug it)");
+            mvprintw(row++, 4, "x   stop serving and release the radio  (then unplug it)");
         } else {
             attron(COLOR_PAIR(3));
-            mvprintw(12, 4, "s   start serving with the radio that is plugged in now");
+            mvprintw(row++, 4, "s   start serving with the radio that is plugged in now");
             attroff(COLOR_PAIR(3));
         }
 
-        attron(A_BOLD); mvprintw(14, 2, "If you are locked out"); attroff(A_BOLD);
-        mvprintw(15, 4, "p   reset the admin password");
-        mvprintw(16, 4, "n   reset or clear the PIN");
-        mvprintw(17, 4, "z   reset to not-set-up  (the browser will ask you to set it up again)");
-        mvprintw(18, 4, "r   restart the server");
-        mvprintw(19, 4, "q   quit");
+        row++;
+        attron(A_BOLD); mvprintw(row++, 2, "If you are locked out"); attroff(A_BOLD);
+        mvprintw(row++, 4, "p   reset the admin password");
+        mvprintw(row++, 4, "n   reset or clear the PIN");
+        mvprintw(row++, 4, "z   reset to not-set-up  (the browser will ask you to set it up again)");
+        mvprintw(row++, 4, "r   restart the server");
+        mvprintw(row++, 4, "q   quit");
 
-        if (!msg.empty()) message(21, 3, msg.c_str());
+        if (!msg.empty()) message(row + 1, 3, msg.c_str());
         refresh();
 
         int c = getch();
         msg.clear();
         if (c == 'q') return;
-        if (c == 'x' && up) {
+        // ★★ TOGGLING A RADIO IS A CONFIG CHANGE, SO IT IS SAVED IMMEDIATELY — and re-read first,
+        //    because the SERVER writes this file too (an admin changing gain persists it). Writing
+        //    back a copy held across a screen would silently revert whatever it had saved.
+        if (c == KEY_UP   && radioCursor > 0) radioCursor--;
+        else if (c == KEY_DOWN && radioCursor + 1 < (int)srvCfg.radios.size()) radioCursor++;
+        else if (c == ' ' && radioCursor < (int)srvCfg.radios.size()) {
+            vsconfig::ServerConfig fresh; std::string e;
+            if (loadServerViaSudo(fresh, e) <= 0 || radioCursor >= (int)fresh.radios.size()) {
+                msg = "Could not read the configuration.";
+            } else {
+                auto& r = fresh.radios[radioCursor];
+                r.enabled = !r.enabled;
+                if (!saveServerConfig(fresh, e)) msg = "Save failed: " + e;
+                else msg = std::string(r.label.empty() ? r.driver : r.label)
+                         + (r.enabled ? " will be served — restart to apply."
+                                      : " will not be served — restart to apply.");
+            }
+        }
+        else if (c == 'x' && up) {
             // ★ STOP, not restart. The whole point is to let go of the USB device so the user can
             //   physically unplug it; a restart would grab it straight back.
             mvprintw(21, 2, "Stopping…"); refresh();
