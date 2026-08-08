@@ -87,7 +87,8 @@
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
 #include "fd_passing.h"
-#include <poll.h>        // hand-written: the setup page, GET / when unconfigured
+#include <poll.h>
+#include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
