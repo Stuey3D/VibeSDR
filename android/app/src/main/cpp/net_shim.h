@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <unistd.h>
 
 namespace net {
 
@@ -29,6 +30,17 @@ public:
 
     void close();
     bool isOpen() { return open_; }
+
+    /** ★★★ LET GO OF THE DESCRIPTOR WITHOUT KILLING THE CONNECTION.
+     *
+     *  close() calls shutdown(), which acts on the SOCKET — every descriptor pointing at it,
+     *  including one another process now holds. After handing a connection on (SCM_RIGHTS) that is
+     *  precisely wrong: the front door "closed its copy" and tore down the live TCP connection the
+     *  radio had just adopted, so the listener got an empty reply and both sides looked healthy.
+     *  ★ Here we drop OUR reference only. The connection lives on for as long as anyone still
+     *    holds one, which is exactly the semantics a hand-off needs.
+     */
+    void releaseFd() { open_ = false; if (fd_ >= 0) { ::close(fd_); fd_ = -1; } }
 
     /** ★ The raw descriptor. Needed for two things and nothing else: peeking at a request without
      *  consuming it (MSG_PEEK), and handing the whole connection to another process
