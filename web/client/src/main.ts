@@ -45,6 +45,16 @@ import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTi
 /** True when THIS process is the front door — it owns no radio, so START and the PIN are
  *  meaningless here and ADMIN means 'unlock every radio', not 'connect as admin'. */
 let isFrontDoor = false;
+
+/** ★★★ ADMIN ON SCREEN MEANS "YOU PROVED IT ON THIS PAGE", NOT "A TICKET EXISTS SOMEWHERE".
+ *  sessionStorage survives a reload, so a ticket from an earlier sign-in made the banner and the
+ *  admin buttons appear on a page where nobody had typed anything — and the renewal timer kept
+ *  that alive for the whole life of the tab (Stuart, 2026-08-08: "I've not entered the password
+ *  yet, the admin mode title nor the setup and admin controls buttons should be visible").
+ *  ★★ The TICKET still persists, because it has one job the flag cannot do: carry proof across the
+ *  navigation from the landing page into /r/<serial>/, which is a fresh page load. So the
+ *  credential outlives the page and the CLAIM does not. */
+let adminSignedInThisView = false;
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
@@ -141,13 +151,13 @@ function initSplash() {
   // ★ Set by showSplashRadios() once it knows what this process is. The front door owns no radio,
   //   which changes what the ADMIN button means (see adminSignIn).
   const paintAdminMode = () => {
-    const on = inAdminMode();
+    const on = adminSignedInThisView && inAdminMode();
     const b = document.getElementById('splashAdminBanner');
     if (b) (b as HTMLElement).hidden = !on;
     const tools = document.getElementById('splashAdminTools');
     if (tools) (tools as HTMLElement).hidden = !on;
     const btn = document.getElementById('btnAdmin');
-    if (btn) btn.textContent = on ? 'SIGN OUT' : (btn.textContent === 'CANCEL ADMIN' ? 'CANCEL ADMIN' : 'ADMIN');
+    if (btn && btn.textContent !== 'CANCEL ADMIN') btn.textContent = on ? 'SIGN OUT' : 'ADMIN';
   };
 
   // ★★ ADMIN AT THE GATE. Reveals the password field and turns CONNECT into an admin connect.
@@ -190,6 +200,7 @@ function initSplash() {
       const j = await r.json();
       saveAdminTicket(String(j.ticket || ''), Number(j.ttl) || 600);
       if (!inAdminMode()) { msg.className = ''; msg.textContent = 'The server issued no admin session.'; return false; }
+      adminSignedInThisView = true;
       // Keep it for the admin PAGE too, which signs its own requests.
       adminPassword = pw;
       setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(location.host), adminPassword));
@@ -208,19 +219,20 @@ function initSplash() {
   // ★ Straight to the tools, without taking a radio. Both work from the ticket alone — the admin
   //   API accepts it (see vibe_admin_ticket.h), and the setup page is served by this same process.
   document.getElementById('btnSplashAdmin')?.addEventListener('click', () => {
-    if (!inAdminMode()) return;
+    if (!adminSignedInThisView || !inAdminMode()) return;
     openAdmin(location.host, adminPassword);
   });
   document.getElementById('btnSplashSetup')?.addEventListener('click', () => {
-    if (!inAdminMode()) return;
+    if (!adminSignedInThisView || !inAdminMode()) return;
     location.href = `${location.origin}/setup`;
   });
 
   $('btnAdmin').addEventListener('click', () => {
     // ★ Already signed in: the button becomes SIGN OUT. Leaving no way out meant the only way to
     //   drop admin was to close the tab, and an owner who has finished should not have to.
-    if (inAdminMode()) {
+    if (adminSignedInThisView && inAdminMode()) {
       clearAdminTicket();
+      adminSignedInThisView = false;
       adminPassword = '';
       paintAdminMode();
       $('btnAdmin').textContent = 'ADMIN';
@@ -238,6 +250,16 @@ function initSplash() {
                      : 'Connecting as admin: no time limit, all controls unlocked.');
     msg.className = showing ? '' : 'info';
   });
+
+  // ★★★ THE BANNER MUST FOLLOW THE TRUTH, NOT THE LAST BUTTON PRESS. Painted only on sign-in and
+  //     sign-out, it was stale both ways — still claiming ADMIN MODE after the ticket lapsed. It
+  //     claims real powers, so it has to take itself down.
+  // ★★ AND IT LIVES HERE, in initSplash, beside the function it calls. It was briefly called from
+  //    startApp() instead — a DIFFERENT SCOPE, so it threw ReferenceError and killed the rest of
+  //    startApp: audio and RDS came up (they are wired earlier) and the waterfall and frequency
+  //    never did. A blank receiver that plays sound is a confusing way to learn about a typo.
+  paintAdminMode();
+  setInterval(paintAdminMode, 5000);
 
   const go = async (remember: boolean) => {
     // ★★★ THE FRONT DOOR HAS NOTHING TO CONNECT TO. Pressing Enter in the admin box ran the whole
@@ -1067,7 +1089,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   //    survives only while the tab is open and the current lease is still good. The server's own
   //    admin idle re-lock is unaffected and still governs.
   setInterval(() => {
-    if (!inAdminMode()) return;
+    // ★ Only a page that actually signed in keeps the lease alive. Renewing from any page holding
+    //   a stored ticket made admin permanent for the life of the tab; now a reload stops the
+    //   renewals and the credential lapses on its own.
+    if (!adminSignedInThisView || !inAdminMode()) return;
     const t = adminTicketQuery();
     if (!t) return;
     void fetch(`${httpBase(location.host)}/vibeserver/admin-ticket?${t}`, { cache: 'no-store' })
@@ -1075,15 +1100,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       .then((j) => { if (j?.ticket) saveAdminTicket(String(j.ticket), Number(j.ttl) || 600); })
       .catch(() => { /* a blip must not end the session; the next tick tries again */ });
   }, 4 * 60 * 1000);
-
-  // ★★★ THE BANNER MUST FOLLOW THE TRUTH, NOT THE LAST BUTTON PRESS. It was painted only when
-  //     signing in or out, so it was stale in both directions: still saying ADMIN MODE after the
-  //     ticket had expired, and — because sessionStorage survives a reload — announcing admin on a
-  //     page load where nothing had been unlocked yet (Stuart, 2026-08-08: "it has the admin mode
-  //     title on the splash screen when not in admin mode"). It claims real powers, so it has to
-  //     go away by itself the moment they lapse.
-  paintAdminMode();
-  setInterval(paintAdminMode, 5000);
 
   setTimeout(showAudioGate, 600);
   // ★ And keep watching. Anything can suspend a context again — a tab switch, the OS, a phone

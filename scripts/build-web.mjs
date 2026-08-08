@@ -17,6 +17,39 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// ★★★ CATCH THE ONE MISTAKE esbuild CANNOT. esbuild does not type-check, so an identifier used
+//     OUTSIDE the scope it was declared in bundles perfectly and throws ReferenceError at run
+//     time — which kills the rest of that function and nothing else. It shipped a receiver whose
+//     audio and RDS worked while the waterfall and the frequency never appeared, and the page
+//     looked "completely broken" for a reason no log mentioned (2026-08-08).
+// ★★ Deliberately NARROW: only "Cannot find name" (TS2304/TS2552). The tree is not clean under a
+//    full strict check, and a gate that always fails is a gate everyone learns to skip.
+import { execFileSync } from 'node:child_process';
+function typeCheck() {
+  // ★ No file arguments and no -p: tsc then finds the project's own tsconfig by walking up, which
+  //   is what resolves the DOM/es2022 libs. Passing a file instead makes tsc refuse outright
+  //   ("tsconfig.json is present but will not be loaded if files are specified") — and the first
+  //   version of this guard swallowed that refusal and reported success on code that was broken.
+  let out = '';
+  try {
+    execFileSync('npx', ['tsc', '--noEmit'],
+                 { stdio: ['ignore', 'pipe', 'pipe'],
+                   cwd: new URL('../web/client', import.meta.url).pathname });
+  } catch (e) {
+    out = String(e.stdout || '') + String(e.stderr || '');
+  }
+  // ★★ NARROW ON PURPOSE: only "Cannot find name". The tree has pre-existing type complaints, and
+  //    a gate that always fails is a gate everyone learns to skip. This one catches the mistake
+  //    esbuild cannot see and that costs a whole screen of the app at run time.
+  const bad = out.split('\n').filter((l) => /TS2304|TS2552/.test(l));
+  if (bad.length) {
+    console.error('\n✗ undefined identifier(s) — these throw at RUN time, and esbuild cannot see them:\n');
+    for (const l of bad.slice(0, 10)) console.error('   ' + l);
+    process.exit(1);
+  }
+}
+typeCheck();
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_HTML = path.join(root, 'web/client/index.html');
 const ENTRY    = path.join(root, 'web/client/src/main.ts');

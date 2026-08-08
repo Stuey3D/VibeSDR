@@ -1764,6 +1764,10 @@ struct LocalSdrShim::Impl {
          *  deciding whether the address they are about to block is a person (Stuart, 2026-08-08:
          *  "in the ip can we show the user Agent please"). */
         std::string agent;
+        std::atomic<unsigned long long> dspNanos{0};   // total time spent in THIS listener's DSP
+        // Previous sample, so a rate can be shown without the reader keeping state per listener.
+        unsigned long long lastDspNanos = 0, lastSentBytes = 0;
+        double             lastSampleAt = 0;
         double vfoHz = 0;                       // ABSOLUTE, like audioFreq
         std::string mode = "am";
         double bwHz = 0;
@@ -2228,7 +2232,16 @@ struct LocalSdrShim::Impl {
                 blk = std::move(c->q.front());
                 c->q.pop_front();
             }
+            // ★ Time the work this listener costs. Measured around feedOneClient only: that IS
+            //   this listener's private pipeline (channelise, demodulate, decode, encode), and
+            //   nothing shared is inside it. Monotonic clock, and the counter only ever rises —
+            //   the reader turns two samples into a percentage.
+            const auto t0 = std::chrono::steady_clock::now();
             feedOneClient(c, blk->bins.data(), blk->index);
+            const auto t1 = std::chrono::steady_clock::now();
+            c->dspNanos.fetch_add(
+                (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(),
+                std::memory_order_relaxed);
         }
     }
 
@@ -2836,6 +2849,12 @@ struct LocalSdrShim::Impl {
         std::condition_variable cv;
         std::deque<std::pair<Out, std::vector<uint8_t>>> q;
         size_t bytes = 0;
+        /** ★ Cumulative bytes ever QUEUED for this socket. `bytes` above is the current backlog
+         *  and goes up and down; this only rises, which is what a rate has to be computed from.
+         *  Per listener it answers "what is this one costing my uplink" — and with the DSP time
+         *  below, what a mode actually costs (Stuart, 2026-08-08: wanting a definitive answer on
+         *  what FM stereo with RDS costs). */
+        std::atomic<unsigned long long> sentTotal{0};
         bool   closing = false;      // drain what is queued, then the writer exits
         bool   overran = false;      // dropped for backlog, not for leaving
         std::thread th;
@@ -2938,6 +2957,7 @@ struct LocalSdrShim::Impl {
             return;
         }
         ob->bytes += frame.size();
+        ob->sentTotal.fetch_add(frame.size(), std::memory_order_relaxed);
         ob->q.emplace_back(cls, std::move(frame));
         ob->cv.notify_one();
     }
