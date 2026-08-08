@@ -219,6 +219,14 @@ struct RadioConfig {
      *    radio releases, there is simply no spectrogram, and the page says so rather than
      *    showing an hour of blank. */
     bool   spectrogram = false;
+
+    /** ★★★ PER RADIO, AND IT MATTERS MOST ON THE ONE-LISTENER RADIOS. This used to be a single
+     *  machine-wide setting that the page only sent for a LOCKED receiver, so a single-user radio
+     *  was always unlimited — which is exactly backwards: a shared receiver has room for everyone,
+     *  a one-at-a-time radio is the one somebody can sit on all evening while others wait
+     *  (Stuart, 2026-08-08: "no time limits for the single user radios").
+     *  ★ 0 = unlimited. Loopback and admin sessions are exempt wherever this is enforced. */
+    int    sessionLimitMin = 0;
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */

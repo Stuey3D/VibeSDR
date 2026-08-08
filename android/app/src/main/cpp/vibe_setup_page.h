@@ -786,7 +786,7 @@ function fill() {
   $("lat").value = cfg.lat || "";
   $("lon").value = cfg.lon || "";
   $("mdns").checked = cfg.mdnsAdvertise !== false;
-  $("sessionLimit").value = cfg.sessionLimitMin || 0;
+
   $("cpuGovernor").value = cfg.cpuGovernor || "performance";
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
@@ -810,6 +810,7 @@ function fill() {
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
   if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
+  $("sessionLimit").value = r.sessionLimitMin || 0;
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
@@ -852,6 +853,9 @@ function collectRadio() {
     ...($("hwPpm").classList.contains("hide")   ? {} : {ppm: parseInt($("ppm").value || "0", 10)}),
     ...($("hwPpb").classList.contains("hide")   ? {} : {ppb: parseInt($("ppb").value || "0", 10)}),
     releaseWhenIdle: $("releaseWhenIdle").checked,
+    // ★ ALWAYS, not just when locked. A one-listener radio is precisely the one someone can sit
+    //   on all evening, so it is the radio that most needs a limit.
+    sessionLimitMin: parseInt($("sessionLimit").value || "0", 10),
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked
@@ -871,7 +875,7 @@ function collect() {
     lon: $("lon").value.trim(),
     mdnsAdvertise: $("mdns").checked,
     mdnsName: $("name").value.trim(),
-    sessionLimitMin: locked ? parseInt($("sessionLimit").value || "0", 10) : 0,
+
     cpuGovernor: $("cpuGovernor").value,
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };

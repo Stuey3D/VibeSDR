@@ -370,6 +370,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
     B("spectrogram", r.spectrogram);
+    I("sessionLimitMin", r.sessionLimitMin);
 }
 
 std::string radioToJson(const RadioConfig& r) {
@@ -392,6 +393,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
     B("spectrogram", r.spectrogram);
+    N("sessionLimitMin", r.sessionLimitMin);
     if (!o.empty() && o.back() == ',') o.pop_back();
     return o + "}";
 }
@@ -441,6 +443,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.forceIdleSaver = one.forceIdleSaver; r.releaseWhenIdle = one.releaseWhenIdle;
     r.idleGrace = one.idleGrace;
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
+    r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
     r.port = one.port;
@@ -579,7 +582,9 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.locator = s.locator; c.lat = s.lat; c.lon = s.lon;
     c.mdnsAdvertise = s.mdnsAdvertise; c.mdnsName = s.mdnsName;
     c.pin = s.pin; c.adminPass = s.adminPass;
-    c.sessionLimitMin = s.sessionLimitMin;
+    // ★ The radio's own limit, falling back to the machine-wide one a pre-per-radio
+    //   config would have carried — so an existing server keeps the limit it had.
+    c.sessionLimitMin = r.sessionLimitMin > 0 ? r.sessionLimitMin : s.sessionLimitMin;
     c.updateSrvHour = s.updateSrvHour; c.updateSrvDay = s.updateSrvDay;
     c.updateAllHour = s.updateAllHour; c.updateAllDay = s.updateAllDay;
     c.adminIdleMin = s.adminIdleMin;

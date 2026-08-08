@@ -9371,6 +9371,17 @@ void LocalSdrShim::stopLocked() {
         catch (const std::system_error& e) { LOGI("shim: %s join failed (%s)", what, e.what()); }
     };
     joinSafely(impl->acceptThread, "accept thread");
+    // ★★★ AND THE HAND-OFF LISTENER. Destroying a joinable std::thread calls std::terminate — which
+    //     is exactly the "terminate called without an active exception" and status=6/ABRT that
+    //     appeared on every radio's shutdown the moment this thread was added. It aborts on the way
+    //     OUT, so the process looks fine until systemd restarts it and finds it failed.
+    // ★ Closing the fd first is what makes the join prompt: the loop is sitting in poll(), and this
+    //   wakes it rather than waiting out its timeout.
+    if (impl->handoffFd >= 0) { ::close(impl->handoffFd); impl->handoffFd = -1; }
+    joinSafely(impl->handoffThread, "hand-off thread");
+    // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
+    //   is listening on, and every hand-off to it would fail with "connection refused".
+    if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
     { std::lock_guard<std::mutex> lk(impl->connMtx);
       for (auto& t : impl->connThreads) joinSafely(t, "connection thread");
       impl->connThreads.clear(); }
