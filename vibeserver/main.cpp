@@ -418,6 +418,8 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
              *  exactly one of them (g_myRadioSerial); the rest it only reads and writes on their
              *  behalf, which is why every write re-reads the file first. */
             vsconfig::ServerConfig g_serverConfig; std::string g_myRadioSerial;
+            /// True in the process that holds the public port and owns no radio.
+            std::atomic<bool> g_amFrontDoor{false};
             std::atomic<bool> g_restartRequested{false}; }
 
 
@@ -969,7 +971,13 @@ int main(int argc, char** argv) {
         vsconfig::ServerConfig srv; std::string err;
         if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
         const int primary = vsconfig::primaryRadio(srv);
-        std::string j = "{\"name\":\"" + jsonEscape(srv.name) + "\",\"radios\":[";
+        // ★★ SAY WHAT THIS PROCESS IS. The page draws itself differently on the front door: there
+        //    is no radio here, so START has nothing to start and a listener count is not ours to
+        //    report. Without this the page offered both and then failed with "enter a server
+        //    address" (Stuart, 2026-08-08: "why is there a start button?").
+        std::string j = std::string("{\"frontDoor\":")
+                      + (g_amFrontDoor.load() ? "true" : "false")
+                      + ",\"name\":\"" + jsonEscape(srv.name) + "\",\"radios\":[";
         bool first = true;
         for (size_t i = 0; i < srv.radios.size(); i++) {
             const auto& r = srv.radios[i];
@@ -1252,6 +1260,7 @@ int main(int argc, char** argv) {
                         vsconfig::portForRadio(g_serverConfig, i));
         }
         frontDoorOnly = true;
+        g_amFrontDoor.store(true);
     } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);

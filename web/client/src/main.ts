@@ -2113,7 +2113,23 @@ async function showSplashRadios(): Promise<void> {
     dir = await r.json();
   } catch { return; }
   const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
-  if (radios.length < 2) { host.innerHTML = ''; return; }
+
+  // ★★★ ON THE FRONT DOOR THERE IS NOTHING TO START. It owns no radio, so START has nothing to
+  //     connect to — it tried anyway and failed with "enter a server address" — and the listener
+  //     count and range above it belong to a radio, not to a door. You pick a radio instead.
+  if (dir?.frontDoor) {
+    const hide = (id: string) => { const e = document.getElementById(id); if (e) e.style.display = 'none'; };
+    // ★★ NOT the whole form — ADMIN lives inside it, and ADMIN is the entire reason this process
+    //    exists: it is how an owner gets in when every radio has died. Hide only the parts that
+    //    connect to a radio this process does not have.
+    hide('btnConnect');          // START — a radio card is the start button here
+    hide('btnSaveConnect');
+    hide('pinRow');              // the PIN gates a RADIO, and there is none behind this door
+    hide('hostRow');
+    hide('splashListeners');     // a listener count and a range belong to a radio, not a door
+  }
+
+  if (radios.length < 2 && !dir?.frontDoor) { host.innerHTML = ''; return; }
 
   // ★ Ask every radio at once. One slow or dead radio must not hold up the others: each entry
   //   resolves independently and an unreachable one is rendered as unreachable.
