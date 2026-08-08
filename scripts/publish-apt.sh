@@ -22,7 +22,10 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_KEY="packages@vibesdr.net"
 ARCH="$(dpkg --print-architecture)"
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+# ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the
+#   test false and `set -e` killed the script instantly with no output. Same shape as the
+#   high-water-mark bug below.
+if [ "${1:-}" = "--dry-run" ]; then DRY_RUN=1; fi
 
 for t in dpkg-scanpackages apt-ftparchive gpg dpkg-deb cmake git rsync; do
   command -v "$t" >/dev/null || { echo "missing: $t (apt install dpkg-dev apt-utils gnupg)"; exit 1; }
@@ -53,22 +56,27 @@ UPSTREAM="$(grep -oE 'project\([^)]*VERSION[[:space:]]+[0-9.]+' "$SRC_DIR/vibese
 # ★★ So the high-water mark comes from three places, and we take the largest: what is in the pool,
 #    what the PUBLISHED index still advertises, and a marker that survives pruning. Any one of
 #    them alone can be made to forget.
+# ★★★ AND EACH SOURCE MUST BE ALLOWED TO SAY "NOTHING". These were `[ -n "$r" ] && [ "$r" -gt
+#     "$HIGH" ] && HIGH="$r"` — the last command in the block, so under `set -e` a source with
+#     nothing to contribute FAILED THE SCRIPT. It could only ever survive when a revision of this
+#     exact upstream version was already published, which meant the FIRST publish of any new
+#     version died at exit 1 with not one line of output. (Hit on 3.0.0.) An `if` cannot do that.
+bump() { [ -n "${1:-}" ] && [ "$1" -gt "$HIGH" ] 2>/dev/null && HIGH="$1"; return 0; }
 HIGH=0
 for f in "$POOL"/vibeserver_"${UPSTREAM}"-*_*.deb; do
   [ -e "$f" ] || continue
-  r="$(basename "$f" | sed -nE "s/^vibeserver_${UPSTREAM}-([0-9]+)_.*/\1/p")"
-  [ -n "$r" ] && [ "$r" -gt "$HIGH" ] && HIGH="$r"
+  bump "$(basename "$f" | sed -nE "s/^vibeserver_${UPSTREAM}-([0-9]+)_.*/\1/p")"
 done
 PKGS="$DIST/main/binary-$ARCH/Packages"
 if [ -f "$PKGS" ]; then
-  r="$(grep -oE "^Version: ${UPSTREAM}-[0-9]+" "$PKGS" | grep -oE '[0-9]+$' | sort -n | tail -1)"
-  [ -n "$r" ] && [ "$r" -gt "$HIGH" ] && HIGH="$r"
+  bump "$(grep -oE "^Version: ${UPSTREAM}-[0-9]+" "$PKGS" | grep -oE '[0-9]+$' | sort -n | tail -1)"
 fi
-MARK="$APT_DIR/.highest-revision"
-if [ -f "$MARK" ]; then
-  r="$(tr -cd '0-9' < "$MARK")"
-  [ -n "$r" ] && [ "$r" -gt "$HIGH" ] && HIGH="$r"
-fi
+# ★★ The marker is PER UPSTREAM VERSION. A single shared file would carry 2.0.0's revision 15 into
+#    3.0.0 and start it at 16 — legal, but it reads like fourteen missing releases. And it is
+#    WRITTEN at the end of this script: it used to be read and never written, so the one source
+#    that was supposed to outlive a prune did not exist at all.
+MARK="$APT_DIR/.highest-revision-$UPSTREAM"
+[ -f "$MARK" ] && bump "$(tr -cd '0-9' < "$MARK")"
 REV=$((HIGH + 1))
 FULLVER="${UPSTREAM}-${REV}"
 echo "==> publishing vibeserver $FULLVER ($ARCH)"
@@ -177,6 +185,10 @@ touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with 
 #     fetches this commit over SSH and pushes it — the Mac already has the credential, the key
 #     backup and Time Machine, and its clone is the copy of the pool that must survive.
 cd "$APT_DIR"
+# ★ Record the high-water mark BEFORE the commit, so it is committed with the package. The prune
+#   above can delete every .deb and rewrite the index; this file is what stops the next publish
+#   from reissuing a number that has already been public.
+printf '%s\n' "$REV" > "$MARK"
 git add -A
 git -c user.name="VibeSDR release" -c user.email="packages@vibesdr.net" \
     commit -q -m "vibeserver $FULLVER ($ARCH)" || { echo "nothing to commit"; exit 0; }
