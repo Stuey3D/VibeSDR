@@ -85,7 +85,9 @@
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
-#include "vibe_setup_page.h"        // hand-written: the setup page, GET / when unconfigured
+#include "vibe_setup_page.h"
+#include "fd_passing.h"
+#include <poll.h>        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
@@ -879,6 +881,9 @@ static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
 static LocalSdrShim::SolarFn       g_vsSolarFn;
 static LocalSdrShim::RadiosFn      g_vsRadiosFn;
+static LocalSdrShim::HandoffFn     g_vsHandoffFn;
+/// Our own "/r/<serial>" prefix, stripped from every request that arrives with it.
+static std::string                 g_vsPathPrefix;
 /// ★ What WE last set the bias-T to. The dongle cannot be asked, so we remember.
 static std::atomic<bool>           g_biasTeeOn{false};
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
@@ -5110,6 +5115,71 @@ struct LocalSdrShim::Impl {
             try { sock = listener->accept(nullptr, 500); } catch (...) { sock = nullptr; }
             if (!sock) continue;
             std::lock_guard<std::mutex> lk(connMtx);
+            connThreads.emplace_back([this, sock]{ routeOrHandle(sock); });
+        }
+    }
+
+    /** ★★★ IS THIS CONNECTION OURS, OR ANOTHER RADIO'S?
+     *
+     *  With several radios on one machine the owner forwards ONE port, so the process holding it
+     *  answers for all of them: a request for `/r/<serial>/…` belongs to that radio's process, and
+     *  the whole connection is handed over (see fd_passing.h). After that we are out of the way
+     *  entirely — no proxying, no copying, no shared writer to become a bottleneck.
+     *
+     *  ★★ THE PEEK HAPPENS HERE, ON THE CONNECTION THREAD, NOT IN accept(). A client that opens a
+     *     socket and sends nothing would otherwise stall every other connection behind it, which is
+     *     a trivial denial of service and an easy accident on a flaky link.
+     *  ★ MSG_PEEK, so the request is left untouched: the receiving process reads an ordinary
+     *    request from byte zero rather than us having to replay what we consumed.
+     */
+    void routeOrHandle(const std::shared_ptr<net::Socket>& sock) {
+        HandoffFn router;
+        { std::lock_guard<std::mutex> lk(g_vsConfigMtx); router = g_vsHandoffFn; }
+        if (router && sock) {
+            char buf[1024];
+            pollfd pfd{ sock->rawFd(), POLLIN, 0 };
+            if (::poll(&pfd, 1, 4000) > 0) {
+                const ssize_t n = ::recv(sock->rawFd(), buf, sizeof buf - 1, MSG_PEEK);
+                if (n > 0) {
+                    buf[n] = 0;
+                    const std::string head(buf, (size_t)n);
+                    const size_t sp = head.find(' ');
+                    const size_t sp2 = sp == std::string::npos ? std::string::npos
+                                                              : head.find(' ', sp + 1);
+                    if (sp != std::string::npos && sp2 != std::string::npos) {
+                        const std::string path = head.substr(sp + 1, sp2 - sp - 1);
+                        const std::string dest = router(path);
+                        if (!dest.empty()) {
+                            std::string err;
+                            if (vibe::sendFdTo(dest, sock->rawFd(), err)) {
+                                // ★ The other process owns it now. Closing our copy is not
+                                //   optional: leave it open and the connection never ends when
+                                //   they finish with it, because a socket dies when the LAST
+                                //   descriptor does.
+                                sock->close();
+                                return;
+                            }
+                            // ★★ THE RADIO IS NOT THERE — a normal outcome, not an error: its
+                            //    process may be starting, stopped, or crashed. Answering it
+                            //    ourselves gives the listener a real page instead of a hang.
+                            LOGI("handoff to %s failed (%s) — answering here instead",
+                                 dest.c_str(), err.c_str());
+                        }
+                    }
+                }
+            }
+        }
+        handleConnection(sock);
+    }
+
+    /** Adopt connections handed to us by the process holding the public port. */
+    void handoffLoop() {
+        vibeThreadName("vibe-handoff");
+        while (serverRunning.load()) {
+            const int fd = vibe::fdAccept(handoffFd, 500);
+            if (fd < 0) continue;
+            auto sock = std::make_shared<net::Socket>(fd);
+            std::lock_guard<std::mutex> lk(connMtx);
             connThreads.emplace_back([this, sock]{ handleConnection(sock); });
         }
     }
@@ -5181,6 +5251,27 @@ struct LocalSdrShim::Impl {
         std::string reqLine, line, wsKey, userAgent;
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
+        // ★★★ STRIP OUR OWN /r/<serial> PREFIX, ONCE, RIGHT HERE.
+        //
+        //     When several radios share one forwarded port, the front door routes on a path prefix
+        //     and hands the connection over untouched — so what arrives here is
+        //     `GET /r/240513CA60/ws/audio`. Every route below matches on the bare path, and there
+        //     are dozens of them: stripping at each would be a list to keep in step for ever, and
+        //     the first one forgotten is a 404 that only appears on multi-radio machines.
+        // ★★ ONLY OUR OWN. A prefix naming a DIFFERENT radio must not be quietly served by us —
+        //    that would answer for a receiver we are not, with our frequency and our listeners.
+        if (!g_vsPathPrefix.empty()) {
+            std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+            const size_t sp = reqLine.find(' ');
+            if (sp != std::string::npos && reqLine.compare(sp + 1, g_vsPathPrefix.size(),
+                                                           g_vsPathPrefix) == 0) {
+                // Leave a leading '/' behind: "/r/ABC" + "/ws/audio" -> "/ws/audio", and
+                // "/r/ABC" alone -> "/", which is the receiver page.
+                const size_t cut = sp + 1 + g_vsPathPrefix.size();
+                const bool bare = (cut >= reqLine.size() || reqLine[cut] == ' ');
+                reqLine = reqLine.substr(0, sp + 1) + (bare ? "/" : "") + reqLine.substr(cut);
+            }
+        }
         while (sock->recvline(line, 8192, 5000) > 0) {
             if (line.empty() || line == "\r") break;
             if (line.size() > 15) {
@@ -7222,6 +7313,11 @@ struct LocalSdrShim::Impl {
      *  LAST listener leaves and cleared the moment one returns — see g_vsIdleGraceSec. */
     std::atomic<double> idleParkDueAt{0.0};
     /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
+    /// The unix socket other VibeServer processes hand connections to us on.
+    int         handoffFd = -1;
+    std::string handoffPath;
+    std::thread handoffThread;
+
     std::atomic<bool> idleDiscard{false};
     /// When we last tried to reopen a dongle whose stream died — see the watchdog.
     double lastReopenAt_ = 0.0;
@@ -8416,6 +8512,26 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     g_vsConfigGet = std::move(get);
     g_vsConfigSet = std::move(set);
 }
+void LocalSdrShim::setHandoffRouter(HandoffFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsHandoffFn = std::move(fn);
+}
+
+void LocalSdrShim::setPathPrefix(const std::string& prefix) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsPathPrefix = prefix;
+}
+
+bool LocalSdrShim::listenForHandoff(const std::string& socketPath, std::string& err) {
+    if (!instance().p) { err = "server not running"; return false; }
+    Impl* impl = instance().p;
+    impl->handoffFd = vibe::fdListen(socketPath, err);
+    if (impl->handoffFd < 0) return false;
+    impl->handoffPath = socketPath;
+    impl->handoffThread = std::thread([impl]{ impl->handoffLoop(); });
+    return true;
+}
+
 void LocalSdrShim::setRadiosHandler(RadiosFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsRadiosFn = std::move(fn);

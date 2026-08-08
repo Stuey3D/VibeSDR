@@ -263,6 +263,20 @@ public:
      *  file. The shim knows nothing of the schema; the daemon supplies the JSON. */
     using RadiosFn = std::function<std::string()>;
     static void setRadiosHandler(RadiosFn fn);
+
+    /** ★★ ONE FORWARDED PORT. Given a request path, return the unix socket of the process that
+     *  should answer it, or "" to answer here. The whole connection is then handed over
+     *  (SCM_RIGHTS), so nothing is proxied and this process is not in the data path.
+     *  ★ The shim knows nothing about radios or serials; the daemon owns that mapping. */
+    using HandoffFn = std::function<std::string(const std::string& path)>;
+    static void setHandoffRouter(HandoffFn fn);
+
+    /** Our own "/r/<serial>" prefix, stripped from arriving requests so every route below
+     *  keeps matching bare paths. "" (the default) means no prefix, i.e. a single-radio server. */
+    static void setPathPrefix(const std::string& prefix);
+
+    /** Accept connections handed to us by the process holding the public port. */
+    static bool listenForHandoff(const std::string& socketPath, std::string& err);
     using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
     static void setEibiHandler(EibiFn fn);
     using ConfigPersistFn = std::function<void(const std::string& patch)>;

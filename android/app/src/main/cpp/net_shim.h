@@ -30,6 +30,11 @@ public:
     void close();
     bool isOpen() { return open_; }
 
+    /** ★ The raw descriptor. Needed for two things and nothing else: peeking at a request without
+     *  consuming it (MSG_PEEK), and handing the whole connection to another process
+     *  (SCM_RIGHTS — see fd_passing.h). Deliberately not a general escape hatch. */
+    int rawFd() const { return fd_; }
+
     // Peer IP address ("a.b.c.d"), or "" if unavailable. For UI/logging.
     std::string peerAddress();
 

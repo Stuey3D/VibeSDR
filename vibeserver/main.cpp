@@ -887,6 +887,50 @@ int main(int argc, char** argv) {
             return true;
         });
 
+    // ── One forwarded port: route by prefix, hand the connection over ───────────────────────
+    // ★★★ 48000 IS THE ONLY PORT THAT NEEDS TO LEAVE THE MACHINE. Asking an owner to forward one
+    //     port per radio is a barrier that grows with every radio; asking them to forward one is a
+    //     thing people already know how to do.
+    // ★★ THE CONNECTION IS HANDED OVER, NOT PROXIED. After the hand-off this process is out of the
+    //    data path entirely — no copying, and no single writer for every listener's audio to queue
+    //    behind. That shape has bitten this project twice.
+    {
+        const std::string dir = "/run/vibeserver";
+        ::mkdir(dir.c_str(), 0700);
+        // Everyone listens, including the primary: a radio must be reachable whichever process
+        // happens to hold the public port today, and which one that is can change.
+        if (!g_myRadioSerial.empty()) {
+            const std::string me = dir + "/" + g_myRadioSerial + ".sock";
+            std::string herr;
+            if (LocalSdrShim::listenForHandoff(me, herr))
+                LocalSdrShim::setPathPrefix("/r/" + g_myRadioSerial);
+            else
+                std::fprintf(stderr, "VibeServer: not accepting handed-over connections — %s\n",
+                             herr.c_str());
+        }
+        if (g_isPrimaryRadio) {
+            LocalSdrShim::setHandoffRouter([dir](const std::string& path) -> std::string {
+                // Paths are "/r/<serial>/…". Anything else is ours to answer.
+                if (path.rfind("/r/", 0) != 0) return "";
+                const size_t end = path.find('/', 3);
+                const std::string serial = path.substr(3, end == std::string::npos
+                                                          ? std::string::npos : end - 3);
+                // ★ OUR OWN prefix is not a hand-off — we would be posting a letter to ourselves,
+                //   and the receiving thread is this thread.
+                if (serial.empty() || serial == g_myRadioSerial) return "";
+                // ★★ ONLY RADIOS THIS MACHINE ACTUALLY OFFERS. Without this check the serial is
+                //    attacker-controlled text used to build a filesystem path — "/r/../../tmp/x"
+                //    would have us connect to whatever unix socket they name.
+                vsconfig::ServerConfig srv; std::string e;
+                if (!vsconfig::loadServer(g_configPath, srv, e)) srv = g_serverConfig;
+                for (const auto& r : srv.radios)
+                    if (r.enabled && r.configured && !r.serial.empty() && r.serial == serial)
+                        return dir + "/" + serial + ".sock";
+                return "";
+            });
+        }
+    }
+
     // ── Which radios this machine offers ────────────────────────────────────────────────────
     // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
     //    processes and this one cannot see their live state. What it can state truthfully is what
