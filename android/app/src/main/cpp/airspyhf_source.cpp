@@ -1,6 +1,9 @@
 // Airspy HF+ capture source — see airspyhf_source.h for why this exists and how it differs
 // from the dongle and RSP paths.
 #include "airspyhf_source.h"
+#include <memory>
+#include <thread>
+#include <future>
 #include <atomic>
 #include <chrono>
 
@@ -254,10 +257,38 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
     const int      gain   = curGainTenth_;
     const bool     wasStreaming = streaming_;
 
-    if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
-    airspyhf_close(impl_->dev);
-    impl_->dev = nullptr;
-    open_ = false;
+    // ★★★ CLOSE ON A DEADLINE — airspyhf_close() CAN HANG FOR EVER, and it took the whole
+    //     recovery thread with it. Caught with gdb on the Pi (2026-08-08): with three radios
+    //     running, this thread sat in airspyhf_close() called from here, and the watchdog's log
+    //     simply STOPPED mid-ladder. The radio was down, and so was the only thing that could have
+    //     brought it back — a hang is worse than the fault it was trying to cure.
+    //
+    // ★★ THE WORKER IS DETACHED DELIBERATELY, exactly as SdrplaySource::withTimeout does for the
+    //    same reason: joining would inherit the hang we are escaping. A leaked blocked thread is a
+    //    far smaller problem than a frozen watchdog, and it unwinds itself if the library ever
+    //    returns.
+    // ★ We do NOT then reopen after a timed-out close: the library still owns that handle, and
+    //   opening a second one on the same device is how you turn a stuck radio into a stuck
+    //   PROCESS. Report it, keep the server up, and let the ladder try again later.
+    {
+        auto done = std::make_shared<std::promise<void>>();
+        auto fut  = done->get_future();
+        airspyhf_device* dying = impl_->dev;
+        const bool wasStreamingNow = streaming_;
+        std::thread([done, dying, wasStreamingNow]() mutable {
+            if (wasStreamingNow) airspyhf_stop(dying);
+            airspyhf_close(dying);
+            done->set_value();
+        }).detach();
+        streaming_ = false;
+        impl_->dev = nullptr;
+        open_ = false;
+        if (fut.wait_for(std::chrono::seconds(3)) != std::future_status::ready) {
+            err = "the Airspy HF+ did not respond to being closed — it needs replugging";
+            std::fprintf(stderr, "airspyhf: close timed out; not reopening\n");
+            return false;
+        }
+    }
 
     if (serial == 0 ||
         airspyhf_open_sn(&impl_->dev, serial) != AIRSPYHF_SUCCESS || !impl_->dev) {
