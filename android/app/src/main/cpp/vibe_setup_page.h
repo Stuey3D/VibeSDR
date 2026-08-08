@@ -108,6 +108,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div style="font-weight:600;letter-spacing:.06em;font-size:12px;opacity:.8">RADIOS ON THIS MACHINE</div>
       <div id="radioTabHint" class="sub" style="margin:2px 0 8px;font-size:12px;opacity:.75"></div>
       <div id="radioTabs" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      <div id="hwScope" class="hide sub" style="margin-top:8px;font-size:12px;opacity:.8"></div>
     </div>
 
     <div class="card">
@@ -450,10 +451,75 @@ async function eibiFetch() {
   b.disabled = false;
 }
 
+/** ★★★ WHAT THIS RADIO CAN DO — AND IT IS NOT ALWAYS THE ONE WE ARE TALKING TO.
+ *
+ *  /vibeserver/hardware answers for the radio THIS PROCESS serves. With a tab per radio that is
+ *  wrong for every tab but one: opening the Airspy's tab on the RSP's process would offer the
+ *  RSP's sample rates, and the owner would pick one the Airspy cannot do. It would then fail at
+ *  the hardware and read as a broken receiver.
+ *
+ *  ★★ SO ASK THE RADIO ITSELF WHERE WE CAN, AND FALL BACK TO WHAT ITS DRIVER CAN DO WHERE WE
+ *     CANNOT. A radio that is not configured yet is not running at all, so there is nobody to ask
+ *     — and that is exactly when the owner is setting it up. The driver tables below are the
+ *     honest answer for that case: they are properties of the MODEL, not of a live handle.
+ *  ★ Rates measured from the radios themselves, not copied from a datasheet: an HF+ Discovery
+ *    ADVERTISES seven rates and implements three (see the airspyhf notes in the shim).
+ */
+const DRIVER_HW = {
+  rtl:      { rates: [250000, 1024000, 1536000, 1792000, 1920000, 2048000, 2160000, 2400000],
+              biasT: true,  rfNotch: false, lnaState: false },
+  rtlsdr:   { rates: [250000, 1024000, 1536000, 1792000, 1920000, 2048000, 2160000, 2400000],
+              biasT: true,  rfNotch: false, lnaState: false },
+  airspyhf: { rates: [768000, 456000, 228000],
+              biasT: false, rfNotch: false, lnaState: false },
+  sdrplay:  { rates: [2000000, 3000000, 4000000, 5000000, 6000000, 8000000, 10000000],
+              biasT: true,  rfNotch: true,  lnaState: true },
+};
+
 async function renderHw() {
   let hw = null;
-  try { hw = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json(); } catch (e) {}
+  const r = radio();
+  // Is the tab we are looking at the radio this process is actually running?
+  let mine = true;
+  try {
+    const dir = await (await fetch("/vibeserver/radios", {cache:"no-store"})).json();
+    const me = (dir.radios || []).find(x => x.mine);
+    if (me && r.serial) mine = (me.serial === r.serial);
+  } catch (e) { /* single-radio server: it is always ours */ }
+
+  if (mine) {
+    try { hw = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json(); } catch (e) {}
+  } else {
+    // ★ Ask that radio's own process through the front door, if it is running. If it is not — the
+    //   usual case while setting one up — fall back to what its driver can do.
+    try {
+      hw = await (await fetch(`/r/${encodeURIComponent(r.serial)}/vibeserver/hardware`,
+                              {cache:"no-store"})).json();
+    } catch (e) { hw = null; }
+    if (!hw || !hw.rates || !hw.rates.length) {
+      const d = DRIVER_HW[r.driver] || DRIVER_HW.rtl;
+      hw = { driver: r.driver, present: false, rates: d.rates, gains: [],
+             biasT: d.biasT, rfNotch: d.rfNotch, offline: true };
+    }
+  }
   const el = $("hw");
+  // ★★ SAY WHICH RADIO THESE OPTIONS BELONG TO when it is not the one running. Otherwise the page
+  //    quietly shows one radio's capabilities under another radio's name, and the owner has no way
+  //    of telling — which is the same class of fault as a tour card pointing at a moved control.
+  {
+    const note = $("hwScope");
+    if (note) {
+      if (mine) { note.textContent = ""; note.classList.add("hide"); }
+      else {
+        note.classList.remove("hide");
+        note.textContent = hw && hw.offline
+          ? `${r.label || r.driver} is not running, so these are what this model supports. `
+            + `Save its settings, then restart the server to bring it on air.`
+          : `Settings for ${r.label || r.driver}, read from that radio.`;
+      }
+    }
+  }
+
   // ★ Show what the processor is ACTUALLY doing, next to the control that asks for it.
   const gv = document.getElementById("govNow");
   if (gv && hw && hw.governor) {
