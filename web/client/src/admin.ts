@@ -154,7 +154,14 @@ function renderHealth(st: any) {
     out.push(card('POWER',
       now ? 'UNDER-VOLTAGE' : ever ? 'DIPPED' : 'OK',
       now  ? 'the supply cannot keep up — expect USB devices to drop out'
-           : ever ? 'the supply has dipped since boot — suspect it before anything else'
+           : ever ? ('the supply has dipped since boot — suspect it before anything else'
+                     // ★ Only raised when there is a problem to explain. `performance` is the
+                     //   default for a good reason (ondemand costs ~25% of throughput, because the
+                     //   DSP spreads over every core so each looks idle and the chip clocks down)
+                     //   — but it also holds the clock high, and on a marginal supply that is a
+                     //   lever the owner has. Saying so unprompted would just be noise.
+                     + (sys.governor === 'performance'
+                        ? ' · the CPU is pinned to performance, which draws more' : ''))
                   : 'supply voltage has stayed in range',
       now ? 'critical' : ever ? 'warning' : 'ok'));
   }
