@@ -1056,16 +1056,33 @@ int main(int argc, char** argv) {
     } else if (o.radioGiven) {
         // ★ Resolve a serial to today's index. Done HERE, at start, so a radio that has moved in
         //   the list since the config was written still lands on the right hardware.
+        // ★★★ ONE ENUMERATION, ONE ANSWER. Resolving a serial to a flat index and then decomposing
+        //     that index against freshly counted per-driver totals is racy: the counts move. With
+        //     three radios starting together, the first process claimed the RSP, SDRplay then
+        //     reported one device fewer, and the other two were routed into the AIRSPY branch —
+        //     both failing with "no Airspy HF+ at that index", including the RTL dongle
+        //     (measured 2026-08-08). So take the driver and its own index from the SAME lookup.
         if (!o.radioSerial.empty()) {
-            o.radio = -1;
+            std::string drv; int drvIdx = -1;
             for (const auto& r : vibe::detectRadios())
-                if (r.serial == o.radioSerial) { o.radio = r.index; break; }
-            if (o.radio < 0) {
+                if (r.serial == o.radioSerial) { drv = r.driver; drvIdx = r.driverIndex; break; }
+            if (drvIdx < 0) {
                 std::fprintf(stderr, "VibeServer: no radio with serial %s is attached\n",
                              o.radioSerial.c_str());
                 return 1;
             }
-        }
+            if (drv == "airspyhf")
+                port = shim.startAirspyHf(drvIdx, o.freq, o.rate, o.gain,
+                                          o.fftSize, o.fftRate, o.mode, err);
+            else if (drv == "sdrplay")
+                port = shim.startSdrplay(drvIdx, o.freq, o.rate, o.gain,
+                                         o.fftSize, o.fftRate, o.mode, err);
+            else
+                port = shim.start(-(drvIdx + 1), 0, 0, o.freq, o.rate, o.gain,
+                                  o.fftSize, o.fftRate, o.mode, err);
+            std::printf("VibeServer: using %s %d (serial %s)\n",
+                        drv.c_str(), drvIdx, o.radioSerial.c_str());
+        } else {
         // ★★★ PICK A RADIO OUT OF THE FLAT LIST — the SAME list vs_device_count() and
         //     vs_device_name() publish, so "the third radio" means the same thing to the setup
         //     screen, the config API and this. Until now `--device N` reached ONLY the dongle
@@ -1086,6 +1103,7 @@ int main(int argc, char** argv) {
             std::printf("VibeServer: using RTL-SDR %d\n", o.radio);
             port = shim.start(-(o.radio + 1), 0, 0, o.freq, o.rate, o.gain,
                               o.fftSize, o.fftRate, o.mode, err);
+        }
         }
     } else if (!o.deviceGiven && vibe::AirspyHfSource::deviceCount() > 0) {
         std::printf("VibeServer: Airspy HF+ detected\n");

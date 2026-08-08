@@ -24,6 +24,7 @@ std::vector<DetectedRadio> detectRadios() {
             const char* n = rtlsdr_get_device_name(i);
             r.name = n ? n : "RTL-SDR";
         }
+        r.driverIndex = (int)i;
         out.push_back(r);
     }
 
@@ -36,6 +37,7 @@ std::vector<DetectedRadio> detectRadios() {
         //   no USB serial to fall back on, so take it from there rather than inventing a lookup.
         const size_t sp = r.name.find_last_of(' ');
         if (sp != std::string::npos) r.serial = r.name.substr(sp + 1);
+        r.driverIndex = i;
         out.push_back(r);
     }
 
@@ -48,6 +50,7 @@ std::vector<DetectedRadio> detectRadios() {
         const size_t open = r.name.find('('), close = r.name.find(')');
         if (open != std::string::npos && close != std::string::npos && close > open + 1)
             r.serial = r.name.substr(open + 1, close - open - 1);
+        r.driverIndex = i;
         out.push_back(r);
     }
 

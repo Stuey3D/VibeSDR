@@ -22,6 +22,13 @@ struct DetectedRadio {
     std::string name;      // human-readable, as the driver describes it
     std::string serial;    // as the DRIVER reports it; may be empty, and may not be unique
     int         index = 0; // position in this flat list — what `--radio N` takes
+    /** ★★★ POSITION WITHIN ITS OWN DRIVER, carried from the SAME enumeration as `index`.
+     *  Resolving a serial to a flat index and then re-deriving the driver from freshly counted
+     *  totals is racy by construction: the counts move. Measured 2026-08-08 starting three radios
+     *  at once — the first process claimed the RSP, SDRplay then reported one fewer device, and
+     *  both other radios were routed into the Airspy branch and failed with "no Airspy HF+ at that
+     *  index". One enumeration, one answer. */
+    int         driverIndex = 0;
 };
 
 /** Everything attached, dongles first, then SDRplay RSPs, then Airspy HF+.
