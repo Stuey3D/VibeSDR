@@ -922,6 +922,23 @@ static const std::string& vsInstanceId() {
  *  losing a saved gain is a nuisance; wedging the control path that set it is not. */
 // ★★★ The proxies whose X-Forwarded-For we believe. EMPTY = believe nobody, which is the
 //     default and the safe answer: the header is client-supplied text. See vibe_proxy.h.
+/** ★★ WHO IS LOOKING AT THE LANDING PAGE. A visitor choosing a radio is not connected to one, so
+ *  they appear nowhere in any listener list — the owner sees "nobody here" while somebody is
+ *  reading the page (Stuart, 2026-08-08: "It should also show if they are sitting on the landing
+ *  page or not"). The page refreshes its spectrogram every 15s while it is open, which makes a
+ *  perfectly good heartbeat: last-seen per address, and anything older than a minute has gone.
+ *  ★ Addresses only, held in memory, pruned — the same data the connection log already keeps. */
+static std::mutex g_vsVisitorMtx;
+static std::map<std::string, double> g_vsVisitors;
+static void vsNoteVisitor(const std::string& ip) {
+    if (ip.empty()) return;
+    const double now = (double)::time(nullptr);
+    std::lock_guard<std::mutex> lk(g_vsVisitorMtx);
+    g_vsVisitors[ip] = now;
+    for (auto it = g_vsVisitors.begin(); it != g_vsVisitors.end();)
+        it = (now - it->second > 60.0) ? g_vsVisitors.erase(it) : std::next(it);
+}
+
 static vibeproxy::TrustedProxies g_vsTrustedProxies;
 static std::mutex                g_vsTrustedProxiesMtx;
 
@@ -5724,6 +5741,7 @@ struct LocalSdrShim::Impl {
         // ★ Deliberately NOT admin-gated: it is the public face of the receiver, and it shows
         //   nothing a listener could not see by watching the waterfall for a day.
         } else if (reqLine.rfind("GET /vibeserver/spectrogram", 0) == 0) {
+            vsNoteVisitor(sock->peerAddress());   // the page refreshes this while it is open
             // ★★ The caller says how big its canvas is; we downsample to fit. Sending the full
             //    2048 x 1440 (~3 MB) to draw on a 900-pixel-wide splash would be paying for detail
             //    the screen cannot show — and on a landing page, load time IS the feature.
@@ -6190,6 +6208,7 @@ struct LocalSdrShim::Impl {
             sock->close(); return;
 
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
+            vsNoteVisitor(sock->peerAddress());
             // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
             //    enabled and configured, with the port each answers on, so one address is enough
             //    to reach all of them.
@@ -8616,6 +8635,21 @@ std::string LocalSdrShim::adminSessionsJson() {
     //     one wedged the moment somebody listened: every path touching clientMtx hung, and the
     //     process stayed "active" and kept accepting connections, which is the same disguise the
     //     LAST clientMtx deadlock wore (see BUG-vibeserver-broadcast-blocks / multiuser_was_three_bugs).
+    // ★ Snapshotted here with the rest, and NOT under clientMtx — see the note below.
+    std::string visitorsJson;
+    {
+        const double nowEpoch = (double)::time(nullptr);
+        std::lock_guard<std::mutex> vl(g_vsVisitorMtx);
+        bool vfirst = true;
+        for (const auto& kv : g_vsVisitors) {
+            if (nowEpoch - kv.second > 60.0) continue;
+            if (!vfirst) visitorsJson += ',';
+            vfirst = false;
+            visitorsJson += "{\"ip\":\"" + vibeadmin::esc(kv.first) + "\""
+                          + ",\"cc\":\"" + vibeadmin::esc(vsCountry(kv.first)) + "\""
+                          + ",\"secs\":" + std::to_string((long long)(nowEpoch - kv.second)) + "}";
+        }
+    }
     std::string curDecoder;
     { std::lock_guard<std::mutex> dl(p->decoderMtx); curDecoder = p->currentDecoder; }
     std::map<net::Socket*, unsigned long long> sentBySock;
@@ -8745,7 +8779,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"cc\":\"" + vibeadmin::esc(vsCountry(w.ip)) + "\""
            + ",\"secs\":" + std::to_string((long long)(now - w.since)) + "}";
     }
-    j += "],\"adminOk\":" + std::string(p->adminOk.load() ? "true" : "false");
+    j += "],\"visitors\":[" + visitorsJson + "],\"adminOk\":" + std::string(p->adminOk.load() ? "true" : "false");
     return j + "}";
 }
 

@@ -366,8 +366,24 @@ function renderQueue(list: any[]) {
               + ` <span class="dim">waiting ${esc(dur(w.secs || 0))}</span></div>`).join('');
 }
 
+function renderVisitors(list: any[], busyIps: Set<string>) {
+  const el = document.getElementById('adminVisitors');
+  if (!el) return;
+  // ★ Somebody LISTENING is not "sitting on the landing page" — their own tab may still be
+  //   polling it. Showing them twice would inflate what the owner reads as demand.
+  const idle = list.filter((v) => !busyIps.has(String(v.ip)));
+  if (!idle.length) { el.innerHTML = ''; el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = '<div class="qHead">ON THE LANDING PAGE</div>' + idle
+    .map((v) => `<div class="qRow">${withFlag(v.cc, v.ip || '—')} `
+              + `<span class="dim">choosing a radio · seen ${esc(dur(v.secs || 0))} ago</span></div>`)
+    .join('');
+}
+
 function renderSessions(s: any) {
   renderQueue(s.queue ?? []);
+  renderVisitors(s.visitors ?? [],
+                 new Set<string>((s.sessions ?? []).map((c: any) => String(c.ip))));
   const list: any[] = s.sessions ?? [];
   const tb = $('adminSessions').querySelector('tbody')!;
   $('adminNoSessions').hidden = list.length > 0;
@@ -483,6 +499,11 @@ async function refresh() {
     const ses = {
       sessions: sesAll.flatMap((r) => (r.data?.sessions ?? []).map((x: any) => ({ ...x, radio: r.radio }))),
       queue:    sesAll.flatMap((r) => (r.data?.queue ?? []).map((x: any) => ({ ...x, radio: r.radio }))),
+      // ★ Visitors are a property of the MACHINE (they are on the front door's landing page), not
+      //   of a radio — so dedupe by address rather than showing the same person once per radio.
+      visitors: Object.values(sesAll.flatMap((r) => r.data?.visitors ?? [])
+        .reduce((acc: any, v: any) => { const k = String(v.ip);
+          if (!acc[k] || v.secs < acc[k].secs) acc[k] = v; return acc; }, {})),
     };
     const conns = {
       connections: connsAll
