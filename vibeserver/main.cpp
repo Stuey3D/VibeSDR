@@ -69,6 +69,7 @@ struct Opts {
     // (miscalibrates the radio invisibly and permanently). The Mac has had all of this since v10;
     // the headless build shipped without any of it, which made it the LEAST safe place to host.
     std::string adminPass;
+    std::string trustedProxies;   // see LocalSdrShim::setTrustedProxies
     int         sessionLimitMin = 0;     // per-listener minutes; 0 = unlimited
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
@@ -292,6 +293,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--dab-notch")  o.dabNotch = true;
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
+        else if (a == "--trusted-proxies") o.trustedProxies = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
         else if (a == "--admin-idle")     o.adminIdleMin    = std::atoi(need(i));
         else if (a == "--public")         o.publicSharing   = true;
@@ -353,7 +355,7 @@ std::string primaryIpv4() {
 void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.rxName = c.name; o.rxPlace = c.place; o.rxIso = c.country;
     o.rxGrid = c.locator; o.rxLat = c.lat; o.rxLon = c.lon;
-    o.pin = c.pin; o.adminPass = c.adminPass;
+    o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.adminIdleMin    = c.adminIdleMin;
     o.publicSharing   = (c.sharing == vsconfig::Sharing::Public);
@@ -379,7 +381,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
 void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.name = o.rxName; c.place = o.rxPlace; c.country = o.rxIso;
     c.locator = o.rxGrid; c.lat = o.rxLat; c.lon = o.rxLon;
-    c.pin = o.pin; c.adminPass = o.adminPass;
+    c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
     c.adminIdleMin    = o.adminIdleMin;
     c.sharing         = o.publicSharing ? vsconfig::Sharing::Public : vsconfig::Sharing::Local;
@@ -1148,6 +1150,7 @@ int main(int argc, char** argv) {
     // calibration (miscalibrates the radio invisibly and permanently). A public receiver typically
     // wants NO pin and a STRONG admin password.
     LocalSdrShim::setVibeServerAdminSecret(o.adminPass);
+    LocalSdrShim::setTrustedProxies(o.trustedProxies);
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
     LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
     LocalSdrShim::setPublicSharing(o.publicSharing);

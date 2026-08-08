@@ -301,6 +301,22 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
     </div>
 
     <div class="card">
+      <h2>Behind a reverse proxy</h2>
+      <p class="why">Only fill this in if something sits in front of VibeServer.</p>
+      <label><span class="lbl">Trusted proxy addresses</span>
+        <input id="trustedProxies" placeholder="e.g. 127.0.0.1, 10.0.0.0/8">
+        <div class="hint">If you run VibeServer behind nginx, Caddy or a tunnel, every listener
+          arrives from the <em>proxy</em>, so they all share one address: a single ban blocks
+          everybody, every visitor shows the same country, and one wrong admin password can lock
+          out the world. Naming the proxy here lets the server read the real address from the
+          <code>X-Forwarded-For</code> header instead.
+          <br><b>Leave it empty unless you have a proxy.</b> That header is just text the client
+          sends, so a server that believed it from anyone would let a stranger claim any address
+          they liked and walk straight through the ban list. Nothing is read from it until you
+          name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
+    </div>
+
+    <div class="card">
       <h2>Processor</h2>
       <p class="why">How hard this machine is allowed to run.</p>
       <label><span class="lbl">CPU governor</span>
@@ -788,6 +804,7 @@ function fill() {
   $("mdns").checked = cfg.mdnsAdvertise !== false;
 
   $("cpuGovernor").value = cfg.cpuGovernor || "performance";
+  $("trustedProxies").value = cfg.trustedProxies || "";
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
   //    machine is how every receiver would show the first one's frequency.
@@ -877,6 +894,7 @@ function collect() {
     mdnsName: $("name").value.trim(),
 
     cpuGovernor: $("cpuGovernor").value,
+    trustedProxies: $("trustedProxies").value.trim(),
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
 }

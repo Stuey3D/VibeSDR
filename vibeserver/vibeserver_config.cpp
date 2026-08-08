@@ -202,6 +202,7 @@ std::string toJson(const Config& c) {
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
     S("cpuGovernor", c.cpuGovernor);
+    S("trustedProxies", c.trustedProxies);
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -273,6 +274,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "dabNotch", c.dabNotch);
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
     getStr(s, "cpuGovernor", c.cpuGovernor);
+    getStr(s, "trustedProxies", c.trustedProxies);
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
 
@@ -427,6 +429,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     out.updateAllHour= one.updateAllHour; out.updateAllDay = one.updateAllDay;
     out.adminIdleMin = one.adminIdleMin;
     out.cpuGovernor  = one.cpuGovernor;
+    out.trustedProxies = one.trustedProxies;
     out.port         = one.port;
     out.web          = one.web;
 
@@ -469,6 +472,7 @@ std::string toJson(const ServerConfig& c) {
     N("updateAllHour", c.updateAllHour); N("updateAllDay", c.updateAllDay);
     N("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
+    S("trustedProxies", c.trustedProxies);
     N("port", c.port); B("web", c.web);
     o += "  \"radios\": [";
     for (size_t i = 0; i < c.radios.size(); i++) {
@@ -514,6 +518,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("updateAllHour", c.updateAllHour); I("updateAllDay", c.updateAllDay);
     I("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
+    S("trustedProxies", c.trustedProxies);
     I("port", c.port); B("web", c.web);
 
     if (haveRadios) {
@@ -605,6 +610,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.updateAllHour = s.updateAllHour; c.updateAllDay = s.updateAllDay;
     c.adminIdleMin = s.adminIdleMin;
     c.cpuGovernor = s.cpuGovernor;
+    c.trustedProxies = s.trustedProxies;
     c.web = s.web;
 
     c.mode = r.mode;

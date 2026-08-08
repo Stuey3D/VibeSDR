@@ -67,6 +67,7 @@ struct Config {
     std::string mdnsName;          // friendly name; the .local label is DERIVED from it, once
 
     // Access
+    std::string trustedProxies;   ///< see ServerConfig::trustedProxies
     std::string pin, adminPass;
     int         sessionLimitMin = 0;
     /** ★★ Minutes of no interaction after which an ADMIN session's controls re-lock. The
@@ -249,6 +250,12 @@ struct ServerConfig {
     int         updateAllHour = -1, updateAllDay = -1;
     int         adminIdleMin = 30;
     std::string cpuGovernor = "performance";
+    /** ★★★ Reverse proxies whose X-Forwarded-For we believe — comma separated, addresses or
+     *  CIDRs ("127.0.0.1, 10.0.0.0/8"). EMPTY BY DEFAULT and empty means "read no headers":
+     *  the header is client-supplied text, so trusting it from anyone would let a stranger forge
+     *  any address and walk through the ban list. Behind a proxy WITHOUT this, every listener
+     *  shares the proxy's address — one ban hits them all. See vibe_proxy.h. */
+    std::string trustedProxies;
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;

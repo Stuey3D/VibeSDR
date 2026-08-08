@@ -47,8 +47,22 @@ public:
      *  (SCM_RIGHTS — see fd_passing.h). Deliberately not a general escape hatch. */
     int rawFd() const { return fd_; }
 
-    // Peer IP address ("a.b.c.d"), or "" if unavailable. For UI/logging.
+    // Peer IP address ("a.b.c.d"), or "" if unavailable. For UI/logging, bans and geo.
+    // ★★★ THIS IS THE *EFFECTIVE* CLIENT ADDRESS. Behind a reverse proxy the TCP peer is the
+    //     PROXY, so every listener looks like one address: bans hit everyone at once, the country
+    //     flags all show the proxy's country, and one wrong admin password locks out the world.
+    //     When the connection arrives from a TRUSTED proxy the real client is taken from
+    //     X-Forwarded-For and set here, so the 30-odd call sites below need no changes.
+    // ★★ Untrusted peers are never overridden — the header is attacker-controlled, and honouring
+    //    it from anyone would let a stranger forge any address and walk straight through the ban
+    //    list. Trust is opt-in, per proxy address, from the owner's config.
     std::string peerAddress();
+
+    /** Override the reported address (see peerAddress()). Only ever called after the peer has been
+     *  checked against the owner's trusted-proxy list. */
+    void setEffectiveAddress(const std::string& ip) { effAddr_ = ip; }
+    /** The real TCP peer, ignoring any override — what the trust check itself must use. */
+    std::string socketPeerAddress();
 
     // Kernel socket buffer sizing. A large send buffer lets a high-rate IQ stream
     // ride out brief WiFi radio stalls before the userspace queue starts dropping;
@@ -76,6 +90,7 @@ private:
     int  recvRaw(uint8_t* data, size_t maxLen, int timeout);
     int  fd_;
     bool open_ = true;
+    std::string effAddr_;   // set only for connections arriving via a trusted proxy
 };
 
 class Listener {

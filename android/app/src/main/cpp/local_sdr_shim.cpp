@@ -89,7 +89,8 @@
 #include "fd_passing.h"
 #include <poll.h>
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
-#include "vibe_admin.h"             // the ban list, the connection log and the machine's vitals
+#include "vibe_admin.h"
+#include "vibe_proxy.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -918,6 +919,11 @@ static const std::string& vsInstanceId() {
 /** Merge `patch` into the stored config and write it out. No-op where nothing registered a
  *  handler (the phone and Mac apps). Never throws and never blocks the caller on I/O errors —
  *  losing a saved gain is a nuisance; wedging the control path that set it is not. */
+// ★★★ The proxies whose X-Forwarded-For we believe. EMPTY = believe nobody, which is the
+//     default and the safe answer: the header is client-supplied text. See vibe_proxy.h.
+static vibeproxy::TrustedProxies g_vsTrustedProxies;
+static std::mutex                g_vsTrustedProxiesMtx;
+
 static void vsPersist(const std::string& patch) {
     LocalSdrShim::ConfigPersistFn fn;
     { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsConfigPersist; }
@@ -2258,6 +2264,16 @@ struct LocalSdrShim::Impl {
             c->rdsS.rdsPsName.clear(); c->rdsS.rdsText.clear();
             c->rdsS.rdsPi = -1; c->rdsS.rdsEcc = 0; c->rdsS.rdsBer = -1; c->rdsS.rdsSig = -99.0f;
             c->rdsS.stereoDetected.store(false);
+            // ★★★ HAVING CLEARED IT, ASK FOR IT BACK. The pipeline reports stereo on a CHANGE,
+            //     and a retune inside WFM does not rebuild the chain, so the pilot stays locked
+            //     and there is no change to report — this clear would otherwise be permanent, and
+            //     the listener sat in mono on a full-strength stereo station until they did
+            //     something that rebuilt the chain (Stuart, 2026-08-08: "every time I tune it
+            //     requires the advanced RDS box to be closed and opened again").
+            if (c->rx) c->rx->requestStereoReport();
+            // ★ And drop what the decoder learned from the PREVIOUS station — its timing hypothesis
+            //   scores outlive a retune, and a stale one beats the correct one on a weak signal.
+            if (c->rx) c->rx->requestRdsResync();
         }
         const auto mp = paramsFor(c->mode);
         const double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
@@ -4068,6 +4084,15 @@ struct LocalSdrShim::Impl {
         std::lock_guard<std::mutex> lk(rdsS.rdsMtx);
         rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; rdsS.rdsEcc = 0; rdsS.rdsBer = -1; rdsS.rdsSig = -99.0f;
         rdsS.stereoDetected.store(false);
+        // ★★★ AND ASK FOR IT BACK. The stereo report is EDGE-triggered and a retune inside the
+        //     same mode does not rebuild the chain, so the pilot never unlocks and there is no
+        //     edge to refill what we just cleared — the listener sat in mono on a plainly stereo
+        //     station until something forced a rebuild (Stuart, 2026-08-08). Measured on the Pi:
+        //     the DSP was locked with blend=1.00 the whole time; only the REPORT was missing.
+        rx.requestStereoReport();
+        // ★ And drop what the decoder learned from the PREVIOUS station — its timing hypothesis
+        //   scores outlive a retune, and a stale one beats the correct one on a weak signal.
+        rx.requestRdsResync();
     }
 
     void buildAudio() {
@@ -4260,6 +4285,15 @@ struct LocalSdrShim::Impl {
             rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
             { std::lock_guard<std::mutex> rl(rdsS.rdsMtx); rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; }
             rdsS.stereoDetected.store(false);
+            // ★★★ AND ASK FOR IT BACK. The stereo report is EDGE-triggered and a retune inside the
+            //     same mode does not rebuild the chain, so the pilot never unlocks and there is no
+            //     edge to refill what we just cleared — the listener sat in mono on a plainly stereo
+            //     station until something forced a rebuild (Stuart, 2026-08-08). Measured on the Pi:
+            //     the DSP was locked with blend=1.00 the whole time; only the REPORT was missing.
+            rx.requestStereoReport();
+            // ★ And drop what the decoder learned from the PREVIOUS station — its timing hypothesis
+            //   scores outlive a retune, and a stale one beats the correct one on a weak signal.
+            rx.requestRdsResync();
             return;
         }
 
@@ -4290,6 +4324,15 @@ struct LocalSdrShim::Impl {
         // showing the previous one's PS/RadioText until its own RDS re-syncs.
         { std::lock_guard<std::mutex> rl(rdsS.rdsMtx); rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; }
         rdsS.stereoDetected.store(false);
+        // ★★★ AND ASK FOR IT BACK. The stereo report is EDGE-triggered and a retune inside the
+        //     same mode does not rebuild the chain, so the pilot never unlocks and there is no
+        //     edge to refill what we just cleared — the listener sat in mono on a plainly stereo
+        //     station until something forced a rebuild (Stuart, 2026-08-08). Measured on the Pi:
+        //     the DSP was locked with blend=1.00 the whole time; only the REPORT was missing.
+        rx.requestStereoReport();
+        // ★ And drop what the decoder learned from the PREVIOUS station — its timing hypothesis
+        //   scores outlive a retune, and a stale one beats the correct one on a weak signal.
+        rx.requestRdsResync();
     }
 
     // ── WebSocket framing ──────────────────────────────────────────────────
@@ -4672,8 +4715,10 @@ struct LocalSdrShim::Impl {
             if (jsonNum(msg, "thresh", v)) LocalSdrShim::instance().setAhfAgcThreshold(v != 0);
             // ★ Calibration is protected even though the rest of this message is not:
             // gain a listener can play with, a miscalibrated reference they cannot see.
-            if (jsonNum(msg, "ppb", v) && adminGate("calibration"))
+            if (jsonNum(msg, "ppb", v) && adminGate("calibration")) {
                 LocalSdrShim::instance().setAhfCalibrationPpb((int)v);
+                vsPersist("{\"ppb\":" + std::to_string((int)v) + "}");
+            }
             // ★ AGC LAST, matching the client's own send order: it owns the gain path, so
             // applying it before the manual attenuation would let it immediately override it.
             if (jsonNum(msg, "agc", v))    LocalSdrShim::instance().setAhfAgc(v != 0);
@@ -4815,7 +4860,15 @@ struct LocalSdrShim::Impl {
         }
         if (type == "biasT") {
             if (!adminGate("bias-T")) return;
-            LocalSdrShim::instance().setBiasTee(msg.find("\"on\":true") != std::string::npos); return;
+            const bool on = msg.find("\"on\":true") != std::string::npos;
+            LocalSdrShim::instance().setBiasTee(on);
+            // ★★★ AND WRITE IT DOWN. Applied to the hardware but never saved, so a restart put the
+            //     DC back off — and an antenna that needs phantom power went dead with the setting
+            //     still showing ON in the owner's UI (Stuart, 2026-08-08: "I had enabled the bias-t
+            //     and was using it until you restarted it which should've saved the Bias-t
+            //     setting"). Gain and the notches already did this; these four were missed.
+            vsPersist(std::string("{\"biasT\":") + (on ? "true" : "false") + "}");
+            return;
         }
         if (type == "agc") {
             // The AGC owns the gain, so it is the same shared front-end control by another name.
@@ -4827,7 +4880,9 @@ struct LocalSdrShim::Impl {
         }
         if (type == "ppm") {
             if (!adminGate("ppm")) return;
-            if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setPpm((int)v); return;
+            if (jsonNum(msg,"value",v)) { LocalSdrShim::instance().setPpm((int)v);
+                                          vsPersist("{\"ppm\":" + std::to_string((int)v) + "}"); }
+            return;
         }
         // Capture sample rate = the spectrum span the server sends. A remote client
         // can widen/narrow it (e.g. drop the rate to ease a struggling link) without
@@ -4854,7 +4909,9 @@ struct LocalSdrShim::Impl {
         }
         if (type == "directSampling") {
             if (!adminGate("direct sampling")) return;
-            if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setDirectSampling((int)v); return;
+            if (jsonNum(msg,"value",v)) { LocalSdrShim::instance().setDirectSampling((int)v);
+                                          vsPersist("{\"directSampling\":" + std::to_string((int)v) + "}"); }
+            return;
         }
         // ── Audio DSP (squelch / NR / notch / de-emphasis / stereo) ───────────
         // These engines already run server-side; they were only reachable from
@@ -5259,7 +5316,7 @@ struct LocalSdrShim::Impl {
 
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
-        std::string reqLine, line, wsKey, userAgent;
+        std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         // ★★★ STRIP OUR OWN /r/<serial> PREFIX, ONCE, RIGHT HERE.
@@ -5362,6 +5419,28 @@ struct LocalSdrShim::Impl {
                     if (a != std::string::npos) userAgent = vv.substr(a, b - a + 1);
                 }
             }
+            // ★ Who the client really is, when the owner has said this peer may tell us.
+            //   Captured here with the others; the decision is made once the peer is known.
+            if (line.size() > 16) {
+                std::string fk = line.substr(0, 16);
+                for (auto& c : fk) c = (char)tolower(c);
+                if (fk == "x-forwarded-for:") {
+                    auto vv = line.substr(16);
+                    size_t a = vv.find_first_not_of(" \t");
+                    size_t b = vv.find_last_not_of(" \t\r\n");
+                    if (a != std::string::npos) xffHeader = vv.substr(a, b - a + 1);
+                }
+            }
+            if (line.size() > 10) {
+                std::string rk = line.substr(0, 10);
+                for (auto& c : rk) c = (char)tolower(c);
+                if (rk == "x-real-ip:") {
+                    auto vv = line.substr(10);
+                    size_t a = vv.find_first_not_of(" \t");
+                    size_t b = vv.find_last_not_of(" \t\r\n");
+                    if (a != std::string::npos) xRealIpHeader = vv.substr(a, b - a + 1);
+                }
+            }
             if (line.size() > 18) {
                 std::string lk = line.substr(0, 18);
                 for (auto& c : lk) c = (char)tolower(c);
@@ -5373,6 +5452,21 @@ struct LocalSdrShim::Impl {
                 }
             }
         }
+        // ★★★ RESOLVE WHO THIS ACTUALLY IS, BEFORE ANYTHING READS THE ADDRESS. Bans, geo/ASN,
+        //     the connection log and the admin lockout all call peerAddress(); doing the
+        //     substitution once here means none of them change, and none of them can be missed.
+        //     ★ socketPeerAddress() deliberately, NOT peerAddress(): the trust decision must be
+        //       made on the real TCP peer, or a proxy could nominate its own successor.
+        if (!xffHeader.empty() || !xRealIpHeader.empty()) {
+            std::string real;
+            {
+                std::lock_guard<std::mutex> lk(g_vsTrustedProxiesMtx);
+                real = vibeproxy::clientAddress(g_vsTrustedProxies, sock->socketPeerAddress(),
+                                                xffHeader, xRealIpHeader);
+            }
+            if (real != sock->socketPeerAddress()) sock->setEffectiveAddress(real);
+        }
+
         bool wsSpec  = reqLine.find("/ws/user-spectrum") != std::string::npos;
         bool wsAudio = reqLine.find("/ws/audio") != std::string::npos;
         bool wsDx    = reqLine.find("/ws/dxcluster") != std::string::npos;
@@ -8675,6 +8769,30 @@ void LocalSdrShim::setEibiHandler(EibiFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsEibiFn = std::move(fn);
 }
+void LocalSdrShim::setTrustedProxies(const std::string& csv) {
+    std::vector<std::string> entries;
+    size_t start = 0;
+    while (start <= csv.size()) {
+        const size_t comma = csv.find(',', start);
+        const size_t end = comma == std::string::npos ? csv.size() : comma;
+        std::string e = csv.substr(start, end - start);
+        const size_t a = e.find_first_not_of(" \t");
+        const size_t b = e.find_last_not_of(" \t\r\n");
+        if (a != std::string::npos) entries.push_back(e.substr(a, b - a + 1));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_vsTrustedProxiesMtx);
+        g_vsTrustedProxies.set(entries);
+    }
+    // ★ Say it out loud at startup. A wrong entry here is invisible until somebody is banned who
+    //   should not have been, so the owner should be able to see what the server believes.
+    if (!entries.empty())
+        LOGI("trusting X-Forwarded-For from %d proxy entr%s", (int)entries.size(),
+             entries.size() == 1 ? "y" : "ies");
+}
+
 void LocalSdrShim::setConfigPersistHandler(ConfigPersistFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsConfigPersist = std::move(fn);

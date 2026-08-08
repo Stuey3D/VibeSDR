@@ -26,6 +26,11 @@ void Socket::close() {
 }
 
 std::string Socket::peerAddress() {
+    if (!effAddr_.empty()) return effAddr_;   // real client, via a trusted proxy
+    return socketPeerAddress();
+}
+
+std::string Socket::socketPeerAddress() {
     if (fd_ < 0) return "";
     struct sockaddr_in addr {};
     socklen_t len = sizeof(addr);

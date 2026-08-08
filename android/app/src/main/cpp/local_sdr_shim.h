@@ -78,6 +78,11 @@ public:
      *  Independent of the PIN on purpose: a public receiver may be open to all listeners and
      *  still refuse a visitor putting DC on the feedline. Empty = nothing is protected. */
     static void setVibeServerAdminSecret(const std::string& secret);
+    /** ★★★ Reverse proxies whose X-Forwarded-For we believe, comma separated (addresses/CIDRs).
+     *  EMPTY = trust nobody and read no headers, which is the default: the header is
+     *  client-supplied, so believing it from any peer lets a stranger forge an address and walk
+     *  through the ban list. See vibe_proxy.h. */
+    static void setTrustedProxies(const std::string& csv);
     /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). For a PUBLIC receiver,
      *  where one client per radio makes the server a queue of one. Loopback and admin sessions
      *  are exempt. On expiry the listener is told, disconnected, and their address held on a
