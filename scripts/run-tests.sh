@@ -15,9 +15,26 @@ SRC=vibeserver
 OUT="${TMPDIR:-/tmp}/vibeserver-tests"
 mkdir -p "$OUT"
 
+VDSP=android/app/src/main/cpp/vibedsp
+KISS="$VDSP/third_party/kissfft"
+
+# test name -> extra compiler flags it needs
+flags_for() {
+  case "$1" in
+    # ★ The DSP engine lives outside vibeserver/ and carries its own vendored kissfft, so this one
+    #   needs both on the include path. Worth it: it is the only test that drives the real audio
+    #   chain end to end.
+    test-wfm-stereo) echo "-O2 -I $VDSP -I $KISS" ;;
+    *)               echo "" ;;
+  esac
+}
+
 # test name -> the sources it needs besides itself
 deps_for() {
   case "$1" in
+    test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -33,7 +50,7 @@ for t in "$SRC"/test-*.cpp; do
   name="$(basename "$t" .cpp)"
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
   # shellcheck disable=SC2046
-  if ! g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp \
+  if ! g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for "$name") \
         -o "$OUT/$name" "$t" $(deps_for "$name") 2>"$OUT/$name.buildlog"; then
     printf '   \033[33mdid not build\033[0m — %s\n' "$OUT/$name.buildlog"
     head -5 "$OUT/$name.buildlog" | sed 's/^/     /'
