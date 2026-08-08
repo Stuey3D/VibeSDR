@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <csignal>
+#include <sys/wait.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -427,6 +428,74 @@ static std::string handoffDir() {
     const std::string t = "/tmp/vibeserver-" + std::to_string((int)getuid());
     if (usable(t)) return t;
     return "";   // ★ No home for them: routing is simply off, and the caller says so.
+}
+
+/** ★★★ IS THERE ANYTHING ELSE TO START THE RADIOS? `vibeserver-radios` is a systemd unit, and
+ *      systemd is not a given: Saber runs this in a chroot with no init at all, and the same is
+ *      true of Docker and WSL. Both halves are checked — `systemctl` on PATH means little if
+ *      nothing is listening to it, and /run/systemd/system is the documented way to ask whether
+ *      systemd is actually the running init. */
+static bool haveServiceManager() {
+    return ::access("/run/systemd/system", F_OK) == 0;
+}
+
+/** ★★★ THE FRONT DOOR OWNS NO RADIO — SO SOMETHING HAS TO START THE ONES BEHIND IT.
+ *
+ *      On a systemd box that is `vibeserver-radios`, which reconciles one `vibeserver@<serial>`
+ *      unit per radio. On a box WITHOUT systemd nothing did, and the result was a server that
+ *      looked completely dead: the front door came up, listed the radio, printed its port — and
+ *      every request for it failed with `handoff to /run/vibeserver/4.sock failed (No such file or
+ *      directory)`, because no process had ever created that socket. The page says "That radio is
+ *      not answering at the moment", which reads as broken hardware. Saber lost an evening to it,
+ *      wiped his config five times, and was right every time that nothing else held his SDR.
+ *
+ * ★★★ AND IT IS A REGRESSION I CAUSED. A headless server is forced to Full mode (see the
+ *     `srv.fullMode = true` block above), Full mode means a front door, and a front door means
+ *     separate radio processes. Before that, one process owned the radio and no supervisor was
+ *     needed — so V2 worked on his machine and V3 could not, on identical hardware. Forcing an
+ *     architecture is only safe if you also ship the thing that architecture depends on.
+ *
+ * ★ Deliberately minimal: fork/exec ourselves with `--radio <serial>`, and kill the children when
+ *   we go. No process groups, no double-fork, and NO RESTART-ON-DEATH — systemd's `Restart=always`
+ *   does that properly where it exists, and this only has to cover the case where it does not. A
+ *   radio process that dies here stays dead until the server is restarted; that is worth knowing
+ *   and worth fixing later, but it is not what was broken.
+ */
+static std::vector<pid_t> g_radioKids;
+static void reapRadios() {
+    for (pid_t p : g_radioKids) if (p > 0) ::kill(p, SIGTERM);
+    for (pid_t p : g_radioKids) if (p > 0) { int st = 0; ::waitpid(p, &st, 0); }
+    g_radioKids.clear();
+}
+static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv) {
+    if (haveServiceManager()) return;   // ★ systemd is doing it; two supervisors would fight
+
+    std::vector<std::string> serials;
+    for (const auto& r : srv.radios)
+        if (r.enabled && r.configured && !r.serial.empty()) serials.push_back(r.serial);
+    if (serials.empty()) return;
+
+    std::printf("VibeServer: no service manager here, so this process starts the radios itself\n");
+    // ★ Children must not inherit our exit path. atexit runs on a normal return from main; the
+    //   signal handlers already installed for shutdown call exit(), so this covers both.
+    std::atexit(reapRadios);
+
+    for (const auto& serial : serials) {
+        const pid_t pid = ::fork();
+        if (pid < 0) { std::fprintf(stderr, "VibeServer: could not fork for %s\n", serial.c_str()); continue; }
+        if (pid == 0) {
+            // ★★ EXEC OURSELVES. `--radio <serial>` takes the front-door branch out of play in the
+            //    child (it only runs when no radio was named), so this cannot recurse.
+            // ★ The config path rides along explicitly: the child must read the same file we did,
+            //   and VIBESERVER_CONFIG may have pointed us somewhere non-default.
+            ::execl(self, self, "--radio", serial.c_str(), "--serve", (char*)nullptr);
+            std::fprintf(stderr, "VibeServer: could not start the process for %s: %s\n",
+                         serial.c_str(), strerror(errno));
+            ::_exit(127);
+        }
+        std::printf("  started radio %s (pid %d)\n", serial.c_str(), (int)pid);
+        g_radioKids.push_back(pid);
+    }
 }
 
 /** ★ Small and local on purpose: the shim has one, but it is a private member of an internal
@@ -1498,6 +1567,7 @@ int main(int argc, char** argv) {
         //     landing page showed the RSP's listener count and frequency range as its own.
         // ★ One line, several symptoms. Clearing it is what makes "not mine" true for every radio.
         g_myRadioSerial.clear();
+        superviseRadios(argv[0], g_serverConfig);
     } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
