@@ -99,6 +99,12 @@ target_link_libraries(vibeserver_core PUBLIC vibedsp)
 # vibeserver, and it pops up". A separate `vibeserver-tui` would be one more name to remember.
 # See tui.cpp for how one binary is both — no arguments AND a terminal means a human typed it.
 if(UNIX AND NOT APPLE)
+  # ★★★ THE WIDE BUILD, OR UTF-8 CANNOT WORK AT ALL. Plain libncurses is byte-oriented: it has no
+  #     idea a three-byte sequence is one character, so it escapes each byte and an em-dash renders
+  #     as "?~@~T" mid-sentence — which reads as corrupted memory, not an encoding problem.
+  #     setlocale() alone does NOT fix it; the library has to be ncursesw.
+  set(CURSES_NEED_NCURSES TRUE)
+  set(CURSES_NEED_WIDE TRUE)
   find_package(Curses)
 endif()
 add_executable(vibeserver

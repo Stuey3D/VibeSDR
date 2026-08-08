@@ -212,6 +212,18 @@ function initSplash() {
   };
 
   $<HTMLFormElement>('connForm').addEventListener('submit', (e) => { e.preventDefault(); go(false); });
+
+  // ★★★ ?join — OPEN THE RECEIVER, NOT THE FRONT DOOR.
+  //
+  //     On a machine with several radios every process serves this same landing page, so a card
+  //     linking to another radio's address landed the listener on ANOTHER list of radios — and the
+  //     card for the radio serving the page just reloaded it (Stuart, 2026-08-08: "the landing
+  //     page just reloads"). A radio card has to mean "let me listen to THIS one".
+  // ★ Same path as pressing START, so there is one way in and not two that can drift.
+  if (new URLSearchParams(location.search).has('join')) {
+    // Let the splash paint first: go() expects the page it is leaving to exist.
+    setTimeout(() => go(false), 0);
+  }
   $('btnSaveConnect').addEventListener('click', () => go(true));
 
   // Ask the server whether it even wants a PIN, and shape the splash to the
@@ -2136,7 +2148,10 @@ async function showSplashRadios(): Promise<void> {
     //   send someone to a page that refuses them, which is worse than saying so here.
     const dim = (full || down) ? 'opacity:.45;cursor:not-allowed' : 'cursor:pointer';
     const tag = (full || down) ? 'div' : 'a';
-    const href = (full || down) ? '' : ` href="${location.protocol}//${location.hostname}:${r.port}/"`;
+    // ★ ?join so the click opens the RECEIVER. Without it the primary's card reloads this very
+    //   page, and a secondary's card shows that radio's own copy of this list.
+    const href = (full || down) ? ''
+               : ` href="${location.protocol}//${location.hostname}:${r.port}/?join=1"`;
     return `<${tag}${href} class="radioCard" data-serial="${r.serial}" style="display:block;text-align:left;`
          + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
          + `text-decoration:none;color:inherit;${dim}">`
