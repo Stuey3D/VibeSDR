@@ -740,6 +740,20 @@ struct SysStats {
     double uptimeSec = 0;
     std::string governor;
     long long   cpuKHz = 0;
+
+    /** ★★★ IS THE POWER SUPPLY COPING? On a Raspberry Pi this is the fault that looks like every
+     *  other fault: USB devices drop out, streams die, and nothing in any log says "your PSU".
+     *  It cost an evening here — three SDRs declaring 1900 mA against a 600 mA default budget
+     *  produced 66 over-current events and a radio that would not stay up, and the only place it
+     *  was written down was `dmesg`, which nobody reads on an appliance in a cupboard.
+     *  ★★ LATCHED, not sampled. A brownout an hour ago is exactly what you want reported: by the
+     *     time an owner opens the page the voltage has usually recovered, and a page showing "all
+     *     fine" would be telling the truth about this instant and lying about the machine.
+     *  ★ Read from the rpi_volt hwmon, NOT `vcgencmd` — the service user cannot open /dev/vcio,
+     *    so vcgencmd fails for exactly the process that needs the answer. */
+    bool haveVolt = false;
+    bool underVoltageNow = false;
+    bool underVoltageEver = false;
 };
 
 inline SysStats readSys() {
@@ -816,6 +830,34 @@ inline SysStats readSys() {
             break;
         }
     }
+#if defined(__linux__)
+    {
+        // The alarm lives under whichever hwmon calls itself rpi_volt — the number moves between
+        // kernels, so find it by NAME rather than hard-coding hwmon2.
+        static std::string voltPath = [] {
+            for (int i = 0; i < 8; i++) {
+                char nameF[64]; snprintf(nameF, sizeof nameF, "/sys/class/hwmon/hwmon%d/name", i);
+                std::string n = slurp(nameF, 32);
+                while (!n.empty() && (n.back() == '\n' || n.back() == ' ')) n.pop_back();
+                if (n == "rpi_volt") {
+                    char f[80]; snprintf(f, sizeof f, "/sys/class/hwmon/hwmon%d/in0_lcrit_alarm", i);
+                    return std::string(f);
+                }
+            }
+            return std::string();
+        }();
+        static bool everSeen = false;
+        if (!voltPath.empty()) {
+            const std::string v = slurp(voltPath.c_str(), 16);
+            if (!v.empty()) {
+                s.haveVolt = true;
+                s.underVoltageNow = (atoi(v.c_str()) != 0);
+                if (s.underVoltageNow) everSeen = true;
+                s.underVoltageEver = everSeen;
+            }
+        }
+    }
+#endif
     {
         const std::string mi = slurp("/proc/meminfo", 2048);
         if (!mi.empty()) {
@@ -858,7 +900,11 @@ inline const char* loadStatus(const SysStats& s) {
  *    85, so 80 is not a scare figure — past it the receiver IS running slower. */
 inline const char* tempStatus(const SysStats& s) {
     if (!s.haveTemp) return "unknown";
+    // ★★ POWER BEATS TEMPERATURE. An under-volting Pi corrupts cards and drops USB devices; it is
+    //    the most serious thing this page can report, and it must not be ranked below a warm chip.
+    if (s.haveVolt && s.underVoltageNow) return "critical";
     if (s.tempC >= 80.0) return "critical";
+    if (s.haveVolt && s.underVoltageEver) return "warning";
     if (s.tempC >= 70.0) return "warning";
     return "ok";
 }
@@ -873,6 +919,10 @@ inline std::string sysJson(const SysStats& s) {
     if (s.cpuPct >= 0) { char b[48]; snprintf(b, sizeof b, ",\"cpuPct\":%.1f", s.cpuPct); j += b; }
     j += std::string(",\"loadStatus\":\"") + loadStatus(s) + "\"";
     if (s.haveTemp) { char b[64]; snprintf(b, sizeof b, ",\"tempC\":%.1f", s.tempC); j += b; }
+    if (s.haveVolt) {
+        j += ",\"underVoltage\":";     j += s.underVoltageNow  ? "true" : "false";
+        j += ",\"underVoltageEver\":"; j += s.underVoltageEver ? "true" : "false";
+    }
     j += std::string(",\"tempStatus\":\"") + tempStatus(s) + "\"";
     if (s.haveMem) {
         j += ",\"memTotalKB\":" + std::to_string(s.memTotalKB)

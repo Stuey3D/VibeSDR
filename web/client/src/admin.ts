@@ -140,6 +140,25 @@ function renderHealth(st: any) {
       usedPct > 92 ? 'critical' : usedPct > 80 ? 'warning' : 'ok'));
   }
 
+  // ★★★ POWER, AND IT EARNS A CARD OF ITS OWN. An under-volting Pi does not announce itself: USB
+  //     devices drop out, radio streams die, SD cards corrupt — and every one of those looks like a
+  //     different fault. It cost an evening here, with three SDRs against a 600 mA default budget
+  //     producing 66 over-current events, and the only record was dmesg, which nobody reads on an
+  //     appliance in a cupboard (Stuart, 2026-08-08: "maybe put the under voltage warning in the
+  //     admin page too").
+  // ★★ SHOWN WHEN IT HAS EVER HAPPENED, not only while it is happening. By the time anyone opens
+  //    this page the voltage has usually recovered, and "all fine" would be true of this instant
+  //    and false about the machine.
+  if (sys.underVoltage !== undefined) {
+    const now = !!sys.underVoltage, ever = !!sys.underVoltageEver;
+    out.push(card('POWER',
+      now ? 'UNDER-VOLTAGE' : ever ? 'DIPPED' : 'OK',
+      now  ? 'the supply cannot keep up — expect USB devices to drop out'
+           : ever ? 'the supply has dipped since boot — suspect it before anything else'
+                  : 'supply voltage has stayed in range',
+      now ? 'critical' : ever ? 'warning' : 'ok'));
+  }
+
   out.push(card('LISTENERS', `${st.listeners ?? 0}${st.maxUsers > 1 ? ` / ${st.maxUsers}` : ''}`,
     st.waiting ? `${st.waiting} waiting` : 'nobody waiting'));
 
