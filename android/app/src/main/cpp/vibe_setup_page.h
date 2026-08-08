@@ -75,6 +75,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
        padding:14px 20px;display:flex;gap:14px;align-items:center;justify-content:flex-end}
   .bar .spacer{flex:1;color:var(--dim);font-size:13px}
   .hide{display:none}
+  .modalWrap{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.72);
+             display:flex;align-items:center;justify-content:center;padding:20px}
+  .modalBox{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+            padding:22px 24px;max-width:520px;width:100%}
   .bandList{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .bandChip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:#0a0704}
   .bandChip button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:14px;padding:0 2px}
@@ -399,9 +403,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            ★ RTL only: an Airspy's serial is factory-burned and an SDRplay has none at all. -->
       <div id="hwSerial" class="hide" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
         <label><span class="lbl">This dongle's serial</span>
+          <!-- ★★ SHOW WHAT IT IS, do not ask for it. An empty box invited someone to type a long
+               string of zeros from memory, and getting the COUNT wrong is easy and silent — the
+               dongle ends up with a name nobody meant (Stuart, 2026-08-08). The change happens in
+               a dialog that starts from the CURRENT value, so the common case (bump the last
+               digit) is an edit rather than a re-entry. -->
           <div class="row" style="gap:8px">
-            <input type="text" id="rtlSerialNew" placeholder="e.g. RTL-FM-01" maxlength="32"
-                   style="flex:2 1 220px">
+            <input type="text" id="rtlSerialNow" readonly
+                   style="flex:2 1 220px;opacity:.85;cursor:default">
             <button type="button" id="rtlSerialGo" class="ghost" style="flex:0 0 auto">Change serial</button>
           </div>
           <div class="hint" id="rtlSerialState"></div>
@@ -448,6 +457,28 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
     </div>
     </div>
 
+
+    <!-- ★★★ THE ONE OPERATION HERE THAT WRITES TO HARDWARE gets a dialog of its own rather than a
+         browser prompt(): it can show the current name, pre-fill the new one so the usual change is
+         a single keystroke, and refuse to enable Change until both entries agree exactly. -->
+    <div id="serialModal" class="modalWrap" hidden>
+      <div class="modalBox">
+        <h2 style="margin-top:0">Change this dongle's serial</h2>
+        <p class="why">Now: <b id="serialModalNow" class="addr"></b></p>
+        <label><span class="lbl">New serial</span>
+          <input type="text" id="serialA" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <label><span class="lbl">Type it again</span>
+          <input type="text" id="serialB" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <div class="hint" id="serialMatch"></div>
+        <div class="hint"><b>This writes to the dongle's memory.</b> A backup is taken first and the
+          result is read back and checked. Do not do this on a machine that might lose power
+          mid-write. The new name only appears after the dongle loses power, so a reboot is needed.</div>
+        <p style="margin-top:16px;display:flex;gap:10px">
+          <button type="button" id="serialDo" disabled>Change serial</button>
+          <button type="button" id="serialCancel" class="ghost">Cancel</button>
+        </p>
+      </div>
+    </div>
 
     <div class="err" id="saveErr"></div>
   </div>
@@ -754,6 +785,7 @@ async function serialStatus() {
     const j = await r.json();
     SERIAL_PENDING = j.pending ? {old: j.old, new: j.new, took: j.took} : null;
     if (!el) return;
+    if ($("rtlSerialNow")) $("rtlSerialNow").value = (radio().serial || "").trim();
     if (j.pending && j.took) {
       // ★ Proven, not assumed: the server clears the marker only when it SEES the new serial on
       //   the bus and the old one gone.
@@ -771,17 +803,53 @@ async function serialStatus() {
   } catch (e) { /* an older server has no such endpoint; the card simply stays quiet */ }
 }
 
-async function serialChange() {
-  const el = $("rtlSerialState"), b = $("rtlSerialGo");
-  const want = ($("rtlSerialNew").value || "").trim();
-  if (!want) { el.textContent = "Type the new serial first."; el.style.color = "var(--bad)"; return; }
-  // ★★ SAY THE NAME OUT LOUD. The terminal version makes the operator TYPE the new serial to
-  //    confirm; a dialog that only asks "are you sure?" is a click people make without reading.
-  if (prompt("This writes to the dongle's memory.\n\nType the new serial again to confirm:") !== want) {
-    el.textContent = "Cancelled — nothing was changed."; el.style.color = "var(--dim)"; return;
+/** ★★ THE DIALOG STARTS FROM THE CURRENT NAME. Bumping the last digit is the usual change, and an
+ *  empty box asked people to retype a run of zeros from memory — miscount them and the dongle
+ *  quietly ends up called something nobody intended. Editing what is already there cannot go wrong
+ *  that way.
+ *  ★ Both entries must still agree exactly, and the button stays disabled until they do: the
+ *    confirmation is what catches a slip in the EDIT, which is the mistake this shape can still
+ *    make. The count of characters is shown because that is the thing being got wrong. */
+function serialModalOpen() {
+  const now = (radio().serial || "").trim();
+  $("serialModalNow").textContent = now || "(none)";
+  $("serialA").value = now;
+  $("serialB").value = "";
+  $("serialMatch").textContent = "";
+  $("serialDo").disabled = true;
+  $("serialModal").hidden = false;
+  const a = $("serialA");
+  a.focus();
+  // ★ Caret at the END, nothing selected: the point is to edit the last character, and a selected
+  //   value is one keystroke from being wiped entirely.
+  a.setSelectionRange(a.value.length, a.value.length);
+}
+
+function serialModalCheck() {
+  const a = $("serialA").value.trim(), b = $("serialB").value.trim();
+  const el = $("serialMatch");
+  const now = (radio().serial || "").trim();
+  if (!a) { el.textContent = ""; $("serialDo").disabled = true; return; }
+  if (a === now) {
+    el.textContent = "That is the name it already has."; el.style.color = "var(--dim)";
+    $("serialDo").disabled = true; return;
   }
+  if (!b) { el.textContent = `${a.length} characters — type it again to confirm.`;
+            el.style.color = "var(--dim)"; $("serialDo").disabled = true; return; }
+  if (a !== b) { el.textContent = "The two do not match."; el.style.color = "var(--bad)";
+                 $("serialDo").disabled = true; return; }
+  el.textContent = `Will be set to ${a} (${a.length} characters).`;
+  el.style.color = "var(--good)";
+  $("serialDo").disabled = false;
+}
+
+async function serialChange() {
+  const want = $("serialA").value.trim();
+  if (!want || want !== $("serialB").value.trim()) return;
+  const el = $("rtlSerialState"), b = $("serialDo");
   b.disabled = true;
   el.textContent = "writing…"; el.style.color = "var(--dim)";
+  $("serialModal").hidden = true;
   try {
     const r = await fetch(radioPath() + "/vibeserver/rtl-serial?" + await authQuery(), {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -790,11 +858,10 @@ async function serialChange() {
     const j = await r.json();
     el.textContent = j.message || (j.ok ? "Done." : "It did not work.");
     el.style.color = j.ok ? "var(--good)" : "var(--bad)";
-    if (j.ok) { await serialStatus(); }
+    if (j.ok) await serialStatus();
   } catch (e) {
     el.textContent = "Could not reach the server."; el.style.color = "var(--bad)";
   }
-  b.disabled = false;
 }
 
 /** ★ The master button changes JOB when a serial is waiting on a power cycle: a restart would not
@@ -1174,7 +1241,10 @@ function fill() {
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
-  $("rtlSerialGo").addEventListener("click", serialChange);
+  $("rtlSerialGo").addEventListener("click", serialModalOpen);
+  $("serialCancel").addEventListener("click", () => { $("serialModal").hidden = true; });
+  $("serialDo").addEventListener("click", serialChange);
+  for (const id of ["serialA", "serialB"]) $(id).addEventListener("input", serialModalCheck);
   $("allowAdd").addEventListener("click", () => bandAdd("allow"));
   $("blockAdd").addEventListener("click", () => bandAdd("block"));
   $("bandCopy").addEventListener("click", () => {
