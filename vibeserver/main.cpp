@@ -733,7 +733,20 @@ int main(int argc, char** argv) {
             // ★ So the front door is unconditional here: 48000 lists the radios and serves setup
             //   and admin, every radio sits behind it, and there is no "primary" special case to
             //   reason about anywhere. One shape, whether the machine has one radio or four.
-            srv.fullMode = true;
+            // ★★★ AND WRITE IT DOWN, not just believe it. Forcing this in memory alone left two
+            //     readers with two answers: the daemon started a front door because it thought the
+            //     machine was Full, while `--list-secondary-radios` read the FILE, saw Simple,
+            //     treated the first radio as "primary" and refused to start it — so the RSP never
+            //     came up and nothing said why (2026-08-08).
+            // ★ Every other reader — the supervisor, the router, portForRadio — takes it from the
+            //   file, so the file is where the truth has to live.
+            if (!srv.fullMode) {
+                srv.fullMode = true;
+                std::string werr;
+                if (!vsconfig::saveServer(g_configPath, srv, werr))
+                    std::fprintf(stderr, "VibeServer: could not record full mode — %s\n",
+                                 werr.c_str());
+            }
             g_serverConfig = srv;
             hadConfigFile = true;
         } else if (!err.empty()) {
