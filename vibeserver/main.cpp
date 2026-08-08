@@ -1224,6 +1224,13 @@ int main(int argc, char** argv) {
         }
         frontDoorOnly = true;
         g_amFrontDoor.store(true);
+        // ★★★ THE FRONT DOOR IS NOBODY'S RADIO. The config loader falls back to "the first radio
+        //     that is ready" when none was named — which is right for a single-radio server and
+        //     exactly wrong here: this process then wore the RSP's identity, so the router saw a
+        //     request for that radio as "that is me" and answered it locally with a 503, while the
+        //     landing page showed the RSP's listener count and frequency range as its own.
+        // ★ One line, several symptoms. Clearing it is what makes "not mine" true for every radio.
+        g_myRadioSerial.clear();
     } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
