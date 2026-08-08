@@ -1699,7 +1699,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    unreadable stack, and the whole value of the connection log is being able to run an eye down
    a column. The menu's shape is right for rows of controls and wrong for this. */
 #adminPanel {
-  position: fixed; inset: 0; z-index: 60;
+  /* ★★★ ABOVE THE SPLASH (z-index 100). At 60 the panel opened perfectly and was drawn BEHIND the
+     landing page, which is exactly where it is now most used: an owner signs in on the splash and
+     asks for ADMIN CONTROLS without taking a radio. Nothing looked broken — the button worked, the
+     data loaded, the page was simply underneath (Stuart, 2026-08-08: "still cannot get into the
+     admin page from the landing screen"). Moving it out of #app was necessary and not sufficient. */
+  position: fixed; inset: 0; z-index: 120;
   background: rgba(6,5,2,0.985);
   display: flex; flex-direction: column;
   font-size: 12px; color: var(--btn-text);
