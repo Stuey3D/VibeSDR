@@ -71,10 +71,12 @@ PKGS="$DIST/main/binary-$ARCH/Packages"
 if [ -f "$PKGS" ]; then
   bump "$(grep -oE "^Version: ${UPSTREAM}-[0-9]+" "$PKGS" | grep -oE '[0-9]+$' | sort -n | tail -1)"
 fi
-# ★★ The marker is PER UPSTREAM VERSION. A single shared file would carry 2.0.0's revision 15 into
-#    3.0.0 and start it at 16 — legal, but it reads like fourteen missing releases. And it is
-#    WRITTEN at the end of this script: it used to be read and never written, so the one source
-#    that was supposed to outlive a prune did not exist at all.
+# ★★ The marker is PER UPSTREAM VERSION. It used to be one shared file, which carried 2.0.0's
+#    revision 15 into 3.0.0 and would have started it at 16 — legal, but it reads like fourteen
+#    releases nobody can find. What must never repeat is an (upstream, revision) PAIR, and
+#    3.0.0-1 has never been 2.0.0-1.
+# ★ Written just below, before the prune. Use $MARK for both — the write used to spell the path
+#   out in full, so a `grep MARK` said the file was read and never written, and I believed it.
 MARK="$APT_DIR/.highest-revision-$UPSTREAM"
 [ -f "$MARK" ] && bump "$(tr -cd '0-9' < "$MARK")"
 REV=$((HIGH + 1))
@@ -132,7 +134,7 @@ PKGVER="$(dpkg-deb -f "$DEB" Version)"
 [ "$PKGVER" = "$FULLVER" ] || { echo "version mismatch: package says $PKGVER, expected $FULLVER"; exit 1; }
 cp "$DEB" "$POOL/"
 # ★ Record the high-water mark BEFORE pruning, so a pruned revision can never be handed out again.
-echo "$REV" > "$APT_DIR/.highest-revision"
+echo "$REV" > "$MARK"
 
 # ── Prune ────────────────────────────────────────────────────────────────────
 # ★★ THE POOL IS NOT AN ARCHIVE. Every publish adds a .deb and nothing ever removed one, so the
@@ -185,10 +187,6 @@ touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with 
 #     fetches this commit over SSH and pushes it — the Mac already has the credential, the key
 #     backup and Time Machine, and its clone is the copy of the pool that must survive.
 cd "$APT_DIR"
-# ★ Record the high-water mark BEFORE the commit, so it is committed with the package. The prune
-#   above can delete every .deb and rewrite the index; this file is what stops the next publish
-#   from reissuing a number that has already been public.
-printf '%s\n' "$REV" > "$MARK"
 git add -A
 git -c user.name="VibeSDR release" -c user.email="packages@vibesdr.net" \
     commit -q -m "vibeserver $FULLVER ($ARCH)" || { echo "nothing to commit"; exit 0; }

@@ -824,6 +824,32 @@ int main(int argc, char** argv) {
                 if (!o.portGiven) o.port = vsconfig::portForRadio(srv, idx);
                 g_isPrimaryRadio = ((int)idx == vsconfig::primaryRadio(srv));
                 g_myRadioSerial = mine->serial;
+            } else {
+                // ★★★ THE ADMIN PASSWORD BELONGS TO THE MACHINE, NOT TO A RADIO — and every
+                //     machine-wide setting used to be applied INSIDE the `if (mine)` above, so a
+                //     server with no ready radio started with no admin password, no PIN, no name
+                //     and no trusted proxies.
+                //
+                //     That is exactly the state the TUI wizard leaves behind: it writes the
+                //     password, sets `configured = false` because "the BROWSER finishes setup",
+                //     and sends the owner to the setup page. The setup page then refused the
+                //     password they had just chosen, because this process had never been told it.
+                //     **The one path into a fresh install was the one path that could not
+                //     authenticate.** (Found on a from-scratch Pi, 2026-08-08.)
+                //
+                // ★★ It could only ever happen on a genuinely fresh install. Every developer box
+                //    and every upgrade already has a configured radio, so `mine` is non-null and
+                //    the settings arrive by the other branch. Same class as the missing
+                //    `vibeserver` account — see fresh_install_gates.
+                //
+                // ★ A default radio, so the machine-wide fields flow through the SAME
+                //   effectiveFor/applyConfig path as always rather than a second hand-copied list
+                //   that would drift from it. The port is restored: `effectiveFor` takes it from
+                //   the radio, and a radio we do not have has none — the front door binds
+                //   `g_serverConfig.port` regardless, but leaving a 0 here is a trap for later.
+                const int keepPort = o.port;
+                applyConfig(vsconfig::effectiveFor(srv, vsconfig::RadioConfig{}), o);
+                o.port = keepPort;
             }
             // ★★★ A HEADLESS SERVER IS ALWAYS FULL. Simple mode is a GUI idea — plug a radio into
             //     a Mac or a phone, press start, share it on the network — and this build has no

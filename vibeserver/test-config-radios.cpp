@@ -96,6 +96,35 @@ int main() {
         ok(c.configured, "configured, because BOTH the machine and the radio are");
     }
 
+    std::printf("\nA machine with NO radio ready still knows its own secrets\n");
+    {
+        // ★★★ THE FRESH-INSTALL STATE, and it locked the owner out of their own setup page. The TUI
+        //     wizard writes the admin password, sets configured=false because the browser finishes
+        //     setup, and points the owner at the web page — which then refused the password they
+        //     had just chosen. main.cpp applied every machine-wide setting only when it had found a
+        //     radio that was enabled AND configured, and on a brand-new install there is no such
+        //     radio by definition. Composing against a DEFAULT radio is what the fix relies on, so
+        //     that is what this pins down.
+        ServerConfig s;
+        s.configured = false;                 // ← the browser has not finished setup yet
+        s.adminPass  = "Test123";
+        s.pin        = "1234";
+        s.name       = "Pi500";
+        s.trustedProxies = "127.0.0.1";
+        RadioConfig detected;                 // enabled by the wizard, never configured
+        detected.serial = "00000001"; detected.enabled = true; detected.configured = false;
+        s.radios.push_back(detected);
+
+        const Config c = effectiveFor(s, RadioConfig{});
+        ok(c.adminPass == "Test123",
+           "★★★ the admin password survives with no radio configured — the setup page needs it",
+           c.adminPass);
+        ok(c.pin == "1234", "and the listening PIN", c.pin);
+        ok(c.name == "Pi500", "and the machine's name", c.name);
+        ok(c.trustedProxies == "127.0.0.1", "and the trusted proxies", c.trustedProxies);
+        ok(!c.configured, "still not configured — this does not pretend setup is finished");
+    }
+
     std::printf("\nWhere an unlocked radio starts\n");
     {
         // ★★★ The owner types a landing frequency; the radio must OPEN there. It used to open on
