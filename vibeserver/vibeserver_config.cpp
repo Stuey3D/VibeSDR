@@ -369,6 +369,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
+    B("spectrogram", r.spectrogram);
 }
 
 std::string radioToJson(const RadioConfig& r) {
@@ -390,6 +391,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
+    B("spectrogram", r.spectrogram);
     if (!o.empty() && o.back() == ',') o.pop_back();
     return o + "}";
 }
@@ -520,6 +522,20 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
 }
 
 bool needsFrontDoor(const ServerConfig& cfg) { return cfg.fullMode; }
+
+bool canDrawSpectrogram(const RadioConfig& r) {
+    // ★ Fixed window, kept, and actually served. Any one of those missing and the picture would
+    //   have holes the viewer cannot account for — which is worse than no picture.
+    return r.enabled && r.configured
+        && r.mode == Mode::LockedRange
+        && !r.releaseWhenIdle;
+}
+
+int spectrogramRadio(const ServerConfig& cfg) {
+    for (size_t i = 0; i < cfg.radios.size(); i++)
+        if (cfg.radios[i].spectrogram && canDrawSpectrogram(cfg.radios[i])) return (int)i;
+    return -1;   // ★ A real answer: no radio can draw one, so the page must not pretend.
+}
 
 int primaryRadio(const ServerConfig& cfg) {
     for (size_t i = 0; i < cfg.radios.size(); i++)

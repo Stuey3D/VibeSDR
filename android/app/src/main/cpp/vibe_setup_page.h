@@ -219,6 +219,27 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <input type="number" id="ppm" step="1" placeholder="0"></label>
         <p class="why">Corrects a dongle whose crystal is slightly off. 0 unless you have measured it.</p>
       </div>
+      <!-- ★★★ WHAT THE LANDING PAGE MEASURES FROM. Offered only to a radio with a FIXED window:
+           a receiver a listener can retune contributes a smear with a hole in it every time
+           somebody uses it, and a radio that releases when idle is letting go of the device at
+           exactly the moment the picture would be drawn. -->
+      <div id="hwSpectro" class="hide" style="margin-top:10px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="spectrogram" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Use this radio for the spectrogram and band conditions</span></label>
+        <p class="why" id="spectroWhy">The landing page's background, and the measured half of the
+           band conditions table — both read the same window, so one radio provides both.</p>
+      </div>
+      <div id="hwRelease" style="margin-top:10px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="releaseWhenIdle" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Let another program use this radio when nobody is listening</span></label>
+        <p class="why">For a machine that shares one SDR with something else — OpenWebRX, a
+           decoder. VibeServer keeps running and takes the radio back the moment a listener
+           arrives; if the other program still has it, they are told so plainly.
+           <strong>It stops this radio contributing the spectrogram and band conditions</strong>,
+           because it spends its idle time letting the device go.</p>
+      </div>
       <div id="hwPpb" class="hide">
         <label><span class="lbl">Calibration (ppb)</span>
           <input type="number" id="ppb" step="1" placeholder="0"></label>
@@ -441,6 +462,26 @@ function setMode(locked) {
   $("modeLocked").classList.toggle("sel", locked);
   $("modeSingle").classList.toggle("sel", !locked);
   $("lockedOnly").classList.toggle("hide", !locked);
+  syncSpectroOffer();
+}
+
+/** ★★★ THE OFFER FOLLOWS THE RULE, LIVE. A radio only qualifies while its window is FIXED and it
+ *  is not letting the device go when idle — so the control appears and disappears as those two are
+ *  changed, rather than being offered and then quietly ignored by the server.
+ *  ★ Ticking it and having it silently not apply is the worst of the three options: the owner
+ *    would believe they had a spectrogram and never know why the page was empty. */
+function syncSpectroOffer() {
+  const wrap = $("hwSpectro"); if (!wrap) return;
+  const locked  = radio().mode === "locked";
+  const release = $("releaseWhenIdle") && $("releaseWhenIdle").checked;
+  const may = locked && !release;
+  wrap.classList.toggle("hide", !may);
+  if (!may && $("spectrogram")) $("spectrogram").checked = false;
+  const why = $("spectroWhy");
+  if (why && may) {
+    why.textContent = "The landing page's background, and the measured half of the band conditions"
+                    + " table — both read the same window, so one radio provides both.";
+  }
 }
 
 // ── The hardware panel, BRANCHED ON THE DRIVER ────────────────────────────────────────────────
@@ -768,6 +809,8 @@ function fill() {
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
+  if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
+  if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); renderHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
@@ -807,7 +850,11 @@ function collectRadio() {
     //   apply — the config would then describe a radio we are not.
     ...($("hwBiasT").classList.contains("hide") ? {} : {biasT: $("biasT").checked}),
     ...($("hwPpm").classList.contains("hide")   ? {} : {ppm: parseInt($("ppm").value || "0", 10)}),
-    ...($("hwPpb").classList.contains("hide")   ? {} : {ppb: parseInt($("ppb").value || "0", 10)})
+    ...($("hwPpb").classList.contains("hide")   ? {} : {ppb: parseInt($("ppb").value || "0", 10)}),
+    releaseWhenIdle: $("releaseWhenIdle").checked,
+    // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
+    //   hidden in that case, and a hidden control must not still be sending a value.
+    spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked
   };
 }
 
@@ -829,6 +876,12 @@ function collect() {
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
 }
+
+// ★ The two settings interact, so the page must recheck when either moves.
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t && (t.id === "releaseWhenIdle")) syncSpectroOffer();
+});
 
 $("signinBtn").onclick = async () => {
   PASS = $("pass").value;

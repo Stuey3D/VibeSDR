@@ -1198,7 +1198,32 @@ int main(int argc, char** argv) {
     // ★ Order is deliberate — an explicit --device N means the user named an RTL index, so that
     // still wins. Same "never infer what the hardware can tell you" rule, applied to discovery.
     int port;
-    if (!o.useUsb) {
+    bool frontDoorOnly = false;
+    // ★★★ THE FRONT DOOR: a server that owns no radio at all.
+    //
+    //     In FULL mode the public port belongs to a process with no device — it lists the radios,
+    //     serves setup and admin, and hands each listener's connection to the radio they chose.
+    //     It is what keeps an admin able to get in when every radio has failed, which is exactly
+    //     the moment somebody needs to.
+    // ★★ ONLY WHEN NO RADIO WAS NAMED. `--radio` means "be that radio"; the supervisor starts one
+    //    process per radio that way, and this branch is the one systemd starts with no arguments.
+    // ★ SIMPLE mode never gets here: needsFrontDoor() is the Simple/Full switch, and a Simple
+    //   server must stay exactly what it has always been — one process, one radio, one port.
+    if (o.useUsb && !o.radioGiven && vsconfig::needsFrontDoor(g_serverConfig)) {
+        port = LocalSdrShim::startFrontDoor(g_serverConfig.port, err);
+        if (port <= 0) {
+            std::fprintf(stderr, "VibeServer: the front door could not start — %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("VibeServer: front door on port %d — the radios are behind it\n", port);
+        for (size_t i = 0; i < g_serverConfig.radios.size(); i++) {
+            const auto& r = g_serverConfig.radios[i];
+            if (!r.enabled || !r.configured) continue;
+            std::printf("  %-22s port %d\n", (r.label.empty() ? r.driver : r.label).c_str(),
+                        vsconfig::portForRadio(g_serverConfig, i));
+        }
+        frontDoorOnly = true;
+    } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
     } else if (o.radioGiven) {

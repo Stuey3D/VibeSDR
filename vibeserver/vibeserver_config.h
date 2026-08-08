@@ -200,6 +200,25 @@ struct RadioConfig {
     int    ppm = 0;             // RTL frequency correction, parts per million
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)
+
+    /** ★★★ DOES THE LANDING PAGE'S SPECTROGRAM — AND THE BAND CONDITIONS — COME FROM THIS RADIO?
+     *
+     *  ★ ONE SETTING, because they are one measurement. Both are taken from the same wide FFT: the
+     *    spectrogram is what that window looked like over hours, and the measured band conditions
+     *    are what it can hear right now. A radio that cannot honestly draw one cannot honestly
+     *    report the other, so they are never chosen separately.
+     *
+     *  ★★ ONLY A FIXED-RANGE RADIO CAN ANSWER YES, and that is not a technicality. The
+     *     spectrogram is a picture of one window over hours; a radio a listener can retune at will
+     *     would contribute a smear with a large hole in it every time somebody used it. Stuart,
+     *     2026-08-08: "this only applies to radios with a fixed frequency range not radios that
+     *     are single user full radio control mode as those will have large gaps when people are
+     *     using them."
+     *  ★ And a radio that RELEASES when idle cannot draw one either — it spends its idle time
+     *    letting go of the device, which is exactly when the picture would be drawn. If every
+     *    radio releases, there is simply no spectrogram, and the page says so rather than
+     *    showing an hour of blank. */
+    bool   spectrogram = false;
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */
@@ -254,6 +273,13 @@ bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
  *    three-radio server does not.
  */
 bool needsFrontDoor(const ServerConfig& cfg);
+
+/** ★ May this radio drive the landing page's spectrogram? Fixed window, not released when idle,
+ *  and actually being served. See RadioConfig::spectrogram for why each of those matters. */
+bool canDrawSpectrogram(const RadioConfig& r);
+
+/** Which radio draws it, or -1 when none can — which is a real answer, not a failure. */
+int spectrogramRadio(const ServerConfig& cfg);
 
 /** ★★★ WHICH RADIO ANSWERS ON THE MACHINE'S MAIN PORT. The first one that is both enabled and
  *  configured. Returns -1 when none is ready — a real state, and not an error: the machine still

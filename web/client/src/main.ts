@@ -221,8 +221,17 @@ function initSplash() {
   //     page just reloads"). A radio card has to mean "let me listen to THIS one".
   // ★ Same path as pressing START, so there is one way in and not two that can drift.
   if (new URLSearchParams(location.search).has('join')) {
-    // Let the splash paint first: go() expects the page it is leaving to exist.
-    setTimeout(() => go(false), 0);
+    // ★★ SUBMIT THE FORM, DO NOT CALL go() DIRECTLY, AND WAIT FOR LOAD. Calling go() from here ran
+    //    it mid-initialisation — before the rest of this module had finished wiring the page up —
+    //    and the first thing it touched that did not exist yet threw, leaving a WHITE SCREEN with
+    //    no error a user could see (Stuart, 2026-08-08: "all of them just went to a white screen").
+    // ★ requestSubmit() goes through the exact path pressing START does, so there is one way in.
+    const joinNow = () => {
+      try { $<HTMLFormElement>('connForm').requestSubmit(); }
+      catch { go(false); }   // very old browsers: fall back, still after load
+    };
+    if (document.readyState === 'complete') setTimeout(joinNow, 0);
+    else window.addEventListener('load', () => setTimeout(joinNow, 0), { once: true });
   }
   $('btnSaveConnect').addEventListener('click', () => go(true));
 
