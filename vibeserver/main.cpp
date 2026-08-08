@@ -248,8 +248,20 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--radio") {
             const std::string v = need(i);
             o.useUsb = true; o.radioGiven = true;
-            if (!v.empty() && v.find_first_not_of("0123456789") == std::string::npos) o.radio = std::atoi(v.c_str());
-            else { o.radioSerial = v; o.radio = -1; }
+            // ★★★ A SERIAL FIRST, AN INDEX ONLY IF IT IS NOT ONE. RTL serials are ALL DIGITS —
+            //     "00000003" on this Pi, "00000001" from the factory — so "numeric means index"
+            //     read a serial as index 3 and started the wrong radio entirely (measured
+            //     2026-08-08: `--radio 00000003` reported "using Airspy HF+ 2"). Match against
+            //     what is actually attached before falling back to a position.
+            o.radioSerial.clear(); o.radio = -1;
+            for (const auto& r : vibe::detectRadios())
+                if (r.serial == v) { o.radioSerial = v; break; }
+            if (o.radioSerial.empty()) {
+                if (!v.empty() && v.find_first_not_of("0123456789") == std::string::npos)
+                    o.radio = std::atoi(v.c_str());
+                else
+                    o.radioSerial = v;   // a serial we cannot see yet; fail with a clear reason later
+            }
         }
         else if (a == "--tcp") {
             o.useUsb = false;
@@ -634,11 +646,21 @@ int main(int argc, char** argv) {
         // ★★ WHICH RADIO IS THIS PROCESS? `--radio` decides when given — that is how the
         //    supervisor starts one process per radio. Otherwise take the first that is both
         //    ENABLED and CONFIGURED, which for every existing install is the only one there is.
+        // ★★★ WHICH RADIO ARE WE? ASK ARGV FIRST. The config is deliberately read BEFORE the flags
+        //     (file supplies defaults, flags override) — but choosing which radio's settings to
+        //     take out of the file is not a default, it decides which file entry we are. Without
+        //     this pre-scan every process fell back to "the first ready radio" and therefore to
+        //     the PRIMARY's port, so radios two and three both tried to bind 48040 and died with
+        //     "port already in use" (measured 2026-08-08).
+        std::string wantSerial;
+        for (int k = 1; k + 1 < argc; k++)
+            if (std::string(argv[k]) == "--radio") { wantSerial = argv[k + 1]; break; }
+
         vsconfig::ServerConfig srv;
         if (vsconfig::loadServer(g_configPath, srv, err)) {
             const vsconfig::RadioConfig* mine = nullptr;
-            if (!o.radioSerial.empty()) {
-                for (const auto& r : srv.radios) if (r.serial == o.radioSerial) { mine = &r; break; }
+            if (!wantSerial.empty()) {
+                for (const auto& r : srv.radios) if (r.serial == wantSerial) { mine = &r; break; }
             }
             if (!mine) {
                 for (const auto& r : srv.radios) if (r.enabled && r.configured) { mine = &r; break; }
