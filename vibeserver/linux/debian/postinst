@@ -86,6 +86,36 @@ case "$1" in
     #   grant lying around for no benefit at all.
     rm -f /etc/sudoers.d/vibeserver
 
+    # ── 2b. THE PI'S USB CURRENT BUDGET ──────────────────────────────────────
+    #
+    # ★★★ SEVERAL SDRs NEED MORE CURRENT THAN A PI 5 HANDS OUT BY DEFAULT. Without this the board
+    #     caps total USB draw and devices drop off under load — it produced 66 over-current events
+    #     on the development Pi with three radios attached, and cost most of an afternoon because
+    #     it presents as a USB BANDWIDTH problem, which it is not: the same machine had run several
+    #     RSPs and dongles happily before. Nobody installing a multi-radio receiver package should
+    #     have to discover that for themselves, so it is set here rather than documented.
+    # ★★ IDEMPOTENT, and it never edits a line it did not write: an existing setting is left alone
+    #    (the owner may have set 0 deliberately, and a package that overrules a deliberate choice
+    #    is worse than one that does nothing). Appended once, with a backup taken first.
+    # ★ Pi only — the file does not exist elsewhere, and the setting means nothing there.
+    for BOOTCFG in /boot/firmware/config.txt /boot/config.txt; do
+      [ -f "$BOOTCFG" ] || continue
+      if grep -q '^[[:space:]]*usb_max_current_enable' "$BOOTCFG"; then
+        echo "VibeServer: usb_max_current_enable is already set in $BOOTCFG — left as it is."
+      else
+        cp -n "$BOOTCFG" "${BOOTCFG}.bak-vibeserver" 2>/dev/null || true
+        {
+          echo ""
+          echo "# Added by VibeServer: several SDRs draw more than the default USB budget allows."
+          echo "# Without this the Pi caps total USB current and devices drop out under load."
+          echo "usb_max_current_enable=1"
+        } >> "$BOOTCFG"
+        echo "VibeServer: enabled the Pi's full USB current budget in $BOOTCFG."
+        echo "VibeServer: this needs a REBOOT before several radios will run reliably."
+      fi
+      break
+    done
+
     # ── 3. systemd ───────────────────────────────────────────────────────────
     # ★ Enabled but NOT started: the user has not chosen a radio, a name or a location yet, and
     #   an unconfigured server that starts itself and fails is a worse first impression than one
