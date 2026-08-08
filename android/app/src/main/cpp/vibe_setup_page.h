@@ -1190,6 +1190,36 @@ async function renderHw() {
 //     settings live on cfg itself and are the same whichever tab you are on.
 let curRadio = 0;
 
+// ★★★ WHICH RADIO THE FORM ON SCREEN ACTUALLY BELONGS TO — which is NOT always `curRadio`.
+//
+//     fill() deliberately does not set the sample rate ("the options do not exist until
+//     renderHw() has heard back from the radio"), so renderHw() applies it ASYNCHRONOUSLY. In the
+//     window between clicking a tab and that fetch returning, the form still holds the PREVIOUS
+//     radio's rate — and stashRadio() copies whatever is on screen into cfg.radios[curRadio].
+//     Switch tabs and save quickly and one radio's sample rate lands in another's config.
+//
+// ★★★ THAT IS NOT THEORETICAL. Stuart switched tabs to change the landing station on two radios
+//     and his Airspy came back misaligned at EVERY sample rate — a constant offset a rate change
+//     could not clear, because the stored rate was never the one he picked (2026-08-09). It is the
+//     one-radio-assumption family again, this time reaching sideways between radios.
+//
+// ★ -2 means "the form belongs to nobody yet". stashRadio() refuses to copy in that state, so a
+//   half-populated form can never be written to a radio — the worst it can do is decline to save
+//   an edit, and refreshHw() below is awaited on the save path so even that cannot happen.
+let formRadio = -2;
+let hwPending  = Promise.resolve();
+
+/** Re-render the hardware pane for the CURRENT tab, and only then let the form be read back.
+ *  ★ The index is captured so a slow render for a tab the owner has already left cannot mark the
+ *    form as belonging to a radio that is no longer on screen. */
+function refreshHw() {
+  const want = curRadio;
+  formRadio = -2;
+  hwPending = renderHw().then(() => { if (curRadio === want) formRadio = want; })
+                        .catch(() => { if (curRadio === want) formRadio = want; });
+  return hwPending;
+}
+
 /** The radios the owner ticked in the setup screen. A radio that was NOT ticked has no tab: it is
  *  not going to be served, and offering somewhere to configure it would say otherwise. */
 function radioList() { return Array.isArray(cfg.radios) ? cfg.radios.filter(r => r.enabled !== false) : []; }
@@ -1233,7 +1263,7 @@ function renderTabs() {
       stashRadio();
       curRadio = parseInt(b.getAttribute("data-i"), 10);
       renderTabs(); paintPanes();
-      if (curRadio >= 0) { fill(); renderHw(); }
+      if (curRadio >= 0) { fill(); refreshHw(); }
     };
   });
   const unsaved = list.filter(r => !r.configured).length;
@@ -1257,6 +1287,9 @@ function paintPanes() {
 function stashRadio() {
   const list = radioList();
   if (!list.length || curRadio < 0) return;
+  // ★★★ THE GUARD. Without it this copies a half-populated form — carrying the PREVIOUS radio's
+  //     sample rate — into this radio's config. See the note on formRadio above.
+  if (formRadio !== curRadio) return;
   Object.assign(list[curRadio], collectRadio());
 }
 
@@ -1301,7 +1334,7 @@ function fill() {
   $("sessionLimit").value = r.sessionLimitMin || 0;
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
-  addr(); coverage(); bwNote(); renderHw(); eibiStatus();
+  addr(); coverage(); bwNote(); refreshHw(); eibiStatus();
   $("eibiGet").addEventListener("click", eibiFetch);
   $("rtlSerialGo").addEventListener("click", serialModalOpen);
   $("serialCancel").addEventListener("click", () => { $("serialModal").hidden = true; });
@@ -1334,6 +1367,7 @@ function addr() {
  *  would end up sharing one window. */
 function collectRadio() {
   const locked = radio().mode === "locked";
+  const drv = radio().driver || "";
   return {
     mode: radio().mode,
     // ★ The band lists are edited as chips straight onto the radio object, so they are carried
@@ -1365,9 +1399,14 @@ function collectRadio() {
     ...($("gain")     ? {gain: parseInt($("gain").value, 10)} : {}),
     // ★ Only what this radio HAS. Sending ppb for a dongle would store a setting that can never
     //   apply — the config would then describe a radio we are not.
-    ...($("hwBiasT").classList.contains("hide") ? {} : {biasT: $("biasT").checked}),
-    ...($("hwPpm").classList.contains("hide")   ? {} : {ppm: parseInt($("ppm").value || "0", 10)}),
-    ...($("hwPpb").classList.contains("hide")   ? {} : {ppb: parseInt($("ppb").value || "0", 10)}),
+    // ★★★ ASK THE RADIO, NOT THE SCREEN. These read `classList.contains("hide")` — the visibility
+    //     that renderHw() sets ASYNCHRONOUSLY — so during a tab switch they described the radio you
+    //     had just left: a dongle could be sent a ppb it can never use, and an Airspy a ppm. The
+    //     driver is in the config and is true the instant the tab changes, which is the whole
+    //     point of deriving a thing from data rather than from the DOM's current mood.
+    ...(DRIVER_HW[drv] && DRIVER_HW[drv].biasT ? {biasT: $("biasT").checked} : {}),
+    ...(drv === "rtl" || drv === "rtlsdr" ? {ppm: parseInt($("ppm").value || "0", 10)} : {}),
+    ...(drv === "airspyhf" ? {ppb: parseInt($("ppb").value || "0", 10)} : {}),
     releaseWhenIdle: $("releaseWhenIdle").checked,
     idleGrace: parseFloat($("idleGrace").value),
     // ★ ALWAYS, not just when locked. A one-listener radio is precisely the one someone can sit
@@ -1465,6 +1504,9 @@ $("saveRadioBtn").onclick = async () => {
   $("saveErr").textContent = "";
   const list = radioList();
   if (!list.length) return;
+  // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
+  //   after opening a tab, which is precisely the window where the form is still the last radio's.
+  await hwPending;
   stashRadio();
   list[curRadio].configured = true;   // ★ THIS is what puts the radio on air after a restart
   $("saveRadioBtn").disabled = true;
@@ -1493,6 +1535,11 @@ $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
+  // ★★★ WAIT FOR THE FORM TO BELONG TO THIS RADIO. stashRadio() refuses to read a form that is
+  //     still showing the radio you just left — which protects the config, but on its own would
+  //     silently discard an edit made in that window. Saving a tab you have only just opened is
+  //     exactly what an owner setting up two radios does, so the save waits instead.
+  await hwPending;
   try {
     // ★ restart:true is what separates this from the per-radio save above — see the server's
     //   config handler, which only bounces the receiver when it is asked to.
