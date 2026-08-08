@@ -448,6 +448,23 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            arrives; if the other program still has it, they are told so plainly.
            <strong>It stops this radio contributing the spectrogram and band conditions</strong>,
            because it spends its idle time letting the device go.</p>
+        <!-- ★★ HOW LONG TO WAIT, because the right answer depends on what else wants the radio.
+             It was fixed at five minutes with nothing to change it — long enough that the other
+             program is still waiting when somebody gives up (Stuart, 2026-08-08: "5 minutes is a
+             bit long anyway"). -->
+        <label><span class="lbl">Let go after</span>
+          <select id="idleGrace">
+            <option value="0">Immediately</option>
+            <option value="30">30 seconds</option>
+            <option value="60">1 minute</option>
+            <option value="300">5 minutes</option>
+            <option value="900">15 minutes</option>
+          </select>
+          <div class="hint">Counted from the moment the last listener leaves. <b>Immediately</b>
+            hands the radio over the instant nobody is listening, which suits a machine where the
+            other program matters as much as this one — but a listener arriving seconds later has
+            to wait for it to come back, and cannot if the other program has taken it. A short
+            wait absorbs somebody reloading their browser.</div></label>
       </div>
       <div id="hwPpb" class="hide">
         <label><span class="lbl">Calibration (ppb)</span>
@@ -1236,6 +1253,9 @@ function fill() {
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
   if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
+  // ★ 300 s is the historical default, so a radio saved before this control existed
+  //   keeps the behaviour it already had rather than silently changing.
+  if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
   $("sessionLimit").value = r.sessionLimitMin || 0;
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
@@ -1307,6 +1327,7 @@ function collectRadio() {
     ...($("hwPpm").classList.contains("hide")   ? {} : {ppm: parseInt($("ppm").value || "0", 10)}),
     ...($("hwPpb").classList.contains("hide")   ? {} : {ppb: parseInt($("ppb").value || "0", 10)}),
     releaseWhenIdle: $("releaseWhenIdle").checked,
+    idleGrace: parseFloat($("idleGrace").value),
     // ★ ALWAYS, not just when locked. A one-listener radio is precisely the one someone can sit
     //   on all evening, so it is the radio that most needs a limit.
     sessionLimitMin: parseInt($("sessionLimit").value || "0", 10),
