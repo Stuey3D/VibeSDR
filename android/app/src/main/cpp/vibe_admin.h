@@ -898,14 +898,21 @@ inline const char* loadStatus(const SysStats& s) {
 /** "ok" | "warning" | "critical" from the CPU temperature.
  *  ★ 70/80 °C are the Pi's own numbers: the firmware soft-throttles at 80 and hard-throttles at
  *    85, so 80 is not a scare figure — past it the receiver IS running slower. */
+/** ★★★ TEMPERATURE ONLY. This used to fold UNDER-VOLTAGE into the temperature verdict, so a Pi on
+ *  a weak supply turned the TEMP card red and told the owner to check their cooling — at 45 °C,
+ *  which is a perfectly healthy chip. The advice was not merely unnecessary, it pointed at the
+ *  wrong component entirely: the Pi's throttling in that state is POWER related, and there is a
+ *  POWER card three inches away already saying so (Stuart, 2026-08-08: "the throttles are not
+ *  temperature they are power related so the warning under the temp box is plain wrong").
+ *  ★★ One reading, one card. Ranking power above temperature INSIDE the temperature status also
+ *  double-reported the same fault in two places while hiding the actual temperature behind it.
+ *  ★ Thresholds sit where the hardware acts, not where a cautious guess would: a Pi 5 soft-
+ *  throttles around 80 °C and hard-throttles at 85, so 80 is "it is happening now" and 75 is
+ *  "close enough to mention". Anything below that is a chip doing its job. */
 inline const char* tempStatus(const SysStats& s) {
     if (!s.haveTemp) return "unknown";
-    // ★★ POWER BEATS TEMPERATURE. An under-volting Pi corrupts cards and drops USB devices; it is
-    //    the most serious thing this page can report, and it must not be ranked below a warm chip.
-    if (s.haveVolt && s.underVoltageNow) return "critical";
     if (s.tempC >= 80.0) return "critical";
-    if (s.haveVolt && s.underVoltageEver) return "warning";
-    if (s.tempC >= 70.0) return "warning";
+    if (s.tempC >= 75.0) return "warning";
     return "ok";
 }
 
@@ -949,6 +956,11 @@ struct HistSample {
     float     tempC = 0;
     uint16_t  listeners = 0;
     uint32_t  kbps = 0;
+    /** ★ CPU clock, MHz. On a Pi the governor drops this when the supply sags, so the clock is
+     *  where an under-voltage event becomes VISIBLE — the temperature stays fine and the load
+     *  looks normal while the machine quietly runs slower (Stuart, 2026-08-08, running `ondemand`
+     *  to see whether he can ride out the dips). A number without its history cannot show that. */
+    uint16_t  mhz = 0;
 };
 
 class History {
@@ -962,12 +974,15 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         // ★ ARRAY OF ARRAYS, not array of objects: 3600 copies of the key names is ~200 KB of
         //   text for 90 KB of data, on a link the owner may be reaching over 4G from a field.
-        std::string j = "{\"fields\":[\"at\",\"load1\",\"tempC\",\"listeners\",\"kbps\"],\"rows\":[";
+        // ★ APPENDED, never inserted: the reader indexes by position, so a new column in the
+        //   middle would silently shift every existing series by one.
+        std::string j = "{\"fields\":[\"at\",\"load1\",\"tempC\",\"listeners\",\"kbps\",\"mhz\"],\"rows\":[";
         bool first = true;
         for (const auto& s : samples_) {
             char b[128];
-            snprintf(b, sizeof b, "%s[%lld,%.2f,%.1f,%u,%u]", first ? "" : ",",
-                     s.atEpoch, s.load1, s.tempC, (unsigned)s.listeners, (unsigned)s.kbps);
+            snprintf(b, sizeof b, "%s[%lld,%.2f,%.1f,%u,%u,%u]", first ? "" : ",",
+                     s.atEpoch, s.load1, s.tempC, (unsigned)s.listeners, (unsigned)s.kbps,
+                     (unsigned)s.mhz);
             j += b;
             first = false;
         }

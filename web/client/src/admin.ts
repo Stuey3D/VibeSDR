@@ -148,9 +148,11 @@ function renderHealth(st: any) {
   out.push(sys.tempStatus === 'unknown'
     ? card('CPU TEMP', 'not available', 'no sensor on this machine', 'unknown')
     : card('CPU TEMP', `${sys.tempC.toFixed(1)}°C`,
-           sys.tempStatus === 'ok' ? 'normal'
-             : sys.tempStatus === 'warning' ? 'warm — check airflow'
-             : 'throttling — check cooling', sys.tempStatus));
+           // ★ Say what the number MEANS, and never blame cooling for something else. A warm chip
+           //   is not a fault: the machine throttles at 80 °C and that is where the advice starts.
+           sys.tempStatus === 'ok' ? 'normal — throttles at 80°C'
+             : sys.tempStatus === 'warning' ? 'warm — approaching the 80°C throttle'
+             : 'throttling at 80°C — check cooling and airflow', sys.tempStatus));
 
   if (sys.memTotalKB) {
     const usedPct = 100 * (1 - (sys.memAvailKB ?? 0) / sys.memTotalKB);
@@ -185,6 +187,11 @@ function renderHealth(st: any) {
       now ? 'critical' : ever ? 'warning' : 'ok'));
   }
 
+  // ★ The governor is already shown under UPTIME; the CLOCK is the number that says what the
+  //   governor is actually DOING right now.
+  if (st.sys?.cpuKHz > 0)
+    out.push(card('CPU CLOCK', `${Math.round(st.sys.cpuKHz / 1000)} MHz`,
+                  st.sys.governor ? `governor: ${st.sys.governor}` : ''));
   out.push(card('LISTENERS', `${st.listeners ?? 0}${st.maxUsers > 1 ? ` / ${st.maxUsers}` : ''}`,
     st.waiting ? `${st.waiting} waiting` : 'nobody waiting'));
 
@@ -247,7 +254,7 @@ function spark(rows: number[][], col: number, label: string, fmt: (n: number) =>
 
 function renderGraphs(h: any) {
   const rows: number[][] = h.rows ?? [];
-  // fields: at, load1, tempC, listeners, kbps
+  // fields: at, load1, tempC, listeners, kbps, mhz
   const parts = [
     spark(rows, 1, 'CPU LOAD', (n) => n.toFixed(2)),
     spark(rows, 3, 'LISTENERS', (n) => String(Math.round(n))),
@@ -255,6 +262,12 @@ function renderGraphs(h: any) {
   ];
   // Only draw temperature where there is one — an empty box is worse than no box.
   if (rows.some((r) => r[2] > 0)) parts.splice(1, 0, spark(rows, 2, 'CPU TEMP °C', (n) => n.toFixed(1)));
+  // ★★ THE CLOCK IS WHERE A SAGGING SUPPLY BECOMES VISIBLE. Temperature stays fine and load looks
+  //    ordinary while the governor quietly runs the machine slower, so the dip only shows here.
+  //    Drawn next to the load so the two can be read together.
+  //    ★ Older servers send five columns; index 5 is simply absent and no box is drawn.
+  if (rows.some((r) => r.length > 5 && r[5] > 0))
+    parts.splice(1, 0, spark(rows, 5, 'CPU CLOCK MHz', (n) => n.toFixed(0)));
   $('adminGraphs').innerHTML = parts.join('');
 }
 

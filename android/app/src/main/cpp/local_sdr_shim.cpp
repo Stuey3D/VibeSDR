@@ -8564,6 +8564,7 @@ std::string LocalSdrShim::adminStatusJson() {
         hs.tempC     = (float)sys.tempC;
         hs.listeners = (uint16_t)listenerCount();
         hs.kbps      = (uint32_t)kbps;
+        hs.mhz       = (uint16_t)(sys.cpuKHz / 1000);
         g_vsHistory.push(hs);
     }
 
