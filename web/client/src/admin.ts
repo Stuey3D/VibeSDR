@@ -17,6 +17,7 @@ import { fetchAuthChallenge, vibeAuthToken } from './auth';
 // ★ The client already knows how to turn an ISO code into a flag — it does it for RDS station
 //   countries. Reuse it rather than growing a second copy that renders a different set.
 import { isoToFlag } from '../../../src/services/rdsCountry';
+import { httpBase } from './origin';
 
 let host = '';
 /** Set by initAdmin so closeAdmin can stop the maintenance-log poll too. */
@@ -26,7 +27,7 @@ let timer = 0;
 let open = false;
 
 const $ = (id: string) => document.getElementById(id)!;
-const base = () => `http://${host}`;
+const base = () => httpBase(host);
 
 /** ★ A FRESH NONCE PER REQUEST. The nonce is single-use on the server, so caching one would
  *  work exactly once and then fail in a way that looks like a wrong password. */

@@ -34,6 +34,7 @@
  */
 
 import { withAuth, type AuthState } from './auth';
+import { wsBase } from './origin';
 
 export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | null;
 
@@ -106,9 +107,8 @@ export class DecoderClient {
   private spotsOn = false;
 
   constructor(host: string, auth: AuthState, cb: DecoderCallbacks) {
-    // ★ Same rule as the other sockets: an https page cannot open a ws:// socket. See connect().
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    this.url = `${scheme}://${host}${withAuth('/ws/dxcluster', auth)}`;
+    // ★ Same rule as every other URL: an https page cannot open a ws:// socket. See origin.ts.
+    this.url = `${wsBase(host)}${withAuth('/ws/dxcluster', auth)}`;
     this.cb = cb;
   }
 

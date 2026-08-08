@@ -39,6 +39,7 @@ import {
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
 import { initAdmin, closeAdmin } from './admin';
+import { httpBase, wsBase } from './origin';
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
@@ -167,7 +168,7 @@ function initSplash() {
       if (!adminConfirmed) {
         let busy = false, freeIn = -1;
         try {
-          const r = await fetch(`http://${host}/vibeserver.json`, { cache: 'no-store' });
+          const r = await fetch(`${httpBase(host)}/vibeserver.json`, { cache: 'no-store' });
           const j = await r.json();
           busy = j.busy === true;
           freeIn = typeof j.freeInSec === 'number' ? j.freeInSec : -1;
@@ -185,7 +186,7 @@ function initSplash() {
           return;
         }
       }
-      const q = await resolveAdminOverride(`http://${host}`, adminPwEl.value).catch(() => '');
+      const q = await resolveAdminOverride(httpBase(host), adminPwEl.value).catch(() => '');
       if (!q) {
         msg.className = ''; msg.textContent = 'This server cannot be given an admin password.';
         return;
@@ -195,7 +196,7 @@ function initSplash() {
       //   this an owner who connected as admin from the splash arrived fully unlocked and
       //   then could not open the admin page without retyping it.
       adminPassword = adminPwEl.value;
-      setBookmarkAdminAuth(async () => resolveAdminOverride(`http://${host}`, adminPassword));
+      setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(host), adminPassword));
     }
     $<HTMLButtonElement>('btnConnect').disabled = true;
     $<HTMLButtonElement>('btnSaveConnect').disabled = true;
@@ -247,12 +248,12 @@ async function shapeSplash(host: string) {
   // ★ The ADMIN button appears only where there is an admin password to enter. `admin` comes
   //   from /vibeserver.json, which the picker already fetches for every server.
   try {
-    const ri = await fetch(`http://${host}/vibeserver.json`, { cache: 'no-store' });
+    const ri = await fetch(`${httpBase(host)}/vibeserver.json`, { cache: 'no-store' });
     const ji = await ri.json();
     if (ji.admin === true) $('btnAdmin').hidden = false;
   } catch { /* not a VibeServer, or unreachable — leave the button hidden */ }
   try {
-    const r = await fetch(`http://${host}/vibeserver/auth`, { cache: 'no-store' });
+    const r = await fetch(`${httpBase(host)}/vibeserver/auth`, { cache: 'no-store' });
     const j = await r.json();
     if (j.required) return;                      // PIN needed: leave the form as-is
     $('pinRow').hidden = true;
@@ -406,12 +407,12 @@ async function doAdminUnlock(pw: string) {
     // ★ The same challenge-response the PIN uses, and the same nonce endpoint. The password
     // never crosses the wire, and reusing the scheme means it inherits the server's existing
     // brute-force lockout rather than needing its own.
-    const ch = await fetchAuthChallenge(`http://${currentHost}`);
+    const ch = await fetchAuthChallenge(httpBase(currentHost));
     const nonce = ch.nonce;
     if (!nonce) { alert('This server did not offer a challenge.'); return; }
     adminPassword = pw;   // the admin page signs its own requests with it
     // ★ Bookmark writes are admin-gated on the server, so they need the same credential.
-    setBookmarkAdminAuth(async () => resolveAdminOverride(`http://${currentHost}`, adminPassword));
+    setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(currentHost), adminPassword));
     spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
   } catch (e) {
     alert(`Could not reach the server to unlock: ${(e as Error).message}`);
@@ -442,13 +443,12 @@ async function connect(host: string, pin: string) {
   //     scheme from the URL already set").
   // ★★ The test is the PAGE's protocol, not the host's: an https page may not load ANY http
   //    subresource, wherever it points. On a plain http page both stay as they were.
-  const secure = location.protocol === 'https:';
-  const httpBase = `${secure ? 'https' : 'http'}://${host}`;
-  const wsBase = `${secure ? 'wss' : 'ws'}://${host}`;
+  const httpBaseUrl = httpBase(host);
+  const wsBaseUrl = wsBase(host);
 
   let auth: AuthState;
   try {
-    auth = await resolveAuth(httpBase, pin);
+    auth = await resolveAuth(httpBaseUrl, pin);
   } catch (e) {
     if (e instanceof Error && e.message === 'PIN required') throw new Error('This server needs a PIN');
     // Only a genuine fetch failure means "unreachable". Anything else is a real
@@ -492,7 +492,7 @@ async function connect(host: string, pin: string) {
   //    per frame on someone else's uplink plus the FFT work on the serving device. The app is
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
-  const specUrl  = `${wsBase}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024', auth)}`;
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024', auth)}`;
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -507,11 +507,11 @@ async function connect(host: string, pin: string) {
   // ★ `?opus` forces Opus even on loopback. Without it the Opus path would be untestable on
   // the Mac dev loop, which is where it is developed — a default that hides a code path from
   // the only machine that exercises it is how that path rots.
-  await loadAudioPolicy(httpBase);
+  await loadAudioPolicy(httpBaseUrl);
   const forceOpus = new URLSearchParams(location.search).has('opus');
   const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
   const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
-  const audioUrl = `${wsBase}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
   // ★★★ WE CAN ALWAYS TAKE OPUS NOW, so this only ever says no when RAW was ASKED for. The old
   // gate answered "no Opus" on every plain-http LAN origin (WebCodecs is [SecureContext]) and the
   // server then refused the uncompressed socket it had just been asked for — silence, on the only
@@ -1040,8 +1040,8 @@ let lastRenderAt = 0;
  *  the same address — `…:48000/r/240513CA60/` — and never sees a second port.
  *
  *  ★★ EVERY URL THIS CLIENT BUILDS HAS TO CARRY THAT PREFIX, and there is exactly one lever that
- *     does it: `host`. The client already composes every request as `http://${host}/…` and every
- *     socket as `ws://${host}/…`, so putting the prefix INSIDE host makes both follow without
+ *     does it: `host`. The client already composes every request as `${httpBase(host)}/…` and every
+ *     socket as `${wsBase(host)}/…`, so putting the prefix INSIDE host makes both follow without
  *     touching the dozens of call sites. The handful of absolute fetch('/…') calls are prefixed
  *     explicitly below — those are the ones that would silently miss it.
  *  ★ Empty on a single-radio server, where the page is served at the root exactly as before. */
@@ -3854,7 +3854,7 @@ function paintTimeLeft() {
 
 async function loadServerLocation(host: string) {
   try {
-    const r = await fetch(`http://${host}/location`, { cache: 'no-store' });
+    const r = await fetch(`${httpBase(host)}/location`, { cache: 'no-store' });
     const j = await r.json();
     serverName = typeof j.name === 'string' ? j.name : '';
     serverIso = typeof j.iso === 'string' ? j.iso : '';
@@ -6391,7 +6391,7 @@ function initFreqEntry() {
  */
 async function shareFrequency() {
   if (!spec) return;
-  const base = `http://${currentHost}/`;
+  const base = `${httpBase(currentHost)}/`;
   const url = `${base}?freq=${Math.round(spec.frequency)}&mode=${spec.mode}`
     + `&bwl=${Math.round(spec.bandwidthLow)}&bwh=${Math.round(spec.bandwidthHigh)}`;
 

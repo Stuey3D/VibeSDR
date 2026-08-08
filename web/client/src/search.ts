@@ -23,6 +23,7 @@ import {
 } from '../../../src/services/userBookmarks';
 import { BAND_PLAN } from '../../../src/constants/bandPlan';
 import type { SDRMode } from './spectrum';
+import { httpBase } from './origin';
 
 export type ResultSource = 'user' | 'server' | 'eibi' | 'band';
 
@@ -72,7 +73,7 @@ export async function loadServerBookmarks(host: string, authSuffix = ''): Promis
   bmHost = host;
   bmAuth = authSuffix;
   try {
-    const r = await fetch(`http://${host}/bookmarks`, { cache: 'no-store' });
+    const r = await fetch(`${httpBase(host)}/bookmarks`, { cache: 'no-store' });
     if (!r.ok) return 0;
     const arr = await r.json();
     serverBookmarks = Array.isArray(arr)
@@ -121,7 +122,7 @@ export async function saveToServer(
     const qs = await adminQs(authQs());
     const sep = qs ? '&' : '?';
     const r = await fetch(
-      `http://${bmHost}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}` +
+      `${httpBase(bmHost)}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}` +
       `&name=${encodeURIComponent(name)}` +
       (mode ? `&mode=${encodeURIComponent(mode)}` : ''), { method: 'POST' });
     if (!r.ok) return false;
@@ -140,7 +141,7 @@ export async function removeFromServer(frequency: number): Promise<boolean> {
     const qs = await adminQs(authQs());   // ★ DELETE is a write too
     const sep = qs ? '&' : '?';
     const r = await fetch(
-      `http://${bmHost}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}`,
+      `${httpBase(bmHost)}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}`,
       { method: 'DELETE' });
     if (!r.ok) return false;
     const arr = await r.json();
@@ -155,7 +156,7 @@ export async function removeFromServer(frequency: number): Promise<boolean> {
 /** Pull the server's station list. Absent/offline is fine — we degrade. */
 export async function loadStations(host: string): Promise<number> {
   try {
-    const r = await fetch(`http://${host}/stations`, { cache: 'no-store' });
+    const r = await fetch(`${httpBase(host)}/stations`, { cache: 'no-store' });
     if (!r.ok) return 0;
     const arr = await r.json();
     stations = Array.isArray(arr) ? arr.filter(s => s && s.name && s.frequency) : [];
