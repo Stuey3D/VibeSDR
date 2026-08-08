@@ -119,6 +119,8 @@ struct Config {
 
     // Front end
     bool rfNotch = false, dabNotch = false, zoomSpectrum = false;
+    /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
+    bool biasT = false;
 
     /** ★★★ CPU GOVERNOR — a SETTING, because the wrong one costs 25% of the machine silently.
      *  Raspberry Pi OS defaults to `ondemand`, which decides how hard to run from how busy each
@@ -181,6 +183,13 @@ struct RadioConfig {
     bool   forceIdleSaver = false, releaseWhenIdle = false;
     double idleGrace = 300;
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
+    /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
+     *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that
+     *  never states a preference inherits one. That is how a V4 came up with its red light on and
+     *  4.5 V going out to the antenna, from a Windows tool used hours earlier on another machine
+     *  (2026-08-08). Default false, and applied at every start so the answer is never "whatever
+     *  the last program left". Same principle as starting at minimum gain. */
+    bool   biasT = false;
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */

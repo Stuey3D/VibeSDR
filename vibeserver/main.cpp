@@ -1241,6 +1241,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // ★★★ STATE THE BIAS-T, EVERY START, WHETHER OR NOT WE WANT IT ON.
+    //
+    //     A dongle's bias-T is a GPIO that holds its setting for as long as the device has power,
+    //     so it outlives the program that set it. A receiver that never states a preference
+    //     therefore INHERITS one — and on 2026-08-08 a V4 came up with its red light on and 4.5 V
+    //     going out to the antenna, left there by a Windows tool used hours earlier on another
+    //     machine. Nothing in VibeServer had ever turned it on, and nothing in VibeServer would
+    //     ever have turned it off.
+    //
+    // ★★ WORSE THAN A WRONG SETTING: it is current out of the same USB budget, and DC into
+    //    whatever is connected. The owner could not even SEE it — the server reports whether a
+    //    radio HAS a bias-T, never whether it is on.
+    // ★ Same principle as starting at minimum gain: assert a known safe state rather than
+    //   discovering one. Off unless this radio's config asks for it.
+    LocalSdrShim::instance().setBiasTee(g_runtimeConfig.biasT);
+    if (g_runtimeConfig.biasT)
+        std::printf("  bias-T: ON — this radio is putting DC on its feedline (from your settings)\n");
+
     if (o.useUsb) std::printf("VibeServer listening on port %d\n", port);
     else          std::printf("VibeServer listening on port %d  (IQ from rtl_tcp %s:%d)\n",
                               port, o.tcpHost.c_str(), o.tcpPort);

@@ -879,6 +879,8 @@ static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
 static LocalSdrShim::SolarFn       g_vsSolarFn;
 static LocalSdrShim::RadiosFn      g_vsRadiosFn;
+/// ★ What WE last set the bias-T to. The dongle cannot be asked, so we remember.
+static std::atomic<bool>           g_biasTeeOn{false};
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
@@ -9385,7 +9387,9 @@ void LocalSdrShim::setBiasTee(bool on) {
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x0e, on ? 1 : 0); return; }
     if (!p->dev) return;
-    rtlsdr_set_bias_tee(p->dev, on ? 1 : 0); LOGI("bias-tee: %d", on);
+    rtlsdr_set_bias_tee(p->dev, on ? 1 : 0);
+    g_biasTeeOn.store(on);
+    LOGI("bias-tee: %s", on ? "ON — DC on the feedline" : "off");
 }
 void LocalSdrShim::setAgc(bool on) {
     if (!p) return;
@@ -9730,6 +9734,10 @@ std::string LocalSdrShim::radioCapsJson() const {
     j += std::string(",\"rfNotch\":") + (d.hasRfNotch() ? "true" : "false");
     j += std::string(",\"dabNotch\":") + (d.hasDabNotch() ? "true" : "false");
     j += std::string(",\"biasT\":") + (d.hasBiasT() ? "true" : "false");
+    // ★★ AND WHETHER IT IS ON. Only the CAPABILITY was ever published, so a receiver could sit
+    //    there with DC on its feedline and no screen anywhere would say so — which is exactly how
+    //    one did (2026-08-08). A control you cannot read the state of is not a control.
+    j += std::string(",\"biasTOn\":") + (g_biasTeeOn.load() ? "true" : "false");
     j += "}";
     return j;
 }

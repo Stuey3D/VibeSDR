@@ -367,6 +367,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
+    B("biasT", r.biasT);
 }
 
 std::string radioToJson(const RadioConfig& r) {
@@ -386,6 +387,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
+    B("biasT", r.biasT);
     if (!o.empty() && o.back() == ',') o.pop_back();
     return o + "}";
 }
@@ -429,6 +431,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.forceIdleSaver = one.forceIdleSaver; r.releaseWhenIdle = one.releaseWhenIdle;
     r.idleGrace = one.idleGrace;
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
+    r.biasT = one.biasT;
     r.port = one.port;
     out.radios.push_back(r);
 }
@@ -538,6 +541,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.forceIdleSaver = r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
+    c.biasT = r.biasT;
     c.port = r.port;
     return c;
 }
