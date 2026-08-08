@@ -26,6 +26,13 @@ ProtectHome=yes
 # memory in /dev/shm, so a private /dev/shm makes RSPs vanish with no message saying why. Same
 # reasoning as vibeserver.service; keep the two in step.
 PrivateTmp=yes
+# ★★★ THE HAND-OFF SOCKETS LIVE HERE. RuntimeDirectory makes systemd create /run/vibeserver with
+# the right owner and clean it up on stop — and, crucially, make it WRITABLE under
+# ProtectSystem=strict. Without it mkdir() is refused silently, the radios never create their
+# sockets, and the front door reports "no such file or directory" for every hand-off while looking
+# otherwise healthy (2026-08-08).
+RuntimeDirectory=vibeserver
+RuntimeDirectoryMode=0700
 StateDirectory=vibeserver
 ReadWritePaths=/var/lib/vibeserver /etc/vibeserver
 DeviceAllow=char-usb_device rw

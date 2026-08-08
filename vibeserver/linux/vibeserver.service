@@ -39,6 +39,13 @@ ProtectHome=yes
 # value, and if a future default changes under us, this is the line to suspect first.
 # ★ Verified 2026-08-06: restart with the API installed -> "SDRplay RSP detected".
 PrivateTmp=yes
+# ★★★ THE HAND-OFF SOCKETS LIVE HERE. RuntimeDirectory makes systemd create /run/vibeserver with
+# the right owner and clean it up on stop — and, crucially, make it WRITABLE under
+# ProtectSystem=strict. Without it mkdir() is refused silently, the radios never create their
+# sockets, and the front door reports "no such file or directory" for every hand-off while looking
+# otherwise healthy (2026-08-08).
+RuntimeDirectory=vibeserver
+RuntimeDirectoryMode=0700
 StateDirectory=vibeserver
 # ★★★ /etc/vibeserver MUST BE WRITABLE — the server now writes its own config.
 # ProtectSystem=strict makes /etc read-only, which is right for a daemon whose settings a human
