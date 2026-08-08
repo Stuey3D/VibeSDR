@@ -138,6 +138,16 @@ input, textarea, [contenteditable],
 .adminQueue .qRow { padding: 2px 0; }
 .clientMix { margin: 6px 0 10px; font-size: 12px; letter-spacing: .04em; }
 .clientMix .mixItem { margin-right: 14px; }
+/* ★★★ THE hidden ATTRIBUTE MUST WIN. `[hidden]` is only display:none in the USER-AGENT sheet, so
+   ANY author rule that sets display beats it — `#splashAdminBanner{display:inline-block}` and
+   `#splash .row{display:flex}` both did, and the ADMIN MODE banner and its buttons sat on screen
+   for a visitor who had never typed a password (Stuart, 2026-08-08). They were inert, because the
+   handlers check properly, but a page that ANNOUNCES admin to a stranger is its own problem.
+   ★★ Fixed once, globally, rather than per element: this file already carried #hostRow[hidden] and
+   #splash button[hidden] patches for the same trap, which is the pattern that guarantees the next
+   element to hit it is missed too. */
+[hidden] { display: none !important; }
+
 #splashAdminBanner { display: inline-block; margin: 8px auto 0; padding: 4px 14px; color: var(--amber);
   border: 1px solid var(--amber); border-radius: 6px; font-size: 12px; letter-spacing: 3px;
   background: rgba(255,184,51,0.09); }
@@ -2314,6 +2324,162 @@ select.btn { padding: 6px 8px; }
   </div>
 </div>
 
+<!-- ★★★ OUTSIDE #app ON PURPOSE. #app is display:none until it goes .live, and a child of a
+     display:none parent is never rendered — so opening the admin panel from the LANDING page
+     (where no radio is connected and #app is not live) showed nothing at all, which is exactly
+     where an owner most wants it: to look at who is connected without taking a radio off somebody
+     (Stuart, 2026-08-08: "cannot enter the admin controls from the splash screen").
+     ★ It is already position:fixed;inset:0, so it does not belong to either container's layout. -->
+<div id="adminPanel" hidden>
+  <div id="adminPanelHead">
+    <span>SERVER ADMIN</span>
+    <span class="dim" id="adminHost"></span>
+    <button class="btn" id="adminPanelClose">CLOSE</button>
+  </div>
+  <div id="adminPanelBody">
+
+    <h2>HEALTH</h2>
+    <div id="adminHealth" class="aCards"></div>
+
+    <h2>THE LAST HOUR</h2>
+    <div id="adminGraphs"></div>
+
+    <div id="secCountries" hidden>
+    <h2>WHERE THEY CONNECT FROM <span class="dim">— distinct addresses, last 24 hours</span></h2>
+    <div id="adminCountries"></div>
+    <!-- ★ Explains its own emptiness. A blank chart otherwise reads as "nobody has connected",
+         which is a very different claim from "the country data has not downloaded yet". -->
+    <p class="dim wrap" id="adminNoCountries" hidden>
+      No country data yet. The list of which address ranges belong to which country is downloaded
+      from the internet registries shortly after the server starts, and refreshed weekly.
+    </p>
+
+    <div id="secListeners" hidden>
+    </div>
+    <h2>LISTENERS <span class="dim" id="adminListenerCount"></span></h2>
+    <div class="aTblWrap"><table id="adminSessions">
+      <thead><tr><th>Address</th><th>Radio</th><th>Frequency</th><th>Mode</th><th>Decoder</th>
+                 <th>For</th><th>CPU</th><th>Uplink</th><th>Drops</th><th>Client</th>
+                 <th>Network</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div id="adminQueue" class="adminQueue" hidden></div>
+    <div id="adminVisitors" class="adminQueue" hidden></div>
+    <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
+
+    </div>
+    <div id="secBlocking" hidden>
+    <h2>BLOCKED ADDRESSES</h2>
+    <!-- ★★ CIDR IS OFFERED FIRST-CLASS, not hidden behind an "advanced" toggle. A single
+         address is nearly useless against what an owner actually wants to stop — a proxy pool
+         or a cloud range cycling through hundreds of addresses. Blocking .7 when the next
+         request comes from .8 is a treadmill; one /24 is a decision that holds. -->
+    <div class="aBanForm">
+      <input type="text" id="banCidr" autocomplete="off" spellcheck="false"
+             placeholder="192.0.2.7   ·   192.0.2.0/24   ·   2001:db8::/32   ·   AS15169">
+      <input type="text" id="banReason" autocomplete="off"
+             placeholder="reason — for your own notes">
+      <select id="banFor" class="btn">
+        <option value="0">forever</option>
+        <option value="60">1 hour</option>
+        <option value="1440">1 day</option>
+        <option value="10080">1 week</option>
+      </select>
+      <button class="btn" id="banAdd">BLOCK</button>
+    </div>
+    <p class="dim wrap" id="banMsg"></p>
+    <div class="aTblWrap"><table id="adminBans">
+      <thead><tr><th>Address or range</th><th>Reason</th><th>Added</th><th>Until</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="dim" id="adminNoBans" hidden>Nothing is blocked.</p>
+    <!-- ★ Says what blocking DOES and the one thing that can go wrong with it. An earlier draft
+         also explained what we deliberately do NOT do (VPN/bot detection) — removed at Stuart's
+         request, 2026-08-06: naming an absent feature only plants the idea that it is missing.
+         The reasoning still lives in vibe_admin.h, where the next developer will look. -->
+    <p class="dim wrap aNote">
+      Blocking is by address, by range, or by whole network. A single address is easy to get
+      around; a range or a network is one decision that holds. Take care with home internet
+      providers — blocking one blocks everybody behind it.
+    </p>
+
+    </div>
+    <div id="secHistory" hidden>
+    <h2>CONNECTION HISTORY</h2>
+    <div id="adminClientMix" class="clientMix"></div>
+    <div class="aTblWrap"><table id="adminConns">
+      <thead><tr><th>When</th><th>Address</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="dim" id="adminNoConns" hidden>Nothing yet.</p>
+
+    </div>
+    <!-- ★★ SAY WHY THE PAGE IS SHORT. Without this, a Simple-mode owner who has heard the admin
+         page can block people goes looking, finds nothing, and concludes it is missing or
+         broken — the exact failure that hiding things behind a mode is supposed to avoid. -->
+    <p class="dim wrap aNote" id="adminSimpleNote" hidden>
+      This receiver is set up for <b>local sharing</b>, so the panels for managing strangers —
+      who is connected, blocking, and connection history — are hidden. The server still records
+      all of it, so switching this receiver to <b>public sharing</b> in setup turns them on with
+      the history already there.
+    </p>
+
+    <div id="secMaintenance" hidden>
+    <h2>MAINTENANCE</h2>
+    <div class="aActions">
+      <button class="btn" id="actUpdateCheck">CHECK FOR UPDATES</button>
+      <!-- ★★ TWO BUTTONS, NOT ONE LABELLED "INSTALL UPDATES". That single button ran
+           `apt-get install --only-upgrade vibeserver` — correct for its scope, and a lie about
+           its label: it walked past 150 pending system packages and reported success. The scope
+           choice existed only in the scheduler, so the manual path had no way to say which you
+           meant (Stuart, 2026-08-07). Now each button names its own scope. -->
+      <button class="btn" id="actUpdate">UPDATE VIBESERVER</button>
+      <button class="btn" id="actUpdateAll">UPDATE ALL PACKAGES</button>
+      <button class="btn" id="actRestart">RESTART VIBESERVER</button>
+      <button class="btn aWarn" id="actReboot">REBOOT THE MACHINE</button>
+    </div>
+    <!-- ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. A VibeServer update is one
+         small package we build and can sensibly be daily; a full system upgrade is bigger and
+         occasionally wants attention, so it suits a weekly slot. One schedule would force the
+         owner to accept the same risk for both. -->
+    <div class="aBanForm" id="updSchedRow">
+      <label class="dim" style="align-self:center;min-width:9em">Update VibeServer</label>
+      <select id="updSrvDay" class="btn"></select>
+      <select id="updSrvHour" class="btn"></select>
+    </div>
+    <div class="aBanForm" id="updSchedAllRow">
+      <label class="dim" style="align-self:center;min-width:9em">Update all packages</label>
+      <select id="updAllDay" class="btn"></select>
+      <select id="updAllHour" class="btn"></select>
+      <button class="btn" id="updSave">SAVE</button>
+    </div>
+    <p class="dim wrap aNote" id="updNote">
+      A receiver in a loft gets logged into roughly never, which makes it the machine most worth
+      updating automatically. <b>Update VibeServer</b> upgrades this one package and is safe to run
+      daily. <b>Update all packages</b> upgrades the whole system unattended — that keeps security
+      fixes current, but an OS upgrade can occasionally need attention and nobody will be watching,
+      so weekly is the sensible choice. Both run at the hour you pick, local time.
+    </p>
+    <p class="dim wrap" id="actMsg"></p>
+    <!-- ★★ THE OUTPUT, UNDER THE BUTTON THAT CAUSED IT. "Install updates" can run for minutes;
+         without this it was a button that went quiet, and quiet is indistinguishable from broken
+         (Stuart, 2026-08-07). Hidden until there is something to show, so the panel is not
+         permanently occupied by an empty box. -->
+    <pre id="actLog" hidden></pre>
+    <!-- ★★★ WHY THERE IS NO TERMINAL, said out loud — its absence is a decision, and an owner
+         who wants one should know that rather than assume we forgot.
+         The full argument is in local_sdr_shim.cpp's /vibeserver/admin/ router. -->
+    <p class="dim wrap aNote">
+      There is deliberately no web terminal here. The admin password's other job is guarding the
+      gain sliders, and a shell behind it would be full control of this machine and the network
+      around it — on a receiver that is publicly listed and served over plain HTTP. The buttons
+      above cover what a terminal was wanted for. For a real shell from your phone, put this
+      machine on Tailscale or WireGuard: proper key authentication, nothing exposed.
+    </p>
+    </div>
+  </div>
+</div>
+
 <!-- Audio DSP gets its own drawer, as in the app (AudioSheet): these are the
      controls you reach for while listening, so they shouldn't be buried in the
      settings menu. All of it runs SERVER-side in the shim. -->
@@ -2984,153 +3150,5 @@ select.btn { padding: 6px 8px; }
      own sockets — showing a different server's worth of numbers.
      ★ Never populated until opened. Polling a monitoring endpoint once a second in every
        listener's browser would be a self-inflicted load problem. -->
-<div id="adminPanel" hidden>
-  <div id="adminPanelHead">
-    <span>SERVER ADMIN</span>
-    <span class="dim" id="adminHost"></span>
-    <button class="btn" id="adminPanelClose">CLOSE</button>
-  </div>
-  <div id="adminPanelBody">
 
-    <h2>HEALTH</h2>
-    <div id="adminHealth" class="aCards"></div>
-
-    <h2>THE LAST HOUR</h2>
-    <div id="adminGraphs"></div>
-
-    <div id="secCountries" hidden>
-    <h2>WHERE THEY CONNECT FROM <span class="dim">— distinct addresses, last 24 hours</span></h2>
-    <div id="adminCountries"></div>
-    <!-- ★ Explains its own emptiness. A blank chart otherwise reads as "nobody has connected",
-         which is a very different claim from "the country data has not downloaded yet". -->
-    <p class="dim wrap" id="adminNoCountries" hidden>
-      No country data yet. The list of which address ranges belong to which country is downloaded
-      from the internet registries shortly after the server starts, and refreshed weekly.
-    </p>
-
-    <div id="secListeners" hidden>
-    </div>
-    <h2>LISTENERS <span class="dim" id="adminListenerCount"></span></h2>
-    <div class="aTblWrap"><table id="adminSessions">
-      <thead><tr><th>Address</th><th>Radio</th><th>Frequency</th><th>Mode</th><th>Decoder</th>
-                 <th>For</th><th>CPU</th><th>Uplink</th><th>Drops</th><th>Client</th>
-                 <th>Network</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <div id="adminQueue" class="adminQueue" hidden></div>
-    <div id="adminVisitors" class="adminQueue" hidden></div>
-    <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
-
-    </div>
-    <div id="secBlocking" hidden>
-    <h2>BLOCKED ADDRESSES</h2>
-    <!-- ★★ CIDR IS OFFERED FIRST-CLASS, not hidden behind an "advanced" toggle. A single
-         address is nearly useless against what an owner actually wants to stop — a proxy pool
-         or a cloud range cycling through hundreds of addresses. Blocking .7 when the next
-         request comes from .8 is a treadmill; one /24 is a decision that holds. -->
-    <div class="aBanForm">
-      <input type="text" id="banCidr" autocomplete="off" spellcheck="false"
-             placeholder="192.0.2.7   ·   192.0.2.0/24   ·   2001:db8::/32   ·   AS15169">
-      <input type="text" id="banReason" autocomplete="off"
-             placeholder="reason — for your own notes">
-      <select id="banFor" class="btn">
-        <option value="0">forever</option>
-        <option value="60">1 hour</option>
-        <option value="1440">1 day</option>
-        <option value="10080">1 week</option>
-      </select>
-      <button class="btn" id="banAdd">BLOCK</button>
-    </div>
-    <p class="dim wrap" id="banMsg"></p>
-    <div class="aTblWrap"><table id="adminBans">
-      <thead><tr><th>Address or range</th><th>Reason</th><th>Added</th><th>Until</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <p class="dim" id="adminNoBans" hidden>Nothing is blocked.</p>
-    <!-- ★ Says what blocking DOES and the one thing that can go wrong with it. An earlier draft
-         also explained what we deliberately do NOT do (VPN/bot detection) — removed at Stuart's
-         request, 2026-08-06: naming an absent feature only plants the idea that it is missing.
-         The reasoning still lives in vibe_admin.h, where the next developer will look. -->
-    <p class="dim wrap aNote">
-      Blocking is by address, by range, or by whole network. A single address is easy to get
-      around; a range or a network is one decision that holds. Take care with home internet
-      providers — blocking one blocks everybody behind it.
-    </p>
-
-    </div>
-    <div id="secHistory" hidden>
-    <h2>CONNECTION HISTORY</h2>
-    <div id="adminClientMix" class="clientMix"></div>
-    <div class="aTblWrap"><table id="adminConns">
-      <thead><tr><th>When</th><th>Address</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <p class="dim" id="adminNoConns" hidden>Nothing yet.</p>
-
-    </div>
-    <!-- ★★ SAY WHY THE PAGE IS SHORT. Without this, a Simple-mode owner who has heard the admin
-         page can block people goes looking, finds nothing, and concludes it is missing or
-         broken — the exact failure that hiding things behind a mode is supposed to avoid. -->
-    <p class="dim wrap aNote" id="adminSimpleNote" hidden>
-      This receiver is set up for <b>local sharing</b>, so the panels for managing strangers —
-      who is connected, blocking, and connection history — are hidden. The server still records
-      all of it, so switching this receiver to <b>public sharing</b> in setup turns them on with
-      the history already there.
-    </p>
-
-    <div id="secMaintenance" hidden>
-    <h2>MAINTENANCE</h2>
-    <div class="aActions">
-      <button class="btn" id="actUpdateCheck">CHECK FOR UPDATES</button>
-      <!-- ★★ TWO BUTTONS, NOT ONE LABELLED "INSTALL UPDATES". That single button ran
-           `apt-get install --only-upgrade vibeserver` — correct for its scope, and a lie about
-           its label: it walked past 150 pending system packages and reported success. The scope
-           choice existed only in the scheduler, so the manual path had no way to say which you
-           meant (Stuart, 2026-08-07). Now each button names its own scope. -->
-      <button class="btn" id="actUpdate">UPDATE VIBESERVER</button>
-      <button class="btn" id="actUpdateAll">UPDATE ALL PACKAGES</button>
-      <button class="btn" id="actRestart">RESTART VIBESERVER</button>
-      <button class="btn aWarn" id="actReboot">REBOOT THE MACHINE</button>
-    </div>
-    <!-- ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. A VibeServer update is one
-         small package we build and can sensibly be daily; a full system upgrade is bigger and
-         occasionally wants attention, so it suits a weekly slot. One schedule would force the
-         owner to accept the same risk for both. -->
-    <div class="aBanForm" id="updSchedRow">
-      <label class="dim" style="align-self:center;min-width:9em">Update VibeServer</label>
-      <select id="updSrvDay" class="btn"></select>
-      <select id="updSrvHour" class="btn"></select>
-    </div>
-    <div class="aBanForm" id="updSchedAllRow">
-      <label class="dim" style="align-self:center;min-width:9em">Update all packages</label>
-      <select id="updAllDay" class="btn"></select>
-      <select id="updAllHour" class="btn"></select>
-      <button class="btn" id="updSave">SAVE</button>
-    </div>
-    <p class="dim wrap aNote" id="updNote">
-      A receiver in a loft gets logged into roughly never, which makes it the machine most worth
-      updating automatically. <b>Update VibeServer</b> upgrades this one package and is safe to run
-      daily. <b>Update all packages</b> upgrades the whole system unattended — that keeps security
-      fixes current, but an OS upgrade can occasionally need attention and nobody will be watching,
-      so weekly is the sensible choice. Both run at the hour you pick, local time.
-    </p>
-    <p class="dim wrap" id="actMsg"></p>
-    <!-- ★★ THE OUTPUT, UNDER THE BUTTON THAT CAUSED IT. "Install updates" can run for minutes;
-         without this it was a button that went quiet, and quiet is indistinguishable from broken
-         (Stuart, 2026-08-07). Hidden until there is something to show, so the panel is not
-         permanently occupied by an empty box. -->
-    <pre id="actLog" hidden></pre>
-    <!-- ★★★ WHY THERE IS NO TERMINAL, said out loud — its absence is a decision, and an owner
-         who wants one should know that rather than assume we forgot.
-         The full argument is in local_sdr_shim.cpp's /vibeserver/admin/ router. -->
-    <p class="dim wrap aNote">
-      There is deliberately no web terminal here. The admin password's other job is guarding the
-      gain sliders, and a shell behind it would be full control of this machine and the network
-      around it — on a receiver that is publicly listed and served over plain HTTP. The buttons
-      above cover what a terminal was wanted for. For a real shell from your phone, put this
-      machine on Tailscale or WireGuard: proper key authentication, nothing exposed.
-    </p>
-    </div>
-  </div>
-</div>
 <script type="module" src="./src/main.ts"></script>
