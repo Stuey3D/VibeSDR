@@ -128,7 +128,7 @@ function initSplash() {
     $('hostRow').hidden = false;
     hostEl.value = (prefs().lastHost as string) || 'localhost:48000';
   } else {
-    hostEl.value = location.host;
+    hostEl.value = location.host + BASE_PATH;
   }
   if (saved[hostEl.value]) pinEl.value = saved[hostEl.value];
 
@@ -935,6 +935,25 @@ let lastRenderAt = 0;
  *
  * Combine freely, e.g. `#perf,noaudio`. Whichever one collapses the CPU names the culprit.
  */
+/** ★★★ ONE FORWARDED PORT: THIS PAGE MAY BE SERVED UNDER /r/<serial>/.
+ *
+ *  With several radios the owner forwards ONE port. The front door on it routes by path prefix and
+ *  hands the whole connection to the right radio's process, so a listener reaches every radio at
+ *  the same address — `…:48000/r/240513CA60/` — and never sees a second port.
+ *
+ *  ★★ EVERY URL THIS CLIENT BUILDS HAS TO CARRY THAT PREFIX, and there is exactly one lever that
+ *     does it: `host`. The client already composes every request as `http://${host}/…` and every
+ *     socket as `ws://${host}/…`, so putting the prefix INSIDE host makes both follow without
+ *     touching the dozens of call sites. The handful of absolute fetch('/…') calls are prefixed
+ *     explicitly below — those are the ones that would silently miss it.
+ *  ★ Empty on a single-radio server, where the page is served at the root exactly as before. */
+const BASE_PATH = (() => {
+  const m = location.pathname.match(/^\/r\/[^/]+/);
+  return m ? m[0] : '';
+})();
+/** An absolute path on THIS receiver, prefix included. */
+const P = (path: string) => BASE_PATH + path;
+
 const NO_AUDIO = location.hash.includes('noaudio');
 const NO_WF    = location.hash.includes('nowf');
 const NO_DEC   = location.hash.includes('nodec');
@@ -1287,7 +1306,7 @@ let bandCond: { measured: Record<string, number>; predicted: Record<string, stri
 
 async function refreshBandConditions(): Promise<void> {
   try {
-    const r = await fetch('/vibeserver/conditions', { cache: 'no-store' });
+    const r = await fetch(P('/vibeserver/conditions'), { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const m: Record<string, number> = {};
@@ -2108,7 +2127,7 @@ async function showSplashRadios(): Promise<void> {
   if (!host) return;
   let dir: any;
   try {
-    const r = await fetch('/vibeserver/radios', { cache: 'no-store' });
+    const r = await fetch(P('/vibeserver/radios'), { cache: 'no-store' });
     if (!r.ok) return;
     dir = await r.json();
   } catch { return; }
@@ -2135,7 +2154,9 @@ async function showSplashRadios(): Promise<void> {
   //   resolves independently and an unreachable one is rendered as unreachable.
   const live = await Promise.all(radios.map(async (r) => {
     try {
-      const base = `${location.protocol}//${location.hostname}:${r.port}`;
+      // ★ Same origin, different PATH — the front door routes it. Asking each radio's own port
+      //   would need every one of them forwarded, which is the thing this exists to avoid.
+      const base = `${location.origin}/r/${encodeURIComponent(r.serial)}`;
       const resp = await fetch(`${base}/vibeserver.json`, { cache: 'no-store' });
       if (!resp.ok) return null;
       return await resp.json();
@@ -2176,7 +2197,7 @@ async function showSplashRadios(): Promise<void> {
     // ★ ?join so the click opens the RECEIVER. Without it the primary's card reloads this very
     //   page, and a secondary's card shows that radio's own copy of this list.
     const href = (full || down) ? ''
-               : ` href="${location.protocol}//${location.hostname}:${r.port}/?join=1"`;
+               : ` href="${location.origin}/r/${encodeURIComponent(r.serial)}/?join=1"`;
     return `<${tag}${href} class="radioCard" data-serial="${r.serial}" style="display:block;text-align:left;`
          + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
          + `text-decoration:none;color:inherit;${dim}">`
@@ -2202,7 +2223,7 @@ async function showSplashListeners(): Promise<void> {
   try {
     // ★ /vibeserver.json — NOT /vibeserver/identity, which does not exist and 404s in
     //   silence behind the try/catch. The endpoint is named for the file it pretends to be.
-    const r = await fetch('/vibeserver.json', { cache: 'no-store' });
+    const r = await fetch(P('/vibeserver.json'), { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const n = Number(j.listeners) || 0, max = Number(j.maxUsers) || 0, wait = Number(j.waiting) || 0;
@@ -2238,7 +2259,7 @@ async function showSplashConditions(): Promise<void> {
   const el = document.getElementById('splashConditions');
   if (!el) return;
   try {
-    const r = await fetch('/vibeserver/conditions', { cache: 'no-store' });
+    const r = await fetch(P('/vibeserver/conditions'), { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const measured: Array<{ band: string; snrDb: number }> = j.measured || [];
