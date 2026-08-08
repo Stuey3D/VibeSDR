@@ -401,6 +401,31 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
 
 }  // namespace
 
+/** ★★★ WHERE THE HAND-OFF SOCKETS LIVE — AND IT CANNOT ASSUME systemd.
+ *
+ *  RuntimeDirectory= in the unit gives us /run/vibeserver, owned and writable. But VibeServer also
+ *  runs where there is no systemd at all — Saber's is a chroot on an Android phone — and there
+ *  ProtectSystem, RuntimeDirectory and the rest simply do not exist. A path that only works under
+ *  a service manager would leave those installs with a front door that can route nothing, and the
+ *  only symptom would be "no such file or directory" for every radio.
+ *
+ *  ★ So: honour an explicit override, else try /run/vibeserver, else fall back beside the state
+ *    directory, else /tmp. Every process on the machine computes it the SAME way, which is what
+ *    makes the front door and the radios agree without being told.
+ */
+static std::string handoffDir() {
+    auto usable = [](const std::string& d) {
+        ::mkdir(d.c_str(), 0700);
+        return ::access(d.c_str(), W_OK | X_OK) == 0;
+    };
+    if (const char* e = getenv("VIBESERVER_RUNTIME_DIR"); e && *e) { if (usable(e)) return e; }
+    if (usable("/run/vibeserver"))            return "/run/vibeserver";
+    if (usable("/var/lib/vibeserver/run"))    return "/var/lib/vibeserver/run";
+    const std::string t = "/tmp/vibeserver-" + std::to_string((int)getuid());
+    if (usable(t)) return t;
+    return "";   // ★ No home for them: routing is simply off, and the caller says so.
+}
+
 /** ★ Small and local on purpose: the shim has one, but it is a private member of an internal
  *  class, and reaching into that to save nine lines would couple the daemon to its internals. */
 static std::string jsonEscape(const std::string& in) {
@@ -900,68 +925,6 @@ int main(int argc, char** argv) {
             return true;
         });
 
-    // ── One forwarded port: route by prefix, hand the connection over ───────────────────────
-    // ★★★ 48000 IS THE ONLY PORT THAT NEEDS TO LEAVE THE MACHINE. Asking an owner to forward one
-    //     port per radio is a barrier that grows with every radio; asking them to forward one is a
-    //     thing people already know how to do.
-    // ★★ THE CONNECTION IS HANDED OVER, NOT PROXIED. After the hand-off this process is out of the
-    //    data path entirely — no copying, and no single writer for every listener's audio to queue
-    //    behind. That shape has bitten this project twice.
-    {
-        const std::string dir = "/run/vibeserver";
-        ::mkdir(dir.c_str(), 0700);
-        // Everyone listens, including the primary: a radio must be reachable whichever process
-        // happens to hold the public port today, and which one that is can change.
-        if (!g_myRadioSerial.empty()) {
-            const std::string me = dir + "/" + g_myRadioSerial + ".sock";
-            std::string herr;
-            if (LocalSdrShim::listenForHandoff(me, herr))
-                LocalSdrShim::setPathPrefix("/r/" + g_myRadioSerial);
-            else
-                std::fprintf(stderr, "VibeServer: not accepting handed-over connections — %s\n",
-                             herr.c_str());
-        }
-        if (g_isPrimaryRadio) {
-            LocalSdrShim::setHandoffRouter([dir](const std::string& path) -> std::string {
-                // ★★★ THE PICTURE COMES FROM A RADIO, AND THE FRONT DOOR HAS NONE.
-                //
-                //     The landing page's spectrogram background and the MEASURED half of the band
-                //     conditions are both read off a live wide FFT. A front door that owns no
-                //     device cannot produce either — so these two requests are handed to whichever
-                //     radio the owner nominated, exactly like a listener's connection.
-                // ★★ ONE RADIO ANSWERS BOTH, because they are one measurement of one window. If
-                //    none qualifies (nothing is locked, or the candidates all release when idle),
-                //    nothing is handed anywhere and the page renders without them — which is the
-                //    honest outcome, not an hour of blank.
-                if (path.rfind("/vibeserver/spectrogram", 0) == 0 ||
-                    path.rfind("/vibeserver/conditions", 0) == 0) {
-                    vsconfig::ServerConfig sc; std::string se;
-                    if (!vsconfig::loadServer(g_configPath, sc, se)) sc = g_serverConfig;
-                    const int idx = vsconfig::spectrogramRadio(sc);
-                    if (idx < 0) return "";
-                    return dir + "/" + sc.radios[(size_t)idx].serial + ".sock";
-                }
-                // Paths are "/r/<serial>/…". Anything else is ours to answer.
-                if (path.rfind("/r/", 0) != 0) return "";
-                const size_t end = path.find('/', 3);
-                const std::string serial = path.substr(3, end == std::string::npos
-                                                          ? std::string::npos : end - 3);
-                // ★ OUR OWN prefix is not a hand-off — we would be posting a letter to ourselves,
-                //   and the receiving thread is this thread.
-                if (serial.empty() || serial == g_myRadioSerial) return "";
-                // ★★ ONLY RADIOS THIS MACHINE ACTUALLY OFFERS. Without this check the serial is
-                //    attacker-controlled text used to build a filesystem path — "/r/../../tmp/x"
-                //    would have us connect to whatever unix socket they name.
-                vsconfig::ServerConfig srv; std::string e;
-                if (!vsconfig::loadServer(g_configPath, srv, e)) srv = g_serverConfig;
-                for (const auto& r : srv.radios)
-                    if (r.enabled && r.configured && !r.serial.empty() && r.serial == serial)
-                        return dir + "/" + serial + ".sock";
-                return "";
-            });
-        }
-    }
-
     // ── Which radios this machine offers ────────────────────────────────────────────────────
     // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
     //    processes and this one cannot see their live state. What it can state truthfully is what
@@ -1372,6 +1335,57 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().setDirectSampling(g_runtimeConfig.directSampling);
     if (g_runtimeConfig.biasT)
         std::printf("  bias-T: ON — this radio is putting DC on its feedline (from your settings)\n");
+
+    // ── One forwarded port: route by prefix, hand the connection over ───────────────────────
+    // ★★★ AFTER THE SERVER IS UP, NOT BEFORE. listenForHandoff needs a running server to attach
+    //     its thread to, and registering it earlier failed with "server not running" — quietly,
+    //     leaving every radio unreachable through the front door while each looked healthy on its
+    //     own port (2026-08-08).
+    {
+        const std::string dir = handoffDir();
+        if (dir.empty()) {
+            std::fprintf(stderr, "VibeServer: nowhere to put the hand-off sockets — radios will "
+                                 "only be reachable on their own ports\n");
+        } else {
+            if (!g_myRadioSerial.empty()) {
+                const std::string me = dir + "/" + g_myRadioSerial + ".sock";
+                std::string herr;
+                if (LocalSdrShim::listenForHandoff(me, herr))
+                    LocalSdrShim::setPathPrefix("/r/" + g_myRadioSerial);
+                else
+                    std::fprintf(stderr, "VibeServer: not accepting handed-over connections — %s\n",
+                                 herr.c_str());
+            }
+            if (frontDoorOnly) {
+                LocalSdrShim::setHandoffRouter([dir](const std::string& path) -> std::string {
+                    // ★★ The picture comes from a radio, and the front door has none: the
+                    //    spectrogram and the MEASURED band conditions are both read off a live wide
+                    //    FFT, so they go to whichever radio the owner nominated.
+                    if (path.rfind("/vibeserver/spectrogram", 0) == 0 ||
+                        path.rfind("/vibeserver/conditions", 0) == 0) {
+                        vsconfig::ServerConfig sc; std::string se;
+                        if (!vsconfig::loadServer(g_configPath, sc, se)) sc = g_serverConfig;
+                        const int idx = vsconfig::spectrogramRadio(sc);
+                        if (idx < 0) return "";
+                        return dir + "/" + sc.radios[(size_t)idx].serial + ".sock";
+                    }
+                    if (path.rfind("/r/", 0) != 0) return "";
+                    const size_t e2 = path.find('/', 3);
+                    const std::string serial = path.substr(3, e2 == std::string::npos
+                                                              ? std::string::npos : e2 - 3);
+                    if (serial.empty() || serial == g_myRadioSerial) return "";
+                    // ★★ ONLY RADIOS THIS MACHINE OFFERS. Without this the serial is
+                    //    attacker-controlled text used to build a filesystem path.
+                    vsconfig::ServerConfig sc; std::string e3;
+                    if (!vsconfig::loadServer(g_configPath, sc, e3)) sc = g_serverConfig;
+                    for (const auto& r : sc.radios)
+                        if (r.enabled && r.configured && !r.serial.empty() && r.serial == serial)
+                            return dir + "/" + serial + ".sock";
+                    return "";
+                });
+            }
+        }
+    }
 
     if (o.useUsb) std::printf("VibeServer listening on port %d\n", port);
     else          std::printf("VibeServer listening on port %d  (IQ from rtl_tcp %s:%d)\n",
