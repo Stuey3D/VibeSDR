@@ -878,6 +878,7 @@ static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
 static LocalSdrShim::SolarFn       g_vsSolarFn;
+static LocalSdrShim::RadiosFn      g_vsRadiosFn;
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
@@ -5830,6 +5831,20 @@ struct LocalSdrShim::Impl {
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close(); return;
 
+        } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
+            // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
+            //    enabled and configured, with the port each answers on, so one address is enough
+            //    to reach all of them.
+            // ★ Open, like the rest of the landing data: a listener choosing between two receivers
+            //   needs to see both before they have connected to either.
+            LocalSdrShim::RadiosFn rfn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); rfn = g_vsRadiosFn; }
+            const std::string body = rfn ? rfn() : std::string("{\"radios\":[]}");
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
+
         } else if (reqLine.rfind("GET /vibeserver/eibi", 0) == 0) {
             // ★ The daemon owns the fetching (it has the filesystem and the network); the shim
             //   only exposes it, and on a phone no handler is registered so this reports
@@ -8359,6 +8374,11 @@ void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     g_vsConfigGet = std::move(get);
     g_vsConfigSet = std::move(set);
 }
+void LocalSdrShim::setRadiosHandler(RadiosFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsRadiosFn = std::move(fn);
+}
+
 void LocalSdrShim::setSolarHandler(SolarFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsSolarFn = std::move(fn);

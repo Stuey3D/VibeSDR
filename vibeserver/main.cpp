@@ -402,6 +402,10 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
 }  // namespace
 
 namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
+            /** ★ The WHOLE machine, so the setup page can show a tab per radio. This process runs
+             *  exactly one of them (g_myRadioSerial); the rest it only reads and writes on their
+             *  behalf, which is why every write re-reads the file first. */
+            vsconfig::ServerConfig g_serverConfig; std::string g_myRadioSerial;
             std::atomic<bool> g_restartRequested{false}; }
 
 
@@ -678,7 +682,9 @@ int main(int argc, char** argv) {
                 const size_t idx = (size_t)(mine - &srv.radios[0]);
                 if (!o.portGiven) o.port = vsconfig::portForRadio(srv, idx);
                 g_isPrimaryRadio = ((int)idx == vsconfig::primaryRadio(srv));
+                g_myRadioSerial = mine->serial;
             }
+            g_serverConfig = srv;
             hadConfigFile = true;
         } else if (!err.empty()) {
             std::fprintf(stderr, "VibeServer: ignoring %s — %s\n", g_configPath.c_str(), err.c_str());
@@ -815,29 +821,106 @@ int main(int argc, char** argv) {
     }
     LocalSdrShim::setConfigHandlers(
         []() -> std::string {
-            // ★ What the server is ACTUALLY RUNNING, not what the file last said. The two differ
-            //   the moment anyone passes a flag, and a settings page that shows the file while the
-            //   radio obeys something else is a page that lies.
-            return vsconfig::toJson(g_runtimeConfig);
+            // ★★ THE WHOLE MACHINE, with THIS radio's live values folded in. The page needs every
+            //    radio to draw its tabs, but it must also show what the radio in front of you is
+            //    ACTUALLY running — those differ the moment anyone passes a flag, and a settings
+            //    page showing the file while the radio obeys something else is a page that lies.
+            vsconfig::ServerConfig out = g_serverConfig;
+            for (auto& r : out.radios) {
+                if (r.serial.empty() || r.serial != g_myRadioSerial) continue;
+                const auto& c = g_runtimeConfig;
+                r.mode = c.mode; r.freq = c.freq; r.rate = c.rate;
+                r.lockFreq = c.lockFreq; r.lockRate = c.lockRate;
+                r.gain = c.gain; r.lnaState = c.lnaState; r.ifGr = c.ifGr; r.ifAgc = c.ifAgc;
+                r.demodMode = c.demodMode; r.landingFreq = c.landingFreq;
+                r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
+                r.uncompressed = c.uncompressed;
+                r.forceIdleSaver = c.forceIdleSaver; r.releaseWhenIdle = c.releaseWhenIdle;
+                r.idleGrace = c.idleGrace;
+                r.rfNotch = c.rfNotch; r.dabNotch = c.dabNotch; r.zoomSpectrum = c.zoomSpectrum;
+                break;
+            }
+            return vsconfig::toJson(out);
         },
         [](const std::string& json, std::string& err) -> bool {
-            // Apply over the RUNNING config so a partial POST is a patch, not a wipe.
-            vsconfig::Config next = g_runtimeConfig;
+            // ★★★ RE-READ BEFORE WRITING, ALWAYS. There are now several writers: this process,
+            //     every OTHER radio's process (each persists its own gain when an admin changes
+            //     it), and the TUI. Writing back a copy loaded at startup would silently revert
+            //     whatever another radio had saved in the meantime — the same read-modify-write
+            //     race the TUI already learned about, multiplied by the number of radios.
+            vsconfig::ServerConfig next;
+            std::string ignored;
+            if (!vsconfig::loadServer(g_configPath, next, ignored)) next = g_serverConfig;
             if (!vsconfig::fromJson(json, next, err)) return false;
-            // ★★ SAVING IS WHAT MARKS IT CONFIGURED. The owner pressing Save on the setup page is
-            //    the only event that means "I have finished" — nothing else should set this.
-            next.configured = true;
-            if (!vsconfig::save(g_configPath, next, err)) return false;
-            g_runtimeConfig = next;
-            LocalSdrShim::setConfigured(true);
-            // ★★★ RESTART TO APPLY. Almost everything here is read ONCE at start (the channel
-            //     method most of all — "never switch methods live, it is in the setup"), so
-            //     applying half of it live would leave the server in a state no code path was
-            //     written for. systemd brings us straight back; the page reconnects and lands on
-            //     the normal receiver screen. Under systemd this is the documented way to reload.
-            g_restartRequested.store(true);
+
+            // ★★ A RESTART IS ASKED FOR, NOT ASSUMED. The setup page saves a tab at a time — and a
+            //    tab save that bounced every listener off the OTHER radios would make the page
+            //    unusable. "Save and reboot server" sends restart=1; per-tab saves do not, and the
+            //    page says the change applies on the next restart.
+            bool wantRestart = json.find("\"restart\":true") != std::string::npos
+                            || json.find("\"restart\": true") != std::string::npos;
+            if (wantRestart) next.configured = true;
+
+            if (!vsconfig::saveServer(g_configPath, next, err)) return false;
+            g_serverConfig = next;
+
+            // Keep this process's own view in step, so the page does not show stale values back.
+            for (const auto& r : next.radios)
+                if (!r.serial.empty() && r.serial == g_myRadioSerial) {
+                    g_runtimeConfig = vsconfig::effectiveFor(next, r);
+                    break;
+                }
+            if (next.configured) LocalSdrShim::setConfigured(true);
+            if (wantRestart) g_restartRequested.store(true);
             return true;
         });
+
+    // ★ Local, small, and deliberately not borrowed from the shim: that one is a private member
+    //   of an internal class, and reaching into it to save nine lines would couple the daemon to
+    //   the shim's internals for no benefit.
+    auto jsonEscape = [](const std::string& in) {
+        std::string o;
+        for (char c : in) {
+            if (c == '"' || c == '\\') { o += '\\'; o += c; }
+            else if ((unsigned char)c < 0x20)  o += ' ';
+            else o += c;
+        }
+        return o;
+    };
+
+    // ── Which radios this machine offers ────────────────────────────────────────────────────
+    // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
+    //    processes and this one cannot see their live state. What it can state truthfully is what
+    //    the owner configured and which port each answers on — enough for the landing page to
+    //    offer them, and honest about being a directory rather than a status board.
+    LocalSdrShim::setRadiosHandler([]() -> std::string {
+        vsconfig::ServerConfig srv; std::string err;
+        if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
+        const int primary = vsconfig::primaryRadio(srv);
+        std::string j = "{\"name\":\"" + jsonEscape(srv.name) + "\",\"radios\":[";
+        bool first = true;
+        for (size_t i = 0; i < srv.radios.size(); i++) {
+            const auto& r = srv.radios[i];
+            if (!r.enabled || !r.configured) continue;   // ★ both gates, same as the supervisor
+            if (!first) j += ",";
+            first = false;
+            j += "{\"serial\":\"" + jsonEscape(r.serial) + "\"";
+            j += ",\"label\":\"" + jsonEscape(r.label.empty() ? r.driver : r.label) + "\"";
+            j += ",\"driver\":\"" + jsonEscape(r.driver) + "\"";
+            j += ",\"port\":" + std::to_string(vsconfig::portForRadio(srv, i));
+            j += ",\"primary\":" + std::string((int)i == primary ? "true" : "false");
+            j += ",\"users\":" + std::to_string(r.users);
+            j += ",\"mine\":" + std::string(r.serial == g_myRadioSerial ? "true" : "false");
+            // What the listener actually wants to know: where it is pointed.
+            const double centre = r.lockFreq > 0 ? r.lockFreq : r.freq;
+            j += ",\"centreHz\":" + std::to_string((long long)centre);
+            j += ",\"spanHz\":" + std::to_string((long long)(r.lockRate > 0 ? r.lockRate : r.rate));
+            j += ",\"mode\":\"" + jsonEscape(r.demodMode) + "\"";
+            j += ",\"locked\":" + std::string(r.mode == vsconfig::Mode::LockedRange ? "true" : "false");
+            j += "}";
+        }
+        return j + "]}";
+    });
 
     // ── Space weather ───────────────────────────────────────────────────────────────────────
     // ★ One request an hour on a detached thread, and the handler only ever READS the cache — so

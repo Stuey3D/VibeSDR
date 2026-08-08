@@ -257,6 +257,12 @@ public:
      *  owns the network); on a phone nothing registers one and the endpoint says so. */
     using SolarFn = std::function<std::string()>;
     static void setSolarHandler(SolarFn fn);
+
+    /** ★★ EVERY RADIO ON THIS MACHINE, for the landing page — served by whichever process owns the
+     *  main port. It answers for its siblings, which it can do because they all read one config
+     *  file. The shim knows nothing of the schema; the daemon supplies the JSON. */
+    using RadiosFn = std::function<std::string()>;
+    static void setRadiosHandler(RadiosFn fn);
     using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
     static void setEibiHandler(EibiFn fn);
     using ConfigPersistFn = std::function<void(const std::string& patch)>;
