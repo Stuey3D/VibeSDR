@@ -5452,6 +5452,11 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/vibeserver/config", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
+                // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
+                //   shared by every radio process, and the setup page that asks for it is served
+                //   by this door. Refusing it here made the page report "could not reach the
+                //   server" about a server it was talking to (Stuart, 2026-08-08).
+                || path0.rfind("/vibeserver/eibi", 0) == 0
                 || path0.rfind("/vibeserver/spectrogram", 0) == 0
                 || path0.rfind("/bookmarks", 0) == 0
                 || path0.rfind("/favicon", 0) == 0
