@@ -5292,10 +5292,37 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/bookmarks", 0) == 0
                 || path0.rfind("/favicon", 0) == 0;
             if (!ok) {
-                const std::string body =
-                    "{\"error\":\"this is the front door — pick a radio first\"}";
+                // ★★★ A DEAD END IS NOT AN ANSWER. This used to reply with a bare JSON error, so a
+                //     listener who simply refreshed their tab — the first thing anyone tries when
+                //     something looks stuck — got a wall of text with no way back and no idea what
+                //     had happened (Stuart, 2026-08-08).
+                //
+                // ★★ IT REACHES A PERSON, SO IT LOOKS LIKE ONE. A path under /r/ that we could not
+                //    route means that radio's process is not answering right now; anything else
+                //    means they have asked the front door for something only a radio has. Either
+                //    way: say so in a sentence, and give them the door back.
+                // ★ 503 with Retry-After, not a redirect. A refresh should land them where they
+                //   were once the radio is back, and bouncing them elsewhere would lose the very
+                //   thing they were trying to keep.
+                const bool wasRadio = path0.rfind("/r/", 0) == 0;
+                const std::string body = std::string(
+                    "<!doctype html><meta charset=utf-8>"
+                    "<title>VibeServer</title>"
+                    "<style>body{background:#0b0b0b;color:#ffb000;font:14px/1.6 ui-monospace,monospace;"
+                    "display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}"
+                    "div{max-width:32em;padding:2em}a{color:#ffb000}</style><div>"
+                    "<h1 style='font-size:1.2em;letter-spacing:.1em'>VIBESERVER</h1><p>")
+                    + (wasRadio
+                        ? "That radio is not answering at the moment. It may be starting up, or it "
+                          "may have been stopped."
+                        : "This is the front door. It lists the radios on this machine; the "
+                          "receivers themselves are behind it.")
+                    + "</p><p><a href=\"/\">See the radios on this machine</a></p>"
+                      "<p style='opacity:.6'>Refreshing this page is safe — it will work again as "
+                      "soon as the radio is back.</p></div>";
                 sock->sendstr("HTTP/1.1 503 Service Unavailable\r\n"
-                              "Content-Type: application/json\r\nConnection: close\r\n"
+                              "Content-Type: text/html; charset=utf-8\r\n"
+                              "Retry-After: 5\r\nConnection: close\r\n"
                               "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
                 sock->close(); return;
             }
