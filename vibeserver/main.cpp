@@ -36,6 +36,8 @@
 #include <cinttypes>
 #include <csignal>
 #include <sys/wait.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -441,6 +443,39 @@ static std::string handoffDir() {
     const std::string t = "/tmp/vibeserver-" + std::to_string((int)getuid());
     if (usable(t)) return t;
     return "";   // ★ No home for them: routing is simply off, and the caller says so.
+}
+
+/** ★★★ ONE PROCESS PER RADIO, ENFORCED — because "the radio is in use by another program on this
+ *      machine" turned out to mean US. Saber's log shows a reacquire succeeding, no IQ arriving,
+ *      and then eleven `usb_claim_interface error -6` in a row before the server concluded another
+ *      program had the dongle and let go. Nothing else on that box wanted it: a second copy of the
+ *      same radio process did (2026-08-09).
+ *
+ * ★★★ IT IS EASY TO END UP WITH TWO. Without systemd the front door forks its own radios, so every
+ *     `vibeserver --serve` started by hand adds a set; a self-restart, a crash recovery or an
+ *     impatient second launch each do the same. systemd refuses to run a unit twice and that is
+ *     exactly the protection a bare process does not get for free.
+ *
+ * ★★ flock, not a pid file. The lock dies WITH the process — including a SIGKILL, a power cut, or
+ *    the orphan case — so there is no stale file to reason about and nothing to clean up. The fd is
+ *    deliberately leaked: it must outlive this function and live as long as the process.
+ * ★ Refusing is not an error. Exiting 0 with a plain sentence is right for something a person does
+ *   by accident; a failure code here would put a red line in a journal for a non-event.
+ */
+static bool claimRadioLock(const std::string& serial) {
+    if (serial.empty()) return true;                 // nothing to key a lock on
+    const std::string dir = handoffDir();
+    if (dir.empty()) return true;                    // no writable home; do not block startup
+    const std::string path = dir + "/" + serial + ".lock";
+    const int fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (fd < 0) return true;                         // cannot lock: carry on rather than refuse
+    if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        std::printf("VibeServer: radio %s is already being served by another VibeServer on this "
+                    "machine — leaving it to that one.\n", serial.c_str());
+        ::close(fd);
+        return false;
+    }
+    return true;                                     // fd intentionally leaked; the lock is the point
 }
 
 /** ★★★ IS THERE ANYTHING ELSE TO START THE RADIOS? `vibeserver-radios` is a systemd unit, and
@@ -1671,7 +1706,13 @@ int main(int argc, char** argv) {
     //    process per radio that way, and this branch is the one systemd starts with no arguments.
     // ★ SIMPLE mode never gets here: needsFrontDoor() is the Simple/Full switch, and a Simple
     //   server must stay exactly what it has always been — one process, one radio, one port.
-    if (o.useUsb && !o.radioGiven && vsconfig::needsFrontDoor(g_serverConfig)) {
+    // ★ Decided once: a front door owns no device and needs no lock; anything else is about to
+    //   claim one, and must be the only process doing so.
+    const bool willBeFrontDoor =
+        o.useUsb && !o.radioGiven && vsconfig::needsFrontDoor(g_serverConfig);
+    if (!willBeFrontDoor && !claimRadioLock(g_myRadioSerial)) return 0;
+
+    if (willBeFrontDoor) {
         port = LocalSdrShim::startFrontDoor(g_serverConfig.port, err);
         if (port <= 0) {
             std::fprintf(stderr, "VibeServer: the front door could not start — %s\n", err.c_str());
