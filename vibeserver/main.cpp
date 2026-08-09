@@ -1477,6 +1477,21 @@ int main(int argc, char** argv) {
             r.directSampling = next.directSampling;
             break;
         }
+        // ★★★ AND THE MACHINE'S OWN SETTINGS BELONG TO THE MACHINE. The loop above folds this
+        //     patch into ONE RADIO's entry, which is right for a gain or a ppm — but the admin
+        //     page's update schedule rides the same channel and belongs to no radio at all. It was
+        //     parsed into `next`, never copied to `srv`, and saveServer() then wrote the untouched
+        //     -1 straight back over it.
+        // ★★★ WORSE, IT LOOKED SAVED. setUpdateSchedule() had already set the running value, so the
+        //     page said "Saved — VibeServer at 03:00", read the same value back, and agreed with
+        //     itself. Only a RESTART revealed that the file had never changed (Stuart, 2026-08-09:
+        //     "it took a few goes to save" — it never saved at all, any of those goes).
+        // ★ Copied unconditionally, which is safe: `next` began life as this radio's effective
+        //   config, so its machine fields already hold the machine's values unless this patch
+        //   changed them.
+        srv.updateSrvHour = next.updateSrvHour; srv.updateSrvDay = next.updateSrvDay;
+        srv.updateAllHour = next.updateAllHour; srv.updateAllDay = next.updateAllDay;
+
         // ★ Do NOT touch `configured` here. Only the setup page finishing means "set up"; a gain
         //   tweak on a half-configured server must not silently declare it done.
         if (!vsconfig::saveServer(g_configPath, srv, err)) {

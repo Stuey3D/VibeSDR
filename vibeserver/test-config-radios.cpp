@@ -96,6 +96,35 @@ int main() {
         ok(c.configured, "configured, because BOTH the machine and the radio are");
     }
 
+    std::printf("\nA machine-wide setting survives a per-radio patch\n");
+    {
+        // ★★★ THE ADMIN PAGE'S UPDATE SCHEDULE RIDES THE PER-RADIO PERSIST CHANNEL. main.cpp folds
+        //     such a patch into one radio's entry; the schedule belongs to the MACHINE, was never
+        //     copied across, and the file kept its old value while the page — reading the RUNNING
+        //     value back — insisted it had saved. Only a restart showed otherwise.
+        ServerConfig s2;
+        s2.configured = true; s2.adminPass = "pw";
+        s2.updateSrvHour = 3; s2.updateSrvDay = 0;     // Sundays at 03:00
+        s2.updateAllHour = -1; s2.updateAllDay = -1;   // never
+        RadioConfig r; r.serial = "A"; r.driver = "rtl"; r.configured = true; r.enabled = true;
+        r.gain = 100;
+        s2.radios.push_back(r);
+
+        std::string js = toJson(s2), err;
+        ServerConfig back;
+        ok(fromJson(js, back, err), "the machine round-trips", err);
+        ok(back.updateSrvHour == 3 && back.updateSrvDay == 0,
+           "★★★ Sundays at 03:00 survives a save",
+           std::to_string(back.updateSrvHour) + "/" + std::to_string(back.updateSrvDay));
+        ok(back.updateAllHour == -1, "and 'never' stays never");
+
+        // And the effective config a radio process runs with must carry it, since that is where
+        // the persist handler reads it back from.
+        const Config eff = effectiveFor(s2, s2.radios[0]);
+        ok(eff.updateSrvHour == 3 && eff.updateSrvDay == 0,
+           "★ and reaches the radio's effective config, which is what gets written back");
+    }
+
     std::printf("\nA machine with NO radio ready still knows its own secrets\n");
     {
         // ★★★ THE FRESH-INSTALL STATE, and it locked the owner out of their own setup page. The TUI
