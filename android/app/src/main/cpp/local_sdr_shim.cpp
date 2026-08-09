@@ -10203,7 +10203,29 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
 
+    // ★★★ "BUSY" IS OFTEN JUST "NOT YET". Taking the radio back a moment after letting it go —
+    //     which is the normal shape of this feature — can land while the kernel still has our own
+    //     interface claimed, or while the other program is halfway through its own close. The open
+    //     then fails with LIBUSB_ERROR_BUSY (-6) and we reported it as "the radio is in use by
+    //     another program on this machine", which was simply untrue and left the listener with a
+    //     dead receiver and nothing retrying.
+    //
+    // ★★★ SABER'S LOG, 2026-08-09, reads exactly this way: `radio REACQUIRED`, a session landing,
+    //     and then `usb claim interface error -6` followed by `could not take the radio back`.
+    //     It "worked for a second and then froze" — because the retake after the next release had
+    //     one attempt and gave up. His kernel is a Termux one that even logs a usbfs mmap
+    //     work-around, so the window is wider there than on a Pi.
+    //
+    // ★ Three seconds of patience, then the honest message. Long enough to cover a hand-over,
+    //   short enough that a radio genuinely held by OpenWebRX still says so promptly.
+    const int kTries = 12;
+    const int kWaitMs = 250;
     bool ok = false;
+    for (int attempt = 0; attempt < kTries && !ok; attempt++) {
+      if (attempt) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(kWaitMs));
+          err.clear();
+      }
     if (rsp) {
         ok = impl->sdrp->open(impl->sdrpIndex, impl->sampleRate, impl->rtlCenter.load(),
                               impl->lastGainTenthDb, err);
@@ -10228,6 +10250,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             ok = true;
         }
     }
+    }   // ★ end of the retry loop
     if (!ok) {
         if (err.empty()) err = "the radio is in use by another program on this machine";
         LOGI("could not take the radio back — %s", err.c_str());
