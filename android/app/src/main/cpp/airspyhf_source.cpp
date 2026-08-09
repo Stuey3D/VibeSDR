@@ -322,6 +322,17 @@ void AirspyHfSource::setFrequency(double hz) {
     if (!impl_->dev) return;
     airspyhf_set_freq(impl_->dev, (uint32_t)std::llround(hz));
     curCentre_ = hz;           // remembered for restartStream(deep)
+    // ★★★ SAY WHAT THE LIBRARY DID WITH IT. This radio has been reading 15 kHz high on medium
+    //     wave and three theories have died on it — the dead-lobe crop, the rate list, and a
+    //     cross-radio settings leak — because every one of them was reasoned about rather than
+    //     measured. The library places the LO on a 1 kHz grid, adds a 5 kHz IF shift in zero-IF
+    //     mode, and corrects the remainder by rotating at current_samplerate; ANY of those three
+    //     disagreeing with what we believe would produce exactly this. One line, at the moment it
+    //     happens, turns the next session into reading rather than guessing.
+    // ★ Cheap and quiet: a tune is a rare, deliberate event, not a per-sample path.
+    std::fprintf(stderr, "airspyhf: tune %.0f Hz -> %s-IF, rate %u\n",
+                 hz, airspyhf_is_low_if(impl_->dev) ? "low" : "zero",
+                 (unsigned)(curRate_ > 0 ? curRate_ : 0));
 }
 
 uint32_t AirspyHfSource::nearestRate(double hz) const {
