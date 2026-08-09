@@ -1283,8 +1283,14 @@ int main(int argc, char** argv) {
                 const vibebands::Ranges cov = vibebands::driverCoverage(r.driver);
                 const vibebands::Ranges perm =
                     vibebands::permitted(cov, r.allowRanges, r.blockRanges);
-                const bool restricted = !r.allowRanges.empty() || !r.blockRanges.empty()
-                                     || r.mode == vsconfig::Mode::LockedRange;
+                // ★★★ A LOCKED WINDOW IS NOT A "RESTRICTION" TO ANNOUNCE — IT IS THE COVERAGE.
+                //     A shared receiver IS its window: saying "1 kHz – 2000 MHz, restrictions in
+                //     place" about a radio fixed to 2.8–10.8 MHz is technically true and useless.
+                //     State the window and be done (Stuart, 2026-08-09). `locked` plus the centre
+                //     and span already carry it, so the client can say it plainly.
+                // ★ This flag is for the other case: a radio that can roam, whose owner has allowed
+                //   or blocked specific bands. That is where a listener needs the detail.
+                const bool restricted = !r.allowRanges.empty() || !r.blockRanges.empty();
                 if (!cov.empty())  j += ",\"coverage\":" + vibebands::toJson(cov);
                 if (!perm.empty()) j += ",\"allowed\":"  + vibebands::toJson(perm);
                 j += std::string(",\"restricted\":") + (restricted ? "true" : "false");

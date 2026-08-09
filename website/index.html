@@ -627,16 +627,22 @@ async function loadDemo() {
       //     the radio is worth opening; "500 kHz – 1.7 GHz" does. The tuned frequency stays, small,
       //     underneath — it is a nice detail, not the headline (Stuart, 2026-08-09).
       const rng = (a, b) => `${fmt(a)} – ${fmt(b)}`;
-      const cover = (x.coverage || []).map(([a, b]) => rng(a, b)).join(', ');
+      // ★★★ A SHARED RECEIVER IS ITS WINDOW. Announcing the tuner's full reach and then adding
+      //     "restrictions in place" is true and useless when the radio is fixed to one band —
+      //     the window IS the answer, so say it and nothing else.
+      const cover = x.shared && x.spanHz
+        ? rng(x.centreHz - x.spanHz / 2, x.centreHz + x.spanHz / 2)
+        : (x.coverage || []).map(([a, b]) => rng(a, b)).join(', ');
       // ★★ AND SAY IF THE OWNER HAS NARROWED IT. Bold and underlined because it changes what a
       //    visitor can do; the tooltip carries the detail so the card stays readable.
-      const limits = x.restricted
+      // ★ And a shared radio needs no label at all — there is nothing left to qualify.
+      const limits = x.shared ? '' : x.restricted
         ? `<abbr class="demo-restricted" title="${
              [x.allowList ? 'Allowed: ' + x.allowList : '', x.blockList ? 'Blocked: ' + x.blockList : '']
                .filter(Boolean).join(' — ') || 'The operator has fixed this receiver to one band.'
            }">Restrictions in place</abbr>`
         : '<span class="demo-open">Unrestricted</span>';
-      const where = (cover ? `${cover} · ${limits}` : '')
+      const where = (cover ? cover + (limits ? ' · ' + limits : '') : '')
         + (x.centreHz ? `<div class="demo-tuned">on ${fmt(x.centreHz)}${x.mode ? ' · ' + x.mode.toUpperCase() : ''}</div>` : '');
       // ★★★ SAY WHEN IT FREES UP, not merely that it is taken. "In use" makes someone leave;
       //     "free in 4:12" makes them wait — and the receiver already knows the number, because
