@@ -8221,12 +8221,46 @@ struct LocalSdrShim::Impl {
                 //    working picture is worth risking (Stuart, 2026-08-08: "I'd rather not break
                 //    something that works"). The COST is real and is now stated on the toggle that
                 //    chooses it, which is where an owner can weigh it.
+                {
+                    // ★★★ SAY WHY IT IS NOT LETTING GO. Saber's radio holds the dongle after every
+                    //     socket has closed, with release-when-idle on and the grace at zero, and
+                    //     nothing in the log explains it — the arming and firing below both read
+                    //     correct. Every input to that decision is printed here, once every ten
+                    //     seconds and only while the radio is still held, so a log answers it
+                    //     instead of another theory (2026-08-09).
+                    // ★ specExtra matters: the emptiness test below only asks about the PRIMARY
+                    //   pair, so an extra spectrum listener that never closed would be invisible to
+                    //   it — worth seeing rather than assuming.
+                    static double lastWhy = 0.0;
+                    if (g_vsReleaseWhenIdle.load() && !radioReleased.load()
+                        && nowSecs() - lastWhy > 10.0) {
+                        lastWhy = nowSecs();
+                        int extra = 0; bool sc = false, ac = false;
+                        { std::lock_guard<std::mutex> lk(clientMtx);
+                          sc = specClient && specClient->isOpen();
+                          ac = audioClient && audioClient->isOpen();
+                          for (auto& e : specExtra) if (e && e->isOpen()) ++extra; }
+                        LOGI("idle: holding the radio — spec=%d audio=%d extra=%d due=%.1f "
+                             "parked=%d spectrogram=%d grace=%.0fs",
+                             (int)sc, (int)ac, extra,
+                             idleParkDueAt.load() > 0 ? idleParkDueAt.load() - nowSecs() : -1.0,
+                             (int)captureIdle.load(), (int)g_vsProvidesSpectrogram.load(),
+                             g_vsIdleGraceSec.load());
+                    }
+                }
                 if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load()
                     && !(g_vsProvidesSpectrogram.load() && !g_vsReleaseWhenIdle.load())) {
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx);
                       empty = (!specClient  || !specClient->isOpen())
-                           && (!audioClient || !audioClient->isOpen()); }
+                           && (!audioClient || !audioClient->isOpen())
+                           // ★ AND THE EXTRA SPECTRUM LISTENERS. This asked only about the primary
+                           //   pair, so on a multi-listener radio a second viewer was invisible to
+                           //   the idle decision entirely — it could park or release a radio that
+                           //   somebody was still watching.
+                           && std::none_of(specExtra.begin(), specExtra.end(),
+                                           [](const std::shared_ptr<net::Socket>& e){
+                                               return e && e->isOpen(); }); }
                     if (empty) armIdlePark();
                 }
 
