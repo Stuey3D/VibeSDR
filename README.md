@@ -6,6 +6,12 @@
 
 *Live on the App Store · the Apple Watch app is included · needs an iPhone + Apple Watch*
 
+### 📻 **[→ Try it right now on our radios](https://demo.vibesdr.net)** · no install, nothing to plug in
+
+*A live VibeServer in England driving three real receivers — an RTL-SDR, an SDRplay RSP1B and an
+Airspy HF+ — running the same VibeDSP engine the apps use. Open it in a browser and tune. It runs
+on a Raspberry Pi on a home line, so please be gentle with it.*
+
 > **On the TestFlight beta?** It's finished — **VibeSDR 10.0.1 is now on the App Store**, and it's
 > newer than anything the beta ever had. **I'll be expiring the beta build next week**, after which
 > it will stop opening. Grab it from the App Store above, or [build it from this repository](#building)
