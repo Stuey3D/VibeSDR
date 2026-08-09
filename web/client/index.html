@@ -1107,7 +1107,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word;
 }
 #decImage {
-  display: none; width: 100%; margin-top: 10px; background: #000;
+  /* ★★★ THE PICTURE MUST FIT THE BOX, NOT SET ITS HEIGHT. With width:100% and no ceiling, the
+     canvas height follows its own aspect — so a Scottie S2 frame (320x256) drawn at the box width
+     is taller than the room available and the body scrolls. Making the box BIGGER makes it worse,
+     because "big" means WIDER and a wider image is a taller one: neither size helped, which is
+     exactly what was reported (Stuart, 2026-08-09, on a Scottie S2 transmission).
+     ★★ object-fit: contain keeps the aspect while the cap does the limiting — canvas is a replaced
+     element, so it applies here as it would to an <img>. The 150px covers the header, the
+     PREV/SAVE row and the margins; the rest of the box's own dvh budget is the picture's. */
+  display: none; width: 100%; height: auto; margin-top: 10px; background: #000;
+  max-height: calc(100dvh - var(--decBoxBottom, 14px) - 150px);
+  object-fit: contain;
   border: 1px solid var(--btn-border); border-radius: 6px; image-rendering: pixelated;
 }
 #decImage.on { display: block; }
@@ -1190,7 +1200,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decBox.open { display: flex; flex-direction: column; }
 #decBoxHead { flex: 0 0 auto; }
 #decBox.open #decBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-#decBox.open { display: block; }
+/* ★★★ THE `display: block` THAT USED TO SIT HERE UNDID THE LINE ABOVE IT. Same selector, same
+   specificity, later in the file — so the flex column never applied, #decBody was not a flex item,
+   and its `flex: 1 1 auto; min-height: 0` did nothing at all. The comment above describes exactly
+   what was intended and was quietly not happening. A duplicate rule is not a harmless duplicate
+   when the two disagree. */
 #decBoxHead {
   display: flex; align-items: center; gap: 8px; padding: 7px 10px;
   border-bottom: 1px solid var(--bar-border); font-size: 12px;
