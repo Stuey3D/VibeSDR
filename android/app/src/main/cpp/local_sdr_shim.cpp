@@ -950,6 +950,10 @@ static LocalSdrShim::RtlSerialFn g_vsRtlSerialFn;
 static LocalSdrShim::RtlSerialStatusFn g_vsRtlSerialStatusFn;
 
 static vibeproxy::TrustedProxies g_vsTrustedProxies;
+/** ★ Whether the owner has named ANY proxy, and how many listeners have arrived from loopback.
+ *  Together they answer "is this server behind something it has not been told about?" */
+static std::atomic<bool> g_vsHaveTrustedProxies{false};
+static std::atomic<int>  g_vsLoopbackSessions{0};
 static std::mutex                g_vsTrustedProxiesMtx;
 
 static void vsPersist(const std::string& patch) {
@@ -7002,6 +7006,13 @@ struct LocalSdrShim::Impl {
             // Before sendConfig, so the client is told the frequency it is actually on rather
             // than being told one thing and then moved.
             if (firstOfSession) {
+                // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
+                //   127.0.0.1, and loopback is exempt from the session limit.
+                if (sock) {
+                    const std::string pa = sock->peerAddress();
+                    if (pa == "127.0.0.1" || pa == "::1" || pa.rfind("127.", 0) == 0)
+                        g_vsLoopbackSessions.fetch_add(1);
+                }
                 const double hz = g_vsLandingHz.load();
                 std::string lm; { std::lock_guard<std::mutex> lk(g_vsLandingMtx); lm = g_vsLandingMode; }
                 if (!lm.empty() && lm != mode) { mode = lm; buildAudio(); }
@@ -8412,7 +8423,29 @@ struct LocalSdrShim::Impl {
                 // ★ `lsusb` in Saber's log lists the device throughout, which is the tell: the
                 //   hardware was never going anywhere.
                 const bool expectingIq = !radioReleased.load() && !captureIdle.load();
-                if (silent && expectingIq && !deviceLost.load()) {
+                // ★★★ EVERY VISITOR LOOKS LIKE LOCALHOST? THEN SOMETHING IS PROXYING AND WE DO NOT KNOW.
+        //     A tunnel or a reverse proxy connects from 127.0.0.1, and loopback is EXEMPT from the
+        //     session limit — so putting a public receiver behind one silently turns the limit off
+        //     for everybody, and fills the ban list, the connection log and the country flags with
+        //     127.0.0.1. Nothing looks wrong; the owner just quietly has no limits.
+        // ★★★ FOUND THE HARD WAY: the demo went behind a Cloudflare tunnel and the countdown
+        //     vanished. The countdown was the only visible symptom of a receiver that had stopped
+        //     enforcing anything at all (2026-08-09).
+        // ★ Said ONCE, and only when the evidence is unambiguous: several distinct sessions, all
+        //   from loopback, with no trusted proxy configured. A single local test connection must
+        //   not nag somebody running it on their own desk.
+        {
+            static bool warned = false;
+            if (!warned && g_vsLoopbackSessions.load() >= 3 && !g_vsHaveTrustedProxies.load()) {
+                warned = true;
+                LOGE("every listener so far has come from 127.0.0.1 — if this server is behind a "
+                     "proxy or a tunnel, set Trusted proxies on the Server tab. Until you do, the "
+                     "session limit does not apply to anyone and the connection log records no "
+                     "real addresses.");
+            }
+        }
+
+        if (silent && expectingIq && !deviceLost.load()) {
                     deviceLost.store(true);
                     captureDown.store(true);
                     LOGE("no IQ for 3s — dongle unplugged or failed");
@@ -9367,6 +9400,7 @@ void LocalSdrShim::setRtlSerialStatusHandler(RtlSerialStatusFn fn) {
 }
 
 void LocalSdrShim::setTrustedProxies(const std::string& csv) {
+    g_vsHaveTrustedProxies.store(!csv.empty());
     std::vector<std::string> entries;
     size_t start = 0;
     while (start <= csv.size()) {
