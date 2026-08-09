@@ -186,7 +186,7 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     // low-IF vs zero-IF changes what the library is doing internally — both are worth having in
     // a log when someone reports the radio being deafer than it should be.
     std::fprintf(stderr, "airspyhf: open ok, rate %u Hz, %s-IF, %zu rates offered\n",
-                 (unsigned)nearestRate(sampleRateHz),
+                 (unsigned)nearestRate(0),
                  airspyhf_is_low_if(impl_->dev) ? "LOW" : "zero", rates_.size());
     return true;
 }
@@ -346,7 +346,26 @@ uint32_t AirspyHfSource::nearestRate(double hz) const {
 bool AirspyHfSource::setSampleRate(double hz) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!impl_->dev) return false;
-    const uint32_t r = nearestRate(hz);
+    // ★★★ THE HF+ RUNS AT ITS DEFAULT RATE, WHATEVER IT IS ASKED FOR — and this is the line that
+    //     finally makes that true. nearestRate() has said "the HF+ is now opened at exactly one
+    //     rate and never re-rated" for months, but it only honoured that for hz <= 0: a config
+    //     carrying 768000 asked for 768000 and got it exactly.
+    //
+    // ★★★ AND THE ARCHITECTURE CHANGES WITH THE RATE. In libairspyhf, `is_low_if` is indexed BY
+    //     SAMPLE RATE (`samplerate_architectures[samplerate]`), so different rates put the tuner in
+    //     genuinely different modes — with a different IF and a different digital correction. At
+    //     768 kHz Stuart's radio was tuning exactly 15.00 kHz high across the whole of medium wave
+    //     (measured against the 9 kHz raster, 12/12 carriers agreeing to within 70 Hz) while being
+    //     spot on at 9.4 MHz. At its default rate it is correct. Stuart, 2026-08-09: "if the radio
+    //     is at 768 that was always broken, it needs to run at 912 truly."
+    //
+    // ★ An owner upgrading carries a stored 768000 that nothing rewrites, so refusing it HERE is
+    //   what fixes an existing install — the setup page no longer offers it, but the config file
+    //   still holds it.
+    const uint32_t r = nearestRate(0);
+    if (hz > 0 && (uint32_t)hz != r)
+        std::fprintf(stderr, "airspyhf: asked for %.0f Hz, using this radio's own rate %u Hz "
+                             "(other rates change the tuner architecture and mis-tune MW)\n", hz, r);
     if (!r) return false;
     if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
     curRate_ = (double)r;      // remembered for restartStream(deep)

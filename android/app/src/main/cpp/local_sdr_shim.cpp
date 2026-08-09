@@ -2794,6 +2794,10 @@ struct LocalSdrShim::Impl {
     }
 
     std::string supportedRates() {
+        // ★ Nothing to offer when this process holds no radio. Empty is what the setup page wants:
+        //   it then falls back to the DRIVER table for the radio whose tab is open, which is the
+        //   right answer per radio rather than one process's guess for all of them.
+        if (frontDoorOnly) return "";
         if (useSdrplay()) return "8000000,6000000,5000000,4000000,3000000,2048000,2000000";
         if (useAirspyHf()) {
             // ★★★ THE HF+ GETS ONE RATE — ITS HIGHEST, WHICH IS ITS DEFAULT. This returned every
@@ -5542,6 +5546,14 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/vibeserver/eibi", 0) == 0
                 || path0.rfind("/vibeserver/rtl-serial", 0) == 0
                 || path0.rfind("/vibeserver/spectrogram", 0) == 0
+                // ★★★ THE SETUP PAGE'S SERVER TAB NEEDS THIS DOOR TO ANSWER. A 503 here made the
+                //   whole Server tab unusable — "cant edit anything, doesnt save, reports Could
+                //   not reach server" (Saber, 2026-08-09) — because the tab reads the CPU
+                //   governor and clock from this endpoint and the failed fetch took the rest of
+                //   the render with it. The door has no RADIO, but it does have a MACHINE, and
+                //   everything the Server tab asks about belongs to the machine.
+                // ★ It answers honestly below: driver "none", present false, no rates, no gains.
+                || path0.rfind("/vibeserver/hardware", 0) == 0
                 || path0.rfind("/bookmarks", 0) == 0
                 || path0.rfind("/favicon", 0) == 0
                 // ★ The page's own furniture. A 503 for the web manifest put a red error in every
@@ -5901,9 +5913,16 @@ struct LocalSdrShim::Impl {
             return;
 
         } else if (reqLine.rfind("GET /vibeserver/hardware", 0) == 0) {
-            const bool rsp = LocalSdrShim::instance().isSdrplay();
-            const bool hf  = LocalSdrShim::instance().isAirspyHf();
-            const bool lost = deviceLost.load();
+            // ★★★ A DOOR THAT OWNS NO RADIO MUST NOT DESCRIBE ONE. Without this the front door
+            //     answered driver "rtl", present true — the default arm of the chain below — and
+            //     the setup page drew dongle controls, a dongle's gain list and a dongle's sample
+            //     rates for a machine holding an RSP and an Airspy. Reporting nothing is the
+            //     honest answer; reporting a dongle is the same "else means dongle" trap this
+            //     tree has fixed twice already.
+            const bool noRadio = frontDoorOnly;
+            const bool rsp = !noRadio && LocalSdrShim::instance().isSdrplay();
+            const bool hf  = !noRadio && LocalSdrShim::instance().isAirspyHf();
+            const bool lost = noRadio || deviceLost.load();
             std::string j = std::string("{\"driver\":\"")
                           + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
