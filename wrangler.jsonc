@@ -1,5 +1,9 @@
 {
   "name": "vibesdr",
   "compatibility_date": "2024-09-23",
-  "assets": { "directory": "./website" }
+  // ★ The site is still static; the Worker exists for ONE route, /api/demo, which has to run
+  //   server-side because a browser on an HTTPS page may not fetch the receiver's plain HTTP.
+  //   Everything else falls through to the assets exactly as before.
+  "main": "website/worker.js",
+  "assets": { "directory": "./website", "binding": "ASSETS" }
 }

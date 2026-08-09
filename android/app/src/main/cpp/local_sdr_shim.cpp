@@ -3372,8 +3372,27 @@ struct LocalSdrShim::Impl {
             int skip = std::min(half - 1, std::max(1, (int)(3000.0 / binHz)));
             double cSum = 0; int cN = 0;
             for (int i = skip; i <= half; i++)           { cSum += dbAt(i); cSum += dbAt(-i); cN += 2; }
+            // ★★★ MEASURE THE FLOOR WHERE THE RADIO CAN STILL HEAR. This sampled the OUTERMOST
+            //     bins — and on an HF+ the outer 72 kHz per side is filter skirt, not band. The
+            //     window is bins/8 per side, which at 912 kHz is 50 kHz: entirely INSIDE the dead
+            //     lobe. So the "noise floor" was the anti-alias filter's stop-band, tens of dB
+            //     below anything real, and the SNR came out correspondingly enormous — 61 dB on
+            //     20 m against the dongle's 8 dB on the same signal at the same moment (Stuart,
+            //     2026-08-09).
+            // ★★ A DONGLE HID IT. At 2.4 MSPS the same window is 50 kHz of gentle roll-off rather
+            //    than a brick wall, so the dongle read about 5 dB optimistic and looked fine. The
+            //    fault was always there; only the HF+'s unusually wide skirts made it obvious.
+            // ★ edgeCutoffHz() already knows where the usable band ends — the display crop uses it.
+            //   Start the window just inside that, and clamp so a narrow capture cannot invert it.
+            const int deadBins = std::min(bins / 4,
+                                          (int)std::lround(edgeCutoffHz() / binHz));
             double eSum = 0; int eN = 0;
-            for (int i = 0; i <= half / 2; i++)          { eSum += dbAt(-(bins/2) + i); eSum += dbAt((bins/2 - 1) - i); eN += 2; }
+            for (int i = 0; i <= half / 2; i++) {
+                const int lo = -(bins/2) + deadBins + i;
+                const int hi = (bins/2 - 1) - deadBins - i;
+                if (lo >= hi) break;
+                eSum += dbAt(lo); eSum += dbAt(hi); eN += 2;
+            }
             spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
             // Band-edge average = our own noise floor, in the engine's dBFS. emitServerFft()
             // aligns the server's differently-scaled dB onto this, so the two waterfall sources

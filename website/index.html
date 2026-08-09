@@ -393,6 +393,61 @@
 </style>
 </head>
 <body>
+<!-- ★★★ THE ON-AIR SIGN. A studio light, in the place a studio light lives: across the top, lit only
+     when the receivers are actually broadcasting. It is the loudest thing on the page BECAUSE the
+     live demo is the strongest argument the page has — everything below it is a claim, and this is
+     the claim running.
+     ★★ It is hidden until the server answers. An ON AIR sign that is lit when nothing is on air is
+     worse than no sign at all: it is the one element on the page that must never lie. -->
+<div id="onAirBar" hidden>
+  <style>
+    #onAirBar {
+      position: sticky; top: 0; z-index: 60;
+      display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap;
+      padding: 10px 18px;
+      background: linear-gradient(180deg, #1a0705 0%, #120504 100%);
+      border-bottom: 1px solid #3a1512;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+    }
+    /* ★ The lamp itself. Red because every studio sign is red — the metaphor does the explaining,
+         so the words do not have to. */
+    .oa-lamp {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 6px 16px; border-radius: 4px;
+      border: 1px solid #ff4d3d; background: rgba(255,77,61,0.10);
+      color: #ff6a58; font: 700 13px/1 var(--mono); letter-spacing: .32em; text-transform: uppercase;
+      text-shadow: 0 0 14px rgba(255,77,61,0.7);
+      box-shadow: 0 0 22px rgba(255,77,61,0.28), inset 0 0 18px rgba(255,77,61,0.12);
+      animation: oaGlow 3.4s ease-in-out infinite;
+    }
+    /* ★ A sign that breathes reads as LIVE; one that sits still reads as a graphic. Slow, though —
+         this is a lamp warming, not a warning light. */
+    @keyframes oaGlow {
+      0%,100% { box-shadow: 0 0 22px rgba(255,77,61,0.28), inset 0 0 18px rgba(255,77,61,0.12); }
+      50%     { box-shadow: 0 0 34px rgba(255,77,61,0.50), inset 0 0 22px rgba(255,77,61,0.20); }
+    }
+    @media (prefers-reduced-motion: reduce) { .oa-lamp { animation: none; } }
+
+    .oa-what { color: var(--ink); font-size: 14px; }
+    .oa-what b { color: #ff8a7a; font-weight: 600; }
+    .oa-sub { color: var(--muted); font-size: 13px; }
+    .oa-listen {
+      display: inline-block; padding: 8px 18px; border-radius: 6px;
+      background: #ff4d3d; color: #120603; text-decoration: none;
+      font: 700 14px/1 var(--sans); letter-spacing: .01em;
+      box-shadow: 0 0 20px rgba(255,77,61,0.35);
+      transition: transform .12s ease, box-shadow .18s ease;
+    }
+    .oa-listen:hover { transform: translateY(-1px); box-shadow: 0 0 30px rgba(255,77,61,0.55); }
+    /* ★ On a phone the sub-line is the first thing to go: the lamp and the button are the message. */
+    @media (max-width: 620px) { .oa-sub { display: none; } #onAirBar { gap: 12px; padding: 9px 12px; } }
+  </style>
+  <span class="oa-lamp">On air</span>
+  <span class="oa-what"><b id="oaCount">3 receivers</b> <span class="oa-sub">live from England &mdash; tune them yourself</span></span>
+  <a class="oa-listen" id="oaListen" href="#">Listen now</a>
+</div>
+
+
 
 <header>
   <div class="wordmark"><span class="dot"></span>VibeSDR</div>
@@ -454,6 +509,133 @@
 
 <!-- ★ The watch sits this high on purpose: it is the thing people actually react to. Twenty
      RTL-SDR giveaway codes came back as comments, and they were all about the wrist. -->
+<!-- ★★★ THE LIVE DEMO. Everything else on this page is a claim; this is the claim running. It sits
+     directly under the hero on purpose — someone deciding whether the DSP is any good should be
+     able to hear it before they read a word about it.
+     ★★ IT HIDES ITSELF WHEN THE RECEIVER IS OFF. A dead demo link is worse than no demo link: it
+     turns "look how well this works" into a broken promise on the one page that has to be
+     convincing. The card starts hidden and is only revealed once the server has answered.
+     ★ The status comes from /api/demo, which is fetched by the WORKER, not the browser — see
+     website/worker.js for why (mixed content, and keeping a home address off a public page). -->
+<section class="band demo-band" id="demo" hidden>
+  <style>
+    .demo-band { border-top: 1px solid var(--line); }
+    .demo-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+    .demo-live {
+      display: inline-flex; align-items: center; gap: 8px;
+      font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+      color: var(--phosphor);
+    }
+    .demo-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--phosphor); box-shadow: 0 0 10px rgba(53,224,138,0.8);
+      animation: demoPulse 2s ease-in-out infinite;
+    }
+    /* ★ Respect a stated preference. A pulsing dot is decoration; for someone who has asked for
+       less motion it is just movement they did not want. */
+    @media (prefers-reduced-motion: reduce) { .demo-dot { animation: none; } }
+    @keyframes demoPulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+    .demo-grid {
+      display: grid; gap: 14px; margin: 26px 0 22px;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+    .demo-card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .demo-card h3 { margin: 0 0 2px; font: 600 16px/1.3 var(--sans); color: var(--ink); }
+    .demo-where { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+    .demo-state { margin-top: 12px; font: 400 13px/1.6 var(--mono); color: var(--ink); }
+    .demo-state b { color: var(--phosphor); font-weight: 600; }
+    .demo-state .busy { color: var(--amber); }
+    .demo-tag {
+      display: inline-block; margin-top: 10px; padding: 3px 8px; border-radius: 999px;
+      font: 600 10px/1.6 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+      border: 1px solid var(--line); color: var(--muted);
+    }
+    .demo-tag.shared { border-color: var(--phosphor-dim); color: var(--phosphor); }
+    .demo-note { color: var(--muted); font-size: 14px; max-width: 62ch; }
+  </style>
+
+  <div class="wrap">
+    <div class="demo-head">
+      <p class="eyebrow" style="margin:0">Live demo</p>
+      <span class="demo-live"><span class="demo-dot"></span><span id="demoLive">On air</span></span>
+    </div>
+
+    <h2>Take it for a spin <span class="glow">on our radios, right now.</span></h2>
+    <p class="lede" style="max-width:64ch">
+      No install, no account, nothing to plug in. This is the same VibeDSP engine the apps run,
+      driving three real receivers on a shelf in England — demodulating, decoding and drawing every
+      pixel of the waterfall on hardware you can hear for yourself.
+    </p>
+
+    <div class="demo-grid" id="demoGrid"></div>
+
+    <div class="cta-row">
+      <a class="btn btn-buy" id="demoOpen" href="#" rel="noopener">Open the receiver</a>
+      <a class="btn btn-ghost" href="#server">Run your own</a>
+    </div>
+    <p class="demo-note" id="demoNote" style="margin-top:14px"></p>
+  </div>
+</section>
+
+<script>
+// ★★★ THE CARD ONLY EXISTS IF THE RECEIVER ANSWERS. Written so the FAILURE path is the quiet one:
+//     no server, no card, no console noise, and a page that is otherwise untouched.
+(async () => {
+  const sec = document.getElementById('demo');
+  if (!sec) return;
+  const fmt = (hz) => hz >= 1e6 ? (hz / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz'
+                                : Math.round(hz / 1e3) + ' kHz';
+  try {
+    const r = await fetch('/api/demo', { cache: 'no-store' });
+    const d = await r.json();
+    if (!d.onAir || !d.radios.length) return;          // ★ stays hidden
+
+    document.getElementById('demoOpen').href = d.url;
+
+    // ★★★ THE SIGN AND THE CARD ARE FED BY THE SAME ANSWER. Two fetches would let them disagree —
+    //     a lit ON AIR sign above a card saying the receiver is down is exactly the sort of thing
+    //     nobody notices until a visitor screenshots it.
+    const bar = document.getElementById('onAirBar');
+    if (bar) {
+      const up = d.radios.filter((x) => x.up).length;
+      document.getElementById('oaCount').textContent =
+        up === 1 ? '1 receiver' : `${up} receivers`;
+      document.getElementById('oaListen').href = d.url;
+      bar.hidden = false;
+    }
+    document.getElementById('demoLive').textContent =
+      d.listeners === 1 ? 'On air · 1 listening' :
+      d.listeners ? `On air · ${d.listeners} listening` : 'On air';
+
+    document.getElementById('demoGrid').innerHTML = d.radios.map((x) => {
+      // ★ Say what a visitor will actually GET. "Shared" means their own tuning inside the owner's
+      //   window; a single-listener radio is one person at a time, and if it is taken they should
+      //   know that BEFORE they click rather than meeting a queue.
+      const where = x.centreHz ? `${fmt(x.centreHz)}${x.mode ? ' · ' + x.mode.toUpperCase() : ''}` : '';
+      const state = !x.up ? '<span class="busy">not answering</span>'
+        : x.shared ? `<b>${x.listeners}</b> of ${x.maxListeners} listening`
+        : x.full   ? `<span class="busy">in use</span>${x.queue ? ` · ${x.queue} waiting` : ''}`
+                   : '<b>free</b> — one listener at a time';
+      return `<div class="demo-card">
+          <h3>${x.name}</h3>
+          <div class="demo-where">${where}</div>
+          <div class="demo-state">${state}</div>
+          <span class="demo-tag${x.shared ? ' shared' : ''}">${x.shared ? 'Shared · own tuning' : 'One at a time'}</span>
+        </div>`;
+    }).join('');
+
+    document.getElementById('demoNote').textContent =
+      'Runs on a Raspberry Pi on a home broadband line, so please be gentle with it. '
+      + 'Everything you see there is in the source.';
+    sec.hidden = false;
+  } catch (e) { /* ★ off, or unreachable — the card simply never appears */ }
+})();
+</script>
+
 <section class="band jr-band" id="watch">
   <div class="wrap jr-showcase">
     <div class="jr-media">
