@@ -250,6 +250,21 @@ inline Ranges subtract(const Ranges& from, const Ranges& cut) {
  *   tunable range at all), and is returned as such rather than silently ignored: quietly serving
  *   the whole band because their entry was wrong is the opposite of what they asked for.
  */
+/** ★★★ WHAT A RADIO CAN HEAR AT ALL, by driver. A listener deciding whether a receiver is worth
+ *      opening wants its COVERAGE — "500 kHz to 1.7 GHz" — not the one frequency it happens to be
+ *      parked on. The directory only ever published the latter, so three very different radios
+ *      looked interchangeable (Stuart, 2026-08-09).
+ *  ★★ These are the same figures the sources enforce, kept here so the FRONT DOOR can answer for a
+ *     radio owned by another process — it has the config but never the device.
+ *  ★ The HF+'s gap is real hardware, not a limitation we invented: 31-60 MHz does not exist on it,
+ *    and a listener who is not told will park there and conclude the receiver is broken. */
+inline Ranges driverCoverage(const std::string& driver) {
+    if (driver == "airspyhf") return { {500.0, 31.0e6}, {60.0e6, 260.0e6} };
+    if (driver == "sdrplay")  return { {1000.0, 2.0e9} };
+    if (driver == "rtl" || driver == "rtlsdr") return { {500.0e3, 1.766e9} };
+    return {};                                   // unknown: say nothing rather than guess
+}
+
 inline Ranges permitted(const Ranges& hardware, const std::string& allowCsv,
                         const std::string& blockCsv) {
     const Ranges hw = normalise(hardware);

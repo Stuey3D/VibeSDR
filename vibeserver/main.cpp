@@ -1268,6 +1268,31 @@ int main(int argc, char** argv) {
             j += ",\"label\":\"" + jsonEscape(vsconfig::publicLabel(r.label.empty() ? r.driver : r.label)) + "\"";
             j += ",\"driver\":\"" + jsonEscape(r.driver) + "\"";
             j += ",\"port\":" + std::to_string(vsconfig::portForRadio(srv, i));
+            // ★★★ WHAT THIS RADIO CAN HEAR, AND WHETHER THE OWNER HAS NARROWED IT. The directory
+            //     published only the frequency it happens to be parked on, which makes three very
+            //     different receivers look interchangeable — a dongle that reaches 1.7 GHz and an
+            //     HF+ that stops at 31 MHz both showed one number (Stuart, 2026-08-09).
+            // ★★ TWO SETS, DELIBERATELY. `coverage` is the hardware's own reach and `allowed` is
+            //    what the owner permits within it. A listener who cannot tune somewhere deserves to
+            //    know WHICH wall they hit: "this radio cannot hear it" and "the operator does not
+            //    allow it" are different facts, and reporting the second as the first tells someone
+            //    the hardware is broken when it is policy.
+            // ★ A locked window counts as a restriction even with no lists set — it is the most
+            //   restrictive thing an owner can do.
+            {
+                const vibebands::Ranges cov = vibebands::driverCoverage(r.driver);
+                const vibebands::Ranges perm =
+                    vibebands::permitted(cov, r.allowRanges, r.blockRanges);
+                const bool restricted = !r.allowRanges.empty() || !r.blockRanges.empty()
+                                     || r.mode == vsconfig::Mode::LockedRange;
+                if (!cov.empty())  j += ",\"coverage\":" + vibebands::toJson(cov);
+                if (!perm.empty()) j += ",\"allowed\":"  + vibebands::toJson(perm);
+                j += std::string(",\"restricted\":") + (restricted ? "true" : "false");
+                if (!r.allowRanges.empty())
+                    j += ",\"allowList\":\"" + jsonEscape(r.allowRanges) + "\"";
+                if (!r.blockRanges.empty())
+                    j += ",\"blockList\":\"" + jsonEscape(r.blockRanges) + "\"";
+            }
             j += ",\"primary\":" + std::string((int)i == primary ? "true" : "false");
             j += ",\"users\":" + std::to_string(r.users);
             j += ",\"mine\":" + std::string(r.serial == g_myRadioSerial ? "true" : "false");

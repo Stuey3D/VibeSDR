@@ -546,6 +546,14 @@
     }
     .demo-card h3 { margin: 0 0 2px; font: 600 16px/1.3 var(--sans); color: var(--ink); }
     .demo-where { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+    .demo-tuned { color: var(--muted); opacity: .75; margin-top: 2px; }
+    .demo-open { color: var(--phosphor-dim); }
+    /* ★ Bold and underlined, as asked — it changes what a visitor is allowed to do, so it should
+       not read like the rest of the line. help cursor signals there is more on hover. */
+    .demo-restricted {
+      font-weight: 700; text-decoration: underline; text-underline-offset: 2px;
+      color: var(--amber); cursor: help; text-decoration-style: dotted;
+    }
     .demo-state { margin-top: 12px; font: 400 13px/1.6 var(--mono); color: var(--ink); }
     .demo-state b { color: var(--phosphor); font-weight: 600; }
     .demo-state .busy { color: var(--amber); }
@@ -584,7 +592,7 @@
 <script>
 // ★★★ THE CARD ONLY EXISTS IF THE RECEIVER ANSWERS. Written so the FAILURE path is the quiet one:
 //     no server, no card, no console noise, and a page that is otherwise untouched.
-(async () => {
+async function loadDemo() {
   const sec = document.getElementById('demo');
   if (!sec) return;
   const fmt = (hz) => hz >= 1e6 ? (hz / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz'
@@ -615,10 +623,30 @@
       // ★ Say what a visitor will actually GET. "Shared" means their own tuning inside the owner's
       //   window; a single-listener radio is one person at a time, and if it is taken they should
       //   know that BEFORE they click rather than meeting a queue.
-      const where = x.centreHz ? `${fmt(x.centreHz)}${x.mode ? ' · ' + x.mode.toUpperCase() : ''}` : '';
+      // ★★★ WHAT IT COVERS, NOT WHERE IT IS PARKED. "648 kHz AM" tells you nothing about whether
+      //     the radio is worth opening; "500 kHz – 1.7 GHz" does. The tuned frequency stays, small,
+      //     underneath — it is a nice detail, not the headline (Stuart, 2026-08-09).
+      const rng = (a, b) => `${fmt(a)} – ${fmt(b)}`;
+      const cover = (x.coverage || []).map(([a, b]) => rng(a, b)).join(', ');
+      // ★★ AND SAY IF THE OWNER HAS NARROWED IT. Bold and underlined because it changes what a
+      //    visitor can do; the tooltip carries the detail so the card stays readable.
+      const limits = x.restricted
+        ? `<abbr class="demo-restricted" title="${
+             [x.allowList ? 'Allowed: ' + x.allowList : '', x.blockList ? 'Blocked: ' + x.blockList : '']
+               .filter(Boolean).join(' — ') || 'The operator has fixed this receiver to one band.'
+           }">Restrictions in place</abbr>`
+        : '<span class="demo-open">Unrestricted</span>';
+      const where = (cover ? `${cover} · ${limits}` : '')
+        + (x.centreHz ? `<div class="demo-tuned">on ${fmt(x.centreHz)}${x.mode ? ' · ' + x.mode.toUpperCase() : ''}</div>` : '');
+      // ★★★ SAY WHEN IT FREES UP, not merely that it is taken. "In use" makes someone leave;
+      //     "free in 4:12" makes them wait — and the receiver already knows the number, because
+      //     it runs the same countdown on screen for whoever is using it.
+      const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      const free = x.freeInSec >= 0
+        ? ` · <span class="demo-free" data-left="${x.freeInSec}">free in ${mmss(x.freeInSec)}</span>` : '';
       const state = !x.up ? '<span class="busy">not answering</span>'
         : x.shared ? `<b>${x.listeners}</b> of ${x.maxListeners} listening`
-        : x.full   ? `<span class="busy">in use</span>${x.queue ? ` · ${x.queue} waiting` : ''}`
+        : x.full   ? `<span class="busy">in use</span>${free}${x.queue ? ` · ${x.queue} waiting` : ''}`
                    : '<b>free</b> — one listener at a time';
       return `<div class="demo-card">
           <h3>${x.name}</h3>
@@ -628,12 +656,31 @@
         </div>`;
     }).join('');
 
+    // ★★ A COUNTDOWN THAT DOES NOT COUNT IS A TIMESTAMP. It ticks locally every second, and the
+    //    whole card re-fetches every 30 s so a listener who leaves early is reflected rather than
+    //    the page insisting on a turn that has already ended.
+    if (!window.__demoTick) {
+      window.__demoTick = setInterval(() => {
+        document.querySelectorAll('.demo-free').forEach((el) => {
+          const left = Math.max(0, Number(el.dataset.left) - 1);
+          el.dataset.left = String(left);
+          el.textContent = left ? `free in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
+                                : 'free any moment';
+        });
+      }, 1000);
+    }
+
     document.getElementById('demoNote').textContent =
       'Runs on a Raspberry Pi on a home broadband line, so please be gentle with it. '
       + 'Everything you see there is in the source.';
     sec.hidden = false;
   } catch (e) { /* ★ off, or unreachable — the card simply never appears */ }
-})();
+}
+
+loadDemo();
+// ★ Re-read every 30 s. Cheap — the Worker caches for 15 — and it keeps the ON AIR sign, the
+//   listener counts and the countdown honest on a tab somebody left open all afternoon.
+setInterval(loadDemo, 30000);
 </script>
 
 <section class="band jr-band" id="watch">

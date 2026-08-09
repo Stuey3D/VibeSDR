@@ -76,6 +76,15 @@ async function demoStatus() {
       // ★ A single-listener radio with somebody on it is FULL, not merely busy — that is the
       //   distinction a visitor cares about before they click.
       full: Number(j.listeners || 0) >= max,
+      // ★ How long until the current occupant's turn ends. -1 means no limit, or nobody on it.
+      //   The receiver already tracks this for its own countdown; the card just repeats it.
+      freeInSec: Number.isFinite(Number(j.freeInSec)) ? Number(j.freeInSec) : -1,
+      // ★ Coverage is the hardware's reach; restricted says whether the owner has narrowed it.
+      //   Both travel so the card can say WHICH wall a listener would hit.
+      coverage: Array.isArray(r.coverage) ? r.coverage : [],
+      restricted: !!r.restricted,
+      allowList: r.allowList || '',
+      blockList: r.blockList || '',
       up: states[i].ok,
     };
   });
