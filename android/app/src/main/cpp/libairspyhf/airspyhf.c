@@ -1310,6 +1310,22 @@ int ADDCALL airspyhf_set_freq(airspyhf_device_t* device, const uint32_t freq_hz)
 	device->freq_hz = freq_hz;
 	device->freq_shift = adjusted_freq_hz - freq_khz * 1000;
 
+	/* ★★★ VIBESDR DIAGNOSTIC. This radio tunes a constant 15 kHz away from what we ask — audio and
+	 *     spectrum together, so it is the TUNING, not the axis — and the error does not change with
+	 *     the sample rate, which rules out the rotation being scaled wrongly. Everything that could
+	 *     cause it lives in these five numbers, and no amount of reading the code has settled which:
+	 *       freq_hz          what we asked for
+	 *       adjusted_freq_hz after the ppb calibration (0 here, so it should equal freq_hz)
+	 *       freq_khz         the LO actually programmed, on its 1 kHz grid, including if_shift
+	 *       freq_shift       the residual the DSP is supposed to rotate away
+	 *       low_if / rate    which architecture, and the rate the rotation divides by
+	 *     15 kHz is exactly 3x the 5 kHz zero-IF shift, which is the sort of coincidence worth
+	 *     printing rather than theorising about. Remove once this is understood. */
+	fprintf(stderr, "airspyhf[lib]: ask %u -> adj %u, LO %u kHz, shift %d, %s-IF, rate %u\n",
+	        (unsigned)freq_hz, (unsigned)adjusted_freq_hz, (unsigned)freq_khz,
+	        (int)device->freq_shift, device->is_low_if ? "low" : "zero",
+	        (unsigned)device->current_samplerate);
+
 	return AIRSPYHF_SUCCESS;
 }
 

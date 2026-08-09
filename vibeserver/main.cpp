@@ -554,6 +554,45 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
     }
 }
 
+/** ★★★ NO SERIAL NUMBERS ON A PUBLIC PAGE. The default label a radio gets is the name the driver
+ *      reports, and for two of the three that name CARRIES THE SERIAL — "SDRplay RSP1B 240513CA60",
+ *      "Airspy HF+ (DD52B980BE4946DA)". On the setup and admin pages that is exactly right and the
+ *      reason it is there: with two identical dongles it is the only way to tell them apart. On the
+ *      LANDING PAGE, which is the one strangers see, it is the owner's hardware identity published
+ *      to anyone who loads the site (Stuart, 2026-08-09).
+ *
+ *  ★★ STRIPS A SERIAL, NOT A NAME. A trailing hex blob, in brackets or bare, of six characters or
+ *     more. "RSP1B" survives because R, S and P are not hex digits; so does "V4", being too short.
+ *     An owner who has typed their own label keeps every character of it — this only ever removes
+ *     something that cannot be anything but a serial.
+ *  ★ The serial still travels in the JSON and in the /r/<serial>/ route, because that is how a
+ *    client reaches a radio at all. This is about what is DISPLAYED. */
+static std::string publicLabel(const std::string& in) {
+    auto isHexRun = [](const std::string& t) {
+        if (t.size() < 6) return false;
+        for (char c : t) if (!std::isxdigit((unsigned char)c)) return false;
+        return true;
+    };
+    std::string s = in;
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+    // "... (DEADBEEF12)"
+    if (!s.empty() && s.back() == ')') {
+        const size_t open = s.rfind('(');
+        if (open != std::string::npos && isHexRun(s.substr(open + 1, s.size() - open - 2))) {
+            s.erase(open);
+            while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+            return s;
+        }
+    }
+    // "... DEADBEEF12"
+    const size_t sp = s.rfind(' ');
+    if (sp != std::string::npos && isHexRun(s.substr(sp + 1))) {
+        s.erase(sp);
+        while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+    }
+    return s;
+}
+
 /** ★ Small and local on purpose: the shim has one, but it is a private member of an internal
  *  class, and reaching into that to save nine lines would couple the daemon to its internals. */
 static std::string jsonEscape(const std::string& in) {
@@ -1205,7 +1244,9 @@ int main(int argc, char** argv) {
             if (!first) j += ",";
             first = false;
             j += "{\"serial\":\"" + jsonEscape(r.serial) + "\"";
-            j += ",\"label\":\"" + jsonEscape(r.label.empty() ? r.driver : r.label) + "\"";
+            // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
+            //   name. The setup and admin pages read the config API instead and keep the full one.
+            j += ",\"label\":\"" + jsonEscape(publicLabel(r.label.empty() ? r.driver : r.label)) + "\"";
             j += ",\"driver\":\"" + jsonEscape(r.driver) + "\"";
             j += ",\"port\":" + std::to_string(vsconfig::portForRadio(srv, i));
             j += ",\"primary\":" + std::string((int)i == primary ? "true" : "false");
