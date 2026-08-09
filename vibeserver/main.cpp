@@ -1566,6 +1566,19 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "VibeServer: could not save setting (%s)\n", err.c_str());
             return;
         }
+        // ★★★ AND PUSH IT TO THE RUNNING RADIO. Saving a setting is not applying it.
+        //     `setVibeServerZoomSpectrum()` was called in exactly ONE place — startup — so
+        //     toggling "real bins at deep zoom" in the setup page wrote the value to the config,
+        //     read it back, and reported success while the running engine carried on
+        //     interpolating. It took effect only on the next restart, and nothing said so.
+        // ★★ THIS IS THE BUG DOCUMENTED FIFTEEN LINES BELOW, in a different field: a page that
+        //    "said Saved, read the same value back, and agreed with itself" while the radio never
+        //    heard about it. Same shape, same file, and the second one was not found by looking —
+        //    it was found by asking why a zoomed Airspy was still blocky (Stuart, 2026-08-09,
+        //    with a screenshot of the staircase to prove it).
+        // ★ Only what this patch actually carries, and only for OUR radio — the loop above has
+        //   already resolved that, so `next` is the truth for this process.
+        LocalSdrShim::setVibeServerZoomSpectrum(next.zoomSpectrum);
         g_runtimeConfig = next;
         g_serverConfig  = srv;
     });
