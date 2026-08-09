@@ -96,6 +96,31 @@ int main() {
         ok(c.configured, "configured, because BOTH the machine and the radio are");
     }
 
+    std::printf("\nWhat a LISTENER sees never carries a hardware serial\n");
+    {
+        // ★★★ TWO PLACES SHOW A RADIO'S NAME and both were leaking it: the landing page's list and
+        //     the name painted across the waterfall once connected. The second was missed first
+        //     time round — "SDRplay RSP1B 240513CA60" on the receiver screen (Stuart, 2026-08-09).
+        ok(publicLabel("SDRplay RSP1B 240513CA60") == "SDRplay RSP1B",
+           "★ a bare trailing serial goes", publicLabel("SDRplay RSP1B 240513CA60"));
+        ok(publicLabel("Airspy HF+ (DD52B980BE4946DA)") == "Airspy HF+",
+           "★ and a bracketed one", publicLabel("Airspy HF+ (DD52B980BE4946DA)"));
+        ok(publicLabel("RTLSDRBlog Blog V4") == "RTLSDRBlog Blog V4",
+           "★★ but a NAME is untouched — V4 is too short to be a serial");
+        ok(publicLabel("Shack RSP1B") == "Shack RSP1B",
+           "★★ and RSP1B survives, because R, S and P are not hex digits");
+        ok(publicLabel("Loft antenna") == "Loft antenna", "an owner's own label is left alone");
+
+        ServerConfig s3;
+        s3.configured = true; s3.name = "Pi500";
+        RadioConfig rr; rr.serial = "240513CA60"; rr.driver = "sdrplay";
+        rr.label = "SDRplay RSP1B 240513CA60"; rr.configured = true;
+        s3.radios.push_back(rr);
+        ok(effectiveFor(s3, s3.radios[0]).name == "SDRplay RSP1B",
+           "★★★ and the name a listener is shown has it stripped",
+           effectiveFor(s3, s3.radios[0]).name);
+    }
+
     std::printf("\nA machine-wide setting survives a per-radio patch\n");
     {
         // ★★★ THE ADMIN PAGE'S UPDATE SCHEDULE RIDES THE PER-RADIO PERSIST CHANNEL. main.cpp folds

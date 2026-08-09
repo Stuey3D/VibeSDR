@@ -337,6 +337,11 @@ int portForRadio(const ServerConfig& cfg, size_t index);
 /** Flatten the shared settings and one radio's settings into the Config a single VibeServer
  *  process consumes. ★ This is what makes process-per-radio cheap: the existing single-radio code
  *  never learns that it has siblings. */
+/** A label with any trailing hardware serial removed — what strangers should see. The setup and
+ *  admin pages use the stored label, serial and all, because telling two identical dongles apart
+ *  is the whole reason it is there. */
+std::string publicLabel(const std::string& in);
+
 Config effectiveFor(const ServerConfig& srv, const RadioConfig& radio);
 
 /** Read `path`. Returns false and leaves `cfg` untouched if the file is absent or unreadable;
