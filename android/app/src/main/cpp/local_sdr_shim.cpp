@@ -1799,6 +1799,41 @@ struct LocalSdrShim::Impl {
      *  a comment justifying a global by an occupancy assumption a later feature quietly repealed. */
     std::map<net::Socket*, int> clientBins;
 
+    /** ★★★ THE FRAME RATE EACH LISTENER ASKED FOR. Absent/0 = the server's own default.
+     *
+     *  THE BUG THIS REPLACES (2026-08-09), and it is the map above's twin. `type:"fftRate"` went
+     *  straight to LocalSdrShim::setFftRate() — the ENGINE rate, one number for the whole radio.
+     *  So one listener's idle-saver dropping to 5 fps dropped the waterfall to 5 fps for EVERY
+     *  listener on that radio, and because nothing recomputed it, it STAYED there after that
+     *  listener left. Measured on the public demo's shared RSP1B: the per-second frame counts
+     *  stepped between 20 and 5 in blocks of many seconds with the observer touching nothing —
+     *
+     *      21 20 20 21 20 20 21 20 20 21 20 21 20 20 21 20 20 21 20 20 21 20 20 8 5 6 5 5 5 5 5
+     *
+     *  — which is what "runs smooth, then sticks, then smooth" is, from the other end. Confirmed
+     *  against a local shared-mode server: a bystander who asked for nothing went 24.5 -> 4.9 fps
+     *  when a second client asked for 5, and did NOT recover when it left
+     *  (`tools/vibeserver-probes/fpsleak.mjs`).
+     *
+     *  ★★ IT LOOKS LIKE NETWORK JITTER AND IS NOT. The frames that were sent still arrived
+     *     promptly (delay-above-best p95 ~11 ms through a Cloudflare tunnel) and no stall was
+     *     followed by a catch-up burst — there were simply FEWER FRAMES. That distinction decides
+     *     the fix: a client-side pacing buffer absorbs clumping and can do nothing whatever about
+     *     frames that were never sent. See tools/vibeserver-probes/jitterprobe.mjs, which prints
+     *     the per-second timeline precisely so the two cannot be confused again.
+     *
+     *  ★ THE ENGINE RUNS AT THE MAXIMUM ANYONE WANTS; everyone slower is decimated on the way
+     *    out. So the idle phone costs itself frames and nobody else — one user at 5 fps must not
+     *    drag down the other nine. The FFT is shared and already paid for, so serving the fast
+     *    listeners costs no more than it did before. */
+    std::map<net::Socket*, double> clientFps;
+    /** Phase accumulator per listener, advanced once per emitted frame. Fractional, so a client
+     *  asking 7 fps off a 20 fps engine gets 7 — not the nearest integer divisor. */
+    std::map<net::Socket*, double> clientFpsAcc;
+    /** The rate the OWNER configured (--fps / the GUI). The floor when nobody has asked, and what
+     *  the radio returns to when the last slow listener leaves. */
+    double baseFftRate = 0.0;
+
     // ── ★★★ PER-CLIENT DSP — every listener their own VFO, demodulator and audio ─────────────
     //
     // THE MODEL, in Stuart's words (2026-08-05): *"it needs to act like an OWRX profile whereby
@@ -2515,7 +2550,11 @@ struct LocalSdrShim::Impl {
             vibedsp::RxPipeline::Callbacks vcb{};
             vcb.ctx = c;
             vcb.zoomSpectrum = &Impl::clientZoomCb;
-            c->viewRx->start(c->viewChanRate, 1024, fftRate, (int)AUDIO_SR, vcb);
+            // ★★ THIS LISTENER'S OWN RATE, not the engine's. A listener drawing its own zoomed
+            //    view is fed by its own pipeline, so its rate is set here rather than decimated on
+            //    the way out — and passing the engine rate (the FASTEST listener's) would have
+            //    handed an idle phone the full 20 fps it had just asked to be spared.
+            c->viewRx->start(c->viewChanRate, 1024, fpsFor(c->spec), (int)AUDIO_SR, vcb);
             LOGI("client view channel: %.3f kHz wide (%d bins) for a %.3f kHz view",
                  c->viewChanRate / 1e3, want, c->viewSpanHz / 1e3);
         }
@@ -2524,7 +2563,7 @@ struct LocalSdrShim::Impl {
         const double off   = c->viewCentreHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         c->viewRx->setZoomBins(binsFor(c->spec));
-        c->viewRx->setZoomView(resid, c->viewSpanHz, fftRate);
+        c->viewRx->setZoomView(resid, c->viewSpanHz, fpsFor(c->spec));
         c->viewPriming.store(true);      // cleared by the first frame out of the new view
     }
 
@@ -2641,7 +2680,7 @@ struct LocalSdrShim::Impl {
         sendClientAudio(c, sock, buf.data(), outFrames, ch);
     }
 
-    struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; };
+    struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; double fps; };
 
     /** Everyone receiving spectrum right now, WITH the width each asked for — primary first.
      *  Call WITHOUT clientMtx held. */
@@ -2650,7 +2689,9 @@ struct LocalSdrShim::Impl {
         std::lock_guard<std::mutex> lk(clientMtx);
         auto add = [&](const std::shared_ptr<net::Socket>& s) {
             auto it = clientBins.find(s.get());
-            out.push_back({s, it == clientBins.end() ? WIRE_BINS_DEFAULT : it->second});
+            auto fit = clientFps.find(s.get());
+            out.push_back({s, it == clientBins.end() ? WIRE_BINS_DEFAULT : it->second,
+                           fit == clientFps.end() ? 0.0 : fit->second});
         };
         if (specClient && specClient->isOpen()) add(specClient);
         for (auto& s : specExtra) if (s && s->isOpen()) add(s);
@@ -2662,6 +2703,80 @@ struct LocalSdrShim::Impl {
         for (auto& p : allSpecPeers()) out.push_back(p.sock);
         return out;
     }
+    /** ★★★ THE ENGINE RUNS AT THE FASTEST RATE ANY LISTENER WANTS — never at the slowest.
+     *  Mirrors wireBins() directly above, and for the same reason: a listener asking for less can
+     *  always be given less on the way out, but a listener asking for more cannot be given frames
+     *  that were never computed. Running at the min is what let one idle phone slow everybody.
+     *  ★ The owner's configured rate is the FLOOR, not a starting point to be lost: with nobody
+     *    asking, the radio sits at --fps, and when the last slow listener leaves it returns there
+     *    rather than staying wherever that listener left it.
+     *  Call WITHOUT clientMtx held. */
+    void recomputeEngineRate() {
+        double want = 0.0;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            auto acc = [&](const std::shared_ptr<net::Socket>& s) {
+                auto it = clientFps.find(s.get());
+                // A listener that has never asked wants the server default, not zero — otherwise
+                // a single silent client would hold the max at 0 and fall through to the floor.
+                want = std::max(want, it == clientFps.end() || it->second <= 0 ? baseFftRate : it->second);
+            };
+            if (specClient && specClient->isOpen()) acc(specClient);
+            for (auto& s : specExtra) if (s && s->isOpen()) acc(s);
+        }
+        if (want <= 0) want = baseFftRate;
+        const double mr = g_vsMaxFftRate.load();     // the owner's ceiling still wins
+        if (mr > 0 && want > mr) want = mr;
+        if (want <= 0 || std::fabs(want - fftRate) < 0.01) return;
+        applyEngineRate(want);
+    }
+
+    /** Set the engine rate itself. The per-client decimation below turns this into each
+     *  listener's own rate; nothing else should call rx.setFftRate directly. */
+    void applyEngineRate(double fps) {
+        fftRate = fps;
+        // The engine runs at FFT_AVG× the EMIT rate — onSpectrum block-averages FFT_AVG frames
+        // into each one it sends. Pass the raw fps and everything comes out 4× too slow.
+        rx.setFftRate(fps * FFT_AVG);
+        // ★★ THE ZOOM PATH HAS ITS OWN RATE and only updateZoomView() sets it — a rate change that
+        //    reached one path and not the other needed a PAGE REFRESH to take effect.
+        updateZoomView();
+        LOGI("engine fft rate: %.1f fps (engine %.1f) — the fastest listener's rate", fps, fps * FFT_AVG);
+    }
+
+    /** Who gets THIS frame. Advances each listener's phase accumulator by its share of the engine
+     *  rate and returns one flag per peer, in peer order.
+     *  ★★ CALL EXACTLY ONCE PER EMITTED FRAME, and only from the path that is actually emitting.
+     *     The wide path and the zoom path suppress each other; advancing in both would double
+     *     every accumulator and hand everyone twice the rate they asked for.
+     *  Call WITHOUT clientMtx held. */
+    std::vector<char> dueForFrame(const std::vector<SpecPeer>& peers) {
+        std::vector<char> due(peers.size(), 1);
+        const double engine = fftRate;
+        if (engine <= 0) return due;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        for (size_t i = 0; i < peers.size(); i++) {
+            const double want = peers[i].fps > 0 ? peers[i].fps : baseFftRate;
+            if (want <= 0 || want >= engine) { clientFpsAcc[peers[i].sock.get()] = 0.0; continue; }
+            double& a = clientFpsAcc[peers[i].sock.get()];
+            a += want / engine;
+            if (a >= 1.0) { a -= 1.0; due[i] = 1; } else due[i] = 0;
+            // Never let the accumulator run away if the engine rate drops under us — a stored
+            // surplus would come back out as a burst of frames the listener did not ask for.
+            if (a > 1.0) a = 1.0;
+        }
+        return due;
+    }
+
+    /** This client's requested rate, or the server default if it has never asked.
+     *  Call WITHOUT clientMtx held. */
+    double fpsFor(const std::shared_ptr<net::Socket>& s) {
+        if (!s) return baseFftRate;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = clientFps.find(s.get());
+        return (it == clientFps.end() || it->second <= 0) ? baseFftRate : it->second;
+    }
+
     /** This client's requested width. Call WITHOUT clientMtx held. */
     int binsFor(const std::shared_ptr<net::Socket>& s) {
         if (!s) return WIRE_BINS_DEFAULT;
@@ -3129,10 +3244,20 @@ struct LocalSdrShim::Impl {
                 LOGI("zoom spectrum DROPPED: %d bins but the wire wants %d", nb, wire); }
             return;
         }
+        // ★★ Per-listener rate, exactly as the wide path does it — and the advance happens HERE
+        //    because this path SUPPRESSES that one (see `rx.zoomSpanHz()` in onSpectrum). Exactly
+        //    one of the two advances each accumulator per frame; doing it in both would give every
+        //    listener twice the rate it asked for.
+        auto due = dueForFrame(peers);
+        {
+            bool any = false;
+            for (char d : due) if (d) { any = true; break; }
+            if (!any) return;
+        }
         std::vector<int> widths;
-        for (auto& p : peers)
-            if (std::find(widths.begin(), widths.end(), p.bins) == widths.end())
-                widths.push_back(p.bins);
+        for (size_t pi = 0; pi < peers.size(); pi++)
+            if (due[pi] && std::find(widths.begin(), widths.end(), peers[pi].bins) == widths.end())
+                widths.push_back(peers[pi].bins);
         for (int outBins : widths) {
         // ★★ The zoom row arrives at `nb` REAL bins (the widest listener's width). A listener who
         //    asked for fewer is peak-held DOWN from it — never interpolated up — so a watch gets a
@@ -3166,8 +3291,9 @@ struct LocalSdrShim::Impl {
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         size_t sent = 0;
-        for (auto& p : peers)
-            if (p.bins == outBins) { sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
+        for (size_t pi = 0; pi < peers.size(); pi++)
+            if (due[pi] && peers[pi].bins == outBins)
+                { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
         vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
         }   // end per-width loop
         if (++zoomFrames_ == 1 || zoomFrames_ % 100 == 0)
@@ -3233,6 +3359,20 @@ struct LocalSdrShim::Impl {
         //   the frame rate and make the two fight over the same texture rows.
         if (emit && rx.zoomSpanHz() > 0.0) emit = false;
 
+        // ★★★ PER-LISTENER RATE, applied HERE and not in the engine. The engine runs at the
+        //     fastest rate anyone asked for (recomputeEngineRate); this drops the frames a slower
+        //     listener did not want, for that listener alone. Advanced only when this path is the
+        //     one emitting — the zoom path suppresses it above and does its own advance.
+        // ★ If nobody is due, skip the whole crop-and-downsample block: at 5 fps against a 20 fps
+        //   engine that is three frames in four of the only expensive work left per listener.
+        std::vector<char> due;
+        if (emit) {
+            due = dueForFrame(peers);
+            bool any = false;
+            for (char d : due) if (d) { any = true; break; }
+            if (!any) emit = false;
+        }
+
         if (emit && sock && sock->isOpen()) {
             // Emit a FIXED OUT_BINS bins (GPU-safe waterfall texture width — a
             // 32768-wide texture exceeds mobile GPU limits and the waterfall
@@ -3252,7 +3392,9 @@ struct LocalSdrShim::Impl {
             //       repeat, and in practice everyone zoomed out shares one view.
             struct ViewKey { int bins; double centre, span; };
             std::vector<ViewKey> views;
-            for (auto& p : peers) {
+            for (size_t pi = 0; pi < peers.size(); pi++) {
+                auto& p = peers[pi];
+                if (!due[pi]) continue;      // not this listener's frame — don't build its view
                 auto c = dspFor(p.sock);
                 // ★ `viewPriming` keeps a listener on the shared row for the moment its own view
                 //   takes to fill — see ClientDsp::viewPriming. Without it the display freezes.
@@ -3320,7 +3462,9 @@ struct LocalSdrShim::Impl {
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
             size_t sent = 0;
-            for (auto& p : peers) {
+            for (size_t pi = 0; pi < peers.size(); pi++) {
+                auto& p = peers[pi];
+                if (!due[pi]) continue;      // this frame is not on this listener's clock
                 if (p.bins != outBins) continue;
                 auto c = dspFor(p.sock);
                 // ★★ A listener drawing its OWN zoomed view must not also receive the shared wide
@@ -5170,7 +5314,21 @@ struct LocalSdrShim::Impl {
             //   never left.
             if (jsonNum(msg, "value", v) && v > 0) {
                 LOGI("client asked for %.0f fps", v);
-                LocalSdrShim::instance().setFftRate(v);
+                // ★★★ RECORD IT AGAINST THIS CLIENT, never in a global — the same rule as
+                //     clientBins, and this is the line that broke it. It used to call
+                //     setFftRate(), which sets the ENGINE rate for the whole radio, so one
+                //     listener's idle-saver slowed every other listener's waterfall and left it
+                //     slow after that listener had gone. See clientFps for the measurements.
+                const double mr = g_vsMaxFftRate.load();     // the owner's ceiling, per client
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  clientFps[sock.get()] = (mr > 0 && v > mr) ? mr : v;
+                  clientFpsAcc[sock.get()] = 0.0; }
+                // The engine follows the FASTEST listener — this may raise it (a client asking
+                // for more than anyone else) as well as lower it (the last slow one leaving).
+                recomputeEngineRate();
+                // A listener drawing its own zoomed view is fed by its own pipeline, whose rate
+                // is set when that view is built — so rebuild it against the new rate.
+                if (auto c = dspFor(sock)) if (c->ownView) clientRetuneView(c.get());
             }
             return;
         }
@@ -6938,6 +7096,14 @@ struct LocalSdrShim::Impl {
         // one's. Same flaw as the bins global directly above.
         if (!isAudio) rateDivisor.store(1);
 
+        // ★ And the same for the rate: a fresh listener starts on the server default, not on
+        //   whatever the previous occupant of this socket address asked for.
+        if (!isAudio) {
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); }
+            recomputeEngineRate();
+        }
+
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
         // (guarded by captureIdle), so whichever of the two sockets lands first does it. Only starts a
         // capture thread (no join), so it's safe here.
@@ -7129,6 +7295,13 @@ struct LocalSdrShim::Impl {
               [&](const std::shared_ptr<net::Socket>& c){ return !c || c == sock || !c->isOpen(); }),
               specExtra.end());
           clientBins.erase(sock.get());     // its width leaves with it
+          // ★★★ AND ITS RATE. This is the half that made the old bug permanent: a listener could
+          //     slow the radio and then leave, and nothing recomputed anything, so the waterfall
+          //     stayed at 5 fps for everyone still watching until somebody happened to ask for
+          //     fast. Measured: bystander 24.5 -> 4.9 fps, still 4.9 after the slow client had
+          //     disconnected. The recompute is below, OUTSIDE this lock.
+          clientFps.erase(sock.get());
+          clientFpsAcc.erase(sock.get());
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent
@@ -7155,6 +7328,10 @@ struct LocalSdrShim::Impl {
           const bool audioGone = !audioClient || !audioClient->isOpen();
           if (specGone && audioGone) { occupantSession.clear(); bothGone = true; } }
         outboxClose(sock);   // drain, then close — see outboxClose()
+        // ★ The slow listener has gone: the survivors get their rate back. OUTSIDE the lock —
+        //   recomputeEngineRate() takes clientMtx, and a helper that locks must never be called
+        //   from a scope that holds it (see specListenerCountLocked's deadlock note).
+        if (!isAudio) recomputeEngineRate();
         broadcastUsersSafe();      // ★ someone left — tell whoever is still here
         // No listeners → idle the dongle so an unattended server stops burning power. OUTSIDE the lock:
         // pauseCaptureIdle() joins the capture thread, which must never happen under clientMtx.
@@ -9474,12 +9651,16 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->sampleRate = sampleRate;
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;   // the owner's default — the floor every listener rate is measured against
     // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Full
     // 20 / Half 10 / Quarter 5) to save CPU and wire data. The client interpolates
     // the waterfall, so a lower rate still scrolls smoothly.
     if (g_serveOnLan.load()) {
         double mr = g_vsMaxFftRate.load();
-        if (mr > 0 && mr < impl->fftRate) impl->fftRate = mr;
+        // ★ Cap the DEFAULT too, not just the running rate — it is what an unasking listener
+        //   gets and what recomputeEngineRate() falls back to, so a ceiling that missed it would
+        //   be re-breached the moment the last listener left.
+        if (mr > 0 && mr < impl->fftRate) { impl->fftRate = mr; impl->baseFftRate = mr; }
     }
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
@@ -9646,6 +9827,7 @@ int LocalSdrShim::startAirspyHfCommon(int index, int fd,
     if (p) { LOGI("stale shim found on Airspy HF+ start — tearing down"); stopLocked(); }
     auto* impl = new Impl();
     impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;   // the owner's default — the floor every listener rate is measured against
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
@@ -9728,6 +9910,7 @@ int LocalSdrShim::startSdrplay(int index,
     impl->sampleRate = sampleRate;
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;   // the owner's default — the floor every listener rate is measured against
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
@@ -9805,6 +9988,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->sampleRate = sampleRate;
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;   // the owner's default — the floor every listener rate is measured against
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
@@ -9882,6 +10066,7 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     auto* impl = new Impl();
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;   // the owner's default — the floor every listener rate is measured against
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
@@ -10485,21 +10670,27 @@ void LocalSdrShim::setStereoEnabled(bool on) {
 // wind down. Audio is untouched, so a throttled server still sounds identical.
 // (Contrast with the client's set_rate divisor, which only drops frames at SEND
 // time: the FFTs are still computed, so it saves bandwidth and nothing else.)
+// ★★★ THIS IS THE OWNER'S RATE, NOT A LISTENER'S. It sets the server default — what the radio
+//     runs at with nobody asking for anything else, and the floor it returns to when the last
+//     listener that asked for less goes away.
+//     A LISTENER asking to be slowed does NOT come here; it lands in `clientFps` and is applied
+//     per listener on the way out. Routing a client's request through this function is the bug
+//     this whole path exists to prevent: it is one number for the whole radio, so one idle phone
+//     slowed everybody's waterfall and left it slow after disconnecting. If you are about to call
+//     setFftRate() from a per-client code path, you want clientFps instead.
 void LocalSdrShim::setFftRate(double fps) {
     if (!p || fps <= 0) return;
     double mr = g_vsMaxFftRate.load();       // never exceed the server's own cap
     if (mr > 0 && fps > mr) fps = mr;
-    p->fftRate = fps;
-    // The engine runs at FFT_AVG× the EMIT rate — onSpectrum block-averages
-    // FFT_AVG frames into each one it sends (see start(): rx.start(..., fftRate *
-    // FFT_AVG, ...)). Pass the raw fps here and everything comes out 4× too slow.
-    p->rx.setFftRate(fps * FFT_AVG);
-    // ★★ THE ZOOM PATH HAS ITS OWN RATE, AND ONLY updateZoomView() SETS IT. Without this a live
-    //    data-rate change reached the wide path and not the zoom one, so the new rate did not take
-    //    effect until something else moved the view — i.e. it needed a PAGE REFRESH (Stuart,
-    //    2026-08-02). Any setting that exists in two paths has to be pushed to both.
-    p->updateZoomView();
-    LOGI("fft rate: %.1f fps (engine %.1f)", fps, fps * FFT_AVG);
+    p->baseFftRate = fps;
+    // Takes effect through the same path as a listener's request: the engine ends up at the
+    // fastest rate anyone wants, which with nobody asking is exactly this.
+    p->recomputeEngineRate();
+    // ★ With listeners already attached and asking for MORE than this, recomputeEngineRate() will
+    //   correctly decline to slow the engine — but the new default must still be recorded, which
+    //   it is above. And if it declines because the rate is unchanged, the engine is already here.
+    if (std::fabs(p->fftRate - fps) > 0.01) return;
+    LOGI("fft rate: %.1f fps (engine %.1f) — server default", fps, fps * FFT_AVG);
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 
