@@ -36,6 +36,9 @@
 #include <cinttypes>
 #include <csignal>
 #include <sys/wait.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -52,10 +55,18 @@
 #include "geoip.h"
 #include "asndb.h"
 
+// ★ Declared out here on purpose: the anonymous namespace below closes long before
+//   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
+//   and the two would quietly not be the same thing.
+void reapRadios();
+
 namespace {
 
 std::atomic<bool> g_stop{false};
-void onSignal(int) { g_stop = true; }
+// ★ Also on the SIGNAL path. A clean return reaps via atexit, but Ctrl-C is the common case and it
+//   must not depend on the main loop noticing g_stop and unwinding tidily. kill() and waitpid()
+//   are async-signal-safe; this deliberately does nothing else.
+void onSignal(int) { g_stop = true; reapRadios(); }
 
 struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
@@ -462,9 +473,25 @@ static bool haveServiceManager() {
  *   and worth fixing later, but it is not what was broken.
  */
 static std::vector<pid_t> g_radioKids;
-static void reapRadios() {
+
+/** ★★★ ASK NICELY, THEN INSIST. A radio process that will not go leaves the SDR claimed and the
+ *      terminal full of its DSP log — precisely what Saber hit: Ctrl-C returned his shell while
+ *      "[VibeLocalSDR] dsp load" kept scrolling from a process he could no longer find, because it
+ *      had been orphaned and reparented away from the tree he was looking at (2026-08-09).
+ *      "I can't even find it in my htop" is the signature of an orphan.
+ *  ★ Two seconds is generous for a clean stop and short enough that nobody sits wondering. */
+void reapRadios() {
     for (pid_t p : g_radioKids) if (p > 0) ::kill(p, SIGTERM);
-    for (pid_t p : g_radioKids) if (p > 0) { int st = 0; ::waitpid(p, &st, 0); }
+    for (pid_t p : g_radioKids) {
+        if (p <= 0) continue;
+        int st = 0;
+        bool gone = false;
+        for (int i = 0; i < 40 && !gone; i++) {          // 40 x 50 ms = 2 s
+            if (::waitpid(p, &st, WNOHANG) == p) { gone = true; break; }
+            ::usleep(50 * 1000);
+        }
+        if (!gone) { ::kill(p, SIGKILL); ::waitpid(p, &st, 0); }
+    }
     g_radioKids.clear();
 }
 static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv) {
@@ -480,10 +507,23 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
     //   signal handlers already installed for shutdown call exit(), so this covers both.
     std::atexit(reapRadios);
 
+    const pid_t parentPid = ::getpid();
     for (const auto& serial : serials) {
         const pid_t pid = ::fork();
         if (pid < 0) { std::fprintf(stderr, "VibeServer: could not fork for %s\n", serial.c_str()); continue; }
         if (pid == 0) {
+            // ★★★ THE KERNEL KILLS IT, NOT OUR CLEANUP CODE. atexit does not run when a process
+            //     dies from a signal, and no handler can help if we are SIGKILLed — so a front
+            //     door that is Ctrl-C'd, crashes, or is killed outright would leave its radios
+            //     running, holding the SDR and writing to a terminal whose shell has already
+            //     returned. PR_SET_PDEATHSIG is exactly that guarantee, and it survives execve.
+            // ★★ AND THE RACE IS REAL: if the parent died between fork() and here, the signal has
+            //    already been and gone. Comparing getppid() with the parent we forked from is the
+            //    standard close — a different answer means we have already been reparented.
+#ifdef __linux__
+            ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if (::getppid() != parentPid) ::_exit(0);
+#endif
             // ★★ EXEC OURSELVES. `--radio <serial>` takes the front-door branch out of play in the
             //    child (it only runs when no radio was named), so this cannot recurse.
             // ★ The config path rides along explicitly: the child must read the same file we did,
