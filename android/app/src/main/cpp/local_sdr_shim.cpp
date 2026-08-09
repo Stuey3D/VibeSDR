@@ -7078,7 +7078,31 @@ struct LocalSdrShim::Impl {
         // occupancy check, a refused client corrupted the incumbent's stream.
         // ★★★ RECORD IT AGAINST THIS CLIENT, never in a global. Storing it globally is what let
         //     a watch asking for 128 cut every browser on the server down to 128 bins.
-        if (wantBins > 0) { std::lock_guard<std::mutex> lk(clientMtx); clientBins[sock.get()] = wantBins; }
+        // ★★★ ON A SHARED RECEIVER THE WIDTH IS NOT THE ASKER'S ALONE TO CHOOSE. A client may ask
+        //     for up to OUT_BINS (4096), and per-client widths mean it only RECEIVES its own —
+        //     but `wireBins()` sizes the one shared zoom FFT to the MAXIMUM anybody asked for,
+        //     because a narrower listener can be peak-held down from a wide row and a wider one
+        //     cannot be interpolated up from a narrow one. So a single 4096 request makes the DSP
+        //     compute a 4096-wide FFT for EVERY listener on the radio, and the cost is not small:
+        //     the note on WIRE_BINS_DEFAULT measures 4096 at 0.50 Mb/s per listener against a
+        //     quarter of that at 1024, "the difference between tens of listeners and hundreds".
+        //     Found on the demo's RSP1B while measuring something else — the probe asked for 4096,
+        //     got it, and was loading the radio for ten other people the whole time it measured.
+        // ★★ SO THE CAP IS THE SHARED CASE ONLY. With one listener and its own DSP, 4096 costs
+        //    nobody but the asker and stays available — a desktop on a wide screen has a real use
+        //    for it. perClientDsp() is precisely "shared receiver": a locked centre and room for
+        //    more than one. Same shape as the fps fix: one listener must not spend everyone's CPU.
+        if (wantBins > 0) {
+            int use = wantBins;
+            if (perClientDsp() && use > WIRE_BINS_DEFAULT) {
+                // ★ SAY SO. A silently downgraded width is indistinguishable from a client bug,
+                //   and this is a request the server is deliberately not honouring.
+                LOGI("bins: asked %d, capped to %d — shared receiver (one width sizes everyone's FFT)",
+                     use, WIRE_BINS_DEFAULT);
+                use = WIRE_BINS_DEFAULT;
+            }
+            std::lock_guard<std::mutex> lk(clientMtx); clientBins[sock.get()] = use;
+        }
 
         // ★★ RESET PER-CLIENT RATE STATE ON ARRIVAL. `rateDivisor` is a global
         // that OUTLIVES the client that set it — nothing cleared it on connect or

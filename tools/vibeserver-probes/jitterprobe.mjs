@@ -33,8 +33,17 @@ const SID = 'jit' + crypto.randomBytes(4).toString('hex');
 //    WebSocket handshake surfaces as a bare 1006 with no clue in it. Ask /vibeserver/radios for
 //    the ids. Omit RADIO for a single-radio server.
 const RADIO = process.env.RADIO || '';
+// ★★ MEASURE THE SESSION THE USER ACTUALLY HAS. Two defaults made every earlier run LIGHTER than
+//    a real listener, and both change the thing being measured:
+//    - BINS: a browser on a wide screen asks for 4096, not 1024. Bytes per frame scale with this,
+//      so a probe at 1024 is a quarter of the traffic and sees a quarter of the burst.
+//    - AUDIO: a real session ALWAYS has an audio socket alongside, and on wfm it is the heaviest
+//      audio the server sends. Spectrum measured on an otherwise idle link is not the link the
+//      listener has.
+const BINS = Number(process.env.BINS || 1024);
+const WANT_AUDIO = process.env.AUDIO === '1';
 const url = `${BASE}${RADIO ? `/r/${RADIO}` : ''}`
-          + `/ws/user-spectrum?user_session_id=${SID}&bins=1024&mode=binary8`;
+          + `/ws/user-spectrum?user_session_id=${SID}&bins=${BINS}&mode=binary8`;
 
 const frames = [];   // {t, ts, freq}
 const marks = [];    // {t, what}
@@ -57,8 +66,20 @@ ws.onmessage = m => {
   const ts = Number(dv.getBigUint64(6, true)) / 1e6;    // ns -> ms
   const freq = Number(dv.getBigUint64(14, true));
   if (!t0) t0 = t;
-  frames.push({ t: t - t0, ts, freq });
+  frames.push({ t: t - t0, ts, freq, bytes: b.length });
 };
+
+// ★ The audio socket carries the SAME session id. Both sockets must, or single-occupancy refuses
+//   the second one as "in use" — the trap that made the phone report itself busy on its own
+//   connection. It is opened but not decoded: the point is that the bytes are on the link.
+let audioBytes = 0, audioFrames = 0;
+if (WANT_AUDIO) {
+  const aurl = `${BASE}${RADIO ? `/r/${RADIO}` : ''}/ws/audio?user_session_id=${SID}`;
+  const aws = new WebSocket(aurl);
+  aws.binaryType = 'arraybuffer';
+  aws.onmessage = m => { if (typeof m.data !== 'string') { audioBytes += m.data.byteLength; audioFrames++; } };
+  aws.onerror = () => console.log('  (audio socket error)');
+}
 
 const send = o => ws.send(JSON.stringify(o));
 const mark = what => marks.push({ t: performance.now() - t0, what });
@@ -94,6 +115,12 @@ function report() {
   const m = mean(gaps);
   const sd = Math.sqrt(mean(gaps.map(g => (g - m) ** 2)));
   console.log(`\n  SITTING STILL (${sit.length} frames over ${(settle / 1000).toFixed(1)}s)`);
+  // ★ Bytes, because a burst is a quantity of DATA arriving at once, not a count of frames. Two
+  //   radios at the same fps are not the same load if one paints four times the spectrum.
+  const sb = sit.reduce((s, f) => s + f.bytes, 0) / (settle / 1000);
+  console.log(`    payload   ${BINS} bins, ${(sit[0]?.bytes || 0)} B/frame`
+    + `   spectrum ${(sb / 1024).toFixed(1)} KB/s`
+    + (WANT_AUDIO ? `   audio ${(audioBytes / (settle / 1000) / 1024).toFixed(1)} KB/s (${audioFrames} pkts)` : '   (no audio socket)'));
   console.log(`    cadence   mean ${m.toFixed(1)} ms   p50 ${pct(gaps, .5).toFixed(1)}   p95 ${pct(gaps, .95).toFixed(1)}   MAX ${Math.max(...gaps).toFixed(1)} ms`);
   console.log(`    jitter    sd ${sd.toFixed(1)} ms`);
 
