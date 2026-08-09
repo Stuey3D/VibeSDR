@@ -10270,6 +10270,19 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     if (!impl->radioReleased.load()) return true;
     const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
+    // ★★★ ASK AGAIN, NOW THAT WE HOLD THE LOCK. The check above is outside it, and a browser opens
+    //     its spectrum and audio sockets together: both arrive, both see the radio released, the
+    //     first takes the lock and reacquires — and the second, already past that check, waits for
+    //     the mutex and then opens a device THIS PROCESS ALREADY HOLDS. Twelve
+    //     usb_claim_interface -6 in a row (the retry loop below doing its best), then "the radio is
+    //     in use by another program on this machine", which was true only in the sense that we were
+    //     the other program. Saber's log shows REACQUIRED immediately followed by the storm
+    //     (2026-08-09) — that is the whole bug, and it is why his receiver gave a second of
+    //     spectrum and then died.
+    // ★★ Textbook double-checked locking: the fast path outside the lock is only safe if the slow
+    //    path repeats the test inside it. Cheap, and it makes concurrent arrivals a no-op rather
+    //    than a fight.
+    if (!impl->radioReleased.load()) return true;
 
     // ★★★ "BUSY" IS OFTEN JUST "NOT YET". Taking the radio back a moment after letting it go —
     //     which is the normal shape of this feature — can land while the kernel still has our own
