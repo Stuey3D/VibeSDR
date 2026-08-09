@@ -2456,8 +2456,32 @@ async function showSplashRadios(): Promise<void> {
     else              state = 'FREE';
 
     const lo = Number(st?.rangeLo) || 0, hi = Number(st?.rangeHi) || 0;
-    const range = (lo > 0 && hi > lo) ? `${mhz(lo)} – ${mhz(hi)} MHz`
-                                      : `${mhz(Number(r.centreHz) || 0)} MHz`;
+    // ★★★ SAY WHAT IT COVERS, NOT WHERE IT IS PARKED. This showed a single frequency for any radio
+    //     that was not locked, so a dongle reaching 1.7 GHz and an HF+ that stops at 31 MHz looked
+    //     the same — one number each, and nothing to choose between them (Stuart, 2026-08-09).
+    // ★★ A LOCKED RADIO IS ITS WINDOW and needs no qualifier: "1 kHz – 2000 MHz, restrictions in
+    //    place" about a receiver fixed to 2.8–10.8 MHz is true and useless. State the window.
+    // ★ The label is only for a radio that CAN roam whose owner has allowed or blocked bands —
+    //   that is the case where a listener needs the detail, so that is where the tooltip goes.
+    const hzTxt = (h: number) => h >= 1e6
+      ? `${(h / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MHz`
+      : `${Math.round(h / 1e3)} kHz`;
+    const cov: [number, number][] = Array.isArray((r as any).coverage) ? (r as any).coverage : [];
+    const restricted = !!(r as any).restricted;
+    const lists = [ (r as any).allowList ? `Allowed: ${(r as any).allowList}` : '',
+                    (r as any).blockList ? `Blocked: ${(r as any).blockList}` : '' ]
+                  .filter(Boolean).join(' — ');
+    let range: string;
+    let rangeTitle = '';
+    if (lo > 0 && hi > lo) {
+      range = `${mhz(lo)} – ${mhz(hi)} MHz`;
+    } else if (cov.length) {
+      range = cov.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ')
+            + (restricted ? ' · RESTRICTIONS IN PLACE' : ' · UNRESTRICTED');
+      if (restricted) rangeTitle = lists || 'The operator has limited where this receiver may tune.';
+    } else {
+      range = `${mhz(Number(r.centreHz) || 0)} MHz`;
+    }
     const kind = max > 1 ? 'shared' : 'one listener at a time';
     // ★ A radio that is full or down is not a link. Greying it out but leaving it clickable would
     //   send someone to a page that refuses them, which is worse than saying so here.
@@ -2479,7 +2503,9 @@ async function showSplashRadios(): Promise<void> {
          + `<div style="display:flex;justify-content:space-between;gap:12px">`
          + `<strong style="letter-spacing:.05em">${r.label}</strong>`
          + `<span style="font-size:11px;opacity:.85">${state}</span></div>`
-         + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7">${range} · ${kind}</div>`
+         + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7"${
+              rangeTitle ? ` title="${rangeTitle.replace(/"/g, '&quot;')}"` : ''
+            }>${range} · ${kind}</div>`
          + `</${tag}>`;
   }).join('');
 
