@@ -1486,11 +1486,24 @@ int main(int argc, char** argv) {
         //     page said "Saved — VibeServer at 03:00", read the same value back, and agreed with
         //     itself. Only a RESTART revealed that the file had never changed (Stuart, 2026-08-09:
         //     "it took a few goes to save" — it never saved at all, any of those goes).
-        // ★ Copied unconditionally, which is safe: `next` began life as this radio's effective
-        //   config, so its machine fields already hold the machine's values unless this patch
-        //   changed them.
-        srv.updateSrvHour = next.updateSrvHour; srv.updateSrvDay = next.updateSrvDay;
-        srv.updateAllHour = next.updateAllHour; srv.updateAllDay = next.updateAllDay;
+        // ★★★ ONLY WHAT THIS PATCH ACTUALLY MENTIONS. Copying them unconditionally — which is what
+        //     I did first — is WRONG the moment there is more than one radio, because every radio
+        //     runs its OWN process with its OWN copy of the machine settings, loaded when it
+        //     started. A gain nudge on radio B would then rewrite the schedule from B's stale
+        //     copy and wipe what radio A had just saved. Measured within minutes of shipping it:
+        //     one process wrote h=3 d=0, another wrote h=-1 d=-1 twenty-two seconds later.
+        // ★★ This is the same family as the config writers that "both had to be updated" — with
+        //    several processes sharing one file, a writer must touch ONLY the fields it was asked
+        //    about and leave the rest exactly as it found them on disk.
+        // ★ Substring on the key is enough: this patch is built by us, one flat object, never
+        //   nested and never containing free text.
+        const auto patched = [&](const char* k) {
+            return patch.find(std::string("\"") + k + "\"") != std::string::npos;
+        };
+        if (patched("updateSrvHour")) srv.updateSrvHour = next.updateSrvHour;
+        if (patched("updateSrvDay"))  srv.updateSrvDay  = next.updateSrvDay;
+        if (patched("updateAllHour")) srv.updateAllHour = next.updateAllHour;
+        if (patched("updateAllDay"))  srv.updateAllDay  = next.updateAllDay;
 
         // ★ Do NOT touch `configured` here. Only the setup page finishing means "set up"; a gain
         //   tweak on a half-configured server must not silently declare it done.
