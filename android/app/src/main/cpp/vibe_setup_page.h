@@ -1524,8 +1524,9 @@ $("saveRadioBtn").onclick = async () => {
       renderTabs();
     }
   } catch (e) {
+    // ★ Same reasoning as the master save: name the fault, do not guess at the network.
     list[curRadio].configured = false;
-    $("saveErr").textContent = "Could not reach the server.";
+    $("saveErr").textContent = "Save failed — " + ((e && e.message) ? e.message : String(e));
     $("barMsg").textContent = "";
   }
   $("saveRadioBtn").disabled = false;
@@ -1544,7 +1545,19 @@ $("saveBtn").onclick = async () => {
     // ★ restart:true is what separates this from the per-radio save above — see the server's
     //   config handler, which only bounces the receiver when it is asked to.
     const body = collect();
-    if (radioList().length) radioList()[curRadio].configured = true;
+    // ★★★ THE SERVER TAB HAS NO RADIO, AND curRadio IS -1 THERE. This tested only that the list was
+    //     non-empty, so on the Server tab it evaluated radioList()[-1].configured = true —
+    //     TypeError: Cannot set properties of undefined — thrown BEFORE the request was built. The
+    //     catch below then reported "Could not reach the server", so the devtools network tab
+    //     showed ZERO requests while the page blamed the network.
+    // ★★★ IT IS THE FIRST THING SABER REPORTED and it took all day to find, because the message
+    //     named the wrong subsystem: I chased the front door, a 503, a restart race and a flush
+    //     race before "0 requests in the network tab" made it obvious the fetch never happened
+    //     (2026-08-09). The Server tab is ALSO the tab the page opens on, so this is the first
+    //     thing a new owner does.
+    // ★ Marking a radio configured belongs to a radio's own tab; from the machine's tab there is
+    //   nothing to mark.
+    if (curRadio >= 0 && radioList()[curRadio]) radioList()[curRadio].configured = true;
     body.radios = cfg.radios;
     body.restart = true;
     const r = await fetch("/vibeserver/config?" + await authQuery(),
@@ -1600,7 +1613,15 @@ $("saveBtn").onclick = async () => {
     };
     waitBack();
   } catch (e) {
-    $("saveErr").textContent = "Could not reach the server.";
+    // ★★★ SAY WHAT ACTUALLY WENT WRONG. This reported "Could not reach the server" for ANY
+    //     exception in the block above — including a plain TypeError thrown before the request was
+    //     ever made. Saber spent a day being told the network had failed while his devtools showed
+    //     ZERO requests leaving the page, which sent me chasing the server, the front door, a
+    //     restart race and a flush race in turn (2026-08-09). A message that names the wrong
+    //     subsystem is worse than no message: it is a false lead with authority.
+    // ★ The network case still reads naturally — a fetch that genuinely cannot connect throws
+    //   "Failed to fetch", which is exactly what an owner should see and pass on.
+    $("saveErr").textContent = "Save failed — " + ((e && e.message) ? e.message : String(e));
     $("saveBtn").disabled = false;
     $("barMsg").textContent = "";
   }

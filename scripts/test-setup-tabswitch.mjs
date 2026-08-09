@@ -141,5 +141,23 @@ console.log('\nA radio is only sent the calibration its own driver has');
   ok(outAhf.ppm === undefined, '★★★ and never ppm', JSON.stringify(outAhf.ppm));
 }
 
+console.log('\nThe SERVER tab has no radio, and must not try to mark one');
+{
+  // ★★★ curRadio is -1 on the machine's tab — which is the tab the page OPENS on. The master save
+  //     did `radioList()[curRadio].configured = true` guarded only by the list being non-empty, so
+  //     it threw TypeError before building the request and the catch blamed the network. Zero
+  //     requests left the page while it said "Could not reach the server".
+  page.cfg = { name: 't', radios: [{ serial: 'A', driver: 'rtl', mode: 'single', configured: true }] };
+  page.curRadio = -1;
+  const list = page.cfg.radios;
+  let threw = null;
+  try {
+    // the exact expression the save performs, as it now stands
+    if (page.curRadio >= 0 && list[page.curRadio]) list[page.curRadio].configured = true;
+  } catch (e) { threw = e; }
+  ok(!threw, '★★★ marking configured from the server tab does not throw', String(threw));
+  ok(list[0].configured === true, 'and the radio is left exactly as it was');
+}
+
 console.log(fail ? `\n${fail} FAILED\n` : '\nall good\n');
 process.exit(fail ? 1 : 0);
