@@ -53,7 +53,8 @@ async function demoStatus() {
   //   whole card — one wedged receiver should not hide the two that are working.
   const states = await Promise.all(radios.map(async (r) => {
     try {
-      const j = await askReceiver(`/r/${encodeURIComponent(r.serial)}/vibeserver.json`);
+      // ★ By the opaque id where the server offers one — the same reason the links use it.
+      const j = await askReceiver(`/r/${encodeURIComponent(r.id || r.serial)}/vibeserver.json`);
       return { ok: true, j };
     } catch { return { ok: false, j: {} }; }
   }));

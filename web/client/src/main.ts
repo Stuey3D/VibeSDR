@@ -2420,7 +2420,12 @@ async function showSplashRadios(): Promise<void> {
     try {
       // ★ Same origin, different PATH — the front door routes it. Asking each radio's own port
       //   would need every one of them forwarded, which is the thing this exists to avoid.
-      const base = `${location.origin}/r/${encodeURIComponent(r.serial)}`;
+      // ★★★ LINK BY THE OPAQUE ID, NOT THE SERIAL. The serial ended up in the address bar, in
+      //     history, in bookmarks and in any link a listener shared. `id` is derived from it and
+      //     resolves to the same radio; the server still accepts the serial, so an older link and
+      //     an older server both keep working.
+      const rid = encodeURIComponent((r as any).id || r.serial);
+      const base = `${location.origin}/r/${rid}`;
       const resp = await fetch(`${base}/vibeserver.json`, { cache: 'no-store' });
       if (!resp.ok) return null;
       return await resp.json();
@@ -2496,7 +2501,7 @@ async function showSplashRadios(): Promise<void> {
     // ★ ?join so the click opens the RECEIVER. Without it the primary's card reloads this very
     //   page, and a secondary's card shows that radio's own copy of this list.
     const href = blocked ? ''
-               : ` href="${location.origin}/r/${encodeURIComponent(r.serial)}/?join=1"`;
+               : ` href="${location.origin}/r/${encodeURIComponent((r as any).id || r.serial)}/?join=1"`;
     return `<${tag}${href} class="radioCard" data-serial="${r.serial}" style="display:block;text-align:left;`
          + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
          + `text-decoration:none;color:inherit;${dim}">`

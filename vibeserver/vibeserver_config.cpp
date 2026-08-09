@@ -646,6 +646,17 @@ std::string publicLabel(const std::string& in) {
     return s;
 }
 
+std::string radioId(const std::string& serial) {
+    if (serial.empty()) return "";
+    // ★ FNV-1a, because this needs to be stable and short, not cryptographic — and pulling in a
+    //   hash library for eight hex characters would be the wrong trade.
+    uint64_t h = 1469598103934665603ULL;
+    for (unsigned char c : serial) { h ^= c; h *= 1099511628211ULL; }
+    char buf[17];
+    std::snprintf(buf, sizeof buf, "%08x", (unsigned)(h ^ (h >> 32)));
+    return buf;
+}
+
 Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     Config c;
     c.configured = s.configured && r.configured;

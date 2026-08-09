@@ -342,6 +342,14 @@ int portForRadio(const ServerConfig& cfg, size_t index);
  *  is the whole reason it is there. */
 std::string publicLabel(const std::string& in);
 
+/** ★★★ A SHORT, STABLE, OPAQUE NAME FOR A RADIO — so a serial never appears in a URL. Links were
+ *  /r/240513CA60/, which puts the owner's hardware identity in the address bar, in browser
+ *  history, in bookmarks and in any link a listener shares. Derived from the serial, so it is the
+ *  same on every process and across restarts without anything to store.
+ *  ★ Not a secret and not trying to be: it identifies a radio to a router. It simply is not the
+ *    serial. */
+std::string radioId(const std::string& serial);
+
 Config effectiveFor(const ServerConfig& srv, const RadioConfig& radio);
 
 /** Read `path`. Returns false and leaves `cfg` untouched if the file is absent or unreadable;

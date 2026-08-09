@@ -1262,7 +1262,12 @@ int main(int argc, char** argv) {
             if (!r.enabled || !r.configured) continue;   // ★ both gates, same as the supervisor
             if (!first) j += ",";
             first = false;
-            j += "{\"serial\":\"" + jsonEscape(r.serial) + "\"";
+            // ★★ THE ID IS WHAT LINKS USE. The serial stays in the JSON because the setup page
+            //    matches its own radios against this list by it, but it no longer reaches a URL —
+            //    which is where it was visible to everyone: address bar, history, bookmarks, and
+            //    any link a listener passed on (Stuart, 2026-08-09).
+            j += "{\"id\":\"" + jsonEscape(vsconfig::radioId(r.serial)) + "\"";
+            j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";
             // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
             //   name. The setup and admin pages read the config API instead and keep the full one.
             j += ",\"label\":\"" + jsonEscape(vsconfig::publicLabel(r.label.empty() ? r.driver : r.label)) + "\"";
@@ -1899,14 +1904,20 @@ int main(int argc, char** argv) {
                     const size_t e2 = path.find('/', 3);
                     const std::string serial = path.substr(3, e2 == std::string::npos
                                                               ? std::string::npos : e2 - 3);
-                    if (serial.empty() || serial == g_myRadioSerial) return "";
+                    if (serial.empty() || serial == g_myRadioSerial
+                        || (!g_myRadioSerial.empty()
+                            && serial == vsconfig::radioId(g_myRadioSerial))) return "";
+                    // ★ Links carry the opaque id now; the serial still works so older links,
+                    //   bookmarks and anything already in someone's history keep resolving.
+                    const std::string want = serial;
                     // ★★ ONLY RADIOS THIS MACHINE OFFERS. Without this the serial is
                     //    attacker-controlled text used to build a filesystem path.
                     vsconfig::ServerConfig sc; std::string e3;
                     if (!vsconfig::loadServer(g_configPath, sc, e3)) sc = g_serverConfig;
                     for (const auto& r : sc.radios)
-                        if (r.enabled && r.configured && !r.serial.empty() && r.serial == serial)
-                            return dir + "/" + serial + ".sock";
+                        if (r.enabled && r.configured && !r.serial.empty()
+                            && (r.serial == want || vsconfig::radioId(r.serial) == want))
+                            return dir + "/" + r.serial + ".sock";
                     return "";
                 });
             }

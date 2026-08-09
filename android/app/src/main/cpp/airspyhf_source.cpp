@@ -171,21 +171,7 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     // here would be a quiet, whole-system sensitivity fault rather than an error anyone sees.
     // ★ Upstream does default it on, so this is belt-and-braces — but a default we depend on
     // this heavily should be stated, not assumed.
-    // ★★★ AN EXPERIMENT WITH AN OFF SWITCH. With the library DSP on, a zero-IF rate puts the LO
-    //     5 kHz above the request and rotates the remainder away in software; with it off, the LO
-    //     lands exactly on the request and nothing is rotated. This radio tunes a constant 15 kHz
-    //     out, and the library's own numbers are provably right (`ask 648000 -> LO 653 kHz, shift
-    //     -5000, rate 912000`), so the fault is in APPLYING that — or in where the firmware really
-    //     puts the LO. Those two are indistinguishable by reading; this switch separates them in
-    //     one restart.
-    // ★ VIBE_AHF_NO_LIBDSP=1 to turn it off. Costs the IQ balancer, so it is a diagnostic, not a
-    //   default — unless it turns out to be the cure, which is Stuart's call to make.
-    {
-        const char* off = getenv("VIBE_AHF_NO_LIBDSP");
-        const int on = (off && *off && *off != '0') ? 0 : 1;
-        airspyhf_set_lib_dsp(impl_->dev, on);
-        std::fprintf(stderr, "airspyhf: library DSP %s\n", on ? "on" : "OFF (diagnostic)");
-    }
+    airspyhf_set_lib_dsp(impl_->dev, 1);
 
     if (!setSampleRate(sampleRateHz)) {
         err = "the Airspy HF+ refused that sample rate";
@@ -337,17 +323,6 @@ void AirspyHfSource::setFrequency(double hz) {
     if (!impl_->dev) return;
     airspyhf_set_freq(impl_->dev, (uint32_t)std::llround(hz));
     curCentre_ = hz;           // remembered for restartStream(deep)
-    // ★★★ SAY WHAT THE LIBRARY DID WITH IT. This radio has been reading 15 kHz high on medium
-    //     wave and three theories have died on it — the dead-lobe crop, the rate list, and a
-    //     cross-radio settings leak — because every one of them was reasoned about rather than
-    //     measured. The library places the LO on a 1 kHz grid, adds a 5 kHz IF shift in zero-IF
-    //     mode, and corrects the remainder by rotating at current_samplerate; ANY of those three
-    //     disagreeing with what we believe would produce exactly this. One line, at the moment it
-    //     happens, turns the next session into reading rather than guessing.
-    // ★ Cheap and quiet: a tune is a rare, deliberate event, not a per-sample path.
-    std::fprintf(stderr, "airspyhf: tune %.0f Hz -> %s-IF, rate %u\n",
-                 hz, airspyhf_is_low_if(impl_->dev) ? "low" : "zero",
-                 (unsigned)(curRate_ > 0 ? curRate_ : 0));
 }
 
 uint32_t AirspyHfSource::nearestRate(double hz) const {
