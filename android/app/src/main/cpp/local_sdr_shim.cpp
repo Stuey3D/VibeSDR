@@ -8287,7 +8287,9 @@ struct LocalSdrShim::Impl {
                 // 30s) before the next go, so a genuinely wedged API isn't hammered and a radio
                 // that recovers on its own — a re-plug, a resumed hub — is picked straight back
                 // up with nobody having to touch anything.
-                const bool recoverable = silent && !captureIdle.load() &&
+                // ★ And do not "recover" a radio we have deliberately lent out: reopening it would
+                //   take it back from the program we just handed it to.
+                const bool recoverable = silent && !captureIdle.load() && !radioReleased.load() &&
                                          ((useSdrplay() && sdrp) || (useAirspyHf() && ahf));
                 if (recoverable) {
                     const double waitS = std::min(30.0, 2.0 * (double)(srcRestarts + 1));
@@ -8342,7 +8344,22 @@ struct LocalSdrShim::Impl {
                     lastRestartAt = 0.0;
                 }
 
-                if (silent && !deviceLost.load()) {
+                // ★★★ SILENCE WE ASKED FOR IS NOT A FAULT. This tested only for silence, so the
+                //     moment the radio was deliberately RELEASED — handed to another program, which
+                //     is a feature — the watchdog declared the dongle unplugged, set deviceLost and
+                //     captureDown, and repeated it every three seconds for ever.
+                // ★★★ WITH `idleGrace: 0` THAT HAPPENS AT STARTUP. Nobody is listening one second
+                //     after launch, so an instant release fires immediately, and Saber's server
+                //     spent its whole life reporting a healthy dongle as unplugged (2026-08-09).
+                //     Worse than the noise: deviceLost then poisons the retake path, which is where
+                //     the storm of usb_claim_interface -6 came from.
+                // ★★ The parked case is the same argument. The Airspy path already dodged this by
+                //    reading the SOURCE's last-received time (see above) — the dongle had no such
+                //    guard, so an idle-parked dongle read as an unplugged one too.
+                // ★ `lsusb` in Saber's log lists the device throughout, which is the tell: the
+                //   hardware was never going anywhere.
+                const bool expectingIq = !radioReleased.load() && !captureIdle.load();
+                if (silent && expectingIq && !deviceLost.load()) {
                     deviceLost.store(true);
                     captureDown.store(true);
                     LOGE("no IQ for 3s — dongle unplugged or failed");
