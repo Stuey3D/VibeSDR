@@ -1479,9 +1479,26 @@ struct LocalSdrShim::Impl {
     // the VFO offset and shift the displayed FFT crop back by the same amount.
     static constexpr double HW_OFFSET_HZ = 15000.0;
 
+    // ★★★ AND IT IS A DONGLE WORKAROUND, SO ONLY THE DONGLE GETS IT. tuneHw() applied the offset
+    //     to EVERY driver, and the compensations below subtracted it again — which cancels only if
+    //     the radio actually landed 15 kHz high. The HF+ does not: libairspyhf adds its own 5 kHz
+    //     IF shift and rotates the remainder away, so it delivers baseband centred exactly where
+    //     it was asked. The result was a constant 15.00 kHz error, in AUDIO as well as spectrum,
+    //     measured across the whole of medium wave with 12 of 12 carriers agreeing to within 70 Hz
+    //     (Stuart, 2026-08-09 — Radio Caroline on 648 reading 663).
+    // ★★★ THE NUMBER GAVE IT AWAY IN THE END: the error was not "about 15 kHz", it was 15000 Hz,
+    //     and HW_OFFSET_HZ is 15000.0. Three theories died before anyone noticed that — the crop,
+    //     the sample rate, and a cross-radio settings leak. Stuart's "we had this working in simple
+    //     mode on Android and Mac" is what finally pointed at the server rather than the radio.
+    // ★★ An RSP is zero-IF too and has its own DC handling; a network source has no DC spike of
+    //    ours to dodge. Only the R820T needs this.
+    double hwOffsetHz() const {
+        return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+    }
+
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
     // sits HW_OFFSET_HZ below DC.
-    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - HW_OFFSET_HZ + demodOffset; }
+    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - hwOffsetHz() + demodOffset; }
 
     // Margin keeping the VFO inside the usable capture: above the 50 kHz auto-
     // retune threshold AND clear of the RTL anti-alias rolloff (~10%). MUST
@@ -1570,7 +1587,7 @@ struct LocalSdrShim::Impl {
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
-        uint32_t hz = (uint32_t)llround(logicalCenter + HW_OFFSET_HZ);
+        uint32_t hz = (uint32_t)llround(logicalCenter + hwOffsetHz());
         if (useSpy()) {
             spy->setIqFrequency(hz);
             // The centres are independent, but not UNBOUNDED: the device only covers
@@ -2073,7 +2090,7 @@ struct LocalSdrShim::Impl {
         };
         const double inv   = 1.0 / (double)n;
         const double binHz = sampleRate / (double)bins;
-        const double centre = rtlCenter.load() + HW_OFFSET_HZ;
+        const double centre = rtlCenter.load() + hwOffsetHz();
         auto dbAtHz = [&](double hz) -> float {
             const int idx = bins / 2 + (int)llround((hz - centre) / binHz);
             return (idx < 0 || idx >= bins) ? -200.0f : (float)(sum[idx] * inv);
@@ -2438,7 +2455,7 @@ struct LocalSdrShim::Impl {
         //     8 MSPS with a 32k FFT, which on SSB is the difference between speech and a growl.
         //     Hand the leftover to the pipeline, which tunes within the channel.
         const double binHz = sampleRate / (double)fftSize;
-        const double off   = c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ;
+        const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
@@ -2497,7 +2514,7 @@ struct LocalSdrShim::Impl {
         }
         // The slice is centred on the VIEW centre bin, so the zoom sits at the residual only.
         const double binHz = sampleRate / (double)fftSize;
-        const double off   = c->viewCentreHz - rtlCenter.load() - HW_OFFSET_HZ;
+        const double off   = c->viewCentreHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         c->viewRx->setZoomBins(binsFor(c->spec));
         c->viewRx->setZoomView(resid, c->viewSpanHz, fftRate);
@@ -2507,13 +2524,13 @@ struct LocalSdrShim::Impl {
     /** The signed centre bin this listener's VIEW channel is taken from. */
     int clientViewCentreBin(const ClientDsp* c) const {
         const double binHz = sampleRate / (double)fftSize;
-        return (int)std::lround((c->viewCentreHz - rtlCenter.load() - HW_OFFSET_HZ) / binHz);
+        return (int)std::lround((c->viewCentreHz - rtlCenter.load() - hwOffsetHz()) / binHz);
     }
 
     /** The signed centre bin this listener's channel is taken from. */
     int clientCentreBin(const ClientDsp* c) const {
         const double binHz = sampleRate / (double)fftSize;
-        return (int)std::lround((c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ) / binHz);
+        return (int)std::lround((c->vfoHz - rtlCenter.load() - hwOffsetHz()) / binHz);
     }
 
     /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
@@ -3071,7 +3088,7 @@ struct LocalSdrShim::Impl {
         // ★★ `fftRate` is the CLIENT-facing rate. rx's own fftRate_ is FFT_AVG times higher —
         //    the wide path averages that back down, the zoom path does not, so passing the engine
         //    rate here emitted FFT_AVG frames for every one asked for.
-        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load() - HW_OFFSET_HZ, shown, fftRate);
+        if (want) rx.setZoomView(viewCenter.load() - rtlCenter.load() - hwOffsetHz(), shown, fftRate);
         else      rx.setZoomView(0.0, 0.0, fftRate);
         // Speaks on the TRANSITION only. The wide path is suppressed while the zoom path owns the
         // waterfall, so "zoom engaged" and "no frames" together means a BLANK display — which is
@@ -3083,8 +3100,8 @@ struct LocalSdrShim::Impl {
                  want ? "ENGAGED" : "released",
                  viewCenter.load() / 1e6, shown / 1e3, step,
                  rtlCenter.load() / 1e6,
-                 (viewCenter.load() - rtlCenter.load() - HW_OFFSET_HZ) / 1e3,
-                 HW_OFFSET_HZ / 1e3);
+                 (viewCenter.load() - rtlCenter.load() - hwOffsetHz()) / 1e3,
+                 hwOffsetHz() / 1e3);
             zoomFrames_ = 0;
         }
     }
@@ -3257,7 +3274,7 @@ struct LocalSdrShim::Impl {
             // shift the crop down by that many source bins to keep the display
             // centred on the logical centre (rtlCenter) — the DC spike then draws
             // HW_OFFSET_HZ off-centre, harmlessly outside the channel.
-            const double hwOffsetBin = HW_OFFSET_HZ * (double)bins / sampleRate;
+            const double hwOffsetBin = hwOffsetHz() * (double)bins / sampleRate;
             // The display centre is viewCenter, which may sit off the dongle
             // centre (rtlCenter) — shift the crop by their difference so the user
             // can pan the view across the captured band while the dongle (and the
@@ -3603,7 +3620,7 @@ struct LocalSdrShim::Impl {
                 for (auto& p : peers) {
                     float mine = peak;                       // shared VFO — the fallback
                     if (auto c = dspFor(p.sock)) {
-                        const double off = c->vfoHz - rtlCenter.load() - HW_OFFSET_HZ;
+                        const double off = c->vfoHz - rtlCenter.load() - hwOffsetHz();
                         const int cb = (int)llround(off / binHz);
                         const int hw2 = std::max(1, (int)(c->bwHz / 2.0 / binHz));
                         float pk = -1e9f;
@@ -3669,7 +3686,7 @@ struct LocalSdrShim::Impl {
         iqPrefillSamples = (size_t)(sampleRate * 0.25);
         iqMaxSamples     = iqPrefillSamples * 2;
 
-        const uint32_t iqHz  = (uint32_t)llround(rtlCenter.load() + HW_OFFSET_HZ);
+        const uint32_t iqHz  = (uint32_t)llround(rtlCenter.load() + hwOffsetHz());
         const uint32_t fftHz = (uint32_t)llround(spyFftCenter.load());
         const uint32_t gainIdx = lastGainTenthDb < 0
             ? (uint32_t)(spyGains.size() / 2)
@@ -9858,7 +9875,7 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
 
     // IQ carries the offset-tuning shift the DSP expects; the FFT does not (its
     // bins are read straight against spyFftCenter).
-    const uint32_t iqHz  = (uint32_t)llround(centerFreq + Impl::HW_OFFSET_HZ);
+    const uint32_t iqHz  = (uint32_t)llround(centerFreq + impl->hwOffsetHz());
     const uint32_t fftHz = (uint32_t)llround(centerFreq);
     // 2048 bins over the span: ~977 Hz on a 2 MHz RTL server, ~30 KB/s at 15 fps.
     // Finer than this costs bandwidth for detail the waterfall can't show, and the
