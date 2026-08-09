@@ -292,7 +292,7 @@ public:
 
     /** Our own "/r/<serial>" prefix, stripped from arriving requests so every route below
      *  keeps matching bare paths. "" (the default) means no prefix, i.e. a single-radio server. */
-    static void setPathPrefix(const std::string& prefix);
+    static void setPathPrefix(const std::string& prefix, const std::string& alt = "");
 
     /** ★★ Run a server that owns NO radio: the front door. It lists the radios, serves setup and
      *  admin, and hands connections on. It stays up when every radio has failed, which is exactly

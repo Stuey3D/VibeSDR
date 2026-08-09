@@ -1882,7 +1882,8 @@ int main(int argc, char** argv) {
                 const std::string me = dir + "/" + g_myRadioSerial + ".sock";
                 std::string herr;
                 if (LocalSdrShim::listenForHandoff(me, herr))
-                    LocalSdrShim::setPathPrefix("/r/" + g_myRadioSerial);
+                    LocalSdrShim::setPathPrefix("/r/" + vsconfig::radioId(g_myRadioSerial),
+                                            "/r/" + g_myRadioSerial);
                 else
                     std::fprintf(stderr, "VibeServer: not accepting handed-over connections — %s\n",
                                  herr.c_str());

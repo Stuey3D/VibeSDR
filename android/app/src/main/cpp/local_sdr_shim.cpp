@@ -894,6 +894,9 @@ static LocalSdrShim::RadiosFn      g_vsRadiosFn;
 static LocalSdrShim::HandoffFn     g_vsHandoffFn;
 /// Our own "/r/<serial>" prefix, stripped from every request that arrives with it.
 static std::string                 g_vsPathPrefix;
+/** ★ The same radio under its other name. Links use the opaque id; older links, bookmarks and
+ *  anything already in a browser's history still carry the serial, and both must strip. */
+static std::string                 g_vsPathPrefixAlt;
 /// ★ What WE last set the bias-T to. The dongle cannot be asked, so we remember.
 static std::atomic<bool>           g_biasTeeOn{false};
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
@@ -5638,16 +5641,22 @@ struct LocalSdrShim::Impl {
                 sock->close(); return;
             }
         }
-        if (!g_vsPathPrefix.empty()) {
+        // ★★★ EITHER NAME. The front door routes /r/<id>/ and /r/<serial>/ to the same socket, so
+        //     a radio that strips only one of them 404s the other — which is exactly what happened
+        //     when links moved to the opaque id: the hand-off succeeded and the radio then refused
+        //     the path it had just been handed (2026-08-09).
+        {
             std::lock_guard<std::mutex> lk(g_vsConfigMtx);
             const size_t sp = reqLine.find(' ');
-            if (sp != std::string::npos && reqLine.compare(sp + 1, g_vsPathPrefix.size(),
-                                                           g_vsPathPrefix) == 0) {
+            for (const std::string* pre : { &g_vsPathPrefix, &g_vsPathPrefixAlt }) {
+                if (pre->empty() || sp == std::string::npos) continue;
+                if (reqLine.compare(sp + 1, pre->size(), *pre) != 0) continue;
                 // Leave a leading '/' behind: "/r/ABC" + "/ws/audio" -> "/ws/audio", and
                 // "/r/ABC" alone -> "/", which is the receiver page.
-                const size_t cut = sp + 1 + g_vsPathPrefix.size();
+                const size_t cut = sp + 1 + pre->size();
                 const bool bare = (cut >= reqLine.size() || reqLine[cut] == ' ');
                 reqLine = reqLine.substr(0, sp + 1) + (bare ? "/" : "") + reqLine.substr(cut);
+                break;
             }
         }
         while (sock->recvline(line, 8192, 5000) > 0) {
@@ -9333,9 +9342,10 @@ void LocalSdrShim::setHandoffRouter(HandoffFn fn) {
     g_vsHandoffFn = std::move(fn);
 }
 
-void LocalSdrShim::setPathPrefix(const std::string& prefix) {
+void LocalSdrShim::setPathPrefix(const std::string& prefix, const std::string& alt) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsPathPrefix = prefix;
+    g_vsPathPrefixAlt = alt;
 }
 
 bool LocalSdrShim::listenForHandoff(const std::string& socketPath, std::string& err) {
