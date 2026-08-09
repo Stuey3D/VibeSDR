@@ -14,6 +14,7 @@
 #include <libairspyhf/airspyhf.h>   /* system/Homebrew (desktop) */
 #endif
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -170,7 +171,21 @@ bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
     // here would be a quiet, whole-system sensitivity fault rather than an error anyone sees.
     // ★ Upstream does default it on, so this is belt-and-braces — but a default we depend on
     // this heavily should be stated, not assumed.
-    airspyhf_set_lib_dsp(impl_->dev, 1);
+    // ★★★ AN EXPERIMENT WITH AN OFF SWITCH. With the library DSP on, a zero-IF rate puts the LO
+    //     5 kHz above the request and rotates the remainder away in software; with it off, the LO
+    //     lands exactly on the request and nothing is rotated. This radio tunes a constant 15 kHz
+    //     out, and the library's own numbers are provably right (`ask 648000 -> LO 653 kHz, shift
+    //     -5000, rate 912000`), so the fault is in APPLYING that — or in where the firmware really
+    //     puts the LO. Those two are indistinguishable by reading; this switch separates them in
+    //     one restart.
+    // ★ VIBE_AHF_NO_LIBDSP=1 to turn it off. Costs the IQ balancer, so it is a diagnostic, not a
+    //   default — unless it turns out to be the cure, which is Stuart's call to make.
+    {
+        const char* off = getenv("VIBE_AHF_NO_LIBDSP");
+        const int on = (off && *off && *off != '0') ? 0 : 1;
+        airspyhf_set_lib_dsp(impl_->dev, on);
+        std::fprintf(stderr, "airspyhf: library DSP %s\n", on ? "on" : "OFF (diagnostic)");
+    }
 
     if (!setSampleRate(sampleRateHz)) {
         err = "the Airspy HF+ refused that sample rate";
