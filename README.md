@@ -12,10 +12,9 @@
 Airspy HF+ — running the same VibeDSP engine the apps use. Open it in a browser and tune. It runs
 on a Raspberry Pi on a home line, so please be gentle with it.*
 
-> **On the TestFlight beta?** It's finished — **VibeSDR 10.0.1 is now on the App Store**, and it's
-> newer than anything the beta ever had. **The old beta build is being retired** and will stop
-> opening. Grab it from the App Store above, or [build it from this repository](#building)
-> free, forever.
+> **Was the beta on your phone?** **The TestFlight beta has been retired and no longer opens.**
+> **VibeSDR 10.0.1 is on the App Store** and is newer than anything the beta ever had — grab it
+> above, or [build it from this repository](#building) free, forever.
 
 | ![Apple Watch — AM broadcast](screenshots/21-watch-wrist-am.jpeg) | ![Apple Watch — 40m waterfall](screenshots/22-watch-waterfall-40m.png) | ![Apple Watch — FM-DX](screenshots/23-watch-fmdx.png) |
 |:---:|:---:|:---:|
