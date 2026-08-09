@@ -60,6 +60,13 @@
 // ★ Declared out here on purpose: the anonymous namespace below closes long before
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
 //   and the two would quietly not be the same thing.
+/** ★ Monotonic seconds — a wall clock could jump and either fire the restart at once or hold it
+ *  off for hours. */
+static double nowMonoSecs() {
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void reapRadios();
 // ★ Kept so a self-restart can re-exec EXACTLY as we were started — same flags, same --radio.
 char** g_argv = nullptr;
@@ -609,7 +616,9 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             vsconfig::ServerConfig g_serverConfig; std::string g_myRadioSerial;
             /// True in the process that holds the public port and owns no radio.
             std::atomic<bool> g_amFrontDoor{false};
-            std::atomic<bool> g_restartRequested{false}; }
+            std::atomic<bool> g_restartRequested{false};
+            /** ★ Earliest moment the restart may happen, so the HTTP reply can drain first. */
+            std::atomic<double> g_restartNotBefore{0.0}; }
 
 
 /** ★★★ RENAME A DONGLE, THE ONE DESTRUCTIVE THING THIS PROGRAM DOES.
@@ -1214,7 +1223,20 @@ int main(int argc, char** argv) {
                     break;
                 }
             if (next.configured) LocalSdrShim::setConfigured(true);
-            if (wantRestart) g_restartRequested.store(true);
+            // ★★★ LET THE ANSWER GET OUT FIRST. Restarting is requested from inside the HTTP
+            //     handler, and the main loop can act on it before the reply has finished crossing
+            //     the network — on a self-restart (no systemd) execv() replaces the process and
+            //     drops every socket instantly. The save SUCCEEDS and the browser sees a dead
+            //     connection, so the page reports "Could not reach the server" about a change it
+            //     just made. It works from curl on the machine itself and fails for the same
+            //     server over Tailscale, which is the shape of a flush race, not a logic error
+            //     (Saber, 2026-08-09).
+            // ★ A deadline rather than a sleep: the handler must return promptly so the response is
+            //   written at all, and the main loop simply waits until this moment to act.
+            if (wantRestart) {
+                g_restartNotBefore.store(nowMonoSecs() + 1.5);
+                g_restartRequested.store(true);
+            }
             return true;
         });
 
@@ -2071,7 +2093,8 @@ int main(int argc, char** argv) {
         // ★ Exit 0, not a failure code: this is a requested restart, and `Restart=always` must
         //   treat it as routine. A non-zero exit here would look like a crash in the journal of a
         //   box nobody can see.
-        if (g_restartRequested.load()) {
+        // ★ Hold off until the reply has had time to leave — see where this is set.
+        if (g_restartRequested.load() && nowMonoSecs() >= g_restartNotBefore.load()) {
             std::printf("\nConfiguration saved — restarting to apply it.\n");
             // ★★ SAVE BEFORE A RESTART. This is the common case by far — every settings save
             //    restarts the server, and losing a day of history to a one-field change is what
