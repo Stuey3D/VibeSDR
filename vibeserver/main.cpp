@@ -59,6 +59,8 @@
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
 //   and the two would quietly not be the same thing.
 void reapRadios();
+// ★ Kept so a self-restart can re-exec EXACTLY as we were started — same flags, same --radio.
+char** g_argv = nullptr;
 
 namespace {
 
@@ -792,6 +794,7 @@ static int setRtlSerial(int index, const std::string& newSerial) {
 static bool g_isPrimaryRadio = true;
 
 int main(int argc, char** argv) {
+    g_argv = argv;
     // ★ Handled before everything else: it never starts a server, and it must work on a machine
     //   whose config is broken or absent — renaming a dongle is often what you do BEFORE setup.
     // ★★ WHAT THE SERVER ACTUALLY SEES, in the order --radio numbers them. Needed the moment
@@ -2004,6 +2007,25 @@ int main(int argc, char** argv) {
             LocalSdrShim::instance().saveSpectrogram();
             LocalSdrShim::stopMdns();
             shim.stop();
+            // ★★★ IF NOTHING WILL BRING US BACK, BRING OURSELVES BACK. "Restart" here is `return
+            //     0` and a reliance on systemd's Restart=always — so on a box with no init, every
+            //     settings save from the Server tab KILLED THE SERVER and the page then waited for
+            //     something that was never coming, reporting "Could not reach the server."
+            //     (Saber, 2026-08-09: the radio tabs saved fine because only the master save
+            //     restarts.) A save that takes the receiver off the air is the worst possible
+            //     outcome for the one control an owner must use.
+            // ★★ REAP FIRST. execve keeps our pid, so PR_SET_PDEATHSIG will NOT fire for the radio
+            //    children — they would survive, keep their devices, and the fresh instance would
+            //    fork a second set that could not open anything.
+            // ★ /proc/self/exe with the original argv: same binary, same flags, same --radio.
+            if (!haveServiceManager()) {
+                reapRadios();
+                std::printf("No service manager here, so restarting myself.\n");
+                std::fflush(stdout);
+                execv("/proc/self/exe", g_argv);
+                std::fprintf(stderr, "VibeServer: could not restart myself (%s) — "
+                                     "start it again with: vibeserver --serve\n", strerror(errno));
+            }
             return 0;
         }
     }
