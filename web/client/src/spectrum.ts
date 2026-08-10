@@ -140,10 +140,21 @@ export interface SpectrumCallbacks {
    *  visible and refused reads as a broken feature, not a blocked one. */
   /** How many are listening, and the owner's cap. Sent when the count CHANGES. */
   onUsers?: (n: number, max: number) => void;
-  /** ★ Global server-side DSP state (NR, notch). These SURVIVE a listener leaving,
-   *  so the next listener inherits them — the client must render what the server
-   *  says rather than its own saved prefs, or the control lies about the radio. */
-  onDspState?: (nr: boolean, notch: boolean) => void;
+  /** ★ Global server-side DSP state. These SURVIVE a listener leaving, so the next
+   *  listener inherits them — the client must render what the server says rather
+   *  than its own saved prefs, or the control lies about the radio.
+   *  ★★ EVERY STICKY CONTROL, not just the two that got reported. `nr`/`notch` were
+   *  added alone and the RSP notches and the NR STRENGTH kept lying for another
+   *  fortnight. Fields are OPTIONAL: absent means the server has no opinion, which
+   *  is not the same as off — render nothing rather than forcing a default. */
+  onDspState?: (s: {
+    nr: boolean; notch: boolean;
+    nrStrength?: number;      // 0..1, absent = never set
+    rfNotch?: boolean; dabNotch?: boolean;
+    /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
+     *  hardware, different setter, different button — never fold them into one field. */
+    biasT?: boolean; rspBiasT?: boolean;
+  }) => void;
   onRds?:    (meta: RdsMeta) => void;
   /** Advanced RDS payload — only sent while the RDS decoder is attached. */
   onRdsX?:   (x: RdsExt) => void;
@@ -397,7 +408,16 @@ export class SpectrumClient {
         //    it reads as "this receiver is for HF", which is the truth.
         if (Array.isArray(msg.blocked)) this.cb.onBlockedModes?.(msg.blocked as string[]);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
-          this.cb.onDspState?.(msg.nr === true, msg.notch === true);
+          this.cb.onDspState?.({
+            nr: msg.nr === true, notch: msg.notch === true,
+            // ★ Only forward what the server actually stated. `undefined` travels through as
+            //   "no opinion" and the renderer leaves that control alone.
+            nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
+            rfNotch:  typeof msg.rfNotch  === 'boolean' ? msg.rfNotch  : undefined,
+            dabNotch: typeof msg.dabNotch === 'boolean' ? msg.dabNotch : undefined,
+            biasT:    typeof msg.biasT    === 'boolean' ? msg.biasT    : undefined,
+            rspBiasT: typeof msg.rspBiasT === 'boolean' ? msg.rspBiasT : undefined,
+          });
         }
         // ★ Seconds left on a limited session, sent on connect so the clock starts THEN
         // rather than at the first warning. -1 = no limit / exempt.

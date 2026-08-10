@@ -196,3 +196,21 @@ residue is covered.
 ★★ That is not hypothetical: a stale phase reference reached the air as "tune to 7074 and it is
 broken, 7073.5 or 7074.5 is fine". The channelizer's own comments already said "sweep, do not
 sample" — from the last time it happened.
+
+## `togglestate.mjs` — does a reloading listener see the RADIO, or its own prefs?
+
+Every sticky server-side control (NR and its STRENGTH, auto notch, the RSP's RF/DAB notches and
+bias-T) survives a listener leaving, so the next listener inherits it. If `hwinfo` does not
+report it, a fresh page renders its own saved prefs instead and the control lies about the radio.
+
+★★★ The fix for this was shipped twice, half each time. `nr`/`notch` were added on 2026-07-28
+because NR read OFF while it was audibly ON — and the four sibling controls of the identical
+shape were left alone, so they went on lying for another fortnight (Stuart, 2026-08-10). **When
+you fix per-control-state-not-reported, fix every control of that shape**, the same lesson the
+`fftRate`/`clientBins` twins taught.
+
+★★ NR was reported as a BOOLEAN, so even the half that was fixed could not restore the slider —
+the switch agreed and the number did not. A boolean cannot describe a continuous control.
+
+★ Run it against a DIRECT server: on a shared one these controls are behind `sharedGate()` and an
+unauthenticated probe's writes are refused, which fails the test for the wrong reason.

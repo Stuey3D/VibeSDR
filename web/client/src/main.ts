@@ -786,23 +786,51 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       refreshAdminRow();
       if (!ok) alert('That admin password was not accepted.');
     },
-    // ★★ THE SERVER'S WORD ON ITS OWN DSP. NR and notch are GLOBAL and sticky —
+    // ★★ THE SERVER'S WORD ON ITS OWN DSP. These controls are GLOBAL and sticky —
     // whatever the last listener left is what the radio is doing — so rendering our
     // saved prefs showed NR OFF while it was audibly ON, and only dragging the
     // slider resynced it (Stuart, on MW, 2026-07-28). A control that misreports the
     // radio is worse than a missing one: nothing tells you to look.
-    onDspState: (nr, notch) => {
+    // ★★★ AND IT IS EVERY STICKY CONTROL, not the two that happened to be reported first.
+    // This handler took `(nr, notch)` for a fortnight while the auto notch, the RSP's RF and
+    // DAB notches, the bias-T and the NR STRENGTH all went on lying in exactly the same way
+    // (Stuart, 2026-08-10, having left auto notch on for the Airspy and found the RSP showing
+    // it OFF while it was on). Anything the SERVER remembers belongs in this message.
+    onDspState: (s) => {
       const nrEl = document.getElementById('nr') as HTMLInputElement | null;
-      if (nrEl && (Number(nrEl.value) > 0) !== nr) {
-        // Keep the user's chosen STRENGTH when it is on; 0 is the honest "off".
-        nrEl.value = nr ? String(Math.max(1, Number(prefs()['nr']) || 50)) : '0';
-        nrEl.dispatchEvent(new Event('input'));
+      if (nrEl) {
+        // ★★ THE SERVER'S STRENGTH WINS WHEN IT HAS ONE. Rendering `on` but keeping OUR saved
+        //    number drew a figure the radio was not using — the switch agreed and the value
+        //    lied, which is harder to spot than the switch being wrong (Stuart, 2026-08-10).
+        //    Falls back to the saved strength only when the server never had one.
+        const want = !s.nr ? 0
+          : s.nrStrength !== undefined ? Math.max(1, Math.round(s.nrStrength * 100))
+          : Math.max(1, Number(prefs()['nr']) || 50);
+        if (Number(nrEl.value) !== want) {
+          nrEl.value = String(want);
+          nrEl.dispatchEvent(new Event('input'));
+        }
       }
-      const nEl = document.getElementById('notch');
-      if (nEl && nEl.classList.contains('on') !== notch) {
-        nEl.classList.toggle('on', notch);
-        nEl.textContent = notch ? 'ON' : 'OFF';
+      setToggleTo('notch', s.notch, 'notch');
+      // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
+      //   other half of the same report. Absent = the server has no opinion; leave the
+      //   control alone rather than inventing an "off" it never said.
+      // ★★★ ONLY WHEN WE ARE NOT THE ONES SETTING THEM. On an UNRESTRICTED receiver the
+      //     client is the source of truth: applyRadioCaps() has just called
+      //     pushAllRspSettings() to restore the owner's saved front end, and it did so from
+      //     the SAME hwinfo message we are reading here — so this snapshot was taken BEFORE
+      //     that push landed. Rendering it would draw the pre-push state over the values we
+      //     have just commanded, i.e. swap one lie for another. On a restricted or shared
+      //     receiver we push nothing, the server's word is the only truth, and that is
+      //     precisely the case the bug was reported on.
+      if (rspRestricted()) {
+        if (s.rfNotch  !== undefined) setToggleTo('rspRfNotch',  s.rfNotch,  'rsp_rfnotch');
+        if (s.dabNotch !== undefined) setToggleTo('rspDabNotch', s.dabNotch, 'rsp_dabnotch');
+        if (s.rspBiasT !== undefined) setToggleTo('rspBiasT',    s.rspBiasT, 'rsp_biast');
       }
+      // ★ The DONGLE's bias-tee is a different button on a different radio, and it is not
+      //   behind the RSP gate — see the two-bias-tees note in spectrum.ts.
+      if (s.biasT !== undefined) setToggleTo('biasT', s.biasT, 'biasT');
     },
     // ★ Rebuild the mode buttons whenever the server tells us what it allows. It arrives with
     //   hwinfo, i.e. AFTER the controls are first built, so this must re-render rather than
@@ -5703,6 +5731,27 @@ function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, init
   };
   el.onclick = () => { on = !on; run(); if (prefKey) savePref(prefKey, on); };
   run();
+}
+
+/** ★★★ RENDER A TOGGLE TO THE STATE THE SERVER REPORTS — without firing its handler.
+ *  These controls are sticky on the server and shared between listeners, so what a fresh page
+ *  believes is irrelevant: only the radio knows. Calling click() would render it AND send the
+ *  value straight back, so a client arriving with a stale pref would COMMAND the radio to match
+ *  it — the reload would change the radio instead of reading it, and on a shared receiver it
+ *  would do that to everyone else's audio.
+ *  ★★ TWO TOGGLE STYLES IN THIS FILE and the difference is silent: `toggle()` writes ON/OFF into
+ *     the button, the RSP toggles carry their own label ("RF NOTCH") and only take the class.
+ *     Overwriting the label unconditionally would blank those buttons — so only rewrite text
+ *     that IS an ON/OFF word.
+ *  ★ The saved pref is updated too, or the next reconnect's pushSettingsToServer() would send
+ *    the stale value and undo what we have just learned. */
+function setToggleTo(id: string, on: boolean, prefKey?: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('on', on);
+  const t = (el.textContent || '').trim();
+  if (t === 'ON' || t === 'OFF') el.textContent = on ? 'ON' : 'OFF';
+  if (prefKey) savePref(prefKey, on);
 }
 
 /** Wire a segmented control (data-<attr> on each button). */

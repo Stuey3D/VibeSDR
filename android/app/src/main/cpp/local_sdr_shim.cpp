@@ -55,6 +55,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <climits>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -907,6 +908,16 @@ static LocalSdrShim::AsnFn         g_vsAsnFn;
 /** Forward-declared: used on the connection path, defined with the other handler plumbing. */
 static std::string vsCountry(const std::string& ip);
 static std::string vsAsnLabel(const std::string& ip);
+/** ★ The DESIRED-state store (`g_dsp`) lives with the restart-replay plumbing, far below the
+ *  hwinfo builder that has to report it. Forward-declared rather than moved: it is read in
+ *  exactly one place up here, and hauling the struct to the top would put the replay logic
+ *  a long way from the setters it mirrors.
+ *  ★★ Tri-state, deliberately — see the sentinel note on DesiredDsp. <0 / nullopt means the
+ *     listener never chose, which is NOT the same as "off" and must not be reported as it. */
+static int   vsDesiredRfNotch();     // -1 unset, 0 off, 1 on
+static int   vsDesiredDabNotch();    // -1 unset, 0 off, 1 on
+static float vsDesiredNrStrength();  // <0 = unset
+static int   vsDesiredRspBiasT();    // -1 unset, 0 off, 1 on
 // The RSP front end as the owner last left it. -1 = never set.
 static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
 
@@ -5555,6 +5566,38 @@ struct LocalSdrShim::Impl {
         // — locked rate, fps ceiling, admin lock, and now these — is the same bug.
         j += std::string(",\"nr\":")    + (nrOn.load()    ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
+        // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
+        //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
+        //     audibly ON. Every OTHER sticky control has exactly the same shape and none of them
+        //     were sent — so the fix cured the two controls that had been reported and left its
+        //     four siblings to be reported separately later, which is what happened (Stuart,
+        //     2026-08-10: auto notch left on for the Airspy still reading OFF on the RSP; "same
+        //     with the RF/DAB notches and any NR figure set with the slider too").
+        //     ★★ WHEN YOU FIX per-control-state-not-reported, FIX EVERY CONTROL OF THAT SHAPE.
+        //        The identical lesson as the `fftRate`/`clientBins` twins — a warning written
+        //        next to one field while its neighbour is left alone.
+        // ★★ THE STRENGTH, not just the switch. `nr:true` alone cannot restore the SLIDER, so
+        //    the client fell back to its own saved number and drew a figure the radio was not
+        //    using. A boolean cannot describe a continuous control.
+        //    ★ <0 means the listener never set one — send nothing rather than invent a value.
+        if (vsDesiredNrStrength() >= 0.0f)
+            j += ",\"nrStrength\":" + std::to_string(vsDesiredNrStrength());
+        // ★★ Tri-state on the wire as well as in the store: these are only meaningful once
+        //    somebody has chosen, and the RSP ones only exist on an RSP at all. Omitting the
+        //    key says "no opinion", which is the truth and is what the client must not
+        //    overwrite the hardware with.
+        if (vsDesiredRfNotch()  >= 0)
+            j += std::string(",\"rfNotch\":")  + (vsDesiredRfNotch()  ? "true" : "false");
+        if (vsDesiredDabNotch() >= 0)
+            j += std::string(",\"dabNotch\":") + (vsDesiredDabNotch() ? "true" : "false");
+        // ★★★ TWO DIFFERENT BIAS-TEES, AND THEY ARE NOT INTERCHANGEABLE. `g_biasTeeOn` is the
+        //     DONGLE's (rtlsdr_set_bias_tee); the RSP's is a separate setter on a separate
+        //     radio, reported under its own key so the client drives the button that exists.
+        //     Reporting one as the other would have switched the wrong control on the wrong
+        //     hardware — the "else means dongle" shape again.
+        j += std::string(",\"biasT\":") + (g_biasTeeOn.load() ? "true" : "false");
+        if (vsDesiredRspBiasT() >= 0)
+            j += std::string(",\"rspBiasT\":") + (vsDesiredRspBiasT() ? "true" : "false");
         // Owner requires the idle saver — the client locks its toggle on rather than offering a
         // switch we would silently ignore.
         j += ",\"forceIdleSaver\":";
@@ -7879,9 +7922,11 @@ struct LocalSdrShim::Impl {
         //   are, the fan-out is proportional. Confusing the two is how "per-client cost" ends up
         //   looking enormous with a single listener connected.
         auto fanT0 = std::chrono::steady_clock::now();
-        double fanMs = 0;
+        double fanMs = 0, wideMs = 0;
+        int blocksThisFeed = 0;
         chan_->feed(iq, n, [&](const cf32* bins, int nbins) {
             (void)nbins;
+            blocksThisFeed++;
             const auto f0 = std::chrono::steady_clock::now();
             // ★★★ HAND THE BLOCK OVER AND MOVE ON — no barrier, no waiting.
             //     The DSP thread's only job is the shared forward FFT; every listener's channel
@@ -7904,16 +7949,38 @@ struct LocalSdrShim::Impl {
             //        than the Nuttall the display FFT used, so a strong carrier smears a little
             //        wider. That is inherited from the architecture, not a mistake — it is the
             //        same compromise the receivers we are matching make.
+            // ★★★ TIMED SEPARATELY, AND THAT IS THE POINT OF THIS SPLIT. Everything inside
+            //     feed() that was not the fan-out used to be reported as "channelizer FFT",
+            //     so the wide waterfall's own cost — a log10 over every bin, then the emit —
+            //     was being charged to the transform. They scale completely differently: the
+            //     FFT is the same work every block, this fires only every `decim`th block and
+            //     is proportional to fps. A number that mixes a fixed cost with a bursty one
+            //     cannot tell you which of them is making the DSP miss real time.
+            const auto w0 = std::chrono::steady_clock::now();
             emitWideFromBins(bins, nbins);
+            wideMs += std::chrono::duration<double,std::milli>(
+                          std::chrono::steady_clock::now() - w0).count();
         });
         const double totalMs = std::chrono::duration<double,std::milli>(
                                    std::chrono::steady_clock::now() - fanT0).count();
-        chanFftMs_ += (totalMs - fanMs);
+        chanFftMs_ += (totalMs - fanMs - wideMs);
         chanFanMs_ += fanMs;
+        chanWideMs_ += wideMs;
         chanClients_ += (double)cs.size();
         chanN_++;
+        // ★★ THE OTHER HALF OF THE QUESTION: is the INPUT ragged? The forward FFT is a fixed
+        //    cost per BLOCK, not per call, so a driver handing us uneven buffers makes some
+        //    calls do two transforms and others none — which looks exactly like a DSP that
+        //    randomly costs three times as much. Track the spread of both.
+        chanBlocksMin_ = std::min(chanBlocksMin_, blocksThisFeed);
+        chanBlocksMax_ = std::max(chanBlocksMax_, blocksThisFeed);
+        chanBlocksTot_ += blocksThisFeed;
+        chanInMin_ = std::min(chanInMin_, n);
+        chanInMax_ = std::max(chanInMax_, n);
     }
-    double chanFftMs_ = 0, chanFanMs_ = 0, chanClients_ = 0; int chanN_ = 0;
+    double chanFftMs_ = 0, chanFanMs_ = 0, chanWideMs_ = 0, chanClients_ = 0; int chanN_ = 0;
+    int chanBlocksMin_ = INT_MAX, chanBlocksMax_ = 0, chanBlocksTot_ = 0;
+    int chanInMin_ = INT_MAX, chanInMax_ = 0;
 
     // ★ The worker POOL that used to live here is gone: every listener now has its own DSP
     //   thread (see ClientDsp::th), so there is nothing to fan out to and no barrier to wait
@@ -8050,11 +8117,19 @@ struct LocalSdrShim::Impl {
                          dspWideMs_ / dspRealMs_ * 100.0, dspPerMs_ / dspRealMs_ * 100.0,
                          (dspWideMs_ + dspPerMs_) / dspRealMs_ * 100.0,
                          (double)q / sampleRate * 1000.0);
-                    if (chanN_ > 0)
-                        LOGI("  split: channelizer FFT %.0f%%, fan-out %.0f%% for %.1f listeners",
-                             chanFftMs_ / dspRealMs_ * 100.0, chanFanMs_ / dspRealMs_ * 100.0,
-                             chanClients_ / chanN_);
-                    chanFftMs_ = chanFanMs_ = chanClients_ = 0; chanN_ = 0;
+                    if (chanN_ > 0) {
+                        LOGI("  split: forward FFT %.0f%%, wide emit %.0f%%, fan-out %.0f%% "
+                             "for %.1f listeners",
+                             chanFftMs_ / dspRealMs_ * 100.0, chanWideMs_ / dspRealMs_ * 100.0,
+                             chanFanMs_ / dspRealMs_ * 100.0, chanClients_ / chanN_);
+                        LOGI("  input: %d..%d samples/call, %d..%d blocks/call, %.2f blocks/call avg",
+                             chanInMin_ == INT_MAX ? 0 : chanInMin_, chanInMax_,
+                             chanBlocksMin_ == INT_MAX ? 0 : chanBlocksMin_, chanBlocksMax_,
+                             (double)chanBlocksTot_ / chanN_);
+                    }
+                    chanFftMs_ = chanFanMs_ = chanWideMs_ = chanClients_ = 0; chanN_ = 0;
+                    chanBlocksMin_ = chanInMin_ = INT_MAX;
+                    chanBlocksMax_ = chanInMax_ = chanBlocksTot_ = 0;
                     dspBlocks_ = 0; dspWideMs_ = dspPerMs_ = dspRealMs_ = 0;
                 }
             }
@@ -8879,6 +8954,11 @@ struct DesiredDsp {
     std::atomic<int>  rspIfAgc{-1};      // tri-state: -1 unset, 0 off, 1 on
     std::atomic<int>  rspRfNotch{-1};
     std::atomic<int>  rspDabNotch{-1};
+    // ★★ THE RSP'S BIAS-T HAD NO ENTRY HERE AT ALL, so unlike the RTL's it was never replayed
+    //    onto a fresh Impl and never reportable to a client — the same omission, on the same
+    //    control, that 2026-08-08 fixed for the DONGLE ("I had enabled the bias-t and was using
+    //    it until you restarted it"). The RTL half was fixed and the RSP half was not looked at.
+    std::atomic<int>  rspBiasT{-1};      // tri-state: -1 unset, 0 off, 1 on
     // ★ Airspy HF+ controls, held here for exactly the reason the RSP ones are: five start
     // paths each build a fresh Impl, and a setter that only writes through `p` is lost the
     // moment one of them runs. Same sentinels — -1 means "the listener never chose".
@@ -8889,6 +8969,12 @@ struct DesiredDsp {
     std::atomic<int>  ahfPpb{INT32_MIN}; // calibration; INT32_MIN = never set
 };
 static DesiredDsp g_dsp;
+
+// ★ Forward-declared up by the hwinfo builder, which reports this state to the client.
+static int   vsDesiredRfNotch()    { return g_dsp.rspRfNotch.load(); }
+static int   vsDesiredDabNotch()   { return g_dsp.rspDabNotch.load(); }
+static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
+static int   vsDesiredRspBiasT()   { return g_dsp.rspBiasT.load(); }
 
 // Replay the listener's choices onto a freshly built Impl. ★ Call this at EVERY `p = impl`
 // site — there are five, one per source type, and a new one that forgets to call it
@@ -8908,6 +8994,7 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         if (g_dsp.rspAgcSet.load()   > -999)  impl->sdrp->setIfAgcSetPoint(g_dsp.rspAgcSet.load());
         if (g_dsp.rspRfNotch.load()  >= 0)    impl->sdrp->setRfNotch(g_dsp.rspRfNotch.load() != 0);
         if (g_dsp.rspDabNotch.load() >= 0)    impl->sdrp->setDabNotch(g_dsp.rspDabNotch.load() != 0);
+        if (g_dsp.rspBiasT.load()    >= 0)    impl->sdrp->setBiasT(g_dsp.rspBiasT.load() != 0);
         // ★ ORDER MATTERS, exactly as it does in the client's pushAllRspSettings: a manual IF
         // reduction is refused while the AGC owns that register, so set the AGC state FIRST and
         // only push a manual IFGR when the AGC is off. Reversing these drops the value silently.
@@ -11110,7 +11197,8 @@ void LocalSdrShim::setRfNotch(bool v)       { g_dsp.rspRfNotch.store(v ? 1 : 0);
 void LocalSdrShim::setDabNotch(bool v)      { g_dsp.rspDabNotch.store(v ? 1 : 0);
                                               if (!p || !p->useSdrplay()) return;
                                               VIBE_HW_LOCK(); p->sdrp->setDabNotch(v); }
-void LocalSdrShim::setBiasT(bool v)         { if (!p || !p->useSdrplay()) return;
+void LocalSdrShim::setBiasT(bool v)         { g_dsp.rspBiasT.store(v ? 1 : 0);
+                                              if (!p || !p->useSdrplay()) return;
                                               VIBE_HW_LOCK(); p->sdrp->setBiasT(v); }
 #undef VIBE_HW_LOCK
 
