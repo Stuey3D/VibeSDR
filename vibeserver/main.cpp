@@ -28,6 +28,7 @@
 #include <rtl-sdr.h>
 #include "rtl_eeprom.h"
 #include "radios.h"
+#include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
 
@@ -38,6 +39,11 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <limits.h>       // PATH_MAX, for selfExePath()
+#include <thread>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>  // _NSGetExecutablePath — macOS's /proc/self/exe
+#endif
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -86,6 +92,11 @@ struct Opts {
     std::string radioSerial;             // ★ preferred: identity that does not move
     bool        portGiven = false;       // an explicit --port always wins
     bool        radioGiven = false;
+    /** ★ Set by `--serve`, which the front door passes to every radio it forks. It is the
+     *  child's only way to know it is SUPERVISED rather than run by hand — and on macOS that
+     *  decides whether it arms dieWithParent(). Killing a hand-run radio because its shell
+     *  exited would be surprising; killing a supervised one is the entire contract. */
+    bool        supervised = false;
     bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
     // ★★★ THE ADMIN / OPERATOR SETTINGS. Without these a Pi CANNOT SAFELY BE MADE PUBLIC — Stuart,
     // 2026-07-31. The admin password is not a convenience: it is what stands between a stranger and
@@ -328,7 +339,7 @@ bool parse(int argc, char** argv, Opts& o) {
         //     whose "restart the server" does nothing without a service, so no server ever ran —
         //     while `vibeserver --device 0` worked perfectly and looked like a lucky accident.
         //     Now there is an honest way to say it, and the setup screen can offer it.
-        else if (a == "--serve")          { /* config supplies everything */ }
+        else if (a == "--serve")          { o.supervised = true; /* config supplies the rest */ }
         else if (a == "--force-idle-saver") o.forceIdleSaver = true;
         else if (a == "--release-when-idle") o.releaseWhenIdle = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
@@ -538,6 +549,39 @@ void reapRadios() {
     }
     g_radioKids.clear();
 }
+/** ★★★ THIS PROCESS'S OWN EXECUTABLE, EXACTLY — not argv[0].
+ *
+ *  The comment at the exec site below explains why argv[0] is not good enough: run from PATH it is
+ *  the bare word "vibeserver", and execl does not search PATH, which shipped as a front door that
+ *  logged "started radio 4" and then "could not start the process for 4: No such file or
+ *  directory" (3.0.0-4). `/proc/self/exe` fixed it — on Linux.
+ *
+ *  ★★ macOS HAS NO /proc AT ALL, so there the code fell straight through to the argv[0] path it
+ *     had just been fixed not to rely on. `_NSGetExecutablePath` is the exact equivalent and is
+ *     what makes the front door's self-exec safe on a Mac, which Full mode there depends on.
+ *  ★ Returns empty if it cannot be determined; the caller keeps the execlp fallback for that. */
+static std::string selfExePath() {
+#if defined(__APPLE__)
+    uint32_t sz = 0;
+    _NSGetExecutablePath(nullptr, &sz);            // first call only reports the size needed
+    std::string buf(sz ? sz : 1024, '\0');
+    if (_NSGetExecutablePath(&buf[0], &sz) != 0) return {};
+    buf.resize(std::strlen(buf.c_str()));
+    // ★ It may be a path with symlinks or "..", which exec handles fine — but realpath makes the
+    //   value we LOG the same one we ran, and that is the whole point of not using argv[0].
+    char real[PATH_MAX];
+    if (::realpath(buf.c_str(), real)) return real;
+    return buf;
+#elif defined(__linux__)
+    char real[PATH_MAX];
+    const ssize_t n = ::readlink("/proc/self/exe", real, sizeof(real) - 1);
+    if (n > 0) { real[n] = '\0'; return real; }
+    return {};
+#else
+    return {};
+#endif
+}
+
 static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv) {
     if (haveServiceManager()) return;   // ★ systemd is doing it; two supervisors would fight
 
@@ -584,8 +628,13 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
             //    real one is testing a different program.
             // ★ /proc/self/exe is exact: immune to PATH, to cwd, and to a renamed argv[0]. execvp
             //   is the fallback for anything without /proc, and it DOES search PATH.
-            ::execl("/proc/self/exe", "vibeserver", "--radio", serial.c_str(), "--serve",
-                    (char*)nullptr);
+            // ★ selfExePath() is /proc/self/exe on Linux and _NSGetExecutablePath on macOS — the
+            //   same guarantee on both, rather than Linux being exact and the Mac silently
+            //   falling through to the argv[0] path this was fixed not to trust.
+            const std::string me = selfExePath();
+            if (!me.empty())
+                ::execl(me.c_str(), "vibeserver", "--radio", serial.c_str(), "--serve",
+                        (char*)nullptr);
             ::execlp(self, self, "--radio", serial.c_str(), "--serve", (char*)nullptr);
             std::fprintf(stderr, "VibeServer: could not start the process for %s: %s\n",
                          serial.c_str(), strerror(errno));
@@ -1743,6 +1792,12 @@ int main(int argc, char** argv) {
     //   claim one, and must be the only process doing so.
     const bool willBeFrontDoor =
         o.useUsb && !o.radioGiven && vsconfig::needsFrontDoor(g_serverConfig);
+
+    // ★★★ ARM THE PARENT-DEATH WATCH BEFORE CLAIMING THE RADIO, not after. The whole point is to
+    //     guarantee the device is released if the front door dies; arming it after the claim
+    //     leaves a window in which we hold an SDR with nobody supervising us. No-op on Linux,
+    //     where PR_SET_PDEATHSIG was already set before exec and survived it.
+    if (o.supervised && o.radioGiven) vibe::dieWithParent();
     if (!willBeFrontDoor && !claimRadioLock(g_myRadioSerial)) return 0;
 
     if (willBeFrontDoor) {

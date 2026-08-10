@@ -73,6 +73,9 @@ add_library(vibeserver_core STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/solar.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/geoip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/asndb.cpp"
+    # ★ Guarantees a radio process cannot outlive the front door. A no-op on Linux (the kernel
+    #   does it via PR_SET_PDEATHSIG); the real work is macOS, where nothing survives exec.
+    "${CMAKE_CURRENT_SOURCE_DIR}/parent_watch.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     # ★ Hands a live connection to another process, so several radios can share one
