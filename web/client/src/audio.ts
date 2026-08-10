@@ -38,11 +38,38 @@ import { OpusDecoder } from 'opus-decoder';
  *  ★ Which means the ORDER MATTERS if this is ever revisited: this number is only safe
  *    while that holds. If retunes start breaking the audio again, look for a rebuild that
  *    has crept back into the tune path before you reach for this constant.
- *  ★ IF THE PUBLIC LINK STUTTERS, PUT IT BACK TO 0.25. This is tuned for a LAN; a receiver
- *    reached over the internet has a longer jitter tail. An underrun is handled (silence +
- *    re-arm) rather than being a glitch, so being slightly wrong here is cheap.
+ *  ★ ~~IF THE PUBLIC LINK STUTTERS, PUT IT BACK TO 0.25.~~ It did stutter, and this is now the
+ *    STARTING depth rather than the whole policy — the buffer grows itself when it underruns.
+ *    See JITTER_MAX_SEC below for why a constant was the wrong shape for this.
  */
 const JITTER_SEC = 0.15;
+
+/** ★★★ THE BUFFER GROWS WHEN IT IS PROVED TOO SHALLOW, and shrinks again when it is proved too
+ *  deep. One constant could not serve both listeners: this is the A/V SYNC KNOB, so every
+ *  millisecond added to cover a remote listener's jitter tail is a millisecond of lag charged to
+ *  a LAN listener who never had a problem.
+ *
+ *  MEASURED, on the public demo through the Cloudflare tunnel (2026-08-10, after M9PSY reported
+ *  audio dropping out): holes of up to 245 ms in the audio stream, and 14 of 14 of them were
+ *  followed by a CATCH-UP BURST. That is the whole justification for a buffer here —
+ *
+ *  ★★★ NOTHING IS EVER LOST ON THIS PATH. It is a WebSocket, so it is TCP: a gap can only mean
+ *      the stream was held up (head-of-line blocking behind a retransmit) and the packets behind
+ *      it arrive the instant it clears. Late data is exactly what a buffer is for. Contrast the
+ *      spectrum's "sticking", which looked identical and was frames the server never sent at all —
+ *      no buffer could have helped there. Same symptom, opposite cause, opposite fix; the test
+ *      that separates them is whether a burst FOLLOWS the gap.
+ *
+ *  ★★ 150 ms could not survive a 245 ms hole — it drains and re-arms, which IS the dropout. But
+ *     a fixed 250 would have cleared that particular window by 5 ms, and picking a constant off
+ *     one bad window is how you end up back here. So: start where the LAN wants it, and let the
+ *     link itself say how much more it needs.
+ *  ★ Growth is fast and decay is slow, deliberately: an underrun is audible and a little extra
+ *    lag is not, so it should cost several clean minutes to give the depth back.
+ */
+const JITTER_MAX_SEC  = 0.40;   // ceiling — beyond this the lag is worse than the stutter
+const JITTER_STEP_SEC = 0.06;   // added per underrun
+const JITTER_DECAY_SEC = 45;    // clean run required before giving a step back
 
 /** Playout worklet: a ring buffer drained at the device rate. Kept tiny — it
  *  runs on the audio thread. Late frames are dropped, not queued, so a stalled
@@ -58,6 +85,15 @@ class VibeSink extends AudioWorkletProcessor {
     // See JITTER_SEC — the buffer is what makes the audio lag the waterfall, and it became
     // obvious once the waterfall was tied to the display refresh and stopped hitching.
     this.target = 48000 * ${JITTER_SEC};
+    this.base   = 48000 * ${JITTER_SEC};
+    this.max    = 48000 * ${JITTER_MAX_SEC};
+    this.step   = 48000 * ${JITTER_STEP_SEC};
+    this.decayAfter = 48000 * ${JITTER_DECAY_SEC};
+    this.cleanFor = 0;          // samples drained since the last underrun
+    // ★ A retune FLUSH is not an underrun. It deliberately empties the buffer and re-arms, and
+    //   counting it would make the buffer grow every time the dial moved — punishing the user for
+    //   tuning, which is the one thing they do constantly.
+    this.armedByFlush = false;
     this.port.onmessage = (e) => {
       // ★★★ FLUSH ON RETUNE. Everything already queued was demodulated at the OLD frequency, so
       //     playing it out after the dial has moved is just the previous station arriving late —
@@ -69,6 +105,7 @@ class VibeSink extends AudioWorkletProcessor {
       //     * NOTE: this block lives inside a template literal — no backticks in here.
       if (e.data && e.data.flush) {
         this.r = this.w; this.filled = 0; this.started = false;
+        this.armedByFlush = true;      // the re-arm that follows is ours, not the link's fault
         return;
       }
       const { l, r } = e.data;
@@ -110,9 +147,33 @@ class VibeSink extends AudioWorkletProcessor {
     const n = out[0].length;
     if (!this.started || this.filled < n) {
       // Underrun — output silence and re-arm the jitter buffer.
-      if (this.started && this.filled < n) this.started = false;
+      if (this.started && this.filled < n) {
+        this.started = false;
+        // ★★ THE LINK HAS JUST PROVED THIS DEPTH TOO SHALLOW. Grow, unless we emptied the buffer
+        //    ourselves on a retune — that re-arm is expected and says nothing about the network.
+        if (this.armedByFlush) {
+          this.armedByFlush = false;
+        } else if (this.target < this.max) {
+          this.target = Math.min(this.max, this.target + this.step);
+          this.cleanFor = 0;
+          // Tell the page, so a listener's depth is observable rather than inferred — the whole
+          // reason this was hard to diagnose is that a stutter looks the same from every cause.
+          this.port.postMessage({ jitterMs: Math.round(this.target / 48) });
+        }
+      }
       for (let c = 0; c < out.length; c++) out[c].fill(0);
       return true;
+    }
+    // ★ Decay: a long clean run means we are carrying lag we no longer need. Give a step back,
+    //   slowly — see JITTER_DECAY_SEC. Counted in samples actually DRAINED, so a paused or
+    //   silent stream cannot earn its way down without really having played.
+    this.cleanFor += n;
+    if (this.cleanFor >= this.decayAfter) {
+      this.cleanFor = 0;
+      if (this.target > this.base) {
+        this.target = Math.max(this.base, this.target - this.step);
+        this.port.postMessage({ jitterMs: Math.round(this.target / 48) });
+      }
     }
     for (let i = 0; i < n; i++) {
       const r = (this.r + i) % this.cap;
@@ -266,6 +327,9 @@ export class AudioPlayer {
   private ws: WebSocket | null = null;
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
+  /** Current playout cushion in ms — starts at JITTER_SEC and the worklet adapts it to the link.
+   *  Read it to explain how far the audio sits behind the waterfall. */
+  jitterMs = Math.round(JITTER_SEC * 1000);
   private gain: GainNode | null = null;
 
   // ScriptProcessor fallback — see start(). Only one of `node` / `sp` is live.
@@ -307,6 +371,8 @@ export class AudioPlayer {
   private rPos = 0;
   private filled = 0;
   private playing = false;
+  /** Fallback path only: suppresses buffer growth for the re-arm that a retune flush causes. */
+  private armedByFlush = false;
   private url: string;
   private cb: AudioCallbacks;
   private closedByUs = false;
@@ -395,6 +461,13 @@ export class AudioPlayer {
         await this.ctx.audioWorklet.addModule(url);
         URL.revokeObjectURL(url);
         this.node = new AudioWorkletNode(this.ctx, 'vibe-sink', { outputChannelCount: [2] });
+        // ★ The worklet reports its depth whenever it changes. Record it so "why is the audio
+        //   behind the waterfall?" has an answer on this side of the port — an adaptive value
+        //   nobody can read is indistinguishable from a bug.
+        this.node.port.onmessage = (e: MessageEvent) => {
+          const ms = (e.data as { jitterMs?: number })?.jitterMs;
+          if (typeof ms === 'number') this.jitterMs = ms;
+        };
         this.node.connect(this.gain);
         this._connectOutput();
       } else {
@@ -423,7 +496,14 @@ export class AudioPlayer {
       // Never gate playback on how FULL the buffer is; only on whether the next
       // block can actually be served.
       if (!this.playing || this.filled < n) {
-        if (this.playing) this.playing = false;
+        if (this.playing) {
+          this.playing = false;
+          // ★ Grow on a real underrun, exactly as the worklet does — and skip the one that our
+          //   own retune flush caused, for the same reason. Without this the fallback would adapt
+          //   its arm threshold and never actually raise it, which is no adaptation at all.
+          if (this.armedByFlush) this.armedByFlush = false;
+          else this.jitterMs = Math.min(JITTER_MAX_SEC * 1000, this.jitterMs + JITTER_STEP_SEC * 1000);
+        }
         outL.fill(0);
         outR.fill(0);
         return;
@@ -463,6 +543,7 @@ export class AudioPlayer {
     // The main-thread fallback path uses its own ring; clear that too, or the fallback keeps the
     // very bug this fixes.
     this.rPos = this.wPos; this.filled = 0; this.playing = false;
+    this.armedByFlush = true;   // the fallback's re-arm after a retune is ours, not the link's
   }
 
   /** Push decoded frames into the fallback ring buffer. */
@@ -481,8 +562,11 @@ export class AudioPlayer {
     }
     this.wPos = (this.wPos + n) % this.cap;
     this.filled += n;
-    // Same cushion as the worklet — this is the fallback path, not a different policy.
-    if (!this.playing && this.filled >= 48000 * JITTER_SEC) this.playing = true;
+    // Same cushion as the worklet — this is the fallback path, not a different policy. ★ Which
+    // means it follows the ADAPTED depth, not the starting constant: this path is what runs on
+    // exactly the setups that cannot use a worklet (a page served over plain HTTP to a LAN IP),
+    // and leaving it pinned at 150 ms would give the fallback the old bug back.
+    if (!this.playing && this.filled >= 48 * this.jitterMs) this.playing = true;
   }
 
   private _openWs() {

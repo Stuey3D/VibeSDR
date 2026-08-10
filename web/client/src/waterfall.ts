@@ -384,7 +384,61 @@ export class Waterfall {
   }
 
   /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
+  /** ★★★ THE SPECTRUM JITTER BUFFER — rows are HELD briefly, then released on the display clock.
+   *
+   *  The pacing below already covers uneven arrivals WITHOUT latency: it sizes each pair against
+   *  the WORST recent gap (`slowGap`) and synthesises interpolated rows to bridge it. That is
+   *  genuinely a jitter buffer's job done for free, and it is why this was left alone for so long.
+   *
+   *  ★★ WHERE IT RUNS OUT. `slowGap` decays (x0.98 per arrival, so ~3 s of memory). An ISOLATED
+   *     long hole after a quiet spell finds it sized for the quiet spell: measured on the public
+   *     demo through the tunnel, arrival gaps to 248 ms against a slowGap of ~65 ms, so the
+   *     synthesised rows run out ~65 ms in and the scroll STOPS for the remaining ~180 ms. That
+   *     stall is the "sticky waterfall" — not a slow link, a bridge built too short.
+   *
+   *  ★★★ AND HOLDING ROWS IS THE A/V SYNC FIX, NOT A COST TO IT. The audio carries its own
+   *      cushion (see audio.ts JITTER_SEC), so the picture has always run AHEAD of the sound by
+   *      exactly that much. Delaying the waterfall by the same amount is the long-standing
+   *      "delay the WATERFALL" item — one change, two problems, and they pull in the SAME
+   *      direction. Set this from the audio path's adapted depth and they stay locked together.
+   *
+   *  ★ Default 0 = the previous behaviour exactly, so a receiver on a LAN pays nothing.
+   */
+  private holdMs = 0;
+  private held: { bins: Float32Array; centerHz: number; bwHz: number; at: number }[] = [];
+
+  /** Match the picture's delay to the sound's. Called with the audio buffer's current depth. */
+  setHoldMs(ms: number) { this.holdMs = Math.max(0, Math.min(500, ms)); }
+
+  /** ★★ Drop everything queued — the rows in here were computed for the OLD centre, and painting
+   *  them after the dial has moved draws the previous frequency's spectrum at the new one's
+   *  position. Same reasoning as the audio path's flush; call it from the same place. */
+  flushHeld() { this.held.length = 0; }
+
   push(bins: Float32Array, centerHz: number, bwHz: number) {
+    if (this.holdMs > 0) {
+      // ★ COPY. `bins` is a reused buffer owned by the caller — queueing the reference would hand
+      //   the renderer whatever happened to be in it by release time, which is the NEXT row.
+      this.held.push({ bins: new Float32Array(bins), centerHz, bwHz,
+                       at: performance.now() + this.holdMs });
+      // Bound it: a link that stalls for a second must not queue a second of catch-up to grind
+      // through afterwards. Oldest goes first — it is the stalest picture.
+      const cap = Math.max(4, Math.ceil(this.holdMs / 20) + 4);
+      while (this.held.length > cap) this.held.shift();
+      return;
+    }
+    this._pushNow(bins, centerHz, bwHz);
+  }
+
+  /** Release any held rows now due. Called from tick(), so it runs on the display clock. */
+  private _releaseHeld(now: number) {
+    while (this.held.length && this.held[0].at <= now) {
+      const f = this.held.shift()!;
+      this._pushNow(f.bins, f.centerHz, f.bwHz);
+    }
+  }
+
+  private _pushNow(bins: Float32Array, centerHz: number, bwHz: number) {
     this.centerHz = centerHz;
     this.spanHz = bwHz;
 
@@ -484,8 +538,12 @@ export class Waterfall {
    *  At 20fps in this draws exactly one row per frame (emitTotal === 1) and the
    *  blending collapses to a straight copy of the newest row. */
   tick() {
-    if (!this.curRow || !this.prevRow) return;
+    // ★ Release BEFORE the early-return: on a cold start there is no curRow yet, and the very
+    //   first held row is the one that creates it. Draining after the guard would deadlock — no
+    //   row because no curRow, no curRow because no row.
     const now = performance.now();
+    if (this.held.length) this._releaseHeld(now);
+    if (!this.curRow || !this.prevRow) return;
 
     // ★★★ PACED BY VSYNC, NOT BY THE CLOCK. tick() is already called from requestAnimationFrame,
     //     but the EMISSION used to ask "is row k due yet?" against wall-clock times. At 20 rows/s

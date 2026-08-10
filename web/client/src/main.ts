@@ -753,7 +753,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBanned: () => showBanned(),
     // ★ Drop audio that was demodulated at the old frequency. Without this the previous station
     //   plays on for as long as the buffer is deep — which is what made tuning feel laggy.
-    onRetuneJump: () => audio?.flush(),
+    // ★ And the waterfall rows held for pacing, for the same reason: they were computed at the
+    //   OLD centre, so releasing them after the dial moves paints the previous frequency at the
+    //   new one's position. Both buffers flush together or the two displays disagree.
+    onRetuneJump: () => { audio?.flush(); if (!NO_WF) wf?.flushHeld(); },
     onAdminRelocked: (idleMin) => showAdminRelocked(idleMin),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
@@ -1276,6 +1279,13 @@ function loop() {
   wf.filterHigh = spec.bandwidthHigh;
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
+  // ★★ KEEP THE PICTURE'S DELAY EQUAL TO THE SOUND'S. The audio buffer adapts itself to the link
+  //    (audio.ts), and every millisecond it adds is a millisecond the waterfall would otherwise
+  //    run AHEAD of what you are hearing. Feeding its current depth to the waterfall holds the two
+  //    together for free — and gives the waterfall the very cushion that stops it sticking.
+  //    ★ Costs nothing on a LAN: the audio depth stays at its floor there, and a hold of that size
+  //      is well inside what the existing row pacing already bridges.
+  if (!NO_WF && audio) wf.setHoldMs(audio.jitterMs);
   if (!NO_WF) wf.tick();   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   if (!NO_WF) wf.draw();
