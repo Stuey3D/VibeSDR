@@ -46,17 +46,37 @@ is the two-editors drift". The GUI should ask the same three and no more.
 - ★ Warn on colliding RTL serials, as the TUI does — two dongles with the same serial cannot be
   told apart and settings follow the wrong radio.
 
-▶ **ASSUMPTION TO CONFIRM — what the toggles toggle.** The spec says "a list of radios with toggles
-to choose *how to serve them*". Two readings:
-- **(i) serve / do not serve**, as the TUI's step 1 does, with the per-radio Mode (SingleUser vs
-  LockedRange) chosen afterwards in the **browser setup page**, per radio tab, as on Linux today.
-- **(ii) the MODE itself in the GUI**, i.e. each row offers single-user / locked-shared.
+## 2a. ✅ THE DIVISION OF LABOUR, confirmed 2026-08-10
 
-Taking **(i)** unless told otherwise, because (ii) puts the same setting in two editors — the exact
-drift the TUI comment warns about ("asking here and editing there is the two-editors drift this
-whole change exists to kill"), and the reason the TUI asks only three questions. Under (i) the mode
-choice is still fully available on Android's single radio; it just lives on the page that opens
-immediately after Start.
+Stuart: *"In full mode everything except the radio selection, password and pin is set in the
+browser. Simple mode everything is done via the GUI."*
+
+So the toggles are **serve / do not serve**, and the per-radio Mode (SingleUser vs LockedRange) is
+chosen in the **browser setup page**, per radio tab, as on Linux today. Exactly three things stay
+in the GUI in Full mode — the same three the TUI asks — and nothing else, because putting a
+setting in two editors is the drift the TUI comment exists to warn about.
+
+### ★★★ SWITCHING MODES MUST BE NON-DESTRUCTIVE, IN BOTH DIRECTIONS
+
+Stuart: *"If in full mode the GUI gets hidden and any previously set settings in simple mode simply
+get overridden or ignored in full mode. That way a user could switch between full/simple modes
+without too much friction."*
+
+**HIDDEN, OVERRIDDEN, IGNORED — never deleted.** This is the invariant to hold onto, and it is easy
+to break by accident:
+
+- Simple mode's settings live where they live today (`@AppStorage`/UserDefaults) and **must survive
+  a trip through Full mode untouched**. Switching to Full and back must return the user to exactly
+  the receiver they had, not to defaults.
+- Full mode's settings live in the **config file** the browser edits. They must survive a trip
+  through Simple mode untouched, for the same reason.
+- ★★ So the two stores are deliberately **NOT merged and NOT synchronised**. A "helpful" copy in
+  either direction is what turns a mode switch into data loss: the browser's carefully set public
+  server would flatten the GUI's remembered local one, or the reverse. Two stores, one active.
+- ★ The **admin password and PIN are the exception** — they are asked in BOTH modes and are the
+  same credential, so they carry across rather than being kept twice.
+- ★ A Simple-mode server and a Full-mode server must never run at once: switching stops one before
+  starting the other. Both want the radio and the port.
 
 ## 3. Android — FULL MODE, CAPPED AT ONE RADIO  ✅ decided 2026-08-10
 

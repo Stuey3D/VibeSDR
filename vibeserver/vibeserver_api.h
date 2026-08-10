@@ -153,6 +153,31 @@ void vs_sdrplay_retry(void);
 /** Display name of device `index`, or "" if there is no such device. Valid until the next call. */
 const char* vs_device_name(int index);
 
+/** ★★★ EVERY RADIO ATTACHED, WITH ITS IDENTITY — for Full mode's radio list.
+ *
+ *  `vs_device_*` above answers "what can I show in a picker", which was enough while a host served
+ *  exactly one radio. Full mode has to WRITE a `radios[]` config, and the front door forks one
+ *  process per radio **by SERIAL** — an identity that survives the list being reordered, which a
+ *  flat index emphatically does not. So the host needs the serial and the driver, not just a name.
+ *
+ *  ★★ ONE ENUMERATION, ONE ANSWER. These all read the SAME detection pass, refreshed by
+ *  `vs_radios_refresh()`. Deriving a serial from one enumeration and a driver from another is the
+ *  race that had three radios starting at once route two of themselves into the Airspy branch
+ *  (2026-08-08) — see DetectedRadio::driverIndex.
+ *
+ *  ★ Strings are valid until the next `vs_radios_refresh()`. Out-of-range indices return "".
+ *  ★ A serial MAY be empty and MAY NOT be unique — RTL dongles ship with identical ones. A host
+ *    that lets the owner serve two radios must say so rather than silently mixing their settings.
+ */
+void        vs_radios_refresh(void);
+int         vs_radio_count(void);
+const char* vs_radio_serial(int index);   ///< driver-reported; may be empty, may collide
+const char* vs_radio_driver(int index);   ///< "rtlsdr" | "sdrplay" | "airspyhf"
+const char* vs_radio_name(int index);     ///< human-readable, as the driver describes it
+/** Non-zero when two attached radios report the SAME serial, so they cannot be told apart and
+ *  settings would follow the wrong one. The TUI warns about this; a GUI must too. */
+int         vs_radio_serials_collide(void);
+
 /**
  * Hand the web client its searchable station list (GET /stations) — the EiBi schedule as a JSON
  * array of {name, frequency, mode, group, comment, flag, itu, source}.

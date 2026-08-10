@@ -76,6 +76,13 @@ add_library(vibeserver_core STATIC
     # ★ Guarantees a radio process cannot outlive the front door. A no-op on Linux (the kernel
     #   does it via PR_SET_PDEATHSIG); the real work is macOS, where nothing survives exec.
     "${CMAKE_CURRENT_SOURCE_DIR}/parent_watch.cpp"
+    # ★★ RADIO DETECTION BELONGS TO THE CORE, NOT THE CLI. It lived in the executable only, which
+    #    was fine while nothing else asked what is attached — but the Mac .app links the core and
+    #    Full mode's radio list (vs_radio_*) needs exactly this. Leaving it in the CLI made
+    #    vibeserver_core reference symbols it did not contain: the CLI still linked (it supplied
+    #    them itself) and the .APP would have failed, i.e. the break would have surfaced on the
+    #    platform being ported to, not on the one being built.
+    "${CMAKE_CURRENT_SOURCE_DIR}/radios.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     # ★ Hands a live connection to another process, so several radios can share one
@@ -113,7 +120,6 @@ endif()
 add_executable(vibeserver
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/rtl_eeprom.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/radios.cpp"
     $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
 if(CURSES_FOUND)
   target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)
@@ -277,6 +283,15 @@ target_include_directories(vibeserver_core PUBLIC "${OPUS_INC}")
 target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_OPUS)
 target_link_libraries(vibeserver_core PUBLIC "${OPUS_LIB}")
 target_link_libraries(vibeserver PRIVATE vibeserver_core)
+
+# ★★ THE RADIO-LIST API, UNDER TEST. Unlike the tests in scripts/run-tests.sh — which compile a
+#    single .cpp with a named handful of deps — this one needs the WHOLE core linked (it probes
+#    real drivers), so it has to be a CMake target rather than a standalone g++ line.
+#    ★ What it is really guarding is the out-of-range answers: a GUI asks about radio N while the
+#      list is being rescanned underneath it, and a wrong answer there is a serial pointed at the
+#      wrong hardware, not a crash.
+add_executable(test-radio-api "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-api.cpp")
+target_link_libraries(test-radio-api PRIVATE vibeserver_core)
 if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
   target_link_libraries(vibeserver_core PUBLIC

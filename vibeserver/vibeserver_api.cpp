@@ -8,6 +8,7 @@
 #include <thread>
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
+#include "radios.h"
 
 #ifdef VIBE_HAVE_LIBRTLSDR
 #include <rtl-sdr.h>
@@ -257,4 +258,55 @@ const char* vs_device_name(int index) {
 #else
     (void)index; return "";
 #endif
+}
+
+// ── Full mode's radio list: identity, not just a name ────────────────────────
+//
+// ★★★ THE FRONT DOOR FORKS BY SERIAL, so a host writing a `radios[]` config needs serials. A flat
+//     index is not an identity: unplug one dongle and every index below it moves, which would
+//     silently point a radio's saved settings at different hardware.
+//
+// ★★ ONE ENUMERATION, ONE ANSWER. Every accessor below reads this ONE cached pass rather than
+//    re-detecting per call. Re-detecting per call would let the list move BETWEEN the serial
+//    lookup and the driver lookup — the exact shape of the 2026-08-08 bug where three radios
+//    starting at once sent two of themselves into the Airspy branch. It is also much cheaper:
+//    probing the SDRplay API is slow and can block.
+namespace {
+std::vector<vibe::DetectedRadio> g_radios;
+std::string g_radioStr;                    // backing store for the returned pointers
+const vibe::DetectedRadio* radioAt(int i) {
+    return (i >= 0 && i < (int)g_radios.size()) ? &g_radios[(size_t)i] : nullptr;
+}
+}  // namespace
+
+void vs_radios_refresh(void) { g_radios = vibe::detectRadios(); }
+
+int vs_radio_count(void) {
+    // ★ Refresh on first use, so a host that only ever calls the accessors still gets an answer
+    //   rather than a confusing zero. An explicit refresh is still the way to RE-scan.
+    if (g_radios.empty()) vs_radios_refresh();
+    return (int)g_radios.size();
+}
+
+const char* vs_radio_serial(int index) {
+    const auto* r = radioAt(index);
+    g_radioStr = r ? r->serial : std::string();
+    return g_radioStr.c_str();
+}
+
+const char* vs_radio_driver(int index) {
+    const auto* r = radioAt(index);
+    g_radioStr = r ? r->driver : std::string();
+    return g_radioStr.c_str();
+}
+
+const char* vs_radio_name(int index) {
+    const auto* r = radioAt(index);
+    g_radioStr = r ? r->name : std::string();
+    return g_radioStr.c_str();
+}
+
+int vs_radio_serials_collide(void) {
+    if (g_radios.empty()) vs_radios_refresh();
+    return vibe::serialsCollide(g_radios) ? 1 : 0;
 }
