@@ -24,11 +24,21 @@ const MODE = process.env.MODE || 'am';
 const SECS = Number(process.env.SECS || 30);
 const BINS = Number(process.env.BINS || 1024);
 
-const PATHS = [
+// ONLY=tunnel|lan|wan restricts the run — for isolating one variable (a mode, a codec) on a
+// single path, where measuring the other two is just time spent not answering the question.
+const ONLY = (process.env.ONLY || '').toLowerCase();
+// CHANNELS=1 asks for mono. ★ wfm STEREO is the one thing that distinguishes the radio that
+// dropped out from the two that did not, so it has to be switchable to be testable.
+const CHANNELS = process.env.CHANNELS || '';
+const PATHS_ALL = [
   { name: 'LAN direct',        base: 'ws://192.168.86.88:48000',      http: 'http://192.168.86.88:48000' },
   { name: 'port-forward (WAN)', base: 'ws://stuey3d.freemyip.com:48000', http: 'http://stuey3d.freemyip.com:48000' },
   { name: 'Cloudflare tunnel', base: 'wss://demo.vibesdr.net',        http: 'https://demo.vibesdr.net' },
 ];
+const PATHS = PATHS_ALL.filter(p => !ONLY
+  || (ONLY === 'tunnel' && p.name.startsWith('Cloud'))
+  || (ONLY === 'lan' && p.name.startsWith('LAN'))
+  || (ONLY === 'wan' && p.name.startsWith('port')));
 
 const pct = (a, p) => a.length ? a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))] : 0;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
@@ -85,7 +95,7 @@ async function measure(p) {
   // ★ codec=opus, and the SAME session id as the spectrum socket — both are required, and the
   //   second one for a different reason: single-occupancy keys on it, so a mismatched id makes a
   //   client report itself "in use" on its own connection.
-  const aws = new WebSocket(`${pre}/ws/audio?user_session_id=${sid}&codec=opus`);
+  const aws = new WebSocket(`${pre}/ws/audio?user_session_id=${sid}&codec=opus${CHANNELS ? `&channels=${CHANNELS}` : ''}`);
   aws.binaryType = 'arraybuffer';
   aws.onmessage = m => {
     const t = performance.now();
@@ -154,6 +164,31 @@ function report(p, hs, r) {
   console.log(`     gaps p95 ${pct(ag, .95).toFixed(1)}  MAX ${Math.max(...ag).toFixed(1)} ms   (sd ${sd(ag).toFixed(1)})`);
   console.log(`     ★ DROPOUTS (>3x nominal): ${holes.length}`
     + (holes.length ? `  worst ${Math.max(...holes).toFixed(0)} ms, ${(lost / 1000).toFixed(2)}s of audio missing` : ''));
+
+  // ★★★ IS IT LATE, OR IS IT GONE? This decides whether a jitter buffer can help at all, and the
+  //     answer over a WEBSOCKET is structural: WS runs on TCP, so nothing is ever dropped at the
+  //     application layer. A gap means the stream was held up — head-of-line blocking behind a
+  //     retransmit — and the packets behind it arrive in a BURST the moment it clears. Confirm it
+  //     rather than assume it: count the packets that arrive back-to-back after each hole.
+  //     (Contrast the fps bug, where frames were never sent at all. A buffer holds late data; it
+  //     cannot invent data that was never produced. Same-looking symptom, opposite fix.)
+  let caught = 0, deepest = 0;
+  for (let i = 1; i < ag.length; i++) {
+    if (ag[i] <= am * 3) continue;
+    let burst = 0;
+    for (let j = i + 1; j < ag.length && ag[j] < am * 0.5; j++) burst++;
+    if (burst > 0) caught++;
+    // How much audio arrived in that catch-up = how deep a buffer had to be to cover the hole.
+    deepest = Math.max(deepest, ag[i]);
+  }
+  if (holes.length) {
+    console.log(`     recovery: ${caught}/${holes.length} holes were followed by a catch-up burst`
+      + `  ->  ${caught >= holes.length / 2 ? 'LATE, NOT LOST — a buffer absorbs this' : 'no catch-up seen'}`);
+    // ★ Depth = the worst hole plus a margin, because a buffer that exactly equals the worst hole
+    //   drains to empty at that moment and clicks anyway.
+    console.log(`     ★ BUFFER DEPTH to have covered this run: ${Math.ceil(deepest * 1.5 / 20) * 20} ms`
+      + `  (worst hole ${deepest.toFixed(0)} ms + 50% margin, rounded to a 20 ms packet)`);
+  }
 }
 
 console.log(`Same radio (${RADIO || 'single'}) at ${FREQ / 1000} kHz ${MODE}, ${SECS}s per path, ${BINS} bins.`);
