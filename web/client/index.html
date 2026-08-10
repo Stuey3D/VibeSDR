@@ -72,21 +72,43 @@ input, textarea, [contenteditable],
 }
 
 /* ── Splash / connect ─────────────────────────────────────────────────────── */
+/* ★★★ IT MUST SCROLL, AND ON A PHONE IN LANDSCAPE IT MUST SCROLL OR RADIOS ARE UNREACHABLE.
+   This was a fixed, centred flex column with NO overflow rule: content taller than the viewport
+   was simply clipped, with no way to reach it. Fine while the splash was a title and a START
+   button; the moment a machine could host several radios the list became the page's whole point,
+   and a 390px-tall landscape phone cannot show three cards plus the form (Stuart, 2026-08-10:
+   "web client doesnt scroll so in landscape not all radios accessible").
+   ★★ `safe center` rather than plain `center`: a centred flex column whose content OVERFLOWS
+      pushes the first item off the TOP of the scroll container, and that part is unreachable
+      because there is nothing above scrollTop 0 to scroll to. `safe` falls back to flex-start the
+      moment it would overflow, which is exactly the wanted behaviour — centred when it fits,
+      scrollable from the top when it does not. */
 #splash {
   position: fixed; inset: 0; z-index: 100;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: safe center;
   gap: 18px; background: var(--bg);
+  overflow-y: auto; overflow-x: hidden;
+  /* Breathing room so the first and last cards are never flush against the screen edge, and the
+     bottom one clears a phone's home indicator. */
+  padding: 20px 12px calc(20px + env(safe-area-inset-bottom, 0px));
+  -webkit-overflow-scrolling: touch;
 }
 #splash.hidden { display: none; }
 /* ★ Behind everything, and DIMMED. At full contrast the form became unreadable over a busy band —
    the picture is the backdrop, not the subject. The gradient keeps the middle darkest, where the
    PIN and buttons sit. */
+/* ★★★ FIXED, NOT ABSOLUTE, NOW THAT #splash SCROLLS. An absolutely positioned child of a scroll
+   container scrolls WITH the content — so the moment the radio list overflowed, the band picture
+   and its dimming gradient would slide up the screen with it and leave bare background behind the
+   cards. `position:fixed` pins both to the viewport, which is the same geometry as before
+   (#splash is itself `fixed; inset:0`) and now stays put while the list moves over it. */
 #splashSpectro {
-  position: absolute; inset: 0; width: 100%; height: 100%;
+  position: fixed; inset: 0; width: 100%; height: 100%;
   z-index: 0; opacity: 0.68;   /* the ramp is brighter now; this keeps the form readable */
 }
 #splash::after {
-  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  content: ""; position: fixed; inset: 0; z-index: 1; pointer-events: none;   /* see #splashSpectro */
   background: radial-gradient(ellipse at center,
               rgba(0,0,0,0.86) 0%, rgba(0,0,0,0.66) 42%, rgba(0,0,0,0.24) 100%);
 }
@@ -118,8 +140,10 @@ input, textarea, [contenteditable],
    ★★ TWO IDs, deliberately: `#splash > *:not(#splashSpectro)` forces position:relative on every
       child, and a single-ID rule would lose to it — leaving `top` applied to a relative element,
       which is a SHIFT rather than a position. That exact trap cost a bug on this page already. */
+/* ★ FIXED for the same reason #splashSpectro is: it is a CAPTION FOR THE PICTURE, so it has to
+   stay with the picture rather than scroll away with the radio list above it. */
 #splash #splashSpectroTip {
-  position: absolute; top: 26px; left: 0; right: 0; text-align: center;
+  position: fixed; top: 26px; left: 0; right: 0; text-align: center;
   z-index: 2; pointer-events: none;
   font-size: 10px; letter-spacing: 1px; text-indent: 1px; color: var(--amber); opacity: 0.8;
 }
