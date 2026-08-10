@@ -410,17 +410,36 @@ export class Waterfall {
   /** Match the picture's delay to the sound's. Called with the audio buffer's current depth. */
   setHoldMs(ms: number) { this.holdMs = Math.max(0, Math.min(500, ms)); }
 
-  /** ★★ Drop everything queued — the rows in here were computed for the OLD centre, and painting
-   *  them after the dial has moved draws the previous frequency's spectrum at the new one's
-   *  position. Same reasoning as the audio path's flush; call it from the same place. */
-  flushHeld() { this.held.length = 0; }
+  /** ★★★ AND GET OUT OF THE WAY WHILE THE DIAL IS MOVING. The first attempt at this froze the
+   *  display completely while tuning (Stuart, 2026-08-10) and the reason is structural, not a
+   *  detail: a hold delays every row by holdMs, and a retune must discard rows computed at the old
+   *  centre. If the centre changes FASTER than holdMs — which is exactly what dragging is — no row
+   *  ever survives long enough to be released, so the picture stops until the dial does.
+   *  ★★ Tagging rows with their centre does NOT fix that, which was my first idea: the freshest
+   *     row is still holdMs away from being drawn. The only thing that works is to stop holding
+   *     while the user is interacting, which is also the moment smoothing matters least — nobody
+   *     is judging the noise floor mid-drag, they are watching the dial.
+   *  ★ So: a retune drops what is queued AND opens a passthrough window. Rows go straight to the
+   *    display, exactly as they did before any of this existed, until the dial has been still for
+   *    TUNE_PASSTHROUGH_MS. */
+  private passthroughUntil = 0;
+
+  flushHeld() {
+    this.held.length = 0;
+    this.passthroughUntil = performance.now() + 400;
+  }
 
   push(bins: Float32Array, centerHz: number, bwHz: number) {
+    // ★ Interacting: straight through, no queue, no delay. This is the pre-buffer code path.
+    if (this.holdMs > 0 && performance.now() < this.passthroughUntil) {
+      this._pushNow(bins, centerHz, bwHz);
+      return;
+    }
     if (this.holdMs > 0) {
       // ★ COPY. `bins` is a reused buffer owned by the caller — queueing the reference would hand
       //   the renderer whatever happened to be in it by release time, which is the NEXT row.
       this.held.push({ bins: new Float32Array(bins), centerHz, bwHz,
-                       at: performance.now() + this.holdMs });
+                       at: performance.now() });
       // Bound it: a link that stalls for a second must not queue a second of catch-up to grind
       // through afterwards. Oldest goes first — it is the stalest picture.
       const cap = Math.max(4, Math.ceil(this.holdMs / 20) + 4);
@@ -430,9 +449,24 @@ export class Waterfall {
     this._pushNow(bins, centerHz, bwHz);
   }
 
-  /** Release any held rows now due. Called from tick(), so it runs on the display clock. */
+  /** Release any held rows now due. Called from tick(), so it runs on the display clock.
+   *
+   *  ★★★ THE DEPTH RAMPS IN, it is never applied in one step. Coming out of a passthrough window
+   *      the queue is EMPTY, so switching straight to a full hold would stall the picture for
+   *      holdMs while it filled — a fresh stutter after every tune, which is the complaint this
+   *      is supposed to cure. Growing the effective hold at ~15% of real time means each row waits
+   *      a little longer than the last: the waterfall scrolls ~15% slow for about a second and
+   *      then sits at full depth, and nothing ever stops. Sub-perceptual, and no gap.
+   */
+  private _effectiveHold(now: number) {
+    const since = now - this.passthroughUntil;      // >0 once the dial has been still
+    if (since <= 0) return 0;
+    return Math.min(this.holdMs, since * 0.15);
+  }
+
   private _releaseHeld(now: number) {
-    while (this.held.length && this.held[0].at <= now) {
+    const eff = this._effectiveHold(now);
+    while (this.held.length && now - this.held[0].at >= eff) {
       const f = this.held.shift()!;
       this._pushNow(f.bins, f.centerHz, f.bwHz);
     }

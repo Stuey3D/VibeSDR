@@ -7330,10 +7330,29 @@ struct LocalSdrShim::Impl {
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent
           //   still-open record, so this cannot overwrite one of those.
-          { auto it = clientDsp.find(sock.get());
-            if (it != clientDsp.end() && it->second)
-                LocalSdrShim::noteConnectionClosed(sock->peerAddress(), it->second->session,
-                                                   "closed"); }
+          // ★★★ CLOSE IT EVEN WHEN THERE IS NO ClientDsp, WHICH IS THE COMMON CASE. This was
+          //     gated on finding a per-client DSP for the socket — but `clientDsp` is only
+          //     populated when perClientDsp() holds (a LOCKED centre with room for more than one).
+          //     On a DIRECT-mode radio there is never an entry, so the close was never recorded
+          //     and every connection stayed OPEN IN THE LOG FOR EVER. The admin table then shows
+          //     "connected now" for everyone who has ever connected since the last restart —
+          //     phantom listeners, and a country list that only ever grows (Stuart, 2026-08-10:
+          //     "it lists IPs being connected now even though nobody is connected", and countries
+          //     that changed between viewings). It bit exactly the radios in single mode and
+          //     spared the shared one, which is why it looked intermittent.
+          // ★★ The OPEN above is unconditional; a close that is conditional on anything the open
+          //    did not require is a leak by construction. Match them.
+          // ★ Session id when we have one, empty when we do not: ConnLog::close fills the most
+          //   recent still-open record for the address either way — the same call the idle-timeout
+          //   path already makes with no session at all.
+          // ★ Spectrum only, to mirror the open: the audio socket is optional and arrives second,
+          //   so closing on it would end the record while the listener is still here.
+          if (!isAudio) {
+            auto it = clientDsp.find(sock.get());
+            const std::string sess = (it != clientDsp.end() && it->second)
+                                   ? it->second->session : std::string();
+            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed");
+          }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
           //   holding clientMtx would deadlock against anything that thread wants.

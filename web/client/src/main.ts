@@ -1291,9 +1291,14 @@ function loop() {
   //     them — e.g. hold rows tagged with their centre and release those matching the CURRENT
   //     centre rather than flushing wholesale, so a drag re-labels the queue instead of emptying
   //     it. Not attempted here; the live receiver comes first.
-  //   ★ Left wired-but-zero rather than deleted: setHoldMs(x) is one line from being live again,
-  //     and the reasoning above is worth more attached to the code than in a commit message.
-  if (!NO_WF) wf.setHoldMs(0);
+  //  ★★ RE-ENABLED once the conflict was actually resolved: a retune now opens a PASSTHROUGH
+  //     window (rows go straight through while the dial moves, exactly as before any of this) and
+  //     the depth RAMPS back in afterwards so re-engaging never stalls either. Verified against a
+  //     simulated drag before going anywhere near the live receiver — the old algorithm freezes
+  //     for the full length of the drag in that harness (3296 ms), the new one never exceeds
+  //     192 ms in any case including a retune every 40 ms.
+  //   ★ Kill switch is still one line: setHoldMs(0) restores the pre-buffer waterfall exactly.
+  if (!NO_WF && audio) wf.setHoldMs(audio.jitterMs);
   if (!NO_WF) wf.tick();   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   if (!NO_WF) wf.draw();
