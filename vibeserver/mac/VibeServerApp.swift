@@ -154,6 +154,17 @@ final class Server: ObservableObject {
     ///   — the same page Linux uses, so a public receiver is configured one way everywhere.
     @AppStorage("fullMode") var fullMode = false
 
+    /// ── Full mode's own state. None of it is read in Simple mode. ────────────
+    /// The radios the owner has ticked to serve. Rebuilt by rescan, un-ticks preserved.
+    @Published var fullRadios: [FullMode.Radio] = []
+    /// Two attached radios reporting the same serial cannot be told apart, so each one's settings
+    /// could follow the other. Surfaced in the pane, as the TUI surfaces it in the wizard.
+    @Published var fullSerialsCollide = false
+    /// The front door we spawned. Non-nil only while Full mode is serving.
+    /// ★ Held so we can stop it: an orphaned front door keeps the radios (and the port), and the
+    ///   next Start would fail with "address already in use" for no visible reason.
+    private var frontDoor: Process?
+
     /// True when the admin password below was GENERATED rather than chosen. The pane then shows
     /// it in the clear, because a secret nobody has ever seen protects nothing and helps no one.
     @AppStorage("generatedAdmin") var generatedAdmin = false
@@ -477,7 +488,140 @@ final class Server: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    /// ★★★ TWO SERVERS BEHIND ONE BUTTON. Simple runs the core in-process; Full writes a config and
+    ///     spawns the front door. Dispatching here — rather than threading `if fullMode` through
+    ///     the body below — is the same lesson the Settings pane learned the hard way: a single
+    ///     path carrying that many conditionals silently does the opposite of what it reads.
     func start() {
+        if fullMode { startFull() } else { startSimple() }
+    }
+
+    func stop() {
+        if fullMode { stopFull() } else { stopSimple() }
+    }
+
+    // ── FULL MODE ────────────────────────────────────────────────────────────
+
+    /// ★★★ NO PASSWORD MUST NOT MEAN NO CONTROL — shared by BOTH modes, because both need it.
+    ///
+    /// The hardware gate refuses gain, bias-T, direct sampling and calibration to everyone when no
+    /// admin password is set — the only safe reading, since a blank secret cannot tell the owner
+    /// from a stranger. But that leaves a receiver NOBODY can control: a new one starts at MINIMUM
+    /// GAIN by design, so the waterfall is flat until the gain is raised, and an owner browsing
+    /// from another room has nothing that raises it. They conclude the RADIO is broken.
+    ///
+    /// ★★ So GENERATE one rather than DEMAND one. Forcing the owner to invent a password taxes the
+    ///    plug-and-play flow this app exists to protect; a generated one costs them nothing, is
+    ///    shown with a Copy button, and unlocks the controls from ANY browser. This is the EXISTING
+    ///    admin credential, not a new mechanism.
+    ///
+    /// ★ Written through and synchronised rather than left to @AppStorage's timing: measured the
+    ///   server coming up with a generated password while the preference stayed EMPTY, so the next
+    ///   launch generated a DIFFERENT one and the password the owner had copied off the screen
+    ///   stopped working. Of everything here, this must not drift.
+    ///
+    /// ★★ It is extracted rather than duplicated for Full mode deliberately: two copies of a rule
+    ///    this subtle would drift, and the half that drifted would be the one that ships a
+    ///    receiver nobody can turn the gain up on.
+    func ensureAdminPassword() {
+        guard adminPassword.isEmpty else { return }
+        let generated = Self.generatedPassword()
+        UserDefaults.standard.set(generated, forKey: "adminPassword")
+        UserDefaults.standard.set(true, forKey: "generatedAdmin")
+        UserDefaults.standard.synchronize()
+        adminPassword = generated
+        generatedAdmin = true
+    }
+
+    /// Rescan, keeping whatever the owner has already un-ticked.
+    func rescanFullRadios() {
+        fullRadios = FullMode.detect(preserving: fullRadios)
+        fullSerialsCollide = FullMode.serialsCollide
+    }
+
+    private func startFull() {
+        lastError = nil
+        guard let bin = FullMode.binaryURL,
+              FileManager.default.isExecutableFile(atPath: bin.path) else {
+            lastError = "The VibeServer engine is missing from this app bundle."
+            return
+        }
+        // ★ Same generated-password rule as Simple mode: a receiver nobody can control reads as
+        //   broken hardware. See the long note in startSimple().
+        ensureAdminPassword()
+        if fullRadios.isEmpty { rescanFullRadios() }
+        guard fullRadios.contains(where: { $0.serve }) else {
+            lastError = "Tick at least one radio — a server with none cannot receive anything."
+            return
+        }
+        do {
+            try FullMode.writeConfig(radios: fullRadios, adminPassword: adminPassword, pin: pin)
+        } catch {
+            lastError = "Could not save the settings: \(error.localizedDescription)"
+            return
+        }
+
+        let p = Process()
+        p.executableURL = bin
+        var env = ProcessInfo.processInfo.environment
+        // ★ The core already honours this, so the app points it at the per-user location rather
+        //   than the core growing a second idea of where its config lives. The front door passes
+        //   it on to every radio it forks, so all of them read the same file.
+        env["VIBESERVER_CONFIG"] = FullMode.configURL.path
+        p.environment = env
+        // ★★ NO ARGUMENTS. `vibeserver` with none IS the front door — the same invocation systemd
+        //    uses on the Pi. Passing --device or --port here would take the front-door branch out
+        //    of play and quietly start a single-radio server wearing Full mode's clothes.
+        p.arguments = []
+        // ★★★ IF THE APP DIES, THE SERVER MUST NOT LIVE ON. A front door outliving the app keeps
+        //     the radios and the port, and nothing in the UI can then stop it. The child watches
+        //     for our exit itself (parent_watch.cpp) — this is the tidy half of the same contract.
+        p.terminationHandler = { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.running && self.fullMode {
+                    self.running = false
+                    self.lastError = "The server stopped unexpectedly."
+                    self.onChange?()
+                }
+            }
+        }
+        do { try p.run() } catch {
+            lastError = "Could not start the server: \(error.localizedDescription)"
+            return
+        }
+        frontDoor = p
+        running = true
+        port = wantedPort > 0 ? wantedPort : 48000
+        onChange?()
+
+        // ★★ AND OPEN THE SETUP PAGE, because in Full mode everything except the radio, the
+        //    password and the PIN is set in the browser — so a Start that left the user looking at
+        //    an unchanged window would have finished only half the job. Briefly delayed: the front
+        //    door has to be listening before the page can load, and a failed first load reads as a
+        //    broken server rather than an early click.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.openSetupInBrowser()
+        }
+    }
+
+    private func stopFull() {
+        stopAdvertising()
+        if let p = frontDoor, p.isRunning {
+            p.terminate()                       // SIGTERM: the front door reaps its radios on exit
+            // ★ Give it a moment to take the radios down with it, then insist. A radio process
+            //   left holding an SDR is the failure that makes hardware look broken.
+            let deadline = Date().addingTimeInterval(3)
+            while p.isRunning && Date() < deadline { usleep(50_000) }
+            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        }
+        frontDoor = nil
+        running = false
+        port = 0
+        onChange?()
+    }
+
+    private func startSimple() {
         lastError = nil
         var cfg = VsConfig()
         vs_default_config(&cfg)
@@ -520,14 +664,7 @@ final class Server: ObservableObject {
         //   the server coming up with a generated password while the preference stayed EMPTY,
         //   so the next launch generated a DIFFERENT one and the password the owner had copied
         //   off the screen stopped working. Of everything here, this must not drift.
-        if adminPassword.isEmpty {
-            let generated = Self.generatedPassword()
-            UserDefaults.standard.set(generated, forKey: "adminPassword")
-            UserDefaults.standard.set(true, forKey: "generatedAdmin")
-            UserDefaults.standard.synchronize()
-            adminPassword = generated
-            generatedAdmin = true
-        }
+        ensureAdminPassword()
         let modeS = mode, pinS = pin, admS = adminPassword
         let limitS = sessionLimitMin
         DispatchQueue.global(qos: .userInitiated).async {
@@ -570,7 +707,7 @@ final class Server: ObservableObject {
         onChange?()
     }
 
-    func stop() {
+    private func stopSimple() {
         stopAdvertising()
         vs_stop()
         running = false
@@ -1026,20 +1163,55 @@ struct SettingsView: View {
     private var fullForm: some View {
         Form {
             modeSection
-            Section("Radio") {
-                HStack {
-                    Text("Receiver")
-                    Spacer()
-                    Text(server.devices.indices.contains(server.deviceIndex)
-                         ? server.devices[server.deviceIndex]
-                         : "None found").foregroundStyle(.secondary)
-                    Button("Refresh") { server.rescan() }
-                }
-                if server.devices.count > 1 {
-                    Picker("Use", selection: $server.wantedDevice) {
-                        ForEach(Array(server.devices.enumerated()), id: \.offset) { i, d in
-                            Text(d).tag(d)
+            // ★★★ A LIST, NOT A PICKER. Full mode's whole point is that a machine can serve
+            //     SEVERAL radios at once, each as its own receiver — so the question is not
+            //     "which one" but "which of these". A picker can only ever express the former,
+            //     and quietly capped Full mode at one radio however many were plugged in.
+            // ★★ ALL TICKED BY DEFAULT, as the Linux TUI does: someone who plugged three radios
+            //    in wants three receivers, and making them opt each one in asks a question their
+            //    hands have already answered. Un-ticking is for the odd one out — the dongle on
+            //    loan to another program.
+            Section("Radios") {
+                if server.fullRadios.isEmpty {
+                    HStack {
+                        Text("No radio detected").foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Look again") { server.rescanFullRadios() }
+                    }
+                    Text("Plug an SDR in — RTL-SDR, Airspy HF+ or SDRplay RSP.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach($server.fullRadios) { $r in
+                        Toggle(isOn: $r.serve) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(r.name)
+                                // ★ The serial only when it adds something: the Airspy's own name
+                                //   already ends with it, and printing it twice reads as a bug.
+                                if !r.serial.isEmpty, !r.name.contains(r.serial) {
+                                    Text(r.serial).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
+                        .disabled(server.running)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Look again") { server.rescanFullRadios() }
+                            .disabled(server.running)
+                    }
+                    Text("Each ticked radio becomes its own receiver, with its own settings. "
+                       + "You set each one up in the browser afterwards.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    // ★★ RTL dongles ship with the SAME serial, and two of them are then
+                    //    indistinguishable — so settings would follow the wrong radio. Say so
+                    //    HERE, where the owner can still act, rather than letting them discover it
+                    //    when their locked frequency range moves. The TUI warns about this too.
+                    if server.fullSerialsCollide {
+                        Text("Two radios report the same serial number, so they cannot be told "
+                           + "apart. Give one a new one:  vibeserver --set-rtl-serial <number> "
+                           + "<serial>")
+                            .font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -1052,16 +1224,27 @@ struct SettingsView: View {
                    + "usually has none.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            // ★★★ ONE BUTTON: SAVE, START, AND OPEN THE BROWSER. In Full mode everything except
+            //     the radios, the password and the PIN is set in the browser — so a Start that
+            //     left the user looking at an unchanged window had finished only half the job,
+            //     and the second button was disabled at exactly the moment they needed it.
+            //     Opening the page IS the rest of the action, not a follow-up the user must know
+            //     to take.
             Section {
-                Button(server.running ? "Stop serving" : "Start serving") {
+                Button(server.running ? "Stop serving" : "Save, start and set up in the browser") {
                     server.running ? server.stop() : server.start()
                 }
-                Button("Open setup in your browser…") { server.openSetupInBrowser() }
-                    .disabled(!server.running)
+                .disabled(!server.running && !server.fullRadios.contains { $0.serve })
+                // ★ Still offered while running, for the second visit — the page is where a
+                //   running server is administered, not only where it is first configured.
+                if server.running {
+                    Button("Open setup in your browser…") { server.openSetupInBrowser() }
+                }
                 Text(server.running
                      ? "Name, location, sharing, session limits, bandwidth and the link settings "
                        + "are all on that page."
-                     : "Start serving first — the setup page is served by the server itself.")
+                     : "Everything else — name, location, sharing, limits and each radio's own "
+                       + "settings — is set on the page this opens.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let err = server.lastError {
                     Text(err).font(.caption).foregroundStyle(.orange)

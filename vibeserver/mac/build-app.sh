@@ -17,6 +17,14 @@ APP="$BUILD/VibeServer.app"
 echo "==> Building the C++ core"
 cmake -S "$ROOT/vibeserver" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build "$BUILD" --target vibeserver_core -j >/dev/null
+# ★★★ AND THE FRONT-DOOR BINARY, WHICH FULL MODE SPAWNS. Simple mode runs the server IN-PROCESS
+#     (vs_start) and needs none of this; Full mode is multi-process by design — a front door that
+#     owns no radio, one process per radio — exactly as on Linux. Rather than re-implement that
+#     model inside the app, the app starts the SAME binary the Pi runs, so "Full mode behaves
+#     identically to Linux" is true by construction instead of by maintenance.
+# ★ It must be built from the same tree in the same configuration as the core the app links, or
+#   the two halves of one product drift apart between releases.
+cmake --build "$BUILD" --target vibeserver -j >/dev/null
 
 echo "==> Assembling the bundle"
 rm -rf "$APP"
@@ -96,11 +104,23 @@ swiftc \
   -I "$ROOT/vibeserver" \
   "$MAC/VibeServerApp.swift" \
   "$MAC/EibiStations.swift" \
+  "$MAC/FullMode.swift" \
   $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} \
   -lc++ \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
   -framework CoreLocation \
   -o "$APP/Contents/MacOS/VibeServer"
+
+# ★★ SHIP THE FRONT DOOR INSIDE THE BUNDLE. Contents/MacOS is the right home: it is code, it is
+#    covered by the app's signature, and it is read-only once installed — an executable dropped in
+#    Application Support would be neither signed nor trusted. Full mode looks it up with
+#    Bundle.main.url(forAuxiliaryExecutable:), so a user who drags the .app anywhere still works.
+# ★★★ NAMED vibeserver-engine, NOT vibeserver, AND THAT IS NOT COSMETIC. macOS filesystems are
+#     CASE-INSENSITIVE by default, so "Contents/MacOS/vibeserver" IS "Contents/MacOS/VibeServer" —
+#     the app's own binary. Copying it here overwrote the SwiftUI app with the command-line tool,
+#     producing a bundle that launched the CLI when double-clicked. It built cleanly and the only
+#     symptom was an .app that answered --list-radios. (Caught 2026-08-10, immediately.)
+cp "$BUILD/vibeserver" "$APP/Contents/MacOS/vibeserver-engine"
 
 # The web client the server hands to browsers is baked into the core, so there is nothing to copy.
 
