@@ -1845,6 +1845,18 @@ int main(int argc, char** argv) {
                           o.fftSize, o.fftRate, o.mode, err);
     }
     if (port <= 0) {
+        // ★★★ SHUT THE RESPONDER DOWN BEFORE RETURNING, or the process ABORTS instead of exiting.
+        //     mDNS is started above, on its own std::thread. Returning from main with a joinable
+        //     thread runs ~thread(), which calls std::terminate — so a clean, well-explained
+        //     start-up failure became `terminate called without an active exception` and SIGABRT.
+        //     ★★ AND THE ABORT IS WHAT MADE IT LOOK LIKE DEAD HARDWARE. systemd sees a crash, not
+        //        a refusal, so it restarts on a 5-second timer for ever. The owner's diagnosis is
+        //        "the radio is broken and rebooting does not fix it" (Stuart, 2026-08-10) when the
+        //        truth was one out-of-range gain and a message printed just above, scrolling past
+        //        five times a minute.
+        //     ★ The two normal exits already call this; only the failure path did not. An exit
+        //       path that skips the cleanup the other exits do is a bug waiting for its moment.
+        LocalSdrShim::stopMdns();
         std::fprintf(stderr, "VibeServer: failed to start — %s\n",
                      err.empty() ? "(no reason given)" : err.c_str());
         // Only offer the source hint when the failure could plausibly BE the source — a port

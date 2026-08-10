@@ -5082,8 +5082,33 @@ struct LocalSdrShim::Impl {
             //     on the next restart brings the receiver back overloaded, silently, and the owner
             //     has to spot it and do it again. Saved WITHOUT a restart: this is a live nudge,
             //     not a setup change.
+            // ★★★ SAVE BOTH REPRESENTATIONS, OR THE SETTING REVERTS ON EVERY RESTART. The RF gain
+            //     exists twice in the config: `lnaState` (what this control sets) and `gain` (the
+            //     generic tenth-dB slider every driver shares). START-UP READS `gain` — open()
+            //     calls setGainTenthDb(), which DERIVES the LNA state from it and overwrites
+            //     whatever `lnaState` said. So an admin could set the RF gain, watch it take
+            //     effect, and find it back at the old value after the next restart, with the
+            //     config file showing the value they chose (Stuart, 2026-08-10: "it had dropped
+            //     back to 2/9 when it was on 7/9").
+            // ★★★ AND IT WAS NOT MERELY ANNOYING — IT BRICKED THE RECEIVER. The stale `gain: 110`
+            //     re-derived LNAstate 7, which together with the gRdB 59 seeded before Init is a
+            //     combination the API rejects outright: Init failed, the process aborted, systemd
+            //     restarted it for ever, and no reboot could clear it because the bad number was
+            //     in the file. Two fields for one quantity, and the one nobody was looking at won.
+            // ★★ Write the EQUIVALENT gain, inverting setGainTenthDb's own mapping
+            //    (st = (1 - tenthDb/490) * (n-1)), so the two cannot disagree again. Derived from
+            //    the live ladder length, so an RSP1 and an RSPdx each get their own answer.
+            // ★ Belt and braces: setLnaState() below still applies the state directly, so the
+            //   LIVE gain is exactly what was asked for even if the arithmetic here rounds.
             if (jsonNum(msg, "lna", v))    { LocalSdrShim::instance().setLnaState((int)v);
-                                             vsPersist("{\"lnaState\":" + std::to_string((int)v) + "}"); }
+                                             const int n = (useSdrplay() && sdrp) ? sdrp->lnaStateCount() : 0;
+                                             std::string j = "{\"lnaState\":" + std::to_string((int)v);
+                                             if (n > 1) {
+                                                 int st = (int)v; if (st < 0) st = 0; if (st > n - 1) st = n - 1;
+                                                 const int tenth = (int)llround(490.0 * (1.0 - (double)st / (double)(n - 1)));
+                                                 j += ",\"gain\":" + std::to_string(tenth > 0 ? tenth : 1);
+                                             }
+                                             vsPersist(j + "}"); }
             if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
                                              vsPersist("{\"ifGr\":" + std::to_string((int)v) + "}"); }
             if (jsonNum(msg, "ifagc", v))  { LocalSdrShim::instance().setIfAgc(v != 0);

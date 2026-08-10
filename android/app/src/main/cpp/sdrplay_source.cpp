@@ -359,7 +359,47 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
     fns.EventCbFn   = &eventCb;
-    if ((e = api().Init(impl_->dev.dev, &fns, &ctx)) != sdrplay_api_Success) {
+    // ★★★ AN ILLEGAL GAIN PAIR MUST NOT MAKE THE RADIO UNSTARTABLE. The API validates the
+    //     COMBINATION, not the parts: it rejected `absolute gRdB=59 LNAstate=7` even though 59 is
+    //     the legal maximum IF reduction and 7 is a legal LNA state, because the TOTAL reduction
+    //     those two imply is out of range. Init then fails, and the whole receiver is down until
+    //     somebody edits a config file — a reboot cannot help, because the offending number is
+    //     saved (Stuart, 2026-08-10: "the SDRplay is broken ... and I've rebooted the Pi too").
+    //
+    // ★★ SO: BACK OFF AND TRY AGAIN, rather than refusing to start. Each rung asks for LESS total
+    //    reduction than the last, so it walks toward the legal region from whichever side it began
+    //    on. We do not model the per-band LNA reduction table to predict the limit — that table is
+    //    the API's business and would be one more thing to keep in step with new hardware. Asking
+    //    is cheaper and cannot go stale.
+    // ★ IT SAYS WHAT IT DID. A receiver quietly running at a gain nobody chose is its own bug, and
+    //   the owner needs to know their setting was not honoured — that is the difference between
+    //   "it recovered" and "it lies".
+    e = api().Init(impl_->dev.dev, &fns, &ctx);
+    if (e != sdrplay_api_Success && impl_->params && impl_->params->rxChannelA) {
+        auto* chg = impl_->params->rxChannelA;
+        const int n = lnaStateCount();
+        const int mid = n > 0 ? n / 2 : 0;
+        const struct { int gr; int lna; const char* why; } ladder[] = {
+            { 40, -1,  "IF reduction 40" },                       // most likely culprit first
+            { 40, mid, "IF reduction 40, LNA to the middle" },
+            { 20,  0,  "IF reduction 20, LNA wide open" },        // the least total reduction there is
+        };
+        const int wantedGr = (int)chg->tunerParams.gain.gRdB;
+        const int wantedLna = (int)chg->tunerParams.gain.LNAstate;
+        for (const auto& rung : ladder) {
+            chg->tunerParams.gain.gRdB = (float)rung.gr;
+            if (rung.lna >= 0) chg->tunerParams.gain.LNAstate = (unsigned char)rung.lna;
+            e = api().Init(impl_->dev.dev, &fns, &ctx);
+            if (e == sdrplay_api_Success) {
+                std::fprintf(stderr,
+                    "VibeServer: the radio refused gain (gRdB %d, LNAstate %d) — started with %s "
+                    "instead. Your saved gain was not applied; set it again and it will be kept.\n",
+                    wantedGr, wantedLna, rung.why);
+                break;
+            }
+        }
+    }
+    if (e != sdrplay_api_Success) {
         close();
         err = std::string("Init: ") + errStr(e);
         return false;
