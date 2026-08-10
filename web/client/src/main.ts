@@ -1279,13 +1279,21 @@ function loop() {
   wf.filterHigh = spec.bandwidthHigh;
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
-  // ★★ KEEP THE PICTURE'S DELAY EQUAL TO THE SOUND'S. The audio buffer adapts itself to the link
-  //    (audio.ts), and every millisecond it adds is a millisecond the waterfall would otherwise
-  //    run AHEAD of what you are hearing. Feeding its current depth to the waterfall holds the two
-  //    together for free — and gives the waterfall the very cushion that stops it sticking.
-  //    ★ Costs nothing on a LAN: the audio depth stays at its floor there, and a hold of that size
-  //      is well inside what the existing row pacing already bridges.
-  if (!NO_WF && audio) wf.setHoldMs(audio.jitterMs);
+  // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
+  //     tune the RSP everything freezes completely then resumes when I stop tuning") and the
+  //     mechanism is plain in hindsight: held rows are flushed on every retune, because a row
+  //     computed at the old centre must not be painted at the new one's position — but DRAGGING
+  //     the dial is a continuous stream of retunes. The queue was emptied faster than the hold
+  //     let it fill, so nothing was ever released and the picture stopped until the dial did.
+  //  ★★ THE TWO REQUIREMENTS ARE IN DIRECT CONFLICT and one line cannot satisfy both: the hold
+  //     needs rows to SURVIVE long enough to smooth the link, and correctness needs them
+  //     DISCARDED the instant the dial moves. Anything that keeps this idea has to reconcile
+  //     them — e.g. hold rows tagged with their centre and release those matching the CURRENT
+  //     centre rather than flushing wholesale, so a drag re-labels the queue instead of emptying
+  //     it. Not attempted here; the live receiver comes first.
+  //   ★ Left wired-but-zero rather than deleted: setHoldMs(x) is one line from being live again,
+  //     and the reasoning above is worth more attached to the code than in a commit message.
+  if (!NO_WF) wf.setHoldMs(0);
   if (!NO_WF) wf.tick();   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   if (!NO_WF) wf.draw();
