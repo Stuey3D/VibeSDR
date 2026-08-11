@@ -2119,6 +2119,25 @@ int main(int argc, char** argv) {
         g_myRadioSerial.empty() ? vsDataDir() + "/connections.jsonl"
                                 : vsDataDir() + "/connections-" + g_myRadioSerial + ".jsonl");
 
+    // ★★★ BOOKMARKS HAD NOWHERE TO BE SAVED. The shim has kept them on disk since the phone
+    //     needed it — VibeLocalSdrModule.kt sets a path — and THE DAEMON NEVER CALLED IT. bmSave()
+    //     opens with `if (g_bmPath.empty()) return;`, so on a Pi or a Mac every bookmark lived in
+    //     memory only: imported fine, displayed fine, and gone at the next restart. And every
+    //     settings save RESTARTS the server, so an owner importing a list and then changing one
+    //     setting lost the lot (Stuart, 2026-08-11: "I've tried a few times to import this and it
+    //     populates only to never show again afterwards").
+    //     ★★ Same family as the spectrogram, the ban list and the connection log, all of which are
+    //        given paths within twenty lines of here. This one was simply missed — and it fails
+    //        SILENTLY, because a memory-only store behaves perfectly right up until it is asked to
+    //        survive something.
+    //     ★★ PER RADIO, for the reason the connection log now is: three radio processes sharing
+    //        one file all load it, all append to it, and one rewriting while another appends
+    //        loses records. A radio's bookmarks belong to that radio's process, which is the only
+    //        writer it has. The front door, which owns no radio, keeps the machine-wide file.
+    LocalSdrShim::instance().setBookmarksPath(
+        g_myRadioSerial.empty() ? vsDataDir() + "/bookmarks.json"
+                                : vsDataDir() + "/bookmarks-" + g_myRadioSerial + ".json");
+
     // ── ★★ WHERE LISTENERS ARE CONNECTING FROM ────────────────────────────────────────────────
     // Flags beside the listener list, and the top-countries chart. See vibeserver/geoip.cpp for
     // why this is the RIRs' OWN published allocation data and not a geolocation API: no account,
