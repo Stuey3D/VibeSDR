@@ -28,7 +28,9 @@ import {
   NativeEventEmitter,
   NativeModules,
   Platform,
+  Pressable,
   Share,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -118,6 +120,8 @@ import RecordingsOverlay from '../components/RecordingsOverlay';
 import { IS_TV } from '../utils/tv';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { fetchFrontDoor, radioBaseUrl, describeRadio,
+         type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -364,6 +368,52 @@ const LOCAL_MODES: { id: string; label: string }[] = [
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
+
+  // ── A MULTI-RADIO SERVER: WHICH RADIO? ────────────────────────────────────────────────────
+  //
+  // ★★★ A V3 SERVER IS A FRONT DOOR THAT OWNS NO RADIO. Every radio lives behind `/r/<id>/…`, so
+  //     asking the door for `/ws/user-spectrum` asks for a radio it does not have: it answers 503,
+  //     which as a WebSocket handshake arrives as a bare 1006 with nothing in it — identical to
+  //     "server down" (measured on the demo, 2026-08-10).
+  //
+  // ★★★ AND THIS IS WHY IT IS RESOLVED **HERE** AND NOT AT THE NAVIGATION SITES. There are SEVEN
+  //     `navigate('SDR')` paths — a favourite, the default server on launch, a deep link, a custom
+  //     URL, the watch's Reopen, and more. The session limit was once threaded through them as a
+  //     route param and reached the receiver on exactly ONE, so we sat past the owner's limit and
+  //     were cut off with no warning; the note in instancesApi.ts records it and says why the fix
+  //     was to ASK from the one place that knows: "the receiver knows its own URL, so it can just
+  //     ask". A front door resolved at the call sites would break the identical way, and a new
+  //     call site would re-break it silently.
+  //
+  // ★★ `doorPending` HOLDS THE CONNECT. Resolving after the socket was already opening would mean
+  //    every multi-radio connect began with a failed handshake to the door, and the client's own
+  //    reconnect logic would race the resolution.
+  const [doorPending, setDoorPending] = useState(true);
+  const [door, setDoor] = useState<VibeFrontDoor | null>(null);
+  const [radioBase, setRadioBase] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDoorPending(true); setDoor(null); setRadioBase(null);
+    (async () => {
+      const d = await fetchFrontDoor(baseUrl);
+      if (cancelled) return;
+      // ★ null is the overwhelmingly common answer — an ordinary VibeServer, a Kiwi, an OWRX, a
+      //   Simple-mode phone. Connect exactly as before.
+      if (!d) { setDoorPending(false); return; }
+      setDoor(d);
+      // ★★ A LIST OF ONE IS NOISE, not a choice. A single-radio V3 still needs the prefix, so it
+      //    is resolved silently rather than shown — the user sees no difference from today.
+      if (d.radios.length === 1) { setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id)); }
+      setDoorPending(false);
+    })();
+    return () => { cancelled = true; };
+  }, [baseUrl]);
+
+  /** The URL the transport must actually use: the radio's, once one is chosen. */
+  const connectBase = radioBase ?? baseUrl;
+  /** Waiting for the owner to pick — the connect must not start. */
+  const awaitingRadio = !!door && door.radios.length > 1 && !radioBase;
 
   // V4 local hardware: tear down the on-device shim (closes the RTL-SDR + the
   // localhost server) when leaving the screen — BUT only if this is still the
@@ -2358,8 +2408,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     //     seconds and end in a silent close — arriving at compatibility mode anyway, ten seconds
     //     later and one wasted seat poorer. The overlay is already up (see compatUrl's initialiser).
     if (route.params?.compatOnly) return;
+    // ★★★ HOLD until we know whether this is a front door, and which radio. Opening to the door
+    //     itself is a guaranteed 1006 that looks exactly like a dead server.
+    if (doorPending || awaitingRadio) return;
     destroyed.current = false;
-    const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
+    const c = createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
       onConnect:    () => { if (!destroyed.current) { kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
@@ -2898,8 +2951,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       cancelled = true; destroyed.current = true; c.destroy(); client.current = null;
       setSessionTeardown(null);
     };
+  // ★★ connectBase AND THE GATES BELONG IN THE DEPS. The effect returns early while the front
+  //    door is being resolved, so without them it would never run again once it WAS resolved —
+  //    the receiver would sit for ever on "connecting" against a server that was answering
+  //    perfectly. A guard that can change is a dependency.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, connEpoch]);
+  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
@@ -5295,6 +5352,37 @@ export default function SDRScreen({ route, navigation }: Props) {
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
+      {/* ── WHICH RADIO? The landing page, for a multi-radio server ───────────────────────
+          ★★★ IT MUST SCROLL. On a phone, and especially in landscape, a list that cannot
+              scroll makes the radios below the fold UNREACHABLE — and the user concludes the
+              server only has two receivers rather than that the list is clipped. The web
+              client shipped exactly this bug on its own landing page (#splash had no overflow
+              rule), which is why it is called out here before anyone lays it out again.
+          ★★ Every radio is described WITHOUT opening it: what it is, where it is pointed, and
+             whether arriving means sharing. Choosing well is the whole point of the screen. */}
+      {awaitingRadio && door && (
+        <View style={styles.radioPickBackdrop}>
+          <Text style={styles.radioPickTitle}>{door.name}</Text>
+          <Text style={styles.radioPickSub}>Choose a receiver</Text>
+          <ScrollView
+            style={styles.radioPickList}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            showsVerticalScrollIndicator
+          >
+            {door.radios.map((r: VibeRadio) => (
+              <Pressable
+                key={r.id}
+                style={styles.radioPickRow}
+                onPress={() => setRadioBase(radioBaseUrl(baseUrl, r.id))}
+              >
+                <Text style={styles.radioPickName}>{r.label}</Text>
+                <Text style={styles.radioPickDetail}>{describeRadio(r)}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Waterfall — fills screen below the status bar / Dynamic Island so the
           band plan strip is never hidden under the notch */}
       <View style={{ marginTop: insets.top }}>
@@ -6510,6 +6598,24 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // ── The multi-radio landing page ────────────────────────────────────────────────────────
+  radioPickBackdrop: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50,
+    backgroundColor: 'rgba(0,0,0,0.94)', paddingHorizontal: 20, paddingTop: 64,
+  },
+  radioPickTitle: { color: '#ffe566', fontSize: 18, fontWeight: '600', textAlign: 'center' },
+  radioPickSub:   { color: '#9a9a9a', fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16 },
+  // ★ flex: 1 is what makes the ScrollView bounded and therefore scrollable at all — an
+  //   unbounded one lays out to its content height and silently stops scrolling.
+  radioPickList:  { flex: 1 },
+  radioPickRow: {
+    borderWidth: 1, borderColor: 'rgba(255,229,102,0.35)', borderRadius: 10,
+    paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10,
+    backgroundColor: 'rgba(255,229,102,0.06)',
+  },
+  radioPickName:   { color: '#ffe566', fontSize: 16 },
+  radioPickDetail: { color: '#b9b9b9', fontSize: 12, marginTop: 4 },
+
   // ★ The receiver's "are you still there?" card — see the render for why it is not a Modal.
   stillHereCard: {
     maxWidth: 420, paddingHorizontal: 22, paddingVertical: 18, borderRadius: 16,
