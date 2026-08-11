@@ -177,6 +177,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
     </div>
 
       <div class="card">
+        <h2>Network port</h2>
+        <p class="why">The one port this machine listens on. Leave it alone unless something else
+          already uses it, or your router needs a particular one.</p>
+        <label><span class="lbl">Port</span>
+          <input type="number" id="srvPort" min="1024" max="65535" placeholder="48000">
+          <div class="hint" id="srvPortHint">This is the only port you need to open on a router or
+            firewall.</div></label>
+      </div>
+
+      <div class="card">
       <h2>Behind a reverse proxy</h2>
       <p class="why">Only fill this in if something sits in front of VibeServer.</p>
       <label><span class="lbl">Trusted proxy addresses</span>
@@ -1307,6 +1317,10 @@ function fill() {
   $("uncompressed").value = String(cfg.uncompressed || 0);
   $("forceIdle").checked = !!cfg.forceIdleSaver;
   $("trustedProxies").value = cfg.trustedProxies || "";
+  // ★ Blank rather than 48000 when unset, so the placeholder can say what the default IS. Filling
+  //   the box with the default makes it look like a deliberate choice the owner made.
+  $("srvPort").value = cfg.port > 0 ? cfg.port : "";
+  renderPortHint();
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
   //    machine is how every receiver would show the first one's frequency.
@@ -1436,14 +1450,51 @@ function collect() {
     uncompressed: parseInt($("uncompressed").value, 10),
     forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
+    // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
+    //   out as a port and the server would fail to bind with nothing to point at.
+    port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
+}
+
+/** ★★★ ONE PORT TO OPEN, AND SAY SO — the radios are not a range the owner has to think about.
+ *
+ *  With a front door, the machine's port belongs to the DOOR and every radio queues behind it:
+ *  48001, 48002, 48003 (portForRadio in vibeserver_config.cpp). The obvious reading of "several
+ *  radios, several ports" is that an owner must forward a RANGE — and they must not: the front
+ *  door hands the whole connection over to the right radio (SCM_RIGHTS, see fd_passing.h) rather
+ *  than proxying it, so a listener only ever connects to the one public port.
+ *
+ *  ★★ So the page asks for ONE number and SHOWS what follows from it. Asking for a range would be
+ *     asking the owner to make a decision the server has already made correctly, and inviting them
+ *     to open ports on a router that nothing outside the machine needs to reach.
+ */
+function renderPortHint() {
+  const el = $("srvPortHint");
+  if (!el) return;
+  const base = parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 48000;
+  const served = (Array.isArray(cfg.radios) ? cfg.radios : [])
+                   .filter(r => r && r.enabled !== false).length;
+  let msg = "This is the only port you need to open on a router or firewall.";
+  if (served > 0) {
+    const last = base + served;
+    msg += served === 1
+      ? ` The radio behind it uses ${base + 1} on this machine only.`
+      : ` The ${served} radios behind it use ${base + 1}\u2013${last} on this machine only.`;
+  }
+  el.textContent = msg;
 }
 
 // ★ The two settings interact, so the page must recheck when either moves.
 document.addEventListener("change", (e) => {
   const t = e.target;
   if (t && (t.id === "releaseWhenIdle")) syncSpectroOffer();
+  if (t && (t.id === "srvPort")) renderPortHint();
+});
+// ★ `input` as well as `change`: the derived range is the whole point of the field, and a hint
+//   that only catches up when the box loses focus reads as broken.
+document.addEventListener("input", (e) => {
+  if (e.target && e.target.id === "srvPort") renderPortHint();
 });
 
 async function signIn(fromTicket) {

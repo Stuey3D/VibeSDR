@@ -764,6 +764,12 @@ final class Server: ObservableObject {
     private func startAdvertising() {
         stopAdvertising()
         guard running, port > 0, advertise else { return }   // advertise=false → discoverable only by address
+        // ★★★ IN FULL MODE THE ENGINE ADVERTISES, NOT US. Each radio process runs its own mDNS
+        //     responder and publishes its own name ("advertising as a.local"), which is what makes
+        //     several radios on one machine individually discoverable. A second advertiser here
+        //     would publish a competing record for the same host — two answers to one question,
+        //     which is worse than none.
+        guard !fullMode else { return }
         let svc = NetService(domain: "local.", type: "_vibesdr._tcp.",
                              name: serviceName, port: Int32(port))
         svc.setTXTRecord(NetService.data(fromTXTRecord: [
@@ -1035,10 +1041,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if server.running {
             menu.addItem(withTitle: "Open in Browser", action: #selector(openBrowser), keyEquivalent: "o")
+            // ★ Full mode is administered in the browser, so the menu bar must offer the way in.
+            //   Without this the only route to setup was the Settings pane's button, which is two
+            //   clicks further away and not where anyone looks for "manage this server".
+            if server.fullMode {
+                menu.addItem(withTitle: "Set Up in Browser…", action: #selector(openSetup), keyEquivalent: "")
+            }
             menu.addItem(withTitle: "Stop Serving", action: #selector(toggleServing), keyEquivalent: "")
         } else {
             let start = NSMenuItem(title: "Start Serving", action: #selector(toggleServing), keyEquivalent: "")
-            start.isEnabled = server.deviceCount > 0
+            // ★ Full mode serves the radios the owner TICKED, which is not the same as "a radio is
+            //   plugged in": with everything un-ticked there is nothing to serve, and the Settings
+            //   pane disables its button for exactly this reason. The menu must agree with it.
+            start.isEnabled = server.fullMode ? server.fullRadios.contains { $0.serve }
+                                              : server.deviceCount > 0
             menu.addItem(start)
         }
 
@@ -1064,6 +1080,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return server.deviceCount == 0 ? "No SDR connected" : "Stopped"
         }
         if server.radioLost { return "Radio disconnected — plug it back in, then Reconnect Radio" }
+        // ★★★ IN FULL MODE WE DO NOT KNOW WHO IS LISTENING, SO WE MUST NOT SAY. The listener count
+        //     comes from vs_status(), which reports on the core running INSIDE this app — and in
+        //     Full mode the server is a separate process, so that struct stays empty and every
+        //     menu would have read "nobody listening" however busy the receiver was. Saying
+        //     nothing is the honest answer; a confident wrong number is the one that gets
+        //     believed. (Same rule as "no inferred hardware readouts".)
+        if server.fullMode {
+            let n = server.fullRadios.filter { $0.serve }.count
+            return "Serving \(n) radio\(n == 1 ? "" : "s") on \(server.address)"
+        }
         let n = server.listeners
         let who = n == 0 ? "nobody listening" : (n == 1 ? "1 listener" : "\(n) listeners")
         return "Serving on \(server.address) — \(who)"
@@ -1071,6 +1097,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // ── Actions ──────────────────────────────────────────────────────────────
     @objc private func openBrowser() { server.openInBrowser() }
+    @objc private func openSetup() { server.openSetupInBrowser() }
     @objc private func copyAddress(_ sender: NSMenuItem) {
         guard let a = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents()
