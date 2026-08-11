@@ -547,3 +547,118 @@ export async function findVibeServerPort(host: string): Promise<number | null> {
   }
   return null;
 }
+
+// ── The multi-radio front door ────────────────────────────────────────────────
+//
+// ★★★ A V3 SERVER IS A FRONT DOOR THAT OWNS NO RADIO. Every radio lives behind `/r/<id>/…`, so a
+//     client that connects to the bare host asks for a radio the door does not have and is
+//     refused — as a WebSocket handshake that surfaces as a bare 1006 with no error text, which
+//     reads as "the server is down" rather than "choose a radio first". That is exactly how
+//     VibeSDR 10.0 fails against the public demo.
+//
+// ★★ DETECTED FROM `/vibeserver.json`, WHICH WE ALREADY FETCH. The door reports `frontDoor:true`
+//    there, so knowing costs no extra round trip; the directory below is fetched only when there
+//    is actually something to choose.
+//    ★ A MISSING key means "ordinary receiver" — every radio, and every server older than this,
+//      omits it. So test `=== true`, never `!== false`.
+
+/** One radio behind a front door, as the directory describes it. */
+export type VibeRadio = {
+  /** ★ The opaque id, and the ONLY thing that belongs in a URL — serials are deliberately kept
+   *  out of them. The door still accepts a serial for old links, but we must not mint new ones. */
+  id: string;
+  label: string;
+  driver: string;
+  /** What the hardware can reach, and what the OWNER permits — [[loHz, hiHz], …]. */
+  coverage: [number, number][];
+  allowed: [number, number][];
+  /** True when this radio is behind the admin password (a locked, shared receiver). */
+  restricted: boolean;
+  /** Owner's cap for this radio. */
+  maxUsers: number;
+  locked: boolean;
+  centreHz: number;
+  spanHz: number;
+  mode: string;
+  // ── the LIVE half, filled in per radio; undefined when that radio did not answer ──
+  listeners?: number;
+  busy?: boolean;
+  waiting?: number;
+  /** Seconds until the current occupant's limit expires; -1 = no limit. */
+  freeInSec?: number;
+  /** ★ False when the radio did not answer at all. A radio that is DOWN must be shown as down,
+   *  not quietly rendered as free — "unknown" and "available" are very different promises. */
+  reachable: boolean;
+};
+
+export type VibeDirectory = { name: string; radios: VibeRadio[] };
+
+const asRanges = (v: any): [number, number][] =>
+  Array.isArray(v) ? v.filter(r => Array.isArray(r) && r.length >= 2)
+                      .map(r => [Number(r[0]), Number(r[1])] as [number, number])
+                   : [];
+
+/**
+ * Is this a multi-radio front door, and if so what is behind it?
+ *
+ * Returns null for an ordinary receiver — the caller then behaves exactly as it always has, which
+ * is what keeps single-radio servers unchanged.
+ *
+ * ★★ THE LIVE HALF COMES FROM EACH RADIO, NOT FROM THE DOOR. The directory is built from the
+ *    config file and is honest about being a directory: it knows what exists, not who is
+ *    listening. Each radio is its own PROCESS, so only that process knows whether it is busy —
+ *    which is also why a radio that is down simply does not answer, and can be SHOWN as down
+ *    instead of the directory claiming it is fine.
+ * ★ Asked in parallel and independently: one slow or dead radio must not hold up the others.
+ */
+export async function fetchVibeDirectory(
+  baseUrl: string, timeoutMs = 4000,
+): Promise<VibeDirectory | null> {
+  const base = baseUrl.replace(/\/+$/, '');
+  const get = async (path: string, ms: number) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const r = await fetch(base + path, { signal: ctrl.signal, cache: 'no-store' });
+      return r.ok ? await r.json() : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  };
+
+  const id = await get('/vibeserver.json', timeoutMs);
+  if (!id || id.server !== 'vibeserver') return null;
+  // ★ Not a door: an ordinary receiver, and the caller must treat it exactly as before.
+  if (id.frontDoor !== true) return null;
+
+  const dir = await get('/vibeserver/radios', timeoutMs);
+  const list: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
+  if (!list.length) return { name: String(dir?.name || ''), radios: [] };
+
+  const radios = await Promise.all(list.map(async (r: any): Promise<VibeRadio> => {
+    const live = await get(`/r/${r.id}/vibeserver.json`, 2500);
+    return {
+      id: String(r.id ?? ''),
+      label: String(r.label || r.driver || 'Radio'),
+      driver: String(r.driver || ''),
+      coverage: asRanges(r.coverage),
+      allowed: asRanges(r.allowed),
+      restricted: r.restricted === true,
+      maxUsers: Number(r.users) || 1,
+      locked: r.locked === true,
+      centreHz: Number(r.centreHz) || 0,
+      spanHz: Number(r.spanHz) || 0,
+      mode: String(r.mode || ''),
+      listeners: live ? Number(live.listeners) || 0 : undefined,
+      busy: live ? live.busy === true : undefined,
+      waiting: live ? Number(live.waiting) || 0 : undefined,
+      freeInSec: live && typeof live.freeInSec === 'number' ? live.freeInSec : -1,
+      reachable: !!live,
+    };
+  }));
+  return { name: String(dir?.name || ''), radios };
+}
+
+/** The base URL for one radio behind a front door.
+ *  ★ Everything in the client appends to its base URL, so addressing a radio is entirely a matter
+ *    of handing it the right one — there is no per-request plumbing to thread through. */
+export const radioBaseUrl = (baseUrl: string, id: string) =>
+  `${baseUrl.replace(/\/+$/, '')}/r/${id}`;

@@ -6574,7 +6574,21 @@ struct LocalSdrShim::Impl {
                              // ★ 0 when the centre is not locked — a free-running dongle has no
                              //   fixed range to promise, and inventing one would be a lie.
                              + ",\"instance\":\"" + vsInstanceId() + "\""
-                             + ",\"instance\":\"" + vsInstanceId() + "\""
+                             // ★★★ SAY THAT WE ARE A FRONT DOOR, ON THE ENDPOINT EVERY CLIENT
+                             //     ALREADY PROBES. Without this a multi-radio server is
+                             //     INDISTINGUISHABLE from an ordinary one here — same shape, same
+                             //     fields — so a client connects believing it has found a
+                             //     receiver and only discovers otherwise when its WebSocket is
+                             //     refused with a bare 1006 and no error text. That is exactly
+                             //     how VibeSDR 10.0 fails against a V3 server, and it reads as
+                             //     "the server is down" rather than "choose a radio first".
+                             //     ★★ Cheap on purpose: the picker already fetches this file, so
+                             //        knowing costs no extra round trip. /vibeserver/radios is
+                             //        then fetched only when there IS something to choose.
+                             //     ★ Absent on a radio and on every older server, so a client
+                             //       must read a MISSING key as "ordinary receiver" — which is
+                             //       what `!== true` gives for free.
+                             + (frontDoorOnly ? std::string(",\"frontDoor\":true") : std::string())
                              + ",\"rangeLo\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
                                    ? g_vsLockedCentre.load() - LocalSdrShim::instance().captureSpanHz() / 2 : 0))
                              + ",\"rangeHi\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
