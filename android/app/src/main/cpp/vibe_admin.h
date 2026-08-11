@@ -500,6 +500,31 @@ public:
             dirty_ = true;
             return;
         }
+        // ★★★ NOT EVERY UNMATCHED CLOSE IS A REFUSAL — AND ASSUMING SO INVENTS HISTORY.
+        //     A listener holds SEVERAL sockets (spectrum, audio, decoder) and the log deliberately
+        //     OPENS on the spectrum one alone, "or logging both would double-count every ordinary
+        //     browser". But it CLOSES on any of them: the first close matches the open record and
+        //     records the real duration, and every later one finds nothing still open and falls
+        //     through to here — manufacturing a phantom 0-second row for a connection that had
+        //     just been logged correctly.
+        //     ★★ On the demo that doubled the log: every visitor appeared as a real listen PLUS a
+        //        0s entry, which reads as somebody connecting and instantly bouncing — the exact
+        //        pattern an owner would examine for abuse. Stuart, 2026-08-11, on a Ukrainian
+        //        address: "is this a bot or spam... a very distinct connection pattern 0 seconds
+        //        then 2:50". It was neither: it was our own audio socket closing.
+        //     ★ Conditional open, unconditional close — the same shape as the phantom
+        //       "connected now" entries fixed on 2026-08-10, which were the mirror image
+        //       (unconditional open, conditional close). Check BOTH ends when you fix one.
+        //
+        //     So: if we have already logged this SESSION, this close is a duplicate, not a
+        //     refusal. Only synthesise when there is genuinely nothing on record.
+        //     ★★ Session only — never by address. Two refusals from one IP are two events an
+        //        owner wants to see (that is what a scan looks like); two closes carrying the same
+        //        session id are one connection.
+        if (!session.empty()) {
+            for (auto it = recs_.rbegin(); it != recs_.rend(); ++it)
+                if (it->session == session) return;
+        }
         // Never opened (refused before we logged it) — record the refusal itself, which is
         // precisely the event an owner is looking for.
         ConnRec r;

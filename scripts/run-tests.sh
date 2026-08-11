@@ -39,6 +39,7 @@ deps_for() {
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
+    test-connlog)       echo "" ;;
     test-geoip)         echo "$SRC/geoip.cpp" ;;
     test-asndb)         echo "$SRC/asndb.cpp" ;;
     test-admin-banlist) echo "" ;;

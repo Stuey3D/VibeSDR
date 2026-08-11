@@ -579,6 +579,12 @@ function renderConns(list: any[]) {
     return `<tr>
       <td>${esc(when(c.at))}</td>
       <td>${withFlag(c.cc, c.ip || '—')}</td>
+      <!-- ★ WHICH RECEIVER THEY CHOSE. The fan-out already tagged every record with the radio it
+           came from; it was meaningless while each radio answered with the whole machine's history
+           (see the per-radio log path in main.cpp) and is worth showing now that it is true.
+           ★ Stuart wanted it to see which radio is the most popular — so it is a plain label, not
+             an id: a column of hex would answer nothing at a glance. -->
+      <td class="cRadio">${esc(c.radio || '—')}</td>
       <td>${live ? '<span class="dim">now</span>' : esc(dur(c.end - c.at))}</td>
       <td class="why-${esc(c.reason || '')}">${live ? '<span class="dim">connected</span>'
                                                     : esc(c.reason || '—')}</td>

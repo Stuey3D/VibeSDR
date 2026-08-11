@@ -539,6 +539,36 @@ async function doAdminUnlock(pw: string) {
   }
 }
 
+
+/** ★★★ ONE ID PER VISIT, NOT PER PAGE LOAD.
+ *
+ *  This was `uuid()`, minted fresh every time the page ran. On a multi-radio server that is once
+ *  per RADIO: the landing page, into the Airspy, back, into the RSP — each is a navigation, so one
+ *  person having a look around arrived in the log as three separate sessions. Stuart, 2026-08-11:
+ *  "if I go into the Airspy and then use the back button and then switch to the SDRPlay that
+ *  should only count 1 session. If I full close the page then come back then it should count as
+ *  multiple sessions."
+ *
+ *  ★★ sessionStorage IS EXACTLY THAT RULE, and it is why it is used rather than a cookie or
+ *     localStorage: it survives reloads and same-tab navigation, and the browser clears it when
+ *     the TAB closes. So "wandering between radios" keeps one id and "closing the page and coming
+ *     back" earns a new one — with no expiry to tune and no state kept on the server.
+ *  ★ Per TAB, which is also right: two tabs are two occupants and must not share an id, or one
+ *    would be mistaken for the other's audio socket.
+ *  ★ Falls back to a fresh uuid where storage is unavailable (private modes, embedded webviews).
+ *    Losing the grouping is a worse log; throwing is a broken receiver.
+ */
+function visitSessionId(): string {
+  try {
+    const k = 'vsVisitSession';
+    const had = sessionStorage.getItem(k);
+    if (had) return had;
+    const made = uuid();
+    sessionStorage.setItem(k, made);
+    return made;
+  } catch { return uuid(); }
+}
+
 function refreshRawAudioRow() {
   const show = srvUncompressed === 'choice' && !srvLocal;
   const row = document.getElementById('rawAudioRow');
@@ -605,7 +635,8 @@ async function connect(host: string, pin: string) {
   // browser opens two sockets (spectrum + audio) — without a shared id the audio socket looks like
   // a different client and the occupancy check would reject a client's own audio. Two browsers or
   // two devices get two ids, which is exactly what we want to keep apart.
-  const sid = uuid();
+  // ★★ AND ONE ID FOR THE WHOLE VISIT — see visitSessionId().
+  const sid = visitSessionId();
   // ★ Bins = the waterfall's DISPLAY width, not its resolution. The server maps
   // its fine 4096-point FFT onto whatever we ask for, scaled to the ZOOMED span
   // (onSpectrum's `step`, peak-held) — so sharpness still improves as you zoom

@@ -2041,7 +2041,30 @@ int main(int argc, char** argv) {
     LocalSdrShim::instance().setBanListPath("/var/lib/vibeserver/bans.jsonl");
     // ★ Beside the bans, and for the same reason: this is history the owner needs ACROSS
     //   restarts, and an update restarts the server.
-    LocalSdrShim::instance().setConnLogPath("/var/lib/vibeserver/connections.jsonl");
+    // ★★★ ONE FILE PER RADIO, NOT ONE PER MACHINE — three writers shared this path.
+    //
+    //     Every radio process ran this same line, so all of them loaded the WHOLE machine's
+    //     history into memory and every one of them answered /connections with all of it. The
+    //     admin page fans out across radios and concatenates (admin.ts, fromEveryRadio), so a
+    //     three-radio machine showed every visitor THREE TIMES — which reads as a repeating
+    //     connection pattern and is exactly what an owner would examine for abuse. Stuart,
+    //     2026-08-11, looking at a Ukrainian address: "is this a bot or spam... a very distinct
+    //     connection pattern". It was three copies of one ordinary listen.
+    //
+    //     ★★ AND THEY WERE ALL WRITING TO IT. saveIfDue() appends, and past a cap
+    //        rewriteLocked() REWRITES the whole file from that process's own memory — so one
+    //        process rewriting while another appends silently loses the other's records. Three
+    //        concurrent writers to one append-and-rewrite file is a corruption waiting to be
+    //        noticed, quite apart from the triple-counting.
+    //
+    //     ★ Splitting also makes "which radio is most popular" answerable: the page already tags
+    //       each record with the radio it came from, and that tag was meaningless while every
+    //       radio returned everything.
+    //     ★ A server with no radio of its own (the front door) and a single-radio Simple server
+    //       both keep the original path, so nothing changes for them and their history survives.
+    LocalSdrShim::instance().setConnLogPath(
+        g_myRadioSerial.empty() ? "/var/lib/vibeserver/connections.jsonl"
+                                : "/var/lib/vibeserver/connections-" + g_myRadioSerial + ".jsonl");
 
     // ── ★★ WHERE LISTENERS ARE CONNECTING FROM ────────────────────────────────────────────────
     // Flags beside the listener list, and the top-countries chart. See vibeserver/geoip.cpp for
