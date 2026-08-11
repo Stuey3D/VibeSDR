@@ -46,7 +46,19 @@ find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 2>/de
 # never appear. ★ Only on a SIGNED build: an unsigned dev build loads it happily, so this
 # fails exclusively in the artefact you ship (2026-07-27).
 ENT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/VibeServer.entitlements"
-codesign --force --timestamp --options runtime --entitlements "$ENT" --sign "$IDENT" "$APP/Contents/MacOS/VibeServer"
+# ★★★ SIGN EVERY EXECUTABLE IN MacOS/, NOT JUST THE APP'S OWN. Full mode ships a SECOND Mach-O —
+#     `vibeserver-engine`, the front door the app spawns — and this script predates it, so it went
+#     out unsigned and Apple rejected the whole submission: "not signed with a valid Developer ID
+#     certificate", "no secure timestamp", "hardened runtime not enabled", all three against that
+#     one file (2026-08-11). Nothing local catches it: an unsigned nested binary runs perfectly on
+#     the machine that built it and fails only in the artefact you ship.
+#     ★★ So enumerate rather than name. A loop over MacOS/ cannot be out of date the next time a
+#        helper binary is added — which is exactly how this one was missed.
+for exe in "$APP/Contents/MacOS/"*; do
+  [ -f "$exe" ] || continue
+  echo "    signing $(basename "$exe")"
+  codesign --force --timestamp --options runtime --entitlements "$ENT" --sign "$IDENT" "$exe"
+done
 codesign --force --timestamp --options runtime --entitlements "$ENT" --sign "$IDENT" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
