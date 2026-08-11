@@ -303,6 +303,17 @@ public:
     static bool listenForHandoff(const std::string& socketPath, std::string& err);
     using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
     static void setEibiHandler(EibiFn fn);
+    /** ★★★ THE BROADCASTER'S OWN STATION LOGO, from RadioDNS (radiodns.org) — looked up by PI
+     *  code, ECC and frequency rather than by NAME. The name is what RDS is worst at: eight
+     *  characters, so "BBC Radio 2" arrives as "BBC R2" and no database matches it.
+     *  ★★ THE DAEMON DOES IT, not the client: a browser cannot make a DNS SRV query, and the
+     *     broadcaster's SPI host sends no CORS headers. Doing it here also fixes it once for every
+     *     client — browser, phone and watch — instead of three implementations.
+     *  ★ Empty on a phone, where no handler is registered; the caller falls back to the name
+     *    search, which is what already works for stations outside RadioDNS. */
+    using StationLogoFn = std::function<std::string(const std::string& piHex,
+                                                    const std::string& ecc, double freqHz)>;
+    static void setStationLogoHandler(StationLogoFn fn);
 
     /** ★★★ REWRITE AN RTL DONGLE'S SERIAL. The daemon owns this because it owns the filesystem
      *  (the mandatory backup) and the device; the shim only exposes it, exactly like the config

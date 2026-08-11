@@ -28,6 +28,7 @@
 #include <rtl-sdr.h>
 #include "rtl_eeprom.h"
 #include "radios.h"
+#include "radiodns.h"
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
@@ -1561,6 +1562,13 @@ int main(int argc, char** argv) {
         return j;
     });
 
+    // ★ RadioDNS station logos. Free and unlicensed to USE (radiodns.org) — but the DATA belongs
+    //   to each broadcaster and carries their terms; see BRIEF-radiodns-logos.md.
+    vsradiodns::setDir(vsDataDir());
+    LocalSdrShim::setStationLogoHandler([](const std::string& pi, const std::string& ecc,
+                                           double hz) -> std::string {
+        return vsradiodns::logoFor(pi, ecc, hz);
+    });
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;
         if (!refresh || n == 0) { const int c = vseibi::loadFromCache(); if (c > n) n = c; }

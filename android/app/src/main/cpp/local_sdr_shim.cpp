@@ -905,6 +905,9 @@ static std::atomic<bool>           g_biasTeeOn{false};
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
 static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
+/** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
+ *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
+static LocalSdrShim::StationLogoFn g_vsStationLogoFn;
 static LocalSdrShim::AsnFn         g_vsAsnFn;
 /** Forward-declared: used on the connection path, defined with the other handler plumbing. */
 static std::string vsCountry(const std::string& ip);
@@ -5816,6 +5819,7 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/setup", 0) == 0
                 || path0.rfind("/vibeserver.json", 0) == 0
                 || path0.rfind("/vibeserver/radios", 0) == 0
+                || path0.rfind("/vibeserver/stationlogo", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
@@ -6645,6 +6649,23 @@ struct LocalSdrShim::Impl {
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close(); return;
 
+        } else if (reqLine.rfind("GET /vibeserver/stationlogo", 0) == 0) {
+            // ★ Station artwork by PI/ECC/frequency — see setStationLogoHandler. Answers {} when
+            //   this build has no handler or the station is not in RadioDNS, so the client can
+            //   fall back without having to tell the two cases apart.
+            StationLogoFn fn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsStationLogoFn; }
+            const std::string pi  = queryParam(reqLine, "pi");
+            const std::string ecc = queryParam(reqLine, "ecc");
+            double hz = atof(queryParam(reqLine, "freq").c_str());
+            std::string url;
+            if (fn && !pi.empty() && !ecc.empty() && hz > 0) url = fn(pi, ecc, hz);
+            const std::string body = url.empty() ? "{}" : "{\"logo\":\"" + vibeadmin::esc(url) + "\"}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=3600\r\n"
+                          "Connection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
             vsNoteVisitor(sock->peerAddress());
             // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
@@ -9847,6 +9868,10 @@ void LocalSdrShim::setRadiosHandler(RadiosFn fn) {
 void LocalSdrShim::setSolarHandler(SolarFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsSolarFn = std::move(fn);
+}
+void LocalSdrShim::setStationLogoHandler(StationLogoFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsStationLogoFn = std::move(fn);
 }
 void LocalSdrShim::setEibiHandler(EibiFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

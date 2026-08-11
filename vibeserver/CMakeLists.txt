@@ -83,6 +83,9 @@ add_library(vibeserver_core STATIC
     #    them itself) and the .APP would have failed, i.e. the break would have surfaced on the
     #    platform being ported to, not on the one being built.
     "${CMAKE_CURRENT_SOURCE_DIR}/radios.cpp"
+    # ★ Station logos from RadioDNS, looked up by PI code. Server-side because a browser can make
+    #   neither the DNS SRV query nor the cross-origin fetch. Credit: radiodns.org
+    "${CMAKE_CURRENT_SOURCE_DIR}/radiodns.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     # ★ Hands a live connection to another process, so several radios can share one
