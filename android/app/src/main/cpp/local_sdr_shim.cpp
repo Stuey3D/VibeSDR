@@ -85,6 +85,7 @@
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
+#include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
 #include "fd_passing.h"
@@ -1758,6 +1759,8 @@ struct LocalSdrShim::Impl {
     // SSTV image decoder (audio-extension). Runs a video-decode thread, so all
     // dxClient sends are serialised through dxSendMtx.
     SstvDecoder* sstv = nullptr;
+    /** MSF / DCF77 time signals. Audio-path like the rest — see decoders/time_decoder.h. */
+    TimeDecoder* timeDec = nullptr;
     int  sstvDecim = 0; float sstvAcc = 0.0f;
     std::mutex dxSendMtx;
     std::shared_ptr<net::Socket> dxClient;
@@ -4294,7 +4297,7 @@ struct LocalSdrShim::Impl {
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
     void feedDecoder(stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(decoderMtx);
-        if (!decoder && !wefax && !sstv) return;
+        if (!decoder && !wefax && !sstv && !timeDec) return;
         // SSTV runs at 12 kHz — decimate 48k→12k (box-average 4) and feed.
         if (sstv) {
             std::vector<int16_t> dec; dec.reserve((size_t)count/4 + 1);
@@ -4315,7 +4318,15 @@ struct LocalSdrShim::Impl {
             mono[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
         }
         if (wefax) { wefax->process(mono.data(), count); return; }
-        decoder->process(mono.data(), count);
+        // ★★★ FALL THROUGH TO THE TEXT FLUSH — do NOT return here. The time decoder emits its
+        //     minutes down the same text channel RTTY uses, and that channel is drained by the
+        //     code BELOW this point. An early return processed the audio perfectly and then threw
+        //     the result away: a decoder that runs, decodes, and is never heard from. Exactly the
+        //     shape of the WEFAX bug documented in startDecoder — complete, correct code with
+        //     nothing carrying its output.
+        if (timeDec) timeDec->process(mono.data(), count);
+        else if (decoder) decoder->process(mono.data(), count);
+        else return;
         // Flush any decoded text to the dxcluster client.
         std::string text;
         { std::lock_guard<std::mutex> bl(decBufMtx); if (!decTextBuf.empty()) { text.swap(decTextBuf); } }
@@ -7514,6 +7525,9 @@ struct LocalSdrShim::Impl {
         //       `adminOk` flag being sent and never read: complete, correct code with no caller.
         //       A function nobody calls is invisible to every test that exercises the callers.
         if (ext == "wefax") { startWefax(msg); return; }
+        // ★ MSF (60 kHz) and DCF77 (77.5 kHz). Tune them in CW: the carrier arrives as a beat note
+        //   whose AMPLITUDE carries the code, which is what the decoder reads.
+        if (ext == "msf" || ext == "dcf77") { startTime(msg, ext); return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
@@ -7524,6 +7538,12 @@ struct LocalSdrShim::Impl {
         std::string framing = jsonStr(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder;
+        // ★ ONE DECODER OWNS THE AUDIO. feedDecoder dispatches in a fixed order, so leaving an
+        //   old image or time decoder alive would silently take priority over the one just asked
+        //   for — the panel would sit blank while a decoder nobody selected ran instead.
+        delete wefax;   wefax   = nullptr;
+        delete sstv;    sstv    = nullptr;
+        delete timeDec; timeDec = nullptr;
         decoder = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
         decoder->onChar = [this](char32_t ch) {
             std::lock_guard<std::mutex> bl(decBufMtx);
@@ -7547,6 +7567,8 @@ struct LocalSdrShim::Impl {
         cfg.autoStart  = msg.find("\"auto_start\":true")   != std::string::npos;
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
+        delete sstv;    sstv    = nullptr;
+        delete timeDec; timeDec = nullptr;
         delete wefax;
         wefax = new WefaxDecoder(48000, cfg);
         wefax->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
@@ -7584,12 +7606,56 @@ struct LocalSdrShim::Impl {
         v.push_back((uint8_t)(x>>24)); v.push_back((uint8_t)(x>>16));
         v.push_back((uint8_t)(x>>8));  v.push_back((uint8_t)x);
     }
+    /** ★ MSF / DCF77. Output goes down the SAME text channel RTTY uses, so it needs no new client
+     *  protocol and appears in the decoder panel that already exists.
+     *  ★★ IT REPORTS WHILE IT IS STILL WAITING. A minute is 59 bits, so a listener who has just
+     *     tuned may wait a full minute before anything is certain — and a panel that says nothing
+     *     for a minute is indistinguishable from one that is broken. So the state and the measured
+     *     carrier margin go out too: "searching, carrier +19 dB" is the difference between "keep
+     *     waiting" and "point the aerial somewhere else". */
+    void startTime(const std::string& msg, const std::string& which) {
+        (void)msg;
+        std::lock_guard<std::mutex> lk(decoderMtx);
+        delete decoder; decoder = nullptr;
+        delete wefax;   wefax   = nullptr;
+        delete sstv;    sstv    = nullptr;
+        delete timeDec;
+        const bool isMsf = (which == "msf");
+        timeDec = new TimeDecoder(48000, isMsf ? TimeDecoder::Station::MSF
+                                               : TimeDecoder::Station::DCF77);
+        const std::string name = isMsf ? "MSF" : "DCF77";
+        timeDec->onTime = [this, name](const TimeDecoder::TimeStamp& t) {
+            static const char* kDay[8] = { "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d  %s%s\n",
+                          name.c_str(), kDay[t.weekday >= 1 && t.weekday <= 7 ? t.weekday : 0],
+                          t.year, t.month, t.day, t.hour, t.minute,
+                          t.dst ? "(summer time)" : "",
+                          t.leapSecondPending ? " LEAP SECOND PENDING" : "");
+            std::lock_guard<std::mutex> bl(decBufMtx);
+            decTextBuf += buf;
+        };
+        timeDec->onState = [this, name](TimeDecoder::State st) {
+            const char* w = st == TimeDecoder::State::NoSignal ? "no carrier"
+                          : st == TimeDecoder::State::Searching ? "searching for the minute"
+                          : st == TimeDecoder::State::Reading   ? "reading the minute"
+                                                                : "locked";
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "[%s] %s — carrier %+.0f dB\n",
+                          name.c_str(), w, timeDec ? timeDec->snrDb() : 0.0);
+            std::lock_guard<std::mutex> bl(decBufMtx);
+            decTextBuf += buf;
+        };
+        LOGI("time decoder: %s (tune it in CW)", name.c_str());
+    }
+
     void startSstv(const std::string& msg) {
         (void)msg;
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
         delete sstv;
+        delete timeDec; timeDec = nullptr;   // ★ only one decoder owns the audio
         // ★★★ autoSync OFF. The post-reception "Correcting slant..." pass is the only thing
         // breaking SSTV here: Stuart, 2026-08-01, watching a geometric test card (W6AOA's prism)
         // come in — "it receives it perfect, then its the cleanup pass afterwards that breaks it",
@@ -7653,6 +7719,7 @@ struct LocalSdrShim::Impl {
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
         delete sstv;    sstv = nullptr;
+        delete timeDec; timeDec = nullptr;
         { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
     }
 

@@ -89,6 +89,7 @@ add_library(vibelocalsdr SHARED
     decoders/sstv_decoder.cpp
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp
+    decoders/time_decoder.cpp
     ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(vibelocalsdr PRIVATE -std=c++17 -O3 -ffp-contract=fast)

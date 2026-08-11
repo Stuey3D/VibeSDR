@@ -36,7 +36,7 @@
 import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'msf' | 'dcf77' | null;
 
 export interface Spot {
   mode: 'FT8' | 'FT4';
@@ -95,6 +95,10 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   navtex: 'navtex',
   wefax: 'wefax',
   sstv: 'sstv',
+  // ★ The LF time signals. They emit TEXT down the same channel RTTY uses, so there is no new
+  //   wire format — see the 'msf'/'dcf77' cases in the frame switch.
+  msf: 'msf',
+  dcf77: 'dcf77',
 };
 
 export class DecoderClient {
@@ -200,6 +204,10 @@ export class DecoderClient {
     switch (this.mode) {
       case 'rtty':
       case 'navtex':
+      // ★ Same text framing: a decoded minute, and the state/carrier lines that say what the
+      //   decoder is doing WHILE it waits — a panel silent for a minute looks broken.
+      case 'msf':
+      case 'dcf77':
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian
           const text = new TextDecoder().decode(new Uint8Array(buf, 13, Math.min(len, buf.byteLength - 13)));

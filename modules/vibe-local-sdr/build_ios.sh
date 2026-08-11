@@ -71,7 +71,10 @@ cxx "$CPP/net_shim.cpp"
 cxx "$CPP/mdns_responder.cpp"   # hostname responder; iOS compiles it but never serves
 cxx "$CPP/spyserver/spyserver_messages.cpp"
 cxx "$CPP/spyserver/spyserver_client.cpp"
-for d in fsk_decoder wefax_decoder ft8_decoder sstv_decoder audio_nr auto_notch; do cxx "$CPP/decoders/$d.cpp"; done
+# ★ time_decoder joined 2026-08-11 (MSF/DCF77). iOS links a PREBUILT lib, so a decoder left
+#   off this line compiles on Android and the server and is simply ABSENT on iOS — see
+#   [[ios_prebuilt_dsp_lib_trap]]. Three build lists, one source tree.
+for d in fsk_decoder wefax_decoder ft8_decoder sstv_decoder audio_nr auto_notch time_decoder; do cxx "$CPP/decoders/$d.cpp"; done
 
 echo "== ft8_lib (plain KissFFT) =="
 for f in "$CPP"/ft8_lib/ft8/*.c "$CPP/ft8_lib/fft/kiss_fft.c" "$CPP/ft8_lib/fft/kiss_fftr.c" "$CPP/ft8_lib/common/monitor.c"; do cc "$f"; done
