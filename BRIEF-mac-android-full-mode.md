@@ -100,11 +100,34 @@ Why the cap is the right line rather than a compromise:
   at one keeps the hardest existing problem from being multiplied.
 - Thermal: sustained multi-radio DSP on a phone throttles in a way the Pi does not.
 
-★★ **The USB fd is the one genuinely Android-shaped problem, and the plumbing exists.** The radio
-is opened by KOTLIN (`UsbManager.openDevice()` → `conn.fileDescriptor` → native); a child process
-cannot call UsbManager itself. So the app opens the device and passes the fd down — and
-`fd_passing.cpp` (SCM_RIGHTS) is already in `android/app/src/main/cpp/`, the same mechanism the
-front door uses for connection hand-off.
+### ★★★ INVERT IT: THE APP IS THE RADIO, THE CHILD IS THE FRONT DOOR
+
+The obvious port of the Linux model — app spawns a front door, front door forks a radio — runs
+straight into the one genuinely Android-shaped problem: the radio is opened by KOTLIN
+(`UsbManager.openDevice()` → `conn.fileDescriptor` → native) and **a child process cannot call
+UsbManager**, so the descriptor would have to be passed down to it.
+
+**It does not have to be, because the front door owns no radio.** Turn the arrangement around:
+
+- **The app process IS the radio.** It already holds the USB fd and already runs the shim
+  in-process — that is Simple mode today, unchanged. It additionally calls
+  `listenForHandoff(<dir>/<serial>.sock)` and `setPathPrefix("/r/<id>")`.
+- **The child process IS the front door.** It binds the public port and routes `/r/<id>/…` to that
+  socket. **It needs no USB, no permission, no libusb and no descriptor passed to it** — a pure
+  network process, doing exactly what it does on a Pi.
+
+★★ This removes the hardest unknown entirely rather than solving it. No USB fd ever crosses a
+process boundary, so there is no SCM_RIGHTS plumbing for the radio, no question about whether a
+`ParcelFileDescriptor` survives `ProcessBuilder` (it does not — Android closes all but 0/1/2), and
+no second claimant on the device.
+
+★ `--no-supervise` (added 2026-08-11) is what makes it safe: on Linux the front door forks one
+process per radio because nothing else will, and on Android that would fork a SECOND copy of a
+radio the app is already serving, with the two fighting over the device. Verified: front door up,
+radios started zero.
+
+★ `handoffDir()` already honours `VIBESERVER_RUNTIME_DIR`, so the sockets can live in the app's
+files directory with no code change. `VIBESERVER_CONFIG` likewise for the config.
 
 ★ **W^X:** since API 29 an app may not exec from its data dir. The binary must ship in
 `nativeLibraryDir`, i.e. packaged as `libvibeserver.so` in jniLibs. Today Android's CMake builds

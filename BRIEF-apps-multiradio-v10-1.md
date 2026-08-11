@@ -34,6 +34,15 @@ Mirror the web client's landing page:
   old links.
 - ★ Single-radio servers must behave exactly as they do today. A list of one is noise.
 
+### Jr needs the same selector
+
+Stuart, 2026-08-11: *"Jr needs the same radio selector too when connecting to a multi radio
+vibeserver."* Jr is a SEPARATE app ([[watch_split_jr_buddy]]) — standalone, `spike/WristSDR` — so
+this is a second implementation of the picker, not a shared one.
+★★ On a watch the list must be reachable by CROWN, and the same scrolling rule applies with far
+   less room: a 41mm screen shows about two rows. Do not assume the phone layout shrinks.
+★ Jr already reads a server's identity; what it cannot do is CHOOSE among several behind one door.
+
 ## 2. The admin box, beneath the radios
 
 On the same splash, under the radio list:

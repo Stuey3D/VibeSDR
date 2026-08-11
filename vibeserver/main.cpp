@@ -97,6 +97,10 @@ struct Opts {
      *  decides whether it arms dieWithParent(). Killing a hand-run radio because its shell
      *  exited would be surprising; killing a supervised one is the entire contract. */
     bool        supervised = false;
+    /** ★ "Be the front door, but do not start any radios — something else runs them." Set on
+     *  Android, where the app process IS the radio (it owns the USB fd) and the front door is the
+     *  part with no hardware. See --no-supervise. */
+    bool        noSupervise = false;
     bool        deviceGiven = false;     // ★ an explicit --device N names an RTL index and wins
     // ★★★ THE ADMIN / OPERATOR SETTINGS. Without these a Pi CANNOT SAFELY BE MADE PUBLIC — Stuart,
     // 2026-07-31. The admin password is not a convenience: it is what stands between a stranger and
@@ -340,6 +344,17 @@ bool parse(int argc, char** argv, Opts& o) {
         //     while `vibeserver --device 0` worked perfectly and looked like a lucky accident.
         //     Now there is an honest way to say it, and the setup screen can offer it.
         else if (a == "--serve")          { o.supervised = true; /* config supplies the rest */ }
+        // ★★★ BE THE FRONT DOOR AND NOTHING ELSE — for a host that runs the radio ITSELF.
+        //     On Linux the front door forks one process per radio, because nothing else will. On
+        //     ANDROID that is backwards: the app already holds the USB file descriptor (it comes
+        //     from UsbManager in Kotlin and cannot be re-opened by a child), so the APP is the
+        //     radio and the front door is the part that owns no hardware. Inverting it that way
+        //     means the child needs no USB, no permission and no descriptor passed to it — it is a
+        //     pure network process that routes to the radio over the hand-off socket exactly as it
+        //     does on a Pi.
+        //     ★ Without this the child would fork a SECOND copy of a radio the app is already
+        //       serving, and the two would fight over the device.
+        else if (a == "--no-supervise")   o.noSupervise = true;
         else if (a == "--force-idle-saver") o.forceIdleSaver = true;
         else if (a == "--release-when-idle") o.releaseWhenIdle = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
@@ -1822,7 +1837,9 @@ int main(int argc, char** argv) {
         //     landing page showed the RSP's listener count and frequency range as its own.
         // ★ One line, several symptoms. Clearing it is what makes "not mine" true for every radio.
         g_myRadioSerial.clear();
-        superviseRadios(argv[0], g_serverConfig);
+        // ★ Someone else owns the radios (Android: the app itself). Route to them, start none.
+        if (!o.noSupervise) superviseRadios(argv[0], g_serverConfig);
+        else std::printf("VibeServer: not starting radios — the host runs them\n");
     } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
