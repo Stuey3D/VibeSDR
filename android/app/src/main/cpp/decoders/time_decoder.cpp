@@ -193,10 +193,31 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
     if (endOfMinute) {
         TimeStamp ts;
         if (decodeMinute(ts)) {
+            // ★★★ PARITY ALONE IS NOT ENOUGH, AND ON AIR THAT IS NOT THEORETICAL. MSF carries FOUR
+            //     parity bits, so random noise satisfies all of them one time in sixteen — over a
+            //     few minutes of marginal signal a false lock is likely rather than exotic. The
+            //     first live run against Anthorn produced a confidently parity-checked
+            //     "2064-02-22 06:16", which is exactly what that failure looks like: plausible
+            //     structure, impossible content.
+            //     ★★ So a minute must AGREE WITH THE ONE BEFORE IT — be exactly 60 seconds later.
+            //        Two independent noise minutes landing one minute apart is ~1 in a million,
+            //        and the cost to a real signal is one extra minute before the first reading.
+            //        For a clock, being a minute late is nothing; being wrong is everything.
+            const long long stamp = (((long long)ts.year * 12 + ts.month) * 31 + ts.day) * 1440
+                                  + ts.hour * 60 + ts.minute;
+            const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
+            lastStamp_ = stamp;
+            if (!follows) {
+                // Not yet corroborated. Keep reading rather than announcing a time we cannot back.
+                setState(State::Reading);
+                second_ = -1;
+                return;
+            }
             good_++;
             setState(State::Locked);
             if (onTime) onTime(ts);
         } else {
+            lastStamp_ = 0;         // ★ a bad minute breaks the chain; corroboration restarts
             // ★ A failed parity is DISCARDED, not shown with a warning. See the header: a clock
             //   that is confidently wrong is worse than one that says it is still waiting.
             bad_++;

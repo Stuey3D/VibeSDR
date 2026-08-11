@@ -103,6 +103,9 @@ private:
     int    bitsA_[60] = {0}, bitsB_[60] = {0};
     int    second_ = -1;                     // -1 until the minute marker is seen
     unsigned long good_ = 0, bad_ = 0;
+    /** ★ The previous parity-passing minute, as a minute count. A reading is only announced when
+     *  it is exactly one minute later than this — see the note in onSecondEdge(). */
+    long long lastStamp_ = 0;
 };
 
 }  // namespace vibe

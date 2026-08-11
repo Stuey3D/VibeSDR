@@ -71,42 +71,39 @@ static void dcf77Minute(std::vector<int16_t>& out, const int bits[59]) {
 int main() {
     std::printf("time-signal decoder — a known minute, as a CW beat note\n");
 
-    // ── DCF77: 14:32 on Tuesday 11 August 2026, CEST ────────────────────────
-    int b[59] = {0};
-    b[20] = 1;                                   // start of encoded time
-    b[17] = 1; b[18] = 0;                        // CEST
-    auto setBcd = [&](int from, int to, int val) {
-        static const int w[] = { 1, 2, 4, 8, 10, 20, 40, 80 };
-        for (int i = from, k = 0; i <= to; i++, k++) { if (val >= w[k] && ((val / w[k]) % 2)) b[i] = 1; }
+    // ── DCF77: 14:32 then 14:33 on Tuesday 11 August 2026, CEST ─────────────
+    // ★★ TWO CONSECUTIVE MINUTES, because the decoder requires a reading to be corroborated by
+    //    the one before it — one minute of parity-checked noise is a 1-in-16 event on MSF, and
+    //    the first live run against Anthorn produced exactly that. A fixture that sent the SAME
+    //    minute twice was testing something no transmitter ever does.
+    auto dcfBits = [](int hh, int mm, int b[59]) {
+        for (int i = 0; i < 59; i++) b[i] = 0;
+        b[20] = 1;                                   // start of encoded time
+        b[17] = 1; b[18] = 0;                        // CEST
+        auto put = [&](int from, int to, int val) {
+            static const int w[] = { 1, 2, 4, 8, 10, 20, 40, 80 };
+            int rem = val;
+            for (int i = to, k = to - from; i >= from; i--, k--) {
+                if (rem >= w[k]) { b[i] = 1; rem -= w[k]; }
+            }
+        };
+        put(21, 27, mm); put(29, 34, hh);
+        put(36, 41, 11); put(42, 44, 2); put(45, 49, 8); put(50, 57, 26);
+        auto evenPar = [&](int from, int to, int pbit) {
+            int n = 0; for (int i = from; i <= to; i++) n += b[i];
+            b[pbit] = (n & 1);
+        };
+        evenPar(21, 27, 28); evenPar(29, 34, 35); evenPar(36, 57, 58);
     };
-    // Straightforward BCD fill (units then tens), matching the decoder's reader.
-    auto put = [&](int from, int to, int val) {
-        static const int w[] = { 1, 2, 4, 8, 10, 20, 40, 80 };
-        int rem = val;
-        for (int i = to, k = to - from; i >= from; i--, k--) {
-            if (rem >= w[k]) { b[i] = 1; rem -= w[k]; }
-        }
-    };
-    (void)setBcd;
-    put(21, 27, 32);        // minute 32
-    put(29, 34, 14);        // hour 14
-    put(36, 41, 11);        // day 11
-    put(42, 44, 2);         // Tuesday
-    put(45, 49, 8);         // August
-    put(50, 57, 26);        // 2026
-    // Even parity over each field, including its own parity bit.
-    auto evenPar = [&](int from, int to, int pbit) {
-        int n = 0; for (int i = from; i <= to; i++) n += b[i];
-        b[pbit] = (n & 1);
-    };
-    evenPar(21, 27, 28);
-    evenPar(29, 34, 35);
-    evenPar(36, 57, 58);
+
+    int b1[59], b2[59];
+    dcfBits(14, 32, b1);
+    dcfBits(14, 33, b2);
 
     std::vector<int16_t> audio;
     emit(audio, 3000.0, 1.0);                    // a little carrier first, to settle the AGC
-    dcf77Minute(audio, b);
-    dcf77Minute(audio, b);                       // twice: the first hunts the marker, the second reads
+    dcf77Minute(audio, b1);                      // hunts the marker, then reads 14:32
+    dcf77Minute(audio, b2);                      // 14:33 — corroborates, and is what is announced
 
     TimeDecoder dec(SR, TimeDecoder::Station::DCF77);
     TimeDecoder::TimeStamp got{}; bool fired = false;
@@ -114,16 +111,16 @@ int main() {
     dec.process(audio.data(), (int)audio.size());
 
     std::printf("    SNR seen by the decoder: %.1f dB\n", dec.snrDb());
-    ok(fired, "★★★ DCF77: a timestamp came out at all");
+    ok(fired, "★★★ DCF77: a corroborated timestamp came out");
     if (fired) {
         std::printf("    decoded: %04d-%02d-%02d %02d:%02d (weekday %d, dst %d)\n",
                     got.year, got.month, got.day, got.hour, got.minute, got.weekday, (int)got.dst);
         ok(got.year == 2026 && got.month == 8 && got.day == 11, "DCF77: date is 2026-08-11");
-        ok(got.hour == 14 && got.minute == 32, "DCF77: time is 14:32");
+        ok(got.hour == 14 && got.minute == 33, "DCF77: the SECOND minute is the one announced");
         ok(got.weekday == 2, "DCF77: weekday is Tuesday");
         ok(got.dst, "DCF77: CEST flag read");
     }
-    ok(dec.minutesGood() >= 1, "DCF77: at least one minute passed parity");
+    ok(dec.minutesGood() >= 1, "DCF77: at least one minute passed parity AND corroboration");
 
     // ── MSF: 07:45 on Tuesday 11 August 2026 ────────────────────────────────
     // ★★★ THE POINT OF THIS CASE IS THE PARITY BITS, which MSF carries as A=0,B=1 — off, on, off,
@@ -131,6 +128,9 @@ int main() {
     //     mis-frames the rest of the minute, and it fails on exactly the bits meant to validate
     //     it. The first version of this decoder did precisely that.
     {
+        std::vector<int16_t> a2;
+        emit(a2, 3000.0, 1.0);
+        for (int MINUTE = 45; MINUTE <= 46; MINUTE++) {
         int A[60] = {0}, B[60] = {0};
         auto putA = [&](int from, int to, int val) {
             static const int w[] = { 1, 2, 4, 8, 10, 20, 40, 80 };
@@ -144,7 +144,7 @@ int main() {
         putA(30, 35, 11);      // 11th
         putA(36, 38, 2);       // Tuesday
         putA(39, 44, 7);       // 07
-        putA(45, 51, 45);      // :45
+        putA(45, 51, MINUTE);  // :45 then :46
         auto oddPar = [&](int from, int to, int pbit) {
             int n = 0; for (int i = from; i <= to; i++) n += A[i];
             B[pbit] = (n & 1) ? 0 : 1;            // ODD parity over the data
@@ -155,9 +155,7 @@ int main() {
         oddPar(39, 51, 57);
         B[58] = 1;                                 // summer time in force
 
-        std::vector<int16_t> a2;
-        emit(a2, 3000.0, 1.0);
-        for (int pass = 0; pass < 2; pass++) {
+        {
             emit(a2, 500.0, 0.0);  emit(a2, 500.0, 1.0);        // second 0: the 500 ms minute mark
             for (int sec = 1; sec <= 59; sec++) {
                 // [0,100) always off; [100,200) off if A; [200,300) off if B.
@@ -166,6 +164,7 @@ int main() {
                 emit(a2, 100.0, B[sec] ? 0.0 : 1.0);
                 emit(a2, 700.0, 1.0);
             }
+        }
         }
         TimeDecoder m(SR, TimeDecoder::Station::MSF);
         TimeDecoder::TimeStamp mt{}; bool mf = false;
@@ -176,7 +175,7 @@ int main() {
             std::printf("    decoded: %04d-%02d-%02d %02d:%02d (weekday %d, dst %d)\n",
                         mt.year, mt.month, mt.day, mt.hour, mt.minute, mt.weekday, (int)mt.dst);
             ok(mt.year == 2026 && mt.month == 8 && mt.day == 11, "MSF: date is 2026-08-11");
-            ok(mt.hour == 7 && mt.minute == 45, "MSF: time is 07:45");
+            ok(mt.hour == 7 && mt.minute == 46, "MSF: the SECOND minute is announced (07:46)");
             ok(mt.dst, "MSF: summer-time flag read");
         }
     }
