@@ -4246,6 +4246,8 @@ let timeStation = 'msf';
 const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
   msf:   { label: 'MSF',   hint: 'MSF, Anthorn — tune <b>60.000 kHz</b> in <b>CW</b>.' },
   dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
+  wwvb:  { label: 'WWVB', hint: 'WWVB, Fort Collins — tune <b>60.000 kHz</b> in <b>CW</b>. '
+                                 + 'Note MSF shares this frequency: which one you hear is geography.' },
   rwm:   { label: 'RWM',   hint: 'RWM, Moscow — <b>4.996 / 9.996 / 14.996 MHz</b> in <b>CW</b>. '
                                  + 'Markers only: RWM transmits <b>no date or time code</b>, so none can be shown.' },
 };

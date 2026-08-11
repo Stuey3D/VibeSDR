@@ -7536,7 +7536,7 @@ struct LocalSdrShim::Impl {
             startTime(msg, st);
             return;
         }
-        if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv") {
+        if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") {
             startTime(msg, ext); return;
         }
         bool navtex = (ext == "navtex");
@@ -7634,6 +7634,7 @@ struct LocalSdrShim::Impl {
         const TimeDecoder::Station st =
               which == "dcf77" ? TimeDecoder::Station::DCF77
             : which == "rwm"   ? TimeDecoder::Station::RWM
+            : which == "wwvb"  ? TimeDecoder::Station::WWVB
             : which == "wwv"   ? TimeDecoder::Station::WWV
                                : TimeDecoder::Station::MSF;
         timeDec = new TimeDecoder(48000, st);

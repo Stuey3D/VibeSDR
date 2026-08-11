@@ -37,6 +37,14 @@ public:
          *  and the seconds it is counting, and never emits a TimeStamp. Useful for calibration and
          *  for proving propagation; useless as a clock, and it must say so. */
         RWM,
+        /** ★★ WWVB (Fort Collins, 60 kHz) — an LF AMPLITUDE station like MSF and DCF77, so it
+         *  rides the same envelope path and NOT WWV's subcarrier one, despite the name. Carrier
+         *  attenuated for 200 ms (0), 500 ms (1) or 800 ms (a marker).
+         *  ★★★ ITS BIT ORDER IS THE OPPOSITE OF WWV's: WWVB sends each field MSB FIRST (seconds
+         *  1–8 are 40,20,10,-,8,4,2,1) where WWV sends LSB first. Taking one station's map for the
+         *  other produces a confidently wrong clock, which is the worst failure this decoder has —
+         *  and neither carries parity to catch it. */
+        WWVB,
     };
 
     /** What the decoder is doing, so the UI can be honest rather than blank. */
@@ -116,6 +124,7 @@ private:
     bool  decodeMsf(TimeStamp& out) const;
     bool  decodeDcf77(TimeStamp& out) const;
     bool  decodeWwv(TimeStamp& out) const;
+    bool  decodeWwvb(TimeStamp& out) const;
     void  emitPartial();
 
     const int      sr_;

@@ -237,6 +237,53 @@ int main() {
         }
     }
 
+    // ── WWVB: 14:32 UTC on day 223 of 2026 (= 11 August) ────────────────────
+    // ★★★ MSB FIRST, THE OPPOSITE OF WWV. Seconds 1–8 carry 40,20,10,(unused),8,4,2,1. The two
+    //     stations share a broadcaster and almost nothing else, and neither carries parity — so a
+    //     map taken from the wrong one yields a plausible wrong clock with nothing to catch it.
+    //     This test exists mainly to pin the ORDER.
+    {
+        auto wwvbMinute = [&](std::vector<int16_t>& out, int hh, int mm, int doy, int yy, bool leap) {
+            int sym[60];
+            for (int i = 0; i < 60; i++) sym[i] = 0;
+            for (int p2 : { 0, 9, 19, 29, 39, 49, 59 }) sym[p2] = 2;      // frame ref + P1..P6
+            auto put = [&](const int* bits, const int* wts, int n, int val) {
+                int rem = val;
+                for (int i = 0; i < n; i++) if (rem >= wts[i]) { sym[bits[i]] = 1; rem -= wts[i]; }
+            };
+            { const int bi[] = {1,2,3,5,6,7,8};   const int wt[] = {40,20,10,8,4,2,1};   put(bi,wt,7,mm); }
+            { const int bi[] = {12,13,15,16,17,18}; const int wt[] = {20,10,8,4,2,1};    put(bi,wt,6,hh); }
+            { const int bi[] = {22,23,25,26,27,28,30,31,32,33};
+              const int wt[] = {200,100,80,40,20,10,8,4,2,1};                            put(bi,wt,10,doy); }
+            { const int bi[] = {45,46,47,48,50,51,52,53};
+              const int wt[] = {80,40,20,10,8,4,2,1};                                    put(bi,wt,8,yy); }
+            sym[55] = leap ? 1 : 0;                       // leap-year indicator
+            for (int sec = 0; sec < 60; sec++) {
+                const double dip = sym[sec] == 2 ? 800.0 : sym[sec] == 1 ? 500.0 : 200.0;
+                emit(out, dip, 0.15);                     // carrier attenuated
+                emit(out, 1000.0 - dip, 1.0);             // full carrier
+            }
+        };
+        std::vector<int16_t> v;
+        emit(v, 3000.0, 1.0);
+        wwvbMinute(v, 14, 32, 223, 26, false);   // spent finding the 59/0 double marker
+        wwvbMinute(v, 14, 33, 223, 26, false);   // read
+        wwvbMinute(v, 14, 34, 223, 26, false);   // corroborates
+
+        TimeDecoder d(SR, TimeDecoder::Station::WWVB);
+        TimeDecoder::TimeStamp t{}; bool got = false;
+        d.onTime = [&](const TimeDecoder::TimeStamp& x) { t = x; got = true; };
+        d.process(v.data(), (int)v.size());
+        ok(got, "★★★ WWVB: a corroborated timestamp came out");
+        if (got) {
+            std::printf("    decoded: %04d-%02d-%02d %02d:%02d UTC\n",
+                        t.year, t.month, t.day, t.hour, t.minute);
+            ok(t.hour == 14 && t.minute == 34, "WWVB: the corroborated minute is announced (14:34)");
+            ok(t.year == 2026, "WWVB: year 2026");
+            ok(t.month == 8 && t.day == 11, "★★ WWVB: day-of-year 223 converted to 11 August");
+        }
+    }
+
     // ── RWM carries no timecode, and must never pretend otherwise ───────────
     {
         std::vector<int16_t> r;

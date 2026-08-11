@@ -245,6 +245,23 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         }
         second_++;
         return;
+    } else if (station_ == Station::WWVB) {
+        // ── WWVB ─────────────────────────────────────────────────────────────
+        // ★ Same polarity as MSF/DCF77 — the carrier is ATTENUATED and the dip carries the symbol,
+        //   so this reuses the envelope path they prove rather than WWV's subcarrier one.
+        const int sym = near(dipMs, 800.0, 130.0) ? 2
+                      : near(dipMs, 500.0, 110.0) ? 1
+                      : near(dipMs, 200.0, 90.0)  ? 0 : -1;
+        if (sym < 0) return;
+        // ★★ The minute is TWO MARKERS IN A ROW (second 59's P6 then second 0's frame reference),
+        //    exactly as WWV does it — WWVB transmits no unique minute pulse to look for.
+        if (sym == 2 && lastWasMarker_) { second_ = 0; setState(State::Reading); }
+        else if (second_ < 0) { lastWasMarker_ = (sym == 2); return; }
+        else second_++;
+        lastWasMarker_ = (sym == 2);
+        if (second_ > 59) { second_ = -1; setState(State::Searching); return; }
+        bitsA_[second_] = (sym == 1) ? 1 : 0;
+        if (onBit) onBit(second_, bitsA_[second_]);
     } else if (station_ == Station::RWM) {
         // ── RWM ──────────────────────────────────────────────────────────────
         // ★★★ RWM SENDS NO TIMECODE, so there is nothing here to decode into a clock and this
@@ -278,9 +295,10 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
     emitPartial();
 
     // A complete minute — try to read it.
-    const bool endOfMinute = (station_ == Station::MSF)  ? (second_ == 59)
-                           : (station_ == Station::WWV)  ? (second_ == 59)
-                                                         : (second_ == 58);
+    const bool endOfMinute = (station_ == Station::MSF)   ? (second_ == 59)
+                           : (station_ == Station::WWV)   ? (second_ == 59)
+                           : (station_ == Station::WWVB)  ? (second_ == 59)
+                                                          : (second_ == 58);
     if (endOfMinute) {
         TimeStamp ts;
         if (decodeMinute(ts)) {
@@ -356,6 +374,14 @@ void TimeDecoder::emitPartial() {
                                  p.hour = true; }
             break;
         }
+        case Station::WWVB: {
+            auto w = [&](int bit, int weight) { return A[bit] ? weight : 0; };
+            if (second_ >= 8)  { p.t.minute = w(1,40)+w(2,20)+w(3,10)+w(5,8)+w(6,4)+w(7,2)+w(8,1);
+                                 p.minute = true; }
+            if (second_ >= 18) { p.t.hour   = w(12,20)+w(13,10)+w(15,8)+w(16,4)+w(17,2)+w(18,1);
+                                 p.hour = true; }
+            break;
+        }
         case Station::RWM:
             break;      // nothing to fill in — it carries no timecode
     }
@@ -366,6 +392,7 @@ bool TimeDecoder::decodeMinute(TimeStamp& out) const {
     switch (station_) {
         case Station::MSF:  return decodeMsf(out);
         case Station::WWV:  return decodeWwv(out);
+        case Station::WWVB: return decodeWwvb(out);
         case Station::RWM:  return false;          // no timecode — see the note in onSecondEdge
         default:            return decodeDcf77(out);
     }
@@ -379,6 +406,52 @@ bool TimeDecoder::decodeMinute(TimeStamp& out) const {
  *    (this minute must be exactly one later than the last) is not a belt-and-braces extra here —
  *    it is the ONLY check standing between noise and a confident wrong clock.
  */
+/**
+ * WWVB, the NIST 60 kHz format.
+ *
+ * ★★★ MSB FIRST, WHICH IS THE OPPOSITE OF WWV — seconds 1–8 carry 40,20,10,(unused),8,4,2,1. The
+ *     two stations share a broadcaster and a purpose and almost nothing else, and using one map
+ *     for the other yields a plausible wrong time with nothing to catch it.
+ * ★★ THERE IS NO PARITY IN WWVB EITHER, so as with WWV the corroboration rule is the only
+ *    validation: a reading is announced only when the next minute agrees with it.
+ * ★ The date is a DAY-OF-YEAR, so the year is needed first to know whether to allow 29 February.
+ */
+bool TimeDecoder::decodeWwvb(TimeStamp& out) const {
+    const int* b = bitsA_;
+    auto w = [&](int bit, int weight) { return b[bit] ? weight : 0; };
+
+    const int minute = w(1,40)+w(2,20)+w(3,10) + w(5,8)+w(6,4)+w(7,2)+w(8,1);
+    const int hour   = w(12,20)+w(13,10) + w(15,8)+w(16,4)+w(17,2)+w(18,1);
+    const int doy    = w(22,200)+w(23,100)
+                     + w(25,80)+w(26,40)+w(27,20)+w(28,10)
+                     + w(30,8)+w(31,4)+w(32,2)+w(33,1);
+    const int yy     = w(45,80)+w(46,40)+w(47,20)+w(48,10)
+                     + w(50,8)+w(51,4)+w(52,2)+w(53,1);
+
+    if (hour > 23 || minute > 59 || doy < 1 || doy > 366 || yy > 99) return false;
+
+    const int year = 2000 + yy;
+    // ★ WWVB states the leap year itself (bit 55) — but deriving it is safer than trusting one
+    //   unparity-checked bit, and the two must agree or the frame is suspect.
+    const bool leapCalc = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    if (b[55] != (leapCalc ? 1 : 0)) return false;
+    static const int len[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    int d = doy, m = 0;
+    for (; m < 12; m++) {
+        const int dm = len[m] + ((m == 1 && leapCalc) ? 1 : 0);
+        if (d <= dm) break;
+        d -= dm;
+    }
+    if (m >= 12) return false;
+
+    out.year = year; out.month = m + 1; out.day = d;
+    out.hour = hour; out.minute = minute;
+    out.weekday = 0;                       // WWVB sends no weekday
+    out.dst = b[58] != 0;                  // DST in effect
+    out.leapSecondPending = b[56] != 0;
+    return true;
+}
+
 bool TimeDecoder::decodeWwv(TimeStamp& out) const {
     const int* b = bitsA_;
     auto w = [&](int bit, int weight) { return b[bit] ? weight : 0; };
