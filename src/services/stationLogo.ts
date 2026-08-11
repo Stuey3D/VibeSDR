@@ -25,7 +25,26 @@ function norm(s: string): string {
  *  can't match the token "radio2" against "radio" + "2" either. Split the digits
  *  back off before looking anything up. */
 export function tidyStationName(s: string): string {
-  return s.replace(/([A-Za-z])(\d)/g, '$1 $2').replace(/\s+/g, ' ').trim();
+  return expandStationAbbrevs(s.replace(/([A-Za-z])(\d)/g, '$1 $2').replace(/\s+/g, ' ').trim());
+}
+
+/** ★★★ "BBC R2" IS NOT WHAT ANY DATABASE CALLS IT. The PS field is EIGHT CHARACTERS, so
+ *  broadcasters abbreviate to fit — and the abbreviation is the one thing a name search cannot
+ *  match: radio-browser lists "BBC Radio 2", the transmitter says "BBC R2", and the two share only
+ *  the token "BBC". Every BBC network failed to find a logo for this reason alone (Stuart,
+ *  2026-08-11, looking at the decoded PS: "BBC R2 is pretty obvious").
+ *
+ *  ★★ Expanded, not guessed at: R<digit> as a WHOLE TOKEN only. "R2" between spaces is a station
+ *     number; the same letters inside a word are not, and rewriting those would break more names
+ *     than it fixed. This is the one abbreviation common enough — and unambiguous enough — to be
+ *     worth encoding.
+ *  ★ Applied to the SEARCH only. What is displayed stays exactly what the transmitter sent; the
+ *    RDS name is authoritative and this is about finding artwork for it, not renaming it. */
+export function expandStationAbbrevs(s: string): string {
+  return s
+    .replace(/\bR\s?(\d)\b/gi, 'Radio $1')      // BBC R2  -> BBC Radio 2
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** Resolve a station favicon URL by name (+ optional ISO country). Returns null
@@ -33,6 +52,9 @@ export function tidyStationName(s: string): string {
 export async function lookupStationLogo(
   name: string, iso?: string, preferIso?: string,
 ): Promise<string | null> {
+  // ★ Expand before normalising: "BBC R2" must become "BBC Radio 2" for BOTH the byname query
+  //   and the token scorer, or the scorer still has nothing to match "radio"/"2" against.
+  name = expandStationAbbrevs(name);
   const q = norm(name);
   if (!q || q.length < 3) return null;
   const key = `${q}|${iso ?? ''}|${preferIso ?? ''}`;

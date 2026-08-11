@@ -967,10 +967,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       const rt = m.radiotext.trim();
       // PS is the station's NAME (8 chars); RadioText is its message. They are
       // different things and the app shows both — don't collapse them.
-      if (ps !== rdsName) {
-        rdsName = ps;
-        rdsLogoUrl = '';
-      }
+      // ★★★ DO NOT THROW THE LOGO AWAY WHEN THE NAME CHANGES. Many stations — every BBC one —
+      //     send a DYNAMIC PS: the 8-character name cycles ("BBC R1", "NOW ON", "RADIO 1"), so
+      //     this cleared the logo several times a minute and then looked up a fragment that
+      //     matches nothing. The visible result is a logo that flashes and vanishes, on the very
+      //     stations whose logos are easiest to find (Stuart, 2026-08-11: "a quick flash of the
+      //     BBC Radio 1 logo does pop up then go again even when tuned to BBC Radio 1").
+      //     ★★ THE PI CODE IS THE STATION; the PS is decoration it may change at will. So the
+      //        logo belongs to the PI, and only a PI change invalidates it — see rdsLogoPi.
+      if (ps !== rdsName) rdsName = ps;
       rdsText = rt;
       if (!rdsName && rt) rdsName = rt;   // some stations send only RadioText
       // Transmitter country from the RDS Extended Country Code + PI, as the app
@@ -986,7 +991,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       rdsIso = m.pi > 0
         ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
         : '';
-      if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
+      // ★ Look up once per STATION, not once per name fragment. A retry is allowed while we have
+      //   no logo yet, because a later PS fragment ("BBC RADIO 1") may match where an earlier one
+      //   ("NOW ON") could not — but a logo we already have is never discarded for a new fragment.
+      if (rdsPi > 0 && rdsPi !== rdsLogoPi) {
+        rdsLogoPi = rdsPi;
+        rdsLogoUrl = '';
+        logoQuery = '';
+      }
+      if (!rdsLogoUrl) void resolveRdsLogoBest(rdsIso);
       rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
       if (rdsPanelOpen()) renderRds();
       updateVts();
@@ -1587,6 +1600,9 @@ let rdsName = '';
 let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
+/** ★ Which PI the current logo belongs to. The PI identifies the STATION; the PS is a label it
+ *  may change every few seconds, so the logo is keyed on the one that does not move. */
+let rdsLogoPi = -1;
 // ★ The frequency the RDS data above belongs to. RDS identifies ONE carrier, so the
 // moment you tune away it is stale — but it used to be cleared only on a MODE change,
 // never on a frequency change, so the name and logo followed you up the band. That was
@@ -1608,7 +1624,7 @@ let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
 /** Drop RDS state if the dial has moved off the station it came from. */
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
-  rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+  rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; rdsLogoPi = -1;
   rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
   grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
   rdsFreq = -1;
@@ -1964,8 +1980,24 @@ function updateVts() {
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
   if (logo) {
-    if (logoEl.src !== logo) logoEl.src = logo;
-    logoEl.classList.add('show');
+    if (logoEl.src !== logo) {
+      // ★★★ A URL THAT RESOLVES IS NOT A PICTURE THAT LOADS. radio-browser's favicons are
+      //     submitted by users and plenty are dead links, expired hosts or hotlink-blocked — the
+      //     lookup succeeds, the <img> 404s, and the bar shows an EMPTY BOX where a logo should
+      //     be (Stuart, 2026-08-11: "Classic FM gets a blank box"). An empty frame is worse than
+      //     no frame: it reads as a broken app rather than a station without artwork.
+      //     ★ So the element is only SHOWN once the image has actually decoded, and a failure
+      //       hides it and forgets the URL so the fallback (name, monogram) takes over.
+      logoEl.classList.remove('show');
+      logoEl.onload  = () => { logoEl.classList.add('show'); };
+      logoEl.onerror = () => {
+        logoEl.classList.remove('show');
+        if (rdsLogoUrl === logo) rdsLogoUrl = '';   // do not retry a dead link this session
+      };
+      logoEl.src = logo;
+    } else if (logoEl.complete && logoEl.naturalWidth > 0) {
+      logoEl.classList.add('show');
+    }
   } else {
     logoEl.classList.remove('show');
   }
@@ -1983,11 +2015,43 @@ function updateVts() {
  * FM-DX tuner uses). Needs internet ON THIS MACHINE, which a desktop has even
  * when the phone is on a hotspot — and it degrades to no logo if not.
  */
+/**
+ * ★★★ TRY THE FULL NAME FIRST, THEN THE SHORT ONE, THEN THE MESSAGE.
+ *
+ * The 8-character PS is often a FRAGMENT of a rotating message rather than the station's name —
+ * "NOW ON", "RADIO 1", "BBC R1" — and looking a fragment up finds nothing. Three sources say who
+ * the station is, in descending order of how much we should trust them:
+ *   1. LONG PS — what stations transmit precisely BECAUSE eight characters is not enough. "BBC
+ *      Radio 1" arrives whole, which is exactly what a name search wants.
+ *   2. PS — right for the many stations that send a static one (Heart, Flex, Horizon all work).
+ *   3. RadioText — a message, not a name, but it usually OPENS with the station's name, so its
+ *      first few words are worth one attempt when the other two have failed. Trimmed to that.
+ *
+ * ★★ Order matters and so does stopping: the first source that yields a logo wins, and the rest
+ *    are not tried. Searching the RadioText of a station we have already identified is how a
+ *    "Now playing: Adele" turns into somebody else's artwork.
+ * ★ Stuart, 2026-08-11: "why does it not use the station name? then the radio text afterwards?"
+ */
+async function resolveRdsLogoBest(iso: string) {
+  const longPs = (rdsExt?.longPs ?? '').trim();
+  // ★ Only the opening of the RadioText: the station name, not the track.
+  const rtHead = rdsText.split(/[-–|:]/)[0].trim().split(/\s+/).slice(0, 4).join(' ');
+  const seen = new Set<string>();
+  for (const cand of [longPs, rdsName, rtHead]) {
+    const name = (cand || '').trim();
+    if (name.length < 3 || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    await resolveRdsLogo(name, iso);
+    if (rdsLogoUrl) return;              // found one — stop looking
+  }
+}
+
 async function resolveRdsLogo(name: string, iso: string) {
   const key = `${name}|${iso}`;
   if (logoQuery === key) return;
   logoQuery = key;
-  rdsLogoUrl = '';
+  // ★ The previous logo STAYS while this lookup runs. Blanking here made every lookup a visible
+  //   flicker even when it was about to succeed with the same URL.
   try {
     const url = await lookupStationLogo(name, iso || undefined, serverIso || undefined);
     // A slow lookup must not overwrite a station we've since tuned away from.
@@ -6216,7 +6280,7 @@ function setMode(m: SDRMode, send: boolean) {
   }
   if (m !== 'wfm') {
     $('stereo').classList.remove('on');
-    rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+    rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; rdsLogoPi = -1;
   }
   updateVts();
   syncBw();

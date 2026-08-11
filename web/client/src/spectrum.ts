@@ -155,6 +155,11 @@ export interface SpectrumCallbacks {
      *  hardware, different setter, different button — never fold them into one field. */
     biasT?: boolean; rspBiasT?: boolean;
   }) => void;
+  /** ★ Demodulators the owner has switched off, from hwinfo. Called since it was added and never
+   *  DECLARED here — so every caller was an implicit-any under a strict check. Harmless at run
+   *  time, invisible in the narrow build gate, and exactly the kind of gap that hides a real
+   *  signature mismatch later. */
+  onBlockedModes?: (list: string[]) => void;
   onRds?:    (meta: RdsMeta) => void;
   /** Advanced RDS payload — only sent while the RDS decoder is attached. */
   onRdsX?:   (x: RdsExt) => void;
