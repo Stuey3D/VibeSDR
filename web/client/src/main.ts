@@ -4237,7 +4237,18 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.ham };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null = null;
+/** Which time station the TIME decoder is set to. A preset, exactly like RTTY's. */
+let timeStation = 'msf';
+/** ★ Each station implies its own FREQUENCY and its own MODE, and the mode matters as much as the
+ *  frequency: these carry their code as carrier amplitude, so CW turns it into a beat note the
+ *  decoder can follow. In AM a DC-blocking demodulator flattens a steady carrier to silence. */
+const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
+  msf:   { label: 'MSF',   hint: 'MSF, Anthorn — tune <b>60.000 kHz</b> in <b>CW</b>.' },
+  dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
+  rwm:   { label: 'RWM',   hint: 'RWM, Moscow — <b>4.996 / 9.996 / 14.996 MHz</b> in <b>CW</b>. '
+                                 + 'Markers only: RWM transmits <b>no date or time code</b>, so none can be shown.' },
+};
 
 /** RDS programme types, RDS (Europe) table — index 0..31. */
 const PTY_EU = [
@@ -4263,6 +4274,7 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'wefax') {
     return { lpm: wefaxLpm, carrier: 1900, deviation: 400, image_width: 1809 };
   }
+  if (mode === 'time') return { station: timeStation };
   return {};
 }
 
@@ -4270,7 +4282,21 @@ function initDecoders(host: string, auth: AuthState) {
   decoders = new DecoderClient(host, auth, {
     onText: (t) => {
       const el = $('decText');
-      el.textContent = (el.textContent + t).slice(-8000);
+      // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
+      //    a progress line once a SECOND — the fields filling in as they arrive — and appending
+      //    those would scroll 59 near-identical lines past the reader every minute, burying the
+      //    decoded times among them. Only the time decoders use it; everything else appends
+      //    exactly as before.
+      let text = el.textContent || '';
+      for (const chunk of t.split(/(?=\r)/)) {
+        if (chunk.startsWith('\r')) {
+          const cut = text.lastIndexOf('\n');
+          text = (cut >= 0 ? text.slice(0, cut + 1) : '') + chunk.slice(1);
+        } else {
+          text += chunk;
+        }
+      }
+      el.textContent = text.slice(-8000);
       el.scrollTop = el.scrollHeight;
       setDecLive(true);
     },
@@ -4311,6 +4337,19 @@ function initDecoders(host: string, auth: AuthState) {
       syncDecButtons();
     };
   }
+
+  // ★ The time station is a preset: changing it re-attaches, because the shim builds the decoder
+  //   from the attach parameters and cannot be re-pointed in place.
+  segButtons('timeStation', 'station', (v) => {
+    timeStation = v;
+    const st = TIME_STATIONS[v];
+    const hint = document.getElementById('timeHint');
+    if (hint && st) {
+      hint.innerHTML = st.hint + ' The fields fill in as they arrive'
+        + (v === 'rwm' ? '.' : '; a reading is only shown once a second minute confirms it.');
+    }
+    reattachIf('time');
+  });
 
   // RTTY settings — presets fill the individual controls, as in the app.
   segButtons('rttyPreset', 'preset', (v) => {
@@ -4399,6 +4438,7 @@ function syncDecButtons() {
   }
   $('rttySettings').hidden = activeDec !== 'rtty';
   $('wefaxSettings').hidden = activeDec !== 'wefax';
+  $('timeSettings').hidden = activeDec !== 'time';
 }
 
 function showDecBox(what: string) {

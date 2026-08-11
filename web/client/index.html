@@ -2652,12 +2652,27 @@ select.btn { padding: 6px 8px; }
     <!-- ★ The LF time signals. The title says CW because that is the mode that works: the carrier
          arrives as a beat note whose amplitude carries the code. In AM a DC-blocking demodulator
          flattens a steady carrier to silence between edges. -->
-    <button class="btn" data-dec="msf" title="MSF, Anthorn — 60 kHz. Tune 60.000 kHz in CW.">MSF</button>
-    <button class="btn" data-dec="dcf77" title="DCF77, Mainflingen — 77.5 kHz. Tune 77.500 kHz in CW.">DCF77</button>
+    <button class="btn" data-dec="time" title="Standard time signals — pick the station below.">TIME</button>
     <button class="btn" data-dec="rds" title="Advanced RDS — the full data set plus signal diagnostics. Basic RDS (station name, RadioText, PI) is always on.">ADV RDS</button>
   </div>
 
   <!-- Settings for the selected mode appear underneath, as in the app. -->
+  <!-- ★ The station is a PRESET, exactly like RTTY's, because each one implies its own frequency
+       AND its own mode — and getting the mode wrong is the difference between decoding and a flat
+       line. The label carries both so nobody has to look them up. -->
+  <div class="subPanel" id="timeSettings" hidden>
+    <div class="mrow">
+      <label>STATION</label>
+      <div class="seg" id="timeStation">
+        <button class="btn on" data-station="msf"   title="Anthorn, UK — tune 60.000 kHz in CW">MSF 60k</button>
+        <button class="btn" data-station="dcf77" title="Mainflingen, DE — tune 77.500 kHz in CW">DCF77 77.5k</button>
+        <button class="btn" data-station="rwm"   title="Moscow — 4.996 / 9.996 / 14.996 MHz in CW. Markers only: no date is transmitted.">RWM</button>
+      </div>
+    </div>
+    <div class="hint" id="timeHint">MSF, Anthorn — tune <b>60.000 kHz</b> in <b>CW</b>. The fields
+      fill in as they arrive; a reading is only shown once a second minute confirms it.</div>
+  </div>
+
   <div class="subPanel" id="rttySettings" hidden>
     <div class="mrow">
       <label>PRESET</label>

@@ -7527,7 +7527,18 @@ struct LocalSdrShim::Impl {
         if (ext == "wefax") { startWefax(msg); return; }
         // ★ MSF (60 kHz) and DCF77 (77.5 kHz). Tune them in CW: the carrier arrives as a beat note
         //   whose AMPLITUDE carries the code, which is what the decoder reads.
-        if (ext == "msf" || ext == "dcf77") { startTime(msg, ext); return; }
+        // ★ ONE extension, the station as a parameter — the client sends a preset, exactly as it
+        //   does for RTTY's shift and baud. The old per-station names still work so a client that
+        //   predates the change is not broken by it.
+        if (ext == "time") {
+            std::string st = jsonStr(msg, "station");
+            if (st.empty()) st = "msf";
+            startTime(msg, st);
+            return;
+        }
+        if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv") {
+            startTime(msg, ext); return;
+        }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
@@ -7620,10 +7631,13 @@ struct LocalSdrShim::Impl {
         delete wefax;   wefax   = nullptr;
         delete sstv;    sstv    = nullptr;
         delete timeDec;
-        const bool isMsf = (which == "msf");
-        timeDec = new TimeDecoder(48000, isMsf ? TimeDecoder::Station::MSF
-                                               : TimeDecoder::Station::DCF77);
-        const std::string name = isMsf ? "MSF" : "DCF77";
+        const TimeDecoder::Station st =
+              which == "dcf77" ? TimeDecoder::Station::DCF77
+            : which == "rwm"   ? TimeDecoder::Station::RWM
+            : which == "wwv"   ? TimeDecoder::Station::WWV
+                               : TimeDecoder::Station::MSF;
+        timeDec = new TimeDecoder(48000, st);
+        std::string name = which; for (auto& c : name) c = (char)toupper((unsigned char)c);
         timeDec->onTime = [this, name](const TimeDecoder::TimeStamp& t) {
             static const char* kDay[8] = { "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
             char buf[160];
@@ -7632,6 +7646,26 @@ struct LocalSdrShim::Impl {
                           t.year, t.month, t.day, t.hour, t.minute,
                           t.dst ? "(summer time)" : "",
                           t.leapSecondPending ? " LEAP SECOND PENDING" : "");
+            std::lock_guard<std::mutex> bl(decBufMtx);
+            decTextBuf += buf;
+        };
+        // ★★★ FILL THE FIELDS AS THEY ARRIVE. A minute is 59 bits, so waiting for the whole thing
+        //     leaves the panel blank for a minute — and blank is indistinguishable from broken
+        //     (Stuart, 2026-08-11, watching MSF read cleanly and show nothing). Sent as a
+        //     replace-in-place line so the panel updates rather than scrolling 59 times a minute.
+        //     ★★ It is the best diagnostic here too: seeing the year fill correctly and the hour
+        //        come out wrong says exactly where the framing slipped, which a pass/fail at the
+        //        end of the minute never could.
+        timeDec->onPartial = [this, name](const TimeDecoder::Partial& p) {
+            char buf[200];
+            char yy[8], mo[4], dd[4], hh[4], mi[4];
+            std::snprintf(yy, sizeof(yy), p.year  ? "%04d" : "----", p.t.year);
+            std::snprintf(mo, sizeof(mo), p.month ? "%02d" : "--",   p.t.month);
+            std::snprintf(dd, sizeof(dd), p.day   ? "%02d" : "--",   p.t.day);
+            std::snprintf(hh, sizeof(hh), p.hour  ? "%02d" : "--",   p.t.hour);
+            std::snprintf(mi, sizeof(mi), p.minute? "%02d" : "--",   p.t.minute);
+            std::snprintf(buf, sizeof(buf), "\r%s  %s-%s-%s %s:%s   second %02d/59",
+                          name.c_str(), yy, mo, dd, hh, mi, p.second);
             std::lock_guard<std::mutex> bl(decBufMtx);
             decTextBuf += buf;
         };
@@ -7646,6 +7680,15 @@ struct LocalSdrShim::Impl {
             std::lock_guard<std::mutex> bl(decBufMtx);
             decTextBuf += buf;
         };
+        // ★★ SAY UP FRONT WHEN THERE IS NOTHING TO WAIT FOR. RWM transmits markers and a Morse
+        //    callsign and NO timecode, so a panel that sat there "reading the minute" for ever
+        //    would look broken when it was working perfectly. Tell the user what it can do.
+        if (!timeDec->carriesTimeCode()) {
+            std::lock_guard<std::mutex> bl(decBufMtx);
+            decTextBuf += "RWM sends second and minute markers and a Morse callsign — it carries "
+                          "NO date or time code, so none can be shown. Use it for propagation and "
+                          "calibration.\n";
+        }
         LOGI("time decoder: %s (tune it in CW)", name.c_str());
     }
 

@@ -48,9 +48,10 @@ static double noise() {           // deterministic, so a failure is reproducible
 //    the amplitude back off it, which is the thing that actually has to work on air. Testing
 //    against a DC level would have exercised none of that.
 static double phase = 0;
+static double toneHz = 800.0;
 static void emit(std::vector<int16_t>& out, double ms, double level, double noiseAmp = 0.05) {
     const int n = (int)(ms * SR / 1000.0);
-    const double w = 2.0 * M_PI * 800.0 / SR;      // an 800 Hz beat note, a typical CW pitch
+    const double w = 2.0 * M_PI * toneHz / SR;     // CW beat note, or WWV's 100 Hz subcarrier
     for (int i = 0; i < n; i++) {
         phase += w;
         const double v = level * 0.60 * std::sin(phase) + noise() * noiseAmp;
@@ -178,6 +179,76 @@ int main() {
             ok(mt.hour == 7 && mt.minute == 46, "MSF: the SECOND minute is announced (07:46)");
             ok(mt.dst, "MSF: summer-time flag read");
         }
+    }
+
+    // ── WWV: 09:07 UTC on day 223 of 2026 (= 11 August) ─────────────────────
+    // ★★★ WWV HAS NO PARITY WHATSOEVER, so nothing in the frame validates it. That makes the
+    //     bit map worth pinning hard: a single wrong weight here produces a confident wrong clock
+    //     and there is no check inside the standard to catch it. It also makes the corroboration
+    //     rule load-bearing rather than belt-and-braces.
+    // ★★ The polarity is INVERTED relative to MSF/DCF77: each second begins with ~30 ms of NO
+    //    subcarrier and the symbol is the PULSE that follows — 170 ms = 0, 470 ms = 1, 770 ms = a
+    //    position marker. And the code rides a 100 Hz SUBCARRIER, so the tone here is 100 Hz.
+    {
+        auto wwvMinute = [&](std::vector<int16_t>& out, int hh, int mm, int doy, int yy) {
+            int sym[60];
+            for (int i = 0; i < 60; i++) sym[i] = 0;
+            sym[0] = 2;                                    // frame reference
+            for (int p : { 9, 19, 29, 39, 49, 59 }) sym[p] = 2;   // P1..P6
+            auto put = [&](const int* bits, const int* wts, int n, int val) {
+                int rem = val;
+                for (int i = n - 1; i >= 0; i--) if (rem >= wts[i]) { sym[bits[i]] = 1; rem -= wts[i]; }
+            };
+            { const int bi[] = {1,2,3,4,6,7,8};      const int wt[] = {1,2,4,8,10,20,40};       put(bi,wt,7,mm); }
+            { const int bi[] = {10,11,12,13,15,16};  const int wt[] = {1,2,4,8,10,20};          put(bi,wt,6,hh); }
+            { const int bi[] = {20,21,22,23,25,26,27,28,30,31};
+              const int wt[] = {1,2,4,8,10,20,40,80,100,200};                                  put(bi,wt,10,doy); }
+            { const int bi[] = {50,51,52,53,55,56,57,58};
+              const int wt[] = {1,2,4,8,10,20,40,80};                                          put(bi,wt,8,yy); }
+            for (int sec = 0; sec < 60; sec++) {
+                emit(out, 30.0, 0.0);                                     // the second tick
+                emit(out, sym[sec] == 2 ? 770.0 : sym[sec] == 1 ? 470.0 : 170.0, 1.0);
+                emit(out, 1000.0 - 30.0 - (sym[sec] == 2 ? 770.0 : sym[sec] == 1 ? 470.0 : 170.0), 0.0);
+            }
+        };
+        std::vector<int16_t> w;
+        toneHz = 100.0;                              // the 100 Hz subcarrier
+        emit(w, 2000.0, 0.0);
+        // ★ THREE minutes, and that is not padding. WWV's only alignment feature is the DOUBLE
+        //   marker spanning seconds 59 and 0, so it cannot lock until it has seen a minute
+        //   BOUNDARY — the first minute is spent hunting. Then one minute to read and one more to
+        //   corroborate. Two minutes looks like enough and is not.
+        wwvMinute(w, 9, 7, 223, 26);                 // spent finding the 59/0 boundary
+        wwvMinute(w, 9, 8, 223, 26);                 // read
+        wwvMinute(w, 9, 9, 223, 26);                 // corroborates
+        toneHz = 800.0;
+
+        TimeDecoder d(SR, TimeDecoder::Station::WWV);
+        TimeDecoder::TimeStamp t{}; bool got = false;
+        d.onTime = [&](const TimeDecoder::TimeStamp& x) { t = x; got = true; };
+        d.process(w.data(), (int)w.size());
+        ok(got, "★★★ WWV: a corroborated timestamp came out");
+        if (got) {
+            std::printf("    decoded: %04d-%02d-%02d %02d:%02d UTC\n",
+                        t.year, t.month, t.day, t.hour, t.minute);
+            ok(t.hour == 9 && t.minute == 9, "WWV: the corroborated minute is announced (09:09)");
+            ok(t.year == 2026, "WWV: year 2026");
+            ok(t.month == 8 && t.day == 11, "★★ WWV: day-of-year 223 converted to 11 August");
+        }
+    }
+
+    // ── RWM carries no timecode, and must never pretend otherwise ───────────
+    {
+        std::vector<int16_t> r;
+        emit(r, 2000.0, 1.0);
+        for (int sec = 0; sec < 120; sec++) { emit(r, 100.0, 0.0); emit(r, 900.0, 1.0); }
+        TimeDecoder d(SR, TimeDecoder::Station::RWM);
+        bool got = false;
+        d.onTime = [&](const TimeDecoder::TimeStamp&) { got = true; };
+        d.process(r.data(), (int)r.size());
+        ok(!got, "★★★ RWM: never emits a timestamp — it carries no timecode to decode");
+        ok(!d.carriesTimeCode(), "RWM: declares that it has no timecode, so the UI can say so");
+        ok(d.secondNow() >= 0, "RWM: but it IS counting second markers (that is the useful part)");
     }
 
     // ── Pure noise must produce NOTHING ─────────────────────────────────────

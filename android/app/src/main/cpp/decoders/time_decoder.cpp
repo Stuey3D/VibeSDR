@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 
 namespace vibe {
 namespace {
@@ -36,7 +37,19 @@ int parityOdd(const int* bits, int from, int to) {
 }  // namespace
 
 TimeDecoder::TimeDecoder(int sampleRate, Station station)
-    : sr_(sampleRate > 0 ? sampleRate : 48000), station_(station) {}
+    : sr_(sampleRate > 0 ? sampleRate : 48000), station_(station) {
+    // ★★ WWV's code is on a 100 Hz SUBCARRIER, so the envelope has to be taken of THAT, not of the
+    //    audio as a whole — WWV also carries voice announcements and 500/600 Hz tones, and an
+    //    envelope of the lot would follow the announcer rather than the timecode. A narrow
+    //    bandpass first (RBJ cookbook, Q=8) is what separates them.
+    if (station_ == Station::WWV) {
+        const double w0 = 2.0 * M_PI * 100.0 / sr_, Q = 8.0;
+        const double alpha = std::sin(w0) / (2.0 * Q), c = std::cos(w0);
+        const double a0 = 1.0 + alpha;
+        bpB0_ =  alpha / a0; bpB1_ = 0.0; bpB2_ = -alpha / a0;
+        bpA1_ = (-2.0 * c) / a0; bpA2_ = (1.0 - alpha) / a0;
+    }
+}
 
 void TimeDecoder::setState(State s) {
     if (s == state_) return;
@@ -47,11 +60,27 @@ void TimeDecoder::setState(State s) {
 void TimeDecoder::process(const int16_t* samples, int count) {
     if (!samples || count <= 0) return;
     // Time constants: fast enough to see a 100 ms dip, slow enough to ignore audio-band noise.
-    const double aFast = 1.0 - std::exp(-1.0 / (0.010 * sr_));   // 10 ms
+    // ★★★ THE SMOOTHING MUST MATCH THE SUBCARRIER, NOT JUST THE SYMBOL. Rectifying a tone leaves
+    //     ripple at TWICE its frequency, and the envelope has to remove that or it chatters across
+    //     the threshold in the middle of a pulse. MSF/DCF77 arrive as a CW beat note of several
+    //     hundred Hz, where 10 ms is ample. WWV's code is on a 100 Hz subcarrier — 200 Hz ripple —
+    //     and 10 ms let it through: a 170 ms pulse was being read as 97 ms, then 119, then 137,
+    //     with a scatter of 9–75 ms fragments in between, so a THIRD of all symbols were rejected
+    //     and the frame never decoded.
+    // ★ 30 ms is still six times shorter than WWV's shortest symbol, so nothing is blurred that
+    //   matters — the constraint is "slower than the ripple, faster than the symbol".
+    const double envMs = (station_ == Station::WWV) ? 0.030 : 0.010;
+    const double aFast = 1.0 - std::exp(-1.0 / (envMs * sr_));
     const double aSlow = 1.0 - std::exp(-1.0 / (5.000 * sr_));   //  5 s
 
     for (int i = 0; i < count; i++) {
-        const double x = std::fabs((double)samples[i]);
+        double raw = (double)samples[i];
+        if (station_ == Station::WWV) {
+            const double y = bpB0_ * raw + bpB1_ * bpX1_ + bpB2_ * bpX2_ - bpA1_ * bpY1_ - bpA2_ * bpY2_;
+            bpX2_ = bpX1_; bpX1_ = raw; bpY2_ = bpY1_; bpY1_ = y;
+            raw = y;
+        }
+        const double x = std::fabs(raw);
         envFast_ += aFast * (x - envFast_);
         envSlow_ += aSlow * (x - envSlow_);
 
@@ -169,6 +198,63 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         bitsA_[second_] = dipMs > kMsfSampleA ? 1 : 0;
         bitsB_[second_] = dipMs > kMsfSampleB ? 1 : 0;
         if (onBit) onBit(second_, bitsA_[second_]);
+    } else if (station_ == Station::WWV) {
+        // ── WWV/WWVH ─────────────────────────────────────────────────────────
+        // ★★★ HERE THE SYMBOL IS THE PULSE, NOT THE DIP — the polarity is inverted relative to
+        //     MSF and DCF77, and getting that backwards would decode noise very convincingly.
+        //     Each second begins with ~30 ms of NO subcarrier, then the subcarrier is present for
+        //     170 ms (0), 470 ms (1) or 770 ms (a position marker). So at every rising edge the
+        //     short dip is the second tick and the gap BEFORE it is the previous second's symbol.
+        const double pulse = gapMs;
+        const int sym = near(pulse, 770.0, 120.0) ? 2
+                      : near(pulse, 470.0, 110.0) ? 1
+                      : near(pulse, 170.0, 90.0)  ? 0 : -1;
+        if (sym < 0) return;                       // not a WWV symbol — ignore rather than guess
+
+        // ★★★ THE SYMBOL BELONGS TO THE SECOND THAT HAS JUST ENDED, NOT THE ONE BEGINNING.
+        //     The rising edge we are standing on STARTS the next second's pulse, so what we have
+        //     just measured is the PREVIOUS second's. Recording it against the new second put
+        //     every bit one second late — and because the data bits are sparse, the fields read
+        //     back as zeros rather than as anything obviously wrong. All four came out 0 and the
+        //     frame simply never validated.
+        //     ★ So: place the symbol, THEN advance.
+        if (sym == 2 && lastWasMarker_) {
+            // Two markers in a row: the one just measured is second 0 (the frame reference), and
+            // the one before it was second 59's P6. This is the only alignment WWV gives.
+            second_ = 0;
+            setState(State::Reading);
+        } else if (second_ < 0) {
+            lastWasMarker_ = (sym == 2);
+            return;                                // still hunting for the double marker
+        }
+        lastWasMarker_ = (sym == 2);
+        bitsA_[second_] = (sym == 1) ? 1 : 0;
+        if (onBit) onBit(second_, bitsA_[second_]);
+        emitPartial();
+        if (second_ == 59) {
+            TimeStamp ts;
+            if (decodeWwv(ts)) {
+                const long long stamp = (((long long)ts.year * 12 + ts.month) * 31 + ts.day) * 1440
+                                      + ts.hour * 60 + ts.minute;
+                const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
+                lastStamp_ = stamp;
+                if (follows) { good_++; setState(State::Locked); if (onTime) onTime(ts); }
+            } else { bad_++; lastStamp_ = 0; }
+            second_ = 0;                           // the next symbol is second 0's, already framed
+            return;
+        }
+        second_++;
+        return;
+    } else if (station_ == Station::RWM) {
+        // ── RWM ──────────────────────────────────────────────────────────────
+        // ★★★ RWM SENDS NO TIMECODE, so there is nothing here to decode into a clock and this
+        //     branch deliberately never produces one. What it can honestly report is that the
+        //     station is being heard and that its second markers are being counted — which is what
+        //     RWM is actually for: calibration and propagation. Anything more would be invented.
+        if (second_ < 0) { second_ = 0; setState(State::Reading); }
+        else second_ = (second_ + 1) % 60;
+        if (onBit) onBit(second_, 1);
+        return;                                   // never falls through to a minute decode
     } else {
         // ── DCF77 ────────────────────────────────────────────────────────────
         // ★★★ THE MINUTE IS MARKED BY AN ABSENCE. Second 59 carries NO dip, so the tell is a gap
@@ -188,8 +274,13 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         if (onBit) onBit(second_, bit);
     }
 
+    // ★ Tell the UI what we have SO FAR, every second. See TimeDecoder::Partial.
+    emitPartial();
+
     // A complete minute — try to read it.
-    const bool endOfMinute = (station_ == Station::MSF) ? (second_ == 59) : (second_ == 58);
+    const bool endOfMinute = (station_ == Station::MSF)  ? (second_ == 59)
+                           : (station_ == Station::WWV)  ? (second_ == 59)
+                                                         : (second_ == 58);
     if (endOfMinute) {
         TimeStamp ts;
         if (decodeMinute(ts)) {
@@ -226,8 +317,100 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
     }
 }
 
+/**
+ * What is known this far into the minute.
+ *
+ * ★★ EACH FIELD BECOMES MEANINGFUL AT A DIFFERENT SECOND, because each station sends them in its
+ *    own order — MSF puts the year first and the minute last, DCF77 the minute first and the year
+ *    last. So this is per-station, and reporting a field before its last bit has arrived would
+ *    show a number that is briefly, confidently wrong.
+ */
+void TimeDecoder::emitPartial() {
+    if (!onPartial || second_ < 0) return;
+    Partial p;
+    p.second = second_;
+    const int* A = bitsA_;
+    switch (station_) {
+        case Station::MSF:
+            if (second_ >= 24) { p.t.year    = 2000 + bcd(A, 17, 24); p.year = true; }
+            if (second_ >= 29) { p.t.month   = bcd(A, 25, 29);        p.month = true; }
+            if (second_ >= 35) { p.t.day     = bcd(A, 30, 35);        p.day = true; }
+            if (second_ >= 38) { const int wd = bcd(A, 36, 38);
+                                 p.t.weekday = wd == 0 ? 7 : wd;      p.weekday = true; }
+            if (second_ >= 44) { p.t.hour    = bcd(A, 39, 44);        p.hour = true; }
+            if (second_ >= 51) { p.t.minute  = bcd(A, 45, 51);        p.minute = true; }
+            break;
+        case Station::DCF77:
+            if (second_ >= 27) { p.t.minute  = bcd(A, 21, 27);        p.minute = true; }
+            if (second_ >= 34) { p.t.hour    = bcd(A, 29, 34);        p.hour = true; }
+            if (second_ >= 41) { p.t.day     = bcd(A, 36, 41);        p.day = true; }
+            if (second_ >= 44) { p.t.weekday = bcd(A, 42, 44);        p.weekday = true; }
+            if (second_ >= 49) { p.t.month   = bcd(A, 45, 49);        p.month = true; }
+            if (second_ >= 57) { p.t.year    = 2000 + bcd(A, 50, 57); p.year = true; }
+            break;
+        case Station::WWV: {
+            auto w = [&](int bit, int weight) { return A[bit] ? weight : 0; };
+            if (second_ >= 8)  { p.t.minute = w(1,1)+w(2,2)+w(3,4)+w(4,8)+w(6,10)+w(7,20)+w(8,40);
+                                 p.minute = true; }
+            if (second_ >= 16) { p.t.hour   = w(10,1)+w(11,2)+w(12,4)+w(13,8)+w(15,10)+w(16,20);
+                                 p.hour = true; }
+            break;
+        }
+        case Station::RWM:
+            break;      // nothing to fill in — it carries no timecode
+    }
+    onPartial(p);
+}
+
 bool TimeDecoder::decodeMinute(TimeStamp& out) const {
-    return station_ == Station::MSF ? decodeMsf(out) : decodeDcf77(out);
+    switch (station_) {
+        case Station::MSF:  return decodeMsf(out);
+        case Station::WWV:  return decodeWwv(out);
+        case Station::RWM:  return false;          // no timecode — see the note in onSecondEdge
+        default:            return decodeDcf77(out);
+    }
+}
+
+/**
+ * WWV/WWVH, the NIST format. Two things make it unlike the European stations:
+ *  ★★ THE DATE IS A DAY-OF-YEAR, not a month and a day, so it has to be converted — and the
+ *     conversion needs the leap year, which is why the year is read first.
+ *  ★ THERE IS NO PARITY AT ALL. Nothing in the frame validates it, so the corroboration rule
+ *    (this minute must be exactly one later than the last) is not a belt-and-braces extra here —
+ *    it is the ONLY check standing between noise and a confident wrong clock.
+ */
+bool TimeDecoder::decodeWwv(TimeStamp& out) const {
+    const int* b = bitsA_;
+    auto w = [&](int bit, int weight) { return b[bit] ? weight : 0; };
+
+    const int minute = w(1,1)+w(2,2)+w(3,4)+w(4,8) + w(6,10)+w(7,20)+w(8,40);
+    const int hour   = w(10,1)+w(11,2)+w(12,4)+w(13,8) + w(15,10)+w(16,20);
+    const int doy    = w(20,1)+w(21,2)+w(22,4)+w(23,8)
+                     + w(25,10)+w(26,20)+w(27,40)+w(28,80)
+                     + w(30,100)+w(31,200);
+    const int yy     = w(50,1)+w(51,2)+w(52,4)+w(53,8) + w(55,10)+w(56,20)+w(57,40)+w(58,80);
+
+    if (hour > 23 || minute > 59 || doy < 1 || doy > 366 || yy > 99) return false;
+
+    const int year = 2000 + yy;
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    static const int len[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    int d = doy, m = 0;
+    for (; m < 12; m++) {
+        const int dm = len[m] + ((m == 1 && leap) ? 1 : 0);
+        if (d <= dm) break;
+        d -= dm;
+    }
+    if (m >= 12) return false;                   // day-of-year past the end of the year
+
+    out.year = year; out.month = m + 1; out.day = d;
+    out.hour = hour; out.minute = minute;
+    // ★ WWV broadcasts UTC and sends no weekday and no local DST — reporting either would be
+    //   inventing information the station does not carry.
+    out.weekday = 0;
+    out.dst = false;
+    out.leapSecondPending = false;
+    return true;
 }
 
 /**
