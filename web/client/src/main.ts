@@ -4667,6 +4667,15 @@ function renderRds() {
     const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
     rEl.textContent = `${rdev.toFixed(1)} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
     rEl.style.color = impossible ? '#ff8a7d' : low ? '#ffd479' : '#7dff9a';
+  } else if (rdev >= 0) {
+    // ★★ ALWAYS VISIBLE, EVEN AT ZERO. A dash cannot be told from a broken readout, and this one
+    //    WAS broken — the server misspelled the field, so it had never populated at all. Someone
+    //    measuring against a Pira needs to see the number is live and reading nothing, not an
+    //    absence that might mean either (Stuart, 2026-08-11, for Hans).
+    //    ★ -1 is the server's honest "no block sync, cannot measure", and stays a dash: that is a
+    //      real absence rather than a real zero.
+    rEl.textContent = `${rdev.toFixed(1)} kHz · no subcarrier`;
+    rEl.style.color = '#ffd479';
   } else { rEl.textContent = dash; rEl.style.color = ''; }
   // ★★★ RDS-to-pilot phase. Correct is near 0 or near 90 (quadrature encoding); the middle
   // ground is a transmitter fault, so say which it is rather than leaving a bare number to

@@ -82,6 +82,9 @@ if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
 if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★ The two ends of the advanced-RDS message must agree on field NAMES. A stray "R." prefix meant
+#   the deviation readout never populated at all, and neither half looked wrong on its own.
+if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build\033[0m\n' "$pass" "$fail" "$broke"
 [ "$fail" -eq 0 ] && [ "$broke" -eq 0 ]

@@ -8489,7 +8489,17 @@ struct LocalSdrShim::Impl {
                       + ",\"phaseDrift\":" + std::to_string(phaseDrift)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)
-                      + ",\"R.rdsDev\":" + std::to_string(rdsDev_)
+                      // ★★★ "rdsDev", NOT "R.rdsDev". A stray "R." prefix — almost certainly a
+                      //     half-finished edit from when these were read off a struct called R —
+                      //     meant the client looked up msg.rdsDev, found undefined, and drew a
+                      //     dash. FOREVER: the RDS DEV field has never once populated (Stuart,
+                      //     2026-08-11, wanting it for Hans, who measures against a Pira).
+                      //     ★★ It is invisible from either side alone. The server "sends the
+                      //        deviation" and the client "reads the deviation"; only the WIRE
+                      //        shows they are not the same word — and every neighbouring field
+                      //        (pilotDev, phaseCoh, ber) is spelled correctly, so nothing looked
+                      //        odd in review. See [[wire_value_derived_both_ends]].
+                      + ",\"rdsDev\":" + std::to_string(rdsDev_)
                       + ",\"ber\":" + std::to_string(berNow)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
