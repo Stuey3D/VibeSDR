@@ -26,6 +26,7 @@
 //
 // Same shape as eibi.cpp: curl to a temp file, parse, atomically replace, cache under
 // /var/lib/vibeserver, refresh at most daily.
+#include <sys/stat.h>
 #include "geoip.h"
 
 #include <algorithm>
@@ -211,10 +212,16 @@ long long updated() { std::lock_guard<std::mutex> lk(g_mtx); return g_updated; }
 bool refresh(std::string& err) {
     std::vector<std::string> got;
     for (const char* url : kSources) {
+        // ★ Make the directory before writing into it. eibi.cpp already did; these two
+        //   assumed it existed, so a fresh install (or a test pointing at a new path) failed
+        //   with "No such file or directory" wearing a curl download error as its message.
+        ::mkdir(g_dir.c_str(), 0755);
         const std::string tmp = g_dir + "/geoip.src.tmp";
         // ★ curl, for the same reason eibi.cpp uses it: the daemon has no TLS stack of its own,
         //   and this is a once-a-day fetch. -f so an HTTP error is a failure, not a saved error page.
-        const std::string cmd = "curl -fsSL --max-time 120 -o " + tmp + " '" + url + "' 2>/dev/null";
+        // ★ Quote the destination: see the note in asndb.cpp — a space in the path made curl
+        //   treat part of it as a hostname.
+        const std::string cmd = "curl -fsSL --max-time 120 -o '" + tmp + "' '" + url + "' 2>/dev/null";
         if (std::system(cmd.c_str()) != 0) continue;    // one registry down must not lose the rest
         got.push_back(tmp);
         std::lock_guard<std::mutex> lk(g_mtx);

@@ -465,6 +465,51 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
  *    directory, else /tmp. Every process on the machine computes it the SAME way, which is what
  *    makes the front door and the radios agree without being told.
  */
+/** ★★★ WHERE THIS MACHINE KEEPS ITS DATA — and it is NOT /var/lib on every machine.
+ *
+ *  The EiBi schedule, the country and network registries, the ban list, the connection log and the
+ *  spectrogram were all hardcoded to /var/lib/vibeserver. That is right on a Pi and WRONG on a
+ *  Mac, where the directory does not exist and cannot be created without root — so every one of
+ *  those silently failed there:
+ *      sh: /var/lib/vibeserver/asn.tsv.tmp: No such file or directory
+ *      curl: (23) Failure writing output to destination
+ *  which surfaced as "EiBi doesn't download", no country flags, and no network blocking (Stuart,
+ *  2026-08-11, running Full mode on macOS).
+ *
+ *  ★★ IT ALSO EXPLAINS TWO FAILING TESTS I MISREAD ALL DAY. test-geoip and test-asndb fail on a
+ *     Mac for exactly this reason, and I dismissed them three times as "network-dependent
+ *     downloads". They were a portability bug wearing a network error's clothes — the message says
+ *     "could not download", so that is what I read, and the line above it said the real cause.
+ *     ★ Lesson: when a failure has TWO lines, read the first one.
+ *
+ *  ★ VIBESERVER_DATA_DIR overrides, which is how the Mac app points at Application Support.
+ *    Falls back to the Linux location, then to the user's own directory, so a non-root run on any
+ *    platform still works instead of failing to write.
+ */
+static std::string vsDataDir() {
+    static std::string cached;
+    if (!cached.empty()) return cached;
+    auto usable = [](const std::string& d) {
+        ::mkdir(d.c_str(), 0755);
+        return ::access(d.c_str(), W_OK | X_OK) == 0;
+    };
+    if (const char* e = getenv("VIBESERVER_DATA_DIR"); e && *e && usable(e)) { cached = e; return cached; }
+#if defined(__APPLE__)
+    if (const char* home = getenv("HOME"); home && *home) {
+        const std::string d = std::string(home) + "/Library/Application Support/VibeServer";
+        if (usable(d)) { cached = d; return cached; }
+    }
+#endif
+    if (usable("/var/lib/vibeserver")) { cached = "/var/lib/vibeserver"; return cached; }
+    if (const char* home = getenv("HOME"); home && *home) {
+        const std::string d = std::string(home) + "/.vibeserver";
+        if (usable(d)) { cached = d; return cached; }
+    }
+    cached = "/tmp/vibeserver";
+    ::mkdir(cached.c_str(), 0700);
+    return cached;
+}
+
 static std::string handoffDir() {
     auto usable = [](const std::string& d) {
         ::mkdir(d.c_str(), 0700);
@@ -2035,10 +2080,10 @@ int main(int argc, char** argv) {
     // status view will show (BRIEF §3), so the GUI is a renderer of this, not its own accounting.
     // ★ Set AFTER start(), because loading needs the window (centre and span) to know whether the
     //   stored history belongs to this profile at all.
-    LocalSdrShim::instance().setSpectrogramPath("/var/lib/vibeserver/spectrogram.bin");
+    LocalSdrShim::instance().setSpectrogramPath(vsDataDir() + "/spectrogram.bin");
     // ★ Beside the spectrogram, and for the same reason: this is state the SERVER writes and must
     //   keep across a restart. A ban that evaporates on reboot is not a ban — and this Pi reboots.
-    LocalSdrShim::instance().setBanListPath("/var/lib/vibeserver/bans.jsonl");
+    LocalSdrShim::instance().setBanListPath(vsDataDir() + "/bans.jsonl");
     // ★ Beside the bans, and for the same reason: this is history the owner needs ACROSS
     //   restarts, and an update restarts the server.
     // ★★★ ONE FILE PER RADIO, NOT ONE PER MACHINE — three writers shared this path.
@@ -2063,14 +2108,14 @@ int main(int argc, char** argv) {
     //     ★ A server with no radio of its own (the front door) and a single-radio Simple server
     //       both keep the original path, so nothing changes for them and their history survives.
     LocalSdrShim::instance().setConnLogPath(
-        g_myRadioSerial.empty() ? "/var/lib/vibeserver/connections.jsonl"
-                                : "/var/lib/vibeserver/connections-" + g_myRadioSerial + ".jsonl");
+        g_myRadioSerial.empty() ? vsDataDir() + "/connections.jsonl"
+                                : vsDataDir() + "/connections-" + g_myRadioSerial + ".jsonl");
 
     // ── ★★ WHERE LISTENERS ARE CONNECTING FROM ────────────────────────────────────────────────
     // Flags beside the listener list, and the top-countries chart. See vibeserver/geoip.cpp for
     // why this is the RIRs' OWN published allocation data and not a geolocation API: no account,
     // no licence, and — the part that matters — no visitor's address ever leaves this machine.
-    geoip::setDir("/var/lib/vibeserver");
+    geoip::setDir(vsDataDir());
     if (!geoip::load())
         std::printf("VibeServer: no country data yet — downloading in the background.\n");
     LocalSdrShim::setGeoIpHandler([](const std::string& ip) { return geoip::lookup(ip); });
@@ -2083,7 +2128,8 @@ int main(int argc, char** argv) {
     // ★ NOT from the registry files. Their opaque-id is a per-holder UUID with no name, and their
     //   `asn` records say which AS NUMBERS were allocated to whom — not which AS announces a
     //   given prefix. That only exists in BGP. See asndb.cpp.
-    asndb::setDir("/var/lib/vibeserver");
+    asndb::setDir(vsDataDir());
+    vseibi::setDir(vsDataDir());
     asndb::load();
     LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
         return asndb::lookup(ip, asn, name);

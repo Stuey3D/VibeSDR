@@ -5,6 +5,10 @@
 
 namespace vseibi {
 
+/** Where the cache lives. ★ Settable because /var/lib does not exist on macOS, so a hardcoded path
+ *  there means the schedule can never download — see vsDataDir() in main.cpp. */
+void setDir(const std::string& dir);
+
 /** Parse the cached CSV and publish it. Returns the number of entries (0 = no usable cache).
  *  ★ Call at start-up BEFORE any refresh: a receiver with yesterday's schedule is useful
  *    immediately, and waiting on the network to serve a search box is not. */

@@ -148,11 +148,14 @@ std::string toStationsJson(const std::string& csv, int& count) {
     return j;
 }
 
-std::string cachePath() { return "/var/lib/vibeserver/eibi.csv"; }
+/** ★ Settable, for the same reason geoip's and asndb's are: /var/lib does not exist on a Mac, so
+ *  a hardcoded path there means the schedule can never download. See vsDataDir() in main.cpp. */
+std::string g_dir = "/var/lib/vibeserver";
+std::string cachePath() { return g_dir + "/eibi.csv"; }
 /** Which season the cache holds. ★ Stored, because the FILE cannot tell us: sked-a26.csv and
  *  sked-b26.csv are the same shape, and a cache fetched yesterday is still stale the moment the
  *  season turns over. Without this a rollover would wait for the age check to expire. */
-std::string seasonPath() { return "/var/lib/vibeserver/eibi.season"; }
+std::string seasonPath() { return g_dir + "/eibi.season"; }
 
 std::string readSmall(const std::string& path) {
     FILE* f = fopen(path.c_str(), "rb");
@@ -166,6 +169,8 @@ std::string readSmall(const std::string& path) {
 }
 
 }  // namespace
+
+void setDir(const std::string& dir) { if (!dir.empty()) g_dir = dir; }
 
 int loadFromCache() {
     FILE* f = fopen(cachePath().c_str(), "rb");
@@ -200,10 +205,11 @@ int refresh(std::string& err) {
     //     perfectly, parse perfectly, and then silently fail to save, leaving the button reporting
     //     success and the cache empty. Same rule the atomic config write already follows: stage
     //     NEXT TO the target, not somewhere convenient.
-    mkdir("/var/lib/vibeserver", 0755);
-    const std::string tmp = "/var/lib/vibeserver/eibi.csv.tmp";
-    const std::string cmd = "curl -fsSL --max-time 45 -o " + tmp +
-                            " http://www.eibispace.de/dx/" + file + " 2>&1";
+    mkdir(g_dir.c_str(), 0755);
+    const std::string tmp = g_dir + "/eibi.csv.tmp";
+    // ★ Quote the destination: see the note in asndb.cpp.
+    const std::string cmd = "curl -fsSL --max-time 45 -o '" + tmp +
+                            "' http://www.eibispace.de/dx/" + file + " 2>&1";
     const std::string out = runCmd(cmd);
     FILE* f = fopen(tmp.c_str(), "rb");
     if (!f) { err = out.empty() ? "could not reach eibispace.de" : out; return 0; }

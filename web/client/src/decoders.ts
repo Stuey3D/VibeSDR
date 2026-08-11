@@ -105,6 +105,8 @@ export class DecoderClient {
   private url: string;
   private cb: DecoderCallbacks;
   private closedByUs = false;
+  /** The parameters the current decoder was attached with, so a reconnect restores it exactly. */
+  private params: DecoderParams = {};
   /** What's attached — REQUIRED to parse frames (0x01 is ambiguous). */
   private mode: DecoderMode = null;
   private spotsOn = false;
@@ -123,7 +125,14 @@ export class DecoderClient {
     ws.onopen = () => {
       this.cb.onOpen?.();
       // Re-assert across reconnects — the shim keeps no per-client state.
-      if (this.mode) this._sendAttach(this.mode);
+      // ★★★ WITH THE PARAMETERS, and that was the bug: this re-attached the MODE alone, so every
+      //     reconnect silently reverted the decoder to the server's DEFAULTS. Selecting RWM gave
+      //     "[RWM] reading the minute" and then, moments later, "[MSF] …" — the station had been
+      //     thrown away and msf is the default (Stuart, 2026-08-11).
+      //     ★★ It was never specific to the time decoder: RTTY's shift, baud, encoding and
+      //        inversion, and WEFAX's LPM, were dropped the same way and silently reverted. The
+      //        time decoder only made it VISIBLE, because it prints the station's name.
+      if (this.mode) this._sendAttach(this.mode, this.params);
       if (this.spotsOn) this._send({ type: 'subscribe_digital_spots' });
     };
     ws.onmessage = (e) => {
@@ -155,12 +164,15 @@ export class DecoderClient {
   /** Attach a decoder (detaching whatever was running). */
   attach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}) {
     this.mode = mode;
+    // ★ Remembered so a reconnect can re-assert the SAME decoder, not the default one.
+    this.params = params;
     this._sendAttach(mode, params);
   }
 
   detach() {
     if (!this.mode) return;
     this.mode = null;
+    this.params = {};
     this._send({ type: 'audio_extension_detach' });
   }
 

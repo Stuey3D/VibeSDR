@@ -157,11 +157,20 @@ bool stale(int maxAgeDays) {
 }
 
 bool refresh(std::string& err) {
+    // ★ Make the directory before writing into it. eibi.cpp already did; these two
+    //   assumed it existed, so a fresh install (or a test pointing at a new path) failed
+    //   with "No such file or directory" wearing a curl download error as its message.
+    ::mkdir(g_dir.c_str(), 0755);
     const std::string tsv = g_dir + "/asn.tsv.tmp";
     // ★ curl piped through gunzip: the daemon has no zlib linked and this is a once-a-week fetch.
     //   Same reasoning as eibi.cpp shelling out to curl rather than growing an HTTP stack.
+// ★★★ QUOTE THE PATH. macOS's data directory is "~/Library/Application Support/VibeServer"
+    //     — it contains a SPACE, so an unquoted path splits and curl read "Support" as a
+    //     HOSTNAME: `curl: (6) Could not resolve host: Support`. The URL was already quoted;
+    //     the destination was not, and only a platform whose standard directory has a space
+    //     in it ever shows the difference (Stuart, 2026-08-11, on macOS).
     const std::string cmd = "curl -fsSL --max-time 180 '" + std::string(kUrl)
-                          + "' | gunzip -c > " + tsv + " 2>/dev/null";
+                          + "' | gunzip -c > '" + tsv + "' 2>/dev/null";
     if (std::system(cmd.c_str()) != 0) { err = "download failed"; remove(tsv.c_str()); return false; }
 
     FILE* f = fopen(tsv.c_str(), "r");
