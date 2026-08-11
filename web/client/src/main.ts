@@ -4238,6 +4238,9 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 let rtty: RttySettings = { ...RTTY_PRESETS.ham };
 let wefaxLpm = 120;
 let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null = null;
+/** True while the last thing written to the decoder panel was a replace-in-place progress line,
+ *  which carries no trailing newline. See onText. */
+let decProgressLine = false;
 /** Which time station the TIME decoder is set to. A preset, exactly like RTTY's. */
 let timeStation = 'msf';
 /** ★ Each station implies its own FREQUENCY and its own MODE, and the mode matters as much as the
@@ -4294,7 +4297,14 @@ function initDecoders(host: string, auth: AuthState) {
         if (chunk.startsWith('\r')) {
           const cut = text.lastIndexOf('\n');
           text = (cut >= 0 ? text.slice(0, cut + 1) : '') + chunk.slice(1);
+          decProgressLine = true;
         } else {
+          // ★★ CLOSE THE PROGRESS LINE FIRST. It is written WITHOUT a trailing newline so the next
+          //    one can overwrite it — which means an ordinary line arriving next would run on the
+          //    end of it: "second 59/59[MSF] locked — carrier +13 dB" (Stuart's screenshot,
+          //    2026-08-11). Only after a progress line, because RTTY streams text character by
+          //    character with no newlines of its own and must not be broken up.
+          if (decProgressLine) { text += '\n'; decProgressLine = false; }
           text += chunk;
         }
       }
