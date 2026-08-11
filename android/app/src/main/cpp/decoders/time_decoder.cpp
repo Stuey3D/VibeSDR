@@ -28,6 +28,21 @@ int bcd(const int* bits, int from, int to) {
     return v;
 }
 
+/** ★★★ BCD, MOST SIGNIFICANT BIT FIRST — which is how MSF sends every field.
+ *  bit 17A is 80, 18A is 40 … 24A is 1 (NPL's published table). The LSB-first reader below is for
+ *  stations that do it the other way; using the wrong one produces a bit-REVERSED number that is
+ *  still a plausible date, which is precisely how Anthorn decoded as "2064-02-22 06:16". */
+int bcdMsb(const int* bits, int from, int to) {
+    int v = 0;
+    for (int i = from; i <= to; i++) v = (v * 2) + (bits[i] ? 1 : 0);
+    // The field is BCD-weighted, not plain binary: rebuild from the published weights.
+    int out = 0, n = to - from + 1;
+    static const int w10[] = { 80, 40, 20, 10, 8, 4, 2, 1 };
+    for (int i = 0; i < n; i++) if (bits[from + i]) out += w10[8 - n + i];
+    (void)v;
+    return out;
+}
+
 int parityOdd(const int* bits, int from, int to) {
     int n = 0;
     for (int i = from; i <= to; i++) n += bits[i] ? 1 : 0;
@@ -350,13 +365,13 @@ void TimeDecoder::emitPartial() {
     const int* A = bitsA_;
     switch (station_) {
         case Station::MSF:
-            if (second_ >= 24) { p.t.year    = 2000 + bcd(A, 17, 24); p.year = true; }
-            if (second_ >= 29) { p.t.month   = bcd(A, 25, 29);        p.month = true; }
-            if (second_ >= 35) { p.t.day     = bcd(A, 30, 35);        p.day = true; }
-            if (second_ >= 38) { const int wd = bcd(A, 36, 38);
-                                 p.t.weekday = wd == 0 ? 7 : wd;      p.weekday = true; }
-            if (second_ >= 44) { p.t.hour    = bcd(A, 39, 44);        p.hour = true; }
-            if (second_ >= 51) { p.t.minute  = bcd(A, 45, 51);        p.minute = true; }
+            if (second_ >= 24) { p.t.year    = 2000 + bcdMsb(A, 17, 24); p.year = true; }
+            if (second_ >= 29) { p.t.month   = bcdMsb(A, 25, 29);        p.month = true; }
+            if (second_ >= 35) { p.t.day     = bcdMsb(A, 30, 35);        p.day = true; }
+            if (second_ >= 38) { const int wd = bcdMsb(A, 36, 38);
+                                 p.t.weekday = wd == 0 ? 7 : wd;         p.weekday = true; }
+            if (second_ >= 44) { p.t.hour    = bcdMsb(A, 39, 44);        p.hour = true; }
+            if (second_ >= 51) { p.t.minute  = bcdMsb(A, 45, 51);        p.minute = true; }
             break;
         case Station::DCF77:
             if (second_ >= 27) { p.t.minute  = bcd(A, 21, 27);        p.minute = true; }
@@ -496,12 +511,14 @@ bool TimeDecoder::decodeMsf(TimeStamp& out) const {
     const int* A = bitsA_;
     const int* B = bitsB_;
 
-    const int year  = bcd(A, 17, 24);
-    const int month = bcd(A, 25, 29);
-    const int day   = bcd(A, 30, 35);
-    const int wday  = bcd(A, 36, 38);
-    const int hour  = bcd(A, 39, 44);
-    const int min   = bcd(A, 45, 51);
+    // ★★★ MSB FIRST. See bcdMsb() — reading these LSB-first bit-reverses every field and yields a
+    //     date that passes every range check while being completely wrong.
+    const int year  = bcdMsb(A, 17, 24);
+    const int month = bcdMsb(A, 25, 29);
+    const int day   = bcdMsb(A, 30, 35);
+    const int wday  = bcdMsb(A, 36, 38);
+    const int hour  = bcdMsb(A, 39, 44);
+    const int min   = bcdMsb(A, 45, 51);
 
     // Odd parity, each over its own span.
     if (parityOdd(A, 17, 24) == B[54]) return false;

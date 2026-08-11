@@ -133,11 +133,18 @@ int main() {
         emit(a2, 3000.0, 1.0);
         for (int MINUTE = 45; MINUTE <= 46; MINUTE++) {
         int A[60] = {0}, B[60] = {0};
+        // ★★★ MSB FIRST, from NPL's published table: 17A is 80, 18A is 40 … 24A is 1.
+        //     The first version of this test built the bits LSB-first — the SAME wrong assumption
+        //     the decoder had — so the pair agreed with each other and disagreed with Anthorn.
+        //     A test written from the same misunderstanding as the code proves only that they
+        //     match. It took a live decode of "2064-02-22" to expose it.
         auto putA = [&](int from, int to, int val) {
-            static const int w[] = { 1, 2, 4, 8, 10, 20, 40, 80 };
+            static const int w10[] = { 80, 40, 20, 10, 8, 4, 2, 1 };
+            const int n = to - from + 1;
             int rem = val;
-            for (int i = to, k = to - from; i >= from; i--, k--) {
-                if (rem >= w[k]) { A[i] = 1; rem -= w[k]; }
+            for (int i = 0; i < n; i++) {
+                const int wt = w10[8 - n + i];
+                if (rem >= wt) { A[from + i] = 1; rem -= wt; }
             }
         };
         putA(17, 24, 26);      // year 2026
