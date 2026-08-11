@@ -1023,7 +1023,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.title = " !"
             button.toolTip = "VibeServer — radio disconnected"
         } else if server.running {
-            let n = server.listeners
+            // ★★★ THE COUNT HAS TWO SOURCES AND THE BADGE ONLY KNEW ONE. `listeners` reads the core
+            //     running INSIDE this app, which in Full mode is not the server at all — the radios
+            //     are separate processes, so the badge silently vanished the moment you switched to
+            //     Full and reappeared in Simple. It read as a Simple-mode-only decoration
+            //     (Stuart, 2026-08-11: "in simple mode there is a listener number next to the icon
+            //     too"). The MENU already picked the right source per mode; the badge did not.
+            //     ★ Same rule as statusLine() below, and deliberately written the same way so the
+            //       two cannot drift: whoever adds a third mode has to answer this question twice
+            //       in one file, not once here and once somewhere they never looked.
+            let n = server.fullMode ? server.fullListeners : server.listeners
             button.title = n > 0 ? " \(n)" : ""
             button.toolTip = n > 0
                 ? "VibeServer — \(n) listening · \(server.address)"

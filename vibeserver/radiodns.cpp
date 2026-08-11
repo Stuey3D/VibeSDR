@@ -2,6 +2,13 @@
 
 #include <algorithm>
 #include <cctype>
+// ★★★ <cmath> FOR llround, AND ITS ABSENCE ONLY BROKE THE PI. libc++ (the Mac) pulls it in
+//     transitively through <string>, libstdc++ (bookworm/GCC) does not — so this file built
+//     cleanly here and failed the publish with "'llround' was not declared in this scope".
+//     That failed build is WHY the demo Pi answered 404 for /vibeserver/stationlogo: the
+//     endpoint was never in a package. A Mac-only compile is not evidence that the release
+//     builds (2026-08-11).
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <map>
@@ -70,7 +77,7 @@ std::string fqdnFor(const std::string& piHex, const std::string& ecc, double fre
     const std::string pi = lower(piHex);
     const std::string gcc = std::string(1, pi[0]) + lower(ecc.substr(ecc.size() - 2));
     char f[16];
-    std::snprintf(f, sizeof f, "%05d", (int)llround(freqHz / 10000.0));
+    std::snprintf(f, sizeof f, "%05d", (int)std::llround(freqHz / 10000.0));
     return std::string(f) + "." + pi + "." + gcc + ".fm.radiodns.org";
 }
 
@@ -141,8 +148,16 @@ std::string logoFromSpi(const std::string& xml, const std::string& bearerId) {
         if (u == std::string::npos) continue;
         const size_t u2 = tag.find('"', u + 5);
         if (u2 == std::string::npos) continue;
-        const std::string url = tag.substr(u + 5, u2 - u - 5);
+        std::string url = tag.substr(u + 5, u2 - u - 5);
         if (url.rfind("http", 0) != 0) continue;
+        // ★★★ https OR THE BROWSER WILL NOT LOAD IT AT ALL. SPI documents still carry plain http
+        //     urls — Global's Classic FM entry does — and a page served over https (the demo, and
+        //     any tunnelled server) BLOCKS mixed content before a request is made. The failure is
+        //     silent and looks exactly like "this station has no logo", which is the case we just
+        //     went to some trouble to fix. Both schemes answered 200 for every host tested, so
+        //     the upgrade costs nothing; a host that genuinely cannot do TLS simply fails to load
+        //     and the client falls back, as it does for a station with no SPI entry at all.
+        if (url.rfind("http://", 0) == 0) url = "https://" + url.substr(7);
         int w = 0;
         const size_t wp = tag.find("width=\"");
         if (wp != std::string::npos) w = atoi(tag.c_str() + wp + 7);
@@ -194,7 +209,7 @@ std::string logoFor(const std::string& piHex, const std::string& ecc, double fre
             const std::string pi = lower(piHex);
             const std::string gcc = std::string(1, pi[0]) + lower(ecc.substr(ecc.size() - 2));
             char f[16];
-            std::snprintf(f, sizeof f, "%05d", (int)llround(freqHz / 10000.0));
+            std::snprintf(f, sizeof f, "%05d", (int)std::llround(freqHz / 10000.0));
             url = logoFromSpi(xml, "fm:" + gcc + "." + pi + "." + std::string(f));
         }
     }

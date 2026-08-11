@@ -998,6 +998,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         rdsLogoPi = rdsPi;
         rdsLogoUrl = '';
         logoQuery = '';
+        logoDnsKey = '';
       }
       if (!rdsLogoUrl) void resolveRdsLogoBest(rdsIso);
       rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
@@ -1624,7 +1625,7 @@ let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
 /** Drop RDS state if the dial has moved off the station it came from. */
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
-  rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; rdsLogoPi = -1;
+  rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
   rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
   grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
   rdsFreq = -1;
@@ -1647,6 +1648,9 @@ function piHex(pi: number): string {
  */
 const bmLogos = new Map<string, string | null>();
 let logoQuery = '';     // guards against a stale async logo landing late
+/** ★ The PI/ECC/frequency already asked of the server's RadioDNS route — one request per station,
+ *  not one per RDS update. Cleared wherever the logo is, so a new station is asked afresh. */
+let logoDnsKey = '';
 
 /** ★★★ BAND CROSSING, as the app announces it. The web VTS computed the band and then hid the
  *  whole bar whenever there was no station name — so on HF, where most of the dial has no
@@ -2033,6 +2037,46 @@ function updateVts() {
  * ★ Stuart, 2026-08-11: "why does it not use the station name? then the radio text afterwards?"
  */
 async function resolveRdsLogoBest(iso: string) {
+  // ★★★ THE BROADCASTER'S OWN ARTWORK FIRST, KEYED ON THE PI — a NAME search cannot be trusted to
+  //     identify a station, and a wrong answer LOCKS. The logo is invalidated only by a PI change
+  //     (rdsLogoPi, and rightly — the PS rotates), so a name that was briefly wrong when the
+  //     lookup happened is never re-examined: one of the weaker BBC Radio 3 signals wore the
+  //     Radio 1 roundel and stayed that way (Stuart, 2026-08-11). Both ways the name can lie
+  //     produce exactly that — a PS damaged in the noise ("BBC R1" is two bits from "BBC R3"), or
+  //     an EON group naming ANOTHER network, and that screenshot showed 30% 14A traffic listing
+  //     BBC R1 first.
+  //     ★★ RadioDNS is keyed on PI + ECC + frequency, which is the identity the transmitter
+  //        error-protects and repeats 11 times a second, and it returns the BROADCASTER'S OWN
+  //        file rather than a crowd-sourced favicon that may 404. That is what the server-side
+  //        lookup was built for; until now nothing called it.
+  //     ★ Server-side ON PURPOSE: it needs DNS SRV and CNAME resolution, which a page cannot do.
+  //       An older server has no such route, so a 404 here just falls through to the name ladder.
+  const hz = spec ? spec.frequency : 0;
+  if (rdsPi > 0 && rdsEcc > 0 && hz > 0) {
+    const piHex  = rdsPi.toString(16).toUpperCase().padStart(4, '0');
+    const eccHex = rdsEcc.toString(16).toUpperCase().padStart(2, '0');
+    const key = `${piHex}|${eccHex}|${Math.round(hz)}`;
+    // ★ ONE REQUEST PER STATION. This runs on every RDS update while we have no logo, and the
+    //   miss path costs the server a DNS round trip — unguarded it would be several a second.
+    if (logoDnsKey !== key) {
+      logoDnsKey = key;
+      try {
+        const r = await fetch(P(`/vibeserver/stationlogo?pi=${piHex}&ecc=${eccHex}&freq=${Math.round(hz)}`),
+                              { cache: 'no-store' });
+        if (r.ok) {
+          const url = String((await r.json())?.logo ?? '');
+          // The dial may have moved while DNS was resolving — this answer belongs to the station
+          // we ASKED about, not to whatever is tuned now.
+          if (url && logoDnsKey === key) {
+            rdsLogoUrl = url;
+            updateVts();
+            updateMediaSession();
+            return;
+          }
+        }
+      } catch { /* no server route, or offline — the name ladder below still applies */ }
+    }
+  }
   const longPs = (rdsExt?.longPs ?? '').trim();
   // ★ Only the opening of the RadioText: the station name, not the track.
   const rtHead = rdsText.split(/[-–|:]/)[0].trim().split(/\s+/).slice(0, 4).join(' ');
@@ -4634,11 +4678,30 @@ function renderRds() {
   // ★ TWO COPIES, ON PURPOSE. The header badge is the identity you glance at while the panel
   // is minimised; the big one under the MPX fills space the column already leaves empty and is
   // the one you actually look at. Both are driven from the same URL so they cannot disagree.
+  // ★★★ A DEAD FAVICON MUST HIDE, HERE TOO. The 404-handling was added to #vtsLogo and to NOTHING
+  //     ELSE, so these two kept showing the browser's broken-image glyph in a reserved box —
+  //     Classic FM, whose radio-browser favicon is dead, rendered a "?" tile where its artwork
+  //     should be (Stuart, 2026-08-11). Same bug, same day, two lines away from the fix.
+  //     ★ `show` is added only ON LOAD: an <img> is guilty until it has decoded, or the box
+  //       flashes broken on every slow logo.
+  //     ★ Clearing rdsLogoUrl stops this session retrying a link already known to be dead — and
+  //       lets the next candidate name (see resolveRdsLogoBest) have its turn.
   for (const id of ['decLogo', 'rdsLogoBig']) {
     const el = document.getElementById(id) as HTMLImageElement | null;
     if (!el) continue;
-    if (rdsLogoUrl) { if (el.src !== rdsLogoUrl) el.src = rdsLogoUrl; el.classList.add('show'); }
-    else el.classList.remove('show');
+    if (!rdsLogoUrl) { el.classList.remove('show'); continue; }
+    if (el.src !== rdsLogoUrl) {
+      const url = rdsLogoUrl;
+      el.classList.remove('show');
+      el.onload  = () => { el.classList.add('show'); };
+      el.onerror = () => {
+        el.classList.remove('show');
+        if (rdsLogoUrl === url) rdsLogoUrl = '';
+      };
+      el.src = url;
+    } else if (el.complete && el.naturalWidth > 0) {
+      el.classList.add('show');
+    }
   }
   // ★ HEX AND DECIMAL. Hex is how the standard defines PI, and how it decomposes into
   // country / coverage / reference — but plenty of databases, loggers and older receivers
@@ -6280,7 +6343,7 @@ function setMode(m: SDRMode, send: boolean) {
   }
   if (m !== 'wfm') {
     $('stereo').classList.remove('on');
-    rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; rdsLogoPi = -1;
+    rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
   }
   updateVts();
   syncBw();

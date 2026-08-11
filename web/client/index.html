@@ -1274,6 +1274,15 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    are genuinely multi-line and do not carry this class. */
 .rdsF.rdsFix { min-height: 17px; align-items: center; }
 .rdsF.rdsFix label, .rdsF.rdsFix span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★★★ TRUNCATION ATE THE VERDICT. rdsFix was put on Pilot dev to stop the row changing height,
+   and the ellipsis fell exactly where the useful half is: "5.5 kHz · …" instead of
+   "5.5 kHz · low" (Stuart, 2026-08-11). The number without its band is the thing this field
+   exists to avoid — the same argument already written above for RDS↔PILOT, which is why that
+   one reserves space instead of clipping.
+   ★ So RESERVE TWO LINES and let it wrap. The height is then constant whichever verdict lands,
+     which is all rdsFix was ever protecting, and RDS dev directly beneath already behaves this
+     way — the row it has to line up with. */
+.rdsF.rdsTwoLine { min-height: 30px; align-items: flex-start; }
 
 /* ★★ RDS↔PILOT IS THE HARD ONE: it alternates between "27° · nominal · 98% steady"
    and "rotating — encoder not locked to pilot", and that difference is FIVE LINES in
@@ -2082,7 +2091,7 @@ select.btn { padding: 6px 8px; }
         <!-- ★ INJECTION LEVELS IN kHz DEVIATION — the units a broadcast analyser uses and an
              FM-DXer reads fluently, and directly comparable against a Pira. Spec bands are in
              the tooltips so the number interprets itself. -->
-        <div class="rdsF rdsFix"><label title="Pilot injection. Spec is 8–10% of 75 kHz, so 6.0–7.5 kHz.">Pilot dev</label><span id="rxPilotDev">—</span></div>
+        <div class="rdsF rdsTwoLine"><label title="Pilot injection. Spec is 8–10% of 75 kHz, so 6.0–7.5 kHz.">Pilot dev</label><span id="rxPilotDev">—</span></div>
         <div class="rdsF"><label title="RDS injection. Typically 2–4 kHz; 7.5% (5.6 kHz) is the ceiling. Higher means the station is pushing its RDS hard, which helps reception. Inferred after filtering, so indicative rather than calibrated.">RDS dev</label><span id="rxRdsDev">—</span></div>
         <!-- ★★★ The measurement FM-DXers carry a Pira analyser to get. Near 0 or near 90 is
              correct; anything in between is a transmitter fault. -->
