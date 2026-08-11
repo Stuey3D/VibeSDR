@@ -24,6 +24,7 @@ import {
 import { BAND_PLAN } from '../../../src/constants/bandPlan';
 import type { SDRMode } from './spectrum';
 import { httpBase } from './origin';
+import { adminTicketQuery } from './adminticket';
 
 export type ResultSource = 'user' | 'server' | 'eibi' | 'band';
 
@@ -103,8 +104,15 @@ function authQs(): string {
 let adminAuthProvider: (() => Promise<string>) | null = null;
 export function setBookmarkAdminAuth(fn: (() => Promise<string>) | null) { adminAuthProvider = fn; }
 async function adminQs(existing: string): Promise<string> {
-  if (!adminAuthProvider) return existing;
-  const q = await adminAuthProvider().catch(() => '');
+  let q = adminAuthProvider ? await adminAuthProvider().catch(() => '') : '';
+  // ★★★ THERE ARE TWO WAYS TO BE ADMIN AND THIS KNEW ONLY ONE. The password typed on THIS page
+  //     produces the nonce+HMAC above — but signing in at the FRONT DOOR and walking into a radio
+  //     carries an admin TICKET instead, and that path never calls setBookmarkAdminAuth at all.
+  //     So the whole admin UI appeared, the buttons worked, and every write went out with no
+  //     credential: "Nothing imported (is the PIN right?)" while signed in as admin (Stuart,
+  //     2026-08-11). The ticket exists precisely so a proof made once is accepted by every radio
+  //     on the machine — a write is exactly what it is for.
+  if (!q) q = adminTicketQuery();
   if (!q) return existing;
   return existing ? existing + '&' + q : '?' + q;
 }

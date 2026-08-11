@@ -228,7 +228,16 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         const int sym = near(pulse, 770.0, 120.0) ? 2
                       : near(pulse, 470.0, 110.0) ? 1
                       : near(pulse, 170.0, 90.0)  ? 0 : -1;
-        if (sym < 0) return;                       // not a WWV symbol — ignore rather than guess
+        // ★★★ AN UNREADABLE PULSE MUST STILL ADVANCE THE CLOCK. `return` here kept the second
+        //     counter where it was, so ONE fade shifted every remaining bit of the minute one
+        //     second early — and the fields then read as plausible nonsense rather than as an
+        //     obvious failure (a live minute decoded as "20:12, day 24, year 120"). On a real HF
+        //     path this is not rare: 15 MHz from K3FEF dropped 3-8 pulses a minute.
+        //     ★★ So the second is derived from ELAPSED TIME, not from a count of pulses we happened
+        //        to recognise. One pulse plus the dip after it IS one second by construction, so
+        //        rounding that period gives how many seconds to step — including the 2 s step over
+        //        a missing pulse. The unreadable second is recorded as 0 and the frame survives.
+        const int steps = std::max(1, (int)std::lround((gapMs + dipMs) / 1000.0));
 
         // ★★★ THE SYMBOL BELONGS TO THE SECOND THAT HAS JUST ENDED, NOT THE ONE BEGINNING.
         //     The rising edge we are standing on STARTS the next second's pulse, so what we have
@@ -237,18 +246,38 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         //     back as zeros rather than as anything obviously wrong. All four came out 0 and the
         //     frame simply never validated.
         //     ★ So: place the symbol, THEN advance.
-        if (sym == 2 && lastWasMarker_) {
-            // Two markers in a row: the one just measured is second 0 (the frame reference), and
-            // the one before it was second 59's P6. This is the only alignment WWV gives.
-            second_ = 0;
+        // ★★★ THE MINUTE IS A HOLE, NOT A DOUBLE MARKER — MEASURED OFF THE AIR, NOT ASSUMED.
+        //
+        //     This waited for two 770 ms markers in a row and WWV NEVER SENDS THAT, so the only
+        //     alignment rule the decoder had could not fire: it sat in Searching for ever and
+        //     emitted not one bit. Recorded from K3FEF (Milford PA) on 15 MHz, 2026-08-11, the
+        //     markers arrive at a flat 10.000 s cadence across a whole minute — 9, 19, 29, 39,
+        //     49, 59 — with no pair anywhere.
+        //
+        //     What identifies the minute is that SECOND 0 CARRIES NO PULSE AT ALL. After second
+        //     59's marker the subcarrier stays down for ~1.23 s (the marker's own 230 ms tail,
+        //     then a silent second, then the 30 ms lead-in) where every other second gives at
+        //     most 830 ms. In the capture that hole landed exactly on 20:57:00 UTC.
+        //     ★★ So the threshold sits between those two: 830 ms is the longest ordinary dip (it
+        //        follows a 170 ms "0") and 1230 ms is the hole. 1050 leaves ~200 ms either side,
+        //        which is the margin a fading HF path actually needs.
+        //     ★ The pulse being measured when this fires is therefore SECOND 1, not second 0 —
+        //       the silent second is the one that was skipped, and it carries no data.
+        //     ★★★ AND THE MARKER AND ITS HOLE ARRIVE ON THE SAME EDGE. onSecondEdge is handed the
+        //         pulse and THEN the dip that followed it, so the marker that precedes the hole is
+        //         THIS call's symbol, not the previous one's. Testing lastWasMarker_ here framed
+        //         one minute and then lost it — right rule, read one second late.
+        constexpr double kWwvHoleMs = 1050.0;
+        if (sym == 2 && dipMs > kWwvHoleMs) {
+            second_ = 59;                          // this marker is second 59; the hole after it is 0
             setState(State::Reading);
         } else if (second_ < 0) {
             lastWasMarker_ = (sym == 2);
-            return;                                // still hunting for the double marker
+            return;                                // still hunting for the marker-then-hole
         }
         lastWasMarker_ = (sym == 2);
         bitsA_[second_] = (sym == 1) ? 1 : 0;
-        if (onBit) onBit(second_, bitsA_[second_]);
+        if (sym >= 0 && onBit) onBit(second_, bitsA_[second_]);
         emitPartial();
         if (second_ == 59) {
             TimeStamp ts;
@@ -259,10 +288,17 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
                 lastStamp_ = stamp;
                 if (follows) { good_++; setState(State::Locked); if (onTime) onTime(ts); }
             } else { bad_++; lastStamp_ = 0; }
-            second_ = 0;                           // the next symbol is second 0's, already framed
+            // ★★★ THE NEXT SYMBOL IS SECOND 1's, NOT SECOND 0's. Second 0 is the hole and never
+            //     produces an edge at all, so resetting to 0 here left every following bit one
+            //     second early for the whole minute.
+            bitsA_[0] = 0;                         // the hole carries no data
+            second_ = 1;
             return;
         }
-        second_++;
+        second_ += steps;
+        // ★ Stepped clean over the minute without seeing second 59 — a dropout on the marker
+        //   itself. Wrap, and drop the corroboration chain rather than decode a half frame.
+        if (second_ > 59) { second_ -= 60; lastStamp_ = 0; }
         return;
     } else if (station_ == Station::WWVB) {
         // ── WWVB ─────────────────────────────────────────────────────────────

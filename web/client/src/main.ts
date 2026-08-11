@@ -3955,7 +3955,9 @@ function initBookmarks() {
         renderBookmarks();
         $('bmMsg').textContent = n
           ? `Imported ${n} bookmark${n === 1 ? '' : 's'} to the receiver`
-          : 'Nothing imported (is the PIN right?)';
+          // ★ The PIN is not what gates this — writes are ADMIN-gated (vsAdminHttpOk). Blaming
+          //   the PIN sent Stuart looking at the wrong credential while signed in as admin.
+          : 'Nothing imported — the receiver refused it (are you signed in as admin?)';
         (e.target as HTMLInputElement).value = '';
         return;
       }
