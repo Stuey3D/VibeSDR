@@ -129,9 +129,36 @@ radios started zero.
 ★ `handoffDir()` already honours `VIBESERVER_RUNTIME_DIR`, so the sockets can live in the app's
 files directory with no code change. `VIBESERVER_CONFIG` likewise for the config.
 
-★ **W^X:** since API 29 an app may not exec from its data dir. The binary must ship in
-`nativeLibraryDir`, i.e. packaged as `libvibeserver.so` in jniLibs. Today Android's CMake builds
-only `vibelocalsdr` as a SHARED LIBRARY and **no executable at all** — that is new build work.
+### ★★★ AND DO NOT EXEC A BINARY AT ALL — USE AN ANDROID SERVICE PROCESS
+
+The first plan was to ship the `vibeserver` binary as `libvibeserver.so` in `nativeLibraryDir`
+(since API 29 an app may not exec from its data dir) and fork/exec it. That works, but it buys
+three problems for nothing: packaging an executable Gradle does not package by default, a child
+process **Android does not track** (so the low-memory killer treats it as free real estate and
+nothing restarts it), and W^X rules to stay on the right side of.
+
+**Android already has a first-class multi-process mechanism.** A `<service>` declared
+`android:process=":frontdoor"` runs in its own process, loads the same `libvibelocalsdr.so`, and
+calls `startFrontDoor()` through JNI. Then:
+- nothing is exec'd, so W^X and jniLibs packaging never arise;
+- the front door is a **real Android component** — foregroundable, tracked, restartable,
+  `START_STICKY` — instead of an orphan the OS knows nothing about. Given `VibeServerRestore.kt`
+  exists precisely because process death is routine, this is the difference between a supervised
+  server and a zombie;
+- `--no-supervise` is not even needed there (it stays for anyone running the CLI this way).
+
+▶ **What this needs, and none of it exists yet:**
+1. JNI bindings for `startFrontDoor`, `listenForHandoff`, `setHandoffRouter`, `setPathPrefix` —
+   `vibe_localsdr_jni.cpp` exposes none of them today.
+2. A `:frontdoor` foreground service. The manifest has no `android:process` anywhere yet.
+3. Kotlin: write `config.json` (radios[] of one) to filesDir, point `VIBESERVER_CONFIG` and
+   `VIBESERVER_RUNTIME_DIR` at it, start the radio in the MAIN process with `listenForHandoff`,
+   then start the front-door service.
+4. The GUI: the mode switch, the single radio, admin password, PIN, and the one button.
+
+★ The Mac keeps the exec'd-binary approach: it has no service model, no sandbox restriction, and
+`parent_watch.cpp` already guarantees the child dies with it. Two platforms, two mechanisms, ONE
+model — front door in one process, radio in another, routed over the hand-off socket.
 
 ▶ Do macOS first regardless: it proves the spawn-and-supervise path against the real front door
 with none of the sandbox questions, leaving Android's remaining unknowns narrow (fd hand-off and
