@@ -2321,12 +2321,23 @@ int main(int argc, char** argv) {
             // ★★ REAP FIRST. execve keeps our pid, so PR_SET_PDEATHSIG will NOT fire for the radio
             //    children — they would survive, keep their devices, and the fresh instance would
             //    fork a second set that could not open anything.
-            // ★ /proc/self/exe with the original argv: same binary, same flags, same --radio.
+            // ★ selfExePath() with the original argv: same binary, same flags, same --radio.
+            // ★★★ NOT "/proc/self/exe" — THAT DOES NOT EXIST ON macOS, and this was the second exec
+            //     site in this file. The first was fixed when Full mode came to the Mac;
+            //     THIS ONE WAS MISSED, so every settings save on a Mac stopped the server, failed
+            //     to bring it back, and left the setup page waiting for ever on "restarting"
+            //     (Stuart, 2026-08-11). The failure is invisible on Linux, which is exactly why
+            //     the sibling survived the first fix.
+            //     ★★ The repo's own rule, again: WHEN YOU FIX ONE, GREP FOR ITS SIBLINGS. Two
+            //        execs of the same binary, one fixed and one not, is the same shape as the
+            //        fftRate/clientBins twins and the nr/notch pair.
             if (!haveServiceManager()) {
                 reapRadios();
                 std::printf("No service manager here, so restarting myself.\n");
                 std::fflush(stdout);
-                execv("/proc/self/exe", g_argv);
+                const std::string me = selfExePath();
+                if (!me.empty()) execv(me.c_str(), g_argv);
+                execvp(g_argv[0], g_argv);        // last resort: PATH lookup
                 std::fprintf(stderr, "VibeServer: could not restart myself (%s) — "
                                      "start it again with: vibeserver --serve\n", strerror(errno));
             }

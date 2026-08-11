@@ -160,6 +160,8 @@ final class Server: ObservableObject {
     /// Two attached radios reporting the same serial cannot be told apart, so each one's settings
     /// could follow the other. Surfaced in the pane, as the TUI surfaces it in the wizard.
     @Published var fullSerialsCollide = false
+    /// Listeners across every radio, asked of the server itself — see startFullPolling().
+    @Published var fullListeners = 0
     /// The front door we spawned. Non-nil only while Full mode is serving.
     /// ★ Held so we can stop it: an orphaned front door keeps the radios (and the port), and the
     ///   next Start would fail with "address already in use" for no visible reason.
@@ -539,6 +541,51 @@ final class Server: ObservableObject {
         fullSerialsCollide = FullMode.serialsCollide
     }
 
+    /// ★★★ THE LISTENER COUNT IN FULL MODE — ASKED FOR, NOT INFERRED.
+    ///
+    /// vs_status() reports on the core running INSIDE this app, and in Full mode the server is a
+    /// separate process, so that struct stays empty however busy the receiver is. My first pass
+    /// simply said nothing rather than print a confident zero — right, but not good enough: Simple
+    /// mode shows the count and Full mode looked broken beside it (Stuart, 2026-08-11).
+    ///
+    /// ★★ So ASK THE SERVER. The front door publishes the radio list, and each radio's own
+    ///    /vibeserver.json carries its live listener count — which is the same route the web
+    ///    client takes, and the only honest one: the directory knows what EXISTS, and only each
+    ///    radio's own process knows who is listening to it.
+    /// ★ Every 5 s, not every second: it is two HTTP round trips per radio and a menu-bar number
+    ///   that is five seconds stale has never misled anyone.
+    private func startFullPolling() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.running, self.fullMode else { return }
+                let base = "http://127.0.0.1:\(self.port)"
+                guard let dirURL = URL(string: base + "/vibeserver/radios") else { return }
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: dirURL)
+                    let dir = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    let radios = (dir?["radios"] as? [[String: Any]]) ?? []
+                    var total = 0
+                    for r in radios {
+                        guard let id = r["id"] as? String,
+                              let u = URL(string: base + "/r/\(id)/vibeserver.json") else { continue }
+                        // ★ A radio that does not answer contributes NOTHING rather than failing the
+                        //   whole count — one down radio must not blank the number for the others.
+                        if let (d2, _) = try? await URLSession.shared.data(from: u),
+                           let j = try? JSONSerialization.jsonObject(with: d2) as? [String: Any] {
+                            total += (j["listeners"] as? Int) ?? 0
+                        }
+                    }
+                    self.fullListeners = total
+                    self.onChange?()
+                } catch {
+                    // The server is up (we started it) but not answering yet — leave the last
+                    // count rather than flashing a zero at the user.
+                }
+            }
+        }
+    }
+
     private func startFull() {
         lastError = nil
         guard let bin = FullMode.binaryURL,
@@ -593,6 +640,8 @@ final class Server: ObservableObject {
         frontDoor = p
         running = true
         port = wantedPort > 0 ? wantedPort : 48000
+        fullListeners = 0
+        startFullPolling()
         onChange?()
 
         // ★★ AND OPEN THE SETUP PAGE, because in Full mode everything except the radio, the
@@ -618,6 +667,8 @@ final class Server: ObservableObject {
         frontDoor = nil
         running = false
         port = 0
+        fullListeners = 0
+        timer?.invalidate(); timer = nil
         onChange?()
     }
 
@@ -1087,8 +1138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //     nothing is the honest answer; a confident wrong number is the one that gets
         //     believed. (Same rule as "no inferred hardware readouts".)
         if server.fullMode {
-            let n = server.fullRadios.filter { $0.serve }.count
-            return "Serving \(n) radio\(n == 1 ? "" : "s") on \(server.address)"
+            let r = server.fullRadios.filter { $0.serve }.count
+            let n = server.fullListeners
+            let who = n == 0 ? "nobody listening" : (n == 1 ? "1 listener" : "\(n) listeners")
+            return "Serving \(r) radio\(r == 1 ? "" : "s") on \(server.address) — \(who)"
         }
         let n = server.listeners
         let who = n == 0 ? "nobody listening" : (n == 1 ? "1 listener" : "\(n) listeners")
