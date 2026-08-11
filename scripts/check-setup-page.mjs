@@ -87,7 +87,11 @@ let bad = 0;
   const sp = paneCards('serverPane'), rp = paneCards('radioPane');
   if (sp === null || rp === null) { console.error('✗ a pane is missing entirely'); bad++; }
   else if (rp < 4) { console.error(`✗ the radio pane holds only ${rp} card(s) — the per-radio settings are not inside it`); bad++; }
-  else if (sp > 8) { console.error(`✗ the server pane holds ${sp} cards — it has swallowed the radio pane`); bad++; }
+  // ★ The ceiling is a "have the two panes merged?" guard, not a design limit — it catches an
+  //   unclosed <div> pulling the radio settings inside the server pane. Raise it when a card is
+  //   legitimately added, and say which one: 9 since the machine-wide Waterfall rate joined
+  //   (2026-08-11), which Simple mode had and Full mode was missing entirely.
+  else if (sp > 9) { console.error(`✗ the server pane holds ${sp} cards — it has swallowed the radio pane`); bad++; }
 }
 
 // 3. Every element the script reaches for by id must exist in the markup. This is the mistake

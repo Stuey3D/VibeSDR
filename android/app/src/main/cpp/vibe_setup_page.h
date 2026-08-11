@@ -220,6 +220,23 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            invited three answers to a question that has one, and three ways to get it wrong
            (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
 <div class="card">
+      <h2>Waterfall rate</h2>
+      <p class="why">Applies to every radio on this machine.</p>
+      <!-- ★ THE ONE SETTING SIMPLE MODE HAD AND FULL DID NOT. The Mac's Simple pane has offered
+           this since it shipped; moving everything else to the browser left it behind, so a Full
+           mode owner had no way to cap the rate at all (Stuart, 2026-08-11). -->
+      <label><span class="lbl">Ceiling</span>
+        <select id="maxFps">
+          <option value="0">Full &middot; 20 fps</option>
+          <option value="10">Half &middot; 10 fps</option>
+          <option value="5">Quarter &middot; 5 fps</option>
+        </select>
+        <div class="hint">A CEILING, not a lock: a listener may still choose a slower waterfall,
+          they just cannot go above this. Halving it roughly halves what this machine sends —
+          worth doing on a metered connection, or where several people share one uplink.</div></label>
+    </div>
+
+    <div class="card">
       <h2>Power saving</h2>
         <p class="why">Applies to every radio on this machine.</p>
       <p class="why">Applies in both modes.</p>
@@ -1320,6 +1337,7 @@ function fill() {
   // ★ Blank rather than 48000 when unset, so the placeholder can say what the default IS. Filling
   //   the box with the default makes it look like a deliberate choice the owner made.
   $("srvPort").value = cfg.port > 0 ? cfg.port : "";
+  $("maxFps").value = String(cfg.maxFps || 0);
   renderPortHint();
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
@@ -1453,6 +1471,7 @@ function collect() {
     // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
     //   out as a port and the server would fail to bind with nothing to point at.
     port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
+    maxFps: parseFloat($("maxFps").value) || 0,
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
 }

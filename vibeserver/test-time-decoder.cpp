@@ -305,6 +305,39 @@ int main() {
         ok(d.secondNow() >= 0, "RWM: but it IS counting second markers (that is the useful part)");
     }
 
+    // ── RWM's Morse callsign ────────────────────────────────────────────────
+    // ★★ THE ONLY THING RWM SENDS THAT PROVES IT IS BEING HEARD. Without it the panel can say
+    //    only "counting markers", which is indistinguishable from counting noise.
+    // ★ Keyed at 20 wpm (60 ms dot). R = .-. , W = .-- , M = --
+    {
+        std::vector<int16_t> m;
+        const double U = 60.0;                         // one dot
+        auto key = [&](const char* code) {
+            for (const char* c = code; *c; c++) {
+                emit(m, *c == '-' ? U * 3 : U, 1.0);   // mark: carrier keyed ON
+                emit(m, U, 0.0);                       // gap between elements
+            }
+            emit(m, U * 2, 0.0);                       // rest of the letter gap (3 units total)
+        };
+        emit(m, 2000.0, 0.0);
+        for (int rep = 0; rep < 3; rep++) {            // "RWM RWM RWM"
+            key(".-."); key(".--"); key("--");
+            emit(m, U * 4, 0.0);                       // word gap
+        }
+        TimeDecoder d(SR, TimeDecoder::Station::RWM);
+        std::string heard;
+        d.onMorse = [&](char c) { heard += c; };
+        d.process(m.data(), (int)m.size());
+        std::printf("    heard: \"%s\"\n", heard.c_str());
+        // ★ The FIRST character is often mangled and that is expected, not a defect: the envelope
+        //   thresholds are still adapting when it arrives, so the leading element can be missed
+        //   ("NWMRWMRW" — N for R, then clean). The assertion is that the callsign APPEARS, not
+        //   that every repetition is perfect; demanding the latter would be demanding the decoder
+        //   be right before it has heard anything.
+        ok(heard.find("RWM") != std::string::npos,
+           "★★★ RWM: the Morse callsign is decoded off the envelope");
+    }
+
     // ── Pure noise must produce NOTHING ─────────────────────────────────────
     {
         std::vector<int16_t> junk;

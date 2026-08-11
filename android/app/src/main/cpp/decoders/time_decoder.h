@@ -98,6 +98,21 @@ public:
         int  second = -1;      ///< how far through the minute we are
     };
     std::function<void(const Partial&)> onPartial;
+    /** ★★★ RWM's MORSE CALLSIGN — the only thing it transmits that PROVES it is being heard.
+     *
+     *  RWM sends no timecode, so without this the panel can only ever say "counting markers",
+     *  which is indistinguishable from counting noise. Decoding "RWM" out of the air is the
+     *  difference between "something is ticking" and "this is Moscow".
+     *
+     *  ★★ CHEAP HERE, EXPENSIVE IN GENERAL — and that distinction is the whole reason it is worth
+     *     doing. What makes a CW decoder costly is the TONE TRACKING: Goertzel or FFT bins, an
+     *     adaptive threshold, and speed estimation. This decoder already computes an envelope
+     *     follower for the second markers, so dot/dash lengths come off a signal we are producing
+     *     anyway — a handful of comparisons per second, no new DSP stage. A general-purpose CW
+     *     decoder for arbitrary signals is the expensive one (Stuart: "we tried a while back and
+     *     it was CPU intensive").
+     *  ★ Emitted per decoded character, so the panel fills in as it is heard. */
+    std::function<void(char)> onMorse;
 
     // ── Health, in the same spirit as FskDecoder's ───────────────────────────
     /** Carrier-to-noise as the decoder sees it, in dB: the difference between the "on" and "off"
@@ -159,6 +174,17 @@ private:
     long long lastStamp_ = 0;
     /** WWV: the minute is two position markers in a row, so the previous symbol matters. */
     bool lastWasMarker_ = false;
+
+    // ── RWM's Morse identifier ───────────────────────────────────────────────
+    // ★ A dot/dash classifier over the SAME envelope the markers use. `unitMs_` adapts to the
+    //   sending speed rather than assuming one, because RWM's ID is keyed by the station and its
+    //   speed is not ours to assume.
+    double morseUnitMs_ = 60.0;      ///< current estimate of one dot
+    std::string morseSym_;           ///< dots and dashes of the character being built
+    double morseSilenceMs_ = 0;      ///< how long since the last mark ended
+    void   morseMark(double onMs);
+    void   morseGap(double offMs);
+    void   morseFlush();
 };
 
 }  // namespace vibe

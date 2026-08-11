@@ -149,6 +149,10 @@ void TimeDecoder::process(const int16_t* samples, int count) {
         if (wasDip && !inDip_) {
             const double dipMs = dipSamples_ * 1000.0 / sr_;
             dipSamples_ = 0;
+            // ★★ RWM's callsign, off the SAME envelope. In CW the ID keys the carrier ON, so a
+            //    MARK is a gap between dips and the dip we have just measured is the SILENCE
+            //    after it — which is exactly the pair the Morse timer needs.
+            if (station_ == Station::RWM) { morseMark(gapBeforeMs_); morseGap(dipMs); }
             onSecondEdge(dipMs, gapBeforeMs_);
         }
 
@@ -286,6 +290,9 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         if (second_ < 0) { second_ = 0; setState(State::Reading); }
         else second_ = (second_ + 1) % 60;
         if (onBit) onBit(second_, 1);
+        // ★ Still report progress: RWM has no minute to decode, but the host uses this tick to
+        //   flush any callsign heard — and a panel with no heartbeat looks dead.
+        emitPartial();
         return;                                   // never falls through to a minute decode
     } else {
         // ── DCF77 ────────────────────────────────────────────────────────────
@@ -401,6 +408,61 @@ void TimeDecoder::emitPartial() {
             break;      // nothing to fill in — it carries no timecode
     }
     onPartial(p);
+}
+
+
+// ── RWM's Morse identifier ───────────────────────────────────────────────────
+//
+// ★★ A DOT IS SHORTER THAN A DASH, AND THAT IS ALL WE ASSUME. The unit length adapts to what is
+//    actually being sent: every mark nudges the estimate towards a dot (if it looks like one) or a
+//    third of a dash (if it looks like one), so the decoder follows the operator's speed instead of
+//    demanding a fixed one. RWM's ID is keyed at the station and its speed is not ours to assume.
+// ★ Standard proportions: dash = 3 units, letter gap = 3, word gap = 7.
+
+namespace {
+/** Morse table, longest-first is unnecessary — the symbol string is an exact key. */
+const char* morseFor(const std::string& sym) {
+    struct E { const char* code; const char* ch; };
+    static const E kTable[] = {
+        {".-","A"},{"-...","B"},{"-.-.","C"},{"-..","D"},{".","E"},{"..-.","F"},{"--.","G"},
+        {"....","H"},{"..","I"},{".---","J"},{"-.-","K"},{".-..","L"},{"--","M"},{"-.","N"},
+        {"---","O"},{".--.","P"},{"--.-","Q"},{".-.","R"},{"...","S"},{"-","T"},{"..-","U"},
+        {"...-","V"},{".--","W"},{"-..-","X"},{"-.--","Y"},{"--..","Z"},
+        {"-----","0"},{".----","1"},{"..---","2"},{"...--","3"},{"....-","4"},
+        {".....","5"},{"-....","6"},{"--...","7"},{"---..","8"},{"----.","9"},
+        {"-..-.","/"},{"-...-","="},{".-.-.","+"},
+    };
+    for (const auto& e : kTable) if (sym == e.code) return e.ch;
+    return nullptr;
+}
+}  // namespace
+
+void TimeDecoder::morseMark(double onMs) {
+    if (onMs < 15.0 || onMs > 2000.0) return;          // noise spike, or a marker pulse
+    // Classify against the current unit, then let it adapt towards what we just saw.
+    const bool dash = onMs > morseUnitMs_ * 2.0;
+    morseSym_ += dash ? '-' : '.';
+    const double impliedUnit = dash ? onMs / 3.0 : onMs;
+    morseUnitMs_ += 0.25 * (impliedUnit - morseUnitMs_);
+    if (morseUnitMs_ < 20.0)  morseUnitMs_ = 20.0;     // 60 wpm
+    if (morseUnitMs_ > 240.0) morseUnitMs_ = 240.0;    // 5 wpm
+    morseSilenceMs_ = 0;
+}
+
+void TimeDecoder::morseGap(double offMs) {
+    if (morseSym_.empty()) return;
+    // ★ A gap of three units ends the CHARACTER. Anything shorter is the space between a dot and
+    //   a dash inside one, which must not break it up.
+    if (offMs >= morseUnitMs_ * 2.0) morseFlush();
+}
+
+void TimeDecoder::morseFlush() {
+    if (morseSym_.empty()) return;
+    const char* ch = morseFor(morseSym_);
+    morseSym_.clear();
+    // ★ Unrecognised patterns are DROPPED, not guessed at. On a fading HF signal most rubbish is
+    //   rubbish, and a decoder that emits its best guess turns a clean "RWM" into noise.
+    if (ch && onMorse) onMorse(ch[0]);
 }
 
 bool TimeDecoder::decodeMinute(TimeStamp& out) const {

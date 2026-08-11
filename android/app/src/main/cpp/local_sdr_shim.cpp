@@ -1761,6 +1761,7 @@ struct LocalSdrShim::Impl {
     SstvDecoder* sstv = nullptr;
     /** MSF / DCF77 time signals. Audio-path like the rest — see decoders/time_decoder.h. */
     TimeDecoder* timeDec = nullptr;
+    std::string  morseWord_;                ///< RWM's callsign, accumulated for display
     int  sstvDecim = 0; float sstvAcc = 0.0f;
     std::mutex dxSendMtx;
     std::shared_ptr<net::Socket> dxClient;
@@ -7658,6 +7659,10 @@ struct LocalSdrShim::Impl {
         //        come out wrong says exactly where the framing slipped, which a pass/fail at the
         //        end of the minute never could.
         timeDec->onPartial = [this, name](const TimeDecoder::Partial& p) {
+            // ★ Flush any callsign heard in the last second, so it appears as it is sent rather
+            //   than only once a buffer fills.
+            { std::lock_guard<std::mutex> bl(decBufMtx);
+              if (morseWord_.size() >= 3) { decTextBuf += "RWM ID: " + morseWord_ + "\n"; morseWord_.clear(); } }
             char buf[200];
             char yy[8], mo[4], dd[4], hh[4], mi[4];
             std::snprintf(yy, sizeof(yy), p.year  ? "%04d" : "----", p.t.year);
@@ -7681,6 +7686,14 @@ struct LocalSdrShim::Impl {
             std::lock_guard<std::mutex> bl(decBufMtx);
             decTextBuf += buf;
         };
+        // ★★ RWM's CALLSIGN, which is the only proof it is being heard. Buffered into a word and
+        //    flushed on a pause, so the panel shows "RWM" rather than one letter per line.
+        timeDec->onMorse = [this](char c) {
+            std::lock_guard<std::mutex> bl(decBufMtx);
+            morseWord_ += c;
+            if (morseWord_.size() >= 24) { decTextBuf += "RWM ID: " + morseWord_ + "\n"; morseWord_.clear(); }
+        };
+
         // ★★ SAY UP FRONT WHEN THERE IS NOTHING TO WAIT FOR. RWM transmits markers and a Morse
         //    callsign and NO timecode, so a panel that sat there "reading the minute" for ever
         //    would look broken when it was working perfectly. Tell the user what it can do.
