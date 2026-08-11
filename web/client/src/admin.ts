@@ -545,7 +545,54 @@ function renderClientMix(list: any[]) {
 let connPage = 0;
 const CONNS_PER_PAGE = 100;
 
-function renderConns(list: any[]) {
+/** ★★★ ONE ROW PER VISIT, LISTING EVERY RADIO THEY TRIED.
+ *
+ *  A visitor who looks at two receivers is ONE person having a look round, not two connections —
+ *  but each radio is its own process and logs its own row, so the table showed them twice. Now
+ *  that a visit carries one session id across radios (see visitSessionId in main.ts), those rows
+ *  can be folded back into the single event they describe.
+ *
+ *  Stuart, 2026-08-11: "if I go into the Airspy and then use the back button and then switch to
+ *  the SDRPlay that should only count 1 session… also if they do use multiple radios then show
+ *  both."
+ *
+ *  ★★ SPAN, NOT SUM. The duration shown is first-open to last-close, because that is how long the
+ *     person was here; adding the per-radio durations would double-count the moment they overlap
+ *     and would read as longer than the visit actually was.
+ *  ★★ ROWS WITH NO SESSION ID ARE NEVER GROUPED. Those are refusals logged before a session
+ *     existed, and two of them from one address are two events — that is what a scan looks like,
+ *     and folding them together would hide exactly what the log is for.
+ *  ★ Radios are listed in the order they were VISITED, deduped: "Airspy HF+ → SDRplay RSP1B"
+ *    tells a story that a set of labels does not.
+ */
+function groupVisits(list: any[]): any[] {
+  const bySession = new Map<string, any>();
+  const out: any[] = [];
+  for (const c of list) {
+    const sess = String(c.session || '');
+    if (!sess) { out.push({ ...c, radios: c.radio ? [c.radio] : [] }); continue; }
+    const had = bySession.get(sess);
+    if (!had) {
+      const v = { ...c, radios: c.radio ? [c.radio] : [] };
+      bySession.set(sess, v);
+      out.push(v);
+      continue;
+    }
+    had.at = Math.min(had.at || 0, c.at || 0);
+    // ★ A still-open leg (end 0) wins: the visit is LIVE, however many closed legs precede it.
+    had.end = (!had.end || !c.end) ? 0 : Math.max(had.end, c.end);
+    had.bytes = (had.bytes || 0) + (c.bytes || 0);
+    // The most recent ending is the one worth showing — "banned" after two clean legs is the news.
+    if (c.end && c.end >= (had.end || 0)) had.reason = c.reason;
+    if (c.radio && !had.radios.includes(c.radio)) had.radios.push(c.radio);
+    if (!had.agent && c.agent) had.agent = c.agent;
+    if (!had.cc && c.cc) had.cc = c.cc;
+  }
+  return out;
+}
+
+function renderConns(raw: any[]) {
+  const list = groupVisits(raw);
   renderClientMix(list);
   const tb = $('adminConns').querySelector('tbody')!;
   $('adminNoConns').hidden = list.length > 0;
@@ -568,7 +615,10 @@ function renderConns(list: any[]) {
         (b as HTMLButtonElement).onclick = () => {
           connPage += b.getAttribute('data-conn') === 'next' ? 1 : -1;
           connPage = Math.max(0, Math.min(pages - 1, connPage));
-          renderConns(list);
+          // ★ RE-RENDER FROM THE RAW LIST, not the grouped one. Grouping is not idempotent —
+          //   a second pass would reset each visit's `radios` to the single `radio` it was built
+          //   from, so paging through the log would quietly lose the second receiver.
+          renderConns(raw);
         };
       });
     }
@@ -584,7 +634,7 @@ function renderConns(list: any[]) {
            (see the per-radio log path in main.cpp) and is worth showing now that it is true.
            ★ Stuart wanted it to see which radio is the most popular — so it is a plain label, not
              an id: a column of hex would answer nothing at a glance. -->
-      <td class="cRadio">${esc(c.radio || '—')}</td>
+      <td class="cRadio">${esc((c.radios && c.radios.length ? c.radios.join(' \u2192 ') : c.radio) || '—')}</td>
       <td>${live ? '<span class="dim">now</span>' : esc(dur(c.end - c.at))}</td>
       <td class="why-${esc(c.reason || '')}">${live ? '<span class="dim">connected</span>'
                                                     : esc(c.reason || '—')}</td>

@@ -50,6 +50,14 @@ deps_for() {
 pass=0; fail=0; broke=0
 for t in "$SRC"/test-*.cpp; do
   name="$(basename "$t" .cpp)"
+  # ★ Not every test fits this harness. It compiles ONE .cpp with a named handful of deps, which is
+  #   what keeps it fast and dependency-free — but a test that needs the whole core (real drivers,
+  #   the shim, opus, fftw) cannot be expressed that way and is a CMake target instead. Listing it
+  #   here rather than renaming it keeps it discoverable beside its siblings.
+  #     test-radio-api — links vibeserver_core; built by `cmake --build … --target test-radio-api`.
+  case "$name" in
+    test-radio-api) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
+  esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
   # shellcheck disable=SC2046
   if ! g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for "$name") \
@@ -70,6 +78,9 @@ if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1
 #   this catches — one radio's sample rate landing in another's config during a tab switch — is
 #   perfectly valid JavaScript and perfectly well-formed HTML.
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
+#   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
+if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build\033[0m\n' "$pass" "$fail" "$broke"
 [ "$fail" -eq 0 ] && [ "$broke" -eq 0 ]
