@@ -566,10 +566,14 @@ export default function TunerScreen({ route, navigation }: Props) {
     if (!logoName || key === lastLogoName.current) return;
     lastLogoName.current = key;
     setLogo(null);
-    resolveStationLogo({ pi: st?.pi, name: logoName, iso: logoIso || undefined }).then((url) => {
+    // ★ Frequency too — RadioDNS keys on the BEARER (PI + ECC + frequency), and the FM-DX tuner
+    //   has it to hand. Same identity-first lookup the local-hardware screen uses.
+    resolveStationLogo({
+      pi: st?.pi, name: logoName, iso: logoIso || undefined, freqHz: st?.freqHz || undefined,
+    }).then((url) => {
       if (!destroyed.current && lastLogoName.current === key) setLogo(url);
     });
-  }, [logoName, logoIso]);
+  }, [logoName, logoIso, st?.freqHz]);
 
   // Inlay the resolved station logo on the lock-screen artwork.
   useEffect(() => { (VibePowerModule as any)?.setStationLogo?.(logo ?? ''); }, [logo]);

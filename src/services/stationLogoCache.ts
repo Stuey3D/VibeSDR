@@ -8,7 +8,8 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { lookupStationLogo } from './stationLogo';
-import { receiverIso } from './rdsCountry';
+import { radioDnsLogo } from './radiodns';
+import { receiverIso, eccForIso } from './rdsCountry';
 
 const DIR = FileSystem.documentDirectory + 'stationlogos/';
 const INDEX_KEY = 'lsv_logo_cache_v1';
@@ -66,9 +67,20 @@ async function refresh(key: string, name: string, iso?: string): Promise<void> {
  *  2. Not cached → online radio-browser lookup, download, cache by PI.
  *  3. Offline + not cached → null (caller shows a monogram, no placeholder).
  */
-export async function resolveStationLogo(opts: { pi?: string; name: string; iso?: string }): Promise<string | null> {
-  const { pi, name, iso } = opts;
-  if (!name) return null;
+export async function resolveStationLogo(
+  opts: { pi?: string; name: string; iso?: string; ecc?: string; freqHz?: number },
+): Promise<string | null> {
+  const { pi, name, iso, ecc, freqHz } = opts;
+  // ★★★ A NAME IS NOT AN IDENTITY, AND A WRONG LOGO LOCKS. The cache is keyed on the PI — right,
+  //     because the PS rotates — so whatever lands first is kept until the PI changes. One bad PS
+  //     decode ("BBC R1" is two bits from "BBC R3") therefore sticks for good, which is exactly
+  //     what Stuart photographed on 2026-08-11: a weak Radio 3 wearing the Radio 1 roundel.
+  //     ▶ So ask RadioDNS FIRST, which is keyed on the PI + ECC + frequency the transmitter
+  //       error-protects, and returns the broadcaster's OWN artwork. The name search stays as the
+  //       fallback for the many stations that publish no SPI at all (Heart, FLEX — verified).
+  //     ★ This is the app's PRIMARY case, not an edge one: driving local hardware there is no
+  //       server to ask, so the in-app lookup is the only route to identity-keyed artwork.
+  if (!name && !(pi && ecc && freqHz)) return null;
   const key = keyFor(pi, iso);
   const idx = await loadIndex();
 
@@ -82,7 +94,15 @@ export async function resolveStationLogo(opts: { pi?: string; name: string; iso?
     delete idx[key];   // file vanished — fall through to re-fetch
   }
 
-  const url = await lookupStationLogo(name, iso, receiverIso() || undefined);
+  // ★ Identity first, name second. Both are cached under the same PI key, so a station that
+  //   publishes an SPI is looked up once and then comes off disk — offline included.
+  let url = '';
+  // ★ The ECC is derived from the country when the station did not transmit one — which is most
+  //   of them. See eccForIso: it is a table lookup against an ISO that has already been validated,
+  //   not an assumption about where the signal came from.
+  const gccEcc = ecc || eccForIso(iso, pi);
+  if (pi && gccEcc && freqHz) url = await radioDnsLogo(pi, gccEcc, freqHz).catch(() => '');
+  if (!url && name) url = (await lookupStationLogo(name, iso, receiverIso() || undefined)) || '';
   if (!url) return null;
   if (key) {
     const path = await download(url, key);

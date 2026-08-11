@@ -69,6 +69,35 @@ export function eccPiToIso(ecc?: number, pi?: string): string {
 }
 
 /**
+ * The ECC that a station's ISO country and PI nibble imply — the reverse of eccPiToIso.
+ *
+ * ★★★ NEEDED BECAUSE MOST STATIONS NEVER TRANSMIT AN ECC. It rides in group 1A, which many
+ *     encoders simply do not send, and the RadioDNS FQDN cannot be built without it: the GCC is
+ *     the PI's country nibble FOLLOWED BY THE ECC. A logo lookup gated on a transmitted ECC would
+ *     therefore almost never fire — the same reason the flag used to be blank nearly always.
+ * ★★ This is a LOOKUP, NOT A GUESS, and it is exactly as safe as the country it is given: the ISO
+ *    passed in has already been resolved (and, when no ECC was transmitted, VALIDATED against the
+ *    receiver's own country by resolveStationIso). Given that country and the PI nibble, the ECC
+ *    is whichever table row puts that country at that nibble — one answer or none.
+ * ★ Ambiguity is possible in principle (a country appearing at the same nibble in two rows), and
+ *   the answer there is to return nothing rather than pick: a wrong GCC resolves to no station,
+ *   which is indistinguishable from "not in RadioDNS" and would send the next person hunting.
+ */
+export function eccForIso(iso?: string, pi?: string): string {
+  if (!iso || !pi) return '';
+  const nibble = parseInt(pi[0], 16);
+  if (!(nibble >= 1 && nibble <= 15)) return '';
+  const want = iso.toUpperCase();
+  let found = '';
+  for (const [ecc, row] of Object.entries(ECC_CC_ISO)) {
+    if ((row[nibble - 1] || '').toUpperCase() !== want) continue;
+    if (found) return '';                      // two rows claim it — say nothing
+    found = ecc;
+  }
+  return found;
+}
+
+/**
  * The RECEIVER's country, set per session.
  *
  * Needed to validate a PI country nibble (see resolveStationIso). It must be the

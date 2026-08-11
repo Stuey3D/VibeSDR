@@ -4799,10 +4799,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     lastLiveLogoKey.current = key;
     if (!name) { setLiveLogo(null); return; }
     setLiveLogo(null);
-    resolveStationLogo({ pi: liveStation.pi, name, iso: iso || undefined }).then((url) => {
+    // ★ The FREQUENCY goes with the PI, because RadioDNS is keyed on the BEARER — one PI can be
+    //   on several transmitters and the SPI lists each by frequency. Without it the identity
+    //   lookup cannot run at all and we are back to matching on a name that may be wrong.
+    resolveStationLogo({
+      pi: liveStation.pi, name, iso: iso || undefined, freqHz: status.frequency || undefined,
+    }).then((url) => {
       if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
     });
-  }, [liveStation.name, liveStation.countryIso, liveStation.pi]);
+  }, [liveStation.name, liveStation.countryIso, liveStation.pi, status.frequency]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
