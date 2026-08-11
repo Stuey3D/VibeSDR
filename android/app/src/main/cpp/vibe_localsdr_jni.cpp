@@ -542,3 +542,95 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv*, jobject, jbyteArray,
     return nullptr;   // no encoder in this build either — the client will not ask for Opus
 }
 #endif
+
+// ─── FULL MODE: the front door, and the hand-off it routes to ────────────────────────────────
+//
+// ★★★ THE APP IS THE RADIO AND THE CHILD IS THE FRONT DOOR — the arrangement is INVERTED relative
+//     to Linux, and that is what makes Full mode possible on Android at all. The obvious port (app
+//     spawns a front door, front door forks a radio) hits the one genuinely Android-shaped
+//     problem: the radio is opened by KOTLIN via UsbManager, and a child process cannot call
+//     UsbManager, so the descriptor would have to cross a process boundary — which it cannot
+//     (Android closes all but 0/1/2 across a spawn).
+//     ▶ It never has to. THE FRONT DOOR OWNS NO RADIO. So the app process keeps the USB fd and
+//       goes on serving exactly as Simple mode does today, additionally accepting handed-over
+//       connections; the separate `:frontdoor` process binds the public port and owns no device,
+//       no permission, no libusb. The hardest unknown is removed rather than solved.
+//
+// ★★ Which process calls what:
+//       main (the radio)   nativeListenForHandoff(<dir>/<serial>.sock) + nativeSetPathPrefix("/r/<id>")
+//       :frontdoor         nativeStartFrontDoor(port) + nativeSetHandoffRoute(<dir>, <serial>, <id>)
+//    They share nothing but the socket path, which is why the front door needs no JNI callback
+//    into Kotlin and cannot be blocked by the main process being killed.
+
+// Accept connections handed over by the front door. Call AFTER the server is running: the
+// listener attaches its thread to a live server, and registering it earlier fails with "server
+// not running" — quietly, leaving the radio unreachable through the door while it looks healthy
+// on its own port (the Pi hit exactly this on 2026-08-08).
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeListenForHandoff(JNIEnv* env, jobject, jstring sockPath) {
+    const char* p = sockPath ? env->GetStringUTFChars(sockPath, nullptr) : nullptr;
+    std::string err;
+    const bool ok = vibe::LocalSdrShim::listenForHandoff(p ? p : "", err);
+    if (p) env->ReleaseStringUTFChars(sockPath, p);
+    if (ok) { LOGI("hand-off listener up"); return nullptr; }
+    LOGE("listenForHandoff failed: %s", err.c_str());
+    return env->NewStringUTF(err.c_str());
+}
+
+// Our own "/r/<id>" prefix, stripped from arriving requests so every route keeps matching bare
+// paths. `alt` is the serial form, still accepted so older links keep working.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetPathPrefix(JNIEnv* env, jobject,
+                                                      jstring prefix, jstring alt) {
+    const char* p = prefix ? env->GetStringUTFChars(prefix, nullptr) : nullptr;
+    const char* a = alt ? env->GetStringUTFChars(alt, nullptr) : nullptr;
+    vibe::LocalSdrShim::setPathPrefix(p ? p : "", a ? a : "");
+    if (p) env->ReleaseStringUTFChars(prefix, p);
+    if (a) env->ReleaseStringUTFChars(alt, a);
+}
+
+// Start the front door: a server that owns NO radio. Returns the port, or -1.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStartFrontDoor(JNIEnv*, jobject, jint port) {
+    std::string err;
+    const int p = vibe::LocalSdrShim::startFrontDoor(port, err);
+    if (p < 0) LOGE("startFrontDoor failed: %s", err.c_str());
+    else       LOGI("front door listening on %d", p);
+    return p;
+}
+
+/**
+ * Teach the front door where the one radio lives.
+ *
+ * ★★★ ANDROID IS CAPPED AT ONE RADIO, so the router is a fixed mapping rather than the config
+ *     lookup the Pi does — and it is written in C++ rather than as a JNI callback into Kotlin ON
+ *     PURPOSE: this runs on the accept path of every request, and calling up into a managed
+ *     runtime there would need a thread attach per connection and would put the front door's
+ *     latency at the mercy of the garbage collector.
+ * ★★ "" means ANSWER HERE — the landing page, the radio list, setup and admin all belong to the
+ *    door itself. Only paths naming the radio are handed over.
+ * ★ Both forms of the prefix are accepted, id and serial, matching setPathPrefix above.
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetHandoffRoute(JNIEnv* env, jobject,
+                                                        jstring dir, jstring serial, jstring id) {
+    const char* d = dir ? env->GetStringUTFChars(dir, nullptr) : nullptr;
+    const char* s = serial ? env->GetStringUTFChars(serial, nullptr) : nullptr;
+    const char* i = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
+    const std::string sock = std::string(d ? d : "") + "/" + std::string(s ? s : "") + ".sock";
+    const std::string byId = "/r/" + std::string(i ? i : "");
+    const std::string bySerial = "/r/" + std::string(s ? s : "");
+    if (d) env->ReleaseStringUTFChars(dir, d);
+    if (s) env->ReleaseStringUTFChars(serial, s);
+    if (i) env->ReleaseStringUTFChars(id, i);
+
+    vibe::LocalSdrShim::setHandoffRouter([sock, byId, bySerial](const std::string& path) -> std::string {
+        // ★★ The spectrogram and the measured band conditions are read off a live wide FFT, which
+        //    the door does not have — they go to the radio, exactly as on the Pi.
+        if (path.rfind("/vibeserver/spectrogram", 0) == 0 ||
+            path.rfind("/vibeserver/conditions", 0) == 0) return sock;
+        if (path.rfind(byId, 0) == 0 || path.rfind(bySerial, 0) == 0) return sock;
+        return "";                       // everything else the front door answers itself
+    });
+    LOGI("hand-off route: %s -> %s", byId.c_str(), sock.c_str());
+}

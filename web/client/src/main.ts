@@ -523,6 +523,15 @@ function initAdminUnlock() {
 
 async function doAdminUnlock(pw: string) {
   if (adminUnlocked || !pw) return;
+  return sendAdminUnlock(pw);
+}
+
+/**
+ * Prove admin to the SERVER. Separate from doAdminUnlock's guard on purpose — see the reconnect
+ * caller below, which must be able to re-prove while the UI already believes we are admin.
+ */
+async function sendAdminUnlock(pw: string) {
+  if (!pw) return;
   try {
     // ★ The same challenge-response the PIN uses, and the same nonce endpoint. The password
     // never crosses the wire, and reusing the scheme means it inherits the server's existing
@@ -1010,7 +1019,26 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // Server-side settings live on the SERVER, so restoring the sliders isn't
       // enough — they have to be re-sent, or the UI shows values the radio isn't
       // actually using. Also covers reconnects, where the shim starts fresh.
-      if (s === 'open') pushSettingsToServer();
+      if (s === 'open') {
+        pushSettingsToServer();
+        // ★★★ ADMIN LIVES IN THE SERVER PROCESS, AND THE CLIENT'S BELIEF OUTLIVES IT.
+        //
+        //     `adminOk` is per-process state on the server, so a RESTART clears it — and every
+        //     settings save restarts the server. The page went on showing ADMIN MODE, because
+        //     that flag is ours, so the session countdown stayed hidden while the server had
+        //     quietly demoted us to an ordinary listener. The limit then expired against someone
+        //     who believed they were exempt, with no countdown to warn them: booted mid-listen,
+        //     dropped back to the landing frequency, and then held on the cooldown that follows a
+        //     timeout (Stuart, 2026-08-11, on the public demo — "I was already in admin mode, I
+        //     shouldn't have hit a time limit", "there was no countdown clock").
+        //     ★★ So RE-PROVE IT ON EVERY OPEN, not once per sign-in. This is the same family as
+        //        the reconnect that re-attached decoders without their parameters, and as the
+        //        settings above: whatever the server forgets across a restart, the client must
+        //        say again. A credential we still hold costs one message to re-present.
+        //     ★ Only when we hold the password. The splash's admin TICKET rides on the connect
+        //       URL and is therefore re-presented by the reconnect itself.
+        if (adminUnlocked && adminPassword) void sendAdminUnlock(adminPassword);
+      }
     },
     onRtt: (ms) => { rtt = ms; },
     onBytes: (n) => { specBytes += n; },

@@ -131,6 +131,44 @@ object VibeLocalSDR {
     }
     private external fun nativeOpusDecode(packet: ByteArray, rate: Int, channels: Int): ShortArray?
 
+    // ─── FULL MODE ────────────────────────────────────────────────────────────────────────
+    //
+    // ★★★ THE APP IS THE RADIO; THE CHILD PROCESS IS THE FRONT DOOR. Inverted relative to Linux,
+    //     because the radio is opened by Kotlin through UsbManager and a child process cannot
+    //     call UsbManager — so on the obvious arrangement the USB descriptor would have to cross
+    //     a process boundary, which Android does not allow (all but 0/1/2 are closed).
+    //     ▶ The front door owns no radio, so it never needs one. This process keeps the device
+    //       and serves it exactly as Simple mode does; the `:frontdoor` service binds the public
+    //       port and hands connections back here over a unix socket.
+    //
+    // ★★ Which side calls which is not interchangeable:
+    //      THIS process   listenForHandoff() + setPathPrefix()
+    //      :frontdoor     startFrontDoor()   + setHandoffRoute()
+
+    /** Accept connections handed over by the front door. Returns null on success, or the reason.
+     *
+     *  ★★★ CALL IT AFTER THE SERVER IS RUNNING. The listener attaches to a live server, and
+     *      registering it earlier fails with "server not running" — quietly, leaving the radio
+     *      unreachable through the door while it looks perfectly healthy on its own port. The Pi
+     *      shipped exactly that bug on 2026-08-08. */
+    fun listenForHandoff(socketPath: String): String? { ensureLoaded(); return nativeListenForHandoff(socketPath) }
+    private external fun nativeListenForHandoff(socketPath: String): String?
+
+    /** Our own "/r/<id>" prefix, stripped from arriving requests so every route keeps matching
+     *  bare paths. `alt` is the serial form, still accepted so older links keep working. */
+    fun setPathPrefix(prefix: String, alt: String = "") { ensureLoaded(); nativeSetPathPrefix(prefix, alt) }
+    private external fun nativeSetPathPrefix(prefix: String, alt: String)
+
+    /** Start a server that owns NO radio. Returns the port, or -1. Call in the :frontdoor process
+     *  ONLY — in the main process it would bind the port the radio is already using. */
+    fun startFrontDoor(port: Int): Int { ensureLoaded(); return nativeStartFrontDoor(port) }
+    private external fun nativeStartFrontDoor(port: Int): Int
+
+    /** Tell the front door where the one radio lives. Android is capped at one radio, so this is
+     *  a fixed mapping rather than the config lookup the Pi does. */
+    fun setHandoffRoute(dir: String, serial: String, id: String) { ensureLoaded(); nativeSetHandoffRoute(dir, serial, id) }
+    private external fun nativeSetHandoffRoute(dir: String, serial: String, id: String)
+
     /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
      *  Call before startSpectrum(). */
     fun setServeOnLan(on: Boolean) { ensureLoaded(); nativeSetServeOnLan(on) }

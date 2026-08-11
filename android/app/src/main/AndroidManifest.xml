@@ -15,6 +15,9 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <!-- RTL-TCP server: connectedDevice FGS + wake lock (keep USB/TCP stream alive screen-off) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+  <!-- ★ The FRONT DOOR is deliberately the process with NO device, so it cannot claim
+       connectedDevice: it binds a port and routes. dataSync is what that is. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.INTERNET"/>
@@ -67,6 +70,15 @@
                  android:resource="@xml/device_filter"/>
     </activity>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
+    <!-- ★★★ FULL MODE'S FRONT DOOR, IN ITS OWN PROCESS. `android:process` makes this a real
+         Android component rather than a forked binary the OS does not track: foregroundable,
+         restartable, START_STICKY. It gets its own copy of the shim's globals, which is required
+         and not incidental — one address space holding both a radio and a front door would have
+         the door answering as the radio. It owns no USB device by design. -->
+    <service android:name=".FrontDoorService"
+             android:process=":frontdoor"
+             android:foregroundServiceType="dataSync"
+             android:exported="false"/>
     <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>
         <action android:name="android.media.browse.MediaBrowserService"/>

@@ -7045,11 +7045,45 @@ struct LocalSdrShim::Impl {
                 }
             }
 
+            // ★★★ WHO ARE YOU — ESTABLISHED BEFORE ANY REFUSAL THAT ADMIN OUTRANKS.
+            //
+            //     This verification used to sit BELOW the cooldown check, so an owner serving a
+            //     cooldown was turned away before anybody looked at the credentials they had just
+            //     presented: password entered, still "PLEASE WAIT — you have just had a turn"
+            //     (Stuart, 2026-08-11, on the public demo). The owner cannot get into their own
+            //     receiver, and nothing on screen explains why, because the password was accepted
+            //     everywhere else.
+            //     ★★★ IT IS THE SAME MISTAKE AS THE ONE DOCUMENTED BELOW — admin status kept being
+            //         computed too late to matter ("VERIFY WHENEVER CREDENTIALS ARE PRESENTED, NOT
+            //         ONLY WHEN WE ARE BUSY", 2026-08-06). That fix moved it out from under
+            //         `occupied`; this one moves it above the cooldown. WHENEVER A CHECK OUTRANKS
+            //         A REFUSAL, IT HAS TO RUN BEFORE IT.
+            //     ★★ The BAN list stays above this, deliberately: a banned address is refused even
+            //        as admin here, and the recovery is the admin PAGE, which is exempt by design
+            //        (see the note above) — that is where you undo a range you banned yourself into.
+            bool adminAuthed = false;
+            if ((!adminNonce.empty() && !adminToken.empty()) || !adminTicket.empty()) {
+                std::string secret;
+                { std::lock_guard<std::mutex> al(g_vsAdminMtx); secret = g_vsAdminSecret; }
+                const std::string ip = sock->peerAddress();
+                const bool byTicket = !adminTicket.empty() && vsTicketOk(adminTicket);
+                adminAuthed = !secret.empty() && !g_vsAuthState.blocked(ip)
+                           && (byTicket
+                               || (!adminNonce.empty() && !adminToken.empty()
+                                   && g_vsAuthState.verify(secret, adminNonce, adminToken)));
+                if (adminAuthed) g_vsAuthState.recordOk(ip);
+                else             g_vsAuthState.recordFail(ip);
+            }
+
             // ★★ COOLDOWN FIRST — before occupancy. Someone serving a cooldown must be refused
             // even when the radio is FREE; that is the entire point of it. Checking occupancy
             // first would let them straight back in the instant their own timeout freed the slot.
             // ★ Loopback is never on cooldown: it is never timed out in the first place.
-            if (!isLoopback(sock->peerAddress())) {
+            // ★★ AND NEITHER IS AN AUTHENTICATED ADMIN. The cooldown shares out a scarce radio
+            //    between listeners; the owner is not one of the listeners it is rationing, and
+            //    they are the one person who must always be able to get in — to see what the
+            //    receiver is doing, or to stop it.
+            if (!isLoopback(sock->peerAddress()) && !adminAuthed) {
                 const double now = Impl::nowSecs();
                 const auto it = cooldownUntil.find(sock->peerAddress());
                 if (it != cooldownUntil.end()) {
@@ -7101,29 +7135,18 @@ struct LocalSdrShim::Impl {
             //     had connected as an admin direct from the splash screen").
             // ★★ Eviction still requires `occupied` — there is nobody to evict otherwise. What
             //    changes is that ADMIN STATUS no longer rides on somebody else being here.
-            bool adminAuthed = false;
+            // ★ adminAuthed was settled above, before the cooldown could refuse them. All that is
+            //   left here is whether there is anybody to evict.
             bool override_ = false;
-            if ((!adminNonce.empty() && !adminToken.empty()) || !adminTicket.empty()) {
-                std::string secret;
-                { std::lock_guard<std::mutex> al(g_vsAdminMtx); secret = g_vsAdminSecret; }
-                // ★★★ CHALLENGE-RESPONSE, NEVER THE PASSWORD ITSELF. The first cut of this put
-                // the admin password in the connect URL as a query parameter — which over plain
-                // HTTP puts it in the clear on the wire, and into proxy and server logs along
-                // the way. These receivers are going on the public internet, so that is exactly
-                // the wrong shape (Stuart, 2026-07-27).
-                // ★ Same VsAuth the PIN and admin_unlock already use: the server issues a nonce
-                // at /auth, the client returns HMAC(secret, nonce), and the secret never
-                // crosses the link. Reusing it also inherits the BRUTE-FORCE LOCKOUT — an
-                // override endpoint without one is an open guessing gallery, and unlike the PIN
-                // this one displaces a listener on success.
-                const std::string ip = sock->peerAddress();
-                const bool byTicket = !adminTicket.empty() && vsTicketOk(adminTicket);
-                adminAuthed = !secret.empty() && !g_vsAuthState.blocked(ip)
-                           && (byTicket
-                               || (!adminNonce.empty() && !adminToken.empty()
-                                   && g_vsAuthState.verify(secret, adminNonce, adminToken)));
-                if (adminAuthed) g_vsAuthState.recordOk(ip);
-                else             g_vsAuthState.recordFail(ip);
+            if (adminAuthed || !adminTicket.empty()
+                || (!adminNonce.empty() && !adminToken.empty())) {
+                // ★★★ CHALLENGE-RESPONSE, NEVER THE PASSWORD ITSELF — see the verification above,
+                // which now runs earlier. The first cut put the admin password in the connect URL
+                // as a query parameter, which over plain HTTP puts it in the clear on the wire and
+                // into every proxy log on the way (Stuart, 2026-07-27). Same VsAuth the PIN and
+                // admin_unlock use, so it inherits the BRUTE-FORCE LOCKOUT too — an override
+                // endpoint without one is an open guessing gallery, and unlike the PIN this one
+                // displaces a listener on success.
                 // Evicting only makes sense if somebody is actually in the way.
                 override_ = adminAuthed && occupied;
                 if (override_) {
