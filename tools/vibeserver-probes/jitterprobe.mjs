@@ -19,6 +19,16 @@
 // Env:    SECS=12  TUNE_A=198000 TUNE_B=909000 MODE=am
 import crypto from 'node:crypto';
 
+// ★★★ SAY WHO WE ARE. Node's WebSocket sends a bare `User-Agent: node`, so every probe run
+//     against a server lands in its connection log looking like an unidentified client — 32 of
+//     them on the public demo in one afternoon, filed under "other", inflating the connection
+//     history and the client mix an owner uses to judge real usage (Stuart, 2026-08-11: "what is
+//     a node connection?").
+// ★★ Which is this repo's own lesson biting again: A PROBE IS PART OF THE SYSTEM IT MEASURES.
+//    Last time it was asking for 4096 bins and loading the shared FFT for ten other people.
+// ★ `headers` is undici's non-standard extension to the WHATWG WebSocket — verified reaching the
+//   server, which is the only thing that matters here.
+
 const BASE = process.argv[2] || 'wss://demo.vibesdr.net';
 const SECS = Number(process.env.SECS || 12);
 const A = Number(process.env.TUNE_A || 198000);
@@ -49,7 +59,7 @@ const frames = [];   // {t, ts, freq}
 const marks = [];    // {t, what}
 let t0 = 0;
 
-const ws = new WebSocket(url);
+const ws = new WebSocket(url, { headers: { 'User-Agent': 'VibeSDR-probe/1.0 (jitterprobe)' } });
 ws.binaryType = 'arraybuffer';
 
 ws.onerror = e => { console.log('  ws error:', e.message || e.type); };
@@ -75,7 +85,7 @@ ws.onmessage = m => {
 let audioBytes = 0, audioFrames = 0;
 if (WANT_AUDIO) {
   const aurl = `${BASE}${RADIO ? `/r/${RADIO}` : ''}/ws/audio?user_session_id=${SID}`;
-  const aws = new WebSocket(aurl);
+  const aws = new WebSocket(aurl, { headers: { 'User-Agent': 'VibeSDR-probe/1.0 (jitterprobe)' } });
   aws.binaryType = 'arraybuffer';
   aws.onmessage = m => { if (typeof m.data !== 'string') { audioBytes += m.data.byteLength; audioFrames++; } };
   aws.onerror = () => console.log('  (audio socket error)');

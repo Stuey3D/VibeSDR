@@ -18,6 +18,16 @@
 //
 // Usage: [RADIO=<id>] node togglestate.mjs [ws://host:port]
 import crypto from 'node:crypto';
+
+// ★★★ SAY WHO WE ARE. Node's WebSocket sends a bare `User-Agent: node`, so every probe run
+//     against a server lands in its connection log looking like an unidentified client — 32 of
+//     them on the public demo in one afternoon, filed under "other", inflating the connection
+//     history and the client mix an owner uses to judge real usage (Stuart, 2026-08-11: "what is
+//     a node connection?").
+// ★★ Which is this repo's own lesson biting again: A PROBE IS PART OF THE SYSTEM IT MEASURES.
+//    Last time it was asking for 4096 bins and loading the shared FFT for ten other people.
+// ★ `headers` is undici's non-standard extension to the WHATWG WebSocket — verified reaching the
+//   server, which is the only thing that matters here.
 const BASE = process.argv[2] || 'ws://127.0.0.1:48077';
 const RADIO = process.env.RADIO || '';
 const pre = `${BASE}${RADIO ? `/r/${RADIO}` : ''}/ws/user-spectrum`;
@@ -25,7 +35,7 @@ const KEYS = ['nr','notch','nrStrength','rfNotch','dabNotch','rspBiasT','biasT']
 
 const open = () => new Promise((res, rej) => {
   const sid = 'tog' + crypto.randomBytes(4).toString('hex');
-  const ws = new WebSocket(`${pre}?user_session_id=${sid}&bins=1024&mode=binary8`);
+  const ws = new WebSocket(`${pre}?user_session_id=${sid}&bins=1024&mode=binary8`, { headers: { 'User-Agent': 'VibeSDR-probe/1.0 (togglestate)' } });
   ws.binaryType = 'arraybuffer';
   const t = setTimeout(() => rej(new Error('no hwinfo in 8s')), 8000);
   ws.onmessage = m => {

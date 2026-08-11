@@ -28,7 +28,10 @@ const BINS = Number(process.env.BINS || 1024);
 
 const SID = 'zs' + crypto.randomBytes(4).toString('hex');
 const ws = new WebSocket(`${BASE}${RADIO ? `/r/${RADIO}` : ''}`
-  + `/ws/user-spectrum?user_session_id=${SID}&bins=${BINS}&mode=binary8`);
+  + `/ws/user-spectrum?user_session_id=${SID}&bins=${BINS}&mode=binary8`,
+  // ★ Identify ourselves — see the note in jitterprobe.mjs. A probe filed as an unknown
+  //   client inflates the very statistics an owner reads to judge real usage.
+  { headers: { 'User-Agent': 'VibeSDR-probe/1.0 (zoomsharpness)' } });
 ws.binaryType = 'arraybuffer';
 
 let cfg = null; const rows = [];

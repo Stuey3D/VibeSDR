@@ -14,6 +14,16 @@
 //
 // Usage: RADIO=<id> node fpsleak.mjs wss://demo.vibesdr.net
 import crypto from 'node:crypto';
+
+// ★★★ SAY WHO WE ARE. Node's WebSocket sends a bare `User-Agent: node`, so every probe run
+//     against a server lands in its connection log looking like an unidentified client — 32 of
+//     them on the public demo in one afternoon, filed under "other", inflating the connection
+//     history and the client mix an owner uses to judge real usage (Stuart, 2026-08-11: "what is
+//     a node connection?").
+// ★★ Which is this repo's own lesson biting again: A PROBE IS PART OF THE SYSTEM IT MEASURES.
+//    Last time it was asking for 4096 bins and loading the shared FFT for ten other people.
+// ★ `headers` is undici's non-standard extension to the WHATWG WebSocket — verified reaching the
+//   server, which is the only thing that matters here.
 const BASE = process.argv[2] || 'wss://demo.vibesdr.net';
 const RADIO = process.env.RADIO || '';
 const ASK = Number(process.env.ASK || 5);
@@ -23,7 +33,7 @@ const pre = `${BASE}${RADIO ? `/r/${RADIO}` : ''}/ws/user-spectrum`;
 const isSpec = b => b.length >= 22 && b[0] === 0x53 && b[1] === 0x50 && b[2] === 0x45 && b[3] === 0x43;
 const open = tag => {
   const sid = tag + crypto.randomBytes(4).toString('hex');
-  const ws = new WebSocket(`${pre}?user_session_id=${sid}&bins=1024&mode=binary8`);
+  const ws = new WebSocket(`${pre}?user_session_id=${sid}&bins=1024&mode=binary8`, { headers: { 'User-Agent': 'VibeSDR-probe/1.0 (fpsleak)' } });
   ws.binaryType = 'arraybuffer';
   ws.hits = [];
   ws.onmessage = m => { if (typeof m.data !== 'string' && isSpec(new Uint8Array(m.data))) ws.hits.push(performance.now()); };

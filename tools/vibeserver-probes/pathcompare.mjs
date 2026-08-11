@@ -18,6 +18,16 @@
 import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 
+// ★★★ SAY WHO WE ARE. Node's WebSocket sends a bare `User-Agent: node`, so every probe run
+//     against a server lands in its connection log looking like an unidentified client — 32 of
+//     them on the public demo in one afternoon, filed under "other", inflating the connection
+//     history and the client mix an owner uses to judge real usage (Stuart, 2026-08-11: "what is
+//     a node connection?").
+// ★★ Which is this repo's own lesson biting again: A PROBE IS PART OF THE SYSTEM IT MEASURES.
+//    Last time it was asking for 4096 bins and loading the shared FFT for ten other people.
+// ★ `headers` is undici's non-standard extension to the WHATWG WebSocket — verified reaching the
+//   server, which is the only thing that matters here.
+
 const RADIO = process.env.RADIO || '';
 const FREQ = Number(process.env.FREQ || 198000);
 const MODE = process.env.MODE || 'am';
@@ -71,7 +81,7 @@ async function measure(p) {
   //    with a pong on the same socket, through the same proxies and the same queues as the data —
   //    so that round trip IS the path's latency, measured end to end.
   const rtts = []; let pingAt = 0, onPong = null;
-  const ws = new WebSocket(`${pre}/ws/user-spectrum?user_session_id=${sid}&bins=${BINS}&mode=binary8`);
+  const ws = new WebSocket(`${pre}/ws/user-spectrum?user_session_id=${sid}&bins=${BINS}&mode=binary8`, { headers: { 'User-Agent': 'VibeSDR-probe/1.0 (pathcompare)' } });
   ws.binaryType = 'arraybuffer';
   ws.onmessage = m => {
     const t = performance.now();

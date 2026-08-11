@@ -342,7 +342,11 @@ export function clientKind(agent: string | undefined): string {
   if (/vibesdr\s*jr/i.test(a)) return 'VibeSDR Jr';
   if (/vibesdr/i.test(a)) return 'VibeSDR';
   if (/mozilla|safari|chrome|firefox|edg\//i.test(a)) return 'browser';
-  if (/bot|crawl|spider|curl|wget|python|scan/i.test(a)) return 'bot';
+  // ★ OUR OWN PROBES, named so they are not mistaken for visitors. tools/vibeserver-probes send
+  //   this; before they did, Node's bare `User-Agent: node` filed them under "other" and they
+  //   quietly inflated the connection history on the public demo.
+  if (/vibesdr-probe/i.test(a)) return 'probe';
+  if (/bot|crawl|spider|curl|wget|python|scan|^node$|undici/i.test(a)) return 'bot';
   return 'other';
 }
 
