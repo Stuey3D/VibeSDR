@@ -600,8 +600,15 @@ function groupVisits(list: any[]): any[] {
     const sess = String(c.session || '');
     if (!sess) { out.push({ ...c, radios: c.radio ? [c.radio] : [] }); continue; }
     const had = bySession.get(sess);
+    // ★★★ TESTED IN BOTH DIRECTIONS, BECAUSE THE LOG ARRIVES NEWEST FIRST. My first cut only asked
+    //     "does this leg START long after the visit ENDED" — which is never true when the list runs
+    //     backwards in time, so the rule silently did nothing and the 2h32 row survived the fix
+    //     (Stuart: "nope, rebooted and reloaded"). ConnLog::json() says "Newest first, capped" and
+    //     it means it. The min/max merge below is order-agnostic; the gap test has to be too.
     // ★ `!had.end` is a LIVE leg — never split from it: the visit is still happening.
-    const gapped = had && had.end && (c.at || 0) - had.end > VISIT_GAP_SEC;
+    const gapped = had && (
+         (!!had.end && (c.at || 0) - had.end > VISIT_GAP_SEC)     // arrives long after it ended
+      || (!!c.end && (had.at || 0) - c.end > VISIT_GAP_SEC));     // ended long before it began
     if (!had || gapped) {
       const v = { ...c, radios: c.radio ? [c.radio] : [] };
       bySession.set(sess, v);

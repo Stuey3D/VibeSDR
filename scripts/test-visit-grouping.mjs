@@ -42,8 +42,15 @@ function groupVisits(list) {
     const sess = String(c.session || '');
     if (!sess) { out.push({ ...c, radios: c.radio ? [c.radio] : [] }); continue; }
     const had = bySession.get(sess);
+    // ★★★ TESTED IN BOTH DIRECTIONS, BECAUSE THE LOG ARRIVES NEWEST FIRST. My first cut only asked
+    //     "does this leg START long after the visit ENDED" — which is never true when the list runs
+    //     backwards in time, so the rule silently did nothing and the 2h32 row survived the fix
+    //     (Stuart: "nope, rebooted and reloaded"). ConnLog::json() says "Newest first, capped" and
+    //     it means it. The min/max merge below is order-agnostic; the gap test has to be too.
     // ★ `!had.end` is a LIVE leg — never split from it: the visit is still happening.
-    const gapped = had && had.end && (c.at || 0) - had.end > VISIT_GAP_SEC;
+    const gapped = had && (
+         (!!had.end && (c.at || 0) - had.end > VISIT_GAP_SEC)     // arrives long after it ended
+      || (!!c.end && (had.at || 0) - c.end > VISIT_GAP_SEC));     // ended long before it began
     if (!had || gapped) {
       const v = { ...c, radios: c.radio ? [c.radio] : [] };
       bySession.set(sess, v);
@@ -112,6 +119,18 @@ g = groupVisits([
 ]);
 ok(g.length === 1, 'a reconnect within the gap stays one visit');
 ok(g[0].end - g[0].at === 300, 'and spans first-open to last-close');
+
+
+// ★★★ THE ORDER THE SERVER ACTUALLY SENDS: NEWEST FIRST. ConnLog::json() is documented "Newest
+//     first", and a gap rule that only looks forwards does nothing at all against it — which is
+//     exactly how the 2h32 row survived being "fixed" once already.
+g = groupVisits([
+  { at: 2400, end: 2460, session: 'S', radio: 'a' },   // newest
+  { at: 1200, end: 1260, session: 'S', radio: 'a' },
+  { at: 100,  end: 160,  session: 'S', radio: 'a' },   // oldest
+]);
+ok(g.length === 3, 'newest-first legs with long gaps are still THREE visits');
+ok(g.every((v) => v.end - v.at === 60), 'and each keeps its own minute');
 
 console.log(fail ? `\n${fail} failed` : '\npassed');
 process.exit(fail ? 1 : 0);
