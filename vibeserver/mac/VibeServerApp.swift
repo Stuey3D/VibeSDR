@@ -949,6 +949,48 @@ final class Server: ObservableObject {
     var vibeSDRAppURL: URL? {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.vibeSDRBundleID)
     }
+
+    /// ★★★ THE APP MUST BE NEW ENOUGH TO UNDERSTAND THE LINK, and older ones are NOT. Before 10.2
+    ///     the link grammar accepted only https/wss and had no `vibeserver` backend — so a
+    ///     VibeServer on a LAN (plain http, no certificate possible for 192.168.x.x) was refused
+    ///     BY ITS OWN APP: the app opened, sat on the servers screen, and a second click said
+    ///     "Invalid VibeSDR link" (Stuart, 2026-08-12, on 3.0.2). Shipping a default that depends
+    ///     on an app update nobody has yet is how a feature becomes a bug report.
+    ///  ★★ Too old, or unreadable, means BROWSER — never a dead click. The browser always works.
+    static let minVibeSDRForLinks = [10, 2]
+
+    /// ★★★ TWO BUNDLE LAYOUTS, AND THE OBVIOUS ONE IS WRONG HERE. VibeSDR on a Mac is the iOS app
+    ///     ("Designed for iPad"), so its payload lives at Wrapper/VibeSDR.app/Info.plist and there
+    ///     is NO Contents/Info.plist at all. Reading only the Mac layout returned nil, which this
+    ///     code treats as "too old" — so the feature would have switched itself off permanently on
+    ///     exactly the machines it was written for, and looked like a deliberate fallback.
+    ///  ★ Both are tried, and Spotlight's kMDItemVersion is not used: it is an index, and an index
+    ///    can be stale or absent on a fresh copy.
+    var vibeSDRVersion: [Int]? {
+        guard let url = vibeSDRAppURL else { return nil }
+        let candidates = [url.appendingPathComponent("Wrapper/VibeSDR.app/Info.plist"),
+                          url.appendingPathComponent("Contents/Info.plist"),
+                          url.appendingPathComponent("Info.plist")]
+        for c in candidates {
+            if let info = NSDictionary(contentsOf: c),
+               let v = info["CFBundleShortVersionString"] as? String, !v.isEmpty {
+                return v.split(separator: ".").map { Int($0) ?? 0 }
+            }
+        }
+        return nil
+    }
+
+    /// Installed AND able to act on what we would send it.
+    var vibeSDRCanOpenLinks: Bool {
+        guard let v = vibeSDRVersion else { return false }
+        let want = Self.minVibeSDRForLinks
+        for i in 0..<max(v.count, want.count) {
+            let a = i < v.count ? v[i] : 0, b = i < want.count ? want[i] : 0
+            if a != b { return a > b }
+        }
+        return true
+    }
+
     var vibeSDRInstalled: Bool { vibeSDRAppURL != nil }
 
     /// Prefer the app over the browser. ★ Defaults to TRUE and is simply ignored when the app is
@@ -967,8 +1009,8 @@ final class Server: ObservableObject {
     }
 
     func openInBrowser() {
-        // ★ The owner asked for the app, and it is here — send them there instead.
-        if openInVibeSDR, vibeSDRInstalled, running, let link = appLink {
+        // ★ The owner asked for the app, it is here, and it is new enough to act on the link.
+        if openInVibeSDR, vibeSDRCanOpenLinks, running, let link = appLink {
             NSWorkspace.shared.open(link)
             return
         }
@@ -1404,9 +1446,16 @@ struct SettingsView: View {
             if server.vibeSDRInstalled {
                 Section("Opening the radio") {
                     Toggle("Open in VibeSDR rather than a browser", isOn: $server.openInVibeSDR)
-                    Text("Clicking the menu-bar icon goes straight into the VibeSDR app, which is "
-                         + "on this Mac. Turn it off to use your browser instead \u{2014} the web "
-                         + "client has everything the app does.")
+                        .disabled(!server.vibeSDRCanOpenLinks)
+                    // ★ An old app is a REASON, not a missing control. Hiding the row would leave
+                    //   someone wondering why the icon still opens a browser.
+                    Text(server.vibeSDRCanOpenLinks
+                         ? "Clicking the menu-bar icon opens the radio in VibeSDR, which is on this "
+                           + "Mac \u{2014} straight to the receiver, or to the radio picker if you "
+                           + "are serving more than one. Turn it off to use your browser instead."
+                         : "VibeSDR 10.2 or newer is needed to open a receiver from here \u{2014} "
+                           + "earlier versions cannot read the link. The menu-bar icon opens your "
+                           + "browser until then.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -1773,9 +1822,16 @@ struct SettingsView: View {
             if server.vibeSDRInstalled {
                 Section("Opening the radio") {
                     Toggle("Open in VibeSDR rather than a browser", isOn: $server.openInVibeSDR)
-                    Text("Clicking the menu-bar icon goes straight into the VibeSDR app, which is "
-                         + "on this Mac. Turn it off to use your browser instead \u{2014} the web "
-                         + "client has everything the app does.")
+                        .disabled(!server.vibeSDRCanOpenLinks)
+                    // ★ An old app is a REASON, not a missing control. Hiding the row would leave
+                    //   someone wondering why the icon still opens a browser.
+                    Text(server.vibeSDRCanOpenLinks
+                         ? "Clicking the menu-bar icon opens the radio in VibeSDR, which is on this "
+                           + "Mac \u{2014} straight to the receiver, or to the radio picker if you "
+                           + "are serving more than one. Turn it off to use your browser instead."
+                         : "VibeSDR 10.2 or newer is needed to open a receiver from here \u{2014} "
+                           + "earlier versions cannot read the link. The menu-bar icon opens your "
+                           + "browser until then.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

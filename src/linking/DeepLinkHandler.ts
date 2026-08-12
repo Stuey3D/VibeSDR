@@ -14,10 +14,10 @@
 import { fetchInstances } from '../services/instancesApi';
 import type { SDRMode } from '../services/UberSDRClient';
 
-export type LinkBackend = 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'rtltcp';
+export type LinkBackend = 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'rtltcp' | 'vibeserver';
 // Route serverType is a subset — rtltcp isn't a plain URL backend (needs the
 // on-device shim + host:port), so it's rejected in Phase 1.
-export type RouteServerType = 'ubersdr' | 'kiwi' | 'web888' | 'owrx';
+export type RouteServerType = 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'vibeserver';
 
 export interface DeepLinkRequest {
   uuid?:    string;
@@ -43,6 +43,35 @@ export type ResolveResult =
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_URL_LEN = 2048;
+
+/**
+ * Is this URL's host on the network the device is already on?
+ *
+ * ★★ Deliberately CONSERVATIVE — an unparseable host, a name we do not recognise, or anything
+ *    routable answers false, so the caller falls back to demanding https. A wrong "yes" here would
+ *    let a link from anywhere push the app into plaintext against a public address.
+ * ★ 172.16-31 is the awkward one: 172.15 and 172.32 are PUBLIC, so the second octet is range
+ *   checked rather than matched with a prefix — the mistake that turns a private-only rule into
+ *   an almost-private one.
+ */
+function isPrivateHost(u: string): boolean {
+  const m = /^[a-z]+:\/\/([^/?#]+)/i.exec(u);
+  if (!m) return false;
+  let host = m[1];
+  const at = host.lastIndexOf('@');            // strip any userinfo before parsing the host
+  if (at >= 0) host = host.slice(at + 1);
+  host = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.localhost')) return true;
+  if (host === '::1') return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;                  // IPv6 unique-local
+  if (/^fe80:/.test(host)) return true;                              // IPv6 link-local
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!v4) return false;
+  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  if (v4.slice(1).some(x => Number(x) > 255)) return false;
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 169 && b === 254);
+}
 
 // Brief's mode vocabulary → the app's SDRMode. `cw`/`cwr` differ, `iq` is
 // unsupported (dropped — connect at the default mode instead).
@@ -91,11 +120,21 @@ export function parseVibeSdrUrl(raw: string): DeepLinkRequest | null {
   } else if (p.url) {
     let u: string;
     try { u = p.url; } catch { return null; }
-    // https/wss only — reject plaintext and anything exotic (brief §6).
-    if (!/^(https|wss):\/\//i.test(u)) return null;
     const backend = (p.backend || '').toLowerCase();
     if (backend !== 'ubersdr' && backend !== 'kiwi' && backend !== 'web888'
-        && backend !== 'owrx' && backend !== 'rtltcp') return null;
+        && backend !== 'owrx' && backend !== 'rtltcp' && backend !== 'vibeserver') return null;
+    // ★★★ https/wss ONLY, EXCEPT ON YOUR OWN NETWORK. The rule exists because a link can arrive
+    //     from anywhere — a QR code on a poster, a forum post — and sending credentials in clear
+    //     to a stranger's address is not a risk worth a convenience. But it also rejected the one
+    //     link we generate OURSELVES: VibeServer on a Mac or a Pi serves plain http on a LAN
+    //     address and cannot hold a certificate for 192.168.x.x, so clicking the VibeServer
+    //     menu-bar icon opened the app and then refused its own link (Stuart, 2026-08-12).
+    // ★★ RELAXED ONLY WHERE PLAINTEXT IS ALREADY UNAVOIDABLE AND ALREADY LOCAL: loopback, RFC1918
+    //    and link-local addresses, and .local names. Nothing routable is admitted, so a link from
+    //    the internet still cannot talk the app into plaintext — it can only ever name a machine
+    //    on the network the phone is already sitting on.
+    if (!/^(https|wss):\/\//i.test(u) && !(/^(http|ws):\/\//i.test(u) && isPrivateHost(u)))
+      return null;
     req.url = u.replace(/\/+$/, '');
     req.backend = backend as LinkBackend;
   } else {
