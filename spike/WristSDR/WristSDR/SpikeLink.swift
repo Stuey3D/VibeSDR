@@ -429,6 +429,15 @@ final class SpikeLink: ObservableObject {
   /// favourite, or a typed IP. The last two are the only routes that work over the
   /// Bluetooth relay, and neither could ever prompt before.
   @Published var needsPin = false
+  /// The radios behind a multi-radio VibeServer's front door — empty unless there is a choice.
+  @Published var radioChoices: [VibeRadio] = []
+  @Published var radioChoiceName = ""
+
+  /// Pass the listener's choice down to the client, which then connects.
+  func chooseRadio(_ r: VibeRadio) {
+    (client as? UberClient)?.chooseRadio(r)
+    radioChoices = []
+  }
   /// What we last connected to, so a PIN entered at the prompt can retry it.
   private(set) var lastConnect: (url: String, host: String, type: ServerType, name: String)?
 
@@ -543,6 +552,14 @@ final class SpikeLink: ObservableObject {
     // Only a VibeServer (UberClient in vibe mode) can ask for a PIN.
     let wantsPin = (client as? UberClient)?.needsPin ?? false
     if needsPin != wantsPin { needsPin = wantsPin }
+    // ★★ …and only a MULTI-RADIO VibeServer can ask which radio. Mirrored the same way as the PIN
+    //    and for the same reason: driven by the CLIENT saying it needs an answer, so it does not
+    //    matter which route reached the server — a favourite, the last one on launch, or the phone
+    //    handing one over. A prompt wired to one route sits invisible on the others.
+    let offer = (client as? UberClient)?.radioChoices ?? []
+    if radioChoices != offer { radioChoices = offer }
+    let offerName = (client as? UberClient)?.radioChoiceName ?? ""
+    if radioChoiceName != offerName { radioChoiceName = offerName }
     if let u = client as? UberClient, vibeDiag != u.vibeDiag { vibeDiag = u.vibeDiag }
     if let u = client as? UberClient {
       if evicted != u.evicted { evicted = u.evicted }

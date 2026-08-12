@@ -23,6 +23,7 @@
 		4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4434780FAA0BCA12A4738A /* BandwidthView.swift */; };
 		4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB51A8941C99A626615A0FC /* Chat.swift */; };
 		559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEA65462FB06374237A24A2 /* OwrxClient.swift */; };
+		A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */; };
 		5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FF50C437861299AAC27394 /* SignalProcessor.swift */; };
 		70EE588C003629B12094698A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C7CA3AAA59DBED958D0315 /* ContentView.swift */; };
 		84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */; };
@@ -80,6 +81,7 @@
 		3337F8EA18D635A21DF13495 /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
 		37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSDRApp.swift; sourceTree = "<group>"; };
 		3EEA65462FB06374237A24A2 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
+		A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontDoor.swift; sourceTree = "<group>"; };
 		3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxMp3Decoder.swift; sourceTree = "<group>"; };
 		4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		4FB5962ADE3FED0012F31D5D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -165,6 +167,7 @@
 				82634AF74EECC78CED58ED93 /* NumpadView.swift */,
 				E39B83C31B97A92BEA5D49AE /* OpusDecoder.swift */,
 				3EEA65462FB06374237A24A2 /* OwrxClient.swift */,
+				A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */,
 				DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */,
 				4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */,
 				69FF50C437861299AAC27394 /* SignalProcessor.swift */,
@@ -345,6 +348,7 @@
 				F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */,
 				CF6770252230AC24E8731FA1 /* OpusDecoder.swift in Sources */,
 				559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */,
+				A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */,
 				F2566A4100EC8550A4BEFB78 /* OwrxSocket.swift in Sources */,
 				BF96B321B6B5696F03092EF8 /* SDRDirectory.swift in Sources */,
 				5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */,

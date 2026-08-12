@@ -20,6 +20,26 @@ final class UberClient: ObservableObject {
   /// instance picker can point the spike at any UberSDR server the user chooses.
   var host = "stuey3d.tunnel.ubersdr.org"
 
+  // ── A MULTI-RADIO VibeServer (V3) ────────────────────────────────────────────
+  //
+  // ★★★ ON SUCH A SERVER EVERY RADIO LIVES BEHIND `/r/<id>/…`, and the front door itself owns no
+  //     radio: ask IT for `/ws/user-spectrum` and it answers 503, which as a WebSocket handshake
+  //     arrives as a bare close with nothing in it — identical to "server down". So the prefix is
+  //     not decoration, it is the difference between connecting and appearing to be offline.
+  // ★★ ONE PROPERTY, INSERTED BETWEEN HOST AND PATH, because every URL this client builds hangs
+  //    off the same two pieces. Prefixing at each call site would be a list to keep in step for
+  //    ever, and the first one forgotten is a failure that appears only on multi-radio servers —
+  //    exactly the reasoning the SERVER uses for stripping it once on arrival rather than at each
+  //    of its dozens of routes.
+  /// "" for an ordinary server, or "/r/<id>" once a radio has been chosen.
+  var radioPath = ""
+
+  /// The radios behind a front door, published for the UI to offer. Empty when there is no choice
+  /// to make — which includes a door with exactly one radio, resolved silently below.
+  @Published var radioChoices: [VibeRadio] = []
+  /// The machine's name, shown above that list.
+  @Published var radioChoiceName = ""
+
   // ── VibeServer mode ──────────────────────────────────────────────────────────
   // VibeServer is VibeSDR's OWN phone-hosted server: the shim's UberSDR-style WS protocol, so the whole
   // SPECTRUM pipeline is reused unchanged. Only three things diverge, all behind these flags (which default
@@ -301,7 +321,7 @@ final class UberClient: ObservableObject {
   /// exists, so the UI only offers a takeover where one could work.
   private func vibeIsBusy() async -> Bool {
     let httpScheme = secure ? "https" : "http"
-    guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver.json"),
+    guard let url = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver.json"),
           let (data, _) = try? await httpSession.data(from: url),
           let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
       return false      // ★ Can't tell ⇒ carry on. A failed probe must not block a connect.
@@ -317,7 +337,7 @@ final class UberClient: ObservableObject {
     Task { [weak self] in
       guard let self else { return }
       let httpScheme = secure ? "https" : "http"
-      guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth"),
+      guard let url = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver/auth"),
             let (data, _) = try? await httpSession.data(from: url),
             let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let nonce = j["nonce"] as? String, !nonce.isEmpty else {
@@ -393,7 +413,7 @@ final class UberClient: ObservableObject {
     Task { [weak self] in
       guard let self else { return }
       let httpScheme = secure ? "https" : "http"
-      guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth"),
+      guard let url = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver/auth"),
             let (data, _) = try? await httpSession.data(from: url),
             let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let nonce = j["nonce"] as? String, !nonce.isEmpty else {
@@ -730,8 +750,43 @@ final class UberClient: ObservableObject {
     return .none
   }
 
+  /// The listener has picked a radio behind the front door — take it and connect.
+  ///
+  /// ★ Clearing the list is what dismisses the chooser, so it happens FIRST: leaving it up while
+  ///   the sockets open would let a second tap choose a different radio mid-connect.
+  func chooseRadio(_ r: VibeRadio) {
+    radioPath = "/r/\(r.id)"
+    radioChoices = []
+    Task { await connect() }
+  }
+
   private func connect() async {
     guard !goingIdle else { return }   // discarded mid-connect (server switch) — don't open anything
+
+    // ★★★ WHICH RADIO — BEFORE ANY SOCKET IS OPENED. Resolving after the fact would mean every
+    //     connection to a multi-radio server began with a failed handshake against the door, and
+    //     the reconnect logic would then race the resolution. It is done HERE, in the one place
+    //     the connection is actually made, rather than in the picker: Jr reaches a server from
+    //     several directions (a favourite, the last server on launch, the phone handing one over)
+    //     and a check placed on one of those paths silently misses the rest.
+    // ★ Only when we have not already chosen. A reconnect keeps the radio it was using — being
+    //   thrown back to a chooser because the link blipped would be its own bug.
+    if isVibe, radioPath.isEmpty, !goingIdle {
+        if let door = await FrontDoor.probe(host: host, tls: secure) {
+            if door.radios.count == 1 {
+                // ★★ A LIST OF ONE IS NOT A CHOICE. A single-radio V3 still needs the prefix, so
+                //    it is resolved silently and the watch shows what it always did.
+                radioPath = "/r/\(door.radios[0].id)"
+            } else {
+                await MainActor.run {
+                    radioChoiceName = door.name
+                    radioChoices = door.radios
+                    status = "choose a radio"
+                }
+                return          // ContentView offers the list; picking one calls chooseRadio()
+            }
+        }
+    }
 
     // ★★★ A NEW STREAM GETS A CLEAN PROCESSOR. Without this the waterfall's derived range
     // outlived the connection that produced it, so a run of corrupt frames on a marginal link
@@ -857,7 +912,7 @@ final class UberClient: ObservableObject {
     //     address and UberSDR did not — which isolated it to this client rather than to
     //     the network, the watch or watchOS.
     let httpScheme = secure ? "https" : "http"
-    guard let cu = URL(string: "\(httpScheme)://\(host)/connection") else {
+    guard let cu = URL(string: "\(httpScheme)://\(host)\(radioPath)/connection") else {
       status = "bad server URL"; return false
     }
     var req = URLRequest(url: cu)
@@ -913,7 +968,7 @@ final class UberClient: ObservableObject {
     // the wire cost is a flat ~128 bins/frame at every zoom. Cuts each SPEC frame ~32x. UberSDR
     // ignores the param (it sends its own count, which we downsample as before).
     let binsParam = isVibe ? "&bins=\(WaterfallBuffer.width)" : ""
-    let url = URL(string: "\(scheme)://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminSuffix)")!
+    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminSuffix)")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -1538,7 +1593,7 @@ final class UberClient: ObservableObject {
       // stereo before encoding so all 64k lands in one channel. On AirPods (stereo) omit it and keep
       // the stereo image. Re-requested on a route change via audio.onRouteChange (openVibeSockets).
       let chParam = audio.outputIsMono ? "&channels=1" : ""
-      url = URL(string: "\(scheme)://\(host)/ws/audio?user_session_id=\(uuid)&codec=opus\(chParam)\(extra)")
+      url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/audio?user_session_id=\(uuid)&codec=opus\(chParam)\(extra)")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
         self.decodeVibeAudio(d)
@@ -1554,7 +1609,7 @@ final class UberClient: ObservableObject {
       //    spectrum". (The other two were postConnection's https and SpikeLink never
       //    deriving `secure` at all.)
       url = URL(string:
-        "\(scheme)://\(host)/ws?user_session_id=\(uuid)" +
+        "\(scheme)://\(host)\(radioPath)/ws?user_session_id=\(uuid)" +
         "&frequency=\(Int(frequency))&mode=\(mode)&format=opus&version=2")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
@@ -1606,7 +1661,7 @@ final class UberClient: ObservableObject {
       return false
     }
     let httpScheme = secure ? "https" : "http"
-    guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth") else { status = "bad server URL"; return false }
+    guard let url = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver/auth") else { status = "bad server URL"; return false }
     // ★ WHAT DID WE ACTUALLY ASK FOR, AND WHAT CAME BACK. A Series 6 on watchOS 26 reaches
     //   every internet backend but never reaches a LAN VibeServer — and the server sees ZERO
     //   packets, on Wi-Fi and on the phone relay, same subnet, with the Mac able to ping the

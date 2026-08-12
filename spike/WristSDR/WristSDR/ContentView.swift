@@ -690,6 +690,38 @@ link.setAutoContrast(wfAutoContrast)
     // picker, so a favourite or a typed IP — the only ways in over Bluetooth — sat
     // on "authenticating" forever with nothing to type into. Driven by the CLIENT
     // saying it needs one, so the route no longer matters.
+    // ── WHICH RADIO? A multi-radio VibeServer's landing page, on a watch ──────────────────
+    //
+    // ★★★ A LIST, so the DIGITAL CROWN scrolls it. This is not a nicety: a 41 mm screen shows
+    //     about two rows, so anything below the fold is unreachable without it and the owner
+    //     concludes the server has two receivers rather than that the list is clipped. The phone
+    //     layout does not shrink to here — the same rule, a different control.
+    // ★★ Interactive dismiss is OFF: dismissing would leave the watch connected to nothing, with
+    //    no way back to the question. Choosing is the only exit.
+    .sheet(isPresented: Binding(get: { !link.radioChoices.isEmpty },
+                                set: { if !$0 { } })) {
+      NavigationStack {
+        List {
+          Section(link.radioChoiceName.isEmpty ? "Choose a receiver" : link.radioChoiceName) {
+            ForEach(link.radioChoices) { r in
+              Button {
+                link.chooseRadio(r)
+              } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(r.label).font(.system(size: 15, weight: .medium))
+                  // ★ The summary is what lets someone choose WITHOUT opening a radio and taking
+                  //   a seat on it to find out what it is.
+                  Text(r.summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                }
+              }
+            }
+          }
+        }
+      }
+      .interactiveDismissDisabled(true)
+    }
     .sheet(isPresented: Binding(get: { link.needsPin }, set: { if !$0 { link.needsPin = false } })) {
       NavigationStack {
         List {
