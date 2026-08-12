@@ -751,14 +751,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             {running && !adminPw.trim() && (
               <View style={[styles.card, { borderColor: C.goldDim, marginTop: 14 }]}>
                 <Text style={{ color: C.amber, fontFamily: F, fontSize: 13 }}>
-                  No admin password — fine at home, worth setting elsewhere
+                  No admin password set
                 </Text>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  Anyone who can reach this server can change the gain, switch on the bias-T or
-                  alter the calibration. On your own network that is usually nobody but you. In a
-                  shared house, or sharing this phone's radio to a laptop over public wi-fi, set a
-                  password here — and a listening PIN above, which are different jobs: the PIN says
-                  who may listen, the password says who may change the radio.
+                  Recommended if you are on a PUBLIC NETWORK, or intend to port forward this and
+                  serve it to the internet — anyone who can reach the server can otherwise change
+                  the gain, switch on the bias-T or alter the calibration. On your own home network
+                  that is usually nobody but you, and no password is needed.{'\n\n'}
+                  A listening PIN above is the other half: the PIN decides who may LISTEN, the
+                  password decides who may CHANGE the radio.
                 </Text>
               </View>
             )}

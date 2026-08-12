@@ -1085,16 +1085,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // ★★★ SAY IT WHILE IT MATTERS, AND DO NOT SCOLD. Simple mode is for HOME NETWORKS, where
         //     no admin password is needed and running without one is the intended, liked
         //     behaviour — the owner is at the machine, and loopback is admin-exempt, so their own
-        //     receiver is fully controllable. The cases that DO want one are narrower and worth
-        //     naming: a house of multiple occupancy, or sharing a phone's radio to a laptop over
-        //     public wi-fi, where a connection PIN usually belongs beside it.
+        //     receiver is fully controllable. The two cases that DO want one are worth naming
+        //     because they are the ones an owner can walk into without noticing: being on a PUBLIC
+        //     NETWORK, and PORT FORWARDING this receiver to the internet.
         // ★ So this states a FACT and when it matters, rather than pronouncing the setup wrong.
         //   Wording that tells someone off for doing the normal thing teaches them to ignore it —
         //   and this is the same line that has to still be read on the day it counts.
         // ★ Not an alert: advice, not an error. A modal here is dismissed on reflex.
         if server.running && !server.fullMode
             && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
-            let w = NSMenuItem(title: "No admin password — fine at home; set one to share wider",
+            let w = NSMenuItem(title: "No admin password — set one for a public network or port forwarding",
                                action: nil, keyEquivalent: "")
             w.isEnabled = false
             menu.addItem(w)
