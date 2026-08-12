@@ -97,6 +97,32 @@ park is where "everybody has gone" is actually decided.
    at 25 dB, other bands uncapped, and ALWAYS back to 19.7 when everyone has left. A receiver may
    have a resting gain and no caps at all, which is the setup most owners will want first.
 
+## ★★ WHAT IS ACTUALLY NEEDED FIRST — and it is smaller than the whole design
+
+Stuart, 2026-08-12: *"right now the gain limit is only needed on the RTL on the demo server, as on
+the RSP the gain is fully locked out as it is in shared mode. However if I were to put that in
+single mode then a limit on the RF gain portion."*
+
+▶ **Build the RTL cap first.** On a SHARED receiver the gain is already behind the admin password
+(`sharedGate("gain")`), so a per-band cap adds nothing there — the listener cannot move it at all.
+The cap earns its place on a receiver where the listener CAN move the gain: the demo's RTL today,
+and the RSP if it is ever run in single mode.
+★ Which also says where the feature is worth testing: a personal/single-mode receiver, not the
+  locked one where nothing can be changed anyway.
+
+## ★★★ AND A PLAIN "LOCK THE AGC" — separate from the per-band rules
+
+Stuart: *"for the RSP and Airspy, the ability to simply force the AGC to be locked like it is now in
+shared mode."*
+
+▶ A per-radio admin switch: **AGC on, and listeners may not turn it off.** Not per band, not a
+number — the same thing shared mode does today, but available deliberately rather than only as a
+side effect of locking the whole receiver.
+★★ This is the WHOLE feature for the Airspy HF+, which has no variable gain to cap, and it is the
+   right default for an RSP an owner does not want fiddled with — the AGC is trusted (Stuart: "the
+   AGC on that is good enough"). It is also far simpler than the per-band caps, works on both
+   radios, and should probably ship FIRST for that reason.
+
 ## What to build
 
 1. **Config** — per radio, alongside `allowRanges` / `blockRanges` (same file, same shape of
@@ -108,10 +134,17 @@ park is where "everybody has gone" is actually decided.
    a cap a listener can walk around:
    - when a listener SETS gain (`type=="gain"`, `rsp_control`, the Airspy branch) — clamp;
    - when a listener TUNES into a limited band — re-clamp, or maximum gain set on HF simply
-     survives the move to FM, which is the exact overload being prevented;
+     survives the move to FM, which is the exact overload being prevented. ★★★ Stuart is explicit
+     that this must be AUTOMATIC and must move the CONTROL, not merely the hardware: *"if I tune
+     from a band which has a higher limit or unlimited set and move into a limited band then we
+     need to reduce the gain to the limit set automatically too, so the gain slider doesn't go into
+     a prohibited range."* So the server lowers the gain AND tells the client the new value and the
+     new ceiling; the slider follows the radio down and then stops there. A slider left sitting in
+     a range the radio is refusing to honour is a control that lies about the receiver;
    - when the radio STARTS in a limited band.
-4. **Tell the client** — publish the cap with the hardware info so the slider stops at the ceiling
-   instead of springing back. ★★ A control that silently undoes what you just did reads as broken;
+4. **Tell the client** — publish the cap AND the corrected value with the hardware info, so the
+   slider both moves down on entering a limited band and stops at the ceiling thereafter, instead
+   of springing back. ★★ A control that silently undoes what you just did reads as broken;
    one that will not go past a marked limit reads as a rule.
 5. **UI** — the setup page, next to the frequency allow/block list it resembles. ★ A "limit to
    here" action from the live gain control is the nicer entry (no unit confusion at all — the admin
