@@ -2695,6 +2695,11 @@ select.btn { padding: 6px 8px; }
         <!-- ★ WWVB is ALSO on 60 kHz, like MSF — which one you hear is a matter of geography, not
              of tuning. Worth saying, or a UK listener picking WWVB would blame the decoder. -->
         <button class="btn" data-station="wwvb"  title="Fort Collins, US — also 60.000 kHz, in CW. Receivable in North America; in Europe MSF dominates this frequency.">WWVB 60k</button>
+        <!-- ★★★ WWV IS THE ODD ONE: AM, NOT CW. Its timecode rides a 100 Hz SUBCARRIER on the
+             AM signal, where the others switch the carrier itself — so CW would demodulate the
+             tones and ticks and leave the decoder nothing to read. Said in the label because it
+             is the single mistake that would make a working decoder look broken. -->
+        <button class="btn" data-station="wwv" title="Fort Collins, US — 2.5 / 5 / 10 / 15 / 20 MHz in AM (not CW). Verified on air 2026-08-12; strongest in North America.">WWV (AM)</button>
         <button class="btn" data-station="rwm"   title="Moscow — 4.996 / 9.996 / 14.996 MHz in CW. Markers only: no date is transmitted.">RWM</button>
       </div>
     </div>

@@ -4398,6 +4398,13 @@ const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
   dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
   wwvb:  { label: 'WWVB', hint: 'WWVB, Fort Collins — tune <b>60.000 kHz</b> in <b>CW</b>. '
                                  + 'Note MSF shares this frequency: which one you hear is geography.' },
+  // ★★ AM, not CW, and the only station here that is: WWV's code rides a 100 Hz subcarrier on the
+  //    AM signal rather than switching the carrier. Tuned in CW there is nothing to decode.
+  // ★ The year is not shown from the air — see decodeWwv: its year field could not be identified
+  //   against real signals, so the date is built from day-of-year and this machine's year.
+  wwv:   { label: 'WWV',   hint: 'WWV, Fort Collins — <b>2.5 / 5 / 10 / 15 / 20 MHz</b> in <b>AM</b> '
+                                 + '(not CW). Strongest in North America; from Europe try 15 MHz in '
+                                 + 'the afternoon.' },
   rwm:   { label: 'RWM',   hint: 'RWM, Moscow — <b>4.996 / 9.996 / 14.996 MHz</b> in <b>CW</b>. '
                                  + 'Markers only: RWM transmits <b>no date or time code</b>, so none can be shown.' },
 };
