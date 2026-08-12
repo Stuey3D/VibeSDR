@@ -1082,16 +1082,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             e.isEnabled = false
             menu.addItem(e)
         }
-        // ★★★ SAY IT WHILE IT MATTERS — WHILE SERVING, not in a pane nobody opened. Simple mode
-        //     does not force a password and should not: the owner is at the machine, and loopback
-        //     is admin-exempt, so their own receiver is fully controllable. But the moment it is
-        //     shared beyond this network that is no longer true, and the owner deserves to be told
-        //     ONCE, where they are already looking, rather than discovering it from a stranger.
-        // ★ Not an alert: this is advice, not an error, and a modal here would be dismissed on
-        //   reflex by the person who most needs to read it.
+        // ★★★ SAY IT WHILE IT MATTERS, AND DO NOT SCOLD. Simple mode is for HOME NETWORKS, where
+        //     no admin password is needed and running without one is the intended, liked
+        //     behaviour — the owner is at the machine, and loopback is admin-exempt, so their own
+        //     receiver is fully controllable. The cases that DO want one are narrower and worth
+        //     naming: a house of multiple occupancy, or sharing a phone's radio to a laptop over
+        //     public wi-fi, where a connection PIN usually belongs beside it.
+        // ★ So this states a FACT and when it matters, rather than pronouncing the setup wrong.
+        //   Wording that tells someone off for doing the normal thing teaches them to ignore it —
+        //   and this is the same line that has to still be read on the day it counts.
+        // ★ Not an alert: advice, not an error. A modal here is dismissed on reflex.
         if server.running && !server.fullMode
             && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
-            let w = NSMenuItem(title: "⚠︎ No admin password — not recommended for public sharing",
+            let w = NSMenuItem(title: "No admin password — fine at home; set one to share wider",
                                action: nil, keyEquivalent: "")
             w.isEnabled = false
             menu.addItem(w)
