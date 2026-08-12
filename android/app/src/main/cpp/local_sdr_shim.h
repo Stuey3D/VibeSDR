@@ -78,6 +78,30 @@ public:
      *  Independent of the PIN on purpose: a public receiver may be open to all listeners and
      *  still refuse a visitor putting DC on the feedline. Empty = nothing is protected. */
     static void setVibeServerAdminSecret(const std::string& secret);
+
+    // ── ★★★ WHAT A LISTENER MAY DO TO THE FRONT END ────────────────────────────────────────
+    //
+    // ★★★ A CEILING, NOT A LOCK. The admin gate takes the gain away entirely on a shared receiver;
+    //     these leave the control in the listener's hands and simply stop it going too far. An
+    //     owner capping FM wants the front end protected and the listener left alone, not to field
+    //     gain requests all evening (Stuart, 2026-08-12). See BRIEF-admin-gain-limits.md.
+    // ★★ VALUES ARE IN THE RADIO'S OWN UNITS — tenths of a dB on an RTL, an RF slider POSITION on
+    //    an RSP. The three radios do not share a gain model and nothing here pretends they do.
+
+    /** Per-band ceilings, "fm:250, 0-30M:400". Empty = no limit anywhere (today's behaviour). */
+    static void setGainLimits(const std::string& csv);
+    /** The gain to return to when everybody has left, in the radio's units. -1 = leave it be. */
+    static void setRestGain(int gain);
+    /** Force the AGC on and refuse to let a listener turn it off (RSP and Airspy HF+). */
+    static void setAgcLock(bool on);
+    /** The ceiling in force at a frequency, or -1 for none. Public so the client can be told. */
+    static int  gainCapAt(double hz);
+    /** Where the listener actually is — the VFO, falling back to the capture centre. This is the
+     *  frequency a gain ceiling is judged against: on the radios where a cap applies at all (the
+     *  ones a listener can still move the gain on) the hardware follows the VFO anyway, and it is
+     *  what the owner means by "when I tune into FM". */
+    double listenFrequency() const;
+    static bool agcLocked();
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe, comma separated (addresses/CIDRs).
      *  EMPTY = trust nobody and read no headers, which is the default: the header is
      *  client-supplied, so believing it from any peer lets a stranger forge an address and walk

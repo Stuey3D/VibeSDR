@@ -885,8 +885,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (first) setMode(first, true);
       }
     },
-    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre) => {
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
+      hwAgcLocked = agcLocked === true;
+      // ★ Re-applied on EVERY hwinfo, because the server re-sends it when the ceiling changes —
+      //   which is how the slider follows the radio down on tuning into a limited band.
+      applyGainCap();
       hwLockedCentre = lockedCentre ?? 0;
       // ★ Search is narrowed to what this receiver can actually reach — see setTunableWindow().
       //   Set from here because this is where the lock becomes known, and re-set on every hwinfo
@@ -1242,6 +1247,10 @@ let lastBytesAt = performance.now();
 let audioKbps = 0;
 let specKbps = 0;
 let hwGains: number[] = [];
+/** ★★ The owner's gain ceiling in force right now, in the radio's units; -1 = none. Re-sent by
+ *  the server whenever it changes, so it follows the listener across bands. */
+let hwGainCap = -1;
+let hwAgcLocked = false;
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
@@ -6278,6 +6287,42 @@ function pushSettingsToServer() {
   // server has told us what this dongle actually supports.
 }
 
+/**
+ * ★★★ BOUND THE SLIDER AT THE OWNER'S CEILING, AND MOVE IT DOWN IF IT IS ABOVE.
+ *
+ *     The server clamps regardless — it is the authority — but a slider left sitting above the
+ *     cap shows a value the radio is not using, which reads as a broken control rather than as
+ *     somebody's rule. Stuart, 2026-08-12: "we need to reduce the gain to the limit set
+ *     automatically too, so the gain slider doesn't go into a prohibited range."
+ * ★★ The slider is an INDEX into the discrete gain list, not a dB value, so the ceiling has to be
+ *    translated into the highest index whose gain is within it. A cap that falls between two steps
+ *    rounds DOWN — the whole point is not to exceed it.
+ * ★ -1 = no ceiling: restore the full range rather than leaving yesterday's limit in place.
+ */
+function applyGainCap() {
+  const g = document.getElementById('gain') as HTMLInputElement | null;
+  if (!g || !hwGains.length) return;
+  let maxIdx = hwGains.length - 1;
+  if (hwGainCap >= 0) {
+    maxIdx = -1;
+    for (let i = 0; i < hwGains.length; i++) if (hwGains[i] <= hwGainCap) maxIdx = i;
+    if (maxIdx < 0) maxIdx = 0;        // every step exceeds it — the lowest is the best we can do
+  }
+  g.max = String(maxIdx);
+  if (Number(g.value) > maxIdx) {
+    g.value = String(maxIdx);
+    const tenths = hwGains[maxIdx] ?? 0;
+    const lbl = document.getElementById('gainVal');
+    if (lbl) lbl.textContent = `${(tenths / 10).toFixed(1)} dB`;
+    savePref('gainIdx', maxIdx);
+  }
+  // ★ Say WHY it stops there. A slider that simply will not go further is indistinguishable from
+  //   one that is broken; a note naming the owner's limit is a rule the listener can understand.
+  g.title = hwGainCap >= 0
+    ? `The owner has limited gain to ${(hwGainCap / 10).toFixed(1)} dB on this band`
+    : '';
+}
+
 /** The server tells us its real gain steps and sample rates (hwinfo) — the
  *  client can't query a remote dongle, so the controls are built from that. */
 function populateHw() {
@@ -6298,6 +6343,7 @@ function populateHw() {
       spec!.setHwGain(hwGains[Number(g.value)] ?? 0, false);
       savePref('gainIdx', Number(g.value));
     };
+    applyGainCap();   // ★ the saved index may be above a ceiling set since it was stored
     show();
     // Push the restored gain — otherwise the slider shows a value the radio
     // isn't using.

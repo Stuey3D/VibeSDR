@@ -142,6 +142,35 @@ int main() {
         eq(parseList("40m"), "[[7000000,7200000]]", "and back again");
     }
 
+    // ── ★★★ PER-BAND GAIN CEILINGS ──────────────────────────────────────────────────────────
+    {
+        std::printf("\nGain ceilings\n");
+        const auto rules = parseGainList("fm:250, 0-30M:400");
+        ok(rules.size() == 2, "two rules parsed");
+        ok(gainCapAt(rules, 96'600'000) == 250, "★ inside FM the FM ceiling applies");
+        ok(gainCapAt(rules, 7'100'000)  == 400, "★ on HF the HF ceiling applies");
+        ok(gainCapAt(rules, 450'000'000) == -1, "★ outside every rule there is NO ceiling");
+
+        // ★★★ THE LOWEST WINS WHERE RULES OVERLAP — an owner who writes a tight FM limit and a
+        //     broad catch-all means the tight one on FM. Reading it the other way would let the
+        //     catch-all silently undo the limit written for the band that was overloading.
+        const auto overlap = parseGainList("fm:250, 0-2000M:400");
+        ok(gainCapAt(overlap, 96'600'000) == 250, "★★ the TIGHTER of two overlapping rules wins");
+        ok(gainCapAt(overlap, 14'200'000) == 400, "and the broad one still applies elsewhere");
+
+        // Rubbish must be skipped, not fatal, and must never read as "no limit anywhere".
+        ok(parseGainList("").empty(), "an empty list is no rules");
+        ok(parseGainList("fm").empty(), "★ a band with no value is not a rule");
+        ok(parseGainList("nonsense:250").empty(), "★ an unknown band name is skipped");
+        const auto mixed = parseGainList("rubbish, fm:250");
+        ok(mixed.size() == 1 && gainCapAt(mixed, 96'600'000) == 250,
+           "★★ one bad entry does not discard the good ones beside it");
+        // ★ 0 is a REAL ceiling (minimum gain), not "unset" — the distinction matters because -1
+        //   means no limit and 0 means the tightest possible one.
+        const auto zero = parseGainList("fm:0");
+        ok(zero.size() == 1 && gainCapAt(zero, 96'600'000) == 0, "★★ a ceiling of 0 is a ceiling");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;

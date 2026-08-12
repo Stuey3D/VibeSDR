@@ -378,6 +378,46 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            ★★ ALLOW says what is reachable; BLOCK carves holes out of it. Leaving ALLOW empty means
            the whole radio, so somebody who only wants to keep listeners off the airband does not
            have to enumerate everything else first. -->
+      <!-- ★★★ WHAT A LISTENER MAY DO TO THE FRONT END.
+           A CEILING, NOT A LOCK: the gain control stays the listener's to move, it simply cannot
+           go past what the owner allows on that band. The admin gate already takes gain away
+           entirely on a shared receiver, and that is a different thing — an owner capping FM wants
+           the front end protected and the listener left alone, not to field gain requests all
+           evening (Stuart, 2026-08-12).
+           ★★ EVERY FIELD IS IN THIS RADIO'S OWN UNITS, because the three radios do not share a
+              gain model — and each is shown only on the radios that HAVE the control, per the rule
+              in AGENTS.md: a control whose every use is a no-op reads as a broken feature. -->
+      <div class="card hide" id="gainCard">
+        <h2>Gain limits</h2>
+        <p class="why">Optional. Leave everything empty and listeners have the full range, which is
+           what a receiver does today.</p>
+
+        <label class="hide" id="gainAgcLockRow" class="row">
+          <input type="checkbox" id="gainAgcLock">
+          <span class="lbl">Lock the AGC on</span>
+          <div class="note">Listeners may not switch to manual. The radio's own loop keeps the
+             front end safe — on an Airspy HF+ this is the whole protection available, since it has
+             no variable gain to limit.</div></label>
+
+        <label class="hide" id="gainRestRow"><span class="lbl">Return to this gain when everybody
+             has left</span>
+          <input type="text" id="gainRest" placeholder="e.g. 19.7 dB — empty to leave it alone">
+          <div class="note">A listener who turns the gain up should not leave it up for the next
+             person. Applied when the last listener has gone, not the moment they disconnect, so a
+             page reload does not undo somebody's setting.</div></label>
+
+        <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
+          <div class="row" style="gap:8px">
+            <select id="gainPick" style="flex:1 1 200px"></select>
+            <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
+            <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add</button>
+          </div>
+          <div id="gainList" class="bandList"></div>
+          <div class="note">Cap the bands that overload and leave the rest open — a strong local FM
+             transmitter is the usual reason, while HF wants everything the radio has. Tuning into
+             a capped band brings the gain down automatically.</div></label>
+      </div>
+
       <div class="card hide" id="bandCard">
         <h2>Where listeners may tune</h2>
         <p class="why">Leave both empty and this radio tunes anywhere it can hear.</p>
@@ -795,6 +835,89 @@ function bandSummary() {
   if (!a.length && !b.length) { el.textContent = "Listeners can tune anywhere this radio hears."; return; }
   el.textContent = (a.length ? `Only ${a.map(bandLabel).join(", ")}` : "Everything this radio hears")
     + (b.length ? `, except ${b.map(bandLabel).join(", ")}.` : ".");
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★★ GAIN LIMITS — a ceiling, not a lock
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// ★★★ THE NUMBERS ARE IN THE RADIO'S OWN UNITS, and the page must speak each radio's language
+//     rather than invent a shared one: an RTL's gain is TENTHS OF A dB (so the owner types 19.7
+//     and we store 197), an RSP's is an RF slider POSITION (a whole number, higher = more gain),
+//     and an Airspy HF+ has no variable gain at all — for it the AGC lock is the whole feature.
+//     Getting this wrong is not cosmetic: an RSP position typed as if it were dB would cap a
+//     receiver at a position it does not have.
+function gainIsDb() {
+  const d = (radio().driver || "");
+  return d === "rtl" || d === "rtlsdr";
+}
+/** Owner's text -> the stored integer. "19.7 dB" -> 197 on an RTL, "5" -> 5 on an RSP. */
+function gainToRaw(txt) {
+  const n = parseFloat(String(txt).replace(/[^0-9.\-]/g, ""));
+  if (!isFinite(n)) return -1;
+  return gainIsDb() ? Math.round(n * 10) : Math.round(n);
+}
+/** The stored integer -> what the owner reads back. */
+function gainFromRaw(v) {
+  if (v === undefined || v === null || v < 0) return "";
+  return gainIsDb() ? (v / 10).toFixed(1) + " dB" : String(v);
+}
+
+function gainChips() {
+  const list = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
+  const host = $("gainList");
+  host.innerHTML = list.map((e, i) => {
+    const colon = e.lastIndexOf(":");
+    const band = colon >= 0 ? e.slice(0, colon) : e;
+    const val  = colon >= 0 ? parseInt(e.slice(colon + 1), 10) : -1;
+    return `<span class="bandChip">${esc(bandLabel(band))} \u2264 ${esc(gainFromRaw(val))}` +
+           `<button type="button" data-g="${i}" aria-label="Remove">\u00d7</button></span>`;
+  }).join("") || '<span class="dim">No ceilings \u2014 listeners have the full range.</span>';
+  for (const b of host.querySelectorAll("button[data-g]"))
+    b.addEventListener("click", () => {
+      const arr = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
+      arr.splice(parseInt(b.getAttribute("data-g"), 10), 1);
+      radio().gainLimits = arr.join(",");
+      gainChips();
+    });
+}
+
+function gainAdd() {
+  const band = $("gainPick").value;
+  const raw  = gainToRaw($("gainMax").value);
+  // ★ Both halves or nothing: a band with no ceiling is not a rule, and a ceiling with no band
+  //   would silently apply everywhere — the opposite of what someone capping ONE band intends.
+  if (!band || raw < 0) return;
+  const cur = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean)
+                .filter(e => e.slice(0, e.lastIndexOf(":")) !== band);   // replace, don't duplicate
+  cur.push(band + ":" + raw);
+  radio().gainLimits = cur.join(",");
+  $("gainMax").value = "";
+  gainChips();
+}
+
+function renderGain() {
+  const r = radio();
+  const drv = r.driver || "";
+  const isRtl = drv === "rtl" || drv === "rtlsdr";
+  const isRsp = drv === "sdrplay";
+  const isHf  = drv === "airspyhf";
+  // ★★ SHOWN ONLY WHERE THE CONTROL EXISTS. An HF+ has no gain to cap, so offering a ceiling box
+  //    for it would be a setting that does nothing — the exact fault AGENTS.md has a rule about.
+  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf));
+  $("gainAgcLockRow").classList.toggle("hide", !(isRsp || isHf));
+  $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp));
+  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp));
+  $("gainAgcLock").checked = r.agcLock === 1;
+  $("gainRest").value = gainFromRaw(r.restGain);
+  $("gainRest").placeholder = isRtl ? "e.g. 19.7 dB \u2014 empty to leave it alone"
+                                    : "RF gain position \u2014 empty to leave it alone";
+  $("gainMax").placeholder = isRtl ? "max, e.g. 25 dB" : "max RF position";
+  const sel = $("gainPick");
+  sel.innerHTML = '<option value="">\u2014 pick a band \u2014</option>'
+    + BANDS.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
+  gainChips();
 }
 
 function renderBands() {
@@ -1366,12 +1489,19 @@ function fill() {
   $("sessionLimit").value = r.sessionLimitMin || 0;
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
-  addr(); coverage(); bwNote(); refreshHw(); eibiStatus();
+  addr(); coverage(); bwNote(); refreshHw(); eibiStatus(); renderGain();
   $("eibiGet").addEventListener("click", eibiFetch);
   $("rtlSerialGo").addEventListener("click", serialModalOpen);
   $("serialCancel").addEventListener("click", () => { $("serialModal").hidden = true; });
   $("serialDo").addEventListener("click", serialChange);
   for (const id of ["serialA", "serialB"]) $(id).addEventListener("input", serialModalCheck);
+  $("gainAdd").addEventListener("click", gainAdd);
+  $("gainAgcLock").addEventListener("change", () => { radio().agcLock = $("gainAgcLock").checked ? 1 : 0; });
+  $("gainRest").addEventListener("change", () => {
+    const t = ($("gainRest").value || "").trim();
+    radio().restGain = t ? gainToRaw(t) : -1;
+    $("gainRest").value = gainFromRaw(radio().restGain);   // echo it back in canonical form
+  });
   $("allowAdd").addEventListener("click", () => bandAdd("allow"));
   $("blockAdd").addEventListener("click", () => bandAdd("block"));
   $("bandCopy").addEventListener("click", () => {

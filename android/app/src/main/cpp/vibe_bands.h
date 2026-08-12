@@ -205,6 +205,64 @@ inline Ranges parseList(const std::string& csv) {
     return out;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★★ PER-BAND GAIN CEILINGS
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// ★★★ THE VALUE IS IN THE RADIO'S OWN CONTROL UNITS and this parser does not care what they are.
+//     The three radios do not share a gain model — an RTL tuner gain is tenths of a dB from a
+//     discrete list, an RSP's is an RF slider POSITION, an Airspy HF+ has no variable gain at all
+//     — so nothing here converts or validates the number beyond "it is a number". The config is
+//     per radio, a radio has one driver, and the admin sets it while looking at that radio's own
+//     control. See BRIEF-admin-gain-limits.md.
+//
+// ★★ The BAND half reuses parseEntry, so an owner may write a named band — "fm:250" — as well as
+//    "88-108:250". Named bands are already ITU-region aware, which a hand-typed pair is not.
+
+struct GainRule {
+    Range band;
+    int   max = -1;     ///< ceiling in the radio's units; -1 = parsed nothing useful
+    bool valid() const { return band.valid() && max >= 0; }
+};
+using GainRules = std::vector<GainRule>;
+
+/** Parse "fm:250, 0-30M:400" — comma/newline separated, bad entries skipped rather than fatal. */
+inline GainRules parseGainList(const std::string& csv) {
+    GainRules out;
+    std::string cur;
+    for (size_t i = 0; i <= csv.size(); ++i) {
+        const char c = i < csv.size() ? csv[i] : ',';
+        if (c == ',' || c == '\n' || c == ';') {
+            // ★ Split on the LAST colon: a band name has none, but "88-108" written as a frequency
+            //   pair never contains one either, so the last is unambiguous and tolerates spaces.
+            const size_t colon = cur.rfind(':');
+            if (colon != std::string::npos) {
+                GainRule g;
+                g.band = parseEntry(cur.substr(0, colon));
+                const std::string v = detail::trim(cur.substr(colon + 1));
+                if (!v.empty()) g.max = atoi(v.c_str());
+                if (g.valid()) out.push_back(g);
+            }
+            cur.clear();
+        } else cur += c;
+    }
+    return out;
+}
+
+/**
+ * The ceiling that applies at a frequency, or -1 for none.
+ *
+ * ★★ THE LOWEST WINS WHERE RULES OVERLAP. An owner who writes both "fm:250" and a wider
+ *    "0-2000M:400" means the tighter one on FM — reading it the other way would let a broad
+ *    catch-all silently undo the specific limit they wrote for the band that was overloading.
+ */
+inline int gainCapAt(const GainRules& rules, double hz) {
+    int cap = -1;
+    for (const auto& g : rules)
+        if (hz >= g.band.lo && hz <= g.band.hi && (cap < 0 || g.max < cap)) cap = g.max;
+    return cap;
+}
+
 /** Sort and merge touching/overlapping ranges into a canonical set. */
 inline Ranges normalise(Ranges in) {
     if (in.empty()) return in;

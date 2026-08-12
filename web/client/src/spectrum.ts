@@ -134,7 +134,16 @@ export interface SpectrumCallbacks {
    *  must go entirely. Two different meanings, deliberately two different fields: reusing the
    *  ceiling as a lock hid the picker in the app and merely filtered it here. */
   onHwInfo?: (gains: number[], rates: number[], lockedRate: number, maxFftRate: number,
-              forceIdleSaver?: boolean, radio?: RadioCaps | null, lockedCentre?: number) => void;
+              forceIdleSaver?: boolean, radio?: RadioCaps | null, lockedCentre?: number,
+              /** ★★★ The owner's gain CEILING in force at the frequency being listened to, in the
+               *  radio's own units, or -1 for none. A cap the client does not know about is a
+               *  control that springs back — the listener drags the slider, the server clamps it,
+               *  and the UI shows a value the radio is not using, which reads as a broken
+               *  receiver rather than as somebody's rule. */
+              gainCap?: number,
+              /** The owner has locked the AGC on: the switch must show as locked rather than
+               *  appear to ignore the tap. */
+              agcLocked?: boolean) => void;
   /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
@@ -406,7 +415,9 @@ export class SpectrumClient {
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null,
-                           Number(msg.lockedCentre) || 0);
+                           Number(msg.lockedCentre) || 0,
+                           typeof msg.gainCap === 'number' ? msg.gainCap : -1,
+                           msg.agcLocked === true);
         // ★★ Demodulators the OWNER has switched off. The server also REFUSES them, so this is
         //    not the enforcement — it is what lets us leave them out of the menu entirely.
         //    Offering a mode that will be refused reads as "the feature is broken"; not offering

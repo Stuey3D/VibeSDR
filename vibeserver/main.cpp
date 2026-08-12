@@ -111,6 +111,11 @@ struct Opts {
     std::string adminPass;
     std::string trustedProxies;   // see LocalSdrShim::setTrustedProxies
     int         sessionLimitMin = 0;     // per-listener minutes; 0 = unlimited
+    // ★ Gain limits, in the RADIO'S OWN units — see BRIEF-admin-gain-limits.md. Empty/-1 is the
+    //   behaviour before they existed, so an older config simply carries on as it was.
+    std::string gainLimits;              // "fm:250, 0-30M:400" — per-band ceilings
+    int         restGain = -1;           // returned to when everybody has left
+    int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
     //   must never change what an existing install does.
@@ -408,6 +413,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.rxGrid = c.locator; o.rxLat = c.lat; o.rxLon = c.lon;
     o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
+    o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
     o.adminIdleMin    = c.adminIdleMin;
     o.publicSharing   = (c.sharing == vsconfig::Sharing::Public);
     o.updateSrvHour = c.updateSrvHour; o.updateSrvDay = c.updateSrvDay;
@@ -416,6 +422,12 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.rate = c.rate;
     o.lockFreq = c.lockFreq; o.lockRate = c.lockRate;
     o.gain = c.gain;
+    // ★★★ THE OWNER'S RESTING GAIN WINS AT START. `gain` is whatever was last applied — which may
+    //     be a LISTENER's setting, saved because an admin adjustment must survive a restart. If
+    //     the owner has named a gain to come back to, coming back to something else is precisely
+    //     the fault the resting gain exists to prevent: a receiver that restarts overloaded
+    //     because of what the last visitor did. -1 = they have not named one, so nothing changes.
+    if (c.restGain >= 0) o.gain = c.restGain;
     o.mode = c.demodMode;
     o.users = c.users;
     o.maxBw = c.maxBw; o.maxFps = c.maxFps; o.fftRate = c.fftRate;
@@ -434,6 +446,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.locator = o.rxGrid; c.lat = o.rxLat; c.lon = o.rxLon;
     c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
+    c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
     c.adminIdleMin    = o.adminIdleMin;
     c.sharing         = o.publicSharing ? vsconfig::Sharing::Public : vsconfig::Sharing::Local;
     c.updateSrvHour = o.updateSrvHour; c.updateSrvDay = o.updateSrvDay;
@@ -1714,6 +1727,12 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerAdminSecret(o.adminPass);
     LocalSdrShim::setTrustedProxies(o.trustedProxies);
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
+    // ★★★ WHAT A LISTENER MAY DO TO THE FRONT END — see BRIEF-admin-gain-limits.md. A ceiling
+    //     rather than a lock: the control stays theirs, it simply cannot go past what the owner
+    //     allows in that band. Empty limits and -1s are exactly the behaviour before this existed.
+    LocalSdrShim::setGainLimits(o.gainLimits);
+    LocalSdrShim::setRestGain(o.restGain);
+    LocalSdrShim::setAgcLock(o.agcLock == 1);
     LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
     // ★★★ THE BAND PLAN FOLLOWS THE RECEIVER, not the author. A server in the US is in ITU Region
     //     2, where 40 m runs to 7.300 and 2 m to 148 — shipping Europe's edges everywhere would

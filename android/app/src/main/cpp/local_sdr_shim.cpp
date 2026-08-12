@@ -841,6 +841,13 @@ static std::string         g_vsAdminSecret;
  *  anything, and timing them out of their own radio would be absurd. Admin sessions are
  *  exempt too — the owner should not be able to lock themselves out. */
 static std::atomic<int>     g_vsSessionLimitMin{0};
+
+// ── ★★★ GAIN LIMITS ─────────────────────────────────────────────────────────────────────────
+static std::mutex            g_gainLimMtx;
+static vibebands::GainRules  g_gainLimits;
+static std::atomic<int>      g_restGain{-1};
+static std::atomic<bool>     g_agcLock{false};
+
 /** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
  *  plain disconnect would be a blip: the same listener would retake the free radio within
  *  seconds and carry on, and the limit would be decorative. After a timeout the address is
@@ -4667,6 +4674,17 @@ struct LocalSdrShim::Impl {
         }
 
         audioFreq.store(freq);
+        // ★★★ TUNING INTO A CAPPED BAND MUST BRING THE GAIN DOWN WITH IT. Without this the whole
+        //     feature is walk-aroundable in the most ordinary way possible: set maximum gain on
+        //     HF, where the owner allows it, then tune to Broadcast FM — and the front end is
+        //     overloaded by exactly the setting the cap exists to prevent, having passed every
+        //     check on the way in. Stuart, 2026-08-12: "if I tune from a band which has a higher
+        //     limit or unlimited set and move into a limited band then we need to reduce the gain
+        //     to the limit set automatically."
+        // ★★ Only ever DOWNWARD. Leaving a band does not restore what the listener had before —
+        //    that would mean remembering a value they may never have chosen, and quietly RAISING
+        //    the gain is the one direction that can damage nothing but sound like everything.
+        applyGainCapForFreq(freq);
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             // The VFO has tuned outside the captured window — recentre the capture
             // on it so we don't end up showing dead air.
@@ -5079,8 +5097,19 @@ struct LocalSdrShim::Impl {
         };
         if (type == "ahf_control") {
             if (!sharedGate("Airspy HF+ controls")) return;
-            if (jsonNum(msg, "att", v))    LocalSdrShim::instance().setAhfAttenuation((int)v);
-            if (jsonNum(msg, "lna", v))    LocalSdrShim::instance().setAhfLna(v != 0);
+            // ★★★ AGC LOCKED MEANS THE MANUAL PATH IS CLOSED TOO. The attenuator and the preamp
+            //     ARE this radio's gain — leaving them writable while the AGC is "locked" would be
+            //     a lock in name only, since a listener could simply attenuate or boost around it.
+            //     ★ The threshold below is the AGC's own setting, not a way past it, so it stays.
+            const bool ahfManualLocked = LocalSdrShim::agcLocked();
+            if (jsonNum(msg, "att", v)) {
+                if (ahfManualLocked) LOGI("attenuator refused — the owner has locked the AGC on");
+                else                 LocalSdrShim::instance().setAhfAttenuation((int)v);
+            }
+            if (jsonNum(msg, "lna", v)) {
+                if (ahfManualLocked) LOGI("preamp refused — the owner has locked the AGC on");
+                else                 LocalSdrShim::instance().setAhfLna(v != 0);
+            }
             if (jsonNum(msg, "thresh", v)) LocalSdrShim::instance().setAhfAgcThreshold(v != 0);
             // ★ Calibration is protected even though the rest of this message is not:
             // gain a listener can play with, a miscalibrated reference they cannot see.
@@ -5090,7 +5119,14 @@ struct LocalSdrShim::Impl {
             }
             // ★ AGC LAST, matching the client's own send order: it owns the gain path, so
             // applying it before the manual attenuation would let it immediately override it.
-            if (jsonNum(msg, "agc", v))    LocalSdrShim::instance().setAhfAgc(v != 0);
+            // ★★★ ON THE HF+ THE AGC LOCK IS THE WHOLE FEATURE. This radio has no variable gain to
+            //     cap — an 8-step attenuator and a preamp — and its AGC is trusted ("the AGC on
+            //     that is good enough", Stuart), so "protect the front end" here means: leave it
+            //     to the radio, and do not let a listener take it off.
+            if (jsonNum(msg, "agc", v)) {
+                if (LocalSdrShim::agcLocked() && v == 0) LOGI("AGC off refused — locked by the owner");
+                else                                     LocalSdrShim::instance().setAhfAgc(v != 0);
+            }
             return;
         }
         if (type == "rsp_control") {
@@ -5126,6 +5162,30 @@ struct LocalSdrShim::Impl {
             //    the live ladder length, so an RSP1 and an RSPdx each get their own answer.
             // ★ Belt and braces: setLnaState() below still applies the state directly, so the
             //   LIVE gain is exactly what was asked for even if the arithmetic here rounds.
+            // ★★★ THE OWNER'S RF CEILING — AND THE NUMBER ON THE WIRE COUNTS THE OTHER WAY.
+            //     `lna` is the RAW LNA STATE, where HIGHER means MORE attenuation and therefore
+            //     LESS gain; the owner's cap is a GAIN POSITION, where higher means more gain (see
+            //     BRIEF-admin-gain-limits.md). Converted once, here, against the LIVE ladder — an
+            //     RSP1 has 4 states and an RSPdx 28, so the arithmetic cannot be hard-coded.
+            //     ★★★ GET THIS BACKWARDS AND THE FEATURE DOES THE OPPOSITE OF WHAT WAS ASKED: an
+            //         owner capping FM would be FORCING the radio to maximum RF gain on exactly
+            //         the band that was overloading, and it would look like it was working,
+            //         because a number went in and a number came out.
+            // ★★ RF, not IF, deliberately: the LNA sits ahead of the mixer, so it is what decides
+            //    whether the front end overloads at all — and capping it leaves the IF AGC its
+            //    full range, so there is no clamp for the AGC to fight.
+            if (jsonNum(msg, "lna", v)) {
+                const int cap = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+                const int n = (useSdrplay() && sdrp) ? sdrp->lnaStateCount() : 0;
+                if (cap >= 0 && n > 1) {
+                    const int minState = std::max(0, (n - 1) - cap);   // more gain = lower state
+                    if ((int)v < minState) {
+                        LOGI("RF gain state %d raised to %d by the owner's limit (cap position %d)",
+                             (int)v, minState, cap);
+                        v = minState;
+                    }
+                }
+            }
             if (jsonNum(msg, "lna", v))    { LocalSdrShim::instance().setLnaState((int)v);
                                              const int n = (useSdrplay() && sdrp) ? sdrp->lnaStateCount() : 0;
                                              std::string j = "{\"lnaState\":" + std::to_string((int)v);
@@ -5137,8 +5197,18 @@ struct LocalSdrShim::Impl {
                                              vsPersist(j + "}"); }
             if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
                                              vsPersist("{\"ifGr\":" + std::to_string((int)v) + "}"); }
-            if (jsonNum(msg, "ifagc", v))  { LocalSdrShim::instance().setIfAgc(v != 0);
-                                             vsPersist(std::string("{\"ifAgc\":") + (v != 0 ? "1" : "0") + "}"); }
+            // ★★★ AGC LOCKED = THE LISTENER MAY NOT TURN IT OFF. The owner has decided the radio's
+            //     own loop keeps the front end safe; letting a visitor switch to manual would hand
+            //     them the very control the lock exists to withhold. Turning it ON is always
+            //     allowed — that is moving TOWARDS what the owner asked for.
+            if (jsonNum(msg, "ifagc", v)) {
+                if (LocalSdrShim::agcLocked() && v == 0) {
+                    LOGI("AGC off refused — the owner has locked it on");
+                } else {
+                    LocalSdrShim::instance().setIfAgc(v != 0);
+                    vsPersist(std::string("{\"ifAgc\":") + (v != 0 ? "1" : "0") + "}");
+                }
+            }
             if (jsonNum(msg, "agcset", v))   LocalSdrShim::instance().setIfAgcSetPoint((int)v);
             // Loop dynamics arrive together — they only make sense as a set.
             {
@@ -5247,8 +5317,21 @@ struct LocalSdrShim::Impl {
             if (msg.find("\"auto\":true") != std::string::npos) {
                 LocalSdrShim::instance().setGain(-1); vsPersist("{\"gain\":-1}");
             } else if (jsonNum(msg,"value",v)) {
-                LocalSdrShim::instance().setGain((int)v);
-                vsPersist("{\"gain\":" + std::to_string((int)v) + "}");
+                // ★★★ THE OWNER'S CEILING FOR THIS BAND. A ceiling, not a lock: the listener keeps
+                //     the control and simply cannot take it past what the owner allows here —
+                //     which on Broadcast FM is what stops a strong local transmitter overloading
+                //     the front end for everybody (Stuart, 2026-08-12).
+                // ★★ Clamped rather than refused. A rejected command leaves the slider showing a
+                //    value the radio is not using, which reads as a broken control; a clamp plus
+                //    the corrected value below reads as a rule.
+                const int cap = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+                int want = (int)v;
+                if (cap >= 0 && want > cap) {
+                    LOGI("gain %d capped to %d by the owner's limit", want, cap);
+                    want = cap;
+                }
+                LocalSdrShim::instance().setGain(want);
+                vsPersist("{\"gain\":" + std::to_string(want) + "}");
             }
             return;
         }
@@ -5410,7 +5493,20 @@ struct LocalSdrShim::Impl {
 
     void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
         std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
-        std::string j = "{\"type\":\"hwinfo\",\"gains\":[";
+        // ★★★ THE OWNER'S CEILING TRAVELS WITH THE HARDWARE INFO. A cap the client does not know
+        //     about is a control that springs back: the listener drags the slider, the server
+        //     quietly clamps it, and the UI shows a value the radio is not using — which reads as
+        //     a broken receiver rather than as somebody's rule. Sent as the cap IN FORCE RIGHT
+        //     NOW, at the frequency being listened to, so it follows the listener across bands.
+        //     ★ -1 = no limit here, which is the overwhelmingly common answer and costs 8 bytes.
+        //     ★ agcLocked says WHY the AGC switch will not move, so the client can show it locked
+        //       rather than appear to ignore the tap.
+        std::string j = "{\"type\":\"hwinfo\""
+                      + std::string(",\"gainCap\":")
+                      + std::to_string(LocalSdrShim::gainCapAt(
+                            LocalSdrShim::instance().listenFrequency()))
+                      + ",\"agcLocked\":" + (LocalSdrShim::agcLocked() ? "true" : "false")
+                      + ",\"gains\":[";
         for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
         // Capture sample rates this server offers (= the spectrum spans the client
         // may pick). These are the rates built into THIS server, so the client's
@@ -8436,7 +8532,80 @@ struct LocalSdrShim::Impl {
     }
     /** Arm the deferred park. The wait itself happens on the hotplug tick, which already runs
      *  every 2 s — no new thread, and nothing to join on shutdown. */
+    /** Bring the gain down to the owner's ceiling for this frequency, if there is one.
+     *  ★ Reads the CURRENT gain and only lowers it, so a listener who was already inside the
+     *    limit is not disturbed and nothing is silently raised. */
+    /** The ceiling last announced to clients, so a change can be sent and nothing else. */
+    std::atomic<int> lastSentGainCap{-2};
+
+    void applyGainCapForFreq(double hz) {
+        const int cap = LocalSdrShim::gainCapAt(hz);
+        // ★★★ TELL THE CLIENTS WHEN THE CEILING CHANGES — including when it goes AWAY. hwinfo is
+        //     otherwise sent once, on connect, so a listener who tunes from HF into FM would keep
+        //     a slider bounded by the old answer: either refusing gain the owner now allows, or
+        //     offering gain that is about to be clamped. Both read as a broken control.
+        //     ★ Only on a CHANGE. This runs on every retune, and re-sending the whole hardware
+        //       description on each dial movement would be a message per pan.
+        if (lastSentGainCap.exchange(cap) != cap)
+            for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
+        if (cap < 0) return;
+        if (useSdrplay() && sdrp) {
+            // ★★ The cap is a GAIN POSITION; the LNA state counts the other way. See the note in
+            //    the rsp_control handler — this is the same conversion and must not drift from it.
+            const int n = sdrp->lnaStateCount();
+            if (n > 1) {
+                const int minState = std::max(0, (n - 1) - cap);
+                if (sdrp->currentLnaState() < minState) {
+                    LOGI("retune into a capped band — RF gain state %d -> %d",
+                         sdrp->currentLnaState(), minState);
+                    LocalSdrShim::instance().setLnaState(minState);
+                }
+            }
+            return;
+        }
+        // RTL: tenths of a dB, and -1 means AUTO — which is the radio deciding, not the listener
+        // overriding, so it is left alone.
+        const int cur = lastGainTenthDb;
+        if (cur >= 0 && cur > cap) {
+            LOGI("retune into a capped band — gain %d -> %d", cur, cap);
+            LocalSdrShim::instance().setGain(cap);
+        }
+    }
+
+    /** ★★★ THE GAIN THE OWNER CHOSE, ONCE EVERYBODY HAS GONE.
+     *
+     *  A cap stops a listener going too far; this stops what they DID becoming the receiver's new
+     *  normal. Without it the next person — and the owner — inherit whatever the last listener
+     *  happened to leave behind, which is how a receiver ends up quietly overloaded with nobody
+     *  having done anything wrong (Stuart, 2026-08-12: "always return to around 19.7").
+     *  ★★ AT THE PARK, NOT ON DISCONNECT. The park is already deferred by the grace period exactly
+     *     so a page reload is not treated as leaving — resetting on disconnect would undo a
+     *     listener's own setting every time they refreshed the page.
+     *  ★ In the radio's own units, like everything else here: tenths of a dB on an RTL, an RF gain
+     *    POSITION on an RSP. -1 = the owner has not set one, so leave the radio exactly as it is.
+     */
+    void applyRestGain() {
+        const int rest = g_restGain.load();
+        if (rest < 0) return;
+        if (useSdrplay() && sdrp) {
+            const int n = sdrp->lnaStateCount();
+            if (n > 1) {
+                const int state = std::max(0, std::min(n - 1, (n - 1) - rest));
+                LOGI("everybody has left — RF gain back to the owner's resting position %d", rest);
+                LocalSdrShim::instance().setLnaState(state);
+            }
+            return;
+        }
+        LOGI("everybody has left — gain back to the owner's resting value %d", rest);
+        LocalSdrShim::instance().setGain(rest);
+    }
+
     void armIdlePark() {
+        // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
+        //   then, and a gain written to a stopped device is a gain nobody applied. The grace
+        //   period is about not disturbing a reload — and a reload does not care what the gain is
+        //   while nobody is listening, because resumeCaptureIdle leaves it exactly as found.
+        applyRestGain();
         const double g = g_vsIdleGraceSec.load();
         if (g <= 0.0) {                                      // grace disabled: act at once
             if (g_vsReleaseWhenIdle.load()) LocalSdrShim::instance().releaseRadio();
@@ -9266,6 +9435,27 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
 void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAudio.store(mode); }
+void LocalSdrShim::setGainLimits(const std::string& csv) {
+    std::lock_guard<std::mutex> lk(g_gainLimMtx);
+    g_gainLimits = vibebands::parseGainList(csv);
+    LOGI("gain limits: %zu rule(s) from \"%s\"", g_gainLimits.size(), csv.c_str());
+}
+void LocalSdrShim::setRestGain(int gain) {
+    g_restGain.store(gain);
+    LOGI("resting gain: %d", gain);
+}
+void LocalSdrShim::setAgcLock(bool on) {
+    g_agcLock.store(on);
+    LOGI("AGC lock: %s", on ? "ON — listeners may not turn it off" : "off");
+}
+bool LocalSdrShim::agcLocked() { return g_agcLock.load(); }
+
+int LocalSdrShim::gainCapAt(double hz) {
+    std::lock_guard<std::mutex> lk(g_gainLimMtx);
+    if (g_gainLimits.empty()) return -1;
+    return vibebands::gainCapAt(g_gainLimits, hz);
+}
+
 void LocalSdrShim::setVibeServerAdminSecret(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsAdminMtx);
     g_vsAdminSecret = secret;
@@ -9288,6 +9478,12 @@ bool LocalSdrShim::isBusy() const {
 int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0; }
 
 double LocalSdrShim::captureSpanHz() const { return p ? p->sampleRate : 0.0; }
+
+double LocalSdrShim::listenFrequency() const {
+    if (!p) return 0.0;
+    const double vfo = p->audioFreq.load();
+    return vfo > 0 ? vfo : p->rtlCenter.load();
+}
 
 void LocalSdrShim::setSpectrogramPath(const std::string& path) {
     if (!p) return;
