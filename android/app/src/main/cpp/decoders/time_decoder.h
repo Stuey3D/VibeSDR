@@ -163,6 +163,9 @@ private:
     /** ★ A sample clock, and where the CURRENT second began. MSF needs it: a second can contain
      *  two dips (A=0,B=1 is off-on-off), so "the next dip" is not "the next second". */
     long long clock_ = 0, dipStartClock_ = 0, secondStartClock_ = 0;
+    /** ★★★ WWV: the sample the minute anchor was seen at. The second counter is DERIVED from the
+     *  distance to it, never incremented per pulse — see onSecondEdge. */
+    long long wwvAnchorClock_ = 0;
 
     // ★ MSF carries TWO bits per second (A and B) in different 100 ms windows, DCF77 one. Both
     //   fit here; B stays zero where a station has no B bit.

@@ -1,4 +1,5 @@
 #include "time_decoder.h"
+#include <ctime>
 
 #include <cmath>
 #include <cstdlib>
@@ -281,6 +282,9 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         //         one minute and then lost it — right rule, read one second late.
         constexpr double kWwvHoleMs = 1050.0;
         if (sym == 2 && dipMs > kWwvHoleMs) {
+            // ★★★ THE ANCHOR IS A CLOCK REFERENCE, NOT JUST A RESET. Everything after it is placed
+            //     by DISTANCE from here — see below.
+            wwvAnchorClock_ = (long long)((double)dipStartClock_ - gapMs * sr_ / 1000.0);
             second_ = 59;                          // this marker is second 59; the hole after it is 0
             setState(State::Reading);
         } else if (second_ < 0) {
@@ -288,6 +292,36 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
             return;                                // still hunting for the marker-then-hole
         }
         lastWasMarker_ = (sym == 2);
+        // ★★★ WHICH SECOND IS THIS? MEASURE IT, DO NOT COUNT IT.
+        //
+        //     Incrementing per symbol assumes exactly one symbol per second, and on a real HF path
+        //     that is not true: a fading pulse SPLITS and arrives as two events, so the counter
+        //     gains a second and every field after it reads its neighbour's data. Measured on a
+        //     live WT8P capture (2026-08-12): the frame decoded with hour=5,6,7 across three
+        //     consecutive minutes — the MINUTE counter, sitting where the hour should be — and the
+        //     array's own content put the hour field 10 places later than the map looked, with the
+        //     minute field one place before that. Two different offsets in one frame is the
+        //     signature of counting rather than measuring, since each slip moves everything after
+        //     it and nothing before.
+        //     ★★ The anchor gives a hard reference once a minute, and every second in that minute
+        //        is a known distance from it: second N begins N seconds after second 0, which is
+        //        the hole immediately following the anchor. So place each symbol by rounding that
+        //        distance — a split pulse then lands in the SAME second twice instead of shifting
+        //        the frame, and a missed pulse leaves a gap instead of pulling everything back.
+        //     ★ Only when anchored. Before the first anchor the count is all we have, and it is
+        //       discarded anyway (second_ < 0 returns above).
+        if (wwvAnchorClock_ > 0) {
+            // ★★★ MEASURE FROM THE PULSE'S START, NOT ITS END. Every second's pulse BEGINS at a
+            //     fixed 30 ms past the tick and then runs for 170, 470 or 770 ms depending on what
+            //     it is saying — so the end moves by 600 ms with the DATA. Timing off the end put
+            //     symbols half a second either side of the truth and rounded them into the wrong
+            //     second; timing off the start is the same instant every time.
+            const double pulseStart = (double)dipStartClock_ - gapMs * sr_ / 1000.0;
+            const double since = (pulseStart - (double)wwvAnchorClock_) / (double)sr_;
+            // The anchor IS second 59, so everything is measured relative to that.
+            const int measured = (int)(((59 + (long long)std::lround(since)) % 60 + 60) % 60);
+            if (measured >= 0 && measured <= 59) second_ = measured;
+        }
         bitsA_[second_] = (sym == 1) ? 1 : 0;
         if (sym >= 0 && onBit) onBit(second_, bitsA_[second_]);
         emitPartial();
@@ -581,12 +615,45 @@ bool TimeDecoder::decodeWwv(TimeStamp& out) const {
     const int* b = bitsA_;
     auto w = [&](int bit, int weight) { return b[bit] ? weight : 0; };
 
-    const int minute = w(1,1)+w(2,2)+w(3,4)+w(4,8) + w(6,10)+w(7,20)+w(8,40);
-    const int hour   = w(10,1)+w(11,2)+w(12,4)+w(13,8) + w(15,10)+w(16,20);
-    const int doy    = w(20,1)+w(21,2)+w(22,4)+w(23,8)
-                     + w(25,10)+w(26,20)+w(27,40)+w(28,80)
-                     + w(30,100)+w(31,200);
-    const int yy     = w(50,1)+w(51,2)+w(52,4)+w(53,8) + w(55,10)+w(56,20)+w(57,40)+w(58,80);
+    // ★★★ THE FIELDS SIT ONE DECADE LATER THAN THIS USED TO LOOK — WWV IS AN IRIG-H FRAME.
+    //
+    //     Seconds 1-9 carry DUT1 and flags, NOT the minute: the BCD time starts in the SECOND
+    //     decade. Reading it from second 1 put every field one decade early, so the "hour" slot
+    //     returned the MINUTE and the "day" slot returned the HOUR — which is exactly what a live
+    //     capture showed: hour=5,6,7 across three consecutive minutes at 19:05, 19:06, 19:07, and
+    //     doy=19 when the hour was 19 (WT8P, Sammamish WA, 15 MHz, 2026-08-12).
+    //
+    // ★★★ AND THE FRAMING WAS NEVER AT FAULT, which is why this took so long to see. WWV marks
+    //     each minute with an 800 ms 1000 Hz tone; in that capture the tone falls at capture
+    //     seconds 12, 72, 132, 192 and the decoder's anchor fires at 13, 73, 133, 193 — one second
+    //     later, exactly as it should for a marker at second 59 followed by the second-0 hole.
+    //     A clock-independent landmark settled in one measurement what argument could not.
+    // ★★ Verified against the same frames: hour=19 and day-of-year=224 both come out right, and
+    //    the bits that differ between consecutive minutes are the 1, 2 and 4 weights of the minute
+    //    field — 5, 6, 7 in LSB-first BCD — sitting in the second decade.
+    const int minute = w(10,1)+w(11,2)+w(12,4)+w(13,8) + w(15,10)+w(16,20)+w(17,40);
+    const int hour   = w(20,1)+w(21,2)+w(22,4)+w(23,8) + w(25,10)+w(26,20);
+    const int doy    = w(30,1)+w(31,2)+w(32,4)+w(33,8)
+                     + w(35,10)+w(36,20)+w(37,40)+w(38,80)
+                     + w(40,100)+w(41,200);
+    // ★★★ THE YEAR COMES FROM THE HOST, NOT FROM THE AIR — AND THAT IS DELIBERATE.
+    //
+    //     WWV does transmit a year, but I could not locate its field against real signals: across
+    //     six frames from two receivers (WT8P and K3FEF, 2026-08-12), NO placement of a two-digit
+    //     BCD year in the tail of the frame yields the correct 26 — the whole region carries only
+    //     three set bits. Rather than ship a number that merely looks decoded, this reads the
+    //     year the machine already knows.
+    // ★★★ AND A WRONG YEAR IS NOT A COSMETIC FAULT: it decided LEAP, so a misread 2012 gave
+    //     February 29 days and put every date one day early. The time was right and the date was
+    //     wrong for a reason that had nothing to do with the date field — day-of-year decoded
+    //     perfectly at second 30 on both captures.
+    // ★★ A receiver knows the year; it does not know the second. Taking the one thing we cannot
+    //    verify from the local clock, and everything we CAN verify from the transmission, is the
+    //    honest division — and it is stated here so nobody later mistakes this for a decode.
+    // ▶ If someone identifies the year field on a live signal, restore it and delete this note.
+    const time_t nowT = time(nullptr);
+    const struct tm* utc = gmtime(&nowT);
+    const int yy = utc ? (utc->tm_year + 1900) % 100 : 0;
 
     if (hour > 23 || minute > 59 || doy < 1 || doy > 366 || yy > 99) return false;
 

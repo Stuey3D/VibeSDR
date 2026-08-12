@@ -14,6 +14,7 @@
 // ★ Deliberately also feeds a minute of pure noise and requires NO timestamp: a decoder that
 //   invents a plausible time from nothing is far worse than one that stays quiet.
 #include "decoders/time_decoder.h"
+#include <ctime>
 
 #include <cmath>
 #include <cstdio>
@@ -200,19 +201,33 @@ int main() {
         auto wwvMinute = [&](std::vector<int16_t>& out, int hh, int mm, int doy, int yy) {
             int sym[60];
             for (int i = 0; i < 60; i++) sym[i] = 0;
-            sym[0] = 2;                                    // frame reference
-            for (int p : { 9, 19, 29, 39, 49, 59 }) sym[p] = 2;   // P1..P6
+            // ★★★ THIS GENERATOR USED TO ENCODE THE SAME MISUNDERSTANDING THE DECODER DID, so the
+            //     two agreed and the test proved only that. Corrected against a LIVE signal on
+            //     2026-08-12 (WT8P, Sammamish WA, 15 MHz) — see wwv_live_testing:
+            //       • SECOND 0 IS A HOLE, not a marker. It used to emit a 770 ms marker there,
+            //         which is why "the double marker spanning seconds 59 and 0" was ever written
+            //         down as WWV's alignment feature. WWV transmits no such thing: the minute is
+            //         the ABSENCE of a pulse, and the markers run at a flat 10 s cadence.
+            //       • THE TIME STARTS IN THE SECOND DECADE. It is an IRIG-H frame — seconds 1-9
+            //         carry DUT1 and flags, minutes are at 10-17, hours at 20-26, day-of-year at
+            //         30-41, year at 51-58. Reading from second 1 put every field one decade early,
+            //         so the "hour" slot returned the MINUTE.
+            //     ★★ A synthetic test is only ever as right as its author's model of the signal.
+            //        This one is now written from measurements of the real transmission.
+            for (int p : { 9, 19, 29, 39, 49, 59 }) sym[p] = 2;   // P1..P6, every ten seconds
             auto put = [&](const int* bits, const int* wts, int n, int val) {
                 int rem = val;
                 for (int i = n - 1; i >= 0; i--) if (rem >= wts[i]) { sym[bits[i]] = 1; rem -= wts[i]; }
             };
-            { const int bi[] = {1,2,3,4,6,7,8};      const int wt[] = {1,2,4,8,10,20,40};       put(bi,wt,7,mm); }
-            { const int bi[] = {10,11,12,13,15,16};  const int wt[] = {1,2,4,8,10,20};          put(bi,wt,6,hh); }
-            { const int bi[] = {20,21,22,23,25,26,27,28,30,31};
+            { const int bi[] = {10,11,12,13,15,16,17}; const int wt[] = {1,2,4,8,10,20,40};     put(bi,wt,7,mm); }
+            { const int bi[] = {20,21,22,23,25,26};    const int wt[] = {1,2,4,8,10,20};        put(bi,wt,6,hh); }
+            { const int bi[] = {30,31,32,33,35,36,37,38,40,41};
               const int wt[] = {1,2,4,8,10,20,40,80,100,200};                                  put(bi,wt,10,doy); }
-            { const int bi[] = {50,51,52,53,55,56,57,58};
+            { const int bi[] = {51,52,53,54,55,56,57,58};
               const int wt[] = {1,2,4,8,10,20,40,80};                                          put(bi,wt,8,yy); }
             for (int sec = 0; sec < 60; sec++) {
+                // ★ Second 0 carries NO pulse at all — the 1.03 s hole that marks the minute.
+                if (sec == 0) { emit(out, 1000.0, 0.0); continue; }
                 emit(out, 30.0, 0.0);                                     // the second tick
                 emit(out, sym[sec] == 2 ? 770.0 : sym[sec] == 1 ? 470.0 : 170.0, 1.0);
                 emit(out, 1000.0 - 30.0 - (sym[sec] == 2 ? 770.0 : sym[sec] == 1 ? 470.0 : 170.0), 0.0);
@@ -221,13 +236,18 @@ int main() {
         std::vector<int16_t> w;
         toneHz = 100.0;                              // the 100 Hz subcarrier
         emit(w, 2000.0, 0.0);
-        // ★ THREE minutes, and that is not padding. WWV's only alignment feature is the DOUBLE
-        //   marker spanning seconds 59 and 0, so it cannot lock until it has seen a minute
+        // ★ THREE minutes, and that is not padding. WWV's only alignment feature is the HOLE at
+        //   second 0, so it cannot lock until it has seen a minute
         //   BOUNDARY — the first minute is spent hunting. Then one minute to read and one more to
         //   corroborate. Two minutes looks like enough and is not.
         wwvMinute(w, 9, 7, 223, 26);                 // spent finding the 59/0 boundary
         wwvMinute(w, 9, 8, 223, 26);                 // read
         wwvMinute(w, 9, 9, 223, 26);                 // corroborates
+        // ★★ A FOURTH MINUTE, because a frame is closed by the NEXT hole. The third minute's bits
+        //    are complete but nothing had yet told the decoder they were finished — the audio
+        //    simply stopped — so the corroborating decode never ran and the test failed against a
+        //    decoder that was working. The signal must not end on the frame you are asserting.
+        wwvMinute(w, 9, 10, 223, 26);
         toneHz = 800.0;
 
         TimeDecoder d(SR, TimeDecoder::Station::WWV);
@@ -239,8 +259,21 @@ int main() {
             std::printf("    decoded: %04d-%02d-%02d %02d:%02d UTC\n",
                         t.year, t.month, t.day, t.hour, t.minute);
             ok(t.hour == 9 && t.minute == 9, "WWV: the corroborated minute is announced (09:09)");
-            ok(t.year == 2026, "WWV: year 2026");
-            ok(t.month == 8 && t.day == 11, "★★ WWV: day-of-year 223 converted to 11 August");
+            // ★★★ THE YEAR IS THE HOST'S, NOT THE TRANSMISSION'S — see the long note in decodeWwv:
+            //     WWV's year field could not be located against real signals, and a WRONG year is
+            //     not cosmetic (it decides leap, and a misread 2012 put every date a day early).
+            //     ★★ So this asserts against the SAME source the decoder uses rather than against
+            //        the literal 2026, which would have quietly become a failing test on 1 January
+            //        — a test that breaks with the calendar teaches people to ignore the suite.
+            const time_t nowT = time(nullptr);
+            const struct tm* utcNow = gmtime(&nowT);
+            const int hostYear = utcNow ? utcNow->tm_year + 1900 : 0;
+            ok(t.year == hostYear, "WWV: the year comes from the host (the air does not give us one)");
+            // ★ Day-of-year 223 is 11 August in a NON-leap year. In a leap year it is the 10th, so
+            //   this follows the same rule the decoder does rather than hard-coding a date.
+            const bool leapNow = (hostYear % 4 == 0 && hostYear % 100 != 0) || (hostYear % 400 == 0);
+            ok(t.month == 8 && t.day == (leapNow ? 10 : 11),
+               "★★ WWV: day-of-year 223 converted to a date");
         }
     }
 
