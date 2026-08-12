@@ -4423,7 +4423,7 @@ function decParams(mode: string): Record<string, unknown> {
 
 function initDecoders(host: string, auth: AuthState) {
   decoders = new DecoderClient(host, auth, {
-    onText: (t) => {
+    onText: (t: string) => {
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -4431,6 +4431,21 @@ function initDecoders(host: string, auth: AuthState) {
       //    decoded times among them. Only the time decoders use it; everything else appends
       //    exactly as before.
       let text = el.textContent || '';
+      // ★★★ ONLY THE TIME DECODERS SPEAK THE TERMINAL CONVENTION — RTTY's CARRIAGE RETURNS ARE
+      //     DATA. CR is a character in the Baudot alphabet (see the tables in fsk_decoder.cpp) and
+      //     stations really send it, usually as CR CR LF and sometimes bare. Treating those as
+      //     "rewrite the last line" ate the history as it decoded: the box grew while everything
+      //     above vanished (Stuart, 2026-08-12).
+      //     ★★★ AND IT WAS WORSE THAN LOSING ONE LINE. The rewrite cuts back to the last '\n' —
+      //         but when the buffer holds none yet, `lastIndexOf` returns -1 and the slice keeps
+      //         NOTHING, so a single CR threw away everything decoded so far. RTTY is exactly the
+      //         case with no newlines of its own, which is why it hit hardest there.
+      // ★ For every other decoder a CR is just an end-of-line: fold a RUN of them, with or
+      //   without a following LF, into ONE newline. RTTY convention is CR CR LF — two returns to
+      //   give the carriage time to travel on a real teleprinter — so mapping each separately
+      //   would print a blank line between every row of a transmission.
+      const terminalCR = activeDec === 'time';
+      if (!terminalCR) t = t.replace(/\r+\n?/g, '\n');
       for (const chunk of t.split(/(?=\r)/)) {
         if (chunk.startsWith('\r')) {
           const cut = text.lastIndexOf('\n');
