@@ -1826,6 +1826,15 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    coloured. "closed" is the boring majority and stays quiet. */
 #adminPanel td.why-kicked  { color: #ffc447; }
 #adminPanel td.why-banned  { color: var(--red); }
+/* ★★ AN ADMIN SESSION IS THE ONE ROW AN OWNER MUST NOT SKIM PAST. Someone holding a compromised
+   password looks exactly like an ordinary listener otherwise — and they can lift every protection
+   on this page. Marked beside the ADDRESS, because "who and from where" is the question being
+   asked, and coloured like a warning rather than like decoration. */
+#adminPanel .adminTag {
+  color: var(--bg, #000); background: var(--hi, #ffe566);
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 1px 4px; border-radius: 3px; vertical-align: middle;
+}
 #adminPanel td.why-timeout { color: var(--unit); }
 
 /* Where listeners connect from. */

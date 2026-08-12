@@ -569,6 +569,30 @@ const CONNS_PER_PAGE = 100;
  *  ★ Radios are listed in the order they were VISITED, deduped: "Airspy HF+ → SDRplay RSP1B"
  *    tells a story that a set of labels does not.
  */
+/**
+ * ★★★ A SESSION ID IS NOT A VISIT, AND A GAP IS WHAT SEPARATES THEM.
+ *
+ *     This merged every leg sharing a session id however far apart they were, and the visit's
+ *     duration is the SPAN from first open to last close — so a browser tab left open, reconnecting
+ *     for a minute every few minutes, became ONE visit whose clock ran across all the idle time
+ *     between. Measured on the demo, 2026-08-12: 195.180.34.4 logged twelve legs of 20-61 seconds
+ *     over an hour and forty; about NINE MINUTES on the radio, displayed as 1h39 and still rising
+ *     while every leg read "closed". Stuart saw 2h15 on a server with a 30-MINUTE LIMIT, which
+ *     makes the limit itself look broken — and it was working perfectly.
+ *     ★ It also explains rows "disappearing and reappearing": each new leg rewrites the visit it
+ *       is folded into, so a row moves and its times change under you.
+ *
+ * ★★ THE SPAN IS STILL RIGHT INSIDE A VISIT — do not be tempted to sum the legs. A visit is
+ *    normally TWO CONCURRENT SOCKETS (spectrum and audio); summing them would double every
+ *    duration, which is the bug this rule was written to avoid in the first place.
+ *
+ * ★ So: same session AND resuming within kVisitGapSec of the last leg ending. A reconnect across a
+ *   network blip comes back in seconds; two minutes of nothing is someone who left and returned.
+ *   The server's own idle grace is 300 s, so this is deliberately tighter — it describes a PERSON
+ *   coming back, not a radio being released.
+ */
+const VISIT_GAP_SEC = 120;
+
 function groupVisits(list: any[]): any[] {
   const bySession = new Map<string, any>();
   const out: any[] = [];
@@ -576,7 +600,9 @@ function groupVisits(list: any[]): any[] {
     const sess = String(c.session || '');
     if (!sess) { out.push({ ...c, radios: c.radio ? [c.radio] : [] }); continue; }
     const had = bySession.get(sess);
-    if (!had) {
+    // ★ `!had.end` is a LIVE leg — never split from it: the visit is still happening.
+    const gapped = had && had.end && (c.at || 0) - had.end > VISIT_GAP_SEC;
+    if (!had || gapped) {
       const v = { ...c, radios: c.radio ? [c.radio] : [] };
       bySession.set(sess, v);
       out.push(v);
@@ -632,7 +658,7 @@ function renderConns(raw: any[]) {
     const live = !c.end;
     return `<tr>
       <td>${esc(when(c.at))}</td>
-      <td>${withFlag(c.cc, c.ip || '—')}</td>
+      <td>${withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}</td>
       <!-- ★ WHICH RECEIVER THEY CHOSE. The fan-out already tagged every record with the radio it
            came from; it was meaningless while each radio answered with the whole machine's history
            (see the per-radio log path in main.cpp) and is worth showing now that it is true.

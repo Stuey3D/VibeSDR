@@ -427,6 +427,18 @@ struct ConnRec {
     std::string cc;               ///< ISO-3166 country, or empty when unknown. See geoip.cpp.
     std::string endReason;        ///< "closed" | "kicked" | "banned" | "queue-full" | "busy" | "timeout"
     uint64_t    bytes = 0;
+    /** ★★★ DID THIS SESSION USE THE ADMIN PASSWORD?
+     *
+     *  An owner who can see WHO held an admin session, and from where, can spot a compromised
+     *  password — which is otherwise invisible: an intruder with the password looks exactly like
+     *  an ordinary listener in this log, and every protection here (the ban list, the frequency
+     *  limits, the session limit) is one they can lift.
+     *  ★ Stuart, 2026-08-12: "list when someone is in an admin session, as it will show if an
+     *    admin password has been compromised."
+     *  ★★ Recorded as a FACT about the connection, not derived later from a live flag: `adminOk`
+     *     is per-process and clears on restart, so anything computed from it would forget exactly
+     *     the history this is for. */
+    bool        admin = false;
 };
 
 class ConnLog {
@@ -457,10 +469,11 @@ public:
         if (!f) return;
         for (const auto& r : pending_) {
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
-                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu}\n",
+                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,"
+                       "\"admin\":%s}\n",
                     r.atEpoch, r.endEpoch, esc(r.ip).c_str(), esc(r.session).c_str(),
                     esc(r.agent).c_str(), esc(r.cc).c_str(), esc(r.endReason).c_str(),
-                    (unsigned long long)r.bytes);
+                    (unsigned long long)r.bytes, r.admin ? "true" : "false");
             ++written_;
         }
         pending_.clear();
@@ -486,6 +499,20 @@ public:
     /** Close the most recent still-open record for this session (or address, if no session).
      *  ★ MOST RECENT, searching backwards: one address can hold several sessions over an evening
      *    and closing the oldest would attribute a 3-second bounce to a 2-hour listen. */
+    /** Mark the still-open record for this session as an ADMIN session.
+     *  ★ Called at the moment the credential is verified, not at close: a session evicted or
+     *    banned mid-flight must still be recorded as having held admin. */
+    void markAdmin(const std::string& ip, const std::string& session) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
+            if (it->endEpoch) continue;
+            const bool hit = session.empty() ? (it->ip == ip) : (it->session == session);
+            if (!hit) continue;
+            it->admin = true;
+            return;
+        }
+    }
+
     void close(const std::string& ip, const std::string& session,
                const char* reason, uint64_t bytes = 0) {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -550,7 +577,8 @@ public:
                + ",\"agent\":\"" + esc(it->agent) + "\""
                + ",\"cc\":\"" + esc(it->cc) + "\""
                + ",\"reason\":\"" + esc(it->endReason) + "\""
-               + ",\"bytes\":" + std::to_string(it->bytes) + "}";
+               + ",\"bytes\":" + std::to_string(it->bytes)
+               + ",\"admin\":" + (it->admin ? "true" : "false") + "}";
         }
         return j + "]";
     }
@@ -617,6 +645,8 @@ private:
             r.agent     = field(line, "\"agent\":\"");
             r.cc        = field(line, "\"cc\":\"");
             r.endReason = field(line, "\"reason\":\"");
+            // ★ Absent in records written before this existed — false is the honest reading.
+            r.admin     = strstr(line, "\"admin\":true") != nullptr;
             if (!r.atEpoch) continue;
             recs_.push_back(std::move(r));
             // ★ Keep only the newest in memory; the file may hold more than we display.
@@ -634,10 +664,11 @@ private:
         for (const auto& r : recs_) {
             if (!r.endEpoch) continue;          // still open — it will be written when it closes
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
-                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu}\n",
+                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,"
+                       "\"admin\":%s}\n",
                     r.atEpoch, r.endEpoch, esc(r.ip).c_str(), esc(r.session).c_str(),
                     esc(r.agent).c_str(), esc(r.cc).c_str(), esc(r.endReason).c_str(),
-                    (unsigned long long)r.bytes);
+                    (unsigned long long)r.bytes, r.admin ? "true" : "false");
         }
         fclose(f);
         rename(tmp.c_str(), path_.c_str());

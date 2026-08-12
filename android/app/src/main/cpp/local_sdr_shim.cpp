@@ -7073,6 +7073,14 @@ struct LocalSdrShim::Impl {
                                    && g_vsAuthState.verify(secret, adminNonce, adminToken)));
                 if (adminAuthed) g_vsAuthState.recordOk(ip);
                 else             g_vsAuthState.recordFail(ip);
+                // ★★★ RECORD THAT SOMEONE HELD ADMIN, AND FROM WHERE. An intruder holding a
+                //     compromised password is otherwise INDISTINGUISHABLE from an ordinary
+                //     listener in this log — and every protection here is one they can lift: the
+                //     ban list, the frequency limits, the session limit. The owner cannot notice
+                //     what is never written down (Stuart, 2026-08-12).
+                // ★ Marked on VERIFICATION, not at close, so a session that is later evicted or
+                //   banned still carries the fact.
+                if (adminAuthed) g_vsConnLog.markAdmin(sock->peerAddress(), session);
             }
 
             // ★★ COOLDOWN FIRST — before occupancy. Someone serving a cooldown must be refused
