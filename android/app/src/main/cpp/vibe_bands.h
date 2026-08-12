@@ -177,6 +177,13 @@ inline Range parseEntry(const std::string& raw) {
     // A name first — names cannot contain '-', so there is no ambiguity to resolve.
     std::string lower;
     for (char c : t) lower += (char)tolower((unsigned char)c);
+    // ★★ "all" — EVERYWHERE THIS RADIO CAN HEAR. A per-band list with no way to say "everywhere"
+    //    forces an owner who wants one overall ceiling to add a rule for every band and to come
+    //    back whenever a band is added (Stuart, 2026-08-12). A name rather than "0-4000M" so the
+    //    saved config still reads as what was meant, and so no radio can ever out-range it.
+    //    ★ It is an ordinary rule, so the LOWEST-WINS merge already does the right thing: an
+    //      overall ceiling with a tighter FM rule leaves FM tighter, which is what both mean.
+    if (lower == "all") { r.lo = 0.0; r.hi = 1e12; return r; }
     for (const auto& b : namedBands(defaultRegion()))
         if (lower == b.id) { r.lo = b.lo; r.hi = b.hi; return r; }
 

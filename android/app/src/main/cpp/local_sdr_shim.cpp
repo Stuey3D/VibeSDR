@@ -6323,6 +6323,17 @@ struct LocalSdrShim::Impl {
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
             }
             j += "]";
+            // ★★★ HOW MANY RF GAIN POSITIONS THIS RSP HAS. The limiter caps an RF POSITION, and the
+            //     count is a property of the MODEL (RSP1 4, RSP1A/1B/duo 10, RSP2 9, RSPdx 28) — so
+            //     the setup page could not draw a slider for it while this was published only in
+            //     the admin status (Stuart, 2026-08-12: "isn't the RF gain 0-9 on an RSP?" — yes on
+            //     his RSP1B, and 0-27 on an RSPdx, which is exactly why it must be READ, not assumed).
+            // ★ 0 when it is not an RSP or no radio is attached: the page then shows its text box
+            //   rather than a slider with an invented maximum.
+            {
+                const int n = (rsp && !lost) ? LocalSdrShim::instance().rfGainPositions() : 0;
+                j += ",\"lnaStates\":" + std::to_string(n);
+            }
             j += ",\"bands\":[";
             {
                 const auto& bs = vibebands::namedBands();
@@ -11455,6 +11466,14 @@ std::vector<int> LocalSdrShim::getTunerGains() {
 }
 
 bool LocalSdrShim::isSdrplay() const { return p && p->useSdrplay(); }
+
+/** ★ How many RF gain POSITIONS this RSP offers (0 = not an RSP, or nothing attached). Published
+ *  so the setup page can draw a slider over the real range instead of a box: the count is a
+ *  property of the MODEL, and the model is something we know and the owner should not have to. */
+int LocalSdrShim::rfGainPositions() const {
+    if (!p || !p->useSdrplay() || !p->sdrp) return 0;
+    return p->sdrp->lnaStateCount();
+}
 
 std::string LocalSdrShim::radioCapsJson() const {
     if (!p) return "";

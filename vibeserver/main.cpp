@@ -1777,9 +1777,20 @@ int main(int argc, char** argv) {
         cfg.mode == vsconfig::Mode::LockedRange ? "" : cfg.blockRanges);
     LocalSdrShim::setUpdateSchedule(o.updateSrvHour, o.updateSrvDay,
                                     o.updateAllHour, o.updateAllDay);
-    // ★ Linux offers the lot: it has systemd and apt, and a reboot comes back on its own.
-    //   macOS and Android must NOT — see setMaintenanceActions in local_sdr_shim.h.
+    // ★★★ THE COMMENT SAID "macOS AND ANDROID MUST NOT" AND THE CODE DID IT ANYWAY. This line was
+    //     unconditional, and macOS Full mode runs THIS BINARY — so the Mac admin page drew the
+    //     whole maintenance section and every button in it was dead (Stuart, 2026-08-12).
+    //     Nothing on the far side saves you: the web client hides what is not offered, so an
+    //     over-generous list here is the ONLY thing that can put an inert button on the page.
+    // ★★ Every action here needs systemd or apt, and neither exists off Linux. Worse than inert:
+    //    a reboot on macOS stops at the FileVault login, and on Android the USB radio is not
+    //    re-detected until it is physically replugged — the button would STRAND the receiver.
+    //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
+#if defined(__linux__) && !defined(__ANDROID__)
     LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all");
+#else
+    LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
+#endif
     LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
     LocalSdrShim::setVibeServerReleaseWhenIdle(o.releaseWhenIdle);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);

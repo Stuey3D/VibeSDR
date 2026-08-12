@@ -483,8 +483,14 @@ final class Server: ObservableObject {
     ///     spawns the front door. Dispatching here — rather than threading `if fullMode` through
     ///     the body below — is the same lesson the Settings pane learned the hard way: a single
     ///     path carrying that many conditionals silently does the opposite of what it reads.
-    func start() {
-        if fullMode { startFull() } else { startSimple() }
+    /// - Parameter showSetup: open the browser setup page once we are serving.
+    ///   ★★★ FALSE BY DEFAULT, AND THAT IS THE WHOLE FIX. Full mode opened the setup page on
+    ///       EVERY start, and the app auto-starts at launch — so a configured receiver threw a
+    ///       browser tab at its owner every single time it opened, insisting they set up something
+    ///       they had already set up (Stuart, 2026-08-12). Opening it belongs to the button that
+    ///       SAYS it will ("Save, start and set up in the browser"), not to starting as such.
+    func start(showSetup: Bool = false) {
+        if fullMode { startFull(showSetup: showSetup) } else { startSimple() }
     }
 
     func stop() {
@@ -567,7 +573,7 @@ final class Server: ObservableObject {
         }
     }
 
-    private func startFull() {
+    private func startFull(showSetup: Bool = false) {
         lastError = nil
         guard let bin = FullMode.binaryURL,
               FileManager.default.isExecutableFile(atPath: bin.path) else {
@@ -630,16 +636,21 @@ final class Server: ObservableObject {
         running = true
         port = wantedPort > 0 ? wantedPort : 48000
         fullListeners = 0
+        // ★ Full mode was never discoverable: startFull() never advertised, and startAdvertising()
+        //   refused to anyway. Both halves are fixed — see startAdvertising.
+        startAdvertising()
         startFullPolling()
         onChange?()
 
-        // ★★ AND OPEN THE SETUP PAGE, because in Full mode everything except the radio, the
-        //    password and the PIN is set in the browser — so a Start that left the user looking at
-        //    an unchanged window would have finished only half the job. Briefly delayed: the front
-        //    door has to be listening before the page can load, and a failed first load reads as a
-        //    broken server rather than an early click.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.openSetupInBrowser()
+        // ★★ OPEN THE SETUP PAGE ONLY WHEN THE OWNER ASKED TO SET UP. In Full mode everything
+        //    except the radio, the password and the PIN is set in the browser, so the button that
+        //    offers to take you there must finish that job — but starting is not the same act.
+        //    ★ Briefly delayed: the front door has to be listening before the page can load, and a
+        //      failed first load reads as a broken server rather than an early click.
+        if showSetup {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.openSetupInBrowser()
+            }
         }
     }
 
@@ -805,12 +816,18 @@ final class Server: ObservableObject {
     private func startAdvertising() {
         stopAdvertising()
         guard running, port > 0, advertise else { return }   // advertise=false → discoverable only by address
-        // ★★★ IN FULL MODE THE ENGINE ADVERTISES, NOT US. Each radio process runs its own mDNS
-        //     responder and publishes its own name ("advertising as a.local"), which is what makes
-        //     several radios on one machine individually discoverable. A second advertiser here
-        //     would publish a competing record for the same host — two answers to one question,
-        //     which is worse than none.
-        guard !fullMode else { return }
+        // ★★★ THIS ONCE BAILED OUT IN FULL MODE, believing "the engine advertises, not us" — and
+        //     the paragraph ELEVEN LINES ABOVE already said why that cannot be true: the C++
+        //     responder answers HOSTNAME queries only and deliberately serves no PTR/SRV/TXT
+        //     (mdns_responder.cpp says so in its own header). So in Full mode NOBODY published the
+        //     service and the Mac was invisible to every client — confirmed with `dns-sd -B
+        //     _vibesdr._tcp`, which returned nothing at all while the server was running
+        //     (Stuart, 2026-08-12). ★ The two halves of one function disagreed, and the wrong half
+        //     was the one with the guard in it.
+        // ★★ ONE advert either way, and in Full mode it names the FRONT DOOR — the single port an
+        //    owner forwards. A client that lands there asks /vibeserver/radios and offers the
+        //    picker, which is exactly the intended way in. Advertising each radio separately would
+        //    publish ports nobody forwards and defeat the point of the door.
         let svc = NetService(domain: "local.", type: "_vibesdr._tcp.",
                              name: serviceName, port: Int32(port))
         svc.setTXTRecord(NetService.data(fromTXTRecord: [
@@ -920,7 +937,41 @@ final class Server: ObservableObject {
         return a.isEmpty || a.hasPrefix("127.") || a == "::1" || a == "::ffff:127.0.0.1"
     }
 
+    // ── ★★★ OPEN IT WHERE THE OWNER PREFERS ──────────────────────────────────────────────────
+    //
+    // ★★ THE CHOICE IS ONLY OFFERED WHEN IT EXISTS. If VibeSDR is not installed there is no
+    //    decision to make, and a preference whose every setting does the same thing is exactly the
+    //    dead control AGENTS.md has a rule about. `vibeSDRInstalled` gates the setting.
+    // ★ Looked up rather than assumed: the Mac App Store "Designed for iPad" build carries the
+    //   same bundle id as the phone, so one lookup answers for both.
+    static let vibeSDRBundleID = "com.vibesdr.app"
+
+    var vibeSDRAppURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.vibeSDRBundleID)
+    }
+    var vibeSDRInstalled: Bool { vibeSDRAppURL != nil }
+
+    /// Prefer the app over the browser. ★ Defaults to TRUE and is simply ignored when the app is
+    /// absent, so someone who installs VibeSDR later gets the better behaviour without hunting
+    /// for a setting they never knew existed.
+    @AppStorage("openInVibeSDR") var openInVibeSDR = true
+
+    /// The deep link the app understands — `vibesdr://connect?url=…&backend=vibeserver`.
+    /// ★★ The URL and the backend name are the app's OWN vocabulary (DeepLinkHandler.buildShareLink).
+    ///    A link that names the backend wrongly opens the right address with the wrong protocol
+    ///    reader, which fails in a way that looks like a broken server rather than a bad link.
+    var appLink: URL? {
+        guard let enc = address.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
+        else { return nil }
+        return URL(string: "vibesdr://connect?url=\(enc)&backend=vibeserver")
+    }
+
     func openInBrowser() {
+        // ★ The owner asked for the app, and it is here — send them there instead.
+        if openInVibeSDR, vibeSDRInstalled, running, let link = appLink {
+            NSWorkspace.shared.open(link)
+            return
+        }
         guard running, let url = URL(string: address) else { return }
         // ★ ALREADY LISTENING FROM THIS MAC? Then a second tab is not what was wanted — the user
         // is looking for the window they already have.
@@ -1328,7 +1379,7 @@ struct SettingsView: View {
             //     to take.
             Section {
                 Button(server.running ? "Stop serving" : "Save, start and set up in the browser") {
-                    server.running ? server.stop() : server.start()
+                    server.running ? server.stop() : server.start(showSetup: true)
                 }
                 .disabled(!server.running && !server.fullRadios.contains { $0.serve })
                 // ★ Still offered while running, for the second visit — the page is where a
@@ -1345,6 +1396,18 @@ struct SettingsView: View {
                 if let err = server.lastError {
                     Text(err).font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            // ★★ ONLY WHEN VibeSDR IS ACTUALLY INSTALLED. With no app to open, every setting of
+            //    this toggle does the same thing — the dead control AGENTS.md forbids. Someone who
+            //    installs VibeSDR later finds it here, already on.
+            if server.vibeSDRInstalled {
+                Section("Opening the radio") {
+                    Toggle("Open in VibeSDR rather than a browser", isOn: $server.openInVibeSDR)
+                    Text("Clicking the menu-bar icon goes straight into the VibeSDR app, which is "
+                         + "on this Mac. Turn it off to use your browser instead \u{2014} the web "
+                         + "client has everything the app does.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section("Startup") {
@@ -1702,6 +1765,18 @@ struct SettingsView: View {
                     Text("Plug the receiver back in, then press Reconnect.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Reconnect Radio") { server.reconnectRadio() }
+                }
+            }
+            // ★★ ONLY WHEN VibeSDR IS ACTUALLY INSTALLED. With no app to open, every setting of
+            //    this toggle does the same thing — the dead control AGENTS.md forbids. Someone who
+            //    installs VibeSDR later finds it here, already on.
+            if server.vibeSDRInstalled {
+                Section("Opening the radio") {
+                    Toggle("Open in VibeSDR rather than a browser", isOn: $server.openInVibeSDR)
+                    Text("Clicking the menu-bar icon goes straight into the VibeSDR app, which is "
+                         + "on this Mac. Turn it off to use your browser instead \u{2014} the web "
+                         + "client has everything the app does.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section("Startup") {

@@ -427,6 +427,8 @@ public:
     static void setLocationJson(const std::string& json);
     /** Is the running source an SDRplay? The client's controls differ materially. */
     bool isSdrplay() const;
+    /** RF gain positions on an RSP (0 = not an RSP / no radio). */
+    int rfGainPositions() const;
     /** `,"radio":{…}` describing the running receiver's real controls, for hwinfo. */
     std::string radioCapsJson() const;
     /** RSP-only controls. No-ops on any other source. */

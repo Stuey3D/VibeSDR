@@ -5,7 +5,7 @@
 # in CI, where a .xcodeproj is a binary blob that drifts. The same script will sign and notarise
 # later; those are extra steps here, not a different pipeline.
 #
-#   ./vibeserver/mac/build-app.sh          → builds, and copies to the Desktop
+#   ./vibeserver/mac/build-app.sh          → builds, and INSTALLS to /Applications
 #   ./vibeserver/mac/build-app.sh --no-copy
 set -euo pipefail
 
@@ -44,7 +44,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <!-- ★★ THE APP IS V3 AND SAID 2.0.0. It launches the V3 front door, drives Full mode and ships
        the V3 core; the number had simply not moved since the alpha, so the About box and the
        GitHub release disagreed with the product (2026-08-11). -->
-  <key>CFBundleShortVersionString</key><string>3.0.1</string>
+  <key>CFBundleShortVersionString</key><string>3.0.2</string>
   <key>CFBundleVersion</key>           <string>31</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
@@ -145,8 +145,16 @@ codesign --force --sign - --identifier com.stuey3d.vibeserver "$APP" >/dev/null 
 echo "==> Built $APP"
 
 if [ "${1:-}" != "--no-copy" ]; then
-  DEST="$HOME/Desktop/VibeServer.app"
+  # ★★ /Applications, NOT the Desktop. A build on the Desktop and an older copy in /Applications
+  #    are two VibeServers with the same icon, and the one you double-click is whichever you
+  #    happened to reach for — so a fix "not working" can simply be the other copy running
+  #    (Stuart, 2026-08-12: "gets confusing otherwise"). One install, one answer.
+  # ★ The running app is quit first: cp over a live bundle leaves a half-replaced app, and macOS
+  #   will keep executing the OLD code it already has mapped.
+  DEST="/Applications/VibeServer.app"
+  osascript -e 'tell application "VibeServer" to quit' >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6; do pgrep -x VibeServer >/dev/null || break; sleep 0.5; done
   rm -rf "$DEST"
   cp -R "$APP" "$DEST"
-  echo "==> Copied to $DEST"
+  echo "==> Installed to $DEST"
 fi

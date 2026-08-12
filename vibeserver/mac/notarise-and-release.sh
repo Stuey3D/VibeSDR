@@ -13,7 +13,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-APP="${1:-$HOME/Desktop/VibeServer.app}"
+# ★ The BUILD OUTPUT, not the Desktop — build-app.sh installs to /Applications now, and there is
+#   no Desktop copy to notarise (Stuart, 2026-08-12: two copies "gets confusing otherwise").
+APP="${1:-$ROOT/vibeserver/build/VibeServer.app}"
 KEY_ID="NG46B3P48N"
 ISSUER="340c3b5f-a208-4c2f-a68b-4ca12851b769"
 KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"

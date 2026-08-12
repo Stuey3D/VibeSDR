@@ -793,6 +793,7 @@ function esc(t) {
 let BANDS = [];              // [{id,label}] — from the server, never a copy in this page
 
 function bandLabel(entry) {
+  if (String(entry).trim().toLowerCase() === "all") return "All bands";
   const b = BANDS.find(x => x.id === entry);
   return b ? b.label : entry;
 }
@@ -869,6 +870,25 @@ function gainFromRaw(v) {
   return gainIsDb() ? (v / 10).toFixed(1) + " dB" : String(v);
 }
 
+/** ★★★ THE BAND PICKER, BUILT WHEREVER BANDS COMES FROM. It was filled ONLY by renderGain(),
+ *      which runs synchronously at page build while renderHw() is still awaiting the server's
+ *      band list — so on FIRST entry the dropdown was EMPTY and only filled if you left the tab
+ *      and came back (Stuart, 2026-08-12). Same shape as the gain-slider fault an hour earlier:
+ *      something async arrives after the thing that needed it has already drawn.
+ *  ★★ "All bands" leads, because an overall ceiling is the common case and hunting for it at the
+ *     bottom of a band list is how people conclude it is not there.
+ *  ★ The current choice is PRESERVED across a refill: this now runs while the page is open, and
+ *    resetting a select someone has just used would be its own bug. */
+function fillGainBands() {
+  const sel = $("gainPick");
+  if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">\u2014 pick a band \u2014</option>'
+    + '<option value="all">All bands</option>'
+    + BANDS.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
+  if (keep) sel.value = keep;
+}
+
 function gainChips() {
   const list = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
   const host = $("gainList");
@@ -915,14 +935,49 @@ function gainAdd() {
  * ★ The slider writes the box, and the box is still the source of truth on save: one value, one
  *   place, and a typed figure from an owner who knows exactly what they want still works.
  */
+/** ★★★ THE HARDWARE DESCRIPTION, GLOBALLY. `renderHw()` keeps its own LOCAL `hw`, so this read a
+ *      free variable that existed nowhere: `typeof hw` was "undefined", gainSteps() returned [],
+ *      and the slider hid itself ON EVERY PLATFORM, ALWAYS (Stuart, 2026-08-12 — reported on the
+ *      Mac, reproduced on the Pi, and it was never platform-specific).
+ *  ★★ The symptom was the FALLBACK working exactly as designed: "no steps known, so show the text
+ *     box". A graceful degradation makes a bug look like a decision, which is why nobody spotted
+ *     it in review — the page looked deliberate. */
+let HW = null;
+
+/**
+ * ★★★ THE LADDER IS A PROPERTY OF THE TUNER, NOT OF WHETHER THE RADIO IS SWITCHED ON.
+ *     (Stuart, 2026-08-12: "surely you know the hardware from the driver and identifier, so you
+ *     should be able to know the gain steps".) He is right, and it matters MOST here: the setup
+ *     page is where you configure a radio you have not started yet, so "wait for the radio to
+ *     tell us" meant no slider precisely when the owner is setting the limit.
+ * ★★ NOT invented — this is the SAME TABLE THE SERVER ITSELF SERVES (kR820tGains in
+ *    local_sdr_shim.cpp), which it already uses for rtl_tcp, where the header gives a gain COUNT
+ *    and no values. One table, two callers, so the slider cannot disagree with the radio.
+ * ★ The real list still WINS whenever the radio has answered. This is the floor, not the source.
+ */
+const R820T_GAINS = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280,
+                     297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496];
+
 function gainSteps() {
-  return (typeof hw === "object" && hw && Array.isArray(hw.gains)) ? hw.gains : [];
+  // ★★★ AN RSP'S LIMIT IS AN RF POSITION, NOT dB — and NOT the list in HW.gains, which is the
+  //     0-49 dB IF scale the listener's slider uses. Sliding over that would be a slider over the
+  //     WRONG QUANTITY, which is worse than the text box it replaced: it would look authoritative
+  //     and cap something else. The positions come from the radio's MODEL (RSP1 4, RSP1A/1B/duo
+  //     10, RSP2 9, RSPdx 28) and the server now publishes the count.
+  if (!gainIsDb()) {
+    const n = (HW && Number(HW.lnaStates)) || 0;
+    return n > 1 ? Array.from({length: n}, (_, i) => i) : [];
+  }
+  if (HW && Array.isArray(HW.gains) && HW.gains.length) return HW.gains;
+  return R820T_GAINS;
 }
 function wireGainSlider(sliderId, boxId) {
   const steps = gainSteps();
   const sl = $(sliderId), box = $(boxId);
   if (!sl || !box) return;
-  const have = steps.length > 0 && gainIsDb();
+  // ★★ WAS `steps.length && gainIsDb()`, which locked the RSP out even once its real position
+  //    count was known. The question is whether we know the REAL steps, not what unit they are in.
+  const have = steps.length > 0;
   sl.classList.toggle("hide", !have);
   if (!have) return;
   sl.min = "0"; sl.max = String(steps.length - 1); sl.step = "1";
@@ -954,9 +1009,7 @@ function renderGain() {
   $("gainMax").placeholder = isRtl ? "max, e.g. 25 dB" : "max RF position";
   wireGainSlider("gainRestSlider", "gainRest");
   wireGainSlider("gainMaxSlider", "gainMax");
-  const sel = $("gainPick");
-  sel.innerHTML = '<option value="">\u2014 pick a band \u2014</option>'
-    + BANDS.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");
+  fillGainBands();
   gainChips();
 }
 
@@ -1206,6 +1259,16 @@ async function renderHw() {
   //   server's own list rather than a copy that could drift from it.
   if (hw && Array.isArray(hw.bands) && hw.bands.length) BANDS = hw.bands;
   renderBands();
+
+  // ★★★ THE SECOND HALF OF THE SAME BUG. renderGain() runs SYNCHRONOUSLY at page build while this
+  //     function is still awaiting the radio, so even with a global the steps had not arrived when
+  //     the sliders were wired. Publish the answer and re-wire HERE, where the ladder is known.
+  // ★ Only the sliders are re-wired, not the whole card: renderGain() rewrites the gain boxes from
+  //   the stored config, which would wipe a figure the owner was part-way through typing.
+  HW = hw;
+  wireGainSlider("gainRestSlider", "gainRest");
+  wireGainSlider("gainMaxSlider", "gainMax");
+  fillGainBands();   // ★ BANDS is only trustworthy here — see fillGainBands.
 
   const el = $("hw");
   // ★★ SAY WHICH RADIO THESE OPTIONS BELONG TO when it is not the one running. Otherwise the page
