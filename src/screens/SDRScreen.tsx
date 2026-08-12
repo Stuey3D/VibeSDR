@@ -413,6 +413,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** The URL the transport must actually use: the radio's, once one is chosen. */
   const connectBase = radioBase ?? baseUrl;
   /**
+   * ★★★ THE SAVED TUNE BELONGS TO THE RADIO, NOT TO THE SERVER.
+   *
+   *     One key per server meant every radio behind a front door shared one remembered frequency:
+   *     tune Radio Caroline on 648 kHz with the Airspy, switch to the RSP — which does not go
+   *     anywhere near that low — and it still tried 648 (Stuart, 2026-08-12). The radios differ in
+   *     coverage, in what they are FOR, and in what you were last listening to on each.
+   * ★ Appended rather than replacing the base, so a single-radio server keeps the key it already
+   *   had and nobody loses a remembered tune to this change.
+   */
+  const radioKeySuffix = radioBase ? radioBase.slice(radioBase.lastIndexOf('/r/')) : '';
+  /**
    * ★★★ ADMIN FROM THE LANDING PAGE, SO WE ARRIVE AS ADMIN RATHER THAN ASKING LATER.
    *
    *     Stuart, 2026-08-12: "under the radio selector there needs to be an admin password entry
@@ -2902,7 +2913,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.
     let cancelled = false;
-    const tuneKey = isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl;
+    const tuneKey = (isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl)
+                  + radioKeySuffix;
     (async () => {
       let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
       // Migrate the pre-per-device global local key on first per-device connect.
@@ -3111,13 +3123,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     // key (usb / tcp:host:port) so the last tune restores and devices don't
     // clobber each other (otherwise it reverts to the 14 MHz default).
     pendingTune.current = {
-      key: isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl,
+      // ★ Must match the READ above exactly — these two were already duplicated, which is how a
+      //   save key and a restore key drift apart and the tune silently stops being remembered.
+      key: (isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl) + radioKeySuffix,
       frequency: status.frequency,
       mode: status.mode,
     };
     const t = setTimeout(flushTune, 1000);
     return () => clearTimeout(t);
-  }, [status.frequency, status.mode, baseUrl, isLocal, localDeviceKey, flushTune]);
+  }, [status.frequency, status.mode, baseUrl, isLocal, localDeviceKey, radioKeySuffix, flushTune]);
 
   // ★ FLUSH ON THE WAY OUT. The debounce timer above is cleared by its own cleanup, so leaving the
   //   screen — or backgrounding the app — within 1s of a tune used to DISCARD it silently: you
@@ -6691,6 +6705,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           bandwidthHigh={status.bandwidthHigh}
           instanceName={instanceName}
           host={route.params.localHost}
+          // ★★★ THE RADIO'S OWN ADDRESS, AS A ws URL. connectBase carries the scheme (https on a
+          //     tunnelled server) and the `/r/<id>` prefix; host+port carries neither, which is
+          //     why the audio was going to the front door while the spectrum went to the radio.
+          wsBase={connectBase.replace(/^http/, 'ws').replace(/\/+$/, '')}
           authSuffix={route.params.authSuffix}
           sessionId={sessionUuid}
           onBytes={(n: number) => { audioBytes.current += n; }}

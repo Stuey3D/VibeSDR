@@ -108,7 +108,8 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     // /ws/audio natively (background-safe), so JS no longer pushes PCM. JS just
     // starts/stops it and forwards tune changes over the same WS.
     @ReactMethod
-    fun startLocalAudio(host: String, port: Double, initialTune: String, authSuffix: String) {
+    fun startLocalAudio(host: String, port: Double, initialTune: String, authSuffix: String,
+                        wsBase: String) {
         VibeStreamService.reactContext = reactContext
         val intent = Intent(reactContext, VibeStreamService::class.java).apply {
             action = VibeStreamService.ACTION_START_LOCAL
@@ -116,6 +117,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
             putExtra(VibeStreamService.EXTRA_PORT, port.toInt())
             putExtra(VibeStreamService.EXTRA_TUNE, initialTune)
             putExtra(VibeStreamService.EXTRA_AUTH, authSuffix)
+            // ★★★ A FULL ws BASE, because host+port CANNOT EXPRESS what this now has to reach: a
+            //     multi-radio VibeServer puts every radio behind `/r/<id>/…`, and a public one is
+            //     https (so wss). Rebuilding "ws://host:port" here dropped both — the audio went
+            //     to the front door, which owns no radio, so the waterfall was perfect and there
+            //     was no sound at all (Stuart, 2026-08-12).
+            putExtra(VibeStreamService.EXTRA_WSBASE, wsBase)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
         else reactContext.startService(intent)

@@ -100,6 +100,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val EXTRA_TUNE = "tune"
         const val EXTRA_HOST = "host"
         const val EXTRA_AUTH = "auth"
+        /** Full ws/wss base incl. any /r/<id> prefix — host+port cannot express either. */
+        const val EXTRA_WSBASE = "wsbase"
         const val EXTRA_RATE = "rate"
         // External-audio pause behaviour: "release" (OWRX — pause disconnects AND
         // drops the media card; reconnect resets the server profile so play isn't
@@ -670,13 +672,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // background to save power. Tune/mode/bandwidth changes ride this same WS as
     // JSON (sendLocalTune), since that's the shim's control channel.
     @Volatile private var localAudioWs: WebSocket? = null
+    /** Full ws/wss base incl. any /r/<id> prefix; "" = build it from host:port. */
+    @Volatile private var localWsBase: String = ""
     @Volatile private var lastLocalTune: String? = null
 
     private var laBytes = 0            // bytes since the last report (see onMessage)
     private var laBytesAt = 0L
 
-    fun startLocalAudio(host: String, port: Int, initialTune: String, authSuffix: String) {
-        Log.i(TAG, "startLocalAudio $host:$port")
+    fun startLocalAudio(host: String, port: Int, initialTune: String, authSuffix: String,
+                        wsBase: String = "") {
+        // ★ Trailing slash removed once, here: the caller may hand us either form and
+        //   "$base//ws/audio" is a 404 that reads as "the server has no audio".
+        localWsBase = wsBase.trimEnd('/')
+        Log.i(TAG, "startLocalAudio $host:$port base='$localWsBase'")
         if (port <= 0) return
         val h = if (host.isNotEmpty()) host else "127.0.0.1"
         startExternalAudio(48_000, "resume")   // external PCM engine; local pause = mute
@@ -689,7 +697,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // a leading "?" rather than "&".
         val authQ = if (authSuffix.isNotEmpty()) "?" + authSuffix.removePrefix("&") else ""
         localAudioWs = client.newWebSocket(
-            Request.Builder().url("ws://$h:$port/ws/audio$authQ").build(),
+            // ★ wsBase wins when supplied — it already carries scheme, host, port and any
+            //   /r/<id> prefix. The host:port form remains for local hardware on loopback.
+            Request.Builder().url(
+                if (localWsBase.isNotEmpty()) "$localWsBase/ws/audio$authQ"
+                else "ws://$h:$port/ws/audio$authQ").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     lastLocalTune?.let { webSocket.send(it) }

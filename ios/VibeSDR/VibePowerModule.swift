@@ -1488,7 +1488,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767]
   private static let adpcmIndex: [Int] = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8]
 
-  @objc func startLocalAudio(_ host: String, port: NSNumber, initialTune: String, authSuffix: String) {
+  @objc func startLocalAudio(_ host: String, port: NSNumber, initialTune: String, authSuffix: String,
+                             wsBase: String) {
     let p = port.intValue
     if p <= 0 { return }
     let h = host.isEmpty ? "127.0.0.1" : host
@@ -1498,7 +1499,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if !authSuffix.isEmpty {
       q = "?" + (authSuffix.hasPrefix("&") ? String(authSuffix.dropFirst()) : authSuffix)
     }
-    guard let url = URL(string: "ws://\(h):\(p)/ws/audio\(q)") else { return }
+    // ★★★ A FULL ws BASE WHEN WE HAVE ONE, because host+port CANNOT EXPRESS what this must now
+    //     reach. A multi-radio VibeServer puts every radio behind `/r/<id>/…`, and a public one is
+    //     served over https (so wss). Rebuilding "ws://host:port" here dropped BOTH: the audio
+    //     socket went to the front door, which owns no radio, so the waterfall was perfect and
+    //     there was no sound whatsoever (Stuart, 2026-08-12). The host:port form stays for local
+    //     hardware on loopback, which has neither a prefix nor TLS.
+    let base = wsBase.isEmpty ? "ws://\(h):\(p)"
+                             : (wsBase.hasSuffix("/") ? String(wsBase.dropLast()) : wsBase)
+    guard let url = URL(string: "\(base)/ws/audio\(q)") else { return }
     laTune = initialTune
     // ★★ THE ENGINE STARTS ON THE FIRST PACKET, NOT HERE — see onLocalAudioFrame. Starting it at
     //    connect left it running and pulling with nothing arriving yet, and that window is audible:

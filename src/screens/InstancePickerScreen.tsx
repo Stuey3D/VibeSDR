@@ -705,9 +705,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // wiring as Local Hardware (spectrum via /ws/user-spectrum, audio via /ws/audio)
   // but pointed at a LAN host, with the PIN resolved to an auth suffix. No local
   // shim is started — the radio lives on the serving phone.
-  const connectVibeServer = useCallback(async (host: string, port: number, name: string, pin: string) => {
+  const connectVibeServer = useCallback(async (host: string, port: number, name: string, pin: string,
+                                              base?: string) => {
     setConnecting(true);
-    const baseUrl = `http://${host}:${port}`;
+    // ★ The probed address wins — see the note in the router. `http://host:port` is only the
+    //   fallback for the paths that never probed (mDNS discovery on a LAN).
+    const baseUrl = base || `http://${host}:${port}`;
     let authSuffix = '';
     try {
       authSuffix = await resolveVibeAuth(baseUrl, pin);
@@ -728,8 +731,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // Tap a discovered/typed VibeServer: prompt for the PIN if it needs one, with a
   // saved PIN pre-filled (per host:port) so the user need not retype it. "Save &
   // Connect" persists the entered PIN; "Connect" uses it just this once.
-  const openVibeServer = useCallback(async (host: string, port: number, name: string, needsPin: boolean) => {
-    if (!needsPin) { connectVibeServer(host, port, name, ''); return; }
+  const openVibeServer = useCallback(async (host: string, port: number, name: string, needsPin: boolean,
+                                            base?: string) => {
+    if (!needsPin) { connectVibeServer(host, port, name, '', base); return; }
     const key = `vs_pin:${host}:${port}`;
     let saved = '';
     try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
@@ -737,16 +741,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       (Alert as any).prompt(
         'VibeServer PIN', `Enter the PIN for ${name}`,
         [{ text: 'Cancel', style: 'cancel' },
-         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin || saved) },
+         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin || saved, base) },
          { text: 'Save & Connect', onPress: (pin?: string) => {
              const p = pin || saved;
              AsyncStorage.setItem(key, p).catch(() => {});
-             connectVibeServer(host, port, name, p);
+             connectVibeServer(host, port, name, p, base);
            } }],
         'plain-text', saved, 'number-pad');
     } else {
       // Android has no Alert.prompt — use the saved PIN if we have one.
-      connectVibeServer(host, port, name, saved);
+      connectVibeServer(host, port, name, saved, base);
     }
   }, [connectVibeServer]);
 
@@ -876,15 +880,25 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       case 'rtltcp':   connectTcp(host, port, label); return;
       case 'spyserver': connectSpy(host, port, label); return;
       case 'vibeserver': {
+        // ★★★ THE ADDRESS THAT ANSWERED, NOT `http://host:port`. This branch hard-coded http, so
+        //     a VibeServer reached over HTTPS — a Cloudflare tunnel, a reverse proxy, anything
+        //     public — was probed at `http://host:443`, which cannot answer. The user was told
+        //     "Could not reach … Is it on the same network?" about a server that was plainly up
+        //     and had ALREADY identified itself over https during detection (Stuart, 2026-08-12:
+        //     demo.vibesdr.net would not connect while his own http server did).
+        //     ★★ This is the exact bug the ProbeResult.url comment describes — "detection
+        //        succeeding on one address and the connection being made to another" — and the
+        //        winning URL was being passed into this function all along, unused here.
+        const vsBase = baseUrl || `http://${host}:${port}`;
         // Ask the server itself whether it wants a PIN — a typed host has no mDNS
         // TXT record to tell us. See vibeServerNeedsPin().
         let needsPin = true;
-        try { needsPin = await vibeServerNeedsPin(`http://${host}:${port}`); }
+        try { needsPin = await vibeServerNeedsPin(vsBase); }
         catch {
-          Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
+          Alert.alert('VibeServer', `Could not reach ${vsBase}. Is it on the same network?`);
           return;
         }
-        openVibeServer(host, port, label, needsPin);
+        openVibeServer(host, port, label, needsPin, vsBase);
         return;
       }
       default: {

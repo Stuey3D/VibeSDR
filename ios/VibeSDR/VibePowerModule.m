@@ -12,7 +12,7 @@ RCT_EXTERN_METHOD(stopExternalAudio)
 // ★ The LOCAL audio pump — iOS reads /ws/audio natively now, as Android always has, so no
 //   packet crosses the bridge and nothing is base64-encoded on the JS thread.
 //   Names match the Android module exactly, so LocalAudioPlayer's native branch works unchanged.
-RCT_EXTERN_METHOD(startLocalAudio:(NSString *)host port:(nonnull NSNumber *)port initialTune:(NSString *)initialTune authSuffix:(NSString *)authSuffix)
+RCT_EXTERN_METHOD(startLocalAudio:(NSString *)host port:(nonnull NSNumber *)port initialTune:(NSString *)initialTune authSuffix:(NSString *)authSuffix wsBase:(NSString *)wsBase)
 RCT_EXTERN_METHOD(sendLocalTune:(NSString *)json)
 RCT_EXTERN_METHOD(stopLocalAudio)
 RCT_EXTERN_METHOD(startFmdxAudio:(NSString *)baseUrl)

@@ -14,7 +14,8 @@ import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 //    on the WS directly.
 
 const Vibe = NativeModules.VibePowerModule as {
-  startLocalAudio?:   (host: string, port: number, initialTune: string, authSuffix: string) => void;
+  startLocalAudio?:   (host: string, port: number, initialTune: string, authSuffix: string,
+                       wsBase: string) => void;
   pushExternalOpus?:  (b64: string, sampleRate: number, channels: number) => void;
   sendLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
@@ -90,6 +91,11 @@ export interface LocalAudioPlayerProps {
   // the local-hardware path on loopback with no auth.
   host?:         string;
   authSuffix?:   string;
+  /** ★★★ THE FULL ws BASE, when host+port cannot say enough. A multi-radio VibeServer puts every
+   *  radio behind `/r/<id>/…` and a public one is served over https (so wss) — neither survives
+   *  being rebuilt from a host and a port, and the audio then goes to the front door, which owns
+   *  no radio. Perfect waterfall, no sound (Stuart, 2026-08-12). Empty for local hardware. */
+  wsBase?:       string;
   // The client's session id — MUST match the spectrum socket's user_session_id so
   // VibeServer treats the audio + spectrum sockets as ONE occupant. Without it the
   // audio socket is filed as an anonymous "anon:IP" occupant and collides with the
@@ -114,7 +120,8 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
-    host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false }: LocalAudioPlayerProps,
+    host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false,
+    wsBase = '' }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -153,7 +160,7 @@ export default function LocalAudioPlayer(
       + (raw ? '' : '&codec=opus') + authSuffix;
 
     if (USE_NATIVE_PUMP) {
-      Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix);
+      Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix, wsBase ?? '');
       started.current = true;
       // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
       //    arrived; with the socket native, only native can count it — so the pump reports a tally
@@ -182,7 +189,10 @@ export default function LocalAudioPlayer(
     // combinedSuffix is "&user_session_id=…&vs_nonce=…&vs_auth=…" (built to append to an existing
     // query). /ws/audio has no query, so it needs a leading "?" instead of "&".
     const authQ = combinedSuffix ? '?' + combinedSuffix.replace(/^&/, '') : '';
-    const sock = new WebSocket(`ws://${host}:${port}/ws/audio${authQ}`);
+    // ★ Same rule as the native pump: the supplied base already carries scheme, host, port
+    //   and any /r/<id> prefix. Only fall back to host:port when there is none.
+    const wsRoot = (wsBase || `ws://${host}:${port}`).replace(/\/+$/, '');
+    const sock = new WebSocket(`${wsRoot}/ws/audio${authQ}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
     started.current = true;
