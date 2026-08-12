@@ -12,6 +12,16 @@
 Airspy HF+ — running the same VibeDSP engine the apps use. Open it in a browser and tune. It runs
 on a Raspberry Pi on a home line, so please be gentle with it.*
 
+> ### ⚠️ Running VibeServer **3.0.0** or **3.0.1** on a Mac? Please update to **[3.0.2](https://github.com/Stuey3D/VibeSDR/releases/latest)**
+>
+> Those two builds open a **browser window with the setup page every time the app starts** — so if
+> VibeServer opens at login, you get an unrequested browser popup at every boot, asking you to set
+> up a receiver you have already set up. Nothing is wrong with your Mac and nothing is wrong with
+> your receiver; it is our bug, and it looks far more alarming than it is.
+>
+> **3.0.2 fixes it**, and also makes Full mode discoverable on the network again (the app and the
+> watch could not see a Mac in Full mode at all). 3.0.0 and 3.0.1 have been withdrawn.
+
 > **Was the beta on your phone?** **The TestFlight beta has been retired and no longer opens.**
 > **VibeSDR 10.0.1 is on the App Store** and is newer than anything the beta ever had — grab it
 > above, or [build it from this repository](#building) free, forever.
