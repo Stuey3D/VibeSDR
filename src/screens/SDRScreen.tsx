@@ -440,6 +440,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminPickBad, setAdminPickBad] = useState(false);
   /** Waiting for the owner to pick — the connect must not start. */
   const awaitingRadio = !!door && door.radios.length > 1 && !radioBase;
+  /** The radio we are actually on, when there is a choice — the door already described it. */
+  const chosenRadio = useMemo(() => {
+    if (!door || !radioBase) return null;
+    const id = radioBase.slice(radioBase.lastIndexOf('/r/') + 3);
+    return door.radios.find((r) => r.id === id) ?? null;
+  }, [door, radioBase]);
 
   // V4 local hardware: tear down the on-device shim (closes the RTL-SDR + the
   // localhost server) when leaving the screen — BUT only if this is still the
@@ -2922,8 +2928,19 @@ export default function SDRScreen({ route, navigation }: Props) {
       return j;
     })().then((j: string | null) => {
       if (cancelled || destroyed.current) return;
-      let f = status.frequency;
-      let m: SDRMode = status.mode;
+      // ★★★ DO NOT CARRY THE LAST RADIO'S FREQUENCY ONTO THE NEXT ONE. The seed here is the
+      //     SCREEN's current tune, and the screen does not unmount when you switch radios behind a
+      //     front door — so picking the RSP after listening to FM asked it for 96.6 MHz, which is
+      //     nowhere near its locked window (Stuart, 2026-08-12: "still wants to tune to FM
+      //     frequency on the RSP1b"). `allowServerDefault` only rescues this if the radio
+      //     publishes a landing frequency; when it does not, the stale value stands.
+      //     ★★ The door has ALREADY TOLD US where each radio is pointed — centreHz and mode come
+      //        with the radio list, so the honest seed is the radio's own, not the last one's. For
+      //        a locked profile that is the middle of the window it is actually serving.
+      let f = chosenRadio?.centreHz && chosenRadio.centreHz > 0
+                ? chosenRadio.centreHz : status.frequency;
+      let m: SDRMode = (chosenRadio?.mode && chosenRadio.mode in MODE_BANDWIDTHS)
+                ? (chosenRadio.mode as SDRMode) : status.mode;
       // Did we actually RESTORE something? Not "was there a stored key" — corrupt or out-of-range
       // data falls through to the default, and that case must still be allowed to take the
       // receiver's own landing spot. Precedence: saved tune > server default > ours.
@@ -3002,7 +3019,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    the receiver would sit for ever on "connecting" against a server that was answering
   //    perfectly. A guard that can change is a dependency.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio, adminAuthQ]);
+  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio, adminAuthQ, chosenRadio]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.

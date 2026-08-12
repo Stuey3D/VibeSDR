@@ -44,8 +44,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <!-- ★★ THE APP IS V3 AND SAID 2.0.0. It launches the V3 front door, drives Full mode and ships
        the V3 core; the number had simply not moved since the alpha, so the About box and the
        GitHub release disagreed with the product (2026-08-11). -->
-  <key>CFBundleShortVersionString</key><string>3.0.0</string>
-  <key>CFBundleVersion</key>           <string>30</string>
+  <key>CFBundleShortVersionString</key><string>3.0.1</string>
+  <key>CFBundleVersion</key>           <string>31</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
