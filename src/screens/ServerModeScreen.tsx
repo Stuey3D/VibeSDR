@@ -740,6 +740,27 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               the feedline. Leave empty and nothing is protected.
             </Text>
 
+            {/* ★★★ WARN WHILE SERVING, AND ONLY THEN. The phone is a SIMPLE-mode server: plug in
+                and share, which is the behaviour people like, so a password is NOT forced here.
+                But an owner who never opened this screen met the consequence as a stranger's
+                demand for a password they had never set (issue #19, on the Mac, where one was
+                being generated silently). Nothing is generated anywhere now — so the honest thing
+                is to say plainly, at the moment it is true, that this receiver is unprotected.
+                ★ Advice, not an error: it is a perfectly reasonable way to run a radio on your own
+                  network, and the colour says "read this", not "you did something wrong". */}
+            {running && !adminPw.trim() && (
+              <View style={[styles.card, { borderColor: C.goldDim, marginTop: 14 }]}>
+                <Text style={{ color: C.amber, fontFamily: F, fontSize: 13 }}>
+                  ⚠︎ No admin password — not recommended for public sharing
+                </Text>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  Anyone who can reach this server can change the gain, switch on the bias-T or
+                  alter the calibration. Fine on your own network — set a password before you
+                  share it beyond it.
+                </Text>
+              </View>
+            )}
+
             {error && (
               <View style={[styles.card, { borderColor: C.red, marginTop: 14 }]}>
                 <Text style={{ color: C.red, fontFamily: F, fontSize: 14 }}>{error}</Text>

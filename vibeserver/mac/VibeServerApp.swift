@@ -167,17 +167,6 @@ final class Server: ObservableObject {
     ///   next Start would fail with "address already in use" for no visible reason.
     private var frontDoor: Process?
 
-    /// True when the admin password below was GENERATED rather than chosen. The pane then shows
-    /// it in the clear, because a secret nobody has ever seen protects nothing and helps no one.
-    @AppStorage("generatedAdmin") var generatedAdmin = false
-
-    /// ★ NO 0/O/1/I/l. This is read off a screen and typed on a phone, and one ambiguous
-    ///   character turns a working password into "the admin login is broken".
-    static func generatedPassword() -> String {
-        let alphabet = Array("ABCDEFGHJKMNPQRSTUVWXYZ23456789")
-        let word = { String((0..<4).map { _ in alphabet.randomElement()! }) }
-        return "\(word())-\(word())"
-    }
     @Published var port: Int = 0
     @Published var lastError: String?
     @Published var status = VsStatus()
@@ -504,36 +493,28 @@ final class Server: ObservableObject {
 
     // ── FULL MODE ────────────────────────────────────────────────────────────
 
-    /// ★★★ NO PASSWORD MUST NOT MEAN NO CONTROL — shared by BOTH modes, because both need it.
+    /// ★★★ THE TWO MODES ANSWER THE PASSWORD QUESTION DIFFERENTLY, ON PURPOSE.
     ///
-    /// The hardware gate refuses gain, bias-T, direct sampling and calibration to everyone when no
-    /// admin password is set — the only safe reading, since a blank secret cannot tell the owner
-    /// from a stranger. But that leaves a receiver NOBODY can control: a new one starts at MINIMUM
-    /// GAIN by design, so the waterfall is flat until the gain is raised, and an owner browsing
-    /// from another room has nothing that raises it. They conclude the RADIO is broken.
+    ///     This app used to GENERATE an admin password whenever the field was empty, in either
+    ///     mode, and show it in the settings pane. The reasoning was sound — a blank secret cannot
+    ///     tell the owner from a stranger, so the hardware gate refuses everyone, and a receiver
+    ///     starts at MINIMUM GAIN, leaving a flat waterfall nobody can lift. But it was generated
+    ///     SILENTLY, so the first an owner knew of it was a client demanding a password they had
+    ///     never set: "Its for the first time that a password is asked. I don't remember having it
+    ///     ever set… Fully uninstalling didn't help" (Tournesol, issue #19). It did not help
+    ///     because on macOS the value lives in UserDefaults, which survives deleting the app.
     ///
-    /// ★★ So GENERATE one rather than DEMAND one. Forcing the owner to invent a password taxes the
-    ///    plug-and-play flow this app exists to protect; a generated one costs them nothing, is
-    ///    shown with a Copy button, and unlocks the controls from ANY browser. This is the EXISTING
-    ///    admin credential, not a new mechanism.
+    /// ★★ Stuart's rule, 2026-08-12, and it follows the two modes' actual purposes:
+    ///      SIMPLE — plug in and serve. NOT forced, and nothing is generated. The owner is at the
+    ///               machine and LOOPBACK IS ALREADY ADMIN-EXEMPT, so the receiver they are sitting
+    ///               at is fully controllable with no password at all. They are WARNED when they
+    ///               start serving, because a public receiver without one is a different matter.
+    ///      FULL   — built for public sharing, with IP monitoring and banning. It will not start
+    ///               without a password THE OWNER TYPED. Nothing is auto-set, so nothing can be a
+    ///               surprise later, and it matches the TUI, which has always forced it.
     ///
-    /// ★ Written through and synchronised rather than left to @AppStorage's timing: measured the
-    ///   server coming up with a generated password while the preference stayed EMPTY, so the next
-    ///   launch generated a DIFFERENT one and the password the owner had copied off the screen
-    ///   stopped working. Of everything here, this must not drift.
-    ///
-    /// ★★ It is extracted rather than duplicated for Full mode deliberately: two copies of a rule
-    ///    this subtle would drift, and the half that drifted would be the one that ships a
-    ///    receiver nobody can turn the gain up on.
-    func ensureAdminPassword() {
-        guard adminPassword.isEmpty else { return }
-        let generated = Self.generatedPassword()
-        UserDefaults.standard.set(generated, forKey: "adminPassword")
-        UserDefaults.standard.set(true, forKey: "generatedAdmin")
-        UserDefaults.standard.synchronize()
-        adminPassword = generated
-        generatedAdmin = true
-    }
+    /// ★ Deleting the generator outright rather than leaving it unused: a password-minting
+    ///   function that nothing calls is one call away from coming back.
 
     /// Rescan, keeping whatever the owner has already un-ticked.
     func rescanFullRadios() {
@@ -593,9 +574,17 @@ final class Server: ObservableObject {
             lastError = "The VibeServer engine is missing from this app bundle."
             return
         }
-        // ★ Same generated-password rule as Simple mode: a receiver nobody can control reads as
-        //   broken hardware. See the long note in startSimple().
-        ensureAdminPassword()
+        // ★★★ FULL MODE DOES NOT START WITHOUT AN ADMIN PASSWORD. This mode exists to be shared
+        //     publicly — it is the one with the front door, the ban list and the connection log —
+        //     and every one of those protections is decoration if a stranger can raise the gain,
+        //     switch on the bias-T or rewrite the calibration. Refused HERE rather than warned
+        //     about, because a warning at this point is dismissed by exactly the person who most
+        //     needs to read it.
+        guard !adminPassword.trimmingCharacters(in: .whitespaces).isEmpty else {
+            lastError = "Full mode needs an admin password — it is what stops a listener changing "
+                      + "your radio's gain, bias-T or calibration. Set one in Settings, then Start."
+            return
+        }
         if fullRadios.isEmpty { rescanFullRadios() }
         guard fullRadios.contains(where: { $0.serve }) else {
             lastError = "Tick at least one radio — a server with none cannot receive anything."
@@ -715,7 +704,8 @@ final class Server: ObservableObject {
         //   the server coming up with a generated password while the preference stayed EMPTY,
         //   so the next launch generated a DIFFERENT one and the password the owner had copied
         //   off the screen stopped working. Of everything here, this must not drift.
-        ensureAdminPassword()
+        // ★ Simple mode serves WITHOUT a password if that is what the owner wants — see the note
+        //   above. `adminMissing` drives the warning in the menu; it does not block anything.
         let modeS = mode, pinS = pin, admS = adminPassword
         let limitS = sessionLimitMin
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1092,6 +1082,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             e.isEnabled = false
             menu.addItem(e)
         }
+        // ★★★ SAY IT WHILE IT MATTERS — WHILE SERVING, not in a pane nobody opened. Simple mode
+        //     does not force a password and should not: the owner is at the machine, and loopback
+        //     is admin-exempt, so their own receiver is fully controllable. But the moment it is
+        //     shared beyond this network that is no longer true, and the owner deserves to be told
+        //     ONCE, where they are already looking, rather than discovering it from a stranger.
+        // ★ Not an alert: this is advice, not an error, and a modal here would be dismissed on
+        //   reflex by the person who most needs to read it.
+        if server.running && !server.fullMode
+            && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
+            let w = NSMenuItem(title: "⚠︎ No admin password — not recommended for public sharing",
+                               action: nil, keyEquivalent: "")
+            w.isEnabled = false
+            menu.addItem(w)
+        }
         menu.addItem(.separator())
 
         if server.radioLost {
@@ -1360,30 +1364,24 @@ struct SettingsView: View {
     ///     already known to them, so it goes behind dots — a settings pane is exactly where
     ///     someone reads over your shoulder.
     @ViewBuilder private var adminPasswordRow: some View {
-        // ★ The setter clears the flag on the FIRST keystroke. Left set, a password the owner had
-        //   typed themselves stayed on screen in plain text — which is how a real one came to be
-        //   displayed to the room during testing.
-        let bound = Binding(get: { server.adminPassword },
-                            set: { server.adminPassword = $0; server.generatedAdmin = false })
-        if server.generatedAdmin && !server.adminPassword.isEmpty {
-            HStack {
-                TextField("Admin password", text: bound)
-                    .font(.system(.body, design: .monospaced))
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(server.adminPassword, forType: .string)
-                }
-            }
-            Text("MADE FOR YOU, and shown in full because you have not seen it before. Without a "
-               + "password NOBODY may change this radio's GAIN, bias-T, direct sampling or "
-               + "calibration — not a stranger, and not you from another machine — and a receiver "
-               + "deliberately starts at MINIMUM GAIN, so the waterfall would stay flat with "
-               + "nothing able to lift it. Enter this in the client to unlock the controls.\n\n"
-               + "Type over it to use your own, and it is hidden from then on.")
+        // ★★ NOTHING IS GENERATED ANY MORE, so there is no "made for you" case to display — see
+        //    the note on the two modes. What is left is one box, behind dots because a settings
+        //    pane is exactly where someone reads over your shoulder, and a line saying what it is
+        //    FOR that changes with the mode: optional in Simple, required in Full.
+        SecureField("Admin password", text: $server.adminPassword,
+                    prompt: Text(server.fullMode ? "Required in Full mode" : "Optional \u{2014} controls stay local"))
+        if server.fullMode && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
+            // ★ Stated where the empty box is, not only when Start refuses: being told what to do
+            //   BEFORE pressing the button is the difference between a rule and an obstacle.
+            Text("REQUIRED. Full mode is built for public sharing, so it will not start without "
+               + "one — it is what stops a listener changing your radio's gain, bias-T or "
+               + "calibration.")
+                .font(.caption).foregroundStyle(.orange)
+        } else if !server.fullMode && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
+            Text("Optional here. You are at this machine, and listening from it is always allowed "
+               + "to change the radio — so Simple mode needs no password to be fully usable. Set "
+               + "one before you share this receiver beyond your own network.")
                 .font(.caption).foregroundStyle(.secondary)
-        } else {
-            SecureField("Admin password", text: bound,
-                        prompt: Text("One will be made for you"))
         }
     }
 
