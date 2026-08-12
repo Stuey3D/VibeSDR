@@ -28,7 +28,7 @@ left inert"* — and it decides the whole design. There is no common unit to cap
 | radio | control | what a "limit" means |
 |---|---|---|
 | RTL-SDR | tuner gain, tenths of a dB, from a discrete list | a MAXIMUM gain |
-| SDRplay RSP | IF gain **reduction** (dB) + LNA state | a MINIMUM reduction — the inverse |
+| SDRplay RSP | **RF gain** (LNA ladder) — see below, NOT the IF | a MAXIMUM RF gain position |
 | Airspy HF+ | no variable gain at all: 8-step attenuator + preamp | **lock to AGC** (see below) |
 
 ▶ So the cap is stored **in each radio's own control units**, per radio. The config is per radio and
@@ -36,16 +36,30 @@ a radio has one driver, so nothing has to pretend tenths-of-a-dB and gain-reduct
 same quantity. The admin sets it while looking at that radio's own gain control, which is also
 where they noticed the overload.
 
-### ★★★ THE RSP'S LIMIT APPLIES IN MANUAL MODE ONLY
+### ★★★ ON THE RSP, CAP THE RF GAIN — NOT THE IF
 
-Stuart, 2026-08-12: *"on the RSP the limits should only be in manual mode so if AGC is enabled then
-it needs the full range."* Exactly right, and it would have been a real bug: a floor on IF gain
-reduction is a ceiling the AGC is not allowed to lift, so an AGC left to work inside a clamped
-range fights it — reduction pinned at the floor while the AGC asks for less, and the result is a
-receiver that sounds wrong in a way nobody would connect to a "gain limit" setting.
-▶ So: when `ifAgc` is ON, the limit is not applied at all. It governs the MANUAL control only.
-★ Which also means turning AGC on is not a way around the cap — it hands the front end to the
-  radio's own loop, which is the thing the cap exists to approximate.
+Stuart, 2026-08-12, arriving at this after first saying the limit should apply in manual mode only:
+*"maybe for the RSP the gain limit is not on the IF gain but the RF gain only."* That is the right
+answer and it removes the problem rather than working around it.
+
+★★★ FRONT-END OVERLOAD IS AN RF PROBLEM. The LNA ladder sits AHEAD of the mixer, so it is what
+decides whether a strong FM transmitter overloads the front end at all; IF gain reduction is
+applied after the damage would already be done. Capping the thing that actually causes the fault is
+both more effective and simpler to explain.
+★★★ AND IT SIDESTEPS THE AGC ENTIRELY. The IF AGC moves gain REDUCTION, not the LNA state, so an RF
+cap leaves the AGC its full range and needs no manual-mode carve-out. The earlier design — a floor
+on IF reduction — would have had the AGC fighting the clamp: pinned at the floor while the loop
+asked for less, producing a receiver that sounds wrong in a way nobody would ever trace back to a
+"gain limit" setting.
+
+▶ **Stored as the UI's SLIDER POSITION, never the raw LNA state.** The code is explicit about this
+and it is a trap: the panel shows a position out of `lnaStateCount-1` where HIGHER = MORE RF GAIN,
+while the raw LNA state COUNTS THE OTHER WAY — 0 is maximum gain. Store the raw number and "limit"
+silently means its own inverse: an owner capping FM would be forcing the RSP to maximum RF gain on
+exactly the band they were protecting.
+★ The ladder length also varies by model — an RSP1 has 4 states, an RSPdx 28 — so a position is
+  only meaningful against the radio it was set on. That is fine: the config is per radio, and the
+  admin sets it while looking at that radio's own control.
 
 ### The Airspy HF+ — AGC only
 
@@ -77,7 +91,7 @@ resetting the gain on disconnect would undo a listener's setting every time they
 park is where "everybody has gone" is actually decided.
 ▶ Also at START, so a restart comes back at the owner's gain rather than at whatever was persisted.
 ★ Per radio, in that radio's own units, exactly like the caps: 19.7 dB is an RTL tuner-gain value.
-  For the RSP it is a gain-reduction figure (and only meaningful in manual mode); for the HF+ it is
+  For the RSP it is an RF gain POSITION (the slider's units, higher = more gain); for the HF+ it is
   simply AGC on.
 ★★ INDEPENDENT of the limits, and worth stating because Stuart's own example sets both: FM capped
    at 25 dB, other bands uncapped, and ALWAYS back to 19.7 when everyone has left. A receiver may
@@ -106,11 +120,12 @@ park is where "everybody has gone" is actually decided.
 
 ## Watch for
 
-- ★★ **The RSP's inverted sense.** A "limit" there is a FLOOR on gain reduction. Getting this
-  backwards would silently do the opposite of what the owner asked — and the failure looks like the
-  feature working (a number went in, a number came out) while the front end is being overloaded.
-  Its config already carries two fields for one quantity (`gain` vs `lnaState`), which has bitten
-  once — see `sdrplay_gain_bricked_the_radio`.
+- ★★★ **The RSP's inverted RAW value.** The LNA state numbers DOWN as gain goes up, so anything
+  stored or compared as a raw state is one sign error away from doing the exact opposite of what
+  the owner asked — while looking like it worked, because a number went in and a number came out.
+  Work in slider POSITIONS throughout and convert once, where the existing code already does.
+  ★ Its config also carries two fields for one quantity (`gain` vs `lnaState`) and start-up has
+    read the stale one before, which is what bricked a radio — see `sdrplay_gain_bricked_the_radio`.
 - ★ **Shared vs personal.** Gain is already behind `sharedGate("gain")` on a locked receiver and
   free on a personal one. A cap is orthogonal: it applies to whoever is permitted to move the
   control at all.
