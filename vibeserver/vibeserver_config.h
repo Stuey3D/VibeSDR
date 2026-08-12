@@ -105,6 +105,35 @@ struct Config {
     int    lnaState = -1;      // RSP LNA state (raw, as the API numbers it)
     int    ifGr = -1;          // RSP IF gain reduction, dB
     int    ifAgc = -1;         // RSP IF AGC: 1 on, 0 off, -1 not set
+
+    // ── ★★★ WHAT A LISTENER MAY DO TO THE FRONT END ────────────────────────────────────────
+    //
+    // ★★★ A CEILING, NOT A LOCK. The admin gate already takes the gain away entirely on a shared
+    //     receiver; these let a listener keep the control and simply not go too far with it. An
+    //     owner capping FM wants the front end protected and the listener left alone, not to field
+    //     gain requests all evening (Stuart, 2026-08-12).
+    // ★★ ALL THREE ARE IN THE RADIO'S OWN CONTROL UNITS, because the three radios do not share a
+    //    gain model and must not pretend to: an RTL tuner gain is tenths of a dB, an RSP's is an RF
+    //    slider POSITION (higher = more gain, unlike the raw LNA state which counts the other way),
+    //    and an Airspy HF+ has no variable gain at all. The config is per radio and a radio has one
+    //    driver, so no common unit has to be invented. See BRIEF-admin-gain-limits.md.
+
+    /** Per-band gain ceilings: "lo-hi:max" in MHz, comma separated, e.g. "88-108:250".
+     *  Empty = no limit anywhere, which is the behaviour before this existed. */
+    std::string gainLimits;
+
+    /** ★★ The gain the radio returns to when everybody has left — in the radio's own units, -1 for
+     *  none. Independent of the limits and useful on its own: without it, the next listener and
+     *  the owner inherit whatever the last one happened to leave behind, which is how a receiver
+     *  ends up quietly overloaded with nobody having done anything wrong.
+     *  ★ Applied at the IDLE PARK rather than on disconnect — the park is where "everybody has
+     *    gone" is actually decided, and a page reload must not reset a listener's own setting. */
+    int    restGain = -1;
+
+    /** ★★ Force the AGC on and refuse to let a listener turn it off. RSP and Airspy HF+ only —
+     *  it is the WHOLE feature for the HF+, which has no variable gain to cap and whose AGC is
+     *  trusted ("the AGC on that is good enough" — Stuart). 1 = locked, 0/-1 = listener's choice. */
+    int    agcLock = -1;
     std::string demodMode = "am";        // landing mode for a new listener
     double landingFreq = 0;              // 0 = same as freq
 
@@ -193,6 +222,14 @@ struct RadioConfig {
      *  the setup page does not offer these there (Stuart, 2026-08-08: "blocked bands wont be
      *  needed in shared mode as the locked nature of it is the block/allow"). */
     std::string allowRanges, blockRanges;
+
+    // ★★★ GAIN LIMITS — see the long note on Config, and BRIEF-admin-gain-limits.md. In the
+    //     RADIO'S OWN UNITS: an RTL tuner gain is tenths of a dB, an RSP's is an RF slider
+    //     POSITION (higher = more gain — the raw LNA state counts the other way, and storing THAT
+    //     would make a "limit" mean its own inverse), an HF+ has no variable gain at all.
+    std::string gainLimits;   ///< "88-108:250" in MHz, comma separated. Empty = no limit.
+    int         restGain = -1;  ///< returned to at the idle park; -1 = leave it where it is.
+    int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
      *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that

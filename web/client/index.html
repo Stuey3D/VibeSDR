@@ -1355,6 +1355,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    thing that makes them bigger is the box; the container queries then re-layout whatever is
    inside at the new width, with no second set of breakpoints to keep in step. */
 #decBox.big { width: min(94vw, 900px); }
+/* ★★★ AND BIG MUST MEAN **TALLER** FOR A TEXT DECODER. The rule above is width-only because it was
+   written for the picture decoders, which draw AT the box's width — but a wider box does nothing
+   for RTTY, whose lines are short: a weather bulletin is about 40 characters, so BIG spread nine
+   visible lines across twice the screen and showed no more of them (Stuart, 2026-08-12: "the big
+   button makes it wider but not taller, and wider is not really useful for the weather RTTY").
+   ★★ What a text decoder wants from "bigger" is MORE LINES AT ONCE, which is height. The picture
+      decoders keep their own sizing — #decImage is capped separately, so it does not stretch. */
+#decBox.big #decText { max-height: clamp(300px, 62vh, 700px); }
 #rdsSize { display: none; padding: 2px 5px; line-height: 0; }
 #rdsSize.show { display: inline-block; }
 #rdsSize svg { width: 11px; height: 13px; }
