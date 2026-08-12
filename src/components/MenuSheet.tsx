@@ -201,6 +201,15 @@ export interface MenuSheetProps {
   dabSpeed?:        number;            // DAB speed-correction factor (1 = off)
   onDabSpeed?:      (scale: number) => void;
   serverType?:      string;   // 'ubersdr' | 'owrx' | 'kiwi' | 'web888' — picks the footer logo
+  /** ★★★ A VibeServer SPEAKS THE UberSDR PROTOCOL, SO serverType SAYS 'ubersdr' — and the SERVER
+   *  ADMIN buttons below therefore offered UberSDR's pages (/admin.html, /noisefloor.html …),
+   *  which a VibeServer does not serve. The result was a section of links that 404, and no way at
+   *  all to reach the admin or setup pages that DO exist (Stuart, 2026-08-12: "no admin/setup
+   *  buttons when admin password is entered").
+   *  ★ Supplied only when we are admin: the pages refuse without the credential, and offering a
+   *    button that cannot work is worse than not offering one. */
+  vibeAdminUrl?:    string;
+  vibeSetupUrl?:    string;
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
   onSearchTune?:    (hz: number, mode?: string | null, isBand?: boolean) => void;
@@ -681,6 +690,7 @@ export default function MenuSheet({
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   profiles = [], activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, serverType = 'ubersdr',
+  vibeAdminUrl, vibeSetupUrl,
   dabProgrammes = [], activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
@@ -1331,6 +1341,21 @@ export default function MenuSheet({
               {kbInUse && <Text style={styles.kbSkipNote}>Server pages are skipped on a keyboard — they are the receiver's own, and we cannot guarantee how a keyboard behaves there. Tap to open one.</Text>}
               <BtnRow>
                 <Btn label="⚙ ADMIN" full skipNav={kbInUse} onPress={() => onAdminLink?.('/settings', 'Settings')} />
+              </BtnRow>
+            </>) : (vibeAdminUrl || vibeSetupUrl) ? (<>
+              {/* ★ A VibeServer's OWN pages. A WebView keeps them automatically in step with the
+                    server, which matters while those pages are still moving — rendering them
+                    natively would be two implementations drifting apart. */}
+              <SectionLabel label="VIBESERVER" icon="admin" />
+              <BtnRow>
+                {!!vibeAdminUrl && (
+                  <Btn label="ADMIN" skipNav={kbInUse}
+                       onPress={() => onAdminLink?.(vibeAdminUrl, 'Admin')} />
+                )}
+                {!!vibeSetupUrl && (
+                  <Btn label="SETUP" skipNav={kbInUse}
+                       onPress={() => onAdminLink?.(vibeSetupUrl, 'Setup')} />
+                )}
               </BtnRow>
             </>) : isLocal || isKiwi ? null : (<>
               <SectionLabel label="SERVER ADMIN" icon="admin" />

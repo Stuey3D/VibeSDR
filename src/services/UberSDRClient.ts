@@ -331,6 +331,19 @@ export class UberSDRClient {
   // VibeServer PIN: a pre-computed "&vs_nonce=&vs_auth=" suffix appended to the
   // spectrum WS URL so a PIN-protected server accepts the upgrade. Empty otherwise.
   authSuffix = '';
+  /**
+   * ★★★ ADMIN ON THE CONNECT URL, NOT AFTER THE SOCKET IS OPEN.
+   *
+   *     `adminUnlock()` proves admin over an ALREADY-OPEN socket, which is fine for unlocking
+   *     controls mid-session and useless for the two cases that matter most: a receiver that is
+   *     BUSY, and one that is holding us on a COOLDOWN. Both are refused during the handshake —
+   *     before any message can be sent — so the owner is turned away from their own radio and the
+   *     password they hold never gets read. The server checks these query parameters at accept
+   *     time, ahead of both refusals, which is precisely why they have to be here.
+   * ★ Challenge-response (`vs_admin_nonce` + `vs_admin_auth`) or a minted `vs_admin_ticket`; the
+   *   password itself never crosses the link. Empty for everyone who is not an admin.
+   */
+  adminSuffix = '';
 
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
@@ -958,13 +971,13 @@ export class UberSDRClient {
    *  socket when the phone locks — same URL this client uses in _openSpectrumWs. Handed to
    *  VibeWatchModule.startWatchSpectrum so the native forwarder never re-implements auth. */
   watchSpectrumUrl(): string {
-    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}`);
+    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}`);
   }
 
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}`);
     const ws  = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;

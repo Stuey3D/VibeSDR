@@ -100,6 +100,11 @@ export class UberSDRAdapter implements SDRBackend {
     } catch {}
   }
 
+  /** Admin credentials for the CONNECT URL — set BEFORE connect(), or the handshake goes out
+   *  without them and a busy or cooling-down receiver refuses us as an ordinary listener. */
+  setAdminAuth(q: string) {
+    (this.client as any).adminSuffix = q ? (q.startsWith('&') ? q : '&' + q) : '';
+  }
   connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }) { this.fetchReceiverLon(); return this.client.connect(frequency, mode, opts); }
   destroy()                                   { this.client.destroy(); }
 

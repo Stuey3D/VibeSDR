@@ -14,10 +14,13 @@
     a public link. Attaching to the wrong one publishes a build to the internet instead of to the
     owner's own devices. So the group is chosen by `isInternalGroup`, never by name.
 
-★★ AND THE BUILD NUMBER LIES. The Cloud workflow numbers its own builds (CURRENT_PROJECT_VERSION
-   is ignored), `/apps/{id}/builds` refuses `sort`, and the page it returns is NOT ordered — a
-   limit=10 peek once read as "the numbers only reach 18" when they reached 80+. So: page fully,
-   and pick by `uploadedDate`, never by number.
+★★★ AND "THE NEWEST BUILD" IS THE WRONG BUILD. With more than one run in flight — which happened
+    the very first time this ran, an earlier pair having built the previous version numbers and
+    finished first — picking the newest upload would have put 10.0.2 into internal testing while
+    reporting success. The build is matched to its RUN instead: the Cloud workflow numbers its own
+    builds and the upload arrives as the ciBuildRun NUMBER (CURRENT_PROJECT_VERSION is ignored).
+★ `/apps/{id}/builds` refuses `sort` and returns its pages UNORDERED, so it is paged fully and
+  filtered here — a limit=10 peek once read as "the numbers only reach 18" when they reached 80+.
 """
 import sys, time, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,38 +47,43 @@ def internal_group(app_id):
     return internal[0]
 
 
-def newest_build(app_id):
-    builds = asc.all_pages(f"apps/{app_id}/builds?limit=200")
-    dated = [b for b in builds if b["attributes"].get("uploadedDate")]
-    if not dated:
-        return None
-    return max(dated, key=lambda b: b["attributes"]["uploadedDate"])
-
-
 def wait_run(kind, run_id):
     while True:
         a = asc.call(f"ciBuildRuns/{run_id}")["data"]["attributes"]
         comp = a.get("completionStatus")
         if comp:
-            log(f"[{kind}] run finished: {comp}")
-            return comp
+            log(f"[{kind}] run {a.get('number')} finished: {comp}")
+            return comp, a.get("number")
         log(f"[{kind}] {a.get('executionProgress')}…")
         time.sleep(30)
 
 
-def wait_processed(kind, app_id, after_iso):
-    """A build is not attachable until ASC has processed it."""
+def wait_processed(kind, app_id, run_number):
+    """The build produced by THIS run, once ASC has processed it.
+
+    ★★★ MATCHED TO THE RUN, NOT "THE NEWEST". Taking the newest upload is wrong the moment there
+        is more than one run in flight — and there was: an earlier pair (89/21) built the previous
+        version numbers and finished first, so "newest" would cheerfully have put 10.0.2 into
+        internal testing while reporting success. The link is exact and already documented: THE
+        CLOUD WORKFLOW NUMBERS ITS OWN BUILDS AND THE UPLOAD ARRIVES AS THE ciBuildRun NUMBER
+        (CURRENT_PROJECT_VERSION is ignored — a 85→86 bump once arrived as 20, matching its run).
+    ★ So `version` is compared as a string against the run number, and nothing else is accepted."""
+    want = str(run_number)
     for _ in range(80):
-        b = newest_build(app_id)
-        if b and b["attributes"]["uploadedDate"] > after_iso:
+        builds = asc.all_pages(f"apps/{app_id}/builds?limit=200")
+        mine = [b for b in builds if str(b["attributes"].get("version")) == want]
+        if mine:
+            b = mine[0]
             state = b["attributes"].get("processingState")
-            log(f"[{kind}] build {b['attributes'].get('version')} — {state}")
+            log(f"[{kind}] build {want} — {state}")
             if state == "VALID":
                 return b
             if state in ("FAILED", "INVALID"):
-                raise SystemExit(f"[{kind}] build {state}")
+                raise SystemExit(f"[{kind}] build {want} {state}")
+        else:
+            log(f"[{kind}] waiting for build {want} to appear…")
         time.sleep(30)
-    raise SystemExit(f"[{kind}] timed out waiting for a processed build")
+    raise SystemExit(f"[{kind}] timed out waiting for build {want}")
 
 
 def ensure_compliance(kind, build):
@@ -99,19 +107,16 @@ def main():
     runs = dict(kv.split("=", 1) for kv in sys.argv[1:])
     if not runs:
         raise SystemExit(__doc__)
-    # ★ Recorded BEFORE the wait, so "newer than this" cannot accidentally match a build that was
-    #   already there when we started.
-    start = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 3600))
     results = {}
     for kind, run_id in runs.items():
         app_id = APPS[kind]
         try:
-            comp = wait_run(kind, run_id)
+            comp, number = wait_run(kind, run_id)
             if comp != "SUCCEEDED":
                 results[kind] = f"run {comp}"
                 continue
             group = internal_group(app_id)
-            build = wait_processed(kind, app_id, start)
+            build = wait_processed(kind, app_id, number)
             ensure_compliance(kind, build)
             attach(kind, group, build)
             results[kind] = f"build {build['attributes'].get('version')} in internal testing"

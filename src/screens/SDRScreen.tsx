@@ -412,6 +412,21 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   /** The URL the transport must actually use: the radio's, once one is chosen. */
   const connectBase = radioBase ?? baseUrl;
+  /**
+   * ★★★ ADMIN FROM THE LANDING PAGE, SO WE ARRIVE AS ADMIN RATHER THAN ASKING LATER.
+   *
+   *     Stuart, 2026-08-12: "under the radio selector there needs to be an admin password entry
+   *     so that an admin can connect straight away." It is not merely convenient: a BUSY radio
+   *     and one holding us on a COOLDOWN both refuse during the handshake, before any message
+   *     can be sent, so an admin who can only prove it after connecting cannot get in at all —
+   *     which is exactly how the owner ended up locked out of his own public demo.
+   * ★ Proved against the DOOR, which owns the machine-wide admin password, and then carried on
+   *   every radio's connect URL: one credential, every radio, which is what the ticket is for.
+   */
+  const [adminAuthQ, setAdminAuthQ] = useState('');
+  const [adminPickPw, setAdminPickPw] = useState('');
+  const [adminPickBusy, setAdminPickBusy] = useState(false);
+  const [adminPickBad, setAdminPickBad] = useState(false);
   /** Waiting for the owner to pick — the connect must not start. */
   const awaitingRadio = !!door && door.radios.length > 1 && !radioBase;
 
@@ -1189,13 +1204,15 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    fetchUiConfig(baseUrl).then((cfg: ServerUiConfig | null) => {
+    // ★★ The RADIO's config, not the door's: a front door owns no receiver and answers
+    //    about the machine, so asking it here described the wrong thing.
+    fetchUiConfig(connectBase).then((cfg: ServerUiConfig | null) => {
       if (cancelled) return;
       if (cfg?.spectrum_bg_image) {
         const raw = cfg.spectrum_bg_image;
         const abs = raw.startsWith('http')
           ? raw
-          : baseUrl.replace(/\/+$/, '') + (raw.startsWith('/') ? raw : '/' + raw);
+          : connectBase.replace(/\/+$/, '') + (raw.startsWith('/') ? raw : '/' + raw);
         // Cache-bust like the web client — a freshly uploaded image always loads
         setBgImageUrl(abs + (abs.includes('?') ? '&' : '?') + 't=' + Date.now());
       } else {
@@ -1208,7 +1225,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (overlayOff) setStationId(null);
       const idColor = /^#[0-9a-fA-F]{6}$/.test((cfg?.station_id_color ?? '').trim())
         ? (cfg!.station_id_color as string).trim() : '#ffffff';
-      fetchReceiverInfo(baseUrl).then((r: ReceiverInfo | null) => {
+      fetchReceiverInfo(connectBase).then((r: ReceiverInfo | null) => {
         if (cancelled || !r) return;
         if (r.serverVersion) setServerVersion(r.serverVersion);
         if (overlayOff) return;
@@ -1223,7 +1240,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       }).catch(() => {});
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [baseUrl]);
+    // ★ connectBase too: this runs once against the door while the radio is still being resolved,
+    //   and without the dependency it would never ask the radio itself.
+  }, [baseUrl, connectBase]);
 
   // SNR squelch (audio gate) — value ≤ -999 = open/disabled
   const [snrSquelch,    setSnrSquelch]    = useState(-999);
@@ -1280,8 +1299,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onAdminLink = useCallback((path: string, title: string) => {
     if (!baseUrl) return;
     setMenuOpen(false);
-    setAdminPage({ url: baseUrl.replace(/\/+$/, '') + path, title });
+    // ★ An ABSOLUTE url passes through untouched. A VibeServer's own pages live on the FRONT DOOR
+    //   and carry an admin credential in their query, so they cannot be expressed as a bare path
+    //   off the current base — and silently prefixing one would produce a URL that 404s.
+    const url = /^https?:\/\//i.test(path)
+      ? path
+      : baseUrl.replace(/\/+$/, '') + path;
+    setAdminPage({ url, title });
   }, [baseUrl]);
+
+  /** ★ The door's own pages, offered ONLY once we are admin — they refuse without the credential,
+   *  and a button that cannot work is worse than no button. */
+  const vibeAdminUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/?${adminAuthQ}` : undefined;
+  const vibeSetupUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/setup?${adminAuthQ}` : undefined;
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
   const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
@@ -2928,6 +2958,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       setTuneLoaded(true);
       // A server crash/refused connection rejects this — swallow it (onDisconnect
       // drives the UI). An unhandled rejection here can escalate to a hard crash.
+      // ★ BEFORE connect(), never after: the credential has to be ON the handshake, which is
+      //   where a busy or cooling-down receiver decides whether to refuse us.
+      if (adminAuthQ) (c as any).setAdminAuth?.(adminAuthQ);
       c.connect(f, m, { allowServerDefault: !restored }).catch(() => {});
     }).catch(() => {
       if (cancelled || destroyed.current) return;
@@ -2935,6 +2968,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setTuneLoaded(true);
       // Storage failed, so we know nothing about this instance — the receiver's own default is a
       // better answer than our hardcoded one.
+      if (adminAuthQ) (c as any).setAdminAuth?.(adminAuthQ);
       c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
     });
     // ★★★ GIVE crashGuard A WAY TO KILL THIS SESSION. A render crash resets navigation, but this
@@ -2956,7 +2990,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    the receiver would sit for ever on "connecting" against a server that was answering
   //    perfectly. A guard that can change is a dependency.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio]);
+  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio, adminAuthQ]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
@@ -5380,6 +5414,68 @@ export default function SDRScreen({ route, navigation }: Props) {
               </Pressable>
             ))}
           </ScrollView>
+
+          {/* ── ADMIN, BENEATH THE RADIOS ────────────────────────────────────────────────
+              ★★★ Entered HERE so the credential rides the CONNECT URL. A busy radio, and one
+                  holding this address on a cooldown, are both refused during the handshake —
+                  so an admin who can only prove it once connected cannot get in at all. That is
+                  the exact way the owner was locked out of his own public demo.
+              ★ Proved against the DOOR: the admin password is machine-wide, so one entry
+                unlocks whichever radio is chosen next. */}
+          <View style={styles.radioPickAdmin}>
+            <TextInput
+              style={styles.radioPickAdminInput}
+              value={adminPickPw}
+              onChangeText={(t) => { setAdminPickPw(t); setAdminPickBad(false); }}
+              placeholder="Admin password (optional)"
+              placeholderTextColor="#7a7a7a"
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.radioPickAdminBtn}
+              disabled={!adminPickPw || adminPickBusy}
+              onPress={async () => {
+                setAdminPickBusy(true); setAdminPickBad(false);
+                const q = await resolveVibeAdminAuth(baseUrl, adminPickPw).catch(() => '');
+                // ★★★ MINT A TICKET, AND USE IT FOR EVERYTHING. The challenge-response pair proves
+                //     admin to the SOCKET, but the setup page reads ONLY `vs_admin_ticket` from
+                //     its own URL — hand it the nonce/auth form and it loads, looks right, and
+                //     then refuses every value on it. The ticket is also what the server designed
+                //     for exactly this: prove it once at the door, walk into any radio as admin.
+                // ★ Falls back to the challenge pair if the server is too old to mint one — that
+                //   still unlocks the sockets, which is the half that matters most.
+                let cred = q;
+                if (q) {
+                  try {
+                    const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${q}`,
+                                          { cache: 'no-store' });
+                    if (r.ok) {
+                      const t = (await r.json())?.ticket;
+                      if (t) cred = `vs_admin_ticket=${encodeURIComponent(String(t))}`;
+                    }
+                  } catch { /* keep the challenge pair */ }
+                }
+                setAdminPickBusy(false);
+                // ★★ A wrong password cannot be told from an unreachable server by the challenge
+                //    alone — resolveVibeAdminAuth returns '' for both. Say the honest thing: it
+                //    did not work, rather than inventing which.
+                if (!q) { setAdminPickBad(true); return; }
+                setAdminAuthQ(cred);
+                setAdminPickPw('');
+              }}
+            >
+              <Text style={styles.radioPickAdminBtnText}>
+                {adminAuthQ ? 'ADMIN ✓' : adminPickBusy ? '…' : 'UNLOCK'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {adminPickBad && (
+            <Text style={styles.radioPickAdminBad}>
+              That did not unlock — wrong password, or the server did not answer.
+            </Text>
+          )}
         </View>
       )}
 
@@ -6113,6 +6209,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDisplayStyle={handleDisplayStyle}
         onBack={onBackToPicker}
         onAdminLink={onAdminLink}
+        vibeAdminUrl={vibeAdminUrl}
+        vibeSetupUrl={vibeSetupUrl}
         onReplayTour={onReplayTour}
         onResetSettings={() => {
           setDbMin(-120); setDbMax(-20); setColormap('Jet');
@@ -6569,7 +6667,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         // stopping the client's reconnect does not touch it — on the web client the
         // audio socket kept knocking and came back under a "TIME UP" screen once the
         // cooldown lapsed (Stuart, 2026-07-28). null is the existing "off" contract.
-        baseUrl={!refusal && tuneLoaded && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? baseUrl : null}
+        // ★★★ connectBase, NOT baseUrl — THE RADIO'S ADDRESS, NOT THE DOOR'S. The native audio
+        //     engine opens its OWN socket, so pointing it at the front door asked a server with no
+        //     radio for audio: the spectrum played perfectly (it had the resolved address) and
+        //     there was simply no sound (Stuart, 2026-08-12, on the first 10.1 build). Exactly the
+        //     failure the session-limit note in instancesApi.ts describes — one place updated, the
+        //     others quietly left behind.
+        baseUrl={!refusal && tuneLoaded && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? connectBase : null}
         password={password}
         frequency={status.frequency}
         mode={status.mode}
@@ -6614,6 +6718,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,229,102,0.06)',
   },
   radioPickName:   { color: '#ffe566', fontSize: 16 },
+  radioPickAdmin: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 },
+  radioPickAdminInput: {
+    flex: 1, color: '#eee', fontSize: 14, paddingVertical: 10, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', borderRadius: 8,
+  },
+  radioPickAdminBtn: {
+    paddingVertical: 11, paddingHorizontal: 14, borderRadius: 8,
+    borderWidth: 1, borderColor: 'rgba(255,229,102,0.5)',
+  },
+  radioPickAdminBtnText: { color: '#ffe566', fontSize: 13, fontWeight: '600' },
+  radioPickAdminBad: { color: '#ff9a8a', fontSize: 12, marginBottom: 8 },
   radioPickDetail: { color: '#b9b9b9', fontSize: 12, marginTop: 4 },
 
   // ★ The receiver's "are you still there?" card — see the render for why it is not a Modal.
