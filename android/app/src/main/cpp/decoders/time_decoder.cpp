@@ -123,8 +123,20 @@ void TimeDecoder::process(const int16_t* samples, int count) {
 
         // ★ Hysteresis, or a noisy envelope crossing the threshold chatters and every dip is read
         //   as several. 40/60 % of the way between off and on.
-        const double lo = offLevel_ + 0.40 * (onLevel_ - offLevel_);
-        const double hi = offLevel_ + 0.60 * (onLevel_ - offLevel_);
+        // ★★★ EXCEPT ON WWV, WHERE 40/60 SAT TOO HIGH AND CLIPPED EVERY PULSE SHORT. `onLevel_`
+        //     tracks the PEAK — attack fast, release very slowly — which is right for MSF and
+        //     DCF77, whose carrier is steady and whose peak IS the "on" level. WWV arrives over a
+        //     fading HF path where the peak is far above a typical pulse, so the threshold ended up
+        //     near the top of the envelope: MEASURED on a K3FEF capture, only 14.5 % of the time
+        //     was spent above `hi` where WWV's duty cycle is 25-30 %, and the symbols came out as
+        //     60-140 ms fragments of the 170 ms they should have been.
+        //     ★ 0.15/0.28 measured against the same capture: 205 symbols -> 228, of a theoretical
+        //       254. Lower still is worse (0.10/0.20 gives 197), which is the noise floor being
+        //       crossed — so this is a measured optimum, not a guess in a direction.
+        const double loFrac = (station_ == Station::WWV) ? 0.15 : 0.40;
+        const double hiFrac = (station_ == Station::WWV) ? 0.28 : 0.60;
+        const double lo = offLevel_ + loFrac * (onLevel_ - offLevel_);
+        const double hi = offLevel_ + hiFrac * (onLevel_ - offLevel_);
 
         const bool wasDip = inDip_;
         if (inDip_) { if (envFast_ > hi) inDip_ = false; }

@@ -401,7 +401,11 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 
         <label class="hide" id="gainRestRow"><span class="lbl">Return to this gain when everybody
              has left</span>
-          <input type="text" id="gainRest" placeholder="e.g. 19.7 dB — empty to leave it alone">
+          <div class="row" style="gap:8px;align-items:center">
+            <input type="range" id="gainRestSlider" class="hide" style="flex:1 1 200px">
+            <input type="text" id="gainRest" placeholder="e.g. 19.7 dB — empty to leave it alone"
+                   style="flex:1 1 160px">
+          </div>
           <div class="note">A listener who turns the gain up should not leave it up for the next
              person. Applied when the last listener has gone, not the moment they disconnect, so a
              page reload does not undo somebody's setting.</div></label>
@@ -409,6 +413,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
           <div class="row" style="gap:8px">
             <select id="gainPick" style="flex:1 1 200px"></select>
+            <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
             <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
             <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add</button>
           </div>
@@ -897,6 +902,39 @@ function gainAdd() {
   gainChips();
 }
 
+/**
+ * ★★★ THE RADIO'S OWN GAIN STEPS, NOT A NUMBER TO REMEMBER.
+ *
+ *     An RTL's ladder is 0, 0.9, 1.4, 2.7, 3.7, 7.7 … 49.6 dB — nobody holds that in their head,
+ *     and a typed "25 dB" is not even a step the radio has (Stuart, 2026-08-12: "problem is
+ *     remembering the gain steps on an RTL to set it"). The server already sends this radio's real
+ *     list, and the page already renders it in dB elsewhere, so a slider over the ACTUAL steps
+ *     removes both the memory and the unit confusion at once.
+ * ★★ Only when the steps are KNOWN — they arrive from the running radio. Offline, the text box
+ *    stays and takes a number, because a slider with no ladder underneath would be inventing one.
+ * ★ The slider writes the box, and the box is still the source of truth on save: one value, one
+ *   place, and a typed figure from an owner who knows exactly what they want still works.
+ */
+function gainSteps() {
+  return (typeof hw === "object" && hw && Array.isArray(hw.gains)) ? hw.gains : [];
+}
+function wireGainSlider(sliderId, boxId) {
+  const steps = gainSteps();
+  const sl = $(sliderId), box = $(boxId);
+  if (!sl || !box) return;
+  const have = steps.length > 0 && gainIsDb();
+  sl.classList.toggle("hide", !have);
+  if (!have) return;
+  sl.min = "0"; sl.max = String(steps.length - 1); sl.step = "1";
+  // ★ Start the slider at whatever the box already says — the nearest step at or BELOW it, since
+  //   every value here is a ceiling and rounding up would raise a limit the owner set.
+  const cur = gainToRaw(box.value);
+  let idx = steps.length - 1;
+  if (cur >= 0) { idx = 0; for (let i = 0; i < steps.length; i++) if (steps[i] <= cur) idx = i; }
+  sl.value = String(idx);
+  sl.oninput = () => { box.value = gainFromRaw(steps[Number(sl.value)] ?? 0); box.dispatchEvent(new Event("change")); };
+}
+
 function renderGain() {
   const r = radio();
   const drv = r.driver || "";
@@ -914,6 +952,8 @@ function renderGain() {
   $("gainRest").placeholder = isRtl ? "e.g. 19.7 dB \u2014 empty to leave it alone"
                                     : "RF gain position \u2014 empty to leave it alone";
   $("gainMax").placeholder = isRtl ? "max, e.g. 25 dB" : "max RF position";
+  wireGainSlider("gainRestSlider", "gainRest");
+  wireGainSlider("gainMaxSlider", "gainMax");
   const sel = $("gainPick");
   sel.innerHTML = '<option value="">\u2014 pick a band \u2014</option>'
     + BANDS.map(b => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("");

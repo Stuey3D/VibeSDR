@@ -62,13 +62,28 @@ int main(int argc, char** argv) {
 
     TimeDecoder td((int)rate, st);
     int stamps = 0, bits = 0;
+    size_t samples = 0;
+    // Start time from the sidecar, so a bit can be placed against real UTC.
+    double startUnix = 0;
+    { const std::string meta = std::string(argv[1]) + ".json";
+      FILE* mf = std::fopen(meta.c_str(), "rb");
+      if (mf) { char buf[512]; const size_t n = std::fread(buf, 1, sizeof buf - 1, mf); buf[n] = 0;
+                std::fclose(mf);
+                const char* k = std::strstr(buf, "\"started_unix\":");
+                if (k) startUnix = atof(k + 15); } }
     td.onState = [](TimeDecoder::State s) {
         const char* n[] = {"NoSignal", "Searching", "Reading", "Locked"};
         std::printf("  [state] %s\n", n[(int)s]);
     };
+    // ★★★ THE DECODER'S SECOND NUMBER BESIDE THE REAL ONE. Everything else is guesswork without
+    //     this: a frame can look internally consistent and still be anchored in the wrong place,
+    //     and the only way to tell is to compare what the decoder CALLS second N against the UTC
+    //     that sample actually arrived at. The capture's start time is in its sidecar .json.
     td.onBit = [&](int second, int bit) {
         bits++;
-        std::printf("  bit s=%-3d %d\n", second, bit);
+        const double t = startUnix + (double)samples / (double)rate;
+        const long long utcSec = (long long)t % 60;
+        std::printf("  bit s=%-3d %d   (real second %02lld)\n", second, bit, utcSec);
     };
     td.onTime = [&](const TimeDecoder::TimeStamp& t) {
         stamps++;
@@ -83,7 +98,6 @@ int main(int argc, char** argv) {
     int bad = 0;
     std::vector<int16_t> pcm(5760);            // 120 ms at 48 kHz — larger than any Opus frame
     std::vector<uint8_t> pkt;
-    size_t samples = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t len = 0;
         if (std::fread(&len, 4, 1, f) != 1) break;
