@@ -86,4 +86,18 @@ echo "==> Re-zipping the stapled app → $ZIP"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 
+# ★★★ AND PUT THE NOTARISED COPY IN /Applications. build-app.sh installs BEFORE this script runs,
+#     so without this the installed app is the ad-hoc signed build: it reports the right version,
+#     runs the right code, and is NOT the artefact anyone downloads — `spctl` rejects it and its
+#     hash differs from the release. That is the worst kind of "same build", because the version
+#     number agrees (Stuart, 2026-08-12: "is 3.0.2 the one in my apps folder?" — it said so, and it
+#     was not). Testing a release means testing the thing that shipped.
+if [ -d "/Applications/VibeServer.app" ]; then
+  osascript -e 'tell application "VibeServer" to quit' >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6; do pgrep -x VibeServer >/dev/null || break; sleep 0.5; done
+  rm -rf "/Applications/VibeServer.app"
+  cp -R "$APP" "/Applications/VibeServer.app"
+  echo "==> Installed the NOTARISED build to /Applications"
+fi
+
 echo "==> DONE. Notarised, stapled, packaged: $ZIP"
