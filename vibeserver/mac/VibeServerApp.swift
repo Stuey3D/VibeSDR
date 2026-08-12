@@ -1382,8 +1382,13 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.orange)
         } else if !server.fullMode && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
             Text("Optional here. You are at this machine, and listening from it is always allowed "
-               + "to change the radio — so Simple mode needs no password to be fully usable. Set "
-               + "one before you share this receiver beyond your own network.")
+               + "to change the radio — so Simple mode needs no password to be fully usable on "
+               + "your own network.\n\nRecommended if you are on a PUBLIC NETWORK, or intend to "
+               + "port forward this and serve it to the internet: anyone who can reach the server "
+               + "can otherwise change the gain, switch on the bias-T or alter the calibration.\n\n"
+               + "Serving to the internet? Use FULL MODE. It is built for it — a password is "
+               + "required there, and it brings the controls that go with being public: "
+               + "per-address monitoring and banning, frequency limits and a connection log.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

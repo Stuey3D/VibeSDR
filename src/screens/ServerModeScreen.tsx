@@ -759,7 +759,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   the gain, switch on the bias-T or alter the calibration. On your own home network
                   that is usually nobody but you, and no password is needed.{'\n\n'}
                   A listening PIN above is the other half: the PIN decides who may LISTEN, the
-                  password decides who may CHANGE the radio.
+                  password decides who may CHANGE the radio.{'\n\n'}
+                  Serving to the internet? Use FULL MODE. It is built for it — an admin password is
+                  required there, and it adds the controls that go with being public: per-address
+                  monitoring and banning, frequency limits, session limits and a connection log.
                 </Text>
               </View>
             )}
