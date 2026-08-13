@@ -741,7 +741,11 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             std::atomic<bool> g_amFrontDoor{false};
             std::atomic<bool> g_restartRequested{false};
             /** ★ Earliest moment the restart may happen, so the HTTP reply can drain first. */
-            std::atomic<double> g_restartNotBefore{0.0}; }
+            std::atomic<double> g_restartNotBefore{0.0};
+            /** ★ The front door's mDNS advert, held until startFrontDoor() reports the port it
+             *  actually bound — see the deferral where it is set. */
+            std::string g_mdnsPendingLabel, g_mdnsPendingIp;
+            bool        g_mdnsPendingPin = false; }
 
 
 /** ★★★ RENAME A DONGLE, THE ONE DESTRUCTIVE THING THIS PROGRAM DOES.
@@ -1312,7 +1316,22 @@ int main(int argc, char** argv) {
             //     ★★ It advertised something that WORKS, which is why it looked healthy: you get a
             //        receiver, just not the way in. A wrong port here cannot fail loudly.
             const int advPort = isDoor ? g_serverConfig.port : o.port;
-            if (behindDoor) {
+            // ★★★ THE DOOR'S PORT IS NOT KNOWN YET, HERE. startFrontDoor() RETURNS the port it
+            //     actually bound — `g_serverConfig.port` is 0 when the owner has not pinned one,
+            //     meaning "assign one" — and it does not run until several hundred lines below
+            //     this. So the door advertised port 0, and a servicePort of 0 means HOSTNAME ONLY:
+            //     the service vanished from the network entirely, having merely been wrong before
+            //     (Stuart, 2026-08-13: "mdns is no longer responding since you moved it from the
+            //     radio port to the landing screen port"). Fixing the port took the advert away.
+            //     ★★ So the door's advert is DEFERRED to the moment it has a real port. A radio
+            //        knows its own port here and still advertises immediately.
+            if (isDoor && advPort <= 0) {
+                g_mdnsPendingLabel = label;
+                g_mdnsPendingIp    = ip;
+                g_mdnsPendingPin   = !o.pin.empty();
+                std::printf("VibeServer: %s.local will advertise once the front door has a port\n",
+                            label.c_str());
+            } else if (behindDoor) {
                 LocalSdrShim::startMdns(label, ip);      // name only — the door does the rest
                 std::printf("VibeServer: %s.local resolves here; the front door advertises the service\n",
                             label.c_str());
@@ -1958,6 +1977,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::printf("VibeServer: front door on port %d — the radios are behind it\n", port);
+        // ★ NOW the port is real. See the deferral above.
+        if (!g_mdnsPendingLabel.empty() && !g_mdnsPendingIp.empty()) {
+            LocalSdrShim::startMdnsService(g_mdnsPendingLabel, g_mdnsPendingIp, port, g_mdnsPendingPin);
+            std::printf("VibeServer: advertising as %s.local (%s) and _vibesdr._tcp on %d (front door)\n",
+                        g_mdnsPendingLabel.c_str(), g_mdnsPendingIp.c_str(), port);
+            g_mdnsPendingLabel.clear();
+        }
         for (size_t i = 0; i < g_serverConfig.radios.size(); i++) {
             const auto& r = g_serverConfig.radios[i];
             if (!r.enabled || !r.configured) continue;

@@ -2351,6 +2351,12 @@ private struct RadioPickerAdminSection: View {
   ///   this is the same idea built from a Button — one tap to reveal, nothing hidden behind a
   ///   gesture a wrist cannot discover.
   @State private var open = false
+  /// ★ Remember it on this watch? Defaults ON: an owner who has just typed a password on a 40 mm
+  ///   screen has demonstrated the need, and forgetting is one tap away.
+  @State private var remember = true
+
+  /// The host this picker belongs to — the key the password is filed under.
+  private var host: String { link.lastConnect?.host ?? "" }
 
   var body: some View {
     Section {
@@ -2358,16 +2364,35 @@ private struct RadioPickerAdminSection: View {
         Label("Admin armed \u{2014} limits lifted", systemImage: "key.fill")
           .font(.system(size: 11)).foregroundStyle(.green)
       } else if !open {
-        Button("Owner of this receiver?") { open = true }
-          .font(.system(size: 11))
-          .tint(.orange)
+        // ★★★ ONE TAP WHEN IT IS REMEMBERED. Typing a password by scribble, exactly, on a wrist is
+        //     the kind of friction that stops people using the thing behind it at all — so a saved
+        //     password becomes a single button and the keyboard never appears.
+        if AdminSecret.has(host: host) {
+          Button("Unlock as owner") { link.armAdmin(AdminSecret.load(host: host)) }
+            .font(.system(size: 12, weight: .semibold))
+            .tint(.orange)
+          Button("Forget password") { AdminSecret.forget(host: host) }
+            .font(.system(size: 10))
+            .tint(.gray)
+        } else {
+          Button("Owner of this receiver?") { open = true }
+            .font(.system(size: 11))
+            .tint(.orange)
+        }
       } else {
         Group {
           SecureField("Admin password", text: $pass)
             .font(.system(size: 14, design: .rounded))
+          Toggle("Remember on this watch", isOn: $remember)
+            .font(.system(size: 11))
           Button("Unlock") {
             let p = pass.trimmingCharacters(in: .whitespaces)
             pass = ""
+            // ★ Saved BEFORE arming: arming is asynchronous and can only be judged by the server
+            //   at the handshake, so waiting for a verdict that never arrives would mean never
+            //   saving it. A wrong password saved is corrected by typing the right one — the same
+            //   as every other remembered credential here.
+            if remember { AdminSecret.save(p, host: host) }
             link.armAdmin(p)
           }
           .font(.system(size: 13, weight: .semibold))

@@ -247,15 +247,32 @@ struct WristSDRApp: App {
                 Divider().padding(.vertical, 2)
                 Text("OWNER OF THIS RECEIVER?")
                   .font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
-                SecureField("Admin password", text: $adminPass)
-                  .font(.system(size: 14, design: .rounded))
-                Button("Take over") {
-                  let p = adminPass.trimmingCharacters(in: .whitespaces)
-                  adminPass = ""
-                  link.takeOver(p)
+                // ★★ THE SAME ONE TAP AS THE PICKER. This is the single-radio route in, reached at
+                //    the worst possible moment — you have just been told the receiver is busy — so
+                //    it is the least welcome place to ask someone to scribble a password.
+                if AdminSecret.has(host: link.lastConnect?.host ?? "") {
+                  Button("Take over as owner") {
+                    link.takeOver(AdminSecret.load(host: link.lastConnect?.host ?? ""))
+                  }
+                  .font(.system(size: 13, weight: .semibold)).tint(.red)
+                  Button("Forget password") {
+                    AdminSecret.forget(host: link.lastConnect?.host ?? "")
+                  }
+                  .font(.system(size: 10)).tint(.gray)
+                } else {
+                  SecureField("Admin password", text: $adminPass)
+                    .font(.system(size: 14, design: .rounded))
+                  Button("Take over") {
+                    let p = adminPass.trimmingCharacters(in: .whitespaces)
+                    adminPass = ""
+                    // ★ Remembered here too — the owner of a busy receiver is exactly the person
+                    //   who will need this again.
+                    AdminSecret.save(p, host: link.lastConnect?.host ?? "")
+                    link.takeOver(p)
+                  }
+                  .font(.system(size: 13, weight: .semibold)).tint(.red)
+                  .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .font(.system(size: 13, weight: .semibold)).tint(.red)
-                .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
                 Text("The current listener is disconnected and told why.")
                   .font(.system(size: 9)).foregroundColor(.white.opacity(0.45))
                   .multilineTextAlignment(.center)
