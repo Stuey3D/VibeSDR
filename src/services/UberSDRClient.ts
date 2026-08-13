@@ -186,6 +186,9 @@ export interface SDRCallbacks {
    *  ★ This is the AUTHORITATIVE remaining time; our local clock is only an interpolation
    *  between these, so re-base on it rather than trusting our own arithmetic. */
   onSessionWarning?: (secs: number) => void;
+  /** ★ The owner's notice to listeners ("antenna maintenance in progress"), pushed when it is
+   *  posted or cleared. '' = nothing to show. */
+  onNotice?: (text: string) => void;
   /** ★ The receiver's own terms, read from POST /connection at connect (see _checkConnection).
    *  idleSecs 0 = NO idle limit (a valid value, not a missing one); daily* −1 = unlimited. */
   onIdlePolicy?: (p: IdlePolicy) => void;
@@ -897,6 +900,10 @@ export class UberSDRClient {
     if (__DEV__) console.warn('[UberSDR]', msg); // console is NOT free in release
     this.callbacks.onDbg?.(msg);
   }
+
+  /** True once a radio has announced itself on this client — so a LATER hwinfo means we came
+   *  back, rather than arrived. */
+  private hadSession = false;
 
   private async _checkConnection() {
     this.dbg('POST /connection uuid=' + this.uuid.slice(0, 8));
@@ -1646,6 +1653,10 @@ export class UberSDRClient {
       this.callbacks.onSessionWarning?.(Number(msg.secs) || 0);
       return;
     }
+    if (msg.type === 'notice') {
+      this.callbacks.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
+      return;
+    }
     if (msg.type === 'admin') {
       this.callbacks.onAdminState?.({
         set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true });
@@ -1687,6 +1698,21 @@ export class UberSDRClient {
       return;
     }
     if (msg.type === 'hwinfo') {
+      // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.
+      //     Backgrounding pauses the spectrum, and resuming opens a FRESH socket — a new session
+      //     as far as the server is concerned, so it starts the listener at the radio's landing
+      //     frequency. On the way back from the background the Airspy therefore jumped from the
+      //     2 m band to broadcast FM, which is not a retune anyone asked for (Stuart, 2026-08-13).
+      //     ★★ onopen re-asserts the VIEW (the zoom/centre) and always has — but the view is where
+      //        the waterfall is LOOKING, not what the demodulator is TUNED to. The two were never
+      //        the same thing, and only one of them was being restored.
+      //     ★ Only on a socket that has been here before (`this.hadSession`): on a FIRST connect
+      //       the server's landing frequency is exactly what should win, and SDRScreen's own
+      //       last-tune restore runs then too — re-asserting here would fight it.
+      if (this.hadSession && this.status.frequency > 0) {
+        this.tune(this.status.frequency, this.status.mode, { recenter: true });
+      }
+      this.hadSession = true;
       // VibeServer sent the serving device's tuner gains + offered sample rates.
       // ★ The radio describes ITSELF. Everything the hardware panel offers is decided from
       // this — see RadioCaps. Forwarded verbatim rather than normalised: a driver we do not

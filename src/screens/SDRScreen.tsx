@@ -1273,6 +1273,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (overlayOff) setStationId(null);
       const idColor = /^#[0-9a-fA-F]{6}$/.test((cfg?.station_id_color ?? '').trim())
         ? (cfg!.station_id_color as string).trim() : '#ffffff';
+      // ★★ A NOTICE MUST GREET SOMEONE WHO ARRIVES AFTER IT WAS POSTED. The push only reaches
+      //    sockets that were already open — and the person connecting now is exactly the one about
+      //    to judge a misbehaving receiver.
+      fetchOccupancy(connectBase).then((occ) => {
+        if (!cancelled && occ?.notice) setOwnerNotice(occ.notice);
+      }).catch(() => {});
       fetchReceiverInfo(connectBase).then((r: ReceiverInfo | null) => {
         if (cancelled || !r) return;
         if (r.serverVersion) setServerVersion(r.serverVersion);
@@ -2031,6 +2037,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [radioCaps, setRadioCaps] = useState<RadioCaps | null>(null);
   // ★ Admin lock, mirrored from the server. `set` comes with hwinfo, `ok` changes when we
   // unlock — so the panel can show the lock the server is ALREADY enforcing.
+  /** The owner's message to listeners, or '' — see onNotice. */
+  const [ownerNotice, setOwnerNotice] = useState('');
+  /** ★ Dismissed by THIS text: having read it you can watch your waterfall, but a NEW notice
+   *  reappears, because the next one may say something else entirely. */
+  const [noticeSeen, setNoticeSeen] = useState('');
   const [adminSet, setAdminSet] = useState(false);
   const [adminOk,  setAdminOk]  = useState(false);
   const [adminRefused, setAdminRefused] = useState(false);
@@ -2855,6 +2866,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Under AGC the IF reduction is the AGC's to move — follow the radio, do not fight it.
         if (rspIfAgcRef.current) setRspIfGr(r.ifgr);
       },
+      // ★★ THE OWNER'S NOTICE. Kept in state rather than shown as a toast: it explains something
+      //    ONGOING — an aerial being worked on — so it must stay on screen while it is true, not
+      //    flash past while the listener is looking at the waterfall.
+      onNotice: (text: string) => { if (!destroyed.current) setOwnerNotice(text || ''); },
       onAdminState: (st) => {
         if (destroyed.current) return;
         setAdminSet(st.set); setAdminOk(st.ok);
@@ -6257,6 +6272,18 @@ export default function SDRScreen({ route, navigation }: Props) {
              with a font size.
           ★ The clock STAYS when the furniture is hidden — a countdown you cannot see is a
             disconnection you cannot see coming. */}
+      {/* ★★ THE OWNER'S NOTICE. Top-CENTRE, clear of the receiver identity and the clock on the
+          right and the Servers chip on the left — it is a sentence, and it needs the width.
+          ★ Tappable to dismiss, and amber rather than red: this is the owner talking, not an
+            error. A red banner over a working receiver teaches people to distrust red. */}
+      {!!ownerNotice && ownerNotice !== noticeSeen && (
+        <TouchableOpacity activeOpacity={0.85}
+          onPress={() => setNoticeSeen(ownerNotice)}
+          style={[styles.ownerNotice, { top: insets.top + 8 }]}>
+          <Text style={styles.ownerNoticeTxt} numberOfLines={3}>{ownerNotice}</Text>
+        </TouchableOpacity>
+      )}
+
       {sessionLeftMs != null && (
         <View pointerEvents="none" style={[styles.rxClock, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
@@ -6920,6 +6947,10 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  ownerNotice: { position: 'absolute', alignSelf: 'center', zIndex: 215, maxWidth: '70%',
+                 paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
+                 borderColor: 'rgba(255,180,60,0.55)', backgroundColor: 'rgba(30,20,0,0.94)' },
+  ownerNoticeTxt: { color: '#ffd479', fontFamily: 'Nixie One', fontSize: 13, textAlign: 'center' },
   rxClock:     { position: 'absolute', zIndex: 210,
                  paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
