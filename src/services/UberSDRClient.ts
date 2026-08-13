@@ -23,6 +23,18 @@ import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 import { USER_AGENT } from '../constants/version';
 
+/**
+ * ★★★ NAME OURSELVES IN THE QUERY, because the header is not ours to set. React Native's WebSocket
+ *     does not reliably send a User-Agent on the upgrade — the platform owns that header — so every
+ *     VibeSDR session appeared in an owner's connection log as "—", indistinguishable from a bot,
+ *     beside browsers naming themselves in full. Setting the header was the obvious fix and was NOT
+ *     enough (Stuart, 2026-08-13: "also no user agent from VibeSDR or Jr still").
+ * ★★ The server prefers a real User-Agent and falls back to this, so nothing changes for clients
+ *    that can send one. It is the client's own word about itself either way — exactly what a
+ *    User-Agent has always been — and it grants nothing.
+ */
+const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}`;
+
 /** Powersave target, in frames/sec — an absolute floor, not a divisor. */
 const POWERSAVE_FPS = 5;
 
@@ -978,13 +990,13 @@ export class UberSDRClient {
    *  socket when the phone locks — same URL this client uses in _openSpectrumWs. Handed to
    *  VibeWatchModule.startWatchSpectrum so the native forwarder never re-implements auth. */
   watchSpectrumUrl(): string {
-    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}`);
+    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
   }
 
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while

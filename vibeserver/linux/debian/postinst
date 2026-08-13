@@ -136,7 +136,22 @@ case "$1" in
       # ★ The wizard enables and starts the service itself (tui.cpp), so telling people to run
       #   systemctl afterwards is wrong — and it is the sort of wrong that makes someone think a
       #   step failed when it simply was not needed (Stuart hit exactly this, 2026-08-06).
-      echo "VibeServer: installed. Log out and back in, then run 'vibeserver' to set it up."
+      # ★★★ AN UPGRADE IS NOT AN INSTALL. This told a server that has been running for weeks to
+      #     "log out and back in, then run 'vibeserver' to set it up" — advice that is not merely
+      #     unnecessary but alarming: it reads as though the upgrade had reset the machine, and it
+      #     invites an owner to re-run a wizard over a working configuration (Stuart, 2026-08-13:
+      #     "this line about logging out and in and setting up with vibeserver is incorrect for
+      #     updates as the server is already setup").
+      # ★★ dpkg tells us which this is: $2 is the OLD version on an upgrade and EMPTY on a first
+      #    install. The group change is the only reason to log out at all, and that only happens
+      #    once — so the sentence about it belongs only to the install that made it.
+      if [ -z "${2:-}" ]; then
+        echo "VibeServer: installed. Log out and back in, then run 'vibeserver' to set it up."
+      elif [ -f /etc/vibeserver/vibeserver.conf ]; then
+        echo "VibeServer: upgraded to $(dpkg-query -W -f='\${Version}' vibeserver 2>/dev/null). Your settings are unchanged."
+      else
+        echo "VibeServer: upgraded. Run 'vibeserver' to set it up."
+      fi
     fi
     ;;
 esac

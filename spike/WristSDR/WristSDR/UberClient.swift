@@ -1018,7 +1018,10 @@ final class UberClient: ObservableObject {
     // the wire cost is a flat ~128 bins/frame at every zoom. Cuts each SPEC frame ~32x. UberSDR
     // ignores the param (it sends its own count, which we downsample as before).
     let binsParam = isVibe ? "&bins=\(WaterfallBuffer.width)" : ""
-    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminSuffix)")!
+    // ★★ NAMED IN THE QUERY TOO. The header is set as well, but a platform may own User-Agent on a
+    //    WebSocket upgrade — and when it does, the owner's connection log shows "—" for us. The
+    //    server prefers a real header and falls back to this.
+    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminSuffix)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }

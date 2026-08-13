@@ -6182,7 +6182,18 @@ struct LocalSdrShim::Impl {
                      queryParam(reqLine, "channels") == "1", wantBins,
                      queryParam(reqLine, "vs_admin_nonce"),
                      queryParam(reqLine, "vs_admin_auth"),
-                     queryParam(reqLine, "vs_admin_ticket"), userAgent);
+                     queryParam(reqLine, "vs_admin_ticket"),
+                     // ★★★ A CLIENT THAT CANNOT SET A HEADER MAY NAME ITSELF IN THE QUERY. React
+                     //     Native's WebSocket does not reliably send a User-Agent on the upgrade —
+                     //     it is one of the headers the platform owns — so every VibeSDR session
+                     //     landed in the owner's log as "—", beside browsers naming themselves in
+                     //     full (Stuart, 2026-08-13, still true after the header was added). The
+                     //     header is still preferred where it exists; this is the fallback, and it
+                     //     is the ONLY thing a WebSocket client can always control.
+                     // ★★ Trusted no further than a User-Agent already is: both are the client's
+                     //    own word about itself, neither grants anything, and the log says who
+                     //    CLAIMED to be there — which is all a User-Agent has ever meant.
+                     userAgent.empty() ? queryParam(reqLine, "client") : userAgent);
         // ★★ MATCHED ON A PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE. This was
         //    `reqLine.find("/connection") != npos`, which quietly claimed every later route whose
         //    path merely CONTAINS that word — /vibeserver/admin/connections was answered by the
