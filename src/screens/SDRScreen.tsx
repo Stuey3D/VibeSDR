@@ -443,6 +443,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  — so there is nothing to reconnect FOR. The ref carries it into any LATER connect without
    *  making this one restart. */
   const adminAuthQRef = useRef('');
+  /** ★ One retry without the admin credential, per session — see onError. */
+  const adminRetryDone = useRef(false);
   useEffect(() => { adminAuthQRef.current = adminAuthQ; }, [adminAuthQ]);
   const [adminPickPw, setAdminPickPw] = useState('');
   const [adminPickBusy, setAdminPickBusy] = useState(false);
@@ -3175,6 +3177,25 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onError: (msg) => {
         if (destroyed.current) return;
+        // ★★★ A STALE ADMIN CREDENTIAL MUST NOT LOCK THE OWNER OUT OF LISTENING. The ticket minted
+        //     at the picker is short-lived (ten minutes) and rides the CONNECT URL — so unlocking,
+        //     then choosing a radio a while later, presents an EXPIRED credential and the server
+        //     refuses the handshake. The app then shows "Connection Error" about a receiver that
+        //     is working perfectly and would have accepted an ordinary listener (Stuart,
+        //     2026-08-13: "when i enter the admin password on radio picker screen ... it throws up
+        //     a connection error").
+        // ★★ So: drop the credential and retry ONCE, as an ordinary listener. Being admin is a
+        //    privilege; being connected is the point. Losing the privilege silently would be
+        //    wrong, so the admin buttons disappear with it and the owner can unlock again.
+        // ★ One shot, guarded — a server refusing for any OTHER reason must still report it rather
+        //   than loop.
+        if (adminAuthQRef.current && !adminRetryDone.current) {
+          adminRetryDone.current = true;
+          adminAuthQRef.current = '';
+          setAdminAuthQ('');
+          setConnEpoch((n) => n + 1);
+          return;
+        }
         // KiwiSDR refusals get our own CUSTOM card (not a system alert) with three choices:
         // Back to Instances / Try Again / Compatibility Mode. Owner restrictions (app-block,
         // private password, slot limits) can't be fixed by the UberSDR bypass-password box, so
@@ -3279,7 +3300,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       // drives the UI). An unhandled rejection here can escalate to a hard crash.
       // ★ BEFORE connect(), never after: the credential has to be ON the handshake, which is
       //   where a busy or cooling-down receiver decides whether to refuse us.
-      if (adminAuthQRef.current) (c as any).setAdminAuth?.(adminAuthQRef.current);
+      // ★ Typed, NOT `(c as any).setAdminAuth?.()`. That form is why this went unnoticed: with the
+      //   method missing, optional chaining made it a silent no-op rather than an error.
+      if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthQRef.current);
       c.connect(f, m, { allowServerDefault: !restored }).catch(() => {});
     }).catch(() => {
       if (cancelled || destroyed.current) return;
@@ -3287,7 +3310,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       setTuneLoaded(true);
       // Storage failed, so we know nothing about this instance — the receiver's own default is a
       // better answer than our hardcoded one.
-      if (adminAuthQRef.current) (c as any).setAdminAuth?.(adminAuthQRef.current);
+      // ★ Typed, NOT `(c as any).setAdminAuth?.()`. That form is why this went unnoticed: with the
+      //   method missing, optional chaining made it a silent no-op rather than an error.
+      if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthQRef.current);
       c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
     });
     // ★★★ GIVE crashGuard A WAY TO KILL THIS SESSION. A render crash resets navigation, but this

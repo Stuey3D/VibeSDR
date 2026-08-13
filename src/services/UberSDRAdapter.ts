@@ -51,6 +51,9 @@ export class UberSDRAdapter implements SDRBackend {
     }
   }
 
+
+
+
   get uuid(): string { return this.client.uuid; }
 
   /** Link-management mode (Auto / Full / Low Data). FORWARD to the inner client — the app sets this on
@@ -102,9 +105,7 @@ export class UberSDRAdapter implements SDRBackend {
 
   /** Admin credentials for the CONNECT URL — set BEFORE connect(), or the handshake goes out
    *  without them and a busy or cooling-down receiver refuses us as an ordinary listener. */
-  setAdminAuth(q: string) {
-    (this.client as any).adminSuffix = q ? (q.startsWith('&') ? q : '&' + q) : '';
-  }
+  setAdminAuth(q: string) { this.client.setAdminAuth(q); }
   connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }) { this.fetchReceiverLon(); return this.client.connect(frequency, mode, opts); }
   destroy()                                   { this.client.destroy(); }
 

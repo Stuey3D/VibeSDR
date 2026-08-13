@@ -360,6 +360,27 @@ export class UberSDRClient {
    */
   adminSuffix = '';
 
+  /**
+   * Carry an admin credential on every socket this client opens from now on.
+   *
+   * ★★★ SDRScreen HAS BEEN CALLING `setAdminAuth` SINCE THE PICKER'S ADMIN BOX WAS BUILT, AND IT
+   *     DID NOT EXIST. The call site is `(c as any).setAdminAuth?.(…)` — optional-chained, so a
+   *     missing method is not an error, not a warning, and not a crash: it is simply nothing
+   *     happening, for ever. The credential never reached the connect URL, so an owner who
+   *     unlocked at the picker was still refused by a FULL radio — the one job that box exists to
+   *     do (found 2026-08-13 while chasing a connection error at that very box).
+   * ★★ THE LEADING `&` IS NORMALISED HERE. resolveVibeAdminAuth returns "&vs_admin_nonce=…" WITH
+   *    one and a minted ticket comes back as "vs_admin_ticket=…" WITHOUT — and these are pasted
+   *    straight into a query string. One of the two would have produced
+   *    "…&mode=binary8vs_admin_ticket=…": a malformed URL, refused at the handshake, which reads
+   *    to a user as exactly the connection error they reported. Fixing it at the join means
+   *    neither caller has to remember.
+   */
+  setAdminAuth(q: string) {
+    const t = (q || '').trim();
+    this.adminSuffix = !t ? '' : (t.startsWith('&') ? t : '&' + t);
+  }
+
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
   private lastSendAt   = 0;

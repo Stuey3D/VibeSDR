@@ -211,6 +211,18 @@ export interface SDRBackend {
   setAudioServiceId?(id: number): void;
   /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */
   setDabAudioScale?(scale: number): void;
+
+  /**
+   * ★★ Carry an admin credential on every socket this backend opens.
+   *
+   * ★★★ DECLARED HERE SO THE COMPILER CHECKS THE CALL. SDRScreen called this for weeks as
+   *     `(c as any).setAdminAuth?.(…)` against a method that did not exist — and optional chaining
+   *     on an `any` is silence, not an error, so an owner unlocking at the radio picker was still
+   *     refused by a full radio (2026-08-13). Optional because Kiwi and OWRX have no such concept;
+   *     typed, so a rename or a typo fails the build instead of quietly doing nothing.
+   */
+  setAdminAuth?(q: string): void;
+
 }
 
 /** A DAB programme (audio service) within the tuned ensemble. */
