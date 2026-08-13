@@ -429,6 +429,21 @@ final class SpikeLink: ObservableObject {
   /// favourite, or a typed IP. The last two are the only routes that work over the
   /// Bluetooth relay, and neither could ever prompt before.
   @Published var needsPin = false
+  /// ★★ ADMIN MODE, mirrored the same way as `needsPin`. The server EXEMPTS an admin session from
+  /// the listening limit (enforceSessionLimit returns early on adminOk), so the countdown simply
+  /// vanished — and a missing pill is indistinguishable from "this server has no limit", when the
+  /// exemption is the thing worth knowing (Stuart, 2026-08-13). Said plainly instead.
+  @Published var adminOk = false
+  /// The owner's password is ARMED for the next connect (see UberClient.proveAdminForConnect).
+  /// ★ "Armed", not "verified" — only the server can judge it, and it does that at the handshake.
+  @Published var adminArmed = false
+  @Published var adminArmFailed = false
+
+  /// Arm the owner's password on the picker, so the connection that follows goes in as admin —
+  /// past the user limit and exempt from the time limit.
+  func armAdmin(_ password: String) {
+    (client as? UberClient)?.proveAdminForConnect(password)
+  }
   /// The radios behind a multi-radio VibeServer's front door — empty unless there is a choice.
   @Published var radioChoices: [VibeRadio] = []
   @Published var radioChoiceName = ""
@@ -468,6 +483,10 @@ final class SpikeLink: ObservableObject {
     serverName = name
     lastConnect = (url, host, type, name)
     needsPin = false
+    // ★ Admin belongs to the SESSION, not to the watch. Carried into a new connection it would
+    //   claim an exemption this server has never granted — and hide a countdown that is running.
+    adminOk = false
+    adminArmed = false; adminArmFailed = false
     sessionSecsLeft = -1; sessionLimitMin = 0
     sessionShownMarks.removeAll(); sessionNoticeDone = false
     sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false
@@ -552,6 +571,28 @@ final class SpikeLink: ObservableObject {
     // Only a VibeServer (UberClient in vibe mode) can ask for a PIN.
     let wantsPin = (client as? UberClient)?.needsPin ?? false
     if needsPin != wantsPin { needsPin = wantsPin }
+    let isAdmin = (client as? UberClient)?.adminOk ?? false
+    if adminOk != isAdmin {
+      adminOk = isAdmin
+      // ★★★ UNLOCKING STOPS THE CLOCK, HERE AND NOW. The server exempts an admin the moment it
+      //     accepts the password (enforceSessionLimit returns early on adminOk), but our countdown
+      //     runs LOCALLY between the server's messages and only re-bases when it next speaks — so
+      //     it carried on ticking down towards a deadline that had already ceased to exist, and
+      //     the owner watched a threat that would not be carried out (Stuart, 2026-08-13: "the
+      //     admin password in the hardware button should also remove the time limits too" — the
+      //     server had; the watch had not caught up).
+      if isAdmin {
+        sessionDeadline = nil
+        lastServerSecs = -1
+        sessionSecsLeft = -1
+        showSessionPill = false
+        sessionNotice = nil
+      }
+    }
+    let armed = (client as? UberClient)?.adminProved ?? false
+    if adminArmed != armed { adminArmed = armed }
+    let armFail = (client as? UberClient)?.adminProveFailed ?? false
+    if adminArmFailed != armFail { adminArmFailed = armFail }
     // ★★ …and only a MULTI-RADIO VibeServer can ask which radio. Mirrored the same way as the PIN
     //    and for the same reason: driven by the CLIENT saying it needs an answer, so it does not
     //    matter which route reached the server — a favourite, the last one on launch, or the phone

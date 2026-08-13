@@ -330,6 +330,53 @@ final class UberClient: ObservableObject {
     return (j["busy"] as? Bool) ?? false
   }
 
+  /// Whether the owner's password has been proved for the NEXT connection.
+  @Published var adminProved = false
+  @Published var adminProveFailed = false
+
+  /**
+   * Prove the owner's password BEFORE connecting, so the credential rides the connect URL.
+   *
+   * ★★★ THIS CANNOT BE DONE AFTER CONNECTING. A full server and one holding us on a cooldown both
+   *     refuse during the HANDSHAKE — the slot is claimed before any socket message could arrive —
+   *     so `admin_unlock`, which is a message, is far too late. That is why the owner of a busy
+   *     receiver could only ever get in by being told IN USE first and answering the prompt: the
+   *     way in existed, but only as a reaction to being turned away (Stuart, 2026-08-13, wanting
+   *     it on the picker so an owner can simply go in).
+   * ★★ Proved at the DOOR — `radioPath` is still empty here — because the door owns the
+   *    machine-wide password and every radio behind it honours what the door issued. Proving at a
+   *    radio would bind the credential to that one process.
+   * ★ Sets no `serverBusy`/reconnect of its own: this only ARMS the credential. The connection is
+   *   made by picking a radio, exactly as it was before.
+   */
+  func proveAdminForConnect(_ password: String) {
+    guard isVibe, !password.isEmpty else { return }
+    adminProveFailed = false
+    Task { [weak self] in
+      guard let self else { return }
+      let httpScheme = secure ? "https" : "http"
+      guard let url = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver/auth"),
+            let (data, _) = try? await httpSession.data(from: url),
+            let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let nonce = j["nonce"] as? String, !nonce.isEmpty else {
+        await MainActor.run { self.adminProveFailed = true }
+        return
+      }
+      let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8),
+                                                using: SymmetricKey(data: Data(password.utf8)))
+      let token = mac.map { String(format: "%02x", $0) }.joined()
+      await MainActor.run {
+        // ★★ A WRONG PASSWORD CANNOT BE DETECTED HERE. The nonce is handed out to anyone; only the
+        //    server can judge the HMAC, and it does that at the handshake. So this reports
+        //    "armed", not "correct" — and a wrong one simply connects as an ordinary listener,
+        //    which is the same outcome as not trying. Saying "unlocked" here would be a lie we
+        //    could not stand behind.
+        self.adminSuffix = "&vs_admin_nonce=\(nonce)&vs_admin_auth=\(token)"
+        self.adminProved = true
+      }
+    }
+  }
+
   /// Take the receiver with the owner's admin password. The displaced listener is
   /// told why (`evicted`), which is what makes this safe where plain takeover was not.
   func takeOverWithAdmin(_ password: String) {

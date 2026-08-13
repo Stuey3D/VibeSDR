@@ -2812,6 +2812,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       onAdminState: (st) => {
         if (destroyed.current) return;
         setAdminSet(st.set); setAdminOk(st.ok);
+        // ★★ AND STOP THE CLOCK. The server exempts an admin the moment it accepts the password,
+        //    but the countdown here is driven by the last figure the server sent — so it went on
+        //    counting down to a deadline that no longer existed. Cleared on the grant, which is
+        //    the same rule the web client follows (clearTimeLeft on admin).
+        if (st.ok) setSessionLeftMs(null);
         if (st.refused) setAdminRefused(true);
         if (st.ok) setAdminRefused(false);
       },

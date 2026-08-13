@@ -199,6 +199,8 @@ struct ContentView: View {
   /// PIN prompt for a VibeServer that wants one. Driven by `link.needsPin`, so it
   /// appears however the user connected — discovered, favourite or typed IP.
   @State private var pinEntry = ""
+  /// ★ Cleared the instant it is submitted — the same rule as the PIN and the phone's box.
+  @State private var adminPass = ""
   @EnvironmentObject var favs: FavStore
   @State private var showHardware = false
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
@@ -475,7 +477,20 @@ link.setAutoContrast(wfAutoContrast)
         // schedule rather than permanently (see SpikeLink.updateSessionPill): a clock
         // ticking all session is nagging, one that appears only at the end is a shock.
         // Turns red for the last two minutes, when it also stops going away.
-        if link.showSessionPill {
+        // ★ ADMIN takes this slot outright: an admin session is not on the clock, so a countdown
+        //   here would be measuring a deadline that no longer exists.
+        if link.adminOk {
+          HStack(spacing: 4) {
+            Image(systemName: "key.fill").font(.system(size: 10, weight: .bold))
+            Text("Admin Mode").font(.system(size: 12, weight: .semibold, design: .rounded))
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 9).padding(.vertical, 4)
+          .background(Color.black.opacity(0.75), in: Capsule())
+          .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 1))
+          .padding(.bottom, 2)
+          .transition(.opacity)
+        } else if link.showSessionPill {
           HStack(spacing: 4) {
             Image(systemName: "hourglass").font(.system(size: 10, weight: .bold))
             Text(link.sessionLeftText).font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -718,6 +733,10 @@ link.setAutoContrast(wfAutoContrast)
               }
             }
           }
+          // ★ Its own View: inlined, this sheet grew past what the SwiftUI type-checker will
+          //   solve ("unable to type-check this expression in reasonable time"), which is a
+          //   compile failure rather than a slow build.
+          RadioPickerAdminSection(link: link)
         }
       }
       .interactiveDismissDisabled(true)
@@ -2309,5 +2328,61 @@ struct BreathingSQL: View {
       .outlined()
       .opacity(dim ? 0.35 : 1)
       .onAppear { withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { dim = true } }
+  }
+}
+
+
+/**
+ * The owner's password on the radio picker — armed BEFORE the handshake.
+ *
+ * ★★★ A password entered after connecting is too late for the two things it most needs to beat: a
+ *     FULL receiver and a COOLDOWN both refuse during the handshake, before any socket message can
+ *     be sent. Armed here, the credential rides the connect URL — so the owner walks past the user
+ *     limit and is exempt from the time limit (Stuart, 2026-08-13).
+ * ★★ LAST in the sheet and folded shut. Every listener sees this picker and almost none own the
+ *    radio; a password box above the receivers would read as though one were needed to listen.
+ * ★ A single-radio server never shows this picker at all — there it stays as it was, the IN USE
+ *   box with its own override, which is the right shape when there is nothing to choose between.
+ */
+private struct RadioPickerAdminSection: View {
+  @ObservedObject var link: SpikeLink
+  @State private var pass = ""
+  /// ★ Folded by default, and opened deliberately. DisclosureGroup does not exist on watchOS, so
+  ///   this is the same idea built from a Button — one tap to reveal, nothing hidden behind a
+  ///   gesture a wrist cannot discover.
+  @State private var open = false
+
+  var body: some View {
+    Section {
+      if link.adminArmed {
+        Label("Admin armed \u{2014} limits lifted", systemImage: "key.fill")
+          .font(.system(size: 11)).foregroundStyle(.green)
+      } else if !open {
+        Button("Owner of this receiver?") { open = true }
+          .font(.system(size: 11))
+          .tint(.orange)
+      } else {
+        Group {
+          SecureField("Admin password", text: $pass)
+            .font(.system(size: 14, design: .rounded))
+          Button("Unlock") {
+            let p = pass.trimmingCharacters(in: .whitespaces)
+            pass = ""
+            link.armAdmin(p)
+          }
+          .font(.system(size: 13, weight: .semibold))
+          .tint(.orange)
+          .disabled(pass.trimmingCharacters(in: .whitespaces).isEmpty)
+          if link.adminArmFailed {
+            Text("Could not reach the server to check that.")
+              .font(.system(size: 10)).foregroundStyle(.red)
+          }
+          // ★ "Armed", NOT "correct": only the server can judge the password, at the handshake. A
+          //   wrong one simply connects you as an ordinary listener.
+          Text("Applied when you pick a receiver. A wrong password just connects you normally.")
+            .font(.system(size: 9)).foregroundStyle(.secondary)
+        }
+      }
+    }
   }
 }
