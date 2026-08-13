@@ -478,7 +478,11 @@ function renderSessions(s: any) {
     <td title="Share of ONE core: 100% = a core fully busy keeping up with this listener's stream. Not a share of the whole machine — the HEALTH card above is that.">${rate(c.cpu, '% core')}</td>
     <td>${rate(c.kbps, 'k')}</td>
     <td>${c.dropped > 0 ? esc(String(c.dropped)) : '<span class="dim">0</span>'}</td>
-    <td class="agent">${clientLabel(c.agent)}</td>
+    <td class="agent">${clientLabel(c.agent)}${c.admin
+      // ★ Named, not coloured-only: an owner scanning this table for a session that should not be
+      //   admin needs a word, and colour alone does not survive a screenshot in a bug report.
+      ? ' <span class="adminTag" title="This session has unlocked the admin password — exempt from the session limit and able to change the radio">ADMIN</span>'
+      : ''}</td>
     <td class="agent">${c.net ? esc(c.net) : '<span class="dim">unknown</span>'}</td>
     <td>
       <button class="btn" data-kick="${esc(c.session)}">DISCONNECT</button>
@@ -598,7 +602,7 @@ function groupVisits(list: any[]): any[] {
   const out: any[] = [];
   for (const c of list) {
     const sess = String(c.session || '');
-    if (!sess) { out.push({ ...c, radios: c.radio ? [c.radio] : [] }); continue; }
+    if (!sess) { out.push({ ...c, radioLegs: c.radio ? [{ radio: c.radio, at: c.at || 0 }] : [] }); continue; }
     const had = bySession.get(sess);
     // ★★★ TESTED IN BOTH DIRECTIONS, BECAUSE THE LOG ARRIVES NEWEST FIRST. My first cut only asked
     //     "does this leg START long after the visit ENDED" — which is never true when the list runs
@@ -610,7 +614,7 @@ function groupVisits(list: any[]): any[] {
          (!!had.end && (c.at || 0) - had.end > VISIT_GAP_SEC)     // arrives long after it ended
       || (!!c.end && (had.at || 0) - c.end > VISIT_GAP_SEC));     // ended long before it began
     if (!had || gapped) {
-      const v = { ...c, radios: c.radio ? [c.radio] : [] };
+      const v = { ...c, radioLegs: c.radio ? [{ radio: c.radio, at: c.at || 0 }] : [] };
       bySession.set(sess, v);
       out.push(v);
       continue;
@@ -621,7 +625,16 @@ function groupVisits(list: any[]): any[] {
     had.bytes = (had.bytes || 0) + (c.bytes || 0);
     // The most recent ending is the one worth showing — "banned" after two clean legs is the news.
     if (c.end && c.end >= (had.end || 0)) had.reason = c.reason;
-    if (c.radio && !had.radios.includes(c.radio)) had.radios.push(c.radio);
+    // ★★★ IN THE ORDER IT HAPPENED, NOT THE ORDER IT ARRIVED. The log is NEWEST FIRST, so pushing
+    //     as we iterate built the chain BACKWARDS: a visit that went RSP1B → Airspy was shown as
+    //     "Airspy HF+ → SDRplay RSP1B" (Stuart, 2026-08-13). The same newest-first trap as the gap
+    //     test twenty lines above, in the next statement along — which is exactly why the fix
+    //     there is written to be order-agnostic rather than to assume a direction.
+    // ★ Each hop keeps its own timestamp and the chain is sorted at render, so it reads correctly
+    //   whichever way the server hands us the legs.
+    if (c.radio && !had.radioLegs.some((x: any) => x.radio === c.radio)) {
+      had.radioLegs.push({ radio: c.radio, at: c.at || 0 });
+    }
     if (!had.agent && c.agent) had.agent = c.agent;
     if (!had.cc && c.cc) had.cc = c.cc;
   }
@@ -671,7 +684,11 @@ function renderConns(raw: any[]) {
            (see the per-radio log path in main.cpp) and is worth showing now that it is true.
            ★ Stuart wanted it to see which radio is the most popular — so it is a plain label, not
              an id: a column of hex would answer nothing at a glance. -->
-      <td class="cRadio">${esc((c.radios && c.radios.length ? c.radios.join(' \u2192 ') : c.radio) || '—')}</td>
+      <td class="cRadio">${esc(
+        (c.radioLegs && c.radioLegs.length
+          ? [...c.radioLegs].sort((a: any, b: any) => (a.at || 0) - (b.at || 0))
+              .map((x: any) => x.radio).join(' \u2192 ')
+          : c.radio) || '—')}</td>
       <td>${live ? '<span class="dim">now</span>' : esc(dur(c.end - c.at))}</td>
       <td class="why-${esc(c.reason || '')}">${live ? '<span class="dim">connected</span>'
                                                     : esc(c.reason || '—')}</td>

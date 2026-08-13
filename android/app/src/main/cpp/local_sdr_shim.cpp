@@ -9838,7 +9838,16 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"cpu\":" + std::to_string(cpuPct)
            + ",\"kbps\":" + std::to_string(kbps)
            + ",\"decoder\":\"" + vibeadmin::esc(dec) + "\""
-           + ",\"occupant\":" + (isOccupant ? "true" : "false");
+           + ",\"occupant\":" + (isOccupant ? "true" : "false")
+           // ★★★ SAY WHICH SESSION IS AN ADMIN ONE. The live LISTENERS table had no admin field at
+           //     all, so an owner sitting in their own admin session could not see it there — and
+           //     neither could they see a STRANGER in one, which is the case that matters: an
+           //     admin session is what a compromised password buys, and it is exempt from the very
+           //     limits the table exists to police (Stuart, 2026-08-13). The connection HISTORY has
+           //     badged admin since 08-12; the live table never did.
+           // ★ Only ever on the OCCUPANT: `adminOk` is cleared whenever the spectrum client
+           //   changes, so it describes the session in the chair and nobody else.
+           + ",\"admin\":" + ((isOccupant && p->adminOk.load()) ? "true" : "false");
         if (isOccupant && p->occupantSince > 0)
             j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
         j += "}";

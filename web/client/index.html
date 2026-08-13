@@ -229,6 +229,10 @@ input, textarea, [contenteditable],
 /* ★ Admin mode sits in the countdown's slot. Deliberately NOT a warning colour: it is a statement
    of fact about this session, not something going wrong. */
 #rxTimeLeft.adminMode { color: var(--accent, #ffb833); opacity: 0.85; letter-spacing: 0.02em; }
+/* ★ An admin session in the live listener table. Amber and outlined — a fact worth noticing, not
+   an error, and legible in a screenshot without relying on colour alone. */
+.adminTag { color: #ffb833; border: 1px solid rgba(255,160,0,0.55); border-radius: 3px;
+            padding: 0 4px; font-size: 0.75em; letter-spacing: 0.08em; }
 
 /* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
 /* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,
