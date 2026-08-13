@@ -985,7 +985,19 @@ export class UberSDRClient {
     if (this.destroyed) return;
 
     const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}`);
-    const ws  = new WebSocket(url);
+    // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
+    //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
+    //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while
+    //     browsers listed themselves in full (Stuart, 2026-08-13: "app also not reporting as
+    //     VibeSDR or VibeSDR Jr either"). An owner deciding whether to BLOCK an address is exactly
+    //     the person who needs to know it is our own app.
+    // ★★ RN's third argument takes headers on both platforms. The /connection POST has always sent
+    //    this header — the sockets, which are what the log actually records, never did.
+    // ★ Cast: React Native's WebSocket takes a third `options` argument (headers, per-socket),
+    //   which the DOM lib's type does not describe. The runtime honours it on both platforms.
+    const ws  = new (WebSocket as unknown as {
+      new (u: string, p: undefined, o: { headers: Record<string, string> }): WebSocket;
+    })(url, undefined, { headers: { 'User-Agent': USER_AGENT } });
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;
 

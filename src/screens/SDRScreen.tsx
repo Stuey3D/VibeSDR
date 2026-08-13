@@ -447,6 +447,36 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminPickPw, setAdminPickPw] = useState('');
   const [adminPickBusy, setAdminPickBusy] = useState(false);
   const [adminPickBad, setAdminPickBad] = useState(false);
+  /**
+   * ★★★ WHICH OF THESE RADIOS IS ACTUALLY IN USE. The door's radio list is a DIRECTORY, not a
+   *     status board — it says what the owner configured and cannot see inside the other radios'
+   *     processes — so the picker could only offer capacity ("one listener at a time") and never
+   *     occupancy. You found out a radio was taken by choosing it and being refused, which is the
+   *     one thing the picker exists to save you from (Stuart, 2026-08-13: "the app doesnt show if
+   *     a radio is in use until you try to use it").
+   * ★★ Asked of each RADIO directly — /vibeserver.json is answered by the process that owns the
+   *    radio, so it is the only honest source. In parallel, and failures simply stay unknown: a
+   *    radio that does not answer must not be labelled free.
+   */
+  const [radioBusy, setRadioBusy] = useState<Record<string, { busy: boolean; freeInSec: number }>>({});
+  useEffect(() => {
+    if (!door || !door.radios.length) { setRadioBusy({}); return; }
+    let dead = false;
+    const ask = () => {
+      door.radios.forEach((r) => {
+        fetchOccupancy(radioBaseUrl(baseUrl, r.id)).then((o) => {
+          if (dead || !o) return;
+          setRadioBusy((prev) => ({ ...prev, [r.id]: { busy: o.busy, freeInSec: o.freeInSec } }));
+        }).catch(() => {});
+      });
+    };
+    ask();
+    // ★ Re-asked while the picker is open: somebody may leave while you are deciding, and a
+    //   stale "IN USE" would send you away from a radio that is now free.
+    const t = setInterval(ask, 5000);
+    return () => { dead = true; clearInterval(t); };
+  }, [door, baseUrl]);
+
   /** Waiting for the owner to pick — the connect must not start. */
   const awaitingRadio = !!door && door.radios.length > 1 && !radioBase;
   /** The radio we are actually on, when there is a choice — the door already described it. */
@@ -1395,15 +1425,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onAdminUnlockPw = useCallback(async (pw: string) => {
     if (!pw) return;
     setAdminRefused(false);
-    const q = await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
-    const nonce = /vs_admin_nonce=([^&]*)/.exec(q)?.[1];
-    const token = /vs_admin_auth=([^&]*)/.exec(q)?.[1];
+    // ★★★ THE NONCE MUST COME FROM THE PROCESS THAT WILL CHECK IT. `/vibeserver/auth` hands out a
+    //     nonce from the process you ASK, and every radio behind a front door is a SEPARATE
+    //     process with its own nonce store — so a challenge proved at the DOOR is meaningless at a
+    //     RADIO. Using the door's nonce for the socket unlock meant the radio refused every
+    //     password on a multi-radio server, silently, while the very same password worked on a
+    //     single-radio one (where the door and the radio are the same address). That is why this
+    //     "stopped unlocking anything" the moment it was pointed at the Pi (Stuart, 2026-08-13).
+    // ★★ SO IT IS PROVED TWICE, deliberately, against two different things:
+    //      · the RADIO (connectBase) — unlocks the live controls on this socket;
+    //      · the DOOR (baseUrl)      — mints the ticket the admin and setup PAGES read.
+    //    One password, two proofs, because they are checked by two processes. On a single-radio
+    //    server the bases are identical and the first challenge is reused rather than asked twice.
+    const radioQ = await resolveVibeAdminAuth(connectBase, pw).catch(() => '');
+    const nonce = /vs_admin_nonce=([^&]*)/.exec(radioQ)?.[1];
+    const token = /vs_admin_auth=([^&]*)/.exec(radioQ)?.[1];
+    if (nonce && token) {
+      (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
+    }
+    const doorQ = connectBase === baseUrl
+      ? radioQ
+      : await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
+    if (doorQ) await mintAdminTicket(doorQ);
     // ★ A wrong password and an unreachable server both come back empty — say it did not work
-    //   rather than inventing which.
-    if (!nonce || !token) { setAdminRefused(true); return; }
-    (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
-    await mintAdminTicket(q);
-  }, [baseUrl, mintAdminTicket]);
+    //   rather than inventing which. The SOCKET is the half that decides: the server has the last
+    //   word on it, and onAdminState will correct us if it disagrees.
+    if (!nonce || !token) setAdminRefused(true);
+  }, [baseUrl, connectBase, mintAdminTicket]);
 
   /** ★ The door's own pages, offered ONLY once we are admin — they refuse without the credential,
    *  and a button that cannot work is worse than no button. */
@@ -2090,7 +2138,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Decoder transport base. Local/UberSDR serve /ws/dxcluster themselves; Kiwi
   // (no dxcluster) gets a native decoder sidecar fed its audio, so we point the
   // DecoderClient at that localhost service instead.
-  const [decoderBase, setDecoderBase] = useState<string | null>(isKiwi ? null : baseUrl);
+  /**
+   * ★★★ THE DECODERS BELONG TO THE RADIO, NOT THE DOOR. This was seeded from `baseUrl` — which on
+   *     a multi-radio server is the FRONT DOOR, a process that owns no radio. The decoder socket
+   *     opens perfectly against it and then has no audio to decode, so the panel sits on
+   *     "listening…" for ever: attached, healthy, and pointed at nothing. Side by side on 4582 kHz
+   *     the web client read the weather RTTY and the app did not (Stuart, 2026-08-13).
+   * ★★ `connectBase` is the radio (/r/<id>) once one is chosen, and equals baseUrl on a
+   *    single-radio server — which is why this was invisible everywhere except behind a door.
+   * ★ Kiwi still starts null: its decoders run in an on-device sidecar whose port arrives later.
+   */
+  const [decoderBase, setDecoderBase] = useState<string | null>(isKiwi ? null : connectBase);
+  // ★ And FOLLOW the radio: switching receivers behind a door must move the decoders with it,
+  //   or they keep listening to the one you left.
+  useEffect(() => {
+    if (isKiwi) return;
+    setDecoderBase((prev) => (prev === connectBase ? prev : connectBase));
+  }, [connectBase, isKiwi]);
   useEffect(() => {
     if (!isKiwi) { setDecoderBase(baseUrl); return; }
     let cancelled = false;
@@ -2269,6 +2333,11 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   /** Time-signal station: 'auto' picks from the tuned frequency (see timeStationFor). */
   const [timeStationPref, setTimeStationPref] = useState<string>('auto');
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_time_station').then((v) => {
+      if (v) setTimeStationPref(v);
+    }).catch(() => {});
+  }, []);
   /** What the running TIME decoder was actually attached AS, so a retune can notice a change. */
   const timeStationRef = useRef<string>('');
 
@@ -2394,8 +2463,37 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // RTTY settings — applying requires a re-attach (server reads params at attach)
   const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.ham });
+  /**
+   * ★★★ REMEMBERED, because RTTY IS NOT ONE THING. The ham preset (170 shift, 45.45 baud) and the
+   *     weather preset (450, 50, inverted) decode different stations, and a decoder pointed at the
+   *     wrong one produces NOTHING — not garbage, which would at least look like a decoder trying.
+   *     This reset to `ham` on every launch while the web client remembered the choice, so the same
+   *     station decoded there and sat on "listening…" here, side by side on 4582 kHz (Stuart,
+   *     2026-08-13). It read as "RTTY not working in the app"; RTTY was working and being asked
+   *     the wrong question.
+   * ★ Restored before any decoder can attach, and written on every change — one line each way,
+   *   which is all this ever needed.
+   */
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_rtty').then((j) => {
+      if (!j) return;
+      try {
+        const p = JSON.parse(j) as Partial<RttySettings>;
+        if (typeof p?.shift === 'number' && typeof p?.baud === 'number') {
+          const next: RttySettings = {
+            shift: p.shift, baud: p.baud,
+            encoding: typeof p.encoding === 'string' ? p.encoding : 'ITA2',
+            inverted: !!p.inverted,
+          };
+          setRttySettings(next);
+          if (decoderClient.current) decoderClient.current.rttySettings = { ...next };
+        }
+      } catch {}
+    }).catch(() => {});
+  }, []);
   const onRttySettings = useCallback((s: RttySettings) => {
     setRttySettings(s);
+    AsyncStorage.setItem('lsv_rtty', JSON.stringify(s)).catch(() => {});
     const dc = decoderClient.current;
     if (!dc) return;
     dc.rttySettings = { ...s };
@@ -2414,8 +2512,20 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // WEFAX LPM — same re-attach rule
   const [wefaxLpm, setWefaxLpm] = useState(120);
+  // ★ Same reasoning as the RTTY preset: 60/120/240 LPM decode different services, and the wrong
+  //   one draws a skewed picture rather than nothing — which is subtler and just as unusable.
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_wefax_lpm').then((v) => {
+      const n = Number(v);
+      if (n === 60 || n === 120 || n === 240) {
+        setWefaxLpm(n);
+        if (decoderClient.current) decoderClient.current.wefaxLpm = n;
+      }
+    }).catch(() => {});
+  }, []);
   const onWefaxLpm = useCallback((lpm: number) => {
     setWefaxLpm(lpm);
+    AsyncStorage.setItem('lsv_wefax_lpm', String(lpm)).catch(() => {});
     const dc = decoderClient.current;
     if (!dc) return;
     dc.wefaxLpm = lpm;
@@ -5621,8 +5731,24 @@ export default function SDRScreen({ route, navigation }: Props) {
                 style={styles.radioPickRow}
                 onPress={() => setRadioBase(radioBaseUrl(baseUrl, r.id))}
               >
-                <Text style={styles.radioPickName}>{r.label}</Text>
-                <Text style={styles.radioPickDetail}>{describeRadio(r)}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={[styles.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
+                  {/* ★ Only ever said when we have been TOLD. An unknown radio shows nothing —
+                      claiming "free" about a radio that did not answer is the error that costs
+                      somebody a wasted choice. */}
+                  {radioBusy[r.id]?.busy === true && (
+                    <Text style={styles.radioPickBusy}>IN USE</Text>
+                  )}
+                  {radioBusy[r.id]?.busy === false && (
+                    <Text style={styles.radioPickFree}>FREE</Text>
+                  )}
+                </View>
+                <Text style={styles.radioPickDetail}>
+                  {describeRadio(r)}
+                  {radioBusy[r.id]?.busy && radioBusy[r.id]!.freeInSec > 0
+                    ? ` · free in ${Math.ceil(radioBusy[r.id]!.freeInSec / 60)} min`
+                    : ''}
+                </Text>
               </Pressable>
             ))}
           </ScrollView>
@@ -6653,6 +6779,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           timeStation: timeStationPref,
           onTimeStation: (v: string) => {
             setTimeStationPref(v);
+            AsyncStorage.setItem('lsv_time_station', v).catch(() => {});
             // ★ Applied at once when the decoder is already running, so choosing a station is a
             //   correction you SEE rather than one that needs stopping and starting.
             if (activeDecRef.current === 'time') openDecoder('time');
@@ -6984,6 +7111,12 @@ const styles = StyleSheet.create({
   radioPickAdminBtnText: { color: '#ffe566', fontSize: 13, fontWeight: '600' },
   radioPickAdminBad: { color: '#ff9a8a', fontSize: 12, marginBottom: 8 },
   radioPickDetail: { color: '#b9b9b9', fontSize: 12, marginTop: 4 },
+  // ★ IN USE is amber (a wait, not a fault); FREE is green and deliberately quieter — the useful
+  //   signal is which ones you cannot have.
+  radioPickBusy: { color: '#ffb833', fontSize: 10, letterSpacing: 1, borderWidth: 1,
+                   borderColor: 'rgba(255,160,0,0.55)', borderRadius: 4,
+                   paddingHorizontal: 5, paddingVertical: 1 },
+  radioPickFree: { color: 'rgba(124,255,155,0.75)', fontSize: 10, letterSpacing: 1 },
 
   // ★ The receiver's "are you still there?" card — see the render for why it is not a Modal.
   stillHereCard: {

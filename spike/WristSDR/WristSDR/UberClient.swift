@@ -72,6 +72,9 @@ final class UberClient: ObservableObject {
   /// password: HMAC(secret, nonce), same VsAuth as the PIN, so it inherits the
   /// brute-force lockout too.
   private var adminSuffix = ""
+  /// ★ One string, so the log cannot show two different names for the same app. Mirrors the value
+  ///   the /connection POST already sends.
+  private let jrUserAgent = "VibeSDR Jr/1.2 (watchOS)"
   /// The server is serving somebody else. Terminal until the user retries or takes
   /// over — NOT a reconnect loop, which would just hammer a busy receiver.
   @Published var serverBusy = false
@@ -971,7 +974,7 @@ final class UberClient: ObservableObject {
     // ★ UberSDR is the one backend where we announce the PRODUCT rather than spoofing a
     //   browser, so this string is what an operator actually sees in their user list. The spike
     //   is the product now, and it is called VibeSDR Jr.
-    req.setValue("VibeSDR Jr/1.0 (watchOS)", forHTTPHeaderField: "User-Agent")
+    req.setValue(jrUserAgent, forHTTPHeaderField: "User-Agent")
     req.setValue("VibeSDR", forHTTPHeaderField: "X-Requested-With")
     req.httpBody = try? JSONSerialization.data(withJSONObject: ["user_session_id": uuid])
     do {
@@ -1048,7 +1051,13 @@ final class UberClient: ObservableObject {
         self.armSpectrumWatchdog()
       }
     }
-    specSock.open(url: url)
+    // ★★ SAY WHO WE ARE. The server logs the User-Agent of the WS upgrade, and without one Jr's
+    //    sessions appeared in the owner's connection log as "—" — indistinguishable from a bot or
+    //    a bare script, next to browsers that name themselves in full (Stuart, 2026-08-13). An
+    //    owner deciding whether to BLOCK an address is exactly who needs to know it is our app.
+    //    ★ The /connection POST has always sent it; the SOCKET, which is what the log records,
+    //      never did.
+    specSock.open(url: url, headers: [("User-Agent", jrUserAgent)])
   }
 
   /// FRAMES OR IT DIDN'T HAPPEN. Ready and silent is a real state, and it needs its own way
@@ -1690,7 +1699,7 @@ final class UberClient: ObservableObject {
         if s.contains("failed") || s.contains("recv:") { self.retryAudio() }
       }
     }
-    audioSock.open(url: url)
+    audioSock.open(url: url, headers: [("User-Agent", jrUserAgent)])
   }
 
   // ── VibeServer: auth + sockets + ADPCM ───────────────────────────────────────

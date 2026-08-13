@@ -44,6 +44,8 @@
  *                [{ completed, text }, …] — append completed segment text
  */
 
+import { USER_AGENT } from '../constants/version';
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time';
@@ -373,7 +375,11 @@ export class DecoderClient {
     const url = this.baseUrl.replace(/^http/, 'ws')
       + `/ws/dxcluster?user_session_id=${this.uuid}`
       + (this.password ? `&password=${encodeURIComponent(this.password)}` : '');
-    const ws = new WebSocket(url);
+    // ★ Same reason as the spectrum socket: the decoder connection is logged too. Cast for the
+    //   same reason — RN takes a third options argument the DOM type does not describe.
+    const ws = new (WebSocket as unknown as {
+      new (u: string, p: undefined, o: { headers: Record<string, string> }): WebSocket;
+    })(url, undefined, { headers: { 'User-Agent': USER_AGENT } });
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
 
