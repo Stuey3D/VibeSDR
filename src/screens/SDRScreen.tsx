@@ -435,6 +435,15 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   every radio's connect URL: one credential, every radio, which is what the ticket is for.
    */
   const [adminAuthQ, setAdminAuthQ] = useState('');
+  /** ★★★ THE CONNECT EFFECT MUST NOT RE-RUN WHEN THIS CHANGES. It is in that effect's deps so a
+   *  ticket minted at the PICKER rides the first connect — but minting one MID-SESSION (the menu's
+   *  password box) then tore the connection down and rebuilt it, which threw the listener back to
+   *  the server's landing frequency: 60 kHz became 99.7 MHz the moment the owner typed their
+   *  password (Stuart, 2026-08-13). The socket is already admin by then — `admin_unlock` did that
+   *  — so there is nothing to reconnect FOR. The ref carries it into any LATER connect without
+   *  making this one restart. */
+  const adminAuthQRef = useRef('');
+  useEffect(() => { adminAuthQRef.current = adminAuthQ; }, [adminAuthQ]);
   const [adminPickPw, setAdminPickPw] = useState('');
   const [adminPickBusy, setAdminPickBusy] = useState(false);
   const [adminPickBad, setAdminPickBad] = useState(false);
@@ -1395,7 +1404,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★★ `#admin` OPENS THE ADMIN VIEW, not the receiver with admin quietly available — tapping
   //    ADMIN and arriving at a waterfall reads as the button having failed. The page only honours
   //    it while holding a valid ticket, so the fragment cannot prise anything open on its own.
-  const vibeAdminUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/?${adminAuthQ}#admin` : undefined;
+  // ★★★ ADMIN BELONGS TO THE RADIO YOU ARE ON. Pointed at `baseUrl` this opened the FRONT DOOR's
+  //     landing page — the list of every radio — which is the one thing someone already inside a
+  //     radio does not need, and it asked them to choose again (Stuart, 2026-08-13: "they take me
+  //     to the landing page only and show all the radios even though i am already in one").
+  //     `connectBase` is the radio's own base (/r/<id>), and its admin panel is about THIS radio.
+  // ★★ SETUP stays at the DOOR, and that is not an oversight: the setup page configures the whole
+  //    machine — every radio, the ports, the passwords — so a per-radio setup page would be a
+  //    narrower thing than the one the owner is asking for.
+  const vibeAdminUrl = adminAuthQ ? `${connectBase.replace(/\/+$/, '')}/?${adminAuthQ}#admin` : undefined;
   const vibeSetupUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/setup?${adminAuthQ}` : undefined;
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
@@ -3137,7 +3154,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // drives the UI). An unhandled rejection here can escalate to a hard crash.
       // ★ BEFORE connect(), never after: the credential has to be ON the handshake, which is
       //   where a busy or cooling-down receiver decides whether to refuse us.
-      if (adminAuthQ) (c as any).setAdminAuth?.(adminAuthQ);
+      if (adminAuthQRef.current) (c as any).setAdminAuth?.(adminAuthQRef.current);
       c.connect(f, m, { allowServerDefault: !restored }).catch(() => {});
     }).catch(() => {
       if (cancelled || destroyed.current) return;
@@ -3145,7 +3162,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setTuneLoaded(true);
       // Storage failed, so we know nothing about this instance — the receiver's own default is a
       // better answer than our hardcoded one.
-      if (adminAuthQ) (c as any).setAdminAuth?.(adminAuthQ);
+      if (adminAuthQRef.current) (c as any).setAdminAuth?.(adminAuthQRef.current);
       c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
     });
     // ★★★ GIVE crashGuard A WAY TO KILL THIS SESSION. A render crash resets navigation, but this
@@ -3167,7 +3184,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    the receiver would sit for ever on "connecting" against a server that was answering
   //    perfectly. A guard that can change is a dependency.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio, adminAuthQ, chosenRadio]);
+  // ★ adminAuthQ deliberately NOT a dependency — see adminAuthQRef.
+  }, [baseUrl, connEpoch, connectBase, doorPending, awaitingRadio, chosenRadio]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
