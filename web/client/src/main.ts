@@ -1236,10 +1236,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   initIdleThrottle();
   initAdminUnlock();
   initAdmin(() => currentHost, () => adminPassword);
-  // ★★ LAND ON THE ADMIN PAGE WHEN ASKED FOR IT. The app's ADMIN button wants the admin view, not
-  //    the receiver with admin quietly available — arriving at the waterfall after tapping ADMIN
-  //    reads as the button having failed. Only honoured when we actually hold a ticket, so the
-  //    fragment can never be used to prise the panel open.
+  // ★ Also honoured here, for the case where the page was ALREADY connected when the fragment
+  //   arrived. The early opener below covers the normal arrival.
   if (location.hash === '#admin' && inAdminMode()) openAdmin(currentHost, adminPassword);
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
@@ -3557,6 +3555,31 @@ async function loadOwnerNotice() {
   } catch { /* an older server has no notice field — nothing to show */ }
 }
 void loadOwnerNotice();
+
+/**
+ * ★★★ OPEN THE ADMIN PAGE ON ARRIVAL, NOT AFTER CONNECTING. The `#admin` handler sat at the end of
+ *     the post-CONNECT init — so tapping ADMIN in the app loaded the page, showed the splash with
+ *     its radio cards, and waited for a connection that the owner had not asked for. What they saw
+ *     was "the landing page", every time, with the admin panel never opening (Stuart, 2026-08-13,
+ *     on build 99 — after the URL itself had already been corrected to point at the radio).
+ * ★★ THE ADMIN PANEL NEEDS NO RADIO. It is HTTP against /vibeserver/admin/*, which is exactly why
+ *     the front door serves it at all: it is how an owner gets in when every radio has died.
+ *     Waiting for a spectrum socket was a dependency it never had.
+ * ★★ `host` is derived from the LOCATION rather than from the connection, prefix included, so the
+ *    panel asks the radio whose page this is — the same value the connected path would have set.
+ * ★ Gated on holding a ticket, so the fragment alone can never prise the panel open.
+ */
+function openAdminIfAsked() {
+  if (location.hash !== '#admin' || !inAdminMode()) return;
+  const h = location.host + BASE_PATH;
+  initAdmin(() => h, () => '');
+  openAdmin(h, '');
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', openAdminIfAsked, { once: true });
+} else {
+  openAdminIfAsked();
+}
 
 // The menu-bar app raises this tab by setting the URL fragment to #here. Changing only the
 // fragment fires hashchange WITHOUT reloading, so the waterfall, the audio and the tuned frequency
