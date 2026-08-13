@@ -516,10 +516,22 @@ export class DecoderClient {
           inverted: false, framing: '4/7', encoding: 'CCIR476',
         }};
       case 'wefax':
+        // ★★★ NO auto_start / auto_stop — DRAW WHATEVER IS THERE. The shim's rule is
+        //     `shouldDecode = !autoStopped && (!autoStart || autoStarted)` (wefax_decoder.cpp),
+        //     so asking for auto_start means NOTHING is drawn until a start tone is heard. Tune
+        //     into a transmission that is already running — which is most of them, since a chart
+        //     takes ten minutes — and the canvas stayed blank for the whole of it, looking like a
+        //     decoder that does not work (Stuart, 2026-08-13). The web client sends none of these
+        //     and free-runs: "it will draw nothing if no signal, but if I catch a transmission
+        //     halfway through it will still draw the end of it."
+        // ★★ use_phasing is LEFT AT ITS DEFAULT (on): phasing still aligns the image when the
+        //    signal does begin properly. It is only the GATING that was wrong — the app was
+        //    treating "no start tone" as "nothing to draw" rather than "start where we are".
+        // ★ auto_stop dropped for the same reason: a false detection mid-chart would end a picture
+        //   the operator can see is still arriving.
         return { extension_name: 'wefax', params: {
           lpm: this.wefaxLpm, carrier: 1900, deviation: 400,
           image_width: 1809, bandwidth: 1,
-          use_phasing: true, auto_stop: true, auto_start: true,
         }};
       case 'sstv':    return { extension_name: 'sstv',    params: {} };
       case 'morse':   return { extension_name: 'morse',   params: {} };
