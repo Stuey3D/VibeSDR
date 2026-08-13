@@ -127,6 +127,8 @@ export interface SpectrumCallbacks {
   onConfig?: (cfg: Config) => void;
   /** The server's radio was unplugged (false) or came back (true). */
   onDevice?: (present: boolean) => void;
+  /** The owner's notice to listeners, pushed when it is posted or cleared ('' = nothing). */
+  onNotice?: (text: string) => void;
   /** The person at the server is looking for this window. */
   onSummon?: () => void;
   /** ★★ lockedRate is an UP-TO CEILING (offer rates at or below it). lockedCentre is a real
@@ -401,6 +403,10 @@ export class SpectrumClient {
       case 'session_warning':
         // Still connected — this is a countdown, not a refusal. Do NOT set refused.
         this.cb.onSessionWarning?.(Number(msg.secs) || 0);
+        break;
+      case 'notice':
+        // ★ The owner's message to listeners, pushed the moment it is posted or cleared.
+        this.cb.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
         break;
       case 'device':
         // The server has lost (or regained) its radio. Without this the page just stops updating

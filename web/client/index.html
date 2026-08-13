@@ -1868,6 +1868,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 .aBanForm #banCidr { flex: 1 1 260px; font-variant-numeric: tabular-nums; }
 
 .aActions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* ★ Same shape as .aActions but for a row that mixes a text field with its buttons — wraps on a
+   phone, which is exactly where an owner posts a notice from. */
+.aRow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+#noticeNow { margin-bottom: 6px; }
 /* The live output of a maintenance action. */
 #actLog {
   margin: 8px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto;
@@ -2497,6 +2501,33 @@ select.btn { padding: 6px 8px; }
       all of it, so switching this receiver to <b>public sharing</b> in setup turns them on with
       the history already there.
     </p>
+
+    <!-- ★★★ A NOTICE TO LISTENERS. First in the admin page, deliberately: it is what an owner
+         reaches for while something is ACTIVELY wrong, often from a phone halfway up a ladder, and
+         the two alternatives are both worse — power the receiver down and leave a dead link, or
+         leave it up while people watch the spectrum jump about and conclude the radio is rubbish
+         (Stuart, 2026-08-13). ★ Sits ABOVE maintenance because it is used far more often than
+         rebooting, and because saying what is happening should be the easy thing to reach. -->
+    <div id="secNotice">
+    <h2>NOTICE TO LISTENERS</h2>
+    <div class="aRow">
+      <input type="text" id="noticeText" maxlength="240" style="flex:1 1 260px"
+             placeholder="e.g. Antenna maintenance in progress">
+      <select id="noticeMins">
+        <option value="30">for 30 minutes</option>
+        <option value="60">for 1 hour</option>
+        <option value="120">for 2 hours</option>
+        <option value="480">for 8 hours</option>
+        <option value="0">until I clear it</option>
+      </select>
+      <button class="btn" id="noticePost">POST</button>
+      <button class="btn" id="noticeClear">CLEAR</button>
+    </div>
+    <div id="noticeNow" class="dim"></div>
+    <p class="dim">Shown to everyone listening, at once, and to anyone who opens the receiver.
+       A timed notice disappears on its own — so it cannot age into a lie while you are still up a
+       ladder. Choose &quot;until I clear it&quot; for a fault you have not fixed yet.</p>
+    </div>
 
     <div id="secMaintenance" hidden>
     <h2>MAINTENANCE</h2>

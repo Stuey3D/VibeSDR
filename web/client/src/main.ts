@@ -812,6 +812,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onSessionWarning: (secs) => setTimeLeft(secs),
     onDevice: (present) => showDeviceBanner(present),
+    // ★ Pushed the instant the owner posts one — the people already watching the spectrum
+    //   misbehave are exactly who it is for.
+    onNotice: (text: string) => showOwnerNotice(text),
     onAdmin: (ok, refused) => {
       if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
       adminUnlocked = ok;
@@ -3542,6 +3545,19 @@ function adoptAdminTicketFromUrl() {
 }
 adoptAdminTicketFromUrl();
 
+/** ★★ A NOTICE MUST GREET SOMEONE WHO ARRIVES AFTER IT WAS POSTED. The push only reaches sockets
+ *  that were already open, and the person opening the page now is precisely the one about to judge
+ *  a misbehaving receiver. Read from /vibeserver.json, which every client already fetches. */
+async function loadOwnerNotice() {
+  try {
+    const r = await fetch('/vibeserver.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (typeof j?.notice === 'string' && j.notice) showOwnerNotice(j.notice);
+  } catch { /* an older server has no notice field — nothing to show */ }
+}
+void loadOwnerNotice();
+
 // The menu-bar app raises this tab by setting the URL fragment to #here. Changing only the
 // fragment fires hashchange WITHOUT reloading, so the waterfall, the audio and the tuned frequency
 // all survive being summoned — which is the whole point of finding this tab instead of opening a
@@ -3567,6 +3583,39 @@ window.addEventListener('hashchange', () => {
  * watches for the dongle coming back and resumes on its own, so the message promises exactly that
  * rather than telling anyone to restart something.
  */
+/**
+ * ★★★ THE OWNER'S NOTICE — "antenna maintenance in progress".
+ *
+ *     The situation it exists for: something is genuinely wrong with the aerial and the owner has
+ *     two bad options — power the server down and leave a dead link on the website, or leave it up
+ *     while listeners watch the spectrum jump about and conclude the receiver is rubbish (Stuart,
+ *     2026-08-13). Neither is a fault in the RADIO; only the explanation is missing.
+ *
+ * ★★ DISMISSABLE, and stays dismissed for THIS message. Somebody who has read it should be able to
+ *    watch their waterfall — but a NEW notice reappears, because the next one may say something
+ *    else entirely.
+ * ★ Amber, not red: this is the owner talking, not an error. A red banner over a working receiver
+ *   teaches people to distrust red.
+ */
+let noticeDismissed = '';
+function showOwnerNotice(text: string) {
+  const id = 'ownerNotice';
+  document.getElementById(id)?.remove();
+  const t = (text || '').trim();
+  if (!t || t === noticeDismissed) return;
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText =
+    'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:9400;max-width:min(92vw,640px);' +
+    'background:rgba(30,20,0,0.94);color:#ffd479;border:1px solid rgba(255,180,60,0.55);' +
+    'border-radius:8px;padding:9px 14px;font:13px ui-monospace,monospace;text-align:center;' +
+    'box-shadow:0 4px 18px rgba(0,0,0,0.55);cursor:pointer';
+  el.title = 'Dismiss';
+  el.textContent = t;
+  el.addEventListener('click', () => { noticeDismissed = t; el.remove(); });
+  document.body.appendChild(el);
+}
+
 function showDeviceBanner(present: boolean) {
   const id = 'deviceBanner';
   document.getElementById(id)?.remove();

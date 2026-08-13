@@ -861,6 +861,9 @@ static constexpr int        kSessionCooldownSec = 120;
 // Bans and the connection log are policy and history, not radio, so they live in their own
 // header. These are the single instances the endpoints and the accept path share.
 static vibeadmin::BanList  g_vsBans;
+/** ★ The owner's notice to listeners ("antenna maintenance in progress"). A FILE, so the front
+ *  door and every radio process show the same thing — see vibeadmin::Notice. */
+static vibeadmin::Notice   g_vsNotice;
 static vibeadmin::ConnLog  g_vsConnLog;
 static vibeadmin::History  g_vsHistory;
 /** ★★ IDLE RE-LOCK, minutes. 0 = never (and that is NOT the default — see below).
@@ -4358,6 +4361,15 @@ struct LocalSdrShim::Impl {
             }
         }
     }
+    /** ★ Push the owner's notice to everyone listening RIGHT NOW. Sent to every spectrum client,
+     *  not just the first: on a shared receiver the people who most need it are the ones already
+     *  watching the spectrum misbehave. */
+    void sendNoticeNow() {
+        const std::string body = "{\"type\":\"notice\",\"text\":\""
+                               + vibeadmin::esc(g_vsNotice.current()) + "\"}";
+        for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
+    }
+
     void sendDecoderState(int st) {
         std::shared_ptr<net::Socket> dx;
         { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
@@ -6554,6 +6566,13 @@ struct LocalSdrShim::Impl {
                 reply(200, "OK", "{\"connections\":" + g_vsConnLog.json() + "}");
                 return;
             }
+            if (!isPost && what == "notice") {
+                // ★ secondsLeft: -1 = no end date, 0 = nothing showing, >0 = seconds. Three
+                //   distinct answers, because "until you clear it" must not read as "about to go".
+                reply(200, "OK", "{\"text\":\"" + vibeadmin::esc(g_vsNotice.current())
+                                 + "\",\"secondsLeft\":" + std::to_string(g_vsNotice.secondsLeft()) + "}");
+                return;
+            }
             if (!isPost && what == "bans") {
                 reply(200, "OK", "{\"bans\":" + g_vsBans.json() + "}");
                 return;
@@ -6575,6 +6594,28 @@ struct LocalSdrShim::Impl {
                 const int kicked = LocalSdrShim::instance().adminKickMatching(cidr);
                 LOGI("admin banned %s (%s) — kicked %d", cidr.c_str(), reason.c_str(), kicked);
                 reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(kicked) + "}");
+                return;
+            }
+            // ★★ THE NOTICE. Its own endpoint rather than a config field, because it is the one
+            //    setting an owner reaches for while something is ACTIVELY wrong — halfway up a
+            //    ladder, on a phone — and it must take effect at once on every radio without a
+            //    restart or a config round-trip.
+            if (isPost && what == "notice") {
+                const std::string text = jsonStr(body, "text");
+                double minsV = 0;
+                const int mins = jsonNum(body, "minutes", minsV) ? (int)minsV : 0;
+                // ★ A limit, not a validation error: a notice is a sentence, and anything longer
+                //   would be pushed to every client on every identity fetch.
+                std::string err;
+                if (!LocalSdrShim::setNotice(text.substr(0, 240), mins, err)) {
+                    reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return;
+                }
+                LOGI("admin notice %s (%d min)", text.empty() ? "cleared" : "posted", mins);
+                // ★★★ TELL THE PEOPLE ALREADY LISTENING. They are exactly who it is for — a
+                //     notice that only reaches the NEXT visitor misses everyone currently watching
+                //     the spectrum misbehave and drawing their own conclusions.
+                LocalSdrShim::instance().broadcastNotice();
+                reply(200, "OK", "{\"ok\":true}");
                 return;
             }
             if (isPost && what == "unban") {
@@ -6677,6 +6718,9 @@ struct LocalSdrShim::Impl {
                              + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
                              + ",\"admin\":" + (adminSet ? "true" : "false") + verField
+                             // ★ The owner's notice, so a client can say WHY the receiver is odd
+                             //   before anybody concludes the radio is rubbish.
+                             + ",\"notice\":\"" + vibeadmin::esc(g_vsNotice.current()) + "\""
                              // ★★ CONFIGURED, and it is NOT the same as `admin`. A fresh install
                              // has an admin password (the wizard makes it mandatory) and is still
                              // not set up. Clients read this to show "not set up yet — open it in
@@ -9531,6 +9575,11 @@ int LocalSdrShim::waitingCount() const {
 // ── ★★★ THE ADMIN API's back end ──────────────────────────────────────────────────────────────
 
 void LocalSdrShim::setBanListPath(const std::string& path) { g_vsBans.setPath(path); }
+void LocalSdrShim::setNoticePath(const std::string& path) { g_vsNotice.setPath(path); }
+std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
+bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
+    return g_vsNotice.set(text, minutes, err);
+}
 void LocalSdrShim::setConnLogPath(const std::string& path) { g_vsConnLog.setPath(path); }
 void LocalSdrShim::saveConnLogIfDue() { g_vsConnLog.saveIfDue(); }
 void LocalSdrShim::setMaintenanceActions(const std::string& csv) {
@@ -9894,6 +9943,8 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
 
 /** Kick everyone the given ban rule now matches — the other half of "a ban must take effect on
  *  people who are already here". */
+void LocalSdrShim::broadcastNotice() { if (p) p->sendNoticeNow(); }
+
 int LocalSdrShim::adminKickMatching(const std::string& cidr) {
     if (!p) return 0;
     vibeadmin::Ban rule;

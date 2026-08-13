@@ -301,6 +301,10 @@ export interface ServerOccupancy {
    *  missing version as UNKNOWN and say nothing, never as "old": a wrong version on screen is
    *  worse than none, because it is the thing people quote in a bug report. */
   version?: string;
+  /** ★ The owner's notice to listeners ("antenna maintenance in progress"), or absent. Read on
+   *  connect so someone arriving AFTER it was posted still sees it — the live push only reaches
+   *  sockets that were already open. */
+  notice?: string;
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -325,6 +329,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,
       version:   typeof j.version === 'string' && j.version ? j.version : undefined,
+      notice:    typeof j.notice === 'string' && j.notice ? j.notice : undefined,
     };
   } catch { return null; }
   finally { clearTimeout(t); }

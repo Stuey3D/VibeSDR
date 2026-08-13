@@ -144,6 +144,15 @@ public:
     /** Where the ban list is persisted (one JSON object per line). Empty = memory only, which is
      *  every phone: an app has no /var/lib and nobody to ban. Setting a path also LOADS it. */
     void setBanListPath(const std::string& path);
+    /** ★★ Where the owner's listener-facing notice lives. A FILE, so a multi-radio machine's
+     *  front door and its radios all show the same one — they are separate processes. */
+    void setNoticePath(const std::string& path);
+    /** The notice to show right now, or "". */
+    static std::string noticeText();
+    /** Post one. minutes <= 0 = until it is cleared; empty text clears it. */
+    static bool setNotice(const std::string& text, int minutes, std::string& err);
+    /** Push the current notice to every connected listener. */
+    void broadcastNotice();
 
     /** ★★ Where the connection log is kept. It used to be memory-only, which meant every update
      *  wiped the history — and an update is the most common reason this server restarts. Empty

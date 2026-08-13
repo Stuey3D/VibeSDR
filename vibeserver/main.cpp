@@ -2154,6 +2154,9 @@ int main(int argc, char** argv) {
     // ★ Beside the spectrogram, and for the same reason: this is state the SERVER writes and must
     //   keep across a restart. A ban that evaporates on reboot is not a ban — and this Pi reboots.
     LocalSdrShim::instance().setBanListPath(vsDataDir() + "/bans.jsonl");
+    // ★ Beside the ban list, and shared for the same reason: the front door and every radio are
+    //   separate processes, and a notice set on one must be seen by all of them.
+    LocalSdrShim::instance().setNoticePath(vsDataDir() + "/notice.json");
     // ★ Beside the bans, and for the same reason: this is history the owner needs ACROSS
     //   restarts, and an update restarts the server.
     // ★★★ ONE FILE PER RADIO, NOT ONE PER MACHINE — three writers shared this path.

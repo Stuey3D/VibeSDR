@@ -812,12 +812,31 @@ async function refresh() {
 
 // ── Open / close ──────────────────────────────────────────────────────────────────────────────
 
+/** What is showing right now, in the owner's own words — read from the server, never assumed. */
+async function refreshNotice() {
+  const el = document.getElementById('noticeNow');
+  if (!el) return;
+  let j: any = null;
+  try { j = await get('notice'); } catch { el.textContent = ''; return; }
+  const text = String(j?.text ?? '');
+  const left = Number(j?.secondsLeft ?? 0);
+  if (!text) { el.textContent = 'Nothing showing.'; return; }
+  // ★ -1 is "no end date", and it must NOT read as though it were about to expire.
+  el.textContent = left < 0
+    ? `Showing until you clear it: “${text}”`
+    : `Showing for another ${Math.max(1, Math.round(left / 60))} min: “${text}”`;
+  const box = document.getElementById('noticeText') as HTMLInputElement | null;
+  if (box && !box.value) box.value = text;
+}
+
 export function openAdmin(currentHost: string, adminPassword: string) {
   host = currentHost;
   password = adminPassword;
   open = true;
   failures = 0;
   $('adminPanel').hidden = false;
+  // ★ What is showing RIGHT NOW, asked of the server — not what this page last sent.
+  void refreshNotice();
   $('adminHost').textContent = host;
   void refresh();
   window.clearInterval(timer);
@@ -1055,6 +1074,29 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       } catch (e) { msg('actMsg', (e as Error).message); }
     });
   }
+
+  // ── ★★ THE NOTICE TO LISTENERS ────────────────────────────────────────────────────────────
+  const postNotice = async (text: string, mins: number) => {
+    try {
+      await post('notice', { text, minutes: mins });
+      // ★ Re-read rather than assume: the server decides what is actually showing (it may have
+      //   trimmed the text), and an admin page that displays what it SENT rather than what is
+      //   live is the same fault as the governor and the mDNS name.
+      await refreshNotice();
+      msg('actMsg', text ? 'Notice posted.' : 'Notice cleared.');
+    } catch (e) { msg('actMsg', (e as Error).message); }
+  };
+  $('noticePost')?.addEventListener('click', () => {
+    const t = ($('noticeText') as HTMLInputElement | null)?.value.trim() ?? '';
+    if (!t) { msg('actMsg', 'Type the message first.'); return; }
+    const m = Number(($('noticeMins') as HTMLSelectElement | null)?.value ?? '30') || 0;
+    void postNotice(t, m);
+  });
+  $('noticeClear')?.addEventListener('click', () => {
+    const el = $('noticeText') as HTMLInputElement | null;
+    if (el) el.value = '';
+    void postNotice('', 0);
+  });
 
   $('actUpdateCheck')?.addEventListener('click', () => act('update-check'));
   $('actUpdate')?.addEventListener('click', () => act('update', 'Update VibeServer to the latest version?'));

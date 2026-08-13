@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <sys/stat.h>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -1069,6 +1070,136 @@ private:
     static const size_t kMax = 3600;   // one hour at 1 Hz
     std::mutex             mtx_;
     std::deque<HistSample> samples_;
+};
+
+/**
+ * ★★★ THE OWNER'S NOTICE TO LISTENERS — "antenna maintenance in progress".
+ *
+ *     Born of a real afternoon: the antenna needed work, and the choice was to power the server
+ *     down (leaving a dead link on the website) or leave it up while people watched the spectrum
+ *     jump about and concluded the receiver was rubbish (Stuart, 2026-08-13). Both are worse than
+ *     simply SAYING so. Nothing about the radio is wrong in that moment — only the explanation is
+ *     missing.
+ *
+ * ★★★ TWO KINDS, AND BOTH ARE REAL. A TIMED notice is for work you are doing right now — you say
+ *     how long it will take and it dies on its own, so the failure mode is "it vanished while I
+ *     was still up a ladder" rather than "it told everyone for a fortnight that the antenna was
+ *     being worked on". A banner nobody remembers to clear ages into a lie, and every later
+ *     warning is trusted less for it.
+ *     ★★ An INDEFINITE one is for a fault you have not fixed yet: "noticed the antenna being
+ *        faulty whilst I was out at work today ... left it up indefinitely as I don't know when I
+ *        will get around to fixing it" (Stuart, 2026-08-13). Forcing a duration there would make
+ *        the owner either lie about a repair time or re-post it every hour.
+ *     ★ Which is why CLEARING is emptying the TEXT, not setting zero minutes: zero minutes means
+ *       "no end", and a control where "0" silently means "delete" is one nobody trusts.
+ *
+ * ★★ A FILE, in the shared data directory, exactly like the ban list. On a multi-radio machine the
+ *    front door and every radio are SEPARATE PROCESSES: a notice set through the door's admin page
+ *    would otherwise be invisible on the very radios people are listening to. Re-read when the
+ *    file's mtime changes, so it costs a stat and appears everywhere within a second.
+ */
+class Notice {
+public:
+    void setPath(std::string p) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        path_ = std::move(p);
+        mtime_ = 0;                       // force a read
+    }
+
+    /**
+     * Post a notice. `minutes` <= 0 means INDEFINITE — up until the owner clears it.
+     * An EMPTY `text` clears it, whatever the minutes say.
+     * Returns false only if there is nowhere to write it: a server with no data directory cannot
+     * share a notice between its processes.
+     */
+    bool set(const std::string& text, int minutes, std::string& err) {
+        std::string path;
+        { std::lock_guard<std::mutex> lk(mtx_); path = path_; }
+        if (path.empty()) { err = "this server has no data directory to store a notice in"; return false; }
+        const long long until = text.empty() ? 0
+                              : minutes <= 0 ? 0
+                              : (long long)::time(nullptr) + (long long)minutes * 60;
+        FILE* f = fopen(path.c_str(), "w");
+        if (!f) { err = "could not write " + path; return false; }
+        // ★ Written even when CLEARING, rather than deleting the file: every process notices a
+        //   change by mtime, and a deleted file is a change nobody is watching for.
+        fprintf(f, "{\"text\":\"%s\",\"until\":%lld}\n", esc(text).c_str(), until);
+        fclose(f);
+        { std::lock_guard<std::mutex> lk(mtx_); mtime_ = 0; }
+        return true;
+    }
+
+    /** The notice to show right now, or "" — cleared, expired, or never set. */
+    std::string current() {
+        refresh();
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (text_.empty()) return std::string();
+        if (until_ > 0 && (long long)::time(nullptr) >= until_) return std::string();
+        return text_;
+    }
+
+    /** -1 = showing with no end date · 0 = nothing showing · >0 = seconds left.
+     *  ★ The three states are DISTINCT on purpose: the admin page has to be able to say "until you
+     *    clear it" rather than showing an indefinite notice as though it were about to expire. */
+    long long secondsLeft() {
+        refresh();
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (text_.empty()) return 0;
+        if (until_ <= 0) return -1;
+        const long long left = until_ - (long long)::time(nullptr);
+        return left > 0 ? left : 0;
+    }
+
+private:
+    static std::string esc(const std::string& in) {
+        std::string o;
+        for (char c : in) {
+            if (c == '"' || c == '\\') { o += '\\'; o += c; }
+            else if ((unsigned char)c < 0x20) o += ' ';    // one line, always
+            else o += c;
+        }
+        return o;
+    }
+
+    void refresh() {
+        std::string path;
+        { std::lock_guard<std::mutex> lk(mtx_); path = path_; }
+        if (path.empty()) return;
+        struct stat st {};
+        if (::stat(path.c_str(), &st) != 0) {
+            std::lock_guard<std::mutex> lk(mtx_);
+            text_.clear(); until_ = 0;
+            return;
+        }
+        const long long m = (long long)st.st_mtime;
+        { std::lock_guard<std::mutex> lk(mtx_); if (m == mtime_) return; }
+
+        std::string body;
+        if (FILE* f = fopen(path.c_str(), "r")) {
+            char buf[1024];
+            while (fgets(buf, sizeof buf, f)) body += buf;
+            fclose(f);
+        }
+        std::string text;
+        long long until = 0;
+        const size_t t = body.find("\"text\":\"");
+        if (t != std::string::npos) {
+            size_t i = t + 8;
+            while (i < body.size() && body[i] != '"') {
+                if (body[i] == '\\' && i + 1 < body.size()) ++i;
+                text += body[i++];
+            }
+        }
+        const size_t u = body.find("\"until\":");
+        if (u != std::string::npos) until = atoll(body.c_str() + u + 8);
+
+        std::lock_guard<std::mutex> lk(mtx_);
+        mtime_ = m; text_ = text; until_ = until;
+    }
+
+    std::mutex  mtx_;
+    std::string path_, text_;
+    long long   until_ = 0, mtime_ = 0;
 };
 
 }  // namespace vibeadmin

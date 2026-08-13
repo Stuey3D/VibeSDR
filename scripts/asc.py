@@ -23,12 +23,23 @@ WORKFLOWS = {
 MAIN_REF = "a238c176-4830-4898-aece-244c4c614ffb"    # scmGitReferences id for `main`
 
 _tok = None
+_tok_exp = 0
 def token():
-    global _tok
-    if _tok is None:
+    """A valid bearer token, re-minted before it expires.
+
+    ★★★ IT USED TO BE MINTED ONCE AND CACHED FOR THE LIFE OF THE PROCESS, with a 15-minute expiry —
+        fine for a quick query, and wrong for the one job that matters: asc-to-internal.py WAITS
+        for a Cloud build, which takes longer than that. So the wait succeeded, the build succeeded,
+        and the attach at the end died with NOT_AUTHORIZED — the work was done and the last step
+        threw it away (seen on build 96, 2026-08-13). Re-minted with 60 s of headroom, so a request
+        that starts just under the wire still lands.
+    """
+    global _tok, _tok_exp
+    now = int(time.time())
+    if _tok is None or now >= _tok_exp - 60:
         import jwt
-        now = int(time.time())
-        _tok = jwt.encode({"iss": ISS, "iat": now, "exp": now + 900,
+        _tok_exp = now + 900
+        _tok = jwt.encode({"iss": ISS, "iat": now, "exp": _tok_exp,
                            "aud": "appstoreconnect-v1"},
                           open(P8).read(), algorithm="ES256",
                           headers={"kid": KEY, "typ": "JWT"})
