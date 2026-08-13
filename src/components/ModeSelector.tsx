@@ -165,6 +165,8 @@ interface ModeSelectorProps {
      *  "unavailable here". */
     advRdsAvail?: boolean; advRdsOn?: boolean; onAdvRds?: () => void;
     rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
+    /** '' / 'auto' = choose from the tuned frequency. Anything else forces that station. */
+    timeStation?: string; onTimeStation?: (s: string) => void;
     wefaxLpm?: number; onWefaxLpm?: (v: number) => void;
   } | null;
   // OWRX MAP + FILES pages (relocated from MenuSheet OPENWEBRX section) — same
@@ -452,6 +454,24 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={dst.callout}>
                 <RttySettingsRows s={decoderControls.rttySettings} onChange={decoderControls.onRttySettings} />
+              </View>
+            )}
+            {/* ★★ THE STATION IS AUTO-PICKED FROM THE DIAL, and this is the override. Auto is right
+                nearly always — nobody lands on 77.5 kHz by accident — but 60 kHz is genuinely TWO
+                stations (MSF in the UK, WWVB in the US) and the tell is the RECEIVER's location,
+                which not every server publishes. Where it cannot know, the owner must be able to
+                say (Stuart, 2026-08-13: "it isnt giving me any options like the web client does").
+                ★ AUTO is a real choice and the default, not an absent one: picking a station by
+                  hand should be a decision, and returning to automatic should be possible without
+                  reconnecting. */}
+            {decoderControls.decMode === 'time' && (
+              <View style={dst.callout}>
+                <SubLabel label="STATION" />
+                <OptRow>{(['auto', 'msf', 'dcf77', 'wwv', 'wwvb', 'rwm'] as const).map(v => (
+                  <SegBtn key={v} label={v.toUpperCase()}
+                          active={(decoderControls.timeStation ?? 'auto') === v}
+                          onPress={() => decoderControls.onTimeStation?.(v)} />
+                ))}</OptRow>
               </View>
             )}
             {decoderControls.decMode === 'wefax' && (

@@ -1221,6 +1221,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bgOpacityUserSet = useRef(false);
   // Station-ID overlay (web drawStationIdOverlay parity)
   const [stationId,     setStationId]     = useState<{ line1: string; line2?: string; color: string } | null>(null);
+  /** How tall the station-ID overlay actually is, so the session clock can clear it. 0 = none.
+   *  ★ Zeroed when the overlay goes: onLayout only fires while it EXISTS, so a stale height would
+   *    leave the clock hovering below nothing after a server switch. */
+  const [stationIdH,    setStationIdH]    = useState(0);
+  useEffect(() => { if (!stationId) setStationIdH(0); }, [stationId]);
   // Server software version (menu footer — identifies the backend type)
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
@@ -1391,15 +1396,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    ADMIN and arriving at a waterfall reads as the button having failed. The page only honours
   //    it while holding a valid ticket, so the fragment cannot prise anything open on its own.
   const vibeAdminUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/?${adminAuthQ}#admin` : undefined;
-  /** What this receiver IS, under its name on the spectrum. ★ Silent rather than guessing: an
-   *  unknown backend says nothing at all, and a VibeServer too old to report its version shows
-   *  just "VibeServer". */
-  const rxIdentity = isVibeServer
-    ? (serverVersion ? `VibeServer ${serverVersion}` : 'VibeServer')
-    : route.params.isTcp ? 'RTL-TCP'
-    : isLocal ? 'This device'
-    : undefined;
-
   const vibeSetupUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/setup?${adminAuthQ}` : undefined;
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
@@ -2243,6 +2239,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!want) setAdvRds(null);                // drop the stale frame with the switch
   }, [advRdsOpen, status.mode, connected]);
 
+  /** Time-signal station: 'auto' picks from the tuned frequency (see timeStationFor). */
+  const [timeStationPref, setTimeStationPref] = useState<string>('auto');
+  /** What the running TIME decoder was actually attached AS, so a retune can notice a change. */
+  const timeStationRef = useRef<string>('');
+
   const openDecoder = useCallback((type: DecoderType) => {
     setActiveDecoder(type);
     activeDecRef.current = type;
@@ -2265,17 +2266,45 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★★ REFUSE CLEARLY OFF-STATION. Attaching anyway would sit there reading noise and saying
       //    "listening…", which is indistinguishable from a decoder that does not work — and this
       //    one has form for looking broken while being merely untuned.
-      const st = timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      // ★ A forced station wins over the dial. Auto is right nearly always, but 60 kHz is two
+      //   stations and only the receiver's location tells them apart — which not every server
+      //   publishes.
+      const forced = timeStationPref !== 'auto' ? timeStationPref : '';
+      const st = forced || timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
       if (!st) {
+        timeStationRef.current = '';
         setDecoderStatus('Tune to a time signal first — MSF 60kHz, DCF77 77.5kHz, '
                        + 'WWVB 60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
         return;
       }
-      if (decoderClient.current) decoderClient.current.timeStation = st;
-      setDecoderStatus(`${st.toUpperCase()} — waiting for the minute`);
+      if (decoderClient.current) decoderClient.current.timeStation = st as any;
+      timeStationRef.current = st;
+      setDecoderStatus(`${st.toUpperCase()}${forced ? '' : ' (auto)'} — waiting for the minute`);
     }
     decoderClient.current?.start(type);
-  }, [status.frequency]);
+  }, [status.frequency, timeStationPref]);
+
+  /**
+   * ★★★ THE STATION FOLLOWS THE DIAL WHILE THE DECODER IS RUNNING. It was chosen ONCE, at attach —
+   *     so turning TIME on somewhere else and then tuning to 60 kHz left it decoding as whatever
+   *     it had picked first, and the only way to correct it was to close the decoder and open it
+   *     again (Stuart, 2026-08-13: "it didnt pick up that it was MSF until I closed the decoder
+   *     down and opened it again"). Tuning is exactly how someone ARRIVES at a time station, so
+   *     choosing only at attach gets the common case wrong.
+   * ★★ Re-attaches only when the station actually CHANGES — every tune would otherwise restart the
+   *    decoder and throw away a minute that was part-read, which on a signal that takes a full
+   *    minute per frame is the most expensive thing you can do to it.
+   * ★ Silent when the dial is nowhere near a time station: the decoder keeps reading whatever it
+   *   had rather than being torn down because you passed through a gap.
+   */
+  useEffect(() => {
+    if (activeDecoder !== 'time') return;
+    const want = timeStationPref !== 'auto'
+      ? timeStationPref
+      : timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+    if (!want || want === timeStationRef.current) return;
+    openDecoder('time');
+  }, [activeDecoder, status.frequency, timeStationPref, openDecoder]);
 
   const closeDecoder = useCallback(() => {
     decoderClient.current?.stop();
@@ -5682,6 +5711,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         bgImageUrl={bgImageUrl}
         bgOpacity={bgOpacity / 10}
         stationId={stationId}
+        onStationIdHeight={setStationIdH}
         specFrac={specFrac}
         panLoHz={walls?.loHz}
         panHiHz={walls?.hiHz}
@@ -6197,18 +6227,32 @@ export default function SDRScreen({ route, navigation }: Props) {
           Anchored to the safe-area top (NOT specTop/wfTop, which move when the
           spectrum toggles), and inset by insets.left so it clears the notch /
           Dynamic Island in landscape. */}
-      {/* ★★★ WHOSE RADIO IS THIS — ON THE SPECTRUM, where the web client puts it. It was in the
-          servers menu, which meant the answer to "which receiver am I listening to" was behind a
-          tap, on a screen you can otherwise look at for an hour without ever being told (Stuart,
-          2026-08-13: "it should be displayed on the waterfall/spectrum like it is in the web
-          client"). Top RIGHT, so it cannot collide with the Servers chip top left.
-          ★ Hidden with the rest of the furniture, and while a picker is up — this identifies the
-            radio you are ON, and during a pick you are not on one yet. */}
-      {!controlsHidden && !awaitingRadio && !!(instanceName || rxIdentity) && (
-        <View pointerEvents="none"
-              style={[styles.rxBadge, { top: insets.top + 46, right: Math.max(12, insets.right + 8) }]}>
-          <Text style={styles.rxBadgeName} numberOfLines={1}>{instanceName ?? rxLabel}</Text>
-          {!!rxIdentity && <Text style={styles.rxBadgeSub} numberOfLines={1}>{rxIdentity}</Text>}
+      {/* ★★★ THE CLOCK SITS UNDER THE RECEIVER'S NAME, NOT OVER IT. The station-ID overlay —
+          "WESSEX - … / Wessex, UK", drawn by WaterfallView at the top-right of the spectrum — has
+          been there all along, and this countdown was pinned to the SAME corner with a higher
+          zIndex, so it covered the name of whichever receiver you were on. It hid UberSDR's too,
+          which is how long it had been wrong without being noticed (Stuart, 2026-08-13: "you
+          couldnt figure that out"), and it is why adding a second badge of my own was the wrong
+          answer to "the name is missing" — the name was never missing, it was underneath.
+          ★★ The offset is MEASURED, not assumed: WaterfallView reports the overlay's real height,
+             so a one-line id and a two-line id both clear it and nothing has to be kept in step
+             with a font size.
+          ★ The clock STAYS when the furniture is hidden — a countdown you cannot see is a
+            disconnection you cannot see coming. */}
+      {sessionLeftMs != null && (
+        <View pointerEvents="none" style={[styles.rxClock, {
+          top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
+          right: Math.max(12, insets.right + 8),
+          borderColor: sessionLeftMs < 120_000 ? 'rgba(255,90,90,0.75)' : 'rgba(255,160,0,0.45)',
+        }]}>
+          <Text style={[styles.rxClockCap, {
+            color: sessionLeftMs < 120_000 ? 'rgba(255,140,140,0.95)' : 'rgba(255,160,0,0.65)' }]}>
+            YOUR TURN ENDS IN
+          </Text>
+          <Text style={[styles.rxClockNum, {
+            color: sessionLeftMs < 120_000 ? '#ff6b6b' : '#ffb833' }]}>
+            {`${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`}
+          </Text>
         </View>
       )}
 
@@ -6237,24 +6281,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ Mirrors the web client's wording so a listener moving between the two reads the same
           sentence. Goes red under two minutes, which is also when the server sends its first
           warning — so the colour change and the server's own countdown agree. */}
-      {sessionLeftMs != null && (
-        <View pointerEvents="none" style={{
-          position: 'absolute', top: insets.top + 46, right: Math.max(12, insets.right + 8),
-          zIndex: 210, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
-          borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)',
-          borderColor: sessionLeftMs < 120_000 ? 'rgba(255,90,90,0.75)' : 'rgba(255,160,0,0.45)',
-          alignItems: 'flex-end',
-        }}>
-          <Text style={{ fontFamily: 'Nixie One', fontSize: 9, letterSpacing: 1.5,
-                         color: sessionLeftMs < 120_000 ? 'rgba(255,140,140,0.95)' : 'rgba(255,160,0,0.65)' }}>
-            YOUR TURN ENDS IN
-          </Text>
-          <Text style={{ fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26,
-                         color: sessionLeftMs < 120_000 ? '#ff6b6b' : '#ffb833' }}>
-            {`${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`}
-          </Text>
-        </View>
-      )}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
       {/* ★ PORTRAIT ONLY on a phone, like the decoder box: 24 fields and three plots need
@@ -6579,6 +6605,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         decoderControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' && (!isLandscape || isTablet) ? {
           decMode: selDecoder, decOn: activeDecoder !== null && activeDecoder === selDecoder, isLocal,
           onDecToggle, rttySettings, onRttySettings, wefaxLpm, onWefaxLpm,
+          timeStation: timeStationPref,
+          onTimeStation: (v: string) => {
+            setTimeStationPref(v);
+            // ★ Applied at once when the decoder is already running, so choosing a station is a
+            //   correction you SEE rather than one that needs stopping and starting.
+            if (activeDecRef.current === 'time') openDecoder('time');
+          },
           // ★ Offered only where it works: a VibeServer, in WFM. An UberSDR has no analyser,
           // and outside WFM there is no RDS to analyse.
           advRdsAvail: !!(client.current as any)?.isVibe && status.mode === 'wfm',
@@ -6869,14 +6902,11 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  // ★ Receiver identity, top-right of the spectrum — the shape the web client uses (#rxBadge).
-  //   pointerEvents none on the container: it must never eat a tap meant for the waterfall.
-  rxBadge:     { position: 'absolute', alignItems: 'flex-end', maxWidth: '55%' },
-  rxBadgeName: { color: '#ffb833', fontFamily: 'Nixie One', fontSize: 15, letterSpacing: 0.4,
-                 textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
-  rxBadgeSub:  { color: 'rgba(255,184,51,0.62)', fontFamily: 'Nixie One', fontSize: 11,
-                 letterSpacing: 0.3, marginTop: 1,
-                 textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
+  rxClock:     { position: 'absolute', zIndex: 210,
+                 paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
+                 borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
+  rxClockCap:  { fontFamily: 'Nixie One', fontSize: 9, letterSpacing: 1.5 },
+  rxClockNum:  { fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26 },
   // ── The multi-radio landing page ────────────────────────────────────────────────────────
   radioPickBackdrop: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50,

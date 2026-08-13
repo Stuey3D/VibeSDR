@@ -1301,14 +1301,25 @@ int main(int argc, char** argv) {
             //    code path, so three radios would publish three records under the SAME instance
             //    name and resolvers would take whichever landed first.
             const bool behindDoor = vsconfig::needsFrontDoor(g_serverConfig) && o.radioGiven;
+            const bool isDoor      = vsconfig::needsFrontDoor(g_serverConfig) && !o.radioGiven;
+            // ★★★ THE DOOR MUST ADVERTISE ITS OWN PORT, AND `o.port` IS NOT IT. With no --radio,
+            //     the radio-selection above falls through to "the first enabled radio" and sets
+            //     `o.port = portForRadio(...)` — so the front door, which BINDS
+            //     g_serverConfig.port, carried the FIRST RADIO's port in `o.port`. It advertised
+            //     48001: clients discovered the RTL directly and the door — the landing page, the
+            //     picker, the one port an owner forwards — was never announced at all (Stuart,
+            //     2026-08-13: "only for port 48001 so the RTL-SDR only not the front door").
+            //     ★★ It advertised something that WORKS, which is why it looked healthy: you get a
+            //        receiver, just not the way in. A wrong port here cannot fail loudly.
+            const int advPort = isDoor ? g_serverConfig.port : o.port;
             if (behindDoor) {
                 LocalSdrShim::startMdns(label, ip);      // name only — the door does the rest
                 std::printf("VibeServer: %s.local resolves here; the front door advertises the service\n",
                             label.c_str());
             } else {
-                LocalSdrShim::startMdnsService(label, ip, o.port, !o.pin.empty());
-                std::printf("VibeServer: advertising as %s.local (%s) and _vibesdr._tcp on %d\n",
-                            label.c_str(), ip.c_str(), o.port);
+                LocalSdrShim::startMdnsService(label, ip, advPort, !o.pin.empty());
+                std::printf("VibeServer: advertising as %s.local (%s) and _vibesdr._tcp on %d%s\n",
+                            label.c_str(), ip.c_str(), advPort, isDoor ? " (front door)" : "");
             }
         } else {
             std::fprintf(stderr, "VibeServer: cannot advertise on mDNS — %s\n",

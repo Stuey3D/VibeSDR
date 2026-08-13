@@ -217,6 +217,10 @@ export interface WaterfallViewProps {
   /** Station-ID overlay: "CALLSIGN - NAME" + location, top-right of the
    *  spectrum (web drawStationIdOverlay parity). */
   stationId?:   { line1: string; line2?: string; color: string } | null;
+  /** ★ How tall this overlay ended up, so the parent can put the session countdown UNDER it
+   *  instead of on top of it. Measured rather than assumed: one line and two lines differ, and a
+   *  constant here would have to be kept in step with a font size nobody would think to check. */
+  onStationIdHeight?: (h: number) => void;
   // Smooth tune (variable refresh): 120Hz interpolated scroll while the user
   // is interacting; once settled the waterfall steps rows discretely (data is
   // ~10Hz — the slide is pure interpolation) and the spectrum trace eases at
@@ -323,7 +327,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
-  bgImageUrl = null, bgOpacity = 0, stationId = null,
+  bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0',
@@ -1986,6 +1990,7 @@ function WaterfallView({
             bold "CALLSIGN - NAME", location at 75% beneath, drop shadow) */}
         {stationId != null && specShow && specH > 40 && (
           <View pointerEvents="none"
+                onLayout={(e) => onStationIdHeight?.(e.nativeEvent.layout.height)}
                 style={[styles.stationId, { top: specTop + 6 }]}>
             <Text style={[styles.stationIdL1, { color: stationId.color }]} numberOfLines={1}>
               {stationId.line1}
