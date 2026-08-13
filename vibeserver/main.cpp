@@ -1375,6 +1375,27 @@ int main(int argc, char** argv) {
             for (const auto& r : next.radios)
                 if (!r.serial.empty() && r.serial == g_myRadioSerial) {
                     g_runtimeConfig = vsconfig::effectiveFor(next, r);
+                    // ★★★ AND APPLY THE ONES THAT PROTECT THE RADIO, NOW. These were set ONCE, in
+                    //     main(), so saving them wrote the file and changed nothing until a
+                    //     restart — an owner set the RTL to return to 8.7 dB, came back a few
+                    //     times, and found it still sitting at 15.7 where the last listener left
+                    //     it (Stuart, 2026-08-13). The setting was saved correctly and was simply
+                    //     never told to anybody.
+                    // ★★ These three in particular CANNOT wait for a restart: they exist to stop a
+                    //    listener overloading the front end, and "next restart" on an unattended
+                    //    receiver can be weeks. A per-tab save deliberately does not bounce
+                    //    listeners, which makes applying live the only way they take effect at all.
+                    // ★ Everything else here still needs a restart, and the page still says so —
+                    //   sample rate and ports cannot change under a running capture.
+                    LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
+                    LocalSdrShim::setRestGain(g_runtimeConfig.restGain);
+                    LocalSdrShim::setAgcLock(g_runtimeConfig.agcLock == 1);
+                    LocalSdrShim::setVibeServerTuneLimits(
+                        g_runtimeConfig.mode == vsconfig::Mode::LockedRange ? "" : g_runtimeConfig.allowRanges,
+                        g_runtimeConfig.mode == vsconfig::Mode::LockedRange ? "" : g_runtimeConfig.blockRanges);
+                    std::printf("VibeServer: gain limits/rest gain/AGC lock applied live "
+                                "(rest=%d, agcLock=%d)\n", g_runtimeConfig.restGain,
+                                g_runtimeConfig.agcLock);
                     break;
                 }
             if (next.configured) LocalSdrShim::setConfigured(true);
