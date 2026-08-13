@@ -1287,8 +1287,29 @@ int main(int argc, char** argv) {
         const std::string label = vsconfig::mdnsLabel(wantName);
         const std::string ip = primaryIpv4();
         if (!label.empty() && !ip.empty()) {
-            LocalSdrShim::startMdns(label, ip);
-            std::printf("VibeServer: advertising as %s.local (%s)\n", label.c_str(), ip.c_str());
+            // ★★★ PUBLISH THE SERVICE, NOT JUST THE NAME. This called startMdns(), which answers
+            //     HOSTNAME queries only — so `vibeserver.local` resolved while the Pi never
+            //     appeared in the app's, the watch's or any client's Discovered list. Every Linux
+            //     VibeServer has been undiscoverable since the daemon shipped (Stuart,
+            //     2026-08-12: "the Pi is not advertising over MDNS either"). On Android NsdManager
+            //     publishes the service and on the Mac it is NetService; Linux had neither, and
+            //     nothing in the logs said so — an A record answering correctly looks like mDNS
+            //     working.
+            // ★★ ONLY THE PROCESS A CLIENT SHOULD CONNECT TO ADVERTISES. With a front door that is
+            //    the DOOR — one instance name, on the one port an owner forwards, with the picker
+            //    behind it. The radios behind it must stay quiet: they share this binary and this
+            //    code path, so three radios would publish three records under the SAME instance
+            //    name and resolvers would take whichever landed first.
+            const bool behindDoor = vsconfig::needsFrontDoor(g_serverConfig) && o.radioGiven;
+            if (behindDoor) {
+                LocalSdrShim::startMdns(label, ip);      // name only — the door does the rest
+                std::printf("VibeServer: %s.local resolves here; the front door advertises the service\n",
+                            label.c_str());
+            } else {
+                LocalSdrShim::startMdnsService(label, ip, o.port, !o.pin.empty());
+                std::printf("VibeServer: advertising as %s.local (%s) and _vibesdr._tcp on %d\n",
+                            label.c_str(), ip.c_str(), o.port);
+            }
         } else {
             std::fprintf(stderr, "VibeServer: cannot advertise on mDNS — %s\n",
                          ip.empty() ? "no IPv4 address found" : "no name set");

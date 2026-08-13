@@ -9410,12 +9410,19 @@ void LocalSdrShim::setServeOnLan(bool on) { g_serveOnLan.store(on); }
 // record and NsdManager cannot publish one. See mdns_responder.cpp.
 // NB: this file is ALREADY inside `namespace vibe`, so these are declared bare —
 // wrapping them in `namespace vibe { }` here would nest to vibe::vibe and fail to link.
-void mdnsStart(const std::string& host, const std::string& ipv4);
+void mdnsStart(const std::string& host, const std::string& ipv4,
+               uint16_t servicePort = 0, bool pinRequired = false);
 void mdnsStop();
 std::string mdnsHost();
 
 void LocalSdrShim::startMdns(const std::string& host, const std::string& ipv4) {
-    mdnsStart(host, ipv4);
+    mdnsStart(host, ipv4);          // hostname only — Android's NsdManager publishes the service
+}
+/** ★ Publish the SERVICE as well. Linux has no NsdManager and no NetService, so without this a
+ *  daemon resolves by name and is still invisible to every client that discovers by browsing. */
+void LocalSdrShim::startMdnsService(const std::string& host, const std::string& ipv4,
+                                    int port, bool pinRequired) {
+    mdnsStart(host, ipv4, (uint16_t)port, pinRequired);
 }
 void LocalSdrShim::stopMdns() { mdnsStop(); }
 std::string LocalSdrShim::mdnsHostname() { return mdnsHost(); }

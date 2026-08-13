@@ -411,6 +411,9 @@ public:
     /** mDNS hostname responder: answer "<host>.local" with this IPv4. Renames itself
      *  (vibesdr-2, …) if the name is already taken on the network — RFC 6762 probing. */
     static void startMdns(const std::string& host, const std::string& ipv4);
+    /** Advertise the hostname AND the _vibesdr._tcp service (Linux/macOS daemons). */
+    static void startMdnsService(const std::string& host, const std::string& ipv4,
+                                 int port, bool pinRequired);
     static void stopMdns();
     /** The name actually taken — may differ from the one requested. */
     static std::string mdnsHostname();

@@ -11,9 +11,21 @@
 // WHAT IT DOES
 //
 // Joins 224.0.0.251:5353, and answers QTYPE=A (and ANY) questions for our own name with
-// our IPv4 address. Nothing more — this is not a general mDNS stack and does not try to
-// be one. It does not browse, it does not cache, it does not serve PTR/SRV/TXT (the
-// NsdManager registration already covers those).
+// our IPv4 address. It does not browse and it does not cache — this is not a general mDNS
+// stack and does not try to be one.
+//
+// ★★★ AND, WHEN ASKED TO, IT PUBLISHES THE SERVICE (_vibesdr._tcp) TOO.
+//
+// That used to be Android's job alone: NsdManager registers the service, so this file
+// only ever needed the A record, and it said so. On LINUX nothing filled that gap —
+// mdnsStart() published a hostname and nothing else — so `vibeserver.local` resolved
+// while the Pi NEVER appeared in the app's, the watch's or any client's Discovered list.
+// Every Linux VibeServer has been undiscoverable since the daemon shipped (Stuart,
+// 2026-08-12). The Mac had the same hole in Full mode, patched separately with NetService.
+//
+// ★★ Publishing is OPT-IN, via the port argument. Android passes none and keeps using
+//    NsdManager: two registrations for one service would answer the same question twice
+//    and a resolver takes whichever arrives first. One publisher per platform.
 //
 // NAME COLLISIONS (RFC 6762 §8)
 //
@@ -60,6 +72,14 @@ std::atomic<bool>      g_run{false};
 std::string            g_host;           // "vibesdr" — WITHOUT the .local
 uint32_t               g_addr = 0;       // our IPv4, network byte order
 std::atomic<bool>      g_conflict{false};
+// ── The service, when we are the one publishing it (0 = we are not) ──────────────────
+uint16_t               g_svcPort = 0;
+bool                   g_svcPin  = false;
+
+// ★★ THE CONTRACT IS FIXED BY THE CLIENTS THAT ALREADY EXIST — VibeMdnsModule.kt,
+//    src/services/mdns.ts and the Mac's NetService all agree on these exact strings, and a
+//    discovery that does not match them finds nothing while looking perfectly healthy.
+constexpr const char* kSvcType = "_vibesdr._tcp";
 
 /** Encode "vibesdr.local" as DNS labels: \7vibesdr\5local\0 */
 std::string encodeName(const std::string& host) {
@@ -71,6 +91,30 @@ std::string encodeName(const std::string& host) {
     out += '\0';
     return out;
 }
+
+/** Encode a dotted name ("vibesdr._vibesdr._tcp.local") as DNS labels. */
+std::string encodeDotted(const std::string& dotted) {
+    std::string out;
+    size_t i = 0;
+    while (i < dotted.size()) {
+        size_t dot = dotted.find('.', i);
+        if (dot == std::string::npos) dot = dotted.size();
+        const size_t len = dot - i;
+        if (len == 0 || len > 63) return std::string();     // malformed — publish nothing
+        out += (char)len;
+        out += dotted.substr(i, len);
+        i = dot + 1;
+    }
+    out += '\0';
+    return out;
+}
+
+std::string svcTypeName()               { return encodeDotted(std::string(kSvcType) + ".local"); }
+std::string svcInstName(const std::string& host) {
+    return encodeDotted(host + "." + kSvcType + ".local");
+}
+/** The meta-query browsers use to ask "what KINDS of service are here?" */
+std::string svcMetaName()               { return encodeDotted("_services._dns-sd._udp.local"); }
 
 /** Case-insensitive compare of a DNS-encoded name in `buf` at `pos` against ours.
  *  Returns the length consumed, or 0 if it doesn't match. Compression pointers are
@@ -119,6 +163,101 @@ std::string buildAnswer(const std::string& host, uint32_t addr, uint16_t txid) {
     u32(kTtl);
     u16(4);
     p.append((const char*)&addr, 4);     // already network byte order
+    return p;
+}
+
+/**
+ * The service records, as one response: PTR (what is here) + SRV (where) + TXT (how) + A.
+ *
+ * ★★★ ALL FOUR IN ONE PACKET, because that is what makes discovery INSTANT rather than a
+ *     three-round-trip conversation. A browser that gets a bare PTR must then ask for SRV,
+ *     then TXT, then A — and on a phone waking its Wi-Fi that is the difference between a
+ *     server appearing at once and appearing "eventually", which reads as not appearing.
+ * ★★ NO NAME COMPRESSION. Pointers would save a hundred bytes and are a common source of
+ *    subtly wrong packets; we are nowhere near the MTU, so the whole names are written out.
+ * ★ The cache-flush bit is set on SRV/TXT/A (we are authoritative for those) but NOT on the
+ *   PTR: several servers legitimately share one service type, and flushing there would tell
+ *   resolvers to forget everyone else's.
+ */
+std::string buildService(const std::string& host, uint32_t addr, uint16_t txid, bool includePtr) {
+    const std::string inst = svcInstName(host);
+    const std::string type = svcTypeName();
+    const std::string hostN = encodeName(host);
+    if (inst.empty() || type.empty()) return std::string();
+
+    std::string p;
+    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
+    auto u32 = [&](uint32_t v) {
+        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
+        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
+    };
+
+    const uint16_t nAns = includePtr ? 4 : 3;
+    u16(txid);
+    u16(0x8400);            // response, authoritative
+    u16(0);                 // questions
+    u16(nAns);              // answers
+    u16(0);                 // authority
+    u16(0);                 // additional
+
+    if (includePtr) {
+        p += type;
+        u16(12);            // TYPE PTR
+        u16(0x0001);        // CLASS IN — no cache-flush, see above
+        u32(kTtl);
+        u16((uint16_t)inst.size());
+        p += inst;
+    }
+
+    // SRV: priority, weight, port, target
+    p += inst;
+    u16(33);                // TYPE SRV
+    u16(0x8001);            // CLASS IN + cache-flush
+    u32(kTtl);
+    u16((uint16_t)(6 + hostN.size()));
+    u16(0); u16(0); u16(g_svcPort);
+    p += hostN;
+
+    // TXT: the same keys every existing client already reads.
+    {
+        const std::string k1 = "proto=vibeserver";
+        const std::string k2 = g_svcPin ? "pin=1" : "pin=0";
+        std::string rd;
+        rd += (char)k1.size(); rd += k1;
+        rd += (char)k2.size(); rd += k2;
+        p += inst;
+        u16(16);            // TYPE TXT
+        u16(0x8001);
+        u32(kTtl);
+        u16((uint16_t)rd.size());
+        p += rd;
+    }
+
+    // A, so the resolver never has to ask where the target lives.
+    p += hostN;
+    u16(1);
+    u16(0x8001);
+    u32(kTtl);
+    u16(4);
+    p.append((const char*)&addr, 4);
+    return p;
+}
+
+/** Answer the "what service types are here?" meta-query with our type. */
+std::string buildMetaPtr(uint16_t txid) {
+    const std::string meta = svcMetaName(), type = svcTypeName();
+    if (meta.empty() || type.empty()) return std::string();
+    std::string p;
+    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
+    auto u32 = [&](uint32_t v) {
+        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
+        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
+    };
+    u16(txid); u16(0x8400); u16(0); u16(1); u16(0); u16(0);
+    p += meta;
+    u16(12); u16(0x0001); u32(kTtl);
+    u16((uint16_t)type.size());
+    p += type;
     return p;
 }
 
@@ -271,10 +410,23 @@ void loop(std::string base, uint32_t addr) {
     // Announce ourselves twice, a second apart, so resolvers learn the name without
     // having to ask (RFC 6762 §8.3).
     const std::string want = encodeName(host);
+    const std::string wantInst = svcInstName(host);
+    const std::string wantType = svcTypeName();
+    const std::string wantMeta = svcMetaName();
     for (int i = 0; i < 2 && g_run.load(); ++i) {
         sendTo(fd, buildAnswer(host, addr, 0), group);
+        // ★ Announce the SERVICE unasked too. A client that is already listening learns about
+        //   this server the moment it starts, instead of only when it next happens to browse —
+        //   which is what "the server took a while to appear" actually is.
+        if (g_svcPort) {
+            const std::string svc = buildService(host, addr, 0, true);
+            if (!svc.empty()) sendTo(fd, svc, group);
+        }
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+    if (g_svcPort)
+        LOGI("mDNS service published: %s.%s.local on port %u", host.c_str(), kSvcType,
+             (unsigned)g_svcPort);
 
     // ── Serve ────────────────────────────────────────────────────────────────
     while (g_run.load()) {
@@ -295,6 +447,11 @@ void loop(std::string base, uint32_t addr) {
         size_t off = 12;
         for (uint16_t q = 0; q < qd && off + 4 < (size_t)n; ++q) {
             size_t used = matchName(buf, n, off, want);
+            // ★ Which of OUR names is being asked about? Checked before the question is
+            //   consumed, since matchName reads from the same offset.
+            const bool isInst = g_svcPort && !wantInst.empty() && matchName(buf, n, off, wantInst);
+            const bool isType = g_svcPort && !wantType.empty() && matchName(buf, n, off, wantType);
+            const bool isMeta = g_svcPort && !wantMeta.empty() && matchName(buf, n, off, wantMeta);
             // Skip this question's name however it turned out.
             size_t skip = off;
             while (skip < (size_t)n && buf[skip]) skip += 1 + buf[skip];
@@ -303,6 +460,27 @@ void loop(std::string base, uint32_t addr) {
             uint16_t qtype = (buf[skip] << 8) | buf[skip + 1];
             const bool unicast = (buf[skip + 2] & 0x80) != 0;   // QU bit
             off = skip + 4;
+
+            // ── The service questions ────────────────────────────────────────────────────
+            if (isType || isInst || isMeta) {
+                std::string ans;
+                if (isMeta) {
+                    if (qtype == 12 || qtype == 255) ans = buildMetaPtr(0);
+                } else if (isType) {
+                    // A browse. PTR + everything needed to use it, in one packet.
+                    if (qtype == 12 || qtype == 255) ans = buildService(host, addr, 0, true);
+                } else {
+                    // The instance itself — SRV/TXT/ANY. No PTR: it was not asked for, and
+                    // this name is not where a PTR lives.
+                    if (qtype == 33 || qtype == 16 || qtype == 255)
+                        ans = buildService(host, addr, 0, false);
+                }
+                if (!ans.empty()) {
+                    if (unicast) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
+                    else         sendTo(fd, ans, group);
+                }
+                continue;
+            }
 
             if (!used) continue;
 
@@ -327,13 +505,24 @@ void loop(std::string base, uint32_t addr) {
 
 }  // namespace
 
-/** Start answering for "<host>.local" with `ipv4` (dotted string). Idempotent. */
-void mdnsStart(const std::string& host, const std::string& ipv4) {
+/**
+ * Start answering for "<host>.local" with `ipv4` (dotted string). Idempotent.
+ *
+ * @param servicePort  publish `_vibesdr._tcp` on this port as well. 0 = HOSTNAME ONLY, which is
+ *                     what Android wants: NsdManager already registers the service there, and two
+ *                     publishers answering one question is worse than one.
+ * @param pinRequired  goes in the TXT record as pin=1, so a client can show the lock before it
+ *                     connects rather than discovering it by being refused.
+ */
+void mdnsStart(const std::string& host, const std::string& ipv4,
+               uint16_t servicePort, bool pinRequired) {
     if (g_run.load()) return;
     if (host.empty() || ipv4.empty()) return;
     uint32_t addr = inet_addr(ipv4.c_str());
     if (addr == INADDR_NONE) return;
     g_addr = addr;
+    g_svcPort = servicePort;
+    g_svcPin = pinRequired;
     g_run.store(true);
     g_thread = std::thread(loop, host, addr);
 }
@@ -343,6 +532,8 @@ void mdnsStop() {
     g_run.store(false);
     if (g_thread.joinable()) g_thread.join();
     g_host.clear();
+    g_svcPort = 0;
+    g_svcPin = false;
 }
 
 /** The name we actually took — may differ from the one asked for, if it was taken. */
