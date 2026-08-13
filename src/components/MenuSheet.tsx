@@ -231,6 +231,13 @@ export interface MenuSheetProps {
   /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
   isTcp?:          boolean;
   onAdminLink?:     (path: string, title: string) => void;
+  /** ★★★ THE ADMIN PASSWORD BELONGS WHERE THE PAGES IT UNLOCKS ARE. It lived only in the hardware
+   *  panel, so an owner looking for the admin page found no way in from here — and unlocking in
+   *  the hardware panel had no visible effect on this menu at all (Stuart, 2026-08-13). */
+  adminSet?:        boolean;
+  adminOk?:         boolean;
+  adminRefused?:    boolean;
+  onAdminUnlock?:   (pw: string) => void;
   onResetSettings?: () => void;
   onReplayTour?:    () => void;
   onDisplaySettings?: () => void;
@@ -701,7 +708,9 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
+  onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink,
+  adminSet = false, adminOk = false, adminRefused = false, onAdminUnlock,
+  onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, isVibeServer = false, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   isFavourite = false, onToggleFavourite,
@@ -732,6 +741,9 @@ export default function MenuSheet({
 
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
   const [cmapOpen, setCmapOpen] = useState(false);
+  /** ★ Cleared the moment it is submitted — this gets typed at a club night with people behind
+   *  you, the same reason the server screen's box is dots by default. */
+  const [menuAdminPw, setMenuAdminPw] = useState('');
 
   // Responsive sheet geometry — SHEET_H is a module constant measured in
   // PORTRAIT, so in landscape a bottom-anchored 700pt sheet pokes past the top
@@ -1348,21 +1360,52 @@ export default function MenuSheet({
               <BtnRow>
                 <Btn label="⚙ ADMIN" full skipNav={kbInUse} onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
-            </>) : (vibeAdminUrl || vibeSetupUrl) ? (<>
+            </>) : (isVibeServer && (adminSet || vibeAdminUrl || vibeSetupUrl)) ? (<>
               {/* ★ A VibeServer's OWN pages. A WebView keeps them automatically in step with the
                     server, which matters while those pages are still moving — rendering them
                     natively would be two implementations drifting apart. */}
               <SectionLabel label="VIBESERVER" icon="admin" />
-              <BtnRow>
-                {!!vibeAdminUrl && (
-                  <Btn label="ADMIN" skipNav={kbInUse}
-                       onPress={() => onAdminLink?.(vibeAdminUrl, 'Admin')} />
-                )}
-                {!!vibeSetupUrl && (
-                  <Btn label="SETUP" skipNav={kbInUse}
-                       onPress={() => onAdminLink?.(vibeSetupUrl, 'Setup')} />
-                )}
-              </BtnRow>
+              {/* ★★ THE WAY IN IS HERE TOO. The section used to appear only once you were ALREADY
+                  admin, so the buttons were invisible to the one person who needed them and there
+                  was nothing on screen to say a password would reveal them. */}
+              {!adminOk && (
+                <>
+                  <View style={styles.adminUnlockRow}>
+                    <TextInput
+                      value={menuAdminPw}
+                      onChangeText={setMenuAdminPw}
+                      placeholder="Admin password"
+                      placeholderTextColor="rgba(255,184,51,0.45)"
+                      secureTextEntry autoCapitalize="none" autoCorrect={false}
+                      style={styles.adminUnlockInput}
+                      onSubmitEditing={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}
+                    />
+                    <TouchableOpacity
+                      style={styles.adminUnlockBtn}
+                      disabled={!menuAdminPw}
+                      onPress={() => { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); }}>
+                      <Text style={styles.adminUnlockBtnTxt}>UNLOCK</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.kbSkipNote}>
+                    {adminRefused
+                      ? 'That password was not accepted.'
+                      : 'The owner\u2019s password unlocks the admin and setup pages, and the hardware controls.'}
+                  </Text>
+                </>
+              )}
+              {adminOk && (
+                <BtnRow>
+                  {!!vibeAdminUrl && (
+                    <Btn label="ADMIN" skipNav={kbInUse}
+                         onPress={() => onAdminLink?.(vibeAdminUrl, 'Admin')} />
+                  )}
+                  {!!vibeSetupUrl && (
+                    <Btn label="SETUP" skipNav={kbInUse}
+                         onPress={() => onAdminLink?.(vibeSetupUrl, 'Setup')} />
+                  )}
+                </BtnRow>
+              )}
             </>) : isLocal || isKiwi ? null : (<>
               <SectionLabel label="SERVER ADMIN" icon="admin" />
               {kbInUse && <Text style={styles.kbSkipNote}>Server pages are skipped on a keyboard — they are the receiver's own, and we cannot guarantee how a keyboard behaves there. Tap to open one.</Text>}
@@ -1480,6 +1523,13 @@ export default function MenuSheet({
 // ── Styles ─────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  adminUnlockRow:   { flexDirection: 'row', alignItems: 'center', gap: 8,
+                      paddingHorizontal: 12, marginBottom: 6 },
+  adminUnlockInput: { flex: 1, borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6,
+                      paddingHorizontal: 10, paddingVertical: 8, color: '#ffb833', fontSize: 14 },
+  adminUnlockBtn:   { borderWidth: 1, borderColor: 'rgba(255,160,0,0.55)', borderRadius: 6,
+                      paddingHorizontal: 12, paddingVertical: 9 },
+  adminUnlockBtnTxt:{ color: '#ffb833', fontSize: 12, letterSpacing: 0.5 },
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0, height: SHEET_H,

@@ -1342,9 +1342,64 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAdminPage({ url, title });
   }, [baseUrl]);
 
+  /**
+   * Turn a proved challenge pair into the credential the PAGES understand, and remember it.
+   *
+   * ★★ The setup and admin pages read `vs_admin_ticket` from their own URL and nothing else — hand
+   *    them the nonce/auth pair and the page loads, looks right, and refuses every value on it.
+   * ★ Falls back to the pair if the server is too old to mint a ticket: that still unlocks the
+   *   sockets, which is the half that matters most.
+   */
+  const mintAdminTicket = useCallback(async (challengeQ: string) => {
+    if (!challengeQ) return;
+    let cred = challengeQ;
+    try {
+      const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${challengeQ}`,
+                            { cache: 'no-store' });
+      if (r.ok) {
+        const t = (await r.json())?.ticket;
+        if (t) cred = `vs_admin_ticket=${encodeURIComponent(String(t))}`;
+      }
+    } catch { /* keep the challenge pair */ }
+    setAdminAuthQ(cred);
+  }, [baseUrl]);
+
+  /**
+   * Prove the admin password, ONCE, for everything it unlocks.
+   *
+   * ★★★ THERE ARE TWO HALVES AND BOTH ARE REQUIRED. The nonce/auth pair unlocks the SOCKET (the
+   *     hardware controls ride on it); the ticket unlocks the PAGES. Doing only the first is what
+   *     made the hardware panel's password look inert — it worked, and changed nothing the owner
+   *     could see. Every entry point now calls this, so they cannot drift apart again.
+   */
+  const onAdminUnlockPw = useCallback(async (pw: string) => {
+    if (!pw) return;
+    setAdminRefused(false);
+    const q = await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
+    const nonce = /vs_admin_nonce=([^&]*)/.exec(q)?.[1];
+    const token = /vs_admin_auth=([^&]*)/.exec(q)?.[1];
+    // ★ A wrong password and an unreachable server both come back empty — say it did not work
+    //   rather than inventing which.
+    if (!nonce || !token) { setAdminRefused(true); return; }
+    (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
+    await mintAdminTicket(q);
+  }, [baseUrl, mintAdminTicket]);
+
   /** ★ The door's own pages, offered ONLY once we are admin — they refuse without the credential,
    *  and a button that cannot work is worse than no button. */
-  const vibeAdminUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/?${adminAuthQ}` : undefined;
+  // ★★ `#admin` OPENS THE ADMIN VIEW, not the receiver with admin quietly available — tapping
+  //    ADMIN and arriving at a waterfall reads as the button having failed. The page only honours
+  //    it while holding a valid ticket, so the fragment cannot prise anything open on its own.
+  const vibeAdminUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/?${adminAuthQ}#admin` : undefined;
+  /** What this receiver IS, under its name on the spectrum. ★ Silent rather than guessing: an
+   *  unknown backend says nothing at all, and a VibeServer too old to report its version shows
+   *  just "VibeServer". */
+  const rxIdentity = isVibeServer
+    ? (serverVersion ? `VibeServer ${serverVersion}` : 'VibeServer')
+    : route.params.isTcp ? 'RTL-TCP'
+    : isLocal ? 'This device'
+    : undefined;
+
   const vibeSetupUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/setup?${adminAuthQ}` : undefined;
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
@@ -2718,7 +2773,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         } else { decoderImageRef.current?.imageDone(); }
       },
       onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
-      onRadioCaps:  (caps) => { if (!destroyed.current) setRadioCaps(caps); },
+      onRadioCaps:  (caps) => {
+        if (destroyed.current) return;
+        setRadioCaps(caps);
+        // ★★★ THE RADIO'S OWN TUNING RANGE WINS OVER THE ADAPTER'S CONSTANT. LOCAL_CAPS pins
+        //     freqRange to [100 kHz, 1766 MHz] — written for an RTL-SDR Blog V4, whose direct
+        //     sampling starts near 0.1 MHz — and a VibeServer session takes that same "local"
+        //     path whatever radio is on the far end. So an Airspy HF+, which tunes from 500 Hz,
+        //     could not be tuned below 100 kHz from the app: the whole of VLF and most of LW
+        //     was unreachable on hardware that receives it perfectly (Stuart, 2026-08-13).
+        //     ★★ Another of the one-radio assumptions: a constant that is true of the FIRST
+        //        radio supported, applied to every radio since. The server has published the
+        //        real windows all along (radioCapsJson "ranges"), and nothing read them.
+        //     ★ Only ever WIDENS what the backend claimed — a server that reports a narrower
+        //       window than the adapter's default is describing a genuine limit, and overriding
+        //       that would offer tuning the radio will refuse.
+        const rs = caps?.ranges;
+        const c = client.current;
+        if (c && Array.isArray(rs) && rs.length) {
+          const lo = Math.min(...rs.map((r) => r[0]));
+          const hi = Math.max(...rs.map((r) => r[1]));
+          if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
+            const [curLo, curHi] = c.caps.freqRange;
+            (c.caps as any).freqRange = [Math.min(curLo, lo), Math.max(curHi, hi)];
+          }
+        }
+      },
       // ★ The RSP reports its own total system gain and its own ADC-overload event ~10/s. Neither
       //   is inferred from the spectrum the way a dongle's would have to be, so it is shown as
       //   fact rather than estimate — and OVERLOAD is what destroys RDS on this radio.
@@ -6112,20 +6192,27 @@ export default function SDRScreen({ route, navigation }: Props) {
           Anchored to the safe-area top (NOT specTop/wfTop, which move when the
           spectrum toggles), and inset by insets.left so it clears the notch /
           Dynamic Island in landscape. */}
-      {/* ★ The admin rows open IN-APP, via onAdminLink — never the system browser. Their URLs
-          carry the admin credential in the query, and handing that to another app puts it in a
-          history and a referrer we do not control. */}
+      {/* ★★★ WHOSE RADIO IS THIS — ON THE SPECTRUM, where the web client puts it. It was in the
+          servers menu, which meant the answer to "which receiver am I listening to" was behind a
+          tap, on a screen you can otherwise look at for an hour without ever being told (Stuart,
+          2026-08-13: "it should be displayed on the waterfall/spectrum like it is in the web
+          client"). Top RIGHT, so it cannot collide with the Servers chip top left.
+          ★ Hidden with the rest of the furniture, and while a picker is up — this identifies the
+            radio you are ON, and during a pick you are not on one yet. */}
+      {!controlsHidden && !awaitingRadio && !!(instanceName || rxIdentity) && (
+        <View pointerEvents="none"
+              style={[styles.rxBadge, { top: insets.top + 46, right: Math.max(12, insets.right + 8) }]}>
+          <Text style={styles.rxBadgeName} numberOfLines={1}>{instanceName ?? rxLabel}</Text>
+          {!!rxIdentity && <Text style={styles.rxBadgeSub} numberOfLines={1}>{rxIdentity}</Text>}
+        </View>
+      )}
+
       {!controlsHidden && (
         <ServersChip
           anchorRef={tourRef('serversChip')}
           top={insets.top + 46}
           left={Math.max(12, insets.left + 8)}
           serverName={instanceName ?? baseUrl}
-          serverDetail={isVibeServer
-            ? (serverVersion ? `VibeServer ${serverVersion}` : 'VibeServer')
-            : isLocal ? 'This device' : undefined}
-          onOpenAdmin={vibeAdminUrl ? () => onAdminLink(vibeAdminUrl, 'Server admin') : undefined}
-          onOpenSetup={vibeSetupUrl ? () => onAdminLink(vibeSetupUrl, 'Server setup') : undefined}
           isFavourite={isFavourite}
           isDefault={isDefault}
           canFavourite={!isLocal}
@@ -6369,6 +6456,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDspParam={onServerDspParam}
         serverVersion={serverVersion}
         isVibeServer={isVibeServer}
+        adminSet={adminSet}
+        adminOk={adminOk}
+        adminRefused={adminRefused}
+        onAdminUnlock={onAdminUnlockPw}
         serverLabel={serverLabel}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
@@ -6556,15 +6647,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminSet={adminSet}
           adminOk={adminOk}
           adminRefused={adminRefused}
-          onAdminUnlock={async (pw) => {
-            // ★ HMAC over a server-issued nonce — the password never crosses the link, and the
-            // server applies the same brute-force lockout it uses for the PIN.
-            const q = await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
-            const nonce = /vs_admin_nonce=([^&]*)/.exec(q)?.[1];
-            const token = /vs_admin_auth=([^&]*)/.exec(q)?.[1];
-            if (!nonce || !token) { setAdminRefused(true); return; }
-            (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
-          }}
+          onAdminUnlock={onAdminUnlockPw}
           rspSysGain={rspSys} rspOverload={rspOvl} rspSettling={rspSettling}
           rspLna={rspLna}
           onRspLna={(v) => { setRspLna(v); (client.current as any)?.rspControl?.({ lna: v }); }}
@@ -6781,6 +6864,14 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // ★ Receiver identity, top-right of the spectrum — the shape the web client uses (#rxBadge).
+  //   pointerEvents none on the container: it must never eat a tap meant for the waterfall.
+  rxBadge:     { position: 'absolute', alignItems: 'flex-end', maxWidth: '55%' },
+  rxBadgeName: { color: '#ffb833', fontFamily: 'Nixie One', fontSize: 15, letterSpacing: 0.4,
+                 textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
+  rxBadgeSub:  { color: 'rgba(255,184,51,0.62)', fontFamily: 'Nixie One', fontSize: 11,
+                 letterSpacing: 0.3, marginTop: 1,
+                 textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
   // ── The multi-radio landing page ────────────────────────────────────────────────────────
   radioPickBackdrop: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50,

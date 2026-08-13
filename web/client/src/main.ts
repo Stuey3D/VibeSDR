@@ -1233,6 +1233,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   initIdleThrottle();
   initAdminUnlock();
   initAdmin(() => currentHost, () => adminPassword);
+  // ★★ LAND ON THE ADMIN PAGE WHEN ASKED FOR IT. The app's ADMIN button wants the admin view, not
+  //    the receiver with admin quietly available — arriving at the waterfall after tapping ADMIN
+  //    reads as the button having failed. Only honoured when we actually hold a ticket, so the
+  //    fragment can never be used to prise the panel open.
+  if (location.hash === '#admin' && inAdminMode()) openAdmin(currentHost, adminPassword);
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
   requestAnimationFrame(loop);
@@ -3507,6 +3512,36 @@ function wantedFps(): number {
 }
 
 // ── "I'm over here" ──────────────────────────────────────────────────────────
+/**
+ * ★★★ ACCEPT AN ADMIN TICKET HANDED TO US IN THE URL.
+ *
+ *     The ticket exists to carry admin from one context into another — that is its entire job —
+ *     but the browser only ever MINTED one after an in-page password unlock, and never READ one.
+ *     So the app's ADMIN button opened `/?vs_admin_ticket=…`, this page saw an empty
+ *     sessionStorage, and asked for the password again: the button led to a locked door while
+ *     holding the key (Stuart, 2026-08-13: "it takes you to the landing screen where it wants you
+ *     to enter the admin password again"). The SETUP page had read it from its own URL all along,
+ *     which is why setup worked and admin did not.
+ *
+ * ★★ THE TICKET IS STRIPPED FROM THE URL IMMEDIATELY. It is a bearer credential: left in the
+ *    address bar it lands in history, in a bookmark, and in the Referer of every outbound request
+ *    the page makes. replaceState removes it without a reload, before anything else runs.
+ *
+ * ★ `vs_admin_ttl` is honoured when sent, and a short default is used otherwise — a ticket we
+ *   over-estimate is one that fails later looking like a wrong password.
+ */
+function adoptAdminTicketFromUrl() {
+  const q = new URLSearchParams(location.search);
+  const t = q.get('vs_admin_ticket');
+  if (!t) return;
+  saveAdminTicket(t, Number(q.get('vs_admin_ttl')) || 600);
+  q.delete('vs_admin_ticket');
+  q.delete('vs_admin_ttl');
+  const rest = q.toString();
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+}
+adoptAdminTicketFromUrl();
+
 // The menu-bar app raises this tab by setting the URL fragment to #here. Changing only the
 // fragment fires hashchange WITHOUT reloading, so the waterfall, the audio and the tuned frequency
 // all survive being summoned — which is the whole point of finding this tab instead of opening a
