@@ -184,6 +184,10 @@ message(STATUS "libusb:    ${USB_LIB}")
 target_include_directories(vibeserver_core PUBLIC "${RTLSDR_INC}")
 # Use the REAL rtl-sdr.h, not the iOS no-op stub the shim falls back to.
 target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
+# ★★ THE VERSION, WHERE THE CODE CAN SAY IT. It lived only in CMake, so the server could not tell a
+#    client what it was — and the app's About panel had nothing to show but the client's own name.
+#    Defined from VIBESERVER_VERSION so it cannot drift from the package the user installed.
+target_compile_definitions(vibeserver_core PUBLIC VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
 target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
 
 # ── SDRplay (RSP): HEADERS ONLY, deliberately never linked ────────────────────

@@ -61,6 +61,24 @@ export type VibeServerConfig = {
   advertise?: boolean;
   /** Rebuild the server if the app process dies under it. Default true. */
   autoRestore?: boolean;
+  /** ★★★ ADVANCED MODE — the management surface. NOT "Full": the Mac and the Pi serve several
+   *  radios behind a front door, and a phone serves ONE (it cannot power three over OTG), so
+   *  calling it Full would promise a parity it cannot deliver (Stuart, 2026-08-12).
+   *  ★ It adds no process and no port. Everything below is applied to the radio already running. */
+  advanced?: boolean;
+  /** Listeners sharing one radio. 1 = single occupant, the Simple-mode behaviour. */
+  maxUsers?: number;
+  /** Where listeners may tune. Block always wins over allow. */
+  allowRanges?: string;
+  blockRanges?: string;
+  /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
+   *  (-1 = leave alone), and whether the AGC is locked on. */
+  gainLimits?: string;
+  restGain?: number;
+  agcLock?: boolean;
+  /** Reverse proxies whose X-Forwarded-For we believe — required behind a tunnel, or every
+   *  visitor arrives as 127.0.0.1 and the limits and ban list cannot tell anyone apart. */
+  trustedProxies?: string;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -104,6 +122,14 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     lockedRate: cfg.lockedRate ?? 0,
     advertise: cfg.advertise ?? true,
     autoRestore: cfg.autoRestore ?? true,
+    advanced: cfg.advanced ?? false,
+    maxUsers: cfg.maxUsers ?? 1,
+    allowRanges: cfg.allowRanges ?? '',
+    blockRanges: cfg.blockRanges ?? '',
+    gainLimits: cfg.gainLimits ?? '',
+    restGain: cfg.restGain ?? -1,
+    agcLock: cfg.agcLock ?? false,
+    trustedProxies: cfg.trustedProxies ?? '',
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.

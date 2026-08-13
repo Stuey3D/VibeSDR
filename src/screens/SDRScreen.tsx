@@ -76,7 +76,7 @@ import { watchProvider } from '../services/watchProvider';
  *  here; the frames we drop cost nothing, and the ones we keep are on time. */
 const WATCH_BG_DIVISOR = 1;
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
-import { DecoderClient, RTTY_PRESETS,
+import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
@@ -463,6 +463,16 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── V4 local hardware controls (RTL-SDR) ──────────────────────────────────
   const isLocal = !!route.params.isLocal;
+  /** ★★★ A VibeServer IS NOT "LOCAL HARDWARE", however it is wired. connectVibeServer navigates
+   *  with isLocal:true because it REUSES the local protocol path — its own comment says "the radio
+   *  lives on the serving phone" — so one flag came to mean both "uses the local wiring" and "the
+   *  radio is in this device", and the UI read the second meaning. A Pi across the room was
+   *  therefore labelled "Local Hardware — via VibeDSP (native)" (Stuart, 2026-08-12: "a holdover
+   *  from when VibeSDR was much simpler").
+   *  ★ Told apart with what is ALREADY there: `localHost` is set only when the radio is on another
+   *    machine, and is absent for a genuine loopback session. No new route param, so no chance of
+   *    the two disagreeing. */
+  const isVibeServer = isLocal && !!route.params.localHost && !route.params.isTcp;
   // rtl_tcp network health, polled from the shim's jitter buffer. 3 = good (also the
   // resting value on the USB path, where it never clamps anything).
   const netLinkRef = useRef<0|1|2|3>(3);
@@ -1179,7 +1189,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!route.params.localPort && !route.params.localHost) return;
     const h = route.params.localHost ?? '127.0.0.1';
     fetchOccupancy(`http://${h}:${route.params.localPort}`)
-      .then((o) => { if (!dead) setRawAudioPolicy(o?.uncompressed ?? null); })
+      .then((o) => {
+        if (dead) return;
+        setRawAudioPolicy(o?.uncompressed ?? null);
+        // ★ Same request, one more field — the server's version, so the app can say WHAT it is
+        //   talking to. Undefined on a server older than the field: we then show nothing rather
+        //   than a number we guessed.
+        if (o?.version) setServerVersion(o.version);
+      })
       .catch(() => {});
     return () => { dead = true; };
   }, [route.params.localHost, route.params.localPort]);
@@ -2101,7 +2118,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -2185,8 +2202,25 @@ export default function SDRScreen({ route, navigation }: Props) {
       setDecoderStatus('FT8 arrives via Digital Spots — see Server Extensions');
       return;
     }
+    if (type === 'time') {
+      // ★★★ THE STATION COMES FROM THE DIAL, not from a menu. Each station is its own extension
+      //     on the wire because the framings genuinely differ, but which one you can hear is
+      //     decided entirely by where you are tuned — so asking would be asking the user the
+      //     question the decoder exists to answer.
+      // ★★ REFUSE CLEARLY OFF-STATION. Attaching anyway would sit there reading noise and saying
+      //    "listening…", which is indistinguishable from a decoder that does not work — and this
+      //    one has form for looking broken while being merely untuned.
+      const st = timeStationFor(status.frequency, recvLocRef.current?.lon ?? null);
+      if (!st) {
+        setDecoderStatus('Tune to a time signal first — MSF 60kHz, DCF77 77.5kHz, '
+                       + 'WWVB 60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
+        return;
+      }
+      if (decoderClient.current) decoderClient.current.timeStation = st;
+      setDecoderStatus(`${st.toUpperCase()} — waiting for the minute`);
+    }
     decoderClient.current?.start(type);
-  }, []);
+  }, [status.frequency]);
 
   const closeDecoder = useCallback(() => {
     decoderClient.current?.stop();
@@ -2221,7 +2255,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -6035,6 +6069,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <ControlsBar
           readOnly={readOnly}
           activeDecoder={activeDecoder}
+          adminMode={adminOk}
           sessionLeft={sessionLeftMs == null ? null : {
             text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
             urgent: sessionLeftMs < 120_000,
@@ -6077,12 +6112,20 @@ export default function SDRScreen({ route, navigation }: Props) {
           Anchored to the safe-area top (NOT specTop/wfTop, which move when the
           spectrum toggles), and inset by insets.left so it clears the notch /
           Dynamic Island in landscape. */}
+      {/* ★ The admin rows open IN-APP, via onAdminLink — never the system browser. Their URLs
+          carry the admin credential in the query, and handing that to another app puts it in a
+          history and a referrer we do not control. */}
       {!controlsHidden && (
         <ServersChip
           anchorRef={tourRef('serversChip')}
           top={insets.top + 46}
           left={Math.max(12, insets.left + 8)}
           serverName={instanceName ?? baseUrl}
+          serverDetail={isVibeServer
+            ? (serverVersion ? `VibeServer ${serverVersion}` : 'VibeServer')
+            : isLocal ? 'This device' : undefined}
+          onOpenAdmin={vibeAdminUrl ? () => onAdminLink(vibeAdminUrl, 'Server admin') : undefined}
+          onOpenSetup={vibeSetupUrl ? () => onAdminLink(vibeSetupUrl, 'Server setup') : undefined}
           isFavourite={isFavourite}
           isDefault={isDefault}
           canFavourite={!isLocal}
@@ -6325,6 +6368,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
         serverVersion={serverVersion}
+        isVibeServer={isVibeServer}
         serverLabel={serverLabel}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}

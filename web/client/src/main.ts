@@ -4279,7 +4279,19 @@ function clearTimeLeft() {
   sessionDeadline = 0;
   if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
   const el = document.getElementById('rxTimeLeft');
-  if (el) { el.hidden = true; el.textContent = ''; el.className = ''; }
+  if (!el) return;
+  // ★★ SAY WHY THE CLOCK WENT, rather than emptying the slot. Hiding it is indistinguishable from
+  //    "no limit on this server", so an admin could not tell an exemption from a receiver that
+  //    never limited anyone — and the exemption is the thing worth knowing, because it is what a
+  //    compromised password would also grant (Stuart, 2026-08-12).
+  if (adminUnlocked) {
+    el.hidden = false;
+    el.textContent = '\u26bf Admin Mode';
+    el.className = 'adminMode';
+    el.title = 'Admin session — not subject to the listening time limit';
+    return;
+  }
+  el.hidden = true; el.textContent = ''; el.className = ''; el.title = '';
 }
 
 function paintTimeLeft() {

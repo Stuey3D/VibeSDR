@@ -35,7 +35,8 @@ import type { Aircraft } from '../services/SDRBackend';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8' | null;
+export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
+                        | 'time' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -182,6 +183,9 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   morse:   'CW/MORSE',
   whisper: 'SPEECH',
   ft8:     'FT8',
+  // ★ Not "MSF" or "WWV" — the panel is the same control whichever station is being read, and the
+  //   station itself appears in every line the decoder emits.
+  time:    'TIME',
 };
 
 const C = {

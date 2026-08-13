@@ -46,7 +46,43 @@
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper';
+export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time';
+
+/** The time signal stations the server can decode. Each is a separate extension name on the
+ *  wire — the shim builds a TimeDecoder for the one asked for. */
+export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm';
+
+/**
+ * ★★★ WHICH STATION IS ON THIS FREQUENCY. Nobody tunes 60 kHz by accident, but plenty of people
+ *     do not know whether what they are hearing is MSF or WWVB — both live there, on opposite
+ *     sides of the Atlantic — so asking the user to name it is asking the question the decoder
+ *     exists to answer.
+ * ★★ WWV and WWVH SHARE EVERY FREQUENCY (2.5/5/10/15/20 MHz) and send the same timecode; the
+ *    decoder reads either, so this maps them to one station rather than pretending to choose.
+ * ★ Returns null well away from any of them, so the caller can say "tune to a time station"
+ *   instead of decoding silence and reporting nothing.
+ */
+export function timeStationFor(hz: number, receiverLonDeg?: number | null): TimeStation | null {
+  const near = (target: number, tolHz: number) => Math.abs(hz - target) <= tolHz;
+  // ★★★ 60 kHz IS TWO STATIONS. MSF (Anthorn, UK) and WWVB (Fort Collins, US) share it, and they
+  //     do NOT share a format — MSF is MSB-first, WWVB is not — so the wrong guess decodes
+  //     confident nonsense rather than failing. Decided by where the RECEIVER is, which is the
+  //     only thing that actually predicts which one is audible; west of 30°W means the Americas.
+  //     ★ Falls back to MSF when the receiver's position is unknown, and the user can override.
+  if (near(60_000, 2_000))
+    return (typeof receiverLonDeg === 'number' && receiverLonDeg < -30) ? 'wwvb' : 'msf';
+  if (near(77_500, 2_000))    return 'dcf77';
+  if (near(66_666, 2_000))    return 'rwm';
+  // ★★★ RWM IS TESTED FIRST, AND THE TOLERANCE IS TIGHT, because 4996 and 9996 kHz sit just
+  //     4 kHz from WWV's 5000 and 10000. With WWV checked first at ±5 kHz, RWM could NEVER be
+  //     selected — every tuning that should have read Moscow read Fort Collins instead, which
+  //     decodes as silence rather than as an error. ±2 kHz keeps the two provably apart.
+  for (const f of [4_996_000, 9_996_000, 14_996_000])
+    if (near(f, 2_000)) return 'rwm';
+  for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000, 20_000_000, 25_000_000])
+    if (near(f, 2_000)) return 'wwv';
+  return null;
+}
 
 export interface RttySettings {
   shift:    number;            // 170 | 200 | 425 | 450 | 850
@@ -168,6 +204,9 @@ export class DecoderClient {
 
   // Per-decoder user settings
   rttySettings:  RttySettings = { ...RTTY_PRESETS.ham };
+  /** ★ Set from the tuned frequency before attaching — see timeStationFor. MSF is the default
+   *  only because something must be; it is overwritten on every start. */
+  timeStation:   TimeStation = 'msf';
   wefaxLpm       = 120;
   whisperLang    = 'auto';
   morseQuality: MorseQuality = 'all';
@@ -485,6 +524,12 @@ export class DecoderClient {
       case 'sstv':    return { extension_name: 'sstv',    params: {} };
       case 'morse':   return { extension_name: 'morse',   params: {} };
       case 'whisper': return { extension_name: 'whisper', params: { language: this.whisperLang } };
+      // ★★ THE STATION IS THE EXTENSION NAME. The server has no single "time" decoder to
+      //    parameterise — it builds a TimeDecoder for the station asked for, because the framing
+      //    differs per station (MSF is MSB-first, DCF77 LSB-first, WWV is IRIG-H with the time
+      //    starting at second 10). One shared decoder with a "station" parameter would have to
+      //    switch all of that at runtime for no gain.
+      case 'time':    return { extension_name: this.timeStation, params: {} };
     }
   }
 
@@ -496,7 +541,9 @@ export class DecoderClient {
     const v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     const t = u8[0];
 
-    if (name === 'rtty' || name === 'navtex') {
+    // ★ TIME rides the same 0x01 text frame as RTTY/NAVTEX — the shim writes every station's
+    //   output into the one decoded-text buffer, so no new parser is needed here.
+    if (name === 'rtty' || name === 'navtex' || name === 'time') {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);

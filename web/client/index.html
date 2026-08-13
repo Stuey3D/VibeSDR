@@ -226,6 +226,9 @@ input, textarea, [contenteditable],
 #rxTimeLeft { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
 #rxTimeLeft.warn { color: #ffd479; }
 #rxTimeLeft.crit { color: #ff8a7d; }
+/* ★ Admin mode sits in the countdown's slot. Deliberately NOT a warning colour: it is a statement
+   of fact about this session, not something going wrong. */
+#rxTimeLeft.adminMode { color: var(--accent, #ffb833); opacity: 0.85; letter-spacing: 0.02em; }
 
 /* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
 /* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,

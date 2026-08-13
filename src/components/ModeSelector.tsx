@@ -9,7 +9,7 @@ import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, note
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -414,7 +414,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </Text>
             <NavRow><View style={st.grid}>
               {/* No MORSE — the decoder was dropped (too heavy), so it's not offered. */}
-              {(['rtty', 'navtex', 'wefax', 'sstv'] as DecId[]).map(k => {
+              {/* ★ TIME reads the standard time signals — MSF, DCF77, WWV/WWVH, WWVB, RWM. It
+                  picks the station from the frequency you are on, so there is nothing to choose
+                  here beyond turning it on. */}
+              {(['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).map(k => {
                 const active = decoderControls.decMode === k && decoderControls.decOn;
                 const selected = decoderControls.decMode === k && !decoderControls.decOn;
                 return (

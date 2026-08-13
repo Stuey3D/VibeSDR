@@ -39,6 +39,13 @@ type Props = {
   top: number;               // anchor from the safe-area/panel top (§5.2)
   left: number;              // Math.max(margin, insets.left) — notch fix
   serverName: string;
+  /** ★ What this server IS — "VibeServer 3.0.2", "OpenWebRX", "KiwiSDR". Shown under the name so
+   *  the menu says WHICH radio you are on, not merely that you are on one. */
+  serverDetail?: string;
+  /** ★★ Offered ONLY once the admin password is in (the parent passes undefined otherwise). The
+   *  pages refuse without the credential, and a button that cannot work is worse than no button. */
+  onOpenAdmin?: () => void;
+  onOpenSetup?: () => void;
   isFavourite: boolean;
   isDefault: boolean;
   onBack: () => void;
@@ -61,6 +68,10 @@ const SEP_STRONG   = 'rgba(255,160,0,0.5)';   // divides the exit from the toggl
 
 export default function ServersChip({
   top, left, isFavourite, isDefault,
+  // ★ `serverName` was declared in Props and never destructured — accepted from the parent and
+  //   silently dropped, which is exactly why the menu named no server: the data was arriving all
+  //   along and nothing read it.
+  serverName, serverDetail, onOpenAdmin, onOpenSetup,
   onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef,
   openToken = 0,
   closeToken = 0,
@@ -112,12 +123,22 @@ export default function ServersChip({
   // ★ Keyboard navigation of the expanded menu. Built from the rows ACTUALLY RENDERED —
   // the favourite row is conditional, so a fixed index list would put focus one row out
   // whenever it is absent. Order matches the JSX below exactly.
-  const rows = useMemo(() => {
-    const r: Array<() => void> = [onHeader];
-    if (canFavourite) r.push(onToggleFavourite);
-    r.push(onSetDefault, collapse);
-    return r;
-  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, collapse]);
+  // ★★ INDICES ARE DERIVED, NOT COUNTED BY HAND. With one conditional row the old
+  //    `rowFocus(canFavourite ? 2 : 1)` was already awkward; with three it is a bug waiting to
+  //    happen — and a keyboard focus that lands one row out is the kind of thing nobody notices
+  //    until it activates the wrong control.
+  const { rows, at } = useMemo(() => {
+    const r: Array<() => void> = [];
+    const k: Record<string, number> = {};
+    const add = (name: string, fn: () => void) => { k[name] = r.length; r.push(fn); };
+    add('header', onHeader);
+    if (canFavourite) add('fav', onToggleFavourite);
+    add('default', onSetDefault);
+    if (onOpenAdmin) add('admin', onOpenAdmin);
+    if (onOpenSetup) add('setup', onOpenSetup);
+    add('collapse', collapse);
+    return { rows: r, at: k };
+  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, onOpenAdmin, onOpenSetup, collapse]);
 
   // Idle-close: a stray key must not leave this sitting over the waterfall with the phone
   // face-down. Touch cancels it — see PanelNav.
@@ -166,10 +187,26 @@ export default function ServersChip({
               <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Back to server list</Text>
             </Pressable>
 
+            {/* ★★★ WHICH SERVER AM I ON? The menu named nothing at all, so on a network of several
+                receivers it could not answer the first question anyone asks of it (Stuart,
+                2026-08-12: "no server name/details at the top either"). Not pressable — it is a
+                label, and a row that highlights but does nothing reads as broken. */}
+            <View style={[styles.sep, { backgroundColor: SEP }]} />
+            <View style={styles.header} pointerEvents="none">
+              <Text style={[styles.headerName, { color: amber, fontFamily: font }]} numberOfLines={1}>
+                {serverName || 'This server'}
+              </Text>
+              {!!serverDetail && (
+                <Text style={[styles.headerDetail, { color: amber, fontFamily: font }]} numberOfLines={1}>
+                  {serverDetail}
+                </Text>
+              )}
+            </View>
+
             <View style={[styles.sep, { backgroundColor: SEP_STRONG }]} />
 
             {canFavourite && (
-              <Pressable onPress={onToggleFavourite} style={[styles.row, rowFocus(1)]}
+              <Pressable onPress={onToggleFavourite} style={[styles.row, rowFocus(at.fav)]}
                 accessibilityRole="button"
                 accessibilityLabel={isFavourite ? 'Remove from favourites' : 'Favourite this server'}>
                 <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>{isFavourite ? '♥' : '♡'}</Text>
@@ -177,15 +214,36 @@ export default function ServersChip({
               </Pressable>
             )}
 
-            <Pressable onPress={onSetDefault} style={[styles.row, rowFocus(canFavourite ? 2 : 1)]}
+            <Pressable onPress={onSetDefault} style={[styles.row, rowFocus(at.default)]}
               accessibilityRole="button"
               accessibilityLabel={isDefault ? 'Clear default server' : 'Set as default server'}>
               <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>{isDefault ? '★' : '☆'}</Text>
               <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>{isDefault ? 'Clear default' : 'Set as default'}</Text>
             </Pressable>
 
+            {/* ★★ THE ADMIN PAGES, once unlocked. They were reachable nowhere from inside a
+                session: you could enter the admin password and still have no way to open the page
+                it unlocks (Stuart, 2026-08-12). Separated by a rule — these leave the app. */}
+            {(onOpenAdmin || onOpenSetup) && (
+              <View style={[styles.sep, { backgroundColor: SEP_STRONG }]} />
+            )}
+            {!!onOpenAdmin && (
+              <Pressable onPress={onOpenAdmin} style={[styles.row, rowFocus(at.admin)]}
+                accessibilityRole="button" accessibilityLabel="Open the server admin page">
+                <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>⚙</Text>
+                <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Admin page</Text>
+              </Pressable>
+            )}
+            {!!onOpenSetup && (
+              <Pressable onPress={onOpenSetup} style={[styles.row, rowFocus(at.setup)]}
+                accessibilityRole="button" accessibilityLabel="Open the server setup page">
+                <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>⚒</Text>
+                <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Server setup</Text>
+              </Pressable>
+            )}
+
             {/* Collapse handle — the non-exit escape from an accidental open */}
-            <Pressable onPress={collapse} style={[styles.collapse, rowFocus(canFavourite ? 3 : 2)]} hitSlop={8}
+            <Pressable onPress={collapse} style={[styles.collapse, rowFocus(at.collapse)]} hitSlop={8}
               accessibilityRole="button" accessibilityLabel="Close server menu">
               <View style={[styles.grab, { backgroundColor: SEP }]} />
               <Text style={[styles.collapseChevron, { color: amber, fontFamily: font }]}>⌃</Text>
@@ -240,6 +298,9 @@ const styles = StyleSheet.create({
   // Focus is a tint, not a border: these rows sit flush in a small dropdown and a
   // border would shift the whole menu as focus moved.
   rowFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
+  header:       { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
+  headerName:   { fontSize: 15, letterSpacing: 0.3 },
+  headerDetail: { fontSize: 11, opacity: 0.7, marginTop: 2, letterSpacing: 0.2 },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 9,
     paddingVertical: 11, paddingHorizontal: 13,

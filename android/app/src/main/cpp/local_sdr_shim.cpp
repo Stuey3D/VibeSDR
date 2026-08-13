@@ -6661,13 +6661,22 @@ struct LocalSdrShim::Impl {
             // to unlock — an unlock prompt on a server with no admin password is a puzzle.
             bool adminSet;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx); adminSet = !g_vsAdminSecret.empty(); }
+            // ★★ WHAT THIS SERVER IS. Without it a client can say "a VibeServer" and no more, so
+            //    the app's own About panel described the SESSION as "Local Hardware" whatever it
+            //    was actually talking to. ★ Absent on a build that predates the define — clients
+            //    must treat a missing version as "unknown", never as old.
+#ifdef VIBESERVER_VERSION_STR
+            const std::string verField = std::string(",\"version\":\"") + VIBESERVER_VERSION_STR + "\"";
+#else
+            const std::string verField;
+#endif
             std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")
                              + ",\"uncompressed\":\""
                              + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
-                             + ",\"admin\":" + (adminSet ? "true" : "false")
+                             + ",\"admin\":" + (adminSet ? "true" : "false") + verField
                              // ★★ CONFIGURED, and it is NOT the same as `admin`. A fresh install
                              // has an admin password (the wizard makes it mandatory) and is still
                              // not set up. Clients read this to show "not set up yet — open it in

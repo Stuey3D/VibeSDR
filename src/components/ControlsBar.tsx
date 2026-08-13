@@ -284,6 +284,11 @@ export interface ControlsBarProps {
   readOnly?: boolean;
   /** Time-limited receiver countdown shown beside the clock. */
   sessionLeft?: { text: string; urgent: boolean } | null;
+  /** ★★ ADMIN SESSIONS ARE NOT TIMED, so this slot says WHY rather than counting down. An admin is
+   *  exempt from the session limit, and the honest thing to show where a countdown would be is
+   *  what is actually true of this session (Stuart, 2026-08-12). Takes precedence over
+   *  `sessionLeft`: an admin who is also inside a limit is still not going to be disconnected. */
+  adminMode?: boolean;
   /** Control mode per control — the drums are the default and stay untouched;
    *  these swap EITHER control independently for the HiFi tuner keys. Four
    *  combinations, two settings, no global switch (BRIEF-inputs §2). */
@@ -682,7 +687,7 @@ function useHandbackFlash() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  readOnly, sessionLeft, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   onControlRects }: any) {
   const handbackFlash = useHandbackFlash();
 
@@ -876,7 +881,13 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             {clock}
           </Text>
           {/* Time-limited receiver: how long before the server drops us. */}
-          {!!sessionLeft && (
+          {adminMode ? (
+            <Text style={{ color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT,
+                           opacity: 0.9 }}
+                  accessibilityLabel="Admin mode — this session is not time limited">
+              ⚿ Admin Mode
+            </Text>
+          ) : !!sessionLeft && (
             <Text style={{ color: sessionLeft.urgent ? '#ff6b6b' : t.clockColor,
                            fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}>
               ⏳{sessionLeft.text}

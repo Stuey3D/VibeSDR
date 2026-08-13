@@ -297,6 +297,10 @@ export interface ServerOccupancy {
    *  uplink, and offering it where they said no is spending someone else's bandwidth.
    *  ★ Undefined = an older server that predates the field: treat as 'off'. */
   uncompressed?: 'off' | 'choice' | 'compat';
+  /** ★ The server's own version ("3.0.0"). Absent from builds that predate the field — treat a
+   *  missing version as UNKNOWN and say nothing, never as "old": a wrong version on screen is
+   *  worse than none, because it is the thing people quote in a bug report. */
+  version?: string;
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -320,6 +324,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       admin:     j.admin === true,
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,
+      version:   typeof j.version === 'string' && j.version ? j.version : undefined,
     };
   } catch { return null; }
   finally { clearTimeout(t); }

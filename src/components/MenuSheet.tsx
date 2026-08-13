@@ -85,9 +85,9 @@ export interface MenuSheetProps {
   isFavourite?: boolean;
   onToggleFavourite?: () => void;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
-  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null;
+  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|null;
   decOn?:          boolean;
-  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper') => void;
+  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time') => void;
   /** Digital/CW spots feeds (skin lsvSpots). */
   spotsKind?:      'digi'|'cw'|null;
   onSpotsToggle?:  (k: 'digi'|'cw') => void;
@@ -236,6 +236,12 @@ export interface MenuSheetProps {
   onDisplaySettings?: () => void;
   /** UberSDR server software version (/api/description) — footer right side. */
   serverVersion?:   string | null;
+  /** ★★★ Is this a VibeServer, rather than a radio in THIS device? MenuSheet decides "local" from
+   *  `!!onLocalHardware`, which was sound when only on-device USB had hardware controls — but a
+   *  VibeServer offers them remotely, so the footer branded a Pi across the room as "Local
+   *  Hardware — via VibeDSP (native)" (Stuart, 2026-08-12). The parent knows which it is; asking
+   *  a callback's existence never could. */
+  isVibeServer?:    boolean;
   /** Opens the About VibeSDR overlay (footer left side). */
   onAbout?:         () => void;
   /** Opens the saved-recordings browser. */
@@ -696,7 +702,7 @@ export default function MenuSheet({
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
-  serverVersion = null, onAbout, onRecordings,
+  serverVersion = null, isVibeServer = false, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   isFavourite = false, onToggleFavourite,
   decMode = null, decOn = false, onDecToggle,
@@ -1425,6 +1431,8 @@ export default function MenuSheet({
                 {isTcp ? (
                   <Image source={require('../../assets/rtltcp.png')}
                     style={[styles.footerLogo, { tintColor: '#cfe3ff' }]} resizeMode="contain" />
+                ) : isVibeServer ? (
+                  <Image source={SERVER_LOGOS.vibeserver} style={styles.footerLogo} resizeMode="contain" />
                 ) : isLocal ? (
                   <View style={styles.footerLogo}>
                     <UsbSdrIcon size={30} color="#cfe3ff" strokeWidth={2.4} />
@@ -1435,9 +1443,16 @@ export default function MenuSheet({
                   </View>
                 )}
                 <View>
-                  <Text style={styles.footerServerName}>{isTcp ? 'RTL-TCP' : isLocal ? 'Local Hardware'
+                  <Text style={styles.footerServerName}>{isTcp ? 'RTL-TCP' : isVibeServer ? 'VibeServer'
+                    : isLocal ? 'Local Hardware'
                     : serverLabel ?? (isKiwi ? kiwiFamilyLabel(serverType) : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
-                  {isLocal ? (
+                  {/* ★ A VibeServer states its OWN version, which is the number a bug report needs.
+                      Silent when the server predates the field — better than a guess. */}
+                  {isVibeServer ? (
+                    serverVersion
+                      ? <Text style={styles.footerServerVer}>v{serverVersion}</Text>
+                      : null
+                  ) : isLocal ? (
                     <Text style={styles.footerServerVer}>via VibeDSP (native)</Text>
                   ) : serverVersion ? (
                     <Text style={styles.footerServerVer}>v{serverVersion}</Text>
