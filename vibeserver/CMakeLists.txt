@@ -18,7 +18,11 @@
 #   ./vibeserver/build/vibeserver --tcp 127.0.0.1:1234
 
 cmake_minimum_required(VERSION 3.20)
-project(vibeserver VERSION 3.0.0 LANGUAGES CXX C)
+# ★★★ 3.1.0 — the weak-signal release (2026-08-15). One version drives BOTH products: the Debian
+#     package takes its upstream version from here, and the macOS app's plist is bumped alongside
+#     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
+#     version are you on?" answer ambiguous, which is the question every fault report starts with.
+project(vibeserver VERSION 3.1.0 LANGUAGES CXX C)
 # ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
 #   so Linux starts level with it rather than inventing a separate number for the same server.
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
