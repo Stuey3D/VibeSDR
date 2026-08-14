@@ -38,7 +38,7 @@ import {
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
-import { initAdmin, closeAdmin, openAdmin } from './admin';
+import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './admin';
 import { httpBase, wsBase } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
 
@@ -222,6 +222,10 @@ function initSplash() {
     if (!adminSignedInThisView || !inAdminMode()) return;
     // ★ The landing page never runs startApp(), so nothing has wired the panel yet. Idempotent.
     initAdmin(() => location.host, () => adminPassword);
+    // ★ Renewal runs for as long as the TAB holds a ticket, not only while the admin panel is
+    //   open — see startAdminTicketRenewal. The panel-scoped version let the lease lapse during
+    //   ordinary listening, which is when it matters most.
+    startAdminTicketRenewal();
     openAdmin(location.host, adminPassword);
   });
   document.getElementById('btnSplashSetup')?.addEventListener('click', () => {
@@ -451,6 +455,13 @@ async function loadAudioPolicy(httpBase: string) {
  *  made a choice — and knows there is a way in if the receiver is theirs. */
 function refreshAdminRow() {
   const show = srvAdminProtected;
+  // ★★★ THE PASSWORD BOX FOLLOWS THE TICKET, NOT THE SOCKET. Hiding it whenever `adminUnlocked`
+  //     was true meant an owner whose PAGE TICKET had expired — while the socket unlock was still
+  //     perfectly valid — was told by the admin button to enter a password and given nowhere to
+  //     type it. Two credentials with two lifetimes, and the UI assumed one implied the other
+  //     (Stuart, 2026-08-14: "asking for a password I cannot enter until I refresh the page").
+  const pwRowNow = document.getElementById('adminPwRow');
+  if (pwRowNow) pwRowNow.hidden = adminUnlocked && inAdminMode();
   const row = document.getElementById('adminRow');
   const note = document.getElementById('adminNote');
   if (row) row.hidden = !show;

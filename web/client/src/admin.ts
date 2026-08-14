@@ -703,19 +703,38 @@ function renderConns(raw: any[]) {
 let failures = 0;
 let lastRenew = 0;
 
+/**
+ * Keep the admin lease alive for as long as the tab holds one — REGARDLESS OF THIS PANEL.
+ *
+ * ★★★ RENEWAL USED TO LIVE INSIDE refresh(), WHICH RETURNS IMMEDIATELY WHEN THE PANEL IS CLOSED.
+ *     So the ticket lapsed after ten minutes of ordinary listening, and the owner met the exact
+ *     symptom Stuart reported: the menu says UNLOCKED — correctly, because the SOCKET unlock is
+ *     still valid — while the admin button demands a password, and there is no box to type it in
+ *     because being "unlocked" hid it. Only a page refresh recovered it.
+ * ★★★ TWO CREDENTIALS, TWO LIFETIMES, AND THE UI ASSUMED ONE IMPLIED THE OTHER. The socket unlock
+ *     lasts until the idle re-lock; the PAGE ticket lasts ten minutes. They are proved against
+ *     different processes and they expire independently — see adminticket.ts.
+ * ★★ A ticket renews ITSELF (the route gates on adminOkFor(), which accepts one as proof), so this
+ *    needs no password and no second challenge. Four minutes against a ten-minute lease: two
+ *    misses still leave a margin.
+ */
+export function startAdminTicketRenewal(): void {
+  setInterval(() => {
+    const q = adminTicketQuery();
+    if (!q || Date.now() - lastRenew < 4 * 60 * 1000) return;
+    lastRenew = Date.now();
+    // ★ base(), not a reconstructed URL: this module already knows where the admin routes live
+    //   (initAdmin sets the host), and a second derivation is a second thing to drift.
+    void fetch(`${base()}/vibeserver/admin-ticket?${q}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (j?.ticket) saveAdminTicket(String(j.ticket), Number(j.ttl) || 600); })
+      .catch(() => { /* a blip must not end the session */ });
+  }, 30_000);
+}
+
 async function refresh() {
   if (!open) return;
   try {
-    // ★ Keep the lease alive while the panel is OPEN. Renewal used to happen only on the page that
-    //   signed in, so opening the panel and then walking into a radio let the ticket lapse under
-    //   the operator's feet — see the 401 note below for what that then cost.
-    if (adminTicketQuery() && Date.now() - lastRenew > 4 * 60 * 1000) {
-      lastRenew = Date.now();
-      void fetch(`${base()}/vibeserver/admin-ticket?${adminTicketQuery()}`, { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (j?.ticket) saveAdminTicket(String(j.ticket), Number(j.ttl) || 600); })
-        .catch(() => { /* a blip must not end the session */ });
-    }
     if (!radioList.length) await discoverRadios();
     const [st, hist, sesAll, connsAll] = await Promise.all([
       get('status'), get('history'), fromEveryRadio('sessions'), fromEveryRadio('connections'),
