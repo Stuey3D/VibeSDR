@@ -6446,7 +6446,9 @@ function buildMenu() {
 
   toggle('notch', (on) => spec!.setNotch(on), 'notch');
   toggle('stereoBtn', (on) => {
-    $('stereoBtn').textContent = on ? 'ON' : 'OFF';
+    // ★ "ST", not "ON". Beside NR / IMS / CEQ / NB a bare "ON" names nothing — the eye reads four
+    //   labelled buttons and one that could belong to any of them, or to the row (Stuart).
+    $('stereoBtn').textContent = on ? 'ST ON' : 'ST OFF';
     spec!.setStereo(on);
   }, 'stereo', true);
   // ★ Defaults ON (the `true`), like stereo itself: it only acts on a signal that needs it, so a
