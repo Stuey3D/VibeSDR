@@ -290,6 +290,7 @@ void RxPipeline::rebuildAudio() {
             mpxNoise_.configure(chFs_);
             multipath_.configure(chFs_);
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
+            audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
             const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
             stereo_ = true; lastStereo_ = false;
@@ -458,6 +459,51 @@ void RxPipeline::feed(const cf32* iq, int n) {
         if (useFmDc_) fmDc_.process(demodBuf_.data(), nc);
         trace_("fmDc", demodBuf_.data(), nc);
 
+        // ★★★ MEASURED FOR BOTH PATHS, ABOVE THE BRANCH. This lived inside the stereo branch when
+        //     it only fed the high-blend, but the hiss it measures is in MONO too — Stuart tuned
+        //     107.4 to mono and found "noise in mono too", which high-blend cannot touch by
+        //     construction (it only ever acts on L-R). The audio high-cut below needs the same
+        //     number, and a station listened to in forced mono has to get it as well.
+        // ★ Still WFM-only: the 15-19 kHz gap it reads is a property of the FM multiplex and
+        //   means nothing on AM or SSB.
+        if (mode_ == Mode::WFM) {
+            mpxNoise_.process(demodBuf_.data(), nc);
+            if (mpxNoise_.ready()) {
+                const float noise = mpxNoise_.level();
+                const float pilot = std::fabs(pll_.lockAmp());
+                // ★ In MONO the pilot PLL still runs, so the reference survives; but if it is not
+                //   tracking at all we have no yardstick and must not invent one — hold the last
+                //   figure rather than reporting a signal as perfect or as hopeless.
+                if (pilot > 1e-6f) {
+                    const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
+                    const float db  = 20.0f * std::log10(std::max(snr, 1e-6f));
+                    blendSnrDb_ += 0.05f * (db - blendSnrDb_);
+                    if (!std::isfinite(blendSnrDb_)) blendSnrDb_ = 99.0f;
+                }
+            }
+            // ★★★ ADAPTIVE HIGH-CUT — "weak signal processing", and the answer to hiss that
+            //     survives a switch to mono. Baseband noise sits in the audio band itself, so no
+            //     amount of stereo treatment reaches it; the only honest cure is to stop
+            //     reproducing the part of the band that is more noise than programme. This is what
+            //     every broadcast receiver has always done, and it is musically benign — a moving
+            //     low-pass has no artefacts, no pumping and no spectral holes, unlike a spectral
+            //     denoiser, which is also why speech-tuned NR was never usable on music.
+            // ★★ IT MUST STAY ABOVE THE L-R CORNER, ALWAYS. high-blend has already narrowed L-R;
+            //    if this cut below it, it would silently make that work irrelevant and we would be
+            //    running two filters to do one filter's job. Held a comfortable margin clear.
+            constexpr float kClean = 30.0f, kRough = 14.0f;     // the same window as the blend
+            constexpr float kWide  = 15000.0f, kNarrow = 4500.0f;
+            float t = (blendSnrDb_ - kRough) / (kClean - kRough);
+            t = std::min(1.0f, std::max(0.0f, t));
+            float wantCut = kNarrow + t * (kWide - kNarrow);
+            wantCut = std::max(wantCut, lmrHiCutHz_ * 1.25f);    // never below the L-R corner
+            wantCut = std::min(wantCut, 15000.0f);
+            audioHiCutHz_ += 0.02f * (wantCut - audioHiCutHz_);  // ~1 s, as slow as the blend
+            if (!std::isfinite(audioHiCutHz_)) audioHiCutHz_ = 15000.0f;
+        } else {
+            audioHiCutHz_ = 15000.0f;
+        }
+
         if (stereo_) {
             // ── WFM stereo MPX decode ────────────────────────────────────────
             // demodBuf_ is the MPX. L+R = LPF(mpx); L-R = LPF(mpx * 38kHz_ref).
@@ -570,9 +616,12 @@ void RxPipeline::feed(const cf32* iq, int n) {
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
             trace_("pll_lmr", lmrBuf_.data(), nc);
-            // ★ Measured on the MPX BEFORE the 15 kHz filters — they are exactly what removes the
-            //   band this meter reads. Read-only; demodBuf_ is untouched.
-            mpxNoise_.process(demodBuf_.data(), nc);
+            // ★ The noise meter now runs ABOVE THE BRANCH (it feeds the mono high-cut too). It ran
+            //   here as well for one revision, so every block was fed to it TWICE — which is not a
+            //   harmless duplicate: the filter integrates, and the asymmetric smoothing ran twice
+            //   per block, so a clean signal measured 26 dB instead of 34 and the blend engaged on
+            //   a perfect station. Caught by the clean-signal assertion, which is exactly the one
+            //   written to catch this class of thing.
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R
             const int n2 = lmrLpf_->process(lmrBuf_.data(),  nc, rightBuf_.data()); // L-R
             const int nm = std::min(n1, n2);
@@ -596,15 +645,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //     deviation and why blending on that would have done nothing at all.
             // ★★ Only the HIGHS go. Bass and mid separation survive, so the station still sounds
             //    stereo instead of just narrow — see the note on lmrHiCutHz_.
+            // ★ blendSnrDb_ is computed ABOVE THE BRANCH now — once, for both paths — because the
+            //   mono high-cut needs the same figure. Smoothing it in two places would have made
+            //   the time constant depend on which path was running, which is the sort of thing
+            //   that is invisible until a station sounds different in mono for no stated reason.
             if (mpxNoise_.ready() && wantStereo && pll_.locked()) {
-                const float noise = mpxNoise_.level();
-                const float pilot = std::fabs(pll_.lockAmp());
-                // ★ The floor keeps a silent/absent noise reading from dividing to infinity, and
-                //   keeps a dead-quiet lab signal from being called "impossibly good".
-                const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
-                const float db = 20.0f * std::log10(std::max(snr, 1e-6f));
-                blendSnrDb_ += 0.05f * (db - blendSnrDb_);          // slow: this is a mood, not an event
-                if (!std::isfinite(blendSnrDb_)) blendSnrDb_ = 99.0f;
                 // ★★ THE CURVE. Above kClean the signal is good and nothing is touched — a strong
                 //    station must be bit-for-bit what it was before this existed, or the feature
                 //    is a tone control that fires on everybody. Below kRough the image is held at
@@ -652,6 +697,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // in it makes every subsequent sample NaN through `target - e`, which is one of the
             // two ways the FM mute latched. Same treatment as the other IIR states.
             if (!std::isfinite(stereoBlend_)) stereoBlend_ = 0.0f;
+            // ★ The audio high-cut, on BOTH channels with the SAME corner. Identical treatment is
+            //   not a detail: give L and R different corners and the stereo image shifts with the
+            //   signal, which is far more objectionable than the hiss.
+            if (audioHiCutHz_ < 14000.0f && audFs_ > 0.0) {
+                const float dt = (float)(1.0 / audFs_);
+                const float rc = 1.0f / (2.0f * (float)M_PI * std::max(audioHiCutHz_, 500.0f));
+                const float a  = dt / (rc + dt);
+                float yl = hiCutYL_, yr = hiCutYR_;
+                for (int i = 0; i < nm; ++i) {
+                    yl += a * (lprBuf_[i] - yl); lprBuf_[i] = yl;
+                    yr += a * (lmrBuf_[i] - yr); lmrBuf_[i] = yr;
+                }
+                hiCutYL_ = std::isfinite(yl) ? yl : 0.0f;
+                hiCutYR_ = std::isfinite(yr) ? yr : 0.0f;
+            } else { hiCutYL_ = hiCutYR_ = 0.0f; }
             trace_("matrix_l", lprBuf_.data(), nm);
             trace_("matrix_r", lmrBuf_.data(), nm);
             const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
@@ -683,6 +743,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 nd = audioLpf_->process(demodBuf_.data(), nc, lpfBuf_.data());
                 audioIn = lpfBuf_.data();
             }
+            // ★★ AND THE SAME CUT IN MONO — this is the path Stuart was listening on when he found
+            //    the hiss that high-blend could not reach. `audioIn` may be lpfBuf_ or demodBuf_
+            //    depending on whether the 15 kHz filter ran, so it is written through the pointer.
+            if (mode_ == Mode::WFM && audioHiCutHz_ < 14000.0f && audFs_ > 0.0 && nd > 0) {
+                const float dt = (float)(1.0 / audFs_);
+                const float rc = 1.0f / (2.0f * (float)M_PI * std::max(audioHiCutHz_, 500.0f));
+                const float a  = dt / (rc + dt);
+                float* w = const_cast<float*>(audioIn);
+                float y = hiCutYM_;
+                for (int i = 0; i < nd; ++i) { y += a * (w[i] - y); w[i] = y; }
+                hiCutYM_ = std::isfinite(y) ? y : 0.0f;
+            } else { hiCutYM_ = 0.0f; }
             if (useAgc_) { agc_.process(audioIn, nd); agc_.guard(); }  // AM/SSB/CW level + anti-clip
             trace_("mono_out", audioIn, nd);
             audioBuf_.resize(resamp_->maxOut(nd));

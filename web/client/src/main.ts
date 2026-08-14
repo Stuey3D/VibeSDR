@@ -4980,6 +4980,37 @@ function renderRds() {
   // signal is weak, when it is the normal injection ratio for a healthy station.
   // ★ Deviations in kHz, each said against its own spec band so the number explains itself
   // — "6.8 kHz" means nothing without knowing 6.0–7.5 is nominal (Stuart: "make it clear").
+  // ★★ MPX S/N, and WHAT IT DID. A number on its own invites "is 22 good?"; showing the corner
+  //    the receiver chose because of it answers the question the listener actually has, which is
+  //    "why does this sound the way it does". Only mentioned when it is actually acting — on a
+  //    clean signal the treatment is bypassed entirely and saying "15.0 kHz" would imply a filter
+  //    is in circuit when none is.
+  const snrEl = $('rxMpxSnr');
+  const snr = rdsExt?.mpxSnr ?? 0;
+  if (rdsExt && snr > 0.5) {
+    const lmr = rdsExt.hiCutLmr ?? 15000, aud = rdsExt.hiCutAud ?? 15000;
+    const acting = lmr < 14000 || aud < 14000;
+    const how = !acting ? 'clean · no treatment'
+              : aud < 14000 ? `blend ${(lmr / 1000).toFixed(1)}k · cut ${(aud / 1000).toFixed(1)}k`
+              : `blend ${(lmr / 1000).toFixed(1)}k`;
+    snrEl.textContent = `${snr.toFixed(0)} dB · ${how}`;
+    // ★ Green only when nothing is being done. Amber is not a warning here — it means the
+    //   receiver is working for its living, which on a difficult signal is the good outcome.
+    snrEl.style.color = acting ? '#ffd479' : '#7dff9a';
+  } else { snrEl.textContent = dash; snrEl.style.color = ''; }
+
+  // ★★★ MULTIPATH — and it is deliberately NOT described as bad news at low levels. Every real
+  //     signal has some, and a DXer needs to know whether what they are hearing is a reflection
+  //     (which an aerial rotation may fix) or noise (which it will not).
+  const mpEl = $('rxMultipath');
+  const mp = rdsExt?.multipath ?? 0;
+  if (rdsExt && mp > 0.0005) {
+    const pct = mp * 100;
+    const label = mp < 0.03 ? 'clean' : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
+    mpEl.textContent = `${pct.toFixed(1)}% · ${label}`;
+    mpEl.style.color = mp < 0.03 ? '#7dff9a' : mp < 0.10 ? '' : mp < 0.20 ? '#ffd479' : '#ff9a9a';
+  } else { mpEl.textContent = dash; mpEl.style.color = ''; }
+
   const pdev = rdsExt?.pilotDev ?? 0;
   const rdev = rdsExt?.rdsDev ?? 0;
   const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');

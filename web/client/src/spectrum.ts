@@ -94,6 +94,16 @@ export interface RdsExt {
   phaseDrift: number;      // 0..1 — how steady that phase is; below ~0.35 it is meaningless
   pilotDev: number;      // pilot injection, kHz deviation (spec 6.0–7.5)
   rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6)
+  /** Pilot against the transmitted-silence gap at 15–19 kHz, dB. NOT a textbook SNR — the
+   *  measuring filter's own leakage caps it near 34 dB — but a real figure of merit, and the
+   *  thing that drives high-blend and the audio high-cut. */
+  mpxSnr: number;
+  /** Envelope-AM depth: 0 for a clean carrier, rising with a REFLECTION. An FM carrier leaves the
+   *  transmitter at constant amplitude, so this is damage done by the channel — multipath, not
+   *  weakness. The two want opposite treatments, which is why it is measured separately. */
+  multipath: number;
+  hiCutLmr: number;      // where high-blend has rolled the stereo difference off, Hz
+  hiCutAud: number;      // where the audio high-cut is sitting, Hz
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -511,6 +521,13 @@ export class SpectrumClient {
           phaseDrift: Number(msg.phaseDrift ?? 0),
           pilotDev: Number(msg.pilotDev ?? 0),
           rdsDev: Number(msg.rdsDev ?? 0),
+          mpxSnr: Number(msg.mpxSnr ?? 0),
+          multipath: Number(msg.multipath ?? 0),
+          // ★ Default to 15000 (wide open), NOT 0. A server too old to send these would otherwise
+          //   report a 0 Hz corner, which reads as "everything is being cut" — the alarming
+          //   opposite of the truth.
+          hiCutLmr: Number(msg.hiCutLmr ?? 15000),
+          hiCutAud: Number(msg.hiCutAud ?? 15000),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });

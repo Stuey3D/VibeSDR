@@ -76,6 +76,10 @@ set(AIRSPYHF_SRC
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     mdns_responder.cpp
+    # ★ SCM_RIGHTS hand-off — how the front-door process gives an accepted socket to the radio.
+    #   Full mode does not link without it, and nothing else references it, so its absence is
+    #   invisible until the day Full mode is switched on.
+    fd_passing.cpp
     # ★ BOTH radio sources, even though Android has no SDRplay. They are written as
     # "real implementation #ifdef <SDK> #else no-op stubs", and the shim references their
     # methods unconditionally — a runtime branch still emits a link-time symbol, so leaving

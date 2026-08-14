@@ -19,7 +19,23 @@ const ts  = readFileSync('web/client/src/spectrum.ts', 'utf8');
 // The rdsx builder: from `"type":"rdsx"` to the end of that JSON assembly.
 const start = cpp.indexOf('\\"type\\":\\"rdsx\\"');
 if (start < 0) { console.error('✗ could not find the rdsx builder'); process.exit(1); }
-const body = cpp.slice(start, start + 6000);
+// ★★★ A FIXED WINDOW OVER THE BUILDER IS ITSELF A BUG WAITING TO HAPPEN. This was 6000 characters,
+//     and adding four fields with their explanatory comments pushed `mpx` — the LAST thing the
+//     builder emits — out to offset 6382. The checker then reported that the server "never sends
+//     mpx", which was false: it was describing its own blind spot, in the confident voice it uses
+//     for a real wire mismatch. A tool that cannot see the whole thing must not report on the part
+//     it cannot see (2026-08-14).
+// ★★ So end at the CLOSING of the JSON assembly rather than at an arbitrary length. The builder
+//    finishes with the mpx array and a `sendWs`; taking everything up to that is exact, and it
+//    cannot silently shrink again as comments are added.
+// ★ The builder ends `j += "]}"; sendText(sock, j);` — so sendText is the exact boundary. My first
+//   attempt used `sendWs`, which does not appear until well AFTER this function, so the window
+//   over-ran into the session-limit code and started counting ITS fields (ok, relocked, idleMin,
+//   secs) as advanced-RDS ones. Too small a window invents missing fields; too large a one invents
+//   extra ones. Anchor on the real terminator.
+const endMark = cpp.indexOf('sendText(sock, j)', start);
+if (endMark < 0) { console.error('✗ could not find the end of the rdsx builder'); process.exit(1); }
+const body = cpp.slice(start, endMark);
 const sent = new Set([...body.matchAll(/\\"([A-Za-z][\w.]*)\\"\s*:/g)].map(m => m[1]));
 sent.delete('type');
 

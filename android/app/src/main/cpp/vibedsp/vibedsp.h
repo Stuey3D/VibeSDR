@@ -1543,6 +1543,8 @@ public:
     /** Envelope-AM depth: how MULTIPATH-damaged this signal is, as opposed to how weak. An FM
      *  carrier arrives at constant amplitude, so anything here was done by the channel. */
     float multipathDepth() const { return multipath_.depth(); }
+    /** The audio high-cut corner now in use (Hz; 15000 = untouched). */
+    float audioHiCutHz() const { return audioHiCutHz_; }
 
 private:
     void rebuildAudio();
@@ -1667,6 +1669,10 @@ private:
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
+    // ★ The audio (L+R and mono) high-cut — the cure for hiss that survives a switch to mono,
+    //   which high-blend cannot touch because it only ever acts on L-R.
+    float audioHiCutHz_ = 15000.0f;
+    float hiCutYL_ = 0.0f, hiCutYR_ = 0.0f, hiCutYM_ = 0.0f;
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()

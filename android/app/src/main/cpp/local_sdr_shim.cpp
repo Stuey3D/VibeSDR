@@ -8785,6 +8785,11 @@ struct LocalSdrShim::Impl {
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
           phaseDrift = R.rdsPhaseDrift;
           pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; berNow = R.rdsBer; }
+        // ★ The pipeline whose figures these are — chosen exactly as RdsState was above, so the
+        //   numbers describe the SAME signal as the constellation beside them. A shared radio has
+        //   one pipeline per client; a single-user radio has only the Impl's own.
+        const vibedsp::RxPipeline* P_ = (src_ && src_->rx) ? src_->rx.get()
+                                      : ((c_ && c_->rx)    ? c_->rx.get() : &rx);
         std::string j = "{\"type\":\"rdsx\",\"pty\":" + std::to_string(pty)
                       + ",\"tp\":"  + std::to_string(tp)
                       + ",\"ta\":"  + std::to_string(ta)
@@ -8825,6 +8830,28 @@ struct LocalSdrShim::Impl {
                       //        odd in review. See [[wire_value_derived_both_ends]].
                       + ",\"rdsDev\":" + std::to_string(rdsDev_)
                       + ",\"ber\":" + std::to_string(berNow)
+                      // ★★★ THE WEAK-SIGNAL FIGURES, KEPT ON PURPOSE — not debug scaffolding.
+                      //     Stuart: "the FM-DX crowd would appreciate them anyway and that would
+                      //     be the place for them". They belong beside pilot deviation and block
+                      //     error rate because they are the same KIND of thing: measurements a
+                      //     listener judges a marginal signal by, at the same time as judging it
+                      //     by ear.
+                      //     · mpxSnr    — pilot against the transmitted-silence gap at 15-19 kHz.
+                      //                   NOT a textbook SNR (the measuring filter's own leakage
+                      //                   caps it near 34 dB); it is a relative figure of merit.
+                      //     · multipath — envelope AM depth. An FM carrier leaves the transmitter
+                      //                   at CONSTANT amplitude, so anything here was done by the
+                      //                   channel: this reads a REFLECTION, not weakness, and the
+                      //                   two want opposite treatments.
+                      //     · hiCutLmr  — where high-blend has rolled the stereo difference off.
+                      //     · hiCutAud  — where the audio high-cut is sitting.
+                      //   ★★ The last two exist so "why is this not in full stereo?" and "why does
+                      //      this sound dull?" have an ANSWER rather than a suspicion — the same
+                      //      rule as every other sticky control reporting its state.
+                      + ",\"mpxSnr\":"    + std::to_string(P_ ? P_->blendSnrDb() : 0.0f)
+                      + ",\"multipath\":" + std::to_string(P_ ? P_->multipathDepth() : 0.0f)
+                      + ",\"hiCutLmr\":"  + std::to_string(P_ ? P_->lmrHiCutHz() : 0.0f)
+                      + ",\"hiCutAud\":"  + std::to_string(P_ ? P_->audioHiCutHz() : 0.0f)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";

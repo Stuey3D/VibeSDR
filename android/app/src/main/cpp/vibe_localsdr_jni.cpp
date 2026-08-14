@@ -13,6 +13,7 @@
 #include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
+#include "vibe_bands.h"   // the server's own band list, shared with the limiter
 #include "rtl_tcp_server.h"
 
 #define LOG_TAG "VibeLocalSDR"
@@ -566,71 +567,101 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv*, jobject, jbyteArray,
 // listener attaches its thread to a live server, and registering it earlier fails with "server
 // not running" — quietly, leaving the radio unreachable through the door while it looks healthy
 // on its own port (the Pi hit exactly this on 2026-08-08).
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeListenForHandoff(JNIEnv* env, jobject, jstring sockPath) {
-    const char* p = sockPath ? env->GetStringUTFChars(sockPath, nullptr) : nullptr;
-    std::string err;
-    const bool ok = vibe::LocalSdrShim::listenForHandoff(p ? p : "", err);
-    if (p) env->ReleaseStringUTFChars(sockPath, p);
-    if (ok) { LOGI("hand-off listener up"); return nullptr; }
-    LOGE("listenForHandoff failed: %s", err.c_str());
-    return env->NewStringUTF(err.c_str());
-}
 
 // Our own "/r/<id>" prefix, stripped from arriving requests so every route keeps matching bare
 // paths. `alt` is the serial form, still accepted so older links keep working.
-extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetPathPrefix(JNIEnv* env, jobject,
-                                                      jstring prefix, jstring alt) {
-    const char* p = prefix ? env->GetStringUTFChars(prefix, nullptr) : nullptr;
-    const char* a = alt ? env->GetStringUTFChars(alt, nullptr) : nullptr;
-    vibe::LocalSdrShim::setPathPrefix(p ? p : "", a ? a : "");
-    if (p) env->ReleaseStringUTFChars(prefix, p);
-    if (a) env->ReleaseStringUTFChars(alt, a);
-}
 
 // Start the front door: a server that owns NO radio. Returns the port, or -1.
-extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartFrontDoor(JNIEnv*, jobject, jint port) {
-    std::string err;
-    const int p = vibe::LocalSdrShim::startFrontDoor(port, err);
-    if (p < 0) LOGE("startFrontDoor failed: %s", err.c_str());
-    else       LOGI("front door listening on %d", p);
-    return p;
+
+
+
+// ── ★★★ ADVANCED MODE — the management surface, wired straight to the shim ────────────────────
+//
+// ★★★ THERE IS NO FRONT DOOR HERE AND THERE SHOULD NOT BE. Android serves ONE radio (a phone
+//     cannot power three over OTG), and with one radio Simple mode already listens on exactly one
+//     port — so a door would add a process Android kills at will, in front of the only thing
+//     behind it. Everything Advanced mode offers is a property of THIS process, and every setter
+//     below already existed in the shim and served the admin API; none of it was reachable from
+//     Kotlin, which is the whole reason it looked like a missing feature (Stuart, 2026-08-12).
+// ★★ WHY THE PATHS MATTER MOST. Without them the ban list and the connection log work perfectly
+//    and then EVAPORATE on restart — you ban someone, it holds, and it is gone by morning. That
+//    is worse than not offering banning at all.
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetPublicSharing(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setPublicSharing(on == JNI_TRUE);
 }
 
-/**
- * Teach the front door where the one radio lives.
- *
- * ★★★ ANDROID IS CAPPED AT ONE RADIO, so the router is a fixed mapping rather than the config
- *     lookup the Pi does — and it is written in C++ rather than as a JNI callback into Kotlin ON
- *     PURPOSE: this runs on the accept path of every request, and calling up into a managed
- *     runtime there would need a thread attach per connection and would put the front door's
- *     latency at the mercy of the garbage collector.
- * ★★ "" means ANSWER HERE — the landing page, the radio list, setup and admin all belong to the
- *    door itself. Only paths naming the radio are handed over.
- * ★ Both forms of the prefix are accepted, id and serial, matching setPathPrefix above.
- */
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetHandoffRoute(JNIEnv* env, jobject,
-                                                        jstring dir, jstring serial, jstring id) {
-    const char* d = dir ? env->GetStringUTFChars(dir, nullptr) : nullptr;
-    const char* s = serial ? env->GetStringUTFChars(serial, nullptr) : nullptr;
-    const char* i = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
-    const std::string sock = std::string(d ? d : "") + "/" + std::string(s ? s : "") + ".sock";
-    const std::string byId = "/r/" + std::string(i ? i : "");
-    const std::string bySerial = "/r/" + std::string(s ? s : "");
-    if (d) env->ReleaseStringUTFChars(dir, d);
-    if (s) env->ReleaseStringUTFChars(serial, s);
-    if (i) env->ReleaseStringUTFChars(id, i);
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAdminPaths(JNIEnv* env, jobject,
+                                                      jstring bans, jstring log) {
+    const char* b = bans ? env->GetStringUTFChars(bans, nullptr) : nullptr;
+    const char* l = log  ? env->GetStringUTFChars(log,  nullptr) : nullptr;
+    if (b) vibe::LocalSdrShim::instance().setBanListPath(b);
+    if (l) vibe::LocalSdrShim::instance().setConnLogPath(l);
+    LOGI("admin state persisted to %s / %s", b ? b : "(none)", l ? l : "(none)");
+    if (b) env->ReleaseStringUTFChars(bans, b);
+    if (l) env->ReleaseStringUTFChars(log, l);
+}
 
-    vibe::LocalSdrShim::setHandoffRouter([sock, byId, bySerial](const std::string& path) -> std::string {
-        // ★★ The spectrogram and the measured band conditions are read off a live wide FFT, which
-        //    the door does not have — they go to the radio, exactly as on the Pi.
-        if (path.rfind("/vibeserver/spectrogram", 0) == 0 ||
-            path.rfind("/vibeserver/conditions", 0) == 0) return sock;
-        if (path.rfind(byId, 0) == 0 || path.rfind(bySerial, 0) == 0) return sock;
-        return "";                       // everything else the front door answers itself
-    });
-    LOGI("hand-off route: %s -> %s", byId.c_str(), sock.c_str());
+/** ★ Reverse proxies whose X-Forwarded-For we believe. Without this EVERY visitor through a
+ *  tunnel looks like 127.0.0.1 — which reads as "the owner", exempting them from the session
+ *  limit and making the ban list unable to tell anyone apart. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetTrustedProxies(JNIEnv* env, jobject, jstring csv) {
+    const char* c = csv ? env->GetStringUTFChars(csv, nullptr) : nullptr;
+    vibe::LocalSdrShim::setTrustedProxies(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(csv, c);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetMaxUsers(JNIEnv*, jobject, jint n) {
+    vibe::LocalSdrShim::setVibeServerMaxUsers(n < 1 ? 1 : (int)n);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetTuneLimits(JNIEnv* env, jobject,
+                                                      jstring allow, jstring block) {
+    const char* a = allow ? env->GetStringUTFChars(allow, nullptr) : nullptr;
+    const char* b = block ? env->GetStringUTFChars(block, nullptr) : nullptr;
+    vibe::LocalSdrShim::setVibeServerTuneLimits(a ? a : "", b ? b : "");
+    if (a) env->ReleaseStringUTFChars(allow, a);
+    if (b) env->ReleaseStringUTFChars(block, b);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
+                                                      jstring csv, jint rest, jboolean agcLock) {
+    const char* c = csv ? env->GetStringUTFChars(csv, nullptr) : nullptr;
+    vibe::LocalSdrShim::setGainLimits(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(csv, c);
+    vibe::LocalSdrShim::setRestGain((int)rest);
+    vibe::LocalSdrShim::setAgcLock(agcLock == JNI_TRUE);
+}
+
+/** ★★ THE RADIO'S REAL GAIN LADDER, so the phone's limiter slider is over steps the hardware
+ *  actually has rather than a scale invented in the GUI — the same rule the setup page follows.
+ *  `lnaStates` is the RSP's RF POSITION count (0 otherwise): its limit is a position, not dB. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGainStepsJson(JNIEnv* env, jobject) {
+    auto& sh = vibe::LocalSdrShim::instance();
+    std::string j = "{\"gains\":[";
+    const std::vector<int> g = sh.getTunerGains();
+    for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
+    j += "],\"lnaStates\":" + std::to_string(sh.rfGainPositions()) + "}";
+    return env->NewStringUTF(j.c_str());
+}
+
+/** The server's OWN band list, so the phone's band limiter cannot drift from the edges the
+ *  server enforces — the same reason the setup page takes its bands from the server. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeBandsJson(JNIEnv* env, jobject) {
+    std::string j = "[";
+    const auto& bs = vibebands::namedBands();
+    for (size_t i = 0; i < bs.size(); ++i)
+        j += std::string(i ? "," : "") + "{\"id\":\"" + bs[i].id + "\",\"label\":\""
+           + bs[i].label + "\",\"lo\":" + std::to_string((long long)bs[i].lo)
+           + ",\"hi\":" + std::to_string((long long)bs[i].hi) + "}";
+    j += "]";
+    return env->NewStringUTF(j.c_str());
 }
