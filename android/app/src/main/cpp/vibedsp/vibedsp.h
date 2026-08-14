@@ -936,6 +936,25 @@ public:
      *  calibration was already right; we had just never expressed it in the units the
      *  industry uses (2026-07-26, prompted by a Pira reading 6.8 kHz). */
     float pilotDeviationKHz() const { return std::fabs(lockAmp_) * 75.0f; }
+    /**
+     * Re-time the RDS BIT CLOCK without disturbing the stereo lock.
+     *
+     * ★★★ AN RDS RESYNC USED TO CALL configure(), WHICH RESETS EVERYTHING — phase, the loop
+     *     integrator, lockAmp, lockState. So every resync DESTROYED a perfectly good pilot lock and
+     *     forced a full re-acquisition, and the listener heard stereo drop and come back with the
+     *     RDS data. Stuart, 2026-08-14: "a load of the RDS data drops and the stereo drops for a
+     *     second with it then it all comes back" — and, decisively, "stereo always dropped when
+     *     switching between standard and advanced RDS too". Longstanding, and nothing to do with
+     *     the weak-signal work it was reported against.
+     * ★★ THE BIT CLOCK IS ALL RDS NEEDED. It is derived from the pilot phase as
+     *    (cycle*2pi + phase)/16, so re-timing it means restarting the CYCLE COUNTER — not tearing
+     *    down the loop that is tracking the pilot perfectly well. The RDS decoder re-acquires its
+     *    own symbol timing regardless; it scores competing hypotheses and rdsDemod_.reset() is what
+     *    clears those.
+     * ★ A resync is asked for on retune and whenever a decoder is attached or detached. Those are
+     *   exactly the moments a listener is most likely to be listening to the audio.
+     */
+    void resyncBitClock() { cycle_ = 0; }
     void reset() { phase_ = 0.0; df_ = 0.0; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false; trackState_ = false;
                    oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0; }
 private:

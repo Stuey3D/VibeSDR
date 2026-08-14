@@ -165,6 +165,34 @@ int main() {
        "★ the pipeline re-announces stereo after a same-chain retune",
        "silent — the listener is stuck in mono until something rebuilds the chain");
 
+    // ── An RDS RESYNC MUST NOT TAKE THE STEREO WITH IT ───────────────────────────────────────
+    // ★★★ IT DID, FOR AS LONG AS THE FEATURE HAS EXISTED. The resync called pll_.configure(), which
+    //     resets phase, the loop integrator, lockAmp and lockState — so a perfectly good pilot lock
+    //     was destroyed and had to re-acquire, and the listener heard stereo drop and return along
+    //     with the RDS data (Stuart, 2026-08-14: "stereo always dropped when switching between
+    //     standard and advanced RDS too"). A resync is asked for on every retune and whenever a
+    //     decoder is attached or detached — i.e. constantly, while somebody is listening.
+    // ★★ The bit clock is all RDS needed re-timing, and that is a counter, not the loop.
+    {
+        Sink s4;
+        RxPipeline::Callbacks cb4{};
+        cb4.ctx = &s4; cb4.stereo = &Sink::onStereo; cb4.audio = &Sink::onAudio;
+        MpxGen g4;
+        RxPipeline rx4;
+        rx4.start(kFs, 1024, 10.0, 48000, cb4);
+        rx4.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx4, g4, 2.0);
+        const int before = s4.transitions;
+        for (int i = 0; i < 5; ++i) {          // as if the panel were opened and closed five times
+            rx4.requestRdsResync();
+            run(rx4, g4, 0.3);
+        }
+        std::printf("   .. five RDS resyncs: stereo transitions %d -> %d\n", before, s4.transitions);
+        ok(s4.transitions == before,
+           "★★★ an RDS RESYNC does not drop the stereo lock — it only re-times the bit clock",
+           "stereo changed state " + std::to_string(s4.transitions - before) + " time(s)");
+    }
+
     // ── An UNDER-INJECTED pilot must still lock ──────────────────────────────────────────────
     // ★★★ THE CASE FROM THE AIR. H F M on 102.3 transmits 4.7 kHz of pilot where the spec says
     //     6.0-7.5, which sat a whisker above the old engage threshold (4.5 kHz) — so its stereo
