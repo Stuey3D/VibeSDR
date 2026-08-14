@@ -74,7 +74,11 @@ final class UberClient: ObservableObject {
   private var adminSuffix = ""
   /// ★ One string, so the log cannot show two different names for the same app. Mirrors the value
   ///   the /connection POST already sends.
-  private let jrUserAgent = "VibeSDR Jr/1.2 (watchOS)"
+  // ★ Jr names itself SEPARATELY from the phone — it is its own app with its own version, and an
+  //   operator reading a connection log wants to know which of the two arrived. Bumped with the
+  //   phone release because they ship together; only the version ever moves, because operators
+  //   write filter rules against this string.
+  private let jrUserAgent = "VibeSDR Jr/1.3 (watchOS)"
   /// The server is serving somebody else. Terminal until the user retries or takes
   /// over — NOT a reconnect loop, which would just hammer a busy receiver.
   @Published var serverBusy = false

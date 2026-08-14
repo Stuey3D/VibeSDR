@@ -14,6 +14,8 @@
  * ★★ So a MISS (we asked, the database has nothing) is held for an hour — worth re-asking, not
  *    worth asking on every retune — and a FAILURE (we could not ask) for a minute.
  */
+import { USER_AGENT } from '../constants/version';
+
 const HIT_TTL  = 24 * 3600 * 1000;
 const MISS_TTL = 3600 * 1000;
 const FAIL_TTL = 60 * 1000;
@@ -98,7 +100,12 @@ export async function lookupStationLogo(
       const timer = setTimeout(() => ac.abort(), LOOKUP_MS);
       let res: Response;
       try {
-        res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' },
+        // ★★ THE SHARED USER_AGENT, not a hardcoded one. This said "VibeSDR/7 (FM-DX tuner)" —
+        //    frozen at version 7, on a version 10 app, to a public database whose operators may
+        //    well write rules against it. A version string that lies is not cosmetic: the whole
+        //    point of naming ourselves is that somebody else can identify and, if they wish,
+        //    refuse us BY NAME. See constants/version.ts, which carries the same warning.
+        res = await fetch(url, { headers: { 'User-Agent': USER_AGENT },
                                  signal: ac.signal });
       } finally { clearTimeout(timer); }
       // ★★ CHECK res.ok BEFORE PARSING. There was no check, so a 5xx or a captive portal's HTML
