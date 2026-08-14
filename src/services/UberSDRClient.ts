@@ -1774,7 +1774,13 @@ export class UberSDRClient {
       // deriving its countdown ONLY from route params filled in by the server-list probe, so
       // connecting by direct IP — or to a server whose limit changed after the probe — showed no
       // countdown at all. Take the server's own number whenever it speaks.
-      if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft > 0) {
+      // ★★★ PASS A NEGATIVE THROUGH — IT IS THE ONLY WAY THE SERVER CAN SAY "NO DEADLINE". The
+      // shim's occupantSecsLeft() returns -1 for an admin, for loopback and for an unlimited
+      // server. Filtering on `> 0` meant the one message that could STOP a countdown was the one
+      // message we dropped, so a clock started from stale route params ran on for ever with
+      // nothing behind it. The web client already accepts >= 0 (spectrum.ts) — this end did not,
+      // and a wire value has to be read the same way at both ends.
+      if (typeof msg.sessionSecsLeft === 'number') {
         this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);

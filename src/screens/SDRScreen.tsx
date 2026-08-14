@@ -2810,8 +2810,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       // ★ The server's own countdown is AUTHORITATIVE — re-base the local clock on it rather
       //   than letting our interpolation drift, which is the bug that froze Jr's timer.
+      // ★★★ AND IT IS AUTHORITATIVE ABOUT "NO DEADLINE" TOO. The server answers a NEGATIVE
+      //     sessionSecsLeft for a session it is not timing — an admin, a loopback listener, an
+      //     unlimited server (occupantSecsLeft returns -1). Treating that as just another number
+      //     would set a deadline in the PAST; ignoring it leaves a stale clock running with
+      //     nothing behind it. Either way the owner sees a countdown the server is not keeping.
       onSessionWarning: (secs: number) => {
         if (destroyed.current) return;
+        if (secs < 0) { setSessionEndsAt(null); setSessionLeftMs(null); return; }
         setSessionEndsAt(Date.now() + secs * 1000);
       },
       // ★★★ THE RECEIVER'S OWN TERMS, read from POST /connection at connect (see
@@ -2989,7 +2995,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    but the countdown here is driven by the last figure the server sent — so it went on
         //    counting down to a deadline that no longer existed. Cleared on the grant, which is
         //    the same rule the web client follows (clearTimeLeft on admin).
-        if (st.ok) setSessionLeftMs(null);
+        // ★★★ CLEAR THE DEADLINE, NOT JUST THE DISPLAY. `sessionLeftMs` is DERIVED: the 1 Hz tick
+        //     is keyed on `sessionEndsAt` and recomputes it from that deadline, so clearing only
+        //     the display put the countdown back within ONE SECOND and the "YOUR TURN ENDS IN"
+        //     badge never went away — the unlock looked like it had done nothing at all (Stuart,
+        //     2026-08-14: "it is not resetting the countdown and putting it into admin mode",
+        //     with the countdown carrying on unchanged from where it was). Whoever stops a clock
+        //     has to stop the thing that WINDS it.
+        if (st.ok) { setSessionEndsAt(null); setSessionLeftMs(null); }
         if (st.refused) setAdminRefused(true);
         if (st.ok) setAdminRefused(false);
       },
@@ -3343,10 +3356,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
   // Start the session countdown once we're actually connected.
+  // ★★★ AN ADMIN HAS NO DEADLINE, SO DO NOT SET ONE. Without this guard the effect re-armed the
+  //     clock the moment onAdminState cleared it — and it also started a countdown for an owner
+  //     who connected with the credential already on the URL, whose session the server had
+  //     exempted from the start (it answers sessionSecsLeft: -1). The limit came from the picker's
+  //     route params, which know nothing about who you turned out to be.
   useEffect(() => {
+    if (adminOk) return;
     if (!connected || !sessionLimitMins || sessionEndsAt) return;
     setSessionEndsAt(Date.now() + sessionLimitMins * 60_000);
-  }, [connected, sessionLimitMins, sessionEndsAt]);
+  }, [connected, sessionLimitMins, sessionEndsAt, adminOk]);
 
   useEffect(() => {
     if (!sessionEndsAt) return;
@@ -6435,7 +6454,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
-      {sessionLeftMs != null && (
+      {/* ★ `&& !adminOk` is belt and braces, and deliberate: the controls pill has always preferred
+            adminMode over the countdown (ControlsBar), and this full-size badge — the one the owner
+            actually sees over the waterfall — did not. Two places drawing the same fact from
+            different state is how one of them ends up wrong. */}
+      {sessionLeftMs != null && !adminOk && (
         <View pointerEvents="none" style={[styles.rxClock, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
           right: Math.max(12, insets.right + 8),
