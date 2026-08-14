@@ -193,6 +193,39 @@ int main() {
            "stereo changed state " + std::to_string(s4.transitions - before) + " time(s)");
     }
 
+    // ── TUNE AWAY AND BACK: THE PILOT MUST RE-ACQUIRE ────────────────────────────────────────
+    // ★★★ THE REGRESSION 3.0.0-92 SHIPPED. Removing pll_.configure() from the RDS resync stopped
+    //     it tearing down a good lock when a decoder was attached — but that ONE CALL was doing TWO
+    //     jobs, and the second was essential: re-acquiring after a RETUNE. Moving the NCO steps the
+    //     whole chain, and this PLL is second-order with a loop bandwidth of 1% of the pilot
+    //     frequency, so its integrator can be kicked outside the pull-in range and never return.
+    //     The pilot sits plainly visible in the MPX while the loop fails to find it: "RDS worked
+    //     when I first switched to advanced, then I tuned away and tuned back and it never came
+    //     back" (Stuart, 2026-08-14).
+    // ★★ A call whose comment describes one of its two purposes is a trap for whoever removes it.
+    {
+        Sink s6;
+        RxPipeline::Callbacks cb6{};
+        cb6.ctx = &s6; cb6.stereo = &Sink::onStereo; cb6.audio = &Sink::onAudio;
+        MpxGen g6;
+        RxPipeline rx6;
+        rx6.start(kFs, 1024, 10.0, 48000, cb6);
+        rx6.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx6, g6, 2.0);
+        const bool lockedFirst = rx6.pilotLockAmp() > 0.042f;
+        // Tune away (a same-chain retune — the NCO moves, nothing rebuilds), then back.
+        rx6.setTune(300000.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx6, g6, 1.0);
+        rx6.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx6, g6, 3.0);
+        std::printf("   .. tune away and back: lock metric %.4f (engage 0.042), first tune %s\n",
+                    rx6.pilotLockAmp(), lockedFirst ? "locked" : "NOT locked");
+        ok(lockedFirst, "the first tune locks at all");
+        ok(rx6.pilotLockAmp() > 0.042f,
+           "★★★ AND IT RE-ACQUIRES AFTER A RETUNE — the half of the old call that mattered",
+           "lock metric " + std::to_string(rx6.pilotLockAmp()));
+    }
+
     // ── OPENING AND CLOSING ADVANCED RDS MUST NOT TOUCH THE AUDIO ────────────────────────────
     // ★★★ THE SECOND CAUSE, AND THE ONE THAT SURVIVED THE FIRST FIX. setRdsNoiseCorrection() set
     //     dirty_ = true, which rebuilds the WHOLE audio chain — filters, AGC, pilot PLL — and the

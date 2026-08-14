@@ -406,8 +406,23 @@ void RxPipeline::feed(const cf32* iq, int n) {
     if (dirty_) rebuildAudio();          // rebuildAudio() re-points the NCO itself
     // A same-chain retune: nothing to rebuild, just move the oscillator. Skipped when a
     // rebuild already ran this block, since that has applied the newer offset anyway.
-    else if (tuneReq_.exchange(false, std::memory_order_relaxed))
+    else if (tuneReq_.exchange(false, std::memory_order_relaxed)) {
         nco_.setFreq(offsetHz_ / sampleRate_);
+        // ★★★ AND RE-ACQUIRE THE PILOT, BECAUSE THIS IS A DIFFERENT STATION. Moving the NCO puts a
+        //     step through the whole chain, and the pilot PLL is second-order with a deliberately
+        //     narrow loop bandwidth (1% of the pilot frequency) — so its integrator can be kicked
+        //     outside the pull-in range and simply never come back. The pilot is plainly present in
+        //     the MPX and the loop sits there not finding it.
+        // ★★★ THIS IS THE HALF I DELETED IN 3.0.0-92. The old code did it from the RDS resync,
+        //     which was doing TWO jobs with one call: re-acquiring after a retune (essential) and
+        //     tearing down a perfectly good lock whenever a decoder was attached (gratuitous). I
+        //     removed the call to stop the second and lost the first with it — "RDS worked when I
+        //     first switched to advanced, then I tuned away and tuned back and it never came back"
+        //     (Stuart, 2026-08-14). One call, two purposes, and only one of them was in the comment.
+        // ★ Here rather than in the resync, because THIS is the event that means "different
+        //   signal". A decoder being attached does not.
+        if (chFs_ > 0.0) pll_.configure(19000.0, chFs_);
+    }
 
     // ── Spectrum ───────────────────────────────────────────────────────────
     // Gather fftSize contiguous samples for a frame, then skip to the next slot.
