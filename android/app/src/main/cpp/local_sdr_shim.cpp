@@ -7356,12 +7356,26 @@ struct LocalSdrShim::Impl {
             // and audio) and reconnects across blips with the same id — restarting the timer
             // on each would make the limit unenforceable, and resetting it on the second
             // socket of the same session would be a quiet bug nobody would ever see.
-            if (occupantSession != me) {
+            const bool newOccupant = (occupantSession != me);
+            if (newOccupant) {
                 occupantSince   = Impl::nowSecs();
                 occupantWarned  = 0;
                 occupantAddr    = sock->peerAddress();
                 occupantAgent   = userAgent;   // for the admin view, same as ClientDsp::agent
             }
+            // ★★★ THE FIRST SOCKET TO ARRIVE IS THE ANONYMOUS ONE, AND IT NAMED THE SESSION "".
+            //     The apps open their AUDIO socket natively (VibeStreamService.kt / VibePowerModule
+            //     .swift) with no `client=` and no User-Agent, and the client deliberately delays
+            //     the spectrum socket by a second to let the session register — so the claim above
+            //     always ran on the nameless one, and the admin page rendered the empty agent as
+            //     "browser / unknown". The CONNECTION LOG showed "VibeSDR/10.0.2" for the very same
+            //     session, because that is written from the SPECTRUM socket instead: one session,
+            //     two writers, two answers (Stuart, 2026-08-14: "that should say Client VibeSDR").
+            // ★★ So let a LATER socket of the same session fill in a name we do not have. Only ever
+            //    filling a BLANK: a client that named itself must not be renamed by its own second
+            //    socket, or the anonymous one would overwrite the good answer just as surely.
+            if (!newOccupant && occupantAgent.empty() && !userAgent.empty())
+                occupantAgent = userAgent;
             occupantSession = me;   // claim (or re-affirm) the slot for this client
             // ★ A NEW CLIENT IS NOT THE ADMIN. Clearing here means an unlock cannot outlive the
             // session that earned it and be inherited by whoever connects next.
@@ -7371,7 +7385,21 @@ struct LocalSdrShim::Impl {
             //     eviction. Before this, connecting as admin cleared the flag it had just earned,
             //     so the owner was let in past the queue and then treated as a guest — the
             //     takeover worked and nothing else did.
-            adminOk.store(adminAuthed);
+            // ★★★ ...BUT A SESSION'S SECOND SOCKET MUST NOT DEMOTE IT. This store ran on EVERY
+            //     accept for the occupant, and the apps' audio socket carries no credential at all
+            //     — so every audio (re)connect, on a blip or a resume from background, stored
+            //     `false` over an admin session that had proved itself on the spectrum socket or by
+            //     typing the password into the menu. The owner silently became a guest: controls
+            //     relocked, and the SESSION LIMIT came back (:enforceSessionLimit,
+            //     :occupantSecsLeft both read this flag). It presents as "I unlocked admin and the
+            //     countdown is still running", which is exactly how this was found.
+            // ★★ The rule that holds: CLEAR on a NEW occupant — an unlock must never be inherited
+            //    by whoever connects next — but on the SAME session only ever RAISE. A socket that
+            //    presents no credential is not making a claim about admin and has no business
+            //    answering the question; a socket that presents a BAD one is not granted anything
+            //    either, it simply does not revoke what another socket proved. Revocation has its
+            //    own paths (relock, and a new occupant taking the chair).
+            if (newOccupant || adminAuthed) adminOk.store(adminAuthed);
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
             if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
         }
@@ -9902,7 +9930,14 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"cpu\":" + std::to_string((int)(p->dspLoadPct + 0.5))
            + ",\"kbps\":" + std::to_string(kbps)
            + ",\"decoder\":\"" + vibeadmin::esc(curDecoder) + "\""
-           + ",\"occupant\":true";
+           + ",\"occupant\":true"
+           // ★★★ AND BADGE IT HERE TOO. The per-client row above has said `admin` since 08-13; this
+           //     one — the row used by every SINGLE-USER radio, which is the Airspy HF+ and the
+           //     dongle — omitted the field entirely, and the admin page only badges on a truthy
+           //     `admin`. So on those radios the badge could NEVER appear, for the owner or for a
+           //     stranger holding a compromised password. A protection that is absent on two of the
+           //     three radios is the same shape as a control that only works on one of them.
+           + ",\"admin\":" + (p->adminOk.load() ? "true" : "false");
         if (p->occupantSince > 0)
             j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
         j += "}";

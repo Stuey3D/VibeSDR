@@ -1159,6 +1159,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
         var url = "$s/ws?user_session_id=$currentUuid&frequency=$currentFreq" +
             "&mode=$currentMode&format=opus&version=2"
+        // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client
+        //     delays the spectrum socket a second to let the session register, so it is THIS one
+        //     that claims the occupant slot — and it was anonymous, so the server stamped an empty
+        //     agent and the owner's admin page listed a VibeSDR session as "browser / unknown"
+        //     while the connection log, written from the spectrum socket, named it correctly
+        //     (Stuart, 2026-08-14). A query parameter is the only thing a WebSocket client can
+        //     always control; the header is not ours to set (see UberSDRClient's CLIENT_Q).
+        // ★ Same shape as the JS USER_AGENT — operators write filter rules against this string, so
+        //   only the version may move.
+        url += "&client=" + java.net.URLEncoder.encode(
+            "VibeSDR/" + BuildConfig.VERSION_NAME + " (+https://vibesdr.net)", "UTF-8")
         if (bypassPassword.isNotEmpty()) {
             url += "&password=" + java.net.URLEncoder.encode(bypassPassword, "UTF-8")
         }

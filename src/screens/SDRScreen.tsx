@@ -1455,6 +1455,33 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!nonce || !token) setAdminRefused(true);
   }, [baseUrl, connectBase, mintAdminTicket]);
 
+  /**
+   * Keep the admin lease alive for as long as we hold one.
+   *
+   * ★★★ THE TICKET LASTS TEN MINUTES AND NOTHING RENEWED IT. Unlock at the picker, look around,
+   *     then open a radio — and the credential riding the connect URL is already expired, so the
+   *     server lets you in as an ordinary listener: controls locked, countdown running, no badge,
+   *     and NOTHING SAID. Worse, the one-shot fallback in onError then clears `adminAuthQ` for
+   *     good, and the password is never stored, so the session can never recover on its own.
+   * ★★ A ticket renews ITSELF — /vibeserver/admin-ticket gates on adminOkFor(), which accepts a
+   *    valid ticket as proof — so this needs no password and no second challenge. Four minutes
+   *    against a ten-minute lease, the same cadence and the same reasoning as the web panel
+   *    (admin.ts: renewal used to happen only on the page that signed in, and lapsed under the
+   *    operator's feet). Two misses still leave a margin before it expires.
+   * ★ Keyed on WHETHER we hold a credential, not on its value: depending on adminAuthQ itself
+   *   would tear down and rebuild the timer on every renewal, so it would fire early for ever.
+   */
+  const holdsAdminCred = !!adminAuthQ;
+  useEffect(() => {
+    if (!holdsAdminCred) return;
+    const t = setInterval(() => {
+      const q = adminAuthQRef.current;
+      if (!q || destroyed.current) return;
+      void mintAdminTicket(q);
+    }, 4 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [holdsAdminCred, mintAdminTicket]);
+
   /** ★ The door's own pages, offered ONLY once we are admin — they refuse without the credential,
    *  and a button that cannot work is worse than no button. */
   // ★★ `#admin` OPENS THE ADMIN VIEW, not the receiver with admin quietly available — tapping
