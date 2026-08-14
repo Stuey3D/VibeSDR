@@ -484,6 +484,13 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // ★ The adaptive IF sits BEFORE the multipath meter and the demod, because it is part of
         //   the receiver, not part of the measurement — everything downstream should see the
         //   signal as filtered, exactly as it would with a narrower crystal filter.
+        // ★★★ THE SHADOW COPY IS TAKEN BEFORE THE ADAPTIVE FILTER, ALWAYS. If it were taken after,
+        //     the comparison would depend on what the filter is currently doing and the control
+        //     would be steering by its own output — the feedback trap this whole design is built to
+        //     avoid ("a probe is part of the system it measures").
+        if (mode_ == Mode::WFM && shadowTick_ + 1 >= 4) {
+            shadowBuf_.assign(chBuf_.begin(), chBuf_.begin() + nc);
+        }
         if (mode_ == Mode::WFM) {
             const double want = ifBwReq_.load(std::memory_order_relaxed);
             if (want != ifBwHz_) { ifBwHz_ = want; adaptIf_.setBandwidth(want); }
@@ -497,7 +504,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //     narrow one. Nothing here touches the audio — it is a measurement, not a path.
         if (mode_ == Mode::WFM && ++shadowTick_ >= 4) {
             shadowTick_ = 0;
-            shadowBuf_.assign(chBuf_.begin(), chBuf_.begin() + nc);
+            // ★★★ THE SHADOW EVALUATES THE OTHER OPTION, not a fixed one. Wide open while the
+            //     audio path is narrowed; narrowed while the audio path is wide. So ifGainDb_
+            //     always answers ONE question — "would switching be better?" — and it answers it
+            //     about a signal that has not been touched by the control it is steering.
+            shadowIf_.setBandwidth(ifBwHz_ > 0.0 ? 0.0 : shadowBwHz_);
             shadowIf_.process(shadowBuf_.data(), nc);
             shadowMpx_.resize(nc);
             shadowFm_.process(shadowBuf_.data(), shadowMpx_.data(), nc);
@@ -513,6 +524,29 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 if (std::isfinite(g)) ifGainDb_ += 0.05f * (g - ifGainDb_);
             }
             if (!std::isfinite(ifGainDb_)) ifGainDb_ = 0.0f;
+
+            // ★★★ THE POLICY, AND IT IS DRIVEN BY THE MEASURED BENEFIT — not by the noise figure.
+            //     Measured at 110 kHz: alone and clean -9.8 dB, alone and hissy -1.0 dB, weak
+            //     neighbour -1.1 dB, STRONG neighbour +10.7 dB. Narrowing does not help against
+            //     noise at all; it trades noise for distortion and loses. It helps against an
+            //     adjacent CHANNEL, and there it is worth ten decibels. Steering this from MPX S/N
+            //     — the original plan — would have narrowed on exactly the signals it cannot help.
+            // ★★ A LONG DWELL, because switching is audible and a wrong switch is worse than a
+            //    late one. Three dB of margin and several seconds of agreement before it moves,
+            //    and the SAME margin in both directions so it cannot sit on the boundary
+            //    chattering between two states.
+            if (weakProcOn_.load(std::memory_order_relaxed)) {
+                if (ifGainDb_ > 3.0f) {
+                    if (++ifDwell_ > 40) {            // ~3 s at one evaluation per 4 blocks
+                        ifDwell_ = 0;
+                        ifBwReq_.store(ifBwHz_ > 0.0 ? 0.0 : shadowBwHz_,
+                                       std::memory_order_relaxed);
+                    }
+                } else ifDwell_ = 0;
+            } else if (ifBwHz_ > 0.0) {
+                ifBwReq_.store(0.0, std::memory_order_relaxed);   // switched off = wide open
+                ifDwell_ = 0;
+            }
         }
         // ★★★ TAKE THE NOISE BACK OUT, OR THIS METER LIES WHERE IT MATTERS MOST. Noise shakes the
         //     envelope exactly as a reflection does, and the first version reported the sum. On

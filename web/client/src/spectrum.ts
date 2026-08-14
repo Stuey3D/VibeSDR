@@ -112,6 +112,9 @@ export interface RdsExt {
    *  on a shadow copy of the live signal, so it is this aerial's answer, not a lab's. */
   ifGain: number;
   ifCand: number;        // the candidate IF width being evaluated, Hz
+  /** The IF width in use now, Hz. 0 = wide open. `ifGain` is always "the OTHER option minus the
+   *  current one", so this says which way round to read it. */
+  ifBw: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -545,6 +548,7 @@ export class SpectrumClient {
           hiCutAud: Number(msg.hiCutAud ?? 15000),
           ifGain: Number(msg.ifGain ?? 0),
           ifCand: Number(msg.ifCand ?? 0),
+          ifBw: Number(msg.ifBw ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });

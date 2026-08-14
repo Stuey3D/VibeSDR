@@ -1770,6 +1770,7 @@ private:
     std::vector<cf32> shadowBuf_;
     std::vector<float> shadowMpx_;
     int            shadowTick_ = 0;
+    int            ifDwell_ = 0;                 // evaluations agreeing before the IF may switch
     float          ifGainDb_ = 0.0f;             // narrow minus wide, dB. >0 = narrowing helps
     double         shadowBwHz_ = 110000.0;       // the candidate width being evaluated
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target

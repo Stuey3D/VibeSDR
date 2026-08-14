@@ -105,7 +105,7 @@ void run(RxPipeline& rx, MpxGen& gen, double seconds) {
  *  ★ A FRESH pipeline each time, and long enough to settle: the corner moves on a ~1 second time
  *    constant on purpose (a corner that chases the signal turns fading into PUMPING, which is more
  *    objectionable than the hiss), so a short run would measure the glide, not the destination. */
-struct Result { float cutHz; float snrDb; bool stereo; float ifGain; };
+struct Result { float cutHz; float snrDb; bool stereo; float ifGain; double ifBw; };
 Result measure(double noise, double seconds = 6.0, double adj = 0.0) {
     Sink sink;
     RxPipeline::Callbacks cb{};
@@ -115,7 +115,7 @@ Result measure(double noise, double seconds = 6.0, double adj = 0.0) {
     rx.start(kFs, 1024, 10.0, 48000, cb);
     rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
     run(rx, gen, seconds);
-    return { rx.lmrHiCutHz(), rx.blendSnrDb(), sink.sawStereo, rx.ifGainDb() };
+    return { rx.lmrHiCutHz(), rx.blendSnrDb(), sink.sawStereo, rx.ifGainDb(), rx.ifBandwidth() };
 }
 
 }  // namespace
@@ -176,6 +176,24 @@ int main() {
     std::printf("   .. with an ADJACENT station 100 kHz up:\n");
     std::printf("      neighbour -3 dB %+.1f dB   neighbour +3 dB %+.1f dB\n",
                 adjW.ifGain, adjS.ifGain);
+
+    // ★★★ DOES THE ADAPTIVE IF ENGAGE ON THE RIGHT EVIDENCE? This is the assertion that keeps the
+    //     policy honest, because the obvious wiring — narrow when noisy — is WRONG and measured so:
+    //     narrowing costs 1-10 dB against noise and gains 10 dB against a strong neighbour. A
+    //     control that fires on the wrong evidence is worse than no control, since it degrades the
+    //     signals it was meant to rescue.
+    {
+        const Result quiet = measure(0.80, 12.0, 0.0);   // hissy, but ALONE — must stay wide
+        const Result crowd = measure(0.20, 12.0, 1.4);   // strong neighbour — must narrow
+        std::printf("   .. adaptive IF: hissy-but-alone %.0f Hz   strong-neighbour %.0f Hz\n",
+                    quiet.ifBw, crowd.ifBw);
+        ok(quiet.ifBw == 0.0,
+           "★★★ NOISE ALONE does NOT narrow the IF — narrowing cannot help it and would cost",
+           "engaged at " + std::to_string((int)quiet.ifBw) + " Hz");
+        ok(crowd.ifBw > 0.0,
+           "★ a STRONG NEIGHBOUR does narrow it — the case narrowing exists for",
+           "stayed wide");
+    }
 
     // ★★★ A PILOT-LOCK FLICKER MUST NOT REOPEN THE FILTER. On a marginal signal the lock drops in
     //     and out constantly, and the not-eligible branch used to rush the L-R corner to 15 kHz at

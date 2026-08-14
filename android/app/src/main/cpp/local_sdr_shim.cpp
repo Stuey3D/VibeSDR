@@ -8878,6 +8878,11 @@ struct LocalSdrShim::Impl {
                       //   trusted (Stuart: "add the benefit measurement in to the advanced rds").
                       + ",\"ifGain\":" + std::to_string(P_ ? P_->ifGainDb() : 0.0f)
                       + ",\"ifCand\":" + std::to_string(P_ ? P_->ifCandidateHz() : 0.0)
+                      // ★ WHICH STATE WE ARE IN — without it `ifGain` is ambiguous, because the
+                      //   shadow always evaluates THE OTHER OPTION: narrow while we are wide, wide
+                      //   while we are narrowed. The sign flips on engagement, and a reader with
+                      //   no state would misread "-11 dB" as bad news when it means the opposite.
+                      + ",\"ifBw\":" + std::to_string(P_ ? P_->ifBandwidth() : 0.0)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";

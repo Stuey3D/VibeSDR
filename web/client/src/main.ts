@@ -5035,11 +5035,22 @@ function renderRds() {
   const ifEl = $('rxIfGain');
   const ifG = rdsExt?.ifGain ?? 0;
   const ifC = rdsExt?.ifCand ?? 0;
+  // ★★ THE FIGURE IS ALWAYS "THE OTHER OPTION MINUS THIS ONE", so it MUST be read against the
+  //    current state — the sign flips the moment the filter engages. Printed as a sentence rather
+  //    than a bare signed number, because "-11 dB" is genuinely ambiguous without it and would
+  //    read as bad news when it means the narrowing is doing eleven decibels of good.
+  const ifBw = rdsExt?.ifBw ?? 0;
   if (rdsExt && ifC > 0 && (rdsExt.mpxSnr ?? 0) > 0.5) {
-    const kHz = Math.round(ifC / 1000);
-    const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
-    ifEl.textContent = `${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB at ${kHz}k · ${verdict}`;
-    ifEl.style.color = ifG > 1.5 ? '#7dff9a' : ifG < -1.5 ? '#ffd479' : '';
+    if (ifBw > 0) {
+      ifEl.textContent = `${Math.round(ifBw / 1000)}k narrow · wide would ` +
+        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`);
+      ifEl.style.color = '#7dff9a';
+    } else {
+      const kHz = Math.round(ifC / 1000);
+      const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
+      ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
+      ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
+    }
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
 
   const pdev = rdsExt?.pilotDev ?? 0;
