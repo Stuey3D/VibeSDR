@@ -5072,88 +5072,32 @@ function renderRds() {
   //     (which an aerial rotation may fix) or noise (which it will not).
   const mpEl = $('rxMultipath');
   const mp = rdsExt?.multipath ?? 0;
+  // ★★★ ORDERED SO THAT A TRUSTED READING ALWAYS PRINTS SOMETHING. The dash was a FOURTH state
+  //     nobody meant to design: valid, trusted, but numerically ~0 after the noise correction, so
+  //     it fell past every branch to the fallback. On a 27 dB station that made the field flicker
+  //     between a figure and "—" (Stuart, 2026-08-14, second report of flashing — the first was a
+  //     validity threshold, this one is a different cause with the same symptom).
+  // ★★ "NONE DETECTED" IS A RESULT. Zero multipath on a signal we can measure is exactly the good
+  //    news a DXer wants, and printing a dash for it says "no data" — the opposite meaning.
   if (rdsExt && rdsExt.snrOk === false) {
     mpEl.textContent = 'no pilot to measure';
     mpEl.style.color = '';
-  } else if (rdsExt && rdsExt.multipathOk === false && mpHeld) {
-    // ★★ HOLD THE LAST GOOD FIGURE rather than replacing it. Even with hysteresis on the server a
-    //    signal can drift across the line, and a panel that swaps between a number and a sentence
-    //    is harder to read than either — the eye is drawn to the CHANGE. Shown dimmed and marked
-    //    "held" so it is never mistaken for a live reading.
+  } else if (rdsExt && rdsExt.multipathOk) {
+    const pct = mp * 100;
+    const label = pct < 0.5 ? 'none detected'
+                : mp < 0.03 ? 'clean' : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
+    mpEl.textContent = pct < 0.5 ? label : `${pct.toFixed(1)}% · ${label}`;
+    mpEl.style.color = mp < 0.03 ? '#7dff9a' : mp < 0.10 ? '' : mp < 0.20 ? '#ffd479' : '#ff9a9a';
+    mpHeld = mpEl.textContent;
+  } else if (rdsExt && mpHeld) {
+    // ★ Confidence dipped — dim the last good figure rather than replacing it. The eye is drawn to
+    //   change, so a panel that swaps text is harder to read than one that fades.
     mpEl.textContent = `${mpHeld} · held`;
     mpEl.style.color = 'rgba(255,255,255,0.35)';
-  } else if (rdsExt && rdsExt.multipathOk === false) {
-    // ★★★ "TOO NOISY TO TELL" IS A RESULT, NOT A BLANK. The first version printed the raw figure
-    //     and a 6 dB signal read "25.7% · severe" — which was the NOISE, and would have sent
-    //     somebody up a ladder to rotate an aerial (Stuart, on air at 107.8). Below ~12 dB the
-    //     noise correction removes nearly everything it measured, so any residual is noise about
-    //     noise. Saying so is more useful than a confident number that means nothing.
+  } else if (rdsExt) {
     mpEl.textContent = 'too noisy to judge';
     mpEl.style.color = '';
-  } else if (rdsExt && mp > 0.0005) {
-    const pct = mp * 100;
-    const label = mp < 0.03 ? 'clean' : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
-    mpEl.textContent = `${pct.toFixed(1)}% · ${label}`;
-    mpHeld = `${pct.toFixed(1)}% · ${label}`;
-    mpEl.style.color = mp < 0.03 ? '#7dff9a' : mp < 0.10 ? '' : mp < 0.20 ? '#ffd479' : '#ff9a9a';
   } else { mpEl.textContent = dash; mpEl.style.color = ''; }
-
-  // ★★ THE IF-NARROWING BENEFIT. Reported as a gain in dB against the width it was measured at,
-  //    and deliberately blunt about a NEGATIVE result: if narrowing would not help, the honest
-  //    display says so rather than leaving an ambiguous number to be read hopefully.
-  const ifEl = $('rxIfGain');
-  const ifG = rdsExt?.ifGain ?? 0;
-  const ifC = rdsExt?.ifCand ?? 0;
-  // ★★ THE FIGURE IS ALWAYS "THE OTHER OPTION MINUS THIS ONE", so it MUST be read against the
-  //    current state — the sign flips the moment the filter engages. Printed as a sentence rather
-  //    than a bare signed number, because "-11 dB" is genuinely ambiguous without it and would
-  //    read as bad news when it means the narrowing is doing eleven decibels of good.
-  const ifBw = rdsExt?.ifBw ?? 0;
-  if (rdsExt && ifC > 0 && (rdsExt.mpxSnr ?? 0) > 0.5) {
-    if (ifBw > 0) {
-      ifEl.textContent = `${Math.round(ifBw / 1000)}k narrow · wide would ` +
-        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`);
-      ifEl.style.color = '#7dff9a';
-    } else {
-      const kHz = Math.round(ifC / 1000);
-      const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
-      ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
-      ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
-    }
-  } else { ifEl.textContent = dash; ifEl.style.color = ''; }
-
-  // ★★ THE BLANKER'S RATE, which is a DIAGNOSTIC before it is a control: it answers "is that
-  //    crackle me or the station?", which an owner otherwise has no way to settle.
-  const nbEl = $('rxNb');
-  const nbR = (rdsExt?.nbRate ?? 0) * 100;
-  if (rdsExt) {
-    nbEl.textContent = nbR < 0.005 ? 'nothing to blank'
-                     : `${nbR.toFixed(nbR < 1 ? 2 : 1)}% blanked`;
-    // ★ Amber only once it is removing enough to matter — a trickle is normal on any receiver and
-    //   colouring it would cry wolf.
-    nbEl.style.color = nbR > 0.5 ? '#ffd479' : nbR < 0.005 ? '#7dff9a' : '';
-  } else { nbEl.textContent = dash; nbEl.style.color = ''; }
-
-  // ★★ CEQ, SHOWN AS BEFORE -> AFTER. "Engaged" on its own says nothing about whether it helped,
-  //    and a blind equaliser that is quietly making things worse is the failure mode that matters.
-  const ceqEl = $('rxCeq');
-  if (rdsExt && rdsExt.ceqOn) {
-    const before = (rdsExt.multipath ?? 0) * 100, after = (rdsExt.ceqAfter ?? 0) * 100;
-    const gained = before > 0.5 && after < before * 0.8;
-    ceqEl.textContent = `${before.toFixed(1)}% → ${after.toFixed(1)}%` + (gained ? '' : ' · little change');
-    ceqEl.style.color = gained ? '#7dff9a' : '';
-  } else if (rdsExt) {
-    // ★★ AND WHY. "Standing by" alone left the owner unable to tell whether it had declined or
-    //    failed — especially on a station being FOUGHT OVER, which reads as severe multipath while
-    //    sitting well under the S/N the equaliser needs. Co-channel is not multipath: a reflection
-    //    is your own signal arriving twice and can be inverted; a second TRANSMITTER cannot be,
-    //    by anyone.
-    const why = rdsExt.ceqWhy ?? 3;
-    ceqEl.textContent = why === 1 ? 'off'
-                      : why === 2 ? 'signal too weak to equalise'
-                      : 'standing by · nothing to correct';
-    ceqEl.style.color = '';
-  } else { ceqEl.textContent = dash; ceqEl.style.color = ''; }
 
   const pdev = rdsExt?.pilotDev ?? 0;
   const rdev = rdsExt?.rdsDev ?? 0;
