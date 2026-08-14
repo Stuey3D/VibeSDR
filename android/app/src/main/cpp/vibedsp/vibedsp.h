@@ -1761,7 +1761,22 @@ public:
      *  number, so it is driven by whether anyone has the analyser OPEN rather than by a setting.
      *  ★ It does NOT touch the channel filter. Widening that was tried and measured to cost
      *  10 dB of RDS SNR — see the chHalf note in pipeline.cpp before considering it again. */
-    void setRdsNoiseCorrection(bool on) { rdsNoiseCorr_ = on; dirty_ = true; }
+    /**
+     * ★★★ NO REBUILD. THIS SET dirty_ = true, WHICH TEARS DOWN THE WHOLE AUDIO CHAIN — every filter
+     *     redesigned, the AGC reset, the pilot PLL reconfigured. And it is called every time the
+     *     Advanced RDS panel is opened or closed, because the panel being open IS the switch. So
+     *     switching RDS modes dropped the stereo and cleared the RDS for about a second, every
+     *     time: "stereo always dropped when switching between standard and advanced RDS too"
+     *     (Stuart, 2026-08-14 — reported against 3.0.0-92, which had already fixed the OTHER path
+     *     that did the same damage. Two independent causes, one symptom, and fixing the first
+     *     proved nothing about the second).
+     * ★★ IT NEVER NEEDED ONE. RdsDemod::setNoiseCorrection sets a flag and zeroes an accumulator —
+     *    no filters, no allocation, nothing that a rebuild would provide. The rebuild was pure
+     *    collateral: the flag happened to be applied inside rebuildAudio(), so marking the chain
+     *    dirty was the laziest way to make it take effect.
+     * ★ Applied live in feed() instead, on the DSP thread that owns the decoder.
+     */
+    void setRdsNoiseCorrection(bool on) { rdsNoiseCorr_ = on; rdsNoiseCorrReq_.store(true); }
 
     /** ★★ DROP STALE STATE AFTER A BREAK IN THE SAMPLE STREAM.
      *
@@ -2033,6 +2048,7 @@ private:
     bool  multipathValid_ = false; // ...and whether that residual means anything at this S/N
     bool  snrValid_ = false;       // is there a real pilot to measure the S/N against at all?
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
+    std::atomic<bool>   rdsNoiseCorrReq_{false};  // apply it in feed(), without a rebuild
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()
     std::atomic<bool> tuneReq_{false};       // same-chain retune: move the NCO, rebuild nothing

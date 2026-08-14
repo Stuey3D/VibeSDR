@@ -442,6 +442,29 @@ struct ConnRec {
     bool        admin = false;
 };
 
+/**
+ * ★★★ RESOLVERS FOR THE CONNECTION LOG, injected by the shim.
+ *
+ * This header cannot call geoip/asndb directly — they live beside the daemon — but the log needs
+ * them for a reason worth stating: the country stored on a record is a SNAPSHOT taken the moment
+ * the connection opened. If the GeoIP database was missing, stale or simply had no entry for that
+ * range at that moment, the row keeps the wrong answer FOR EVER, even after the data is fixed. On
+ * the demo that showed as a work laptop logged in the US while the live table had it right
+ * (Stuart, 2026-08-14) — and the history had NO network column at all, because none was ever
+ * recorded.
+ * ★★ So the log derives BOTH at render time, exactly as the live table does, and falls back to the
+ *    stored value only when a fresh lookup has nothing to say. One derivation, two tables — the
+ *    same rule as every other value that appears twice.
+ */
+inline std::function<std::string(const std::string&)>& ccResolver() {
+    static std::function<std::string(const std::string&)> f;
+    return f;
+}
+inline std::function<std::string(const std::string&)>& netResolver() {
+    static std::function<std::string(const std::string&)> f;
+    return f;
+}
+
 class ConnLog {
 public:
     /** ★★★ PERSIST THE LOG. It used to live only in memory, and I wrote down that surviving a
@@ -576,12 +599,24 @@ public:
                + ",\"ip\":\"" + esc(it->ip) + "\""
                + ",\"session\":\"" + esc(it->session) + "\""
                + ",\"agent\":\"" + esc(it->agent) + "\""
-               + ",\"cc\":\"" + esc(it->cc) + "\""
+               // ★ Fresh lookup first, stored snapshot second — see ccResolver().
+               + ",\"cc\":\"" + esc(liveCc(it->ip, it->cc)) + "\""
+               + ",\"net\":\"" + esc(liveNet(it->ip)) + "\""
                + ",\"reason\":\"" + esc(it->endReason) + "\""
                + ",\"bytes\":" + std::to_string(it->bytes)
                + ",\"admin\":" + (it->admin ? "true" : "false") + "}";
         }
         return j + "]";
+    }
+
+    /** The country for a stored record: today's answer if we have one, else what was recorded. */
+    static std::string liveCc(const std::string& ip, const std::string& stored) {
+        if (ccResolver()) { const std::string v = ccResolver()(ip); if (!v.empty()) return v; }
+        return stored;
+    }
+    /** The network label. Never stored, so this is the only source — hence history showed none. */
+    static std::string liveNet(const std::string& ip) {
+        return netResolver() ? netResolver()(ip) : std::string();
     }
 
     /** ★★ TOP COUNTRIES, counted by DISTINCT ADDRESS rather than by connection.

@@ -394,6 +394,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
     // ★★ The BIT CLOCK is all RDS needed re-timing, and that is a counter — (cycle*2pi + phase)/16
     //    — not the loop tracking the pilot. The decoder re-acquires its own symbol timing anyway;
     //    rdsDemod_.reset() is what clears its hypotheses.
+    // ★ The guard-band switch, applied WITHOUT a rebuild — see setRdsNoiseCorrection. It is a flag
+    //   on the decoder, and it is toggled every time somebody opens or closes the Advanced RDS
+    //   panel, which is far too often to be spending an audio chain on.
+    if (rdsNoiseCorrReq_.exchange(false, std::memory_order_relaxed))
+        rdsDemod_.setNoiseCorrection(rdsNoiseCorr_.load(std::memory_order_relaxed));
     if (rdsResyncReq_.exchange(false, std::memory_order_relaxed) && chFs_ > 0.0) {
         rdsDemod_.reset();
         pll_.resyncBitClock();

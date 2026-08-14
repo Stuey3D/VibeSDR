@@ -193,6 +193,42 @@ int main() {
            "stereo changed state " + std::to_string(s4.transitions - before) + " time(s)");
     }
 
+    // ── OPENING AND CLOSING ADVANCED RDS MUST NOT TOUCH THE AUDIO ────────────────────────────
+    // ★★★ THE SECOND CAUSE, AND THE ONE THAT SURVIVED THE FIRST FIX. setRdsNoiseCorrection() set
+    //     dirty_ = true, which rebuilds the WHOLE audio chain — filters, AGC, pilot PLL — and the
+    //     shim calls it every time the Advanced RDS panel opens or closes, because the panel being
+    //     open IS the switch. So 3.0.0-92 fixed the resync path and the symptom remained, exactly
+    //     as Stuart reported it against that build. Two independent causes, one symptom; fixing
+    //     the first proved nothing about the second, which is why this test exercises the USER'S
+    //     ACTION rather than the internal call the last one happened to use.
+    {
+        Sink s5;
+        RxPipeline::Callbacks cb5{};
+        cb5.ctx = &s5; cb5.stereo = &Sink::onStereo; cb5.audio = &Sink::onAudio;
+        MpxGen g5;
+        RxPipeline rx5;
+        rx5.start(kFs, 1024, 10.0, 48000, cb5);
+        rx5.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx5, g5, 2.0);
+        const int before5 = s5.transitions;
+        const unsigned rb0 = rx5.rebuildCount();
+        for (int i = 0; i < 4; ++i) {          // open, close, open, close
+            rx5.setRdsNoiseCorrection(true);  run(rx5, g5, 0.3);
+            rx5.setRdsNoiseCorrection(false); run(rx5, g5, 0.3);
+        }
+        std::printf("   .. RDS panel toggled 8x: stereo transitions %d -> %d, rebuilds %u -> %u\n",
+                    before5, s5.transitions, rb0, rx5.rebuildCount());
+        ok(s5.transitions == before5,
+           "★★★ opening/closing ADVANCED RDS does not drop the stereo lock",
+           "stereo changed state " + std::to_string(s5.transitions - before5) + " time(s)");
+        // ★ And the reason, asserted directly: no audio chain was rebuilt. Asserting the CAUSE as
+        //   well as the effect means a future change that reintroduces the rebuild fails here even
+        //   if the lock happens to survive it on a strong test signal.
+        ok(rx5.rebuildCount() == rb0,
+           "★★ ...and rebuilds NO audio chain — the cause, not just the symptom",
+           "rebuilt " + std::to_string(rx5.rebuildCount() - rb0) + " time(s)");
+    }
+
     // ── An UNDER-INJECTED pilot must still lock ──────────────────────────────────────────────
     // ★★★ THE CASE FROM THE AIR. H F M on 102.3 transmits 4.7 kHz of pilot where the spec says
     //     6.0-7.5, which sat a whisker above the old engage threshold (4.5 kHz) — so its stereo

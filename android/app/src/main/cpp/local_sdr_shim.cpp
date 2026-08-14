@@ -9715,7 +9715,15 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
-void LocalSdrShim::setConnLogPath(const std::string& path) { g_vsConnLog.setPath(path); }
+void LocalSdrShim::setConnLogPath(const std::string& path) {
+    // ★ Teach the log how to resolve a country and a network. It cannot call geoip/asndb itself —
+    //   they live out here — and without these the history could only ever replay the SNAPSHOT
+    //   taken when the connection opened, which is how a laptop stayed logged in the US after the
+    //   database knew better.
+    vibeadmin::ccResolver()  = [](const std::string& ip) { return vsCountry(ip); };
+    vibeadmin::netResolver() = [](const std::string& ip) { return vsAsnLabel(ip); };
+    g_vsConnLog.setPath(path);
+}
 void LocalSdrShim::saveConnLogIfDue() { g_vsConnLog.saveIfDue(); }
 void LocalSdrShim::setMaintenanceActions(const std::string& csv) {
     std::lock_guard<std::mutex> lk(g_vsMaintMtx);
