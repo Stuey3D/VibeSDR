@@ -1662,10 +1662,10 @@ int main(int argc, char** argv) {
         // ★★ From the RECEIVER's own country, and it is self-checking: eccForIso returns nothing
         //    unless that country actually sits at this PI's country nibble, so a foreign station
         //    is declined rather than mislabelled.
-        std::string e = ecc;
-        if (e.empty() || e == "00" || e == "0") e = vsradiodns::eccForIso(g_runtimeConfig.country, pi);
-        if (e.empty()) return {};
-        return vsradiodns::logoFor(pi, e, hz);
+        // ★ The receiver's country is a HINT, not a requirement — it is tried first and the rest
+        //   of the candidates follow. See logoForAuto: depending on it outright is what made this
+        //   silently do nothing on a server with no country configured.
+        return vsradiodns::logoForAuto(pi, ecc, hz, g_runtimeConfig.country);
     });
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;

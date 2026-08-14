@@ -357,6 +357,31 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
         VibeLocalSDR.setVibeServerSessionLimit(limitMin)
         VibeLocalSDR.setVibeServerWebEnabled(webSrv)
+
+        // ── ★★★ ADVANCED MODE ────────────────────────────────────────────────────────────────
+        // ★★ Applied on EVERY start, including the crash-restore path, and always to a definite
+        //    value — never "only when advanced". A limit left set from a previous run would
+        //    outlive the mode that asked for it, and the owner would have no way to see why.
+        run {
+            val adv = if (opts.hasKey("advanced")) opts.getBoolean("advanced") else false
+            // ★ Bans and the log are recorded in BOTH modes and only DISPLAYED in Advanced — so
+            //   switching a receiver public later arrives with its history already there.
+            val dir = reactContext.filesDir
+            VibeLocalSDR.setAdminPaths(java.io.File(dir, "vibe_bans.json").absolutePath,
+                                       java.io.File(dir, "vibe_connlog.json").absolutePath)
+            VibeLocalSDR.setPublicSharing(adv)
+            VibeLocalSDR.setTrustedProxies(
+                if (adv && opts.hasKey("trustedProxies")) opts.getString("trustedProxies") ?: "" else "")
+            VibeLocalSDR.setMaxUsers(
+                if (adv && opts.hasKey("maxUsers")) opts.getInt("maxUsers").coerceAtLeast(1) else 1)
+            VibeLocalSDR.setTuneLimits(
+                if (adv && opts.hasKey("allowRanges")) opts.getString("allowRanges") ?: "" else "",
+                if (adv && opts.hasKey("blockRanges")) opts.getString("blockRanges") ?: "" else "")
+            VibeLocalSDR.setGainLimits(
+                if (adv && opts.hasKey("gainLimits")) opts.getString("gainLimits") ?: "" else "",
+                if (adv && opts.hasKey("restGain")) opts.getInt("restGain") else -1,
+                adv && opts.hasKey("agcLock") && opts.getBoolean("agcLock"))
+        }
         VibeLocalSDR.setVibeServerLockedRate(lockedRate)
         VibeLocalSDR.setServeOnLan(true)
 
@@ -387,6 +412,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             VibeServerRestore.disarm(reactContext)
         }
         Log.i(TAG, "VibeServer started $ip:$port as \"$name\" (pin=${pin.isNotEmpty()})")
+
         val res = Arguments.createMap()
         res.putString("ip", ip)
         res.putInt("port", port)

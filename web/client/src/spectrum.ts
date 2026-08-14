@@ -184,6 +184,8 @@ export interface SpectrumCallbacks {
     /** FM weak-signal processing: stereo high-blend + audio high-cut, one switch. Reported so a
      *  reconnecting client restores the button rather than showing a state the radio is not in. */
     wsp: boolean;
+    /** IMS — the adaptive IF. Separate from wsp: noise and a neighbour want opposite actions. */
+    ims: boolean;
     nrStrength?: number;      // 0..1, absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
@@ -459,6 +461,7 @@ export class SpectrumClient {
             // ★ Defaults TRUE when absent: an older server that does not report it still HAS the
             //   treatment on, so showing OFF would be a lie about the radio.
             wsp: msg.wsp !== false,
+            ims: msg.ims !== false,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
             nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
@@ -820,6 +823,8 @@ export class SpectrumClient {
   /** FM weak-signal processing — high-blend + audio high-cut together. One switch because it is
    *  one treatment: A/B-ing half of it would not answer the question a DXer is asking. */
   setWeakProc(on: boolean) { this._send({ type: 'wsp', on }); }
+  /** IMS — adaptive IF against an adjacent channel. NOT the same control as the noise treatment. */
+  setIms(on: boolean) { this._send({ type: 'ims', on }); }
 
   // ── Coalesced view sender ──────────────────────────────────────────────────
 

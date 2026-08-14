@@ -169,12 +169,13 @@ std::string logoFromSpi(const std::string& xml, const std::string& bearerId) {
 
 }  // namespace
 
-std::string eccForIso(const std::string& iso, const std::string& piHex) {
-    if (iso.size() != 2 || piHex.empty()) return {};
-    // ★ The ECC country table, mirrored from src/services/rdsCountry.ts. Row = ECC, column = the
-    //   PI's country nibble 1..F. Kept in the SAME order and shape as the TypeScript so the two
-    //   can be diffed by eye; a divergence here shows up as a station whose logo works in the app
-    //   and not in the browser, which is a miserable thing to chase from either end alone.
+/** The ECC country table: row = ECC, column = the PI's country nibble 1..F.
+ *  ★ Mirrored from src/services/rdsCountry.ts and kept in the SAME order and shape so the two can
+ *    be diffed by eye — a divergence shows up as a station whose logo works in the app and not in
+ *    the browser, which is miserable to chase from either end alone.
+ *  ★ A function rather than two copies: eccForIso() and eccCandidates() both need it, and a second
+ *    transcription of 22 rows of country codes is a typo waiting to happen. */
+const std::map<std::string, std::array<const char*, 15>>& kEccTable() {
     static const std::map<std::string, std::array<const char*, 15>> kTable = {
         {"A1", {{"",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "CA", "CA", "CA", "CA", "GL"}}},
         {"A2", {{"AI", "AG", "",   "FK", "BB", "BZ", "KY", "CR", "CU", "AR", "BR", "",   "",   "GP", "BS"}}},
@@ -199,6 +200,51 @@ std::string eccForIso(const std::string& iso, const std::string& piHex) {
         {"F3", {{"LA", "TH", "TO", "",   "",   "",   "",   "CN", "PG", "",   "YE", "",   "",   "FM", "MN"}}},
         {"F4", {{"",   "",   "",   "",   "",   "",   "",   "",   "CN", "",   "MH", "",   "",   "",   ""}}},
     };
+    return kTable;
+}
+
+std::string eccForIso(const std::string& iso, const std::string& piHex);
+
+/** Every ECC that could possibly go with this PI's country nibble, best guess first.
+ *
+ * ★★★ BECAUSE DERIVING FROM THE RECEIVER'S COUNTRY DOES NOT WORK WHEN THERE IS NO COUNTRY. The
+ *     demo server has none configured, so eccForIso() returned nothing and the whole feature
+ *     silently did nothing at all: "RadioDNS is not showing up any icons anymore" (Stuart,
+ *     2026-08-14). A lookup that depends on a setting most owners will never fill in is a lookup
+ *     that mostly will not happen.
+ * ★★★ SO ASK RADIODNS INSTEAD OF ASKING THE CONFIG. A wrong GCC does not resolve — that is the
+ *     whole point of a DNS-backed identity — so the candidates can simply be TRIED. The nibble
+ *     narrows it to about ten, each answer is cached for a day (misses for an hour), and it costs
+ *     nothing at all for the many stations that do transmit an ECC.
+ * ★★ It also fixes the case the config approach could never handle: a station from ACROSS A
+ *    BORDER, whose country is not the receiver's. The old derivation would refuse those by design.
+ * ★ The receiver's own country still goes FIRST when it is known, so the common case is one
+ *   lookup rather than ten.
+ */
+std::vector<std::string> eccCandidates(const std::string& piHex, const std::string& preferIso) {
+    std::vector<std::string> out;
+    const std::string first = eccForIso(preferIso, piHex);
+    if (!first.empty()) out.push_back(first);
+    if (piHex.empty()) return out;
+    const char c = (char)std::toupper((unsigned char)piHex[0]);
+    int nibble = -1;
+    if (c >= '0' && c <= '9')      nibble = c - '0';
+    else if (c >= 'A' && c <= 'F') nibble = 10 + (c - 'A');
+    if (nibble < 1 || nibble > 15) return out;
+    for (const auto& [ecc, row] : kEccTable()) {
+        if (!row[nibble - 1] || !*row[nibble - 1]) continue;   // no country at this nibble
+        if (std::find(out.begin(), out.end(), ecc) == out.end()) out.push_back(ecc);
+    }
+    return out;
+}
+
+std::string eccForIso(const std::string& iso, const std::string& piHex) {
+    if (iso.size() != 2 || piHex.empty()) return {};
+    // ★ The ECC country table, mirrored from src/services/rdsCountry.ts. Row = ECC, column = the
+    //   PI's country nibble 1..F. Kept in the SAME order and shape as the TypeScript so the two
+    //   can be diffed by eye; a divergence here shows up as a station whose logo works in the app
+    //   and not in the browser, which is a miserable thing to chase from either end alone.
+    const auto& kTable = kEccTable();
 
     const char c = (char)std::toupper((unsigned char)piHex[0]);
     int nibble = -1;
@@ -267,6 +313,30 @@ std::string logoFor(const std::string& piHex, const std::string& ecc, double fre
     std::lock_guard<std::mutex> lk(g_mtx);
     g_cache[fqdn] = Entry{ url, now };
     return url;
+}
+
+/**
+ * The logo for an FM service, deriving the ECC when the station does not transmit one.
+ *
+ * ★★★ THIS IS THE ENTRY POINT THE SERVER SHOULD USE. Deriving from the receiver's configured
+ *     COUNTRY was the first attempt and it failed in the field for the most ordinary reason
+ *     possible: the demo server has no country configured, so nothing could be derived and the
+ *     feature silently did nothing at all. A lookup that depends on a setting most owners will
+ *     never fill in is a lookup that mostly will not happen.
+ * ★★ RadioDNS is the authority, so ASK IT. A wrong GCC does not resolve; the nibble narrows the
+ *    field to about ten; every answer, hit or miss, is cached. The receiver's country still goes
+ *    first when it is known, so the common case is one lookup rather than ten — and a station from
+ *    across a BORDER now works too, which the country-derived version refused by design.
+ */
+std::string logoForAuto(const std::string& piHex, const std::string& ecc, double freqHz,
+                        const std::string& preferIso) {
+    const bool haveEcc = ecc.size() >= 2 && ecc != "00" && ecc != "0";
+    if (haveEcc) return logoFor(piHex, ecc, freqHz);
+    for (const auto& cand : eccCandidates(piHex, preferIso)) {
+        const std::string url = logoFor(piHex, cand, freqHz);
+        if (!url.empty()) return url;
+    }
+    return {};
 }
 
 }  // namespace vsradiodns

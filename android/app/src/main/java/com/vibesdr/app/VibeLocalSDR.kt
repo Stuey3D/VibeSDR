@@ -145,29 +145,54 @@ object VibeLocalSDR {
     //      THIS process   listenForHandoff() + setPathPrefix()
     //      :frontdoor     startFrontDoor()   + setHandoffRoute()
 
-    /** Accept connections handed over by the front door. Returns null on success, or the reason.
-     *
-     *  ★★★ CALL IT AFTER THE SERVER IS RUNNING. The listener attaches to a live server, and
-     *      registering it earlier fails with "server not running" — quietly, leaving the radio
-     *      unreachable through the door while it looks perfectly healthy on its own port. The Pi
-     *      shipped exactly that bug on 2026-08-08. */
-    fun listenForHandoff(socketPath: String): String? { ensureLoaded(); return nativeListenForHandoff(socketPath) }
-    private external fun nativeListenForHandoff(socketPath: String): String?
+    // ── ★★★ ADVANCED MODE ────────────────────────────────────────────────────────────────
+    //
+    // ★★★ THE FRONT DOOR WAS REMOVED FROM ANDROID, DELIBERATELY. The phone serves ONE radio, and
+    //     with one radio Simple mode already listens on exactly one port — so a door bought
+    //     nothing and cost a second process Android is free to kill (Stuart, 2026-08-12: "so its
+    //     not FULL if compared to those"; hence ADVANCED, which promises no parity it cannot
+    //     deliver). Everything below is a property of THIS process. It all existed in the shim
+    //     already and served the admin API; none of it was reachable from Kotlin, which is why a
+    //     wiring gap looked like a missing feature.
 
-    /** Our own "/r/<id>" prefix, stripped from arriving requests so every route keeps matching
-     *  bare paths. `alt` is the serial form, still accepted so older links keep working. */
-    fun setPathPrefix(prefix: String, alt: String = "") { ensureLoaded(); nativeSetPathPrefix(prefix, alt) }
-    private external fun nativeSetPathPrefix(prefix: String, alt: String)
+    /** Show the management surface — listeners, blocking, history, countries. ★ It changes what
+     *  the admin page DISPLAYS, not what is recorded: a private server still keeps its log and
+     *  honours its bans, so turning this on later arrives with history already there. */
+    fun setPublicSharing(on: Boolean) { ensureLoaded(); nativeSetPublicSharing(on) }
+    private external fun nativeSetPublicSharing(on: Boolean)
 
-    /** Start a server that owns NO radio. Returns the port, or -1. Call in the :frontdoor process
-     *  ONLY — in the main process it would bind the port the radio is already using. */
-    fun startFrontDoor(port: Int): Int { ensureLoaded(); return nativeStartFrontDoor(port) }
-    private external fun nativeStartFrontDoor(port: Int): Int
+    /** ★★ Where the ban list and connection log LIVE. Without these both work and then evaporate
+     *  on restart — a ban that holds all evening and is gone by morning. */
+    fun setAdminPaths(bansPath: String, logPath: String) { ensureLoaded(); nativeSetAdminPaths(bansPath, logPath) }
+    private external fun nativeSetAdminPaths(bansPath: String, logPath: String)
 
-    /** Tell the front door where the one radio lives. Android is capped at one radio, so this is
-     *  a fixed mapping rather than the config lookup the Pi does. */
-    fun setHandoffRoute(dir: String, serial: String, id: String) { ensureLoaded(); nativeSetHandoffRoute(dir, serial, id) }
-    private external fun nativeSetHandoffRoute(dir: String, serial: String, id: String)
+    /** Reverse proxies whose X-Forwarded-For we believe. ★★★ Behind a tunnel with this unset,
+     *  EVERY visitor arrives as 127.0.0.1 — which counts as the owner, silently switching off the
+     *  session limit and leaving the ban list unable to tell two people apart. */
+    fun setTrustedProxies(csv: String) { ensureLoaded(); nativeSetTrustedProxies(csv) }
+    private external fun nativeSetTrustedProxies(csv: String)
+
+    /** How many listeners may share this radio at once. 1 = the single-occupant server. */
+    fun setMaxUsers(n: Int) { ensureLoaded(); nativeSetMaxUsers(n) }
+    private external fun nativeSetMaxUsers(n: Int)
+
+    /** Where listeners may tune. Empty allow = anywhere it can hear; block always wins. */
+    fun setTuneLimits(allowCsv: String, blockCsv: String) { ensureLoaded(); nativeSetTuneLimits(allowCsv, blockCsv) }
+    private external fun nativeSetTuneLimits(allowCsv: String, blockCsv: String)
+
+    /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and
+     *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at
+     *  the idle park — a cap applied at only one of those is one a listener can walk around. */
+    fun setGainLimits(csv: String, restGain: Int, agcLock: Boolean) { ensureLoaded(); nativeSetGainLimits(csv, restGain, agcLock) }
+    private external fun nativeSetGainLimits(csv: String, restGain: Int, agcLock: Boolean)
+
+    /** The radio's REAL gain ladder + the RSP's RF position count, for the limiter's slider. */
+    fun gainStepsJson(): String { ensureLoaded(); return nativeGainStepsJson() }
+    private external fun nativeGainStepsJson(): String
+
+    /** The server's own band list, so the phone's limiter uses the edges the server enforces. */
+    fun bandsJson(): String { ensureLoaded(); return nativeBandsJson() }
+    private external fun nativeBandsJson(): String
 
     /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
      *  Call before startSpectrum(). */

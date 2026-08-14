@@ -1614,6 +1614,10 @@ public:
      *  a signal that needs it, and a listener who never touches it should get the better sound. */
     void setWeakSignalProc(bool on) { weakProcOn_.store(on, std::memory_order_relaxed); }
     bool weakSignalProc() const { return weakProcOn_.load(std::memory_order_relaxed); }
+    /** IMS — the adaptive IF, and where the multipath responses will live. ON by default: like the
+     *  noise treatment it only acts when the evidence says it will help. */
+    void setIms(bool on) { imsOn_.store(on, std::memory_order_relaxed); }
+    bool ims() const { return imsOn_.load(std::memory_order_relaxed); }
     /** Adaptive IF width in Hz (0 = wide open). Settable directly so a test can measure whether
      *  narrowing actually BUYS anything before any policy is built on top of it. */
     void setIfBandwidth(double hz) { ifBwReq_.store(hz, std::memory_order_relaxed); }
@@ -1738,6 +1742,12 @@ private:
     //     AGENTS.md forbids — but A/B is a real use, not a hypothetical one.
     std::atomic<bool> weakProcOn_{true};
     std::atomic<double> ifBwReq_{0.0};       // requested adaptive IF width, 0 = wide
+    // ★★★ IMS IS ITS OWN SWITCH, SEPARATE FROM THE NOISE TREATMENT. They answer different faults:
+    //     NR (high-blend + high-cut) works on NOISE; this works on a NEIGHBOUR. Measured, they
+    //     even want opposite actions — narrowing costs up to 10 dB against noise and gains 10 dB
+    //     against a strong adjacent channel — so folding them into one button would mean a
+    //     listener could not tell which of the two was helping (Stuart: "where is the IMS button").
+    std::atomic<bool> imsOn_{true};
     std::atomic<bool> rdsEnabled_{true};     // see setRdsEnabled — shared-receiver economy
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     // ── HIGH-BLEND: the stereo hiss cure ─────────────────────────────────────────────────────

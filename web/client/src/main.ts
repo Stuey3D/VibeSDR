@@ -859,6 +859,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //   what the radio is doing, not what this tab last asked for.
       setToggleTo('wsp', s.wsp, 'wsp');
       $('wspBtn').textContent = s.wsp ? 'NR ON' : 'NR OFF';
+      setToggleTo('ims', s.ims, 'ims');
+      $('imsBtn').textContent = s.ims ? 'IMS ON' : 'IMS OFF';
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -1021,6 +1023,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         logoQuery = '';
         logoDnsKey = '';
         rdsLogoProvisional = false;
+  logoFromIdentity = false;
+        logoFromIdentity = false;
       }
       // ★★★ AND UPGRADE A DERIVED ANSWER THE MOMENT THE REAL ECC ARRIVES. A logo found from an
       //     ECC we DERIVED rests on the assumption that the station is in the receiver's own
@@ -1690,6 +1694,7 @@ function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
   rdsLogoProvisional = false;
+  logoFromIdentity = false;
   rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
   grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
   rdsFreq = -1;
@@ -1718,6 +1723,13 @@ let logoDnsKey = '';
 /** ★ True when the logo we are showing was found from a DERIVED ECC (the receiver's country), so
  *  it is our inference and not the transmitter's word. A real ECC arriving later replaces it. */
 let rdsLogoProvisional = false;
+/** ★★★ WHERE THE CURRENT LOGO CAME FROM. Identity (PI+ECC+frequency, the broadcaster's own file)
+ *  OUTRANKS a name match, always — and without recording the source there is nothing to enforce
+ *  that with. Making name results provisional accidentally let the name ladder RUN AFTER a
+ *  successful RadioDNS lookup and overwrite it, including with '' when radio-browser had no
+ *  match: "RadioDNS is not showing up any icons anymore" (Stuart, 2026-08-14). A ranking that
+ *  exists only in the ORDER things happen is not a ranking; it is a race with an opinion. */
+let logoFromIdentity = false;
 
 /** ★★★ BAND CROSSING, as the app announces it. The web VTS computed the band and then hid the
  *  whole bar whenever there was no station name — so on HF, where most of the dial has no
@@ -2143,6 +2155,7 @@ async function resolveRdsLogoBest(iso: string) {
           // we ASKED about, not to whatever is tuned now.
           if (url && logoDnsKey === key) {
             rdsLogoUrl = url;
+            logoFromIdentity = true;
             // ★ Remember HOW we identified it. Derived (we sent "00") is provisional and will be
             //   re-asked when the transmitter finally states its country; transmitted is final.
             rdsLogoProvisional = (rdsEcc <= 0);
@@ -2154,6 +2167,12 @@ async function resolveRdsLogoBest(iso: string) {
       } catch { /* no server route, or offline — the name ladder below still applies */ }
     }
   }
+  // ★★★ THE NAME LADDER DOES NOT RUN ONCE IDENTITY HAS ANSWERED. The PI is error-protected and
+  //     repeated eleven times a second; a name is eight characters of rotating text that one bad
+  //     decode can turn into another station. There is no circumstance in which the second should
+  //     be allowed to replace the first.
+  if (logoFromIdentity && rdsLogoUrl) return;
+
   const longPs = (rdsExt?.longPs ?? '').trim();
   // ★ Only the opening of the RadioText: the station name, not the track.
   const rtHead = rdsText.split(/[-–|:]/)[0].trim().split(/\s+/).slice(0, 4).join(' ');
@@ -2177,6 +2196,8 @@ async function resolveRdsLogo(name: string, iso: string) {
     const url = await lookupStationLogo(name, iso || undefined, serverIso || undefined);
     // A slow lookup must not overwrite a station we've since tuned away from.
     if (logoQuery !== key) return;
+    // ★ A slow name lookup may land AFTER identity has answered — it must not undo it.
+    if (logoFromIdentity && rdsLogoUrl) return;
     rdsLogoUrl = url || '';
     // ★★★ A NAME-SEARCH RESULT IS PROVISIONAL, AND SAYING SO IS THE WHOLE FIX. A NAME IS NOT AN
     //     IDENTITY: radio-browser matched "BBC 3CR" to a generic Radioplayer icon, and because a
@@ -6374,6 +6395,13 @@ function buildMenu() {
     $('wspBtn').textContent = on ? 'NR ON' : 'NR OFF';
     spec!.setWeakProc(on);
   }, 'wsp', true);
+  // ★ IMS is its OWN switch. NR works on noise, IMS works on a neighbour, and measured they want
+  //   opposite actions — so one button for both would leave a listener unable to tell which of the
+  //   two was helping (Stuart: "where is the IMS button to toggle it?").
+  toggle('imsBtn', (on) => {
+    $('imsBtn').textContent = on ? 'IMS ON' : 'IMS OFF';
+    spec!.setIms(on);
+  }, 'ims', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -6519,6 +6547,7 @@ function pushSettingsToServer() {
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
   const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
+  const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
   const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
   const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
   const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);
@@ -6682,6 +6711,7 @@ function setMode(m: SDRMode, send: boolean) {
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
   rdsLogoProvisional = false;
+  logoFromIdentity = false;
   }
   updateVts();
   syncBw();

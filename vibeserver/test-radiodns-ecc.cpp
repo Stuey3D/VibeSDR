@@ -58,6 +58,31 @@ int main() {
     ck("",   "C363", "", "no country");
     ck("GB", "ZZZZ", "", "a PI that is not hex");
 
+    // ── The candidates, which is what actually runs when no ECC is transmitted ────────────────
+    // ★★★ THE COUNTRY-DERIVED VERSION FAILED IN THE FIELD FOR THE DULLEST POSSIBLE REASON: the
+    //     demo server has NO COUNTRY CONFIGURED, so eccForIso() returned nothing and the whole
+    //     feature silently did nothing at all ("RadioDNS is not showing up any icons anymore").
+    //     Every test here passed throughout — because every one of them PASSED A COUNTRY IN. The
+    //     untested path was the one every real server takes.
+    std::printf("\nECC candidates (what runs when the station sends no ECC)\n");
+    {
+        const auto withIso = vsradiodns::eccCandidates("C363", "GB");
+        const auto noIso   = vsradiodns::eccCandidates("C363", "");
+        std::printf("   with GB: %zu candidates, first %s\n", withIso.size(),
+                    withIso.empty() ? "--" : withIso[0].c_str());
+        std::printf("   with no country: %zu candidates\n", noIso.size());
+        if (!(withIso.size() > 1 && withIso[0] == "E1")) {
+            ++fails; std::printf("  FAIL the receiver's own country must be tried FIRST\n");
+        } else std::printf("  ok   the receiver's own country is tried FIRST\n");
+        if (noIso.size() < 5) {
+            ++fails; std::printf("  FAIL NO COUNTRY must still produce candidates\n");
+        } else std::printf("  ok   ★★★ NO COUNTRY still produces candidates — the case that shipped broken\n");
+        bool hasE1 = false;
+        for (const auto& c : noIso) if (c == "E1") hasE1 = true;
+        if (!hasE1) { ++fails; std::printf("  FAIL E1 missing from the nibble-C candidates\n"); }
+        else std::printf("  ok   E1 is among them, so a GB station resolves from any server\n");
+    }
+
     std::printf(fails ? "FAILED %d\n" : "all good\n", fails);
     return fails ? 1 : 0;
 }

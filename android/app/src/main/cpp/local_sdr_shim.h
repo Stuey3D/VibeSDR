@@ -532,6 +532,10 @@ public:
     //   because they are one treatment — and a DXer A/B-ing a marginal catch wants BOTH out of the
     //   way, not half of it (asked for by Saber via the FM-DX community, 2026-08-14).
     void setWeakProc(bool on);
+    // ★ IMS is SEPARATE from the noise treatment on purpose: NR works on noise, this works on a
+    //   neighbour, and measured they want opposite actions. One button for both would leave a
+    //   listener unable to tell which of the two was helping.
+    void setIms(bool on);
     void setStereoEnabled(bool on);       // WFM: allow stereo (true) vs force mono
     float getNrCpu();                     // NR CPU% (rolling) for the UI readout
     // Returns supported tuner gains (tenths of dB); empty if not running.

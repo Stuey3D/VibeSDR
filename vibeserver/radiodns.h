@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 
 /**
  * RadioDNS — the broadcaster's OWN station logo, found from what the transmitter tells us.
@@ -60,6 +61,17 @@ std::string logoFor(const std::string& piHex, const std::string& ecc, double fre
  * @param piHex the PI as hex; only its first nibble is used
  */
 std::string eccForIso(const std::string& iso, const std::string& piHex);
+
+/** Every ECC that could go with this PI's country nibble, the receiver's own country first.
+ *  Exposed so it can be tested WITHOUT a country — the case that shipped broken. */
+std::vector<std::string> eccCandidates(const std::string& piHex, const std::string& preferIso);
+
+/** The logo for a service, working the ECC out when the station transmits none — which is most of
+ *  them. Prefer this over logoFor(): deriving from the receiver's configured country fails
+ *  whenever that country is unset, which on the demo server meant the whole feature did nothing.
+ *  @param preferIso the receiver's own country, tried first; may be empty. */
+std::string logoForAuto(const std::string& piHex, const std::string& ecc, double freqHz,
+                        const std::string& preferIso);
 
 /** Where the cache lives, for the same reason the other data directories are settable. */
 void setDir(const std::string& dir);

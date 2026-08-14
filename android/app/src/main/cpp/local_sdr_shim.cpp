@@ -1392,6 +1392,7 @@ struct LocalSdrShim::Impl {
     // ★ Weak-signal processing (high-blend + audio high-cut). Defaults ON: it only ever acts on a
     //   signal that needs it, so a listener who never touches it should get the better sound.
     std::atomic<bool>  weakProcOn{true};
+    std::atomic<bool>  imsOn{true};        // adaptive IF — a neighbour, not noise
     std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
     std::mutex         nrMtx;
     AudioNR*           nrEng = nullptr;
@@ -5433,6 +5434,11 @@ struct LocalSdrShim::Impl {
             LocalSdrShim::instance().setWeakProc(msg.find("\"on\":true") != std::string::npos);
             return;
         }
+        if (type == "ims") {
+            if (!sharedGate("IMS")) return;
+            LocalSdrShim::instance().setIms(msg.find("\"on\":true") != std::string::npos);
+            return;
+        }
         if (type == "notch") {
             if (!sharedGate("the notch filter")) return;
             LocalSdrShim::instance().setNotch(msg.find("\"on\":true") != std::string::npos); return;
@@ -5703,6 +5709,7 @@ struct LocalSdrShim::Impl {
         //    restored by a client that reconnects, and the button then lies about the radio — the
         //    lesson from the July fix that did `nr` and `notch` and left four siblings behind.
         j += std::string(",\"wsp\":")   + (weakProcOn.load() ? "true" : "false");
+        j += std::string(",\"ims\":")   + (imsOn.load()      ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -9470,6 +9477,7 @@ struct DesiredDsp {
     std::atomic<float>  nrStrength{-1.0f};  // <0 = never set, so leave the engine alone
     std::atomic<bool>   notchOn{false};     // Impl::notchOn
     std::atomic<bool>   weakProcOn{true};   // Impl::weakProcOn — replayed onto a fresh Impl
+    std::atomic<bool>   imsOn{true};        // Impl::imsOn
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
     // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
     // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
@@ -11408,6 +11416,15 @@ void LocalSdrShim::setWeakProc(bool on) {
     { std::lock_guard<std::mutex> lk(p->clientMtx);
       for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setWeakSignalProc(on); }
     LOGI("weak-signal processing: %d", on);
+}
+void LocalSdrShim::setIms(bool on) {
+    g_dsp.imsOn.store(on);
+    if (!p) return;
+    p->imsOn.store(on);
+    p->rx.setIms(on);
+    { std::lock_guard<std::mutex> lk(p->clientMtx);
+      for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setIms(on); }
+    LOGI("IMS (adaptive IF): %d", on);
 }
 void LocalSdrShim::setNotch(bool on) {
     g_dsp.notchOn.store(on);

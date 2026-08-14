@@ -70,16 +70,7 @@
                  android:resource="@xml/device_filter"/>
     </activity>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
-    <!-- ★★★ FULL MODE'S FRONT DOOR, IN ITS OWN PROCESS. `android:process` makes this a real
-         Android component rather than a forked binary the OS does not track: foregroundable,
-         restartable, START_STICKY. It gets its own copy of the shim's globals, which is required
-         and not incidental — one address space holding both a radio and a front door would have
-         the door answering as the radio. It owns no USB device by design. -->
-    <service android:name=".FrontDoorService"
-             android:process=":frontdoor"
-             android:foregroundServiceType="dataSync"
-             android:exported="false"/>
-    <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
+        <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>
         <action android:name="android.media.browse.MediaBrowserService"/>
       </intent-filter>

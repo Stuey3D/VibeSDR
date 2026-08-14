@@ -1915,6 +1915,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    a hidden row — e.g. the pinned-rate row — still showed, giving a duplicate "SAMPLE RATE" label. */
 .mrow[hidden] { display: none; }
 .mrow label { color: var(--btn-text); flex: 0 0 auto; }
+/* ★ A subsection inside a panel. The AUDIO panel mixes controls that apply to EVERY mode (squelch,
+   NR, notch) with ones that only mean anything on broadcast FM (de-emphasis, stereo, high-blend,
+   IMS). Without a divider a listener on SSB reads four rows that can do nothing for them, and a
+   listener on FM cannot see that these belong together (Stuart, 2026-08-14). */
+.msub { margin: 14px 0 2px; font-size: 11px; letter-spacing: 2px; color: var(--amber);
+        opacity: .8; border-top: 1px solid rgba(255,160,0,.22); padding-top: 10px; }
 /* The split is meaningless while the spectrum trace is hidden — show the control as inert. */
 .mrow.dim { opacity: .38; }
 .mrow .val { color: var(--unit); font-size: 11px; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -2698,6 +2704,7 @@ select.btn { padding: 6px 8px; }
     <label>AUTO NOTCH</label>
     <div class="seg"><button class="btn" id="notch">OFF</button></div>
   </div>
+  <div class="msub">BROADCAST FM</div>
   <div class="mrow">
     <label>FM DE-EMPHASIS</label>
     <div class="seg" id="deemphSeg">
@@ -2714,9 +2721,10 @@ select.btn { padding: 6px 8px; }
        voice, and never usable on music). This is the FM weak-signal processing — stereo high-blend
        plus the matching audio high-cut, which is a pair of moving filters and has no artefacts. -->
   <div class="mrow">
-    <label>WFM STEREO</label>
+    <label>STEREO · NR<span style="opacity:.55"> (mono too)</span></label>
     <div class="seg"><button class="btn on" id="stereoBtn">ON</button><button class="btn on"
-      id="wspBtn" title="FM weak-signal processing: stereo high-blend + audio high-cut. Acts only on a noisy signal — a strong station is bypassed entirely. Turn off to A/B what it is doing.">NR ON</button></div>
+      id="wspBtn" title="Weak-signal noise treatment: stereo high-blend plus an audio high-cut. WORKS IN MONO TOO — the high-cut treats baseband hiss, which is there whether you are in stereo or not; only the stereo half needs L-R. Acts only on a noisy signal: a strong station is bypassed entirely. Turn off to A/B what it is doing.">NR ON</button><button class="btn on"
+      id="imsBtn" title="IMS — adaptive IF. Narrows the receiver when a strong ADJACENT station is interfering, and deliberately does NOT narrow for noise: measured, narrowing costs up to 10 dB against noise and gains 10 dB against a close neighbour. Separate from NR because they answer different faults. Watch the IF NARROW figure in the Advanced RDS panel to see what it is deciding.">IMS ON</button></div>
   </div>
 </div>
 

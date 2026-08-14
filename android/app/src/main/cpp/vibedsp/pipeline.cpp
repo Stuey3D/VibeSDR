@@ -535,7 +535,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    late one. Three dB of margin and several seconds of agreement before it moves,
             //    and the SAME margin in both directions so it cannot sit on the boundary
             //    chattering between two states.
-            if (weakProcOn_.load(std::memory_order_relaxed)) {
+            if (imsOn_.load(std::memory_order_relaxed)) {
                 if (ifGainDb_ > 3.0f) {
                     if (++ifDwell_ > 40) {            // ~3 s at one evaluation per 4 blocks
                         ifDwell_ = 0;
@@ -544,7 +544,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     }
                 } else ifDwell_ = 0;
             } else if (ifBwHz_ > 0.0) {
-                ifBwReq_.store(0.0, std::memory_order_relaxed);   // switched off = wide open
+                ifBwReq_.store(0.0, std::memory_order_relaxed);   // IMS off = wide open
                 ifDwell_ = 0;
             }
         }
