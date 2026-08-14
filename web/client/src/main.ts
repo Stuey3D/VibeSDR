@@ -1032,7 +1032,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //     this whole identity path exists to prevent.
       // ★ One upgrade only: once we have asked with a real ECC the answer is authoritative, and
       //   rdsLogoProvisional stays false so a repeating ECC cannot start a request loop.
-      if (!rdsLogoUrl || (rdsLogoProvisional && rdsEcc > 0)) void resolveRdsLogoBest(rdsIso);
+      // ★★ Re-ask when a PROVISIONAL logo could now be improved: either a real ECC has arrived
+      //    (which may correct a derived one), or we have a PI and identity has not been tried yet
+      //    for it. `logoDnsKey` records the attempt, so this cannot loop on a station that simply
+      //    is not in RadioDNS — it asks once per PI+frequency and then leaves it alone.
+      if (!rdsLogoUrl || (rdsLogoProvisional && (rdsEcc > 0 || rdsPi > 0)))
+        void resolveRdsLogoBest(rdsIso);
       rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
       if (rdsPanelOpen()) renderRds();
       updateVts();
@@ -2173,6 +2178,16 @@ async function resolveRdsLogo(name: string, iso: string) {
     // A slow lookup must not overwrite a station we've since tuned away from.
     if (logoQuery !== key) return;
     rdsLogoUrl = url || '';
+    // ★★★ A NAME-SEARCH RESULT IS PROVISIONAL, AND SAYING SO IS THE WHOLE FIX. A NAME IS NOT AN
+    //     IDENTITY: radio-browser matched "BBC 3CR" to a generic Radioplayer icon, and because a
+    //     logo we already have was never re-examined, that wrong picture LOCKED — even though the
+    //     server was returning the correct BBC Three Counties artwork the whole time, keyed on the
+    //     PI (Stuart, 2026-08-14: "icon is wrong"). The name usually resolves FIRST, before the PI
+    //     has even arrived, so first-past-the-post meant the weakest evidence always won.
+    // ★★ Marking it provisional lets the identity path overrule it the moment the PI is known —
+    //    the same rule the app follows, and the same failure the app already suffered when a weak
+    //    Radio 3 wore the Radio 1 roundel.
+    if (rdsLogoUrl) rdsLogoProvisional = true;
     updateVts();
     updateMediaSession();      // the logo arrives late; the card has to be told
   } catch {
