@@ -5040,7 +5040,12 @@ function renderRds() {
   const snrEl = $('rxMpxSnr');
   const snr = rdsExt?.mpxSnr ?? 0;
   const wspOff = !$('wspBtn').classList.contains('on');
-  if (rdsExt && snr > 0.5) {
+  if (rdsExt && rdsExt.snrOk === false) {
+    // ★★ NO PILOT, NO FIGURE. Printing 70 dB — on a meter whose leakage floor caps it near 34 —
+    //    beside 580.9% multipath was the panel reporting arithmetic as measurement.
+    snrEl.textContent = 'no pilot to measure';
+    snrEl.style.color = '';
+  } else if (rdsExt && snr > 0.5) {
     const lmr = rdsExt.hiCutLmr ?? 15000, aud = rdsExt.hiCutAud ?? 15000;
     const acting = lmr < 14000 || aud < 14000;
     // ★★ "BYPASSED" IS NOT "CLEAN". With the switch off nothing is acting either, but for a
@@ -5062,7 +5067,10 @@ function renderRds() {
   //     (which an aerial rotation may fix) or noise (which it will not).
   const mpEl = $('rxMultipath');
   const mp = rdsExt?.multipath ?? 0;
-  if (rdsExt && rdsExt.multipathOk === false) {
+  if (rdsExt && rdsExt.snrOk === false) {
+    mpEl.textContent = 'no pilot to measure';
+    mpEl.style.color = '';
+  } else if (rdsExt && rdsExt.multipathOk === false) {
     // ★★★ "TOO NOISY TO TELL" IS A RESULT, NOT A BLANK. The first version printed the raw figure
     //     and a 6 dB signal read "25.7% · severe" — which was the NOISE, and would have sent
     //     somebody up a ladder to rotate an aerial (Stuart, on air at 107.8). Below ~12 dB the

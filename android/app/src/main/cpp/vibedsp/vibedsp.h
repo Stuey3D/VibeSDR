@@ -657,18 +657,30 @@ public:
         if (!std::isfinite(depth)) return;
         // ★ Slow, and asymmetric the same way the noise meter is: react to a problem appearing,
         //   but do not let a momentary clean patch declare the multipath solved.
+        // ★★★ A DEPTH ABOVE 1 IS NOT A MEASUREMENT, IT IS A COLLAPSED DENOMINATOR. This is RMS
+        //     wobble over MEAN POWER, so a physical signal sits well under 1 — a -2 dB reflection,
+        //     about as bad as multipath gets, reads 0.25. On air it once showed 580.9% "severe",
+        //     on a station whose pilot had fallen to 1.0 kHz and whose encoder was unlocked
+        //     (Stuart, 2026-08-14, BBC R1 at 98.5): with almost no carrier the mean goes to
+        //     nothing and the ratio explodes. Reporting that as multipath is worse than reporting
+        //     nothing, because it is a confident number about a signal we cannot measure.
+        if (!(depth < 1.0f)) { valid_ = false; return; }
+        valid_ = true;
         const float k = (depth > depth_) ? 0.20f : 0.02f;
         depth_ += k * (depth - depth_);
     }
     /** 0 = constant envelope (no multipath), rising with the depth of the reflection. */
     float depth() const { return depth_; }
+    /** False when the last block produced a figure that cannot be physical — see process(). */
+    bool  plausible() const { return valid_; }
     bool  ready() const { return ready_; }
-    void reset() { mean_ = 0.0f; lp_ = 0.0f; depth_ = 0.0f; }
+    void reset() { mean_ = 0.0f; lp_ = 0.0f; depth_ = 0.0f; valid_ = true; }
 private:
     double rate_ = 0.0;
     bool ready_ = false;
     float aMean_ = 0.0f, aLp_ = 0.0f;
     float mean_ = 0.0f, lp_ = 0.0f, depth_ = 0.0f;
+    bool  valid_ = true;
 };
 
 // ── MPX guard-band noise meter ───────────────────────────────────────────--
@@ -1679,6 +1691,9 @@ public:
      *  stereo?" has an answer other than guessing — the same rule as every other sticky control. */
     float lmrHiCutHz()   const { return lmrHiCutHz_; }
     float blendSnrDb()   const { return blendSnrDb_; }
+    /** False when there is no usable pilot — the S/N and multipath figures are both ratios against
+     *  it, so without one they are arithmetic rather than measurement. */
+    bool  snrValid()     const { return snrValid_; }
     /** Envelope-AM depth: how MULTIPATH-damaged this signal is, as opposed to how weak. An FM
      *  carrier arrives at constant amplitude, so anything here was done by the channel. */
     /** Raw envelope-AM depth — reflection AND noise together. Diagnostics; prefer the corrected
@@ -1892,6 +1907,7 @@ private:
     float hiCutYL_ = 0.0f, hiCutYR_ = 0.0f, hiCutYM_ = 0.0f;
     float multipathCorr_ = 0.0f;   // envelope AM with the measured noise contribution removed
     bool  multipathValid_ = false; // ...and whether that residual means anything at this S/N
+    bool  snrValid_ = false;       // is there a real pilot to measure the S/N against at all?
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()

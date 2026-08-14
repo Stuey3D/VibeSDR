@@ -8884,6 +8884,9 @@ struct LocalSdrShim::Impl {
                       //   as "severe multipath".
                       + ",\"multipath\":" + std::to_string(P_ ? P_->multipathDepth() : 0.0f)
                       + ",\"multipathOk\":" + std::string((P_ && P_->multipathValid()) ? "1" : "0")
+                      // ★ Is there a pilot to measure ANY of this against? Without one, mpxSnr and
+                      //   multipath are both ratios with a collapsed denominator.
+                      + ",\"snrOk\":" + std::string((P_ && P_->snrValid()) ? "1" : "0")
                       + ",\"hiCutLmr\":"  + std::to_string(P_ ? P_->lmrHiCutHz() : 0.0f)
                       + ",\"hiCutAud\":"  + std::to_string(P_ ? P_->audioHiCutHz() : 0.0f)
                       // ★ WOULD A NARROWER IF HELP THIS SIGNAL? Measured live on a shadow copy —

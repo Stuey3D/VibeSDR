@@ -615,7 +615,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    everything it measured, so the residual is the small difference of two large
             //    numbers — the classic way to produce a confident-looking figure that means
             //    nothing. Better to report "cannot tell" than to invent a verdict.
-            multipathValid_ = (blendSnrDb_ > 12.0f);
+            // ★ ...and multipath is only knowable when the S/N figure driving its noise correction
+            //   is itself trustworthy, and when the raw reading was physically possible.
+            multipathValid_ = snrValid_ && multipath_.plausible() && (blendSnrDb_ > 12.0f);
         } else { multipathCorr_ = 0.0f; multipathValid_ = false; }
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
@@ -648,7 +650,17 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // ★ In MONO the pilot PLL still runs, so the reference survives; but if it is not
                 //   tracking at all we have no yardstick and must not invent one — hold the last
                 //   figure rather than reporting a signal as perfect or as hopeless.
-                if (pilot > 1e-6f) {
+                // ★★★ NO PILOT, NO MEASUREMENT. Both of these figures are ratios against the
+                //     19 kHz pilot, so when the pilot collapses the denominators do too and the
+                //     numbers become nonsense: 70 dB of "MPX S/N" on a meter whose leakage floor
+                //     caps it near 34, beside 580.9% "multipath", on a station reading 1.0 kHz of
+                //     pilot deviation with its encoder unlocked (Stuart, 2026-08-14). A real pilot
+                //     is 6.0-7.5 kHz by specification; below about 2 kHz there is nothing to
+                //     measure against and the honest output is to say so and HOLD the last figure.
+                // ★ lockAmp is deviation/75 kHz, so 2 kHz is ~0.027.
+                const bool pilotUsable = (pilot > 0.027f);
+                snrValid_ = pilotUsable;
+                if (pilotUsable) {
                     const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
                     const float db  = 20.0f * std::log10(std::max(snr, 1e-6f));
                     blendSnrDb_ += 0.05f * (db - blendSnrDb_);

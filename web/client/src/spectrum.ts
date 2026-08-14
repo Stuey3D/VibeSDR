@@ -106,6 +106,9 @@ export interface RdsExt {
    *  nearly everything it measured, so the residual is the difference of two large numbers — a
    *  confident-looking figure about nothing. "Cannot tell" is an honest answer; a number is not. */
   multipathOk: boolean;
+  /** Whether there is a usable 19 kHz pilot at all. Both mpxSnr and multipath are ratios against
+   *  it, so with no pilot they are arithmetic rather than measurement — 70 dB and 580% together. */
+  snrOk: boolean;
   hiCutLmr: number;      // where high-blend has rolled the stereo difference off, Hz
   hiCutAud: number;      // where the audio high-cut is sitting, Hz
   /** dB the signal would GAIN by narrowing the IF to ifCand. Positive = narrowing helps. Measured
@@ -572,6 +575,7 @@ export class SpectrumClient {
           mpxSnr: Number(msg.mpxSnr ?? 0),
           multipath: Number(msg.multipath ?? 0),
           multipathOk: Number(msg.multipathOk ?? 0) === 1,
+          snrOk: Number(msg.snrOk ?? 1) === 1,
           // ★ Default to 15000 (wide open), NOT 0. A server too old to send these would otherwise
           //   report a 0 Hz corner, which reads as "everything is being cut" — the alarming
           //   opposite of the truth.
