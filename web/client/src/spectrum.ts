@@ -256,6 +256,9 @@ export class SpectrumClient {
   followVfo = true;
 
   // Predicted view (what we've asked for), vs cfg (what the server acked).
+  /** What we last believed about being admin, so the LOSS of it can be noticed. See the hwinfo
+   *  handler: reporting only the positive left a relocked client showing UNLOCKED for ever. */
+  private adminBelief = false;
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
   private sendTimer: number | null = null;
@@ -487,7 +490,25 @@ export class SpectrumClient {
         //    and pops an alert — but adminOk is false for every ordinary listener, so reporting
         //    it here would alert "that admin password was not accepted" on every single connect,
         //    to people who never typed one. Locked is already the default the UI draws.
-        if (msg.adminOk === true) this.cb.onAdmin?.(true, false);
+        // ★★★ ...AND THE LOSS OF IT, WHICH IS THE HALF THAT WAS MISSING. Reporting only the
+        //     POSITIVE is right for a listener who never typed a password — but it left a client
+        //     that HAD been admin with no way to learn it no longer was. After the server's idle
+        //     re-lock the menu still said UNLOCKED, the password row stayed hidden because
+        //     unlocking had hidden it, and the admin page meanwhile asked for the password again:
+        //     one receiver telling the owner two different things (Stuart, 2026-08-14).
+        // ★★ The relock MESSAGE exists and is handled, but a message can be missed — a socket that
+        //    reconnects, a client that joined after it was sent. hwinfo is the SERVER'S STANDING
+        //    WORD and arrives continuously, so believing it in both directions is what makes this
+        //    self-heal rather than depend on catching one packet.
+        // ★ Only reported on a CHANGE, and never as a refusal, so it greys the controls without
+        //   the "that password was not accepted" alert.
+        if (msg.adminOk === true) {
+          this.adminBelief = true;
+          this.cb.onAdmin?.(true, false);
+        } else if (msg.adminOk === false && this.adminBelief) {
+          this.adminBelief = false;
+          this.cb.onAdmin?.(false, true);
+        }
         break;
       case 'rds':
         this.cb.onRds?.({

@@ -816,7 +816,17 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   misbehave are exactly who it is for.
     onNotice: (text: string) => showOwnerNotice(text),
     onAdmin: (ok, refused) => {
-      if (refused) { adminUnlocked = false; refreshAdminRow(); return; }
+      if (refused) {
+        adminUnlocked = false;
+        // ★★★ AND PUT THE PASSWORD BOX BACK. Unlocking HIDES this row, and this early return
+        //     never un-hid it — so after the idle re-lock the owner was told to unlock by the
+        //     admin page while the menu offered no way to do it. A path that hides a control on
+        //     success must un-hide it on the way back, or the way back does not exist.
+        const pwRowBack = document.getElementById('adminPwRow');
+        if (pwRowBack) pwRowBack.hidden = false;
+        refreshAdminRow();
+        return;
+      }
       adminUnlocked = ok;
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
       if (ok) clearTimeLeft();
