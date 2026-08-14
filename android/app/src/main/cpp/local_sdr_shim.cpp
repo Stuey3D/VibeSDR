@@ -1394,6 +1394,7 @@ struct LocalSdrShim::Impl {
     std::atomic<bool>  weakProcOn{true};
     std::atomic<bool>  imsOn{true};        // adaptive IF — a neighbour, not noise
     std::atomic<bool>  ceqOn{true};        // blind channel equaliser — a reflection
+    std::atomic<bool>  nbOn{true};         // noise blanker — impulses
     std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
     std::mutex         nrMtx;
     AudioNR*           nrEng = nullptr;
@@ -5435,6 +5436,11 @@ struct LocalSdrShim::Impl {
             LocalSdrShim::instance().setWeakProc(msg.find("\"on\":true") != std::string::npos);
             return;
         }
+        if (type == "nb") {
+            if (!sharedGate("the noise blanker")) return;
+            LocalSdrShim::instance().setNoiseBlanker(msg.find("\"on\":true") != std::string::npos);
+            return;
+        }
         if (type == "ceq") {
             if (!sharedGate("CEQ")) return;
             LocalSdrShim::instance().setCeq(msg.find("\"on\":true") != std::string::npos);
@@ -5717,6 +5723,7 @@ struct LocalSdrShim::Impl {
         j += std::string(",\"wsp\":")   + (weakProcOn.load() ? "true" : "false");
         j += std::string(",\"ims\":")   + (imsOn.load()      ? "true" : "false");
         j += std::string(",\"ceq\":")   + (ceqOn.load()      ? "true" : "false");
+        j += std::string(",\"nb\":")    + (nbOn.load()       ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -8905,6 +8912,10 @@ struct LocalSdrShim::Impl {
                       //   so the panel shows what it achieved rather than merely that it ran.
                       + ",\"ceqOn\":" + std::string((P_ && P_->ceqEngaged()) ? "1" : "0")
                       + ",\"ceqAfter\":" + std::to_string(P_ ? P_->multipathAfterCeq() : 0.0f)
+                      // ★ The blanker's RATE is the diagnostic that matters: it tells an owner
+                      //   whether they have an impulse-noise problem at all, which is otherwise
+                      //   pure guesswork ("is that crackle me, or the station?").
+                      + ",\"nbRate\":" + std::to_string(P_ ? P_->noiseBlankRate() : 0.0f)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";
@@ -9494,6 +9505,7 @@ struct DesiredDsp {
     std::atomic<bool>   weakProcOn{true};   // Impl::weakProcOn — replayed onto a fresh Impl
     std::atomic<bool>   imsOn{true};        // Impl::imsOn
     std::atomic<bool>   ceqOn{true};        // Impl::ceqOn
+    std::atomic<bool>   nbOn{true};         // Impl::nbOn
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
     // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
     // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
@@ -11432,6 +11444,15 @@ void LocalSdrShim::setWeakProc(bool on) {
     { std::lock_guard<std::mutex> lk(p->clientMtx);
       for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setWeakSignalProc(on); }
     LOGI("weak-signal processing: %d", on);
+}
+void LocalSdrShim::setNoiseBlanker(bool on) {
+    g_dsp.nbOn.store(on);
+    if (!p) return;
+    p->nbOn.store(on);
+    p->rx.setNoiseBlanker(on);
+    { std::lock_guard<std::mutex> lk(p->clientMtx);
+      for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setNoiseBlanker(on); }
+    LOGI("noise blanker: %d", on);
 }
 void LocalSdrShim::setCeq(bool on) {
     g_dsp.ceqOn.store(on);

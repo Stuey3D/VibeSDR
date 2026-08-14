@@ -55,6 +55,12 @@ struct MpxGen {
     double echoAmp = 0.0;        // reflection amplitude, 0..1 (0.5 = -6 dB)
     int    echoDelay = 3;        // samples at kFs (1 us each ~ 300 m)
     double echoPhase = 1.1;      // radians
+    // ★ Impulse noise: brief, enormous, wideband — ignition, a thermostat, an electric fence.
+    //   Modelled as short bursts at a realistic repetition rate (100/s ~ mains-related buzz).
+    double impAmp = 0.0;
+    int    impEvery = 10000;     // samples between impulses (1 MHz / 10000 = 100 per second)
+    int    impLen = 3;           // samples — microseconds
+    long   impN = 0;
     std::mt19937 rng{2024};
     std::normal_distribution<double> gauss{0.0, 1.0};
     std::deque<cf32> hist;
@@ -84,6 +90,10 @@ struct MpxGen {
             if (noise > 0.0)
                 y = cf32{ (float)(y.real() + noise * gauss(rng)),
                           (float)(y.imag() + noise * gauss(rng)) };
+            if (impAmp > 0.0 && (impN % impEvery) < impLen) {
+                y = cf32{ (float)(y.real() + impAmp), (float)(y.imag() + impAmp * 0.4) };
+            }
+            ++impN;
             out[(size_t)i] = y;
             tAcc += 1.0 / kFs;
         }
@@ -95,15 +105,19 @@ struct Sink {
     static void onAudio(void*, const float*, int, int, int) {}
 };
 
-struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float effort; };
+struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float effort;
+                float nbRate; };
 
-Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0) {
+Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0,
+               double impAmp = 0.0, bool nbOn = true) {
     Sink sink;
     RxPipeline::Callbacks cb{};
     cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
     MpxGen gen; gen.noise = noise; gen.echoAmp = echoAmp; gen.echoDelay = echoDelay;
+    gen.impAmp = impAmp;
     RxPipeline rx;
     rx.start(kFs, 1024, 10.0, 48000, cb);
+    rx.setNoiseBlanker(nbOn);
     rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
     const int block = 8192, total = (int)(kFs * seconds);
     std::vector<cf32> buf;
@@ -112,7 +126,7 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
         rx.feed(buf.data(), (int)buf.size());
     }
     return { rx.multipathDepth(), rx.blendSnrDb(), rx.ceqEngaged(),
-             rx.multipathAfterCeq(), rx.ceqEffort() };
+             rx.multipathAfterCeq(), rx.ceqEffort(), rx.noiseBlankRate() };
 }
 
 }  // namespace
@@ -211,6 +225,50 @@ int main() {
         const Result c = measure(0.0, 0.0, 3, 12.0);
         std::printf("   .. clean, no reflection:     engaged %s\n", c.ceqOn ? "YES" : "no");
         ok(!c.ceqOn, "★ and not on a clean signal either — there is nothing to correct");
+    }
+
+    // ── Noise blanker ─────────────────────────────────────────────────────────────────────────
+    // ★★★ THE FIRST ASSERTION IS THAT IT DOES NOTHING WHEN THERE IS NOTHING TO DO. A blanker that
+    //     triggers on ordinary signal is a distortion generator: it removes real samples and
+    //     replaces them with held ones, and on a clean carrier that is pure damage.
+    std::printf("\nNoise blanker — impulses, not noise\n");
+    {
+        const Result clean = measure(0.0, 0.0, 3, 6.0, 0.0);
+        std::printf("   .. clean signal:        blanked %.4f%%\n", clean.nbRate * 100.0f);
+        ok(clean.nbRate < 0.0005f,
+           "★★★ a CLEAN signal is not blanked at all — a blanker that fires on signal is damage",
+           "blanked " + std::to_string(clean.nbRate * 100.0f) + "%");
+
+        // ★★ AND IT MUST NOT MISTAKE GAUSSIAN NOISE FOR IMPULSES. Noise has no outliers of the
+        //    kind that matter; if this fires on a hissy station it will chew the signal up.
+        const Result noisy = measure(0.60, 0.0, 3, 6.0, 0.0);
+        std::printf("   .. noisy (no impulses): blanked %.4f%%\n", noisy.nbRate * 100.0f);
+        ok(noisy.nbRate < 0.02f,
+           "★★ and hiss is not impulses — the blanker stays out of a merely NOISY signal",
+           "blanked " + std::to_string(noisy.nbRate * 100.0f) + "%");
+
+        const Result imp = measure(0.05, 0.0, 3, 6.0, 6.0);
+        std::printf("   .. with impulses:       blanked %.4f%%\n", imp.nbRate * 100.0f);
+        // ★ THE RATE IS MEANT TO BE TINY, and my first threshold (0.02%) was simply wrong: the
+        //   generator fires 3 samples in every 10000 at 1 MHz, and the chain decimates by four
+        //   before this sees anything, so a few hundredths of a percent IS the whole of the
+        //   interference. A blanker removing a large fraction of a signal would be the alarming
+        //   result, not this one — which is why the assertion that matters is the dB one below.
+        ok(imp.nbRate > clean.nbRate * 10.0f + 0.00005f,
+           "★ impulses ARE detected and excised",
+           "blanked " + std::to_string(imp.nbRate * 100.0f) + "%");
+
+        // ★★★ AND DOES IT ACTUALLY HELP? Detecting them is not the point; the point is that the
+        //     signal measures better afterwards. Blanking at the CHANNEL rate is a compromise —
+        //     the decimation filters have already smeared each impulse into a ring — so this is
+        //     the number that decides whether the placement is good enough or the blanker belongs
+        //     earlier in the chain, at real CPU cost.
+        const Result impOff = measure(0.05, 0.0, 3, 6.0, 6.0, /*nbOn=*/false);
+        std::printf("   .. impulses, NB off %.1f dB   NB on %.1f dB   -> %+.1f dB\n",
+                    impOff.snrDb, imp.snrDb, imp.snrDb - impOff.snrDb);
+        ok(imp.snrDb > impOff.snrDb + 0.5f,
+           "★★★ AND THE SIGNAL MEASURES BETTER FOR IT — the only result that matters",
+           "off " + std::to_string(impOff.snrDb) + " dB, on " + std::to_string(imp.snrDb) + " dB");
     }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);

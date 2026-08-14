@@ -500,6 +500,75 @@ private:
     std::vector<cf32> scratch_;
 };
 
+// ── Noise blanker (impulse noise) ────────────────────────────────────────--
+/**
+ * Excise impulse noise — ignition, thermostats, switch-mode supplies, electric fences.
+ *
+ * ★★★ A DIFFERENT FAULT AGAIN, AND THE FOURTH IN THIS FAMILY. Noise is continuous and cured by
+ *     throwing bandwidth away; a neighbour is cured by narrowing; a reflection is cured by
+ *     equalising. IMPULSE noise is none of those: it is brief, enormous and wideband, and the cure
+ *     is to remove the moments it occupies and leave the rest of the signal alone. Averaging it,
+ *     filtering it or equalising it all fail, because between the impulses the signal is perfect.
+ *
+ * ★★ AN FM CARRIER'S AMPLITUDE IS CONSTANT — the same property CEQ exploits — so an impulse is
+ *    trivially visible as a sample far above the running mean. No spectral analysis, no training:
+ *    if it is ten times the average envelope, the transmitter did not send it.
+ *
+ * ★★★ HOLD, DO NOT ZERO. Blanking to zero replaces an impulse with a step, and a step is itself
+ *     wideband — it trades a click for a different click, which is the classic way a blanker makes
+ *     a receiver sound worse. Holding the last good sample keeps the envelope constant and the
+ *     phase continuous, which is what an FM demodulator wants.
+ * ★★ AND A LIMIT ON CONSECUTIVE SAMPLES. If the "impulse" lasts, it is not an impulse — it is the
+ *    signal, or a fade, or the AGC moving — and blanking it would mute the station. After the
+ *    limit the blanker gives up and lets it through, which fails safe rather than silent.
+ */
+class NoiseBlanker {
+public:
+    void configure(double rate) {
+        rate_ = rate;
+        // A slow envelope average: the reference must not follow the impulses it is detecting.
+        a_ = (rate > 0.0) ? (float)(1.0 / (rate * 0.020)) : 0.0f;
+        reset();
+    }
+    void reset() { avg_ = 0.0f; run_ = 0; blanked_ = 0; seen_ = 0; last_ = cf32{0.0f, 0.0f}; }
+    /** @param k how far above the running mean counts as an impulse. */
+    void process(cf32* z, int n, float k) {
+        if (n <= 0 || a_ <= 0.0f) return;
+        for (int i = 0; i < n; ++i) {
+            const float m = std::sqrt(z[i].real() * z[i].real() + z[i].imag() * z[i].imag());
+            if (avg_ <= 0.0f) avg_ = m;                       // first sample: seed, do not blank
+            const bool hit = (m > k * avg_) && (run_ < kMaxRun);
+            if (hit) {
+                z[i] = last_;                                 // hold — see the note above
+                ++run_; ++blanked_;
+            } else {
+                run_ = 0;
+                last_ = z[i];
+                // ★ The average is updated ONLY on samples we kept. Feeding the impulses back into
+                //   it would raise the threshold until the loudest interference defined "normal",
+                //   and the blanker would quietly stop blanking exactly when it was needed most.
+                avg_ += a_ * (m - avg_);
+                if (!std::isfinite(avg_)) avg_ = m;
+            }
+            ++seen_;
+        }
+    }
+    /** Fraction of samples blanked since the last read, 0..1 — and the reading resets the count so
+     *  the panel shows a RATE rather than an ever-growing total. */
+    float rate() {
+        const float r = (seen_ > 0) ? (float)blanked_ / (float)seen_ : 0.0f;
+        blanked_ = 0; seen_ = 0;
+        return r;
+    }
+private:
+    static constexpr int kMaxRun = 8;   // consecutive samples; beyond this it is not an impulse
+    double rate_ = 0.0;
+    float a_ = 0.0f, avg_ = 0.0f;
+    int run_ = 0;
+    long long blanked_ = 0, seen_ = 0;
+    cf32 last_{0.0f, 0.0f};
+};
+
 // ── CEQ: a blind channel equaliser for FM ────────────────────────────────--
 /**
  * Undo a reflection, rather than merely hide it.
@@ -1707,6 +1776,12 @@ public:
     /** CEQ — the blind channel equaliser. Reports whether it is ENGAGED (it only engages on a good
      *  signal with real multipath), how hard it is working, and what the multipath depth looks
      *  like AFTER it. Engaged plus no improvement is a failure the panel can show. */
+    /** Noise blanker — impulse noise only. ON by default: on a clean signal it blanks nothing. */
+    void  setNoiseBlanker(bool on) { nbOn_.store(on, std::memory_order_relaxed); }
+    bool  noiseBlanker() const { return nbOn_.load(std::memory_order_relaxed); }
+    /** Fraction of samples being blanked, 0..1. This is the DIAGNOSTIC that matters: it tells an
+     *  owner whether they have an impulse-noise problem at all, which is otherwise guesswork. */
+    float noiseBlankRate() const { return nbRate_; }
     void  setCeq(bool on) { ceqOn_.store(on, std::memory_order_relaxed); }
     bool  ceq() const { return ceqOn_.load(std::memory_order_relaxed); }
     bool  ceqEngaged() const { return ceqEngaged_; }
@@ -1870,6 +1945,9 @@ private:
     //     reads it as the equaliser leaves it. Two meters mean the feature scores itself on every
     //     real signal instead of being trusted — and a CMA equaliser that is making things worse
     //     is not a hypothetical: fed noise it will contort itself trying to correct randomness.
+    NoiseBlanker   nb_;
+    std::atomic<bool> nbOn_{true};
+    float          nbRate_ = 0.0f;          // fraction of samples blanked, smoothed
     CmaEqualiser   ceq_;
     MultipathMeter ceqOut_;
     std::atomic<bool> ceqOn_{true};

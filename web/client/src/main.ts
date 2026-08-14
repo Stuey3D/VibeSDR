@@ -873,6 +873,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       $('imsBtn').textContent = s.ims ? 'IMS ON' : 'IMS OFF';
       setToggleTo('ceq', s.ceq, 'ceq');
       $('ceqBtn').textContent = s.ceq ? 'CEQ ON' : 'CEQ OFF';
+      setToggleTo('nb', s.nb, 'nb');
+      $('nbBtn').textContent = s.nb ? 'NB ON' : 'NB OFF';
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -1742,6 +1744,9 @@ let rdsLogoProvisional = false;
  *  match: "RadioDNS is not showing up any icons anymore" (Stuart, 2026-08-14). A ranking that
  *  exists only in the ORDER things happen is not a ranking; it is a race with an opinion. */
 let logoFromIdentity = false;
+/** The last multipath figure we could stand behind, kept so a dip in confidence dims the reading
+ *  instead of replacing it. Cleared on retune — it describes a station, not a receiver. */
+let mpHeld = '';
 
 /** ★★★ BAND CROSSING, as the app announces it. The web VTS computed the band and then hid the
  *  whole bar whenever there was no station name — so on HF, where most of the dial has no
@@ -5070,6 +5075,13 @@ function renderRds() {
   if (rdsExt && rdsExt.snrOk === false) {
     mpEl.textContent = 'no pilot to measure';
     mpEl.style.color = '';
+  } else if (rdsExt && rdsExt.multipathOk === false && mpHeld) {
+    // ★★ HOLD THE LAST GOOD FIGURE rather than replacing it. Even with hysteresis on the server a
+    //    signal can drift across the line, and a panel that swaps between a number and a sentence
+    //    is harder to read than either — the eye is drawn to the CHANGE. Shown dimmed and marked
+    //    "held" so it is never mistaken for a live reading.
+    mpEl.textContent = `${mpHeld} · held`;
+    mpEl.style.color = 'rgba(255,255,255,0.35)';
   } else if (rdsExt && rdsExt.multipathOk === false) {
     // ★★★ "TOO NOISY TO TELL" IS A RESULT, NOT A BLANK. The first version printed the raw figure
     //     and a 6 dB signal read "25.7% · severe" — which was the NOISE, and would have sent
@@ -5082,6 +5094,7 @@ function renderRds() {
     const pct = mp * 100;
     const label = mp < 0.03 ? 'clean' : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
     mpEl.textContent = `${pct.toFixed(1)}% · ${label}`;
+    mpHeld = `${pct.toFixed(1)}% · ${label}`;
     mpEl.style.color = mp < 0.03 ? '#7dff9a' : mp < 0.10 ? '' : mp < 0.20 ? '#ffd479' : '#ff9a9a';
   } else { mpEl.textContent = dash; mpEl.style.color = ''; }
 
@@ -5108,6 +5121,18 @@ function renderRds() {
       ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
     }
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
+
+  // ★★ THE BLANKER'S RATE, which is a DIAGNOSTIC before it is a control: it answers "is that
+  //    crackle me or the station?", which an owner otherwise has no way to settle.
+  const nbEl = $('rxNb');
+  const nbR = (rdsExt?.nbRate ?? 0) * 100;
+  if (rdsExt) {
+    nbEl.textContent = nbR < 0.005 ? 'nothing to blank'
+                     : `${nbR.toFixed(nbR < 1 ? 2 : 1)}% blanked`;
+    // ★ Amber only once it is removing enough to matter — a trickle is normal on any receiver and
+    //   colouring it would cry wolf.
+    nbEl.style.color = nbR > 0.5 ? '#ffd479' : nbR < 0.005 ? '#7dff9a' : '';
+  } else { nbEl.textContent = dash; nbEl.style.color = ''; }
 
   // ★★ CEQ, SHOWN AS BEFORE -> AFTER. "Engaged" on its own says nothing about whether it helped,
   //    and a blind equaliser that is quietly making things worse is the failure mode that matters.
@@ -6441,6 +6466,10 @@ function buildMenu() {
     $('ceqBtn').textContent = on ? 'CEQ ON' : 'CEQ OFF';
     spec!.setCeq(on);
   }, 'ceq', true);
+  toggle('nbBtn', (on) => {
+    $('nbBtn').textContent = on ? 'NB ON' : 'NB OFF';
+    spec!.setNoiseBlanker(on);
+  }, 'nb', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -6588,6 +6617,7 @@ function pushSettingsToServer() {
   const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
   const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
   const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
+  const nb = bool('nb');            if (nb !== undefined) spec.setNoiseBlanker(nb);
   const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
   const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
   const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);

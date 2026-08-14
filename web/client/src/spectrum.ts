@@ -122,6 +122,9 @@ export interface RdsExt {
    *  arrived. Two numbers so the equaliser is judged on what it achieved, not on having run. */
   ceqOn: boolean;
   ceqAfter: number;
+  /** Fraction of samples the noise blanker is excising, 0..1. Says whether impulse noise is even
+   *  a problem here — otherwise a guess. */
+  nbRate: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -195,6 +198,8 @@ export interface SpectrumCallbacks {
     ims: boolean;
     /** CEQ — the blind channel equaliser. Separate again: it corrects a REFLECTION. */
     ceq: boolean;
+    /** Noise blanker — impulses, the fourth fault and the fourth switch. */
+    nb: boolean;
     nrStrength?: number;      // 0..1, absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
@@ -475,6 +480,7 @@ export class SpectrumClient {
             wsp: msg.wsp !== false,
             ims: msg.ims !== false,
             ceq: msg.ceq !== false,
+            nb: msg.nb !== false,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
             nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
@@ -586,6 +592,7 @@ export class SpectrumClient {
           ifBw: Number(msg.ifBw ?? 0),
           ceqOn: Number(msg.ceqOn ?? 0) === 1,
           ceqAfter: Number(msg.ceqAfter ?? 0),
+          nbRate: Number(msg.nbRate ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });
@@ -862,6 +869,9 @@ export class SpectrumClient {
   /** CEQ — blind channel equaliser. Corrects a REFLECTION; cannot help noise and is gated so it
    *  does not try. */
   setCeq(on: boolean) { this._send({ type: 'ceq', on }); }
+  /** Noise blanker — impulse noise. Not the same as NR: impulses are brief and enormous, and the
+   *  cure is to remove the moments they occupy, not to filter continuously. */
+  setNoiseBlanker(on: boolean) { this._send({ type: 'nb', on }); }
 
   // ── Coalesced view sender ──────────────────────────────────────────────────
 

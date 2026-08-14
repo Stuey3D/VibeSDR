@@ -322,6 +322,7 @@ void RxPipeline::rebuildAudio() {
             mpxNoise_.configure(chFs_);
             multipath_.configure(chFs_);
             adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
+            nb_.configure(chFs_); nbRate_ = 0.0f;
             ceq_.configure(9); ceqOut_.configure(chFs_);
             ceqEngaged_ = false; ceqDwell_ = 0; ceqEffort_ = 0.0f;
             shadowIf_.configure(chFs_); shadowIf_.setBandwidth(shadowBwHz_);
@@ -498,6 +499,25 @@ void RxPipeline::feed(const cf32* iq, int n) {
             if (want != ifBwHz_) { ifBwHz_ = want; adaptIf_.setBandwidth(want); }
             adaptIf_.process(chBuf_.data(), nc);
         }
+        // ── NOISE BLANKER ────────────────────────────────────────────────────────────────────
+        // ★★★ FIRST IN THE CHAIN, because everything after it AVERAGES. The noise meters, the
+        //     multipath meter and the equaliser all integrate, so an impulse left in place is
+        //     smeared across their readings and pulls every one of them the wrong way — and the
+        //     equaliser would then try to "correct" a channel it had been told about wrongly.
+        // ★★ AN HONEST LIMITATION, RECORDED: this runs at the CHANNEL rate, after decimation, and
+        //    an impulse is wideband and microseconds long. The decimation filters have already
+        //    smeared it into a short ring by the time we see it, so we excise the ring rather than
+        //    the spike. Blanking on the raw input would be more effective and costs a magnitude
+        //    per sample at the full rate — real money on a Pi that already runs its DSP near real
+        //    time. If the measured benefit is not there, this belongs earlier, not tuned harder.
+        if (mode_ == Mode::WFM && nbOn_.load(std::memory_order_relaxed)) {
+            nb_.process(chBuf_.data(), nc, 4.0f);
+            nbRate_ += 0.1f * (nb_.rate() - nbRate_);
+            if (!std::isfinite(nbRate_)) nbRate_ = 0.0f;
+        } else if (mode_ == Mode::WFM) {
+            nbRate_ = 0.0f;
+        }
+
         // ★ The RAW reading first — what arrived, before we touch it. It is both the trigger for
         //   the equaliser and half of its scorecard, so it must never see the equaliser's output.
         if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
@@ -617,7 +637,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    nothing. Better to report "cannot tell" than to invent a verdict.
             // ★ ...and multipath is only knowable when the S/N figure driving its noise correction
             //   is itself trustworthy, and when the raw reading was physically possible.
-            multipathValid_ = snrValid_ && multipath_.plausible() && (blendSnrDb_ > 12.0f);
+            // ★★★ HYSTERESIS, OR THE READING FLASHES IN AND OUT. A single threshold at 12 dB meant
+            //     a signal sitting near it flipped between a figure and "too noisy to judge"
+            //     several times a second — unreadable, and it makes a stable measurement look
+            //     unstable (Stuart, 2026-08-14: "can you make the multipath % stay on as it keeps
+            //     flashing in and out"). Becoming trustworthy needs 13 dB; ceasing to be needs a
+            //     fall to 10. The gap is the point: a boundary crossed by noise alone is not a
+            //     change of state.
+            const float need = multipathValid_ ? 10.0f : 13.0f;
+            multipathValid_ = snrValid_ && multipath_.plausible() && (blendSnrDb_ > need);
         } else { multipathCorr_ = 0.0f; multipathValid_ = false; }
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);

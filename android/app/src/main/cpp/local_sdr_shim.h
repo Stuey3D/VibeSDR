@@ -536,7 +536,8 @@ public:
     //   neighbour, and measured they want opposite actions. One button for both would leave a
     //   listener unable to tell which of the two was helping.
     void setIms(bool on);
-    void setCeq(bool on);                 // blind channel equaliser (multipath)
+    void setCeq(bool on);
+    void setNoiseBlanker(bool on);        // impulse noise                 // blind channel equaliser (multipath)
     void setStereoEnabled(bool on);       // WFM: allow stereo (true) vs force mono
     float getNrCpu();                     // NR CPU% (rolling) for the UI readout
     // Returns supported tuner gains (tenths of dB); empty if not running.
