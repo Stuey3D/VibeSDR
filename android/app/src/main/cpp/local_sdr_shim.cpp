@@ -1389,6 +1389,9 @@ struct LocalSdrShim::Impl {
     // Audio noise reduction (self-contained spectral subtraction). Mono only;
     // off by default. No external resources → can't fail to init.
     std::atomic<bool>  nrOn{false};
+    // ★ Weak-signal processing (high-blend + audio high-cut). Defaults ON: it only ever acts on a
+    //   signal that needs it, so a listener who never touches it should get the better sound.
+    std::atomic<bool>  weakProcOn{true};
     std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
     std::mutex         nrMtx;
     AudioNR*           nrEng = nullptr;
@@ -5422,6 +5425,14 @@ struct LocalSdrShim::Impl {
                 LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.0, v)));
             return;
         }
+        if (type == "wsp") {
+            // ★ SHARED, like NR and the notch: it is one DSP chain per radio, so this changes what
+            //   everyone listening hears. The gate says so rather than letting one listener
+            //   silently re-tune another's audio.
+            if (!sharedGate("weak-signal processing")) return;
+            LocalSdrShim::instance().setWeakProc(msg.find("\"on\":true") != std::string::npos);
+            return;
+        }
         if (type == "notch") {
             if (!sharedGate("the notch filter")) return;
             LocalSdrShim::instance().setNotch(msg.find("\"on\":true") != std::string::npos); return;
@@ -5688,6 +5699,10 @@ struct LocalSdrShim::Impl {
         // ★ ADVERTISE STATE THE SERVER ENFORCES. Every silent disagreement we have hit
         // — locked rate, fps ceiling, admin lock, and now these — is the same bug.
         j += std::string(",\"nr\":")    + (nrOn.load()    ? "true" : "false");
+        // ★★ REPORTED, NOT JUST ACCEPTED. A sticky control that does not say its state cannot be
+        //    restored by a client that reconnects, and the button then lies about the radio — the
+        //    lesson from the July fix that did `nr` and `notch` and left four siblings behind.
+        j += std::string(",\"wsp\":")   + (weakProcOn.load() ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -9443,6 +9458,7 @@ struct DesiredDsp {
     std::atomic<bool>   nrOn{false};        // Impl::nrOn
     std::atomic<float>  nrStrength{-1.0f};  // <0 = never set, so leave the engine alone
     std::atomic<bool>   notchOn{false};     // Impl::notchOn
+    std::atomic<bool>   weakProcOn{true};   // Impl::weakProcOn — replayed onto a fresh Impl
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
     // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
     // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
@@ -11371,6 +11387,17 @@ void LocalSdrShim::setNrStrength(float s) {
     p->nrEng->setStrength(s);
 }
 float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
+void LocalSdrShim::setWeakProc(bool on) {
+    g_dsp.weakProcOn.store(on);
+    if (!p) return;
+    p->weakProcOn.store(on);
+    // ★ Applied to EVERY pipeline this process owns — the Impl's own and each per-client one — or
+    //   the switch would work on a single-user radio and silently do nothing on a shared one.
+    p->rx.setWeakSignalProc(on);
+    { std::lock_guard<std::mutex> lk(p->clientMtx);
+      for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setWeakSignalProc(on); }
+    LOGI("weak-signal processing: %d", on);
+}
 void LocalSdrShim::setNotch(bool on) {
     g_dsp.notchOn.store(on);
     if (!p) return;

@@ -2701,9 +2701,17 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-tau="75">75µs</button>
     </div>
   </div>
+  <!-- ★★ STEREO AND ITS NOISE TREATMENT ON ONE ROW, because they are one subject: what the
+       receiver is doing to a weak FM signal. Asked for here by Stuart, and the toggle itself by
+       Saber via the FM-DX community — a DXer judging a marginal catch has to be able to A/B it,
+       and "off" is a legitimate reference point when comparing receivers.
+       ★ NR here is NOT the NOISE REDUCTION slider above: that one is the audio denoiser (built for
+       voice, and never usable on music). This is the FM weak-signal processing — stereo high-blend
+       plus the matching audio high-cut, which is a pair of moving filters and has no artefacts. -->
   <div class="mrow">
     <label>WFM STEREO</label>
-    <div class="seg"><button class="btn on" id="stereoBtn">ON</button></div>
+    <div class="seg"><button class="btn on" id="stereoBtn">ON</button><button class="btn on"
+      id="wspBtn" title="FM weak-signal processing: stereo high-blend + audio high-cut. Acts only on a noisy signal — a strong station is bypassed entirely. Turn off to A/B what it is doing.">NR ON</button></div>
   </div>
 </div>
 

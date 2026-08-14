@@ -174,6 +174,9 @@ export interface SpectrumCallbacks {
    *  is not the same as off — render nothing rather than forcing a default. */
   onDspState?: (s: {
     nr: boolean; notch: boolean;
+    /** FM weak-signal processing: stereo high-blend + audio high-cut, one switch. Reported so a
+     *  reconnecting client restores the button rather than showing a state the radio is not in. */
+    wsp: boolean;
     nrStrength?: number;      // 0..1, absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
@@ -446,6 +449,9 @@ export class SpectrumClient {
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.({
             nr: msg.nr === true, notch: msg.notch === true,
+            // ★ Defaults TRUE when absent: an older server that does not report it still HAS the
+            //   treatment on, so showing OFF would be a lie about the radio.
+            wsp: msg.wsp !== false,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
             nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
@@ -801,6 +807,9 @@ export class SpectrumClient {
   /** tau in seconds: 0 = off, 50e-6 or 75e-6. */
   setDeemph(tau: number) { this._send({ type: 'deemph', tau }); }
   setStereo(on: boolean) { this._send({ type: 'stereo', on }); }
+  /** FM weak-signal processing — high-blend + audio high-cut together. One switch because it is
+   *  one treatment: A/B-ing half of it would not answer the question a DXer is asking. */
+  setWeakProc(on: boolean) { this._send({ type: 'wsp', on }); }
 
   // ── Coalesced view sender ──────────────────────────────────────────────────
 

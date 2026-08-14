@@ -855,6 +855,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         }
       }
       setToggleTo('notch', s.notch, 'notch');
+      // ★ Sticky, so it must be RESTORED from the server's own report — the button has to say
+      //   what the radio is doing, not what this tab last asked for.
+      setToggleTo('wsp', s.wsp, 'wsp');
+      $('wspBtn').textContent = s.wsp ? 'NR ON' : 'NR OFF';
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -4987,16 +4991,22 @@ function renderRds() {
   //    is in circuit when none is.
   const snrEl = $('rxMpxSnr');
   const snr = rdsExt?.mpxSnr ?? 0;
+  const wspOff = !$('wspBtn').classList.contains('on');
   if (rdsExt && snr > 0.5) {
     const lmr = rdsExt.hiCutLmr ?? 15000, aud = rdsExt.hiCutAud ?? 15000;
     const acting = lmr < 14000 || aud < 14000;
-    const how = !acting ? 'clean · no treatment'
+    // ★★ "BYPASSED" IS NOT "CLEAN". With the switch off nothing is acting either, but for a
+    //    completely different reason — and printing "clean · no treatment" over a hissy signal
+    //    because the LISTENER turned the treatment off would be the panel telling a flat lie
+    //    (Stuart, 2026-08-14: "you could put a bypass label in to show it being bypassed").
+    const how = wspOff ? 'bypassed'
+              : !acting ? 'clean · no treatment'
               : aud < 14000 ? `blend ${(lmr / 1000).toFixed(1)}k · cut ${(aud / 1000).toFixed(1)}k`
               : `blend ${(lmr / 1000).toFixed(1)}k`;
     snrEl.textContent = `${snr.toFixed(0)} dB · ${how}`;
     // ★ Green only when nothing is being done. Amber is not a warning here — it means the
     //   receiver is working for its living, which on a difficult signal is the good outcome.
-    snrEl.style.color = acting ? '#ffd479' : '#7dff9a';
+    snrEl.style.color = wspOff ? '' : acting ? '#ffd479' : '#7dff9a';
   } else { snrEl.textContent = dash; snrEl.style.color = ''; }
 
   // ★★★ MULTIPATH — and it is deliberately NOT described as bad news at low levels. Every real
@@ -6319,6 +6329,12 @@ function buildMenu() {
     $('stereoBtn').textContent = on ? 'ON' : 'OFF';
     spec!.setStereo(on);
   }, 'stereo', true);
+  // ★ Defaults ON (the `true`), like stereo itself: it only acts on a signal that needs it, so a
+  //   listener who never opens this panel should get the better sound.
+  toggle('wspBtn', (on) => {
+    $('wspBtn').textContent = on ? 'NR ON' : 'NR OFF';
+    spec!.setWeakProc(on);
+  }, 'wsp', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -6463,6 +6479,7 @@ function pushSettingsToServer() {
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nr / 100);
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
+  const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
   const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
   const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
   const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);

@@ -528,6 +528,10 @@ public:
     void setNR(bool on);                  // audio noise reduction on/off
     void setNrStrength(float s);          // NR aggressiveness 0..1
     void setNotch(bool on);               // automatic notch (adaptive line enhancer)
+    // ★ Weak-signal processing: FM stereo high-blend + the audio high-cut, together. One switch,
+    //   because they are one treatment — and a DXer A/B-ing a marginal catch wants BOTH out of the
+    //   way, not half of it (asked for by Saber via the FM-DX community, 2026-08-14).
+    void setWeakProc(bool on);
     void setStereoEnabled(bool on);       // WFM: allow stereo (true) vs force mono
     float getNrCpu();                     // NR CPU% (rolling) for the UI readout
     // Returns supported tuner gains (tenths of dB); empty if not running.

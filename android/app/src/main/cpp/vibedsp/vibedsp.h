@@ -1552,6 +1552,10 @@ public:
     bool  multipathValid() const { return multipathValid_; }
     /** The audio high-cut corner now in use (Hz; 15000 = untouched). */
     float audioHiCutHz() const { return audioHiCutHz_; }
+    /** Weak-signal processing (high-blend + audio high-cut). ON by default: it only ever acts on
+     *  a signal that needs it, and a listener who never touches it should get the better sound. */
+    void setWeakSignalProc(bool on) { weakProcOn_.store(on, std::memory_order_relaxed); }
+    bool weakSignalProc() const { return weakProcOn_.load(std::memory_order_relaxed); }
 
 private:
     void rebuildAudio();
@@ -1660,6 +1664,13 @@ private:
     bool lastStereo_ = false;
     std::atomic<bool> stereoReport_{false};  // force one report even with no edge
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
+    // ★★★ THE WEAK-SIGNAL PROCESSING SWITCH — high-blend and the audio high-cut together.
+    //     Requested from the FM-DX community (Saber, via Stuart, 2026-08-14) so it can be A/B'd:
+    //     a DXer judging a marginal catch needs to hear what the receiver is DOING to it, and
+    //     "off" is a legitimate reference point when comparing receivers. It was left automatic
+    //     originally because a switch that does nothing on a strong signal is close to the control
+    //     AGENTS.md forbids — but A/B is a real use, not a hypothetical one.
+    std::atomic<bool> weakProcOn_{true};
     std::atomic<bool> rdsEnabled_{true};     // see setRdsEnabled — shared-receiver economy
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     // ── HIGH-BLEND: the stereo hiss cure ─────────────────────────────────────────────────────

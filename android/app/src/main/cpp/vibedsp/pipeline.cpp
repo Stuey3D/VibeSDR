@@ -560,12 +560,28 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // ★★ IT MUST STAY ABOVE THE L-R CORNER, ALWAYS. high-blend has already narrowed L-R;
             //    if this cut below it, it would silently make that work irrelevant and we would be
             //    running two filters to do one filter's job. Held a comfortable margin clear.
+            // ★ Switched OFF -> glide the corner back to wide open rather than jumping. An A/B
+            //   test wants to hear the DIFFERENCE, not a click, and a step change in a filter
+            //   corner is audible in its own right — which would colour the very comparison the
+            //   switch exists to make.
+            const bool wsp = weakProcOn_.load(std::memory_order_relaxed);
             constexpr float kClean = 30.0f, kRough = 14.0f;     // the same window as the blend
             constexpr float kWide  = 15000.0f, kNarrow = 4500.0f;
             float t = (blendSnrDb_ - kRough) / (kClean - kRough);
             t = std::min(1.0f, std::max(0.0f, t));
-            float wantCut = kNarrow + t * (kWide - kNarrow);
-            wantCut = std::max(wantCut, lmrHiCutHz_ * 1.25f);    // never below the L-R corner
+            float wantCut = wsp ? (kNarrow + t * (kWide - kNarrow)) : 15000.0f;
+            // ★★★ ONLY WHEN THE BLEND IS ACTUALLY ACTING — and getting this wrong DISABLED THE
+            //     HIGH-CUT IN MONO ENTIRELY. The guard exists so the two filters do not fight: the
+            //     audio cut must not sit below the L-R corner, or it would make high-blend
+            //     irrelevant. But in forced mono there is no L-R to protect, so lmrHiCutHz_ glides
+            //     back to 15 kHz — and `max(want, 15000 * 1.25)` then pinned the audio filter WIDE
+            //     OPEN. A listener who pressed MONO to escape the hiss got LESS help than one who
+            //     stayed in stereo, which is precisely backwards.
+            // ★★ FOUND FROM TWO ON-AIR RECORDINGS, not from reading this code: the mono take rolled
+            //    off at ~8 kHz and the stereo take at ~4 kHz, one minute apart on the same station.
+            //    The innocent explanation (a better signal for the second) was plausible enough
+            //    that only a test could separate them — and the test failed immediately.
+            if (lmrHiCutHz_ < 14000.0f) wantCut = std::max(wantCut, lmrHiCutHz_ * 1.25f);
             wantCut = std::min(wantCut, 15000.0f);
             audioHiCutHz_ = glideCorner(audioHiCutHz_, wantCut);
             if (!std::isfinite(audioHiCutHz_)) audioHiCutHz_ = 15000.0f;
@@ -718,7 +734,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //   mono high-cut needs the same figure. Smoothing it in two places would have made
             //   the time constant depend on which path was running, which is the sort of thing
             //   that is invisible until a station sounds different in mono for no stated reason.
-            if (mpxNoise_.ready() && wantStereo && pll_.locked()) {
+            if (mpxNoise_.ready() && wantStereo && pll_.locked()
+                && weakProcOn_.load(std::memory_order_relaxed)) {
                 // ★★ THE CURVE. Above kClean the signal is good and nothing is touched — a strong
                 //    station must be bit-for-bit what it was before this existed, or the feature
                 //    is a tone control that fires on everybody. Below kRough the image is held at

@@ -149,6 +149,32 @@ int main() {
        "★ and it never collapses to mono — bass/mid separation is kept",
        "corner " + std::to_string((int)worse.cutHz) + " Hz");
 
+    // ★★★ DOES FORCED MONO STILL GET THE AUDIO HIGH-CUT? Two on-air recordings of the same
+    //     station a minute apart showed the stereo take rolling off at ~4 kHz and the MONO take at
+    //     ~8 kHz. The innocent explanation is that the signal was simply better for the second one
+    //     — 8 kHz implies about 20 dB, which is plausible. The guilty one is that forced mono takes
+    //     a different path and never gets the cut at all, in which case the listener who switches
+    //     to mono to escape the hiss gets LESS help, not more.
+    // ★★ Not guessable from the recordings, so assert it: with stereo forced OFF, a noisy signal
+    //    must still close the audio corner. The measurement is why this cannot be settled by
+    //    reading the code — the cut is applied in the stereo branch, which forced mono still uses.
+    {
+        Sink sink;
+        RxPipeline::Callbacks cb{};
+        cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
+        MpxGen gen; gen.noise = 0.80;           // ~12 dB, hissy
+        RxPipeline rx;
+        rx.start(kFs, 1024, 10.0, 48000, cb);
+        rx.setStereoEnabled(false);             // the listener presses MONO
+        rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx, gen, 6.0);
+        std::printf("   .. forced MONO: audio cut %7.0f Hz   ratio %5.1f dB\n",
+                    rx.audioHiCutHz(), rx.blendSnrDb());
+        ok(rx.audioHiCutHz() < 14000.0f,
+           "★ FORCED MONO still gets the audio high-cut — the hiss cure is not stereo-only",
+           "corner " + std::to_string((int)rx.audioHiCutHz()) + " Hz");
+    }
+
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);
     return failures ? 1 : 0;
 }
