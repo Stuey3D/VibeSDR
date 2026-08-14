@@ -28,6 +28,7 @@ flags_for() {
     # ★ Same deps as test-wfm-stereo: it drives the same real audio chain, which is the only way
     #   to measure a feature that responds to FM's triangular noise spectrum.
     test-stereo-highblend) echo "-O2 -I $VDSP -I $KISS" ;;
+    test-multipath-meter)  echo "-O2 -I $VDSP -I $KISS" ;;
     *)               echo "" ;;
   esac
 }
@@ -39,6 +40,9 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
     test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
+    test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;

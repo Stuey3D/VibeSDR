@@ -288,6 +288,7 @@ void RxPipeline::rebuildAudio() {
             //   benefit of the doubt and narrowed if it earns it, not opened up from mono —
             //   which would be audible as a swell on every retune.
             mpxNoise_.configure(chFs_);
+            multipath_.configure(chFs_);
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
@@ -436,6 +437,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
         }
 
         demodBuf_.resize(nc);
+        // ★★★ MEASURED ON THE IQ, BEFORE DEMODULATION — this is the ONLY place the information
+        //     exists. The FM demodulator throws amplitude away by design (that is what makes FM
+        //     immune to AM noise), so after this line the envelope wobble that reveals multipath
+        //     is simply gone. Read-only; chBuf_ is untouched.
+        if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);

@@ -445,6 +445,96 @@ private:
     float r_ = 0.99998f, x1_ = 0.0f, y_ = 0.0f;
 };
 
+// ── Multipath meter (the detector an "IMS" needs) ────────────────────────--
+/**
+ * How much of what is wrong with this signal is MULTIPATH, as distinct from noise.
+ *
+ * ★★★ WHY A SEPARATE METER AT ALL — THEY WANT OPPOSITE RESPONSES. Noise is cured by throwing
+ *     bandwidth away: blend the stereo, cut the top, narrow the IF. Multipath is a DISTORTION, and
+ *     narrowing the IF can make it worse rather than better while also dulling a signal that may be
+ *     perfectly strong. A receiver that cannot tell them apart must treat every bad signal as a
+ *     weak one, which is exactly the compromise that makes ordinary SDRs sound worse than a TEF.
+ *
+ * ★★★ ON A FIXED AERIAL THE MULTIPATH IS STATIC, SO THERE IS NO FLUTTER TO LOOK FOR. Car radios
+ *     detect the picket-fencing of a moving antenna; a rooftop aerial sees a reflection that does
+ *     not move. What it does instead is make the channel FREQUENCY-SELECTIVE — a notch at some
+ *     offset — and FM's instantaneous frequency sweeps +/-75 kHz straight through that notch many
+ *     times a second. The notch is therefore converted into AMPLITUDE modulation of the received
+ *     envelope, at MODULATION rates, correlated with the programme. That is why static multipath
+ *     sounds like distortion rather than fading, and it is what makes it measurable here.
+ *
+ * ★★ AN FM CARRIER HAS CONSTANT AMPLITUDE. That is the whole basis of this: whatever amplitude
+ *    variation arrives did not come from the transmitter. It came from the channel.
+ *
+ * ★★ NOISE ALSO SHAKES THE ENVELOPE, which is the trap. The discrimination is bandwidth: additive
+ *    noise spreads its envelope disturbance across the WHOLE channel (hundreds of kHz), while
+ *    multipath AM is concentrated down at audio rates. Measuring the envelope's wobble only in a
+ *    low band therefore keeps most of the multipath and rejects most of the noise. The test proves
+ *    this rather than assuming it — a noise-only signal must NOT read as multipath.
+ *
+ * ★ Scale-invariant by construction: the wobble is divided by the mean power, so gain, AGC drift
+ *   and signal strength all cancel. A strong multipath signal and a weak one read the same.
+ */
+class MultipathMeter {
+public:
+    void configure(double rate) {
+        rate_ = rate;
+        ready_ = (rate > 100000.0);       // needs a real channel rate to mean anything
+        if (!ready_) { reset(); return; }
+        // ★ The mean must be slow enough to be a DC reference and not follow the very wobble we
+        //   are trying to measure — a few tens of ms, i.e. well below audio rates.
+        aMean_ = (float)(1.0 / (rate * 0.030));
+        // ★★★ AND THE WOBBLE IS KEPT BELOW 5 kHz — THIS IS THE DISCRIMINATION. Multipath AM is
+        //     driven by the modulation, so it sits at audio rates; additive noise spreads its
+        //     envelope disturbance across the WHOLE 250 kHz channel. Listening in a narrow low
+        //     band therefore keeps nearly all the multipath and throws away most of the noise.
+        //     Measured (test-multipath-meter): at 20 kHz a noise-only signal read 0.134 against a
+        //     -6 dB reflection's 0.231 — a margin of only 1.7x; at 5 kHz it reads 0.074 against
+        //     0.216, i.e. 2.9x, with the reflection barely affected.
+        // ★★ NOT NARROWED FURTHER ON PURPOSE. The test signal is a single 1 kHz tone, and real
+        //    programme material spreads its modulation — and therefore its multipath AM — much
+        //    wider. Squeezing this band until the synthetic numbers look their best would be
+        //    tuning to the test rather than to the air, which is the exact trap that let the MSF
+        //    and WWV decoders ship agreeing with their own bugs.
+        const double dt = 1.0 / rate, rc = 1.0 / (2.0 * M_PI * 5000.0);
+        aLp_ = (float)(dt / (rc + dt));
+        reset();
+    }
+    /** Feed channelised complex samples. Read-only. */
+    void process(const cf32* z, int n) {
+        if (!ready_ || n <= 0) return;
+        double acc = 0.0;
+        double meanAcc = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const float p = z[i].real() * z[i].real() + z[i].imag() * z[i].imag();
+            mean_ += aMean_ * (p - mean_);
+            lp_   += aLp_   * ((p - mean_) - lp_);     // the audio-rate part of the wobble
+            acc     += (double)lp_ * lp_;
+            meanAcc += (double)mean_;
+        }
+        if (!std::isfinite(mean_) || !std::isfinite(lp_)) { reset(); return; }
+        const double m = meanAcc / (double)n;
+        if (!(m > 1e-20)) return;
+        // Depth = RMS wobble / mean power. Dimensionless, and 0 for a perfect constant-envelope
+        // carrier however loud or quiet it is.
+        const float depth = (float)(std::sqrt(acc / (double)n) / m);
+        if (!std::isfinite(depth)) return;
+        // ★ Slow, and asymmetric the same way the noise meter is: react to a problem appearing,
+        //   but do not let a momentary clean patch declare the multipath solved.
+        const float k = (depth > depth_) ? 0.20f : 0.02f;
+        depth_ += k * (depth - depth_);
+    }
+    /** 0 = constant envelope (no multipath), rising with the depth of the reflection. */
+    float depth() const { return depth_; }
+    bool  ready() const { return ready_; }
+    void reset() { mean_ = 0.0f; lp_ = 0.0f; depth_ = 0.0f; }
+private:
+    double rate_ = 0.0;
+    bool ready_ = false;
+    float aMean_ = 0.0f, aLp_ = 0.0f;
+    float mean_ = 0.0f, lp_ = 0.0f, depth_ = 0.0f;
+};
+
 // ── MPX guard-band noise meter ───────────────────────────────────────────--
 /**
  * How noisy is this signal, measured where nothing is transmitted.
@@ -1450,6 +1540,9 @@ public:
      *  stereo?" has an answer other than guessing — the same rule as every other sticky control. */
     float lmrHiCutHz()   const { return lmrHiCutHz_; }
     float blendSnrDb()   const { return blendSnrDb_; }
+    /** Envelope-AM depth: how MULTIPATH-damaged this signal is, as opposed to how weak. An FM
+     *  carrier arrives at constant amplitude, so anything here was done by the channel. */
+    float multipathDepth() const { return multipath_.depth(); }
 
 private:
     void rebuildAudio();
@@ -1570,6 +1663,7 @@ private:
     //     (Stuart, 2026-08-14: "blending the mono signal ... whilst hopefully preserving the
     //     stereo separation" — the frequency-selective form is how you get both).
     MpxNoiseMeter mpxNoise_;                 // measures the 15-19 kHz gap; see the class note
+    MultipathMeter multipath_;               // envelope AM — distortion, not weakness
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
