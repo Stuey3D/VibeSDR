@@ -153,6 +153,23 @@ int RdsDemod::mergedAf(int* khzOut, int maxOut, int* seenOut) {
         agg_ = Agg{}; aggEonN_ = 0; aggOdaN_ = 0;
     }
     updateAggregate();
+    // ★★ EVERY frequency glimpsed, with whether it is confirmed — the list a DXer wants to see,
+    //    rather than a score with no names attached. Built in the same pass so the two cannot
+    //    disagree about what was seen.
+    allAfN_ = 0;
+    for (int p = 0; p < NPH; ++p) {
+        const int n2 = dec_[p].afCount();
+        for (int i = 0; i < n2; ++i) {
+            const int khz = dec_[p].afKhz(i);
+            const bool ok = dec_[p].afHits(i) >= RdsDecoder::kAfConfirm;
+            int at = -1;
+            for (int k = 0; k < allAfN_; ++k) if (allAf_[k] == khz) { at = k; break; }
+            if (at >= 0) { if (ok) allAfOk_[at] = 1; continue; }
+            if (allAfN_ < RdsDecoder::kMaxAf) {
+                allAf_[allAfN_] = khz; allAfOk_[allAfN_] = ok ? 1 : 0; ++allAfN_;
+            }
+        }
+    }
     for (int p = 0; p < NPH; ++p) {
         const int n = dec_[p].afCount();
         for (int i = 0; i < n; ++i) {

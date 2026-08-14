@@ -863,6 +863,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.ctMinutes = a.ctMinutes;
                 x.ctOffsetHalfHours = a.ctOffsetHalfHours;
                 x.afKhz = af; x.nAf = nAf; x.afSeen = afSeen;
+                // ★ ...and the full list with per-frequency confirmation. Taken AFTER mergedAf(),
+                //   which is the call that rebuilds it.
+                x.nAfAll = rdsDemod_.allAf(&x.afAllKhz, &x.afAllOk);
                 x.groupCounts = a.groupCounts; x.groupTotal = a.groupTotal;
                 x.rtpTitle = a.rtpTitle; x.rtpArtist = a.rtpArtist; x.longPs = a.longPs;
                 x.ptyn = a.ptyn; x.language = a.language;

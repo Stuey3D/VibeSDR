@@ -5422,14 +5422,34 @@ function renderRds() {
     : (rdsExt?.gtot ?? 0) > 0 ? 'none announced' : dash;
 
   const afEl = $('rxAf');
-  if (!af.length) {
+  // ★★★ THE LIST WITH A TICK EACH, as the FM-DX Webserver shows it (Stuart, 2026-08-15). A bare
+  //     "3 of 7" says entries are arriving damaged but not WHICH frequencies — and on a noisy
+  //     station the unconfirmed ones are usually PHANTOMS manufactured by block errors rather than
+  //     real alternatives. H F M, a Market Harborough community station running 22-27% block
+  //     errors, was listing seven AFs across the band; a DXer needs to see which of those to
+  //     believe. Confirmed entries are ticked and full-strength, unconfirmed are dimmed.
+  // ★ Every entry stays TUNEABLE, confirmed or not: an unconfirmed AF is exactly the one you want
+  //   to go and check by ear.
+  const afAll = rdsExt?.afAll ?? [];
+  if (!af.length && !afAll.length) {
     afEl.textContent = (rdsExt?.gtot ?? 0) > 0 ? 'none announced' : dash;
+  } else if (afAll.length) {
+    const seenSet = new Map<number, boolean>();
+    for (const [khz, ok] of afAll) seenSet.set(khz, (seenSet.get(khz) ? true : false) || !!ok);
+    const list = [...seenSet.entries()].sort((a, b) => a[0] - b[0]);
+    afEl.innerHTML = list.map(([khz, ok]) =>
+      `<a href="#" class="afLink${ok ? '' : ' afUnconf'}" data-khz="${khz}" title="${
+        ok ? 'Confirmed — seen enough times to be believed'
+           : 'Seen but NOT confirmed. On a noisy signal this is often a phantom created by block errors.'
+      }">${(khz / 1000).toFixed(1)}${ok ? ' \u2713' : ''}</a>`).join('  ');
   } else {
     // Ascending, and de-duplicated: the same AF is re-announced constantly.
     const list = [...new Set(af)].sort((a, b) => a - b);
     afEl.innerHTML = list
       .map(khz => `<a href="#" class="afLink" data-khz="${khz}">${(khz / 1000).toFixed(1)}</a>`)
       .join('  ');
+  }
+  {
     for (const a of Array.from(afEl.querySelectorAll<HTMLAnchorElement>('.afLink'))) {
       a.onclick = (e) => {
         e.preventDefault();

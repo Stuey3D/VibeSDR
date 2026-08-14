@@ -1700,6 +1700,8 @@ struct LocalSdrShim::Impl {
         std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
         std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
         std::vector<int> rdsAf;
+        // ★ Every AF glimpsed with a confirmed flag — the list, not just the score. See afAll.
+        std::vector<int> rdsAfAll; std::vector<unsigned char> rdsAfAllOk;
         std::vector<float> rdsConst;
         std::vector<float> rdsMpx;             // MPX spectrum, dB per bin
         std::atomic<bool> stereoDetected{false};
@@ -4041,6 +4043,8 @@ struct LocalSdrShim::Impl {
         st.rdsCtMin = x.ctMinutes; st.rdsCtOff = x.ctOffsetHalfHours;
         st.rdsGrpTotal = x.groupTotal; st.rdsAfSeen = x.afSeen;
         st.rdsAf.assign(x.afKhz, x.afKhz + x.nAf);
+        st.rdsAfAll.assign(x.afAllKhz, x.afAllKhz + x.nAfAll);
+        st.rdsAfAllOk.assign(x.afAllOk, x.afAllOk + x.nAfAll);
         st.rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
         st.rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
         if (x.mpx && x.nMpx > 0) st.rdsMpx.assign(x.mpx, x.mpx + x.nMpx);
@@ -8810,12 +8814,13 @@ struct LocalSdrShim::Impl {
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
         std::vector<vibedsp::RdsDecoder::Oda> oda;
-        std::vector<int> af, grp; std::vector<float> pts, mpx;
+        std::vector<int> af, grp, afAll; std::vector<unsigned char> afAllOk;
+        std::vector<float> pts, mpx;
         { std::lock_guard<std::mutex> lk(R.rdsMtx);
           pty = R.rdsPty; tp = R.rdsTp; ta = R.rdsTa; ms = R.rdsMs; di = R.rdsDi;
           ptyR = R.rdsPtyRaw; tpR = R.rdsTpRaw; taR = R.rdsTaRaw; msR = R.rdsMsRaw; diR = R.rdsDiRaw;
           ctMin = R.rdsCtMin; ctOff = R.rdsCtOff; gTot = R.rdsGrpTotal;
-          af = R.rdsAf; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
+          af = R.rdsAf; afAll = R.rdsAfAll; afAllOk = R.rdsAfAllOk; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
@@ -8917,7 +8922,17 @@ struct LocalSdrShim::Impl {
                       //   whether they have an impulse-noise problem at all, which is otherwise
                       //   pure guesswork ("is that crackle me, or the station?").
                       + ",\"nbRate\":" + std::to_string(P_ ? P_->noiseBlankRate() : 0.0f)
-                      + ",\"grp\":[";
+                      // ★★ THE AF LIST WITH A TICK EACH, as the FM-DX Webserver shows it: a bare
+                      //    "3 of 7" says the link is damaging entries but not WHICH frequencies,
+                      //    and on a noisy station the unconfirmed ones are usually phantoms
+                      //    manufactured by block errors rather than real alternatives.
+                      + ",\"afAll\":[";
+        for (size_t i = 0; i < afAll.size(); ++i) {
+            if (i) j += ',';
+            j += "[" + std::to_string(afAll[i]) + ","
+               + std::string((i < afAllOk.size() && afAllOk[i]) ? "1" : "0") + "]";
+        }
+        j += "],\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";
         for (size_t i = 0; i < eon.size(); ++i) {

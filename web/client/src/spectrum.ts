@@ -77,6 +77,10 @@ export interface RdsExt {
   ctoff: number;         // local offset, half-hours
   af: number[];          // kHz, CONFIRMED only
   afseen: number;        // distinct frequencies glimpsed, confirmed or not
+  /** Every AF glimpsed as [kHz, confirmed] — so the list can be drawn with a tick each rather
+   *  than reduced to a score. On a noisy station the unconfirmed entries are usually phantoms
+   *  manufactured by block errors, and only the list shows WHICH frequencies they are. */
+  afAll: [number, number][];
   grp: number[];         // 32 counters, gtype*2+version
   gtot: number;
   rtpTitle: string;      // RT+ tagged title (ODA 4BD7)
@@ -563,6 +567,7 @@ export class SpectrumClient {
           ct: Number(msg.ct ?? -1), ctoff: Number(msg.ctoff ?? 0),
           af: Array.isArray(msg.af) ? msg.af : [],
           afseen: Number(msg.afseen ?? 0),
+          afAll: Array.isArray(msg.afAll) ? msg.afAll : [],
           grp: Array.isArray(msg.grp) ? msg.grp : [],
           gtot: Number(msg.gtot ?? 0),
           rtpTitle: String(msg.rtpTitle ?? ''),

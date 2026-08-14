@@ -975,6 +975,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    It was the ONLY thing in the bar that didn't shrink, so on a 1366 laptop it ran
    straight off the right-hand edge of the window. */
 #sigLabel { margin-top: 4px; }
+/* ★ An AF that has been glimpsed but not confirmed. Dimmed rather than hidden: on a noisy station
+   these are usually phantoms from block errors, and seeing WHICH frequencies are suspect is the
+   whole point of showing the list instead of a score. Still tuneable — it is exactly the one you
+   would want to go and check. */
+.afUnconf { opacity: .45; }
 /* ★ The network label under an address in the connection log — context, not a heading. */
 .cNet { font-size: 0.85em; opacity: .6; margin-top: 2px; }
 
@@ -2167,7 +2172,7 @@ select.btn { padding: 6px 8px; }
         <div class="rdsF"><label title="Coverage area and reference number, decoded from the PI">PI detail</label><span id="rxPiDetail">—</span></div>
         <div class="rdsF"><label title="Groups decoded per second, and the total since tuning">Rate</label><span id="rxRate">—</span></div>
         <div class="rdsF"><label title="Confirmed alternative frequencies against how many have been glimpsed — below 100% means entries are arriving damaged">AF score</label><span id="rxAfScore">—</span></div>
-        <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz — tap to tune">AF MHz</label><span id="rxAf">—</span></div>
+        <div class="rdsF rdsWide"><label title="Alternative frequencies, MHz — tap to tune. A tick means the entry has been seen often enough to be believed; a dimmed one has been glimpsed but not confirmed, and on a noisy signal those are often phantoms created by block errors.">AF MHz</label><span id="rxAf">—</span></div>
         <div class="rdsF rdsWide"><label title="What SHARE of the groups received were of each type — the transmitter's configuration, not a quality measure. The error rate is the Errors field above.">Group share</label><span id="rxGroups">—</span></div>
       </div>
       <!-- The constellation. Two tight clusters = healthy; a diffuse cloud = the subcarrier

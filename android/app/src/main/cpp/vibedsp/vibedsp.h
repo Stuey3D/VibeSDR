@@ -1472,6 +1472,11 @@ public:
      *  above the bank makes the list monotonic within a station, and only a retune or a PI
      *  change clears it. Entries appear only once CONFIRMED by repetition.  */
     int mergedAf(int* khzOut, int maxOut, int* seenOut = nullptr);
+    /** Every AF glimpsed since this PI's list began, with a confirmed flag each. Valid until the
+     *  next mergedAf() call, which is what rebuilds it. */
+    int allAf(const int** khz, const unsigned char** ok) const {
+        *khz = allAf_; *ok = allAfOk_; return allAfN_;
+    }
 private:
     std::unique_ptr<RealFir> lpfI_, lpfQ_;  // complex RDS baseband (decimating)
     double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
@@ -1584,6 +1589,10 @@ private:
     void updateAggregate();
     int mergedAf_[RdsDecoder::kMaxAf] = {0};
     int mergedAfN_ = 0;
+    // ★ Every AF glimpsed and whether it is confirmed — see the note on afAllKhz.
+    int allAf_[RdsDecoder::kMaxAf] = {0};
+    unsigned char allAfOk_[RdsDecoder::kMaxAf] = {0};
+    int allAfN_ = 0;
     uint16_t mergedAfPi_ = 0;          // whose list this is; a new PI starts a new list
     float constXY_[kConstPts * 2] = {0};
     int   constHead_ = 0;
@@ -1650,6 +1659,13 @@ public:
             int ptyRaw, tpRaw, taRaw, msRaw, diRaw;
             int ctMinutes, ctOffsetHalfHours;
             const int* afKhz; int nAf; int afSeen;
+            /** ★★ EVERY AF GLIMPSED, confirmed or not, with a flag each — so a client can draw the
+             *  LIST with a tick against the ones that have been confirmed, exactly as the FM-DX
+             *  Webserver does, instead of only a bare "3/7". A frequency that keeps appearing
+             *  unconfirmed is the interesting case: it is either a real AF arriving damaged or a
+             *  phantom manufactured by block errors, and only the list shows which frequencies
+             *  they are. */
+            const int* afAllKhz; const unsigned char* afAllOk; int nAfAll;
             const int* groupCounts; int groupTotal;
             const char* rtpTitle; const char* rtpArtist; const char* longPs;
             const char* ptyn; int language;
