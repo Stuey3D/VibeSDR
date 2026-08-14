@@ -62,6 +62,11 @@ RTLSDR_API int rtlsdr_get_index_by_serial(const char *serial);
 
 RTLSDR_API int rtlsdr_open(rtlsdr_dev_t **dev, uint32_t index);
 
+/*!
+ * ★ ANDROID ONLY, and not present upstream: open a device from an already-open USB file
+ * descriptor. An unrooted Android process cannot enumerate USB at all — the Java layer opens the
+ * device and passes the fd down — so without this there is no way to reach a dongle on a phone.
+ */
 RTLSDR_API int rtlsdr_open_sys_dev(rtlsdr_dev_t **out_dev, intptr_t sys_dev);
 
 RTLSDR_API int rtlsdr_close(rtlsdr_dev_t *dev);
