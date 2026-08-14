@@ -678,7 +678,17 @@ function renderConns(raw: any[]) {
     const live = !c.end;
     return `<tr>
       <td>${esc(when(c.at))}</td>
-      <td>${withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}</td>
+      <!-- ★★ THE NETWORK, which the LIVE table has always shown and this one never did — because
+           it was never RECORDED. The country was, as a SNAPSHOT taken when the connection opened,
+           so a row kept whatever GeoIP said at that moment even after the database knew better:
+           a work laptop stayed logged in the US while the live table had it right (Stuart,
+           2026-08-14). Both are derived at RENDER time now, from the stored address, exactly as
+           the live table derives them. One derivation, two tables.
+           ★ Dimmed and on its own line: it is context for the address above it, not a column
+             anyone scans. A blank means the ASN database has no entry for that range — which is
+             itself worth seeing, since it usually means a VPN or corporate egress. -->
+      <td>${withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}${
+        c.net ? `<div class="dim cNet" title="Network this address belongs to. A corporate VPN or cloud egress will show its provider rather than a consumer ISP — and that is usually why a country looks wrong.">${esc(String(c.net).slice(0, 40))}</div>` : ''}</td>
       <!-- ★ WHICH RECEIVER THEY CHOSE. The fan-out already tagged every record with the radio it
            came from; it was meaningless while each radio answered with the whole machine's history
            (see the per-radio log path in main.cpp) and is worth showing now that it is true.
