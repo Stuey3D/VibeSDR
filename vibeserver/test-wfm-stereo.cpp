@@ -13,6 +13,8 @@
 #include "vibedsp.h"
 
 #include <cmath>
+#include <random>
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -40,6 +42,15 @@ constexpr double kAudioHz = 1000.0;      // the tone we put in L only, so L-R !=
  *  pilot AND a difference signal. */
 struct MpxGen {
     double phase = 0.0, tAcc = 0.0;
+    // ★ Pilot injection as a fraction of full deviation. 0.10 is the textbook 7.5 kHz; real
+    //   stations under-inject, and 0.063 is the 4.7 kHz measured on air at 102.3.
+    double pilot = 0.10;
+    // ★★★ PURE STATIC — no carrier at all, only noise. This is the case that must NEVER produce
+    //     stereo, and the reason the lock threshold cannot simply be lowered.
+    bool   staticOnly = false;
+    double noise = 0.0;
+    std::mt19937 rng{7};
+    std::normal_distribution<double> gauss{0.0, 1.0};
     void fill(std::vector<cf32>& out, int n) {
         out.resize((size_t)n);
         for (int i = 0; i < n; ++i) {
@@ -47,11 +58,19 @@ struct MpxGen {
             const double L = std::sin(2.0 * M_PI * kAudioHz * t), R = 0.0;
             // 45% sum, 10% pilot, 45% difference on the 38 kHz subcarrier — the standard budget.
             const double mpx = 0.45 * (L + R)
-                             + 0.10 * std::sin(2.0 * M_PI * kPilotHz * t)
+                             + pilot * std::sin(2.0 * M_PI * kPilotHz * t)
                              + 0.45 * (L - R) * std::sin(2.0 * M_PI * 2.0 * kPilotHz * t);
             phase += 2.0 * M_PI * kDevHz * mpx / kFs;
             if (phase >  M_PI * 1e6) phase -= M_PI * 2e6;   // keep it bounded
-            out[(size_t)i] = cf32{ (float)std::cos(phase), (float)std::sin(phase) };
+            if (staticOnly) {
+                // Nothing but receiver noise: no carrier, no pilot, no programme.
+                out[(size_t)i] = cf32{ (float)gauss(rng), (float)gauss(rng) };
+                tAcc += 1.0 / kFs;
+                continue;
+            }
+            double re = std::cos(phase), im = std::sin(phase);
+            if (noise > 0.0) { re += noise * gauss(rng); im += noise * gauss(rng); }
+            out[(size_t)i] = cf32{ (float)re, (float)im };
             tAcc += 1.0 / kFs;
         }
     }
@@ -145,6 +164,64 @@ int main() {
     ok(sink.transitions > 0,
        "★ the pipeline re-announces stereo after a same-chain retune",
        "silent — the listener is stuck in mono until something rebuilds the chain");
+
+    // ── An UNDER-INJECTED pilot must still lock ──────────────────────────────────────────────
+    // ★★★ THE CASE FROM THE AIR. H F M on 102.3 transmits 4.7 kHz of pilot where the spec says
+    //     6.0-7.5, which sat a whisker above the old engage threshold (4.5 kHz) — so its stereo
+    //     dropped in and out on an otherwise clean 26 dB signal (Stuart, 2026-08-14). Stations do
+    //     not always comply, and a receiver that only works with compliant ones is not finished.
+    {
+        Sink s2;
+        RxPipeline::Callbacks cb2{};
+        cb2.ctx = &s2; cb2.stereo = &Sink::onStereo; cb2.audio = &Sink::onAudio;
+        MpxGen g2; g2.pilot = 0.063;              // 4.7 kHz, as measured on air
+        RxPipeline rx2;
+        rx2.start(kFs, 1024, 10.0, 48000, cb2);
+        rx2.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx2, g2, 3.0);
+        ok(s2.sawStereo,
+           "★★★ a 4.7 kHz UNDER-INJECTED pilot still locks — real stations are not always compliant",
+           "no stereo on a pilot the receiver should manage");
+    }
+
+    // ── ...AND PURE STATIC MUST NOT ─────────────────────────────────────────────────────────
+    // ★★★ THE ASSERTION THAT GUARDS THE CHANGE ABOVE, AND THE ONE STUART NAMED: "we must not risk
+    //     it going back to how it was in the early days and give us stereo on pure static". The
+    //     engage threshold was lowered by 30%, which on its own WOULD risk exactly that — it is
+    //     paid for by averaging 2.2x longer, because a real pilot correlates coherently (as N)
+    //     while noise correlates randomly (as sqrt(N)). If that reasoning is ever wrong, or the
+    //     averaging is ever shortened without moving the threshold back, this test is what says so.
+    {
+        Sink s3;
+        RxPipeline::Callbacks cb3{};
+        cb3.ctx = &s3; cb3.stereo = &Sink::onStereo; cb3.audio = &Sink::onAudio;
+        MpxGen g3; g3.staticOnly = true;          // no carrier, no pilot — receiver noise alone
+        RxPipeline rx3;
+        rx3.start(kFs, 1024, 10.0, 48000, cb3);
+        rx3.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        // ★★★ MEASURE THE MARGIN, DO NOT JUST WATCH FOR A FAILURE. A binary "did it lock?" over a
+        //     few seconds of synthetic noise passes even with the OLD averaging and the NEW lower
+        //     threshold — I checked, and it did — so on its own it proves nothing about why we are
+        //     safe. False locks are rare events; a test that waits for one is a test that usually
+        //     says nothing. So watch the lock METRIC and record how close it ever came.
+        float peak = 0.0f;
+        for (int i = 0; i < 40; ++i) {
+            run(rx3, g3, 0.4);
+            peak = std::max(peak, std::fabs(rx3.pilotLockAmp()));
+        }
+        const float engage = 0.042f;              // kLockEngage — see the note beside it
+        std::printf("   .. static: peak lock metric %.4f against an engage threshold of %.3f"
+                    "  (%.1fx margin)\n", peak, engage, peak > 0 ? engage / peak : 99.0f);
+        ok(!s3.sawStereo,
+           "★★★ PURE STATIC NEVER GIVES STEREO — the guarantee the lower threshold is measured against",
+           "stereo declared on noise alone");
+        // ★★ AND WITH ROOM TO SPARE. This is the assertion with teeth: shorten the averaging, or
+        //    drop the threshold again, and the margin closes measurably long before a false lock
+        //    becomes likely enough for a short test to catch one.
+        ok(peak < engage * 0.5f,
+           "★★★ ...and not even CLOSE — the noise floor of the metric stays well under the threshold",
+           "peak " + std::to_string(peak) + " vs engage " + std::to_string(engage));
+    }
 
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);

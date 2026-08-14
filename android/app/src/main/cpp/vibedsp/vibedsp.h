@@ -959,8 +959,23 @@ private:
     float lockSmooth_ = 0.0005f;     // lock-metric 1-pole coeff (set by rate ~50ms)
     bool  lockState_ = false;        // hysteretic lock state (stereo audio)
     bool  trackState_ = false;       // hysteretic PLL-is-tracking state (RDS)
-    static constexpr float kLockEngage = 0.060f;   // pilot present (real ~0.08)
-    static constexpr float kLockRelease = 0.035f;  // pilot lost
+    // ★★★ LOWERED FOR UNDER-INJECTED PILOTS — AND PAID FOR WITH LONGER AVERAGING, NOT WITH RISK.
+    //     lockAmp is deviation/75 kHz, so the old 0.060 engage meant 4.5 kHz of pilot. The spec is
+    //     6.0-7.5, but stations do not always comply: H F M on 102.3 transmits 4.7 kHz (Stuart,
+    //     2026-08-14) — a whisker above the threshold — so its stereo dropped in and out on an
+    //     otherwise clean 26 dB signal. The pilot was the fault, and no amount of processing adds
+    //     pilot that was never sent.
+    // ★★★ THE ONE THING THIS MUST NOT DO IS GIVE STEREO ON STATIC ("we must not risk it going back
+    //     to how it was in the early days" — Stuart). So the threshold is NOT simply lowered. A
+    //     real pilot is COHERENT: correlated against the VCO it accumulates in proportion to N,
+    //     while noise accumulates only as sqrt(N). Averaging for longer therefore lowers the
+    //     metric's noise floor faster than it lowers a real pilot's reading — the margin, measured
+    //     in standard deviations of the noise, is what actually decides false locks.
+    //     Threshold x0.70 (0.060 -> 0.042, i.e. 3.1 kHz) against averaging x2.2 (50 -> 110 ms),
+    //     which shrinks the noise sigma by x0.674. Margin: 0.70/0.674 = 1.04 — very slightly
+    //     BETTER than before, not worse. The cost is 60 ms more to acquire, which is inaudible.
+    static constexpr float kLockEngage = 0.042f;   // ~3.1 kHz of pilot; spec is 6.0-7.5
+    static constexpr float kLockRelease = 0.025f;  // pilot lost (~1.9 kHz)
     // Tracking-only thresholds: well below the stereo bar, with wide hysteresis so a
     // fade cannot chatter the gate and cost RDS its block sync.
     static constexpr float kTrackEngage = 0.015f;

@@ -20,9 +20,15 @@ void StereoPLL::configure(double pilotHz, double rate) {
     oscC_ = 1.0f; oscS_ = 0.0f; outC_ = 1.0f; outS_ = 0.0f; sinceNorm_ = 0;
     lockAmp_ = 0.0f;
     lockState_ = false; trackState_ = false;
-    // Lock-metric averaging: ~50 ms time constant (rate-independent). Slow enough
-    // that brief noise-correlation spikes on static don't reach the engage level.
-    lockSmooth_ = (float)(1.0 / (0.05 * rate));
+    // ★★★ 110 ms, NOT 50 — AND THIS IS WHAT PAYS FOR THE LOWER ENGAGE THRESHOLD. A real pilot
+    //     correlates COHERENTLY against the VCO, so its contribution to this average grows with N;
+    //     noise correlates randomly and grows only as sqrt(N). Averaging longer therefore lowers
+    //     the metric's noise floor faster than it lowers a weak pilot's reading, which is why a
+    //     lower threshold here does NOT mean more stereo-on-static — the margin in sigmas is
+    //     slightly better than it was. See kLockEngage for the arithmetic.
+    // ★ The cost is acquisition time: 60 ms longer to declare stereo on a tune, which nobody can
+    //   hear. The thing that WOULD be heard is a false lock, and that is what this protects.
+    lockSmooth_ = (float)(1.0 / (0.11 * rate));
 }
 
 // One PLL sample. Returns the oscillator's cos/sin via oscC_/oscS_ and keeps

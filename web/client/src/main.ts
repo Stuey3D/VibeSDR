@@ -5099,6 +5099,59 @@ function renderRds() {
     mpEl.style.color = '';
   } else { mpEl.textContent = dash; mpEl.style.color = ''; }
 
+  // ★★ THE BLANKER'S RATE, a DIAGNOSTIC before it is a control: it answers "is that crackle me or
+  //    the station?", which an owner otherwise has no way to settle.
+  const nbEl = $('rxNb');
+  const nbR = (rdsExt?.nbRate ?? 0) * 100;
+  if (rdsExt) {
+    nbEl.textContent = nbR < 0.005 ? 'nothing to blank'
+                     : `${nbR.toFixed(nbR < 1 ? 2 : 1)}% blanked`;
+    // ★ Amber only once it is removing enough to matter — a trickle is normal and colouring it
+    //   would cry wolf.
+    nbEl.style.color = nbR > 0.5 ? '#ffd479' : nbR < 0.005 ? '#7dff9a' : '';
+  } else { nbEl.textContent = dash; nbEl.style.color = ''; }
+
+  // ★★ CEQ, SHOWN AS BEFORE -> AFTER, because "engaged" says nothing about whether it HELPED, and
+  //    a blind equaliser quietly making things worse is the failure mode that matters.
+  const ceqEl = $('rxCeq');
+  if (rdsExt && rdsExt.ceqOn) {
+    const before = (rdsExt.multipath ?? 0) * 100, after = (rdsExt.ceqAfter ?? 0) * 100;
+    const gained = before > 0.5 && after < before * 0.8;
+    ceqEl.textContent = `${before.toFixed(1)}% → ${after.toFixed(1)}%` + (gained ? '' : ' · little change');
+    ceqEl.style.color = gained ? '#7dff9a' : '';
+  } else if (rdsExt) {
+    // ★★ AND WHY IT IS NOT RUNNING. "Standing by" alone left the owner unable to tell whether it
+    //    had declined or failed — especially on a station being FOUGHT OVER, which reads as severe
+    //    multipath while sitting well under the S/N the equaliser needs. Co-channel is not
+    //    multipath: a reflection is your own signal arriving twice and can be inverted; a second
+    //    TRANSMITTER cannot be, by anyone.
+    const why = rdsExt.ceqWhy ?? 3;
+    ceqEl.textContent = why === 1 ? 'off'
+                      : why === 2 ? 'signal too weak to equalise'
+                      : 'standing by · nothing to correct';
+    ceqEl.style.color = '';
+  } else { ceqEl.textContent = dash; ceqEl.style.color = ''; }
+
+  // ★★ THE IF-NARROWING BENEFIT, read against the CURRENT state — the shadow always evaluates THE
+  //    OTHER OPTION, so the sign flips the moment the filter engages and a bare number is
+  //    genuinely ambiguous.
+  const ifEl = $('rxIfGain');
+  const ifG = rdsExt?.ifGain ?? 0;
+  const ifC = rdsExt?.ifCand ?? 0;
+  const ifBw = rdsExt?.ifBw ?? 0;
+  if (rdsExt && ifC > 0 && (rdsExt.mpxSnr ?? 0) > 0.5) {
+    if (ifBw > 0) {
+      ifEl.textContent = `${Math.round(ifBw / 1000)}k narrow · wide would ` +
+        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`);
+      ifEl.style.color = '#7dff9a';
+    } else {
+      const kHz = Math.round(ifC / 1000);
+      const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
+      ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
+      ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
+    }
+  } else { ifEl.textContent = dash; ifEl.style.color = ''; }
+
   const pdev = rdsExt?.pilotDev ?? 0;
   const rdev = rdsExt?.rdsDev ?? 0;
   const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');
