@@ -572,7 +572,9 @@ export default function TunerScreen({ route, navigation }: Props) {
       pi: st?.pi, name: logoName, iso: logoIso || undefined, freqHz: st?.freqHz || undefined,
     }).then((url) => {
       if (!destroyed.current && lastLogoName.current === key) setLogo(url);
-    });
+    // ★ An UNHANDLED REJECTION here is a crash risk in RN, not a missing picture. The resolver
+    //   catches internally today, so this guards the next edit to it rather than a live fault.
+    }).catch(() => {});
   }, [logoName, logoIso, st?.freqHz]);
 
   // Inlay the resolved station logo on the lock-screen artwork.

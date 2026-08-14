@@ -5290,7 +5290,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       pi: liveStation.pi, name, iso: iso || undefined, freqHz: status.frequency || undefined,
     }).then((url) => {
       if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
-    });
+    // ★ An UNHANDLED REJECTION here is a crash risk in RN, not a missing picture. The resolver
+    //   catches internally today, so this guards the next edit to it rather than a live fault.
+    }).catch(() => {});
   }, [liveStation.name, liveStation.countryIso, liveStation.pi, status.frequency]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────

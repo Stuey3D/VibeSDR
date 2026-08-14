@@ -5,8 +5,32 @@
 //
 // No backend, no fees. Results cached in-memory per (name|country) for the session.
 
-const cache = new Map<string, string | null>();
+/**
+ * ★★★ A NEGATIVE USED TO BE PERMANENT. This cached `null` with NO TTL, so the first failure of the
+ *     session — offline at the moment you tuned, radio-browser slow, the mirror returning an HTML
+ *     error page — settled the question until the app was killed and relaunched. That is most of
+ *     what "the logos don't load well" looks like from the outside: it works, or it never works,
+ *     and which one you get is decided by whatever the network was doing the first time.
+ * ★★ So a MISS (we asked, the database has nothing) is held for an hour — worth re-asking, not
+ *    worth asking on every retune — and a FAILURE (we could not ask) for a minute.
+ */
+const HIT_TTL  = 24 * 3600 * 1000;
+const MISS_TTL = 3600 * 1000;
+const FAIL_TTL = 60 * 1000;
+
+/** ★ And it could not give up either: no timeout, so a mirror that accepts the connection and then
+ *  stalls held the lookup open indefinitely. */
+const LOOKUP_MS = 6000;
+
+type Entry = { v: string | null; at: number; failed: boolean };
+const cache = new Map<string, Entry>();
 const inflight = new Map<string, Promise<string | null>>();
+
+function fresh(e: Entry | undefined): boolean {
+  if (!e) return false;
+  const ttl = e.v ? HIT_TTL : e.failed ? FAIL_TTL : MISS_TTL;
+  return Date.now() - e.at < ttl;
+}
 
 // de1 is a stable radio-browser mirror; the `all.` host is round-robin DNS which
 // some RN networking stacks resolve poorly, so we pin a mirror.
@@ -58,9 +82,11 @@ export async function lookupStationLogo(
   const q = norm(name);
   if (!q || q.length < 3) return null;
   const key = `${q}|${iso ?? ''}|${preferIso ?? ''}`;
-  if (cache.has(key)) return cache.get(key)!;
+  const hit = cache.get(key);
+  if (fresh(hit)) return hit!.v;
   if (inflight.has(key)) return inflight.get(key)!;
 
+  let failed = false;
   const p = (async (): Promise<string | null> => {
     try {
       // byname/ is a substring match (search?name= over-filters and returns []).
@@ -68,7 +94,17 @@ export async function lookupStationLogo(
       // 40, not 10: the right station is often outside the top 10 by votes — widening
       // the pool is what turned "Absolute" from a miss into a hit.
       const url = `${HOST}/json/stations/byname/${encodeURIComponent(name)}?limit=40&order=votes&reverse=true&hidebroken=true`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' } });
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), LOOKUP_MS);
+      let res: Response;
+      try {
+        res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' },
+                                 signal: ac.signal });
+      } finally { clearTimeout(timer); }
+      // ★★ CHECK res.ok BEFORE PARSING. There was no check, so a 5xx or a captive portal's HTML
+      //    went straight into res.json(), threw, and was swallowed by the catch below as "no such
+      //    station" — a network fault recorded for ever as a fact about the station.
+      if (!res.ok) { failed = true; return null; }
       const rows: any[] = await res.json();
       const list = Array.isArray(rows) ? rows : [];
       // Country-filtered fuzzy match. The COUNTRY filter (from the transmitter's
@@ -113,6 +149,7 @@ export async function lookupStationLogo(
       if (bestScore < 0.8) return null;
       return bestFav;
     } catch {
+      failed = true;                        // offline, timed out, or the mirror answered rubbish
       return null;
     }
   })();
@@ -120,6 +157,6 @@ export async function lookupStationLogo(
   inflight.set(key, p);
   const result = await p;
   inflight.delete(key);
-  cache.set(key, result);
+  cache.set(key, { v: result, at: Date.now(), failed });
   return result;
 }

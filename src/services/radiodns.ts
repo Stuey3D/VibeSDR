@@ -32,13 +32,41 @@ const DOH = 'https://cloudflare-dns.com/dns-query';
 const HIT_TTL = 24 * 3600 * 1000;
 const MISS_TTL = 3600 * 1000;
 
-const cache = new Map<string, { url: string; at: number }>();
+/** ★★★ A MINUTE FOR A FAILURE, WHICH IS NOT THE SAME THING AS A MISS — see the note on `failed`
+ *  below. Long enough that a dead broadcaster is not re-dialled on every retune, short enough that
+ *  a station is not blanked for an hour because the train went through a tunnel. */
+const FAIL_TTL = 60 * 1000;
+
+/** ★★★ NO TIMEOUT AT ALL WAS THE REAL "LOGOS DON'T LOAD WELL". Nothing in this chain could ever
+ *  give up: a DoH request or a broadcaster's SPI host that accepts the connection and then says
+ *  nothing left the promise pending FOR EVER. And because the name-search fallback runs only after
+ *  this resolves (stationLogoCache), one unreachable broadcaster did not merely lose its own logo —
+ *  it withheld the fallback for that station permanently. A hang is worse than a failure precisely
+ *  because nothing downstream is allowed to happen. */
+const DNS_MS = 4000;
+const SPI_MS = 6000;
+
+async function fetchT(url: string, ms: number, init?: any): Promise<Response> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...(init || {}), signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const cache = new Map<string, { url: string; at: number; failed?: boolean }>();
 const inflight = new Map<string, Promise<string>>();
 
 async function dns(name: string, type: 'CNAME' | 'SRV'): Promise<string> {
-  const r = await fetch(`${DOH}?name=${encodeURIComponent(name)}&type=${type}`,
-                        { headers: { accept: 'application/dns-json' } });
-  if (!r.ok) return '';
+  const r = await fetchT(`${DOH}?name=${encodeURIComponent(name)}&type=${type}`, DNS_MS,
+                         { headers: { accept: 'application/dns-json' } });
+  // ★★ THROW, do not return ''. A resolver that answers "no such name" and a resolver we could not
+  //    REACH are opposite facts: the first says the station is not in RadioDNS (cache it for an
+  //    hour), the second says we do not know (try again in a minute). Flattening both to '' is what
+  //    let one bad minute of connectivity blank a station's logo for the next hour.
+  if (!r.ok) throw new Error(`doh ${r.status}`);
   const j: any = await r.json();
   const ans = Array.isArray(j?.Answer) ? j.Answer : [];
   // ★ Take the record of the type we ASKED for. A CNAME query often answers with the CNAME chain
@@ -123,12 +151,19 @@ export async function radioDnsLogo(piHex: string, ecc: string, freqHz: number): 
   if (!fqdn) return '';
 
   const hit = cache.get(fqdn);
-  if (hit && Date.now() - hit.at < (hit.url ? HIT_TTL : MISS_TTL)) return hit.url;
+  if (hit && Date.now() - hit.at < (hit.url ? HIT_TTL : hit.failed ? FAIL_TTL : MISS_TTL))
+    return hit.url;
   const busy = inflight.get(fqdn);
   if (busy) return busy;                    // ★ one lookup per station, however many callers ask
 
   const p = (async (): Promise<string> => {
     let url = '';
+    // ★★★ "WE COULD NOT ASK" IS NOT "THERE IS NOTHING TO FIND", AND CACHING THEM ALIKE IS WHY A
+    //     LOGO THAT FAILED ONCE STAYED MISSING. Every failure here — offline, DNS blocked on the
+    //     network, the broadcaster's host down, our own timeout — was written into the cache as a
+    //     settled miss and honoured for a full hour, so a station whose logo exists and would
+    //     resolve perfectly well a second later simply had no artwork until the app was restarted.
+    let failed = false;
     try {
       const anchor = await dns(fqdn, 'CNAME');
       if (anchor) {
@@ -138,14 +173,17 @@ export async function radioDnsLogo(piHex: string, ecc: string, freqHz: number): 
         if (hostPort) {
           const tls = hostPort.endsWith(':443');
           const base = tls ? `https://${hostPort.slice(0, -4)}` : `http://${hostPort}`;
-          const r = await fetch(`${base}/radiodns/spi/3.1/SI.xml`);
+          const r = await fetchT(`${base}/radiodns/spi/3.1/SI.xml`, SPI_MS);
+          // ★ A 5xx from the broadcaster is a failure, not a verdict on the station.
           if (r.ok) url = logoFromSpi(await r.text(), fmBearerId(piHex, ecc, freqHz));
+          else failed = true;
         }
       }
     } catch {
-      url = '';                             // offline, or the broadcaster's host is down
+      failed = true;                        // offline, host down, or we timed out asking
+      url = '';
     }
-    cache.set(fqdn, { url, at: Date.now() });
+    cache.set(fqdn, { url, at: Date.now(), failed });
     inflight.delete(fqdn);
     return url;
   })();

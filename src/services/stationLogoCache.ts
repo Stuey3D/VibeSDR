@@ -49,12 +49,21 @@ async function download(url: string, key: string): Promise<string | null> {
   } catch { return null; }
 }
 
-async function refresh(key: string, name: string, iso?: string): Promise<void> {
+async function refresh(key: string, name: string, iso?: string,
+                       id?: { pi?: string; ecc?: string; freqHz?: number }): Promise<void> {
+  // ★★★ THE REFRESH COULD NOT CORRECT THE THING MOST LIKELY TO BE WRONG. It re-ran ONLY the name
+  //     search, so a logo that got here by a bad PS decode — the Radio 1 roundel on Radio 3 — was
+  //     re-derived from a name every fortnight and confirmed itself for ever. The identity path is
+  //     the one that can overrule it, so it runs FIRST here too, exactly as on the cold path.
+  let url = '';
+  if (id?.pi && id.ecc && id.freqHz) {
+    url = await radioDnsLogo(id.pi, id.ecc, id.freqHz).catch(() => '');
+  }
   // receiverIso() is a PREFERENCE, not a filter: it searches the receiver's own
   // country first (a global name search buries the local station — "Kiss" found a
   // Greek one because the UK one was nowhere near the top by votes) but still falls
   // back worldwide, so a sporadic-E catch from abroad is not excluded.
-  const url = await lookupStationLogo(name, iso, receiverIso() || undefined);   // no-op offline (returns null)
+  if (!url && name) url = (await lookupStationLogo(name, iso, receiverIso() || undefined)) || '';   // no-op offline
   if (!url) return;
   const path = await download(url, key);
   if (path) { (await loadIndex())[key] = { path, url, ts: Date.now() }; await saveIndex(); }
@@ -88,7 +97,8 @@ export async function resolveStationLogo(
     const e = idx[key];
     const info = await FileSystem.getInfoAsync(e.path);
     if (info.exists) {
-      if (Date.now() - e.ts > REFRESH_MS) refresh(key, name, iso).catch(() => {});
+      if (Date.now() - e.ts > REFRESH_MS)
+        refresh(key, name, iso, { pi, ecc: ecc || eccForIso(iso, pi), freqHz }).catch(() => {});
       return e.path;
     }
     delete idx[key];   // file vanished — fall through to re-fetch

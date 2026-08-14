@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Image, StyleSheet } from 'react-native';
 import { resolveStationLogo } from '../services/stationLogoCache';
-import { ituToIso } from '../services/rdsCountry';
+import { ituToIso, validIso } from '../services/rdsCountry';
 
 /**
  * A station's logo, resolved lazily and cached.
@@ -27,7 +27,12 @@ export default function StationLogo({ name, itu, size = 18 }: {
     setUrl(null);
     const n = name?.trim();
     if (!n) return;
-    const iso = itu ? ituToIso(itu) : '';
+    // ★★ AN ISO ARRIVES HERE TOO, AND ituToIso() SILENTLY ATE IT. AdvRdsPanel passes
+    //    `itu={p.countryIso}` — already an ISO ("GB") — but ITU_TO_ISO is keyed on ITU codes
+    //    ("G", "D", "F"), so the lookup missed and the country fell to '', dropping the one filter
+    //    that keeps a foreign station's artwork off a British one. Accept either: a two-letter
+    //    value that is already a valid ISO is passed straight through.
+    const iso = itu ? (validIso(itu.toUpperCase()) ? itu.toUpperCase() : ituToIso(itu)) : '';
     resolveStationLogo({ name: n, iso: iso || undefined })
       .then((u) => { if (!cancelled) setUrl(u); })
       .catch(() => {});
