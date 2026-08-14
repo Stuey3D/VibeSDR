@@ -5004,7 +5004,15 @@ function renderRds() {
   //     (which an aerial rotation may fix) or noise (which it will not).
   const mpEl = $('rxMultipath');
   const mp = rdsExt?.multipath ?? 0;
-  if (rdsExt && mp > 0.0005) {
+  if (rdsExt && rdsExt.multipathOk === false) {
+    // ★★★ "TOO NOISY TO TELL" IS A RESULT, NOT A BLANK. The first version printed the raw figure
+    //     and a 6 dB signal read "25.7% · severe" — which was the NOISE, and would have sent
+    //     somebody up a ladder to rotate an aerial (Stuart, on air at 107.8). Below ~12 dB the
+    //     noise correction removes nearly everything it measured, so any residual is noise about
+    //     noise. Saying so is more useful than a confident number that means nothing.
+    mpEl.textContent = 'too noisy to judge';
+    mpEl.style.color = '';
+  } else if (rdsExt && mp > 0.0005) {
     const pct = mp * 100;
     const label = mp < 0.03 ? 'clean' : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
     mpEl.textContent = `${pct.toFixed(1)}% · ${label}`;

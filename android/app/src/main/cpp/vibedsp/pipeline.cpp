@@ -443,6 +443,43 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //     immune to AM noise), so after this line the envelope wobble that reveals multipath
         //     is simply gone. Read-only; chBuf_ is untouched.
         if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
+        // ★★★ TAKE THE NOISE BACK OUT, OR THIS METER LIES WHERE IT MATTERS MOST. Noise shakes the
+        //     envelope exactly as a reflection does, and the first version reported the sum. On
+        //     air at 107.8 (S8, MPX S/N 6 dB) it showed 25.7% — "severe" — which would have sent
+        //     the owner rotating an aerial to cure a reflection that was very likely not there
+        //     (Stuart, 2026-08-14). The lab had only ever demonstrated the discrimination at
+        //     MODERATE noise, and 6 dB is far outside that.
+        // ★★ MEASURED, NOT ASSUMED. test-multipath-meter sweeps noise with NO echo at all and
+        //    prints what the meter reads: 34 dB -> 0.001, 28 -> 0.074, 24 -> 0.117, 12 -> 0.166,
+        //    3 -> 0.208. That curve is this table. It must be re-read whenever the meter's filters
+        //    change — the printout exists so it cannot quietly go stale.
+        // ★★★ SUBTRACTED IN THE POWER DOMAIN, because the two contributions are UNCORRELATED and
+        //     therefore add as powers, not as amplitudes. Subtracting linearly would over-remove
+        //     and report clean paths as pristine while hiding real reflections.
+        if (mode_ == Mode::WFM) {
+            static constexpr float kSnr[]   = { 34.3f, 28.0f, 23.8f, 12.5f, 3.0f, -15.0f };
+            static constexpr float kDepth[] = { 0.001f, 0.074f, 0.117f, 0.166f, 0.208f, 0.241f };
+            const float s = blendSnrDb_;
+            float expect = kDepth[0];
+            if (s <= kSnr[5]) expect = kDepth[5];
+            else if (s < kSnr[0]) {
+                for (int i = 0; i < 5; ++i) {
+                    if (s <= kSnr[i] && s > kSnr[i + 1]) {
+                        const float t = (kSnr[i] - s) / (kSnr[i] - kSnr[i + 1]);
+                        expect = kDepth[i] + t * (kDepth[i + 1] - kDepth[i]);
+                        break;
+                    }
+                }
+            }
+            const float d = multipath_.depth();
+            const float p = d * d - expect * expect;
+            multipathCorr_ = (p > 0.0f) ? std::sqrt(p) : 0.0f;
+            // ★★ AND SAY WHEN WE CANNOT TELL. Below ~12 dB the correction is subtracting nearly
+            //    everything it measured, so the residual is the small difference of two large
+            //    numbers — the classic way to produce a confident-looking figure that means
+            //    nothing. Better to report "cannot tell" than to invent a verdict.
+            multipathValid_ = (blendSnrDb_ > 12.0f);
+        } else { multipathCorr_ = 0.0f; multipathValid_ = false; }
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
@@ -662,6 +699,19 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 //     below that ceiling (or a flawless station would still be narrowed) and
                 //     kRough above the floor. Both figures come from test-stereo-highblend, which
                 //     prints them; change the filter and these must be re-read, not reasoned about.
+                // ★★★ CALIBRATED BY EAR, AND I NEARLY BROKE IT BY REASONING INSTEAD. Real readings:
+                //     6 dB (107.8, very noisy), 11 and 13 dB (107.4/105.4, weak and hissy), 27 and
+                //     30 dB (106.0/106.9 — "fairly weak stations normally", and fine to listen to).
+                //     Seeing the first three all pinned at the FLOOR, I decided that must be wrong
+                //     and widened the window to 5-28 so they would spread out.
+                // ★★★ THEY WERE NOT WRONG. Stuart, listening to exactly those stations at exactly
+                //     that floor: "this one is SIGNIFICANTLY cleaner to listen to", "sounds a lot
+                //     cleaner to me". Widening would have handed back a good part of the hiss he
+                //     had just gained. The shape of a set of numbers is NOT evidence that they are
+                //     mis-scaled — the ear is the instrument here, and it had already answered.
+                // ★★ So the window stays 14-30, and it maps well: everything below 14 dB is bad
+                //    enough to want the full treatment, 27 dB gets a light touch (blend ~12.6k),
+                //    30 dB gets nothing at all.
                 constexpr float kClean = 30.0f, kRough = 14.0f;
                 constexpr float kWide  = 15000.0f, kNarrow = 2000.0f;
                 float t = (blendSnrDb_ - kRough) / (kClean - kRough);

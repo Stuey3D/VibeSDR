@@ -1542,7 +1542,14 @@ public:
     float blendSnrDb()   const { return blendSnrDb_; }
     /** Envelope-AM depth: how MULTIPATH-damaged this signal is, as opposed to how weak. An FM
      *  carrier arrives at constant amplitude, so anything here was done by the channel. */
-    float multipathDepth() const { return multipath_.depth(); }
+    /** Raw envelope-AM depth — reflection AND noise together. Diagnostics; prefer the corrected
+     *  figure for anything a user reads. */
+    float multipathRaw() const { return multipath_.depth(); }
+    /** Envelope AM with the measured noise contribution subtracted in the power domain: what is
+     *  left is a REFLECTION. Only meaningful when multipathValid() — below ~12 dB S/N the
+     *  correction removes nearly everything and the residual is noise about noise. */
+    float multipathDepth() const { return multipathCorr_; }
+    bool  multipathValid() const { return multipathValid_; }
     /** The audio high-cut corner now in use (Hz; 15000 = untouched). */
     float audioHiCutHz() const { return audioHiCutHz_; }
 
@@ -1673,6 +1680,8 @@ private:
     //   which high-blend cannot touch because it only ever acts on L-R.
     float audioHiCutHz_ = 15000.0f;
     float hiCutYL_ = 0.0f, hiCutYR_ = 0.0f, hiCutYM_ = 0.0f;
+    float multipathCorr_ = 0.0f;   // envelope AM with the measured noise contribution removed
+    bool  multipathValid_ = false; // ...and whether that residual means anything at this S/N
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()

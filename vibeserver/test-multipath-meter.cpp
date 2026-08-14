@@ -149,10 +149,40 @@ int main() {
                 noisy.mpDepth, noisy.snrDb);
     ok(noisy.snrDb < clean.snrDb - 3.0f,
        "the noise meter sees the noise (the signal really did get worse)");
-    ok(noisy.mpDepth < echo.mpDepth,
-       "★★★ NOISE DOES NOT READ AS MULTIPATH — the discrimination this meter exists for",
-       "noise-only " + std::to_string(noisy.mpDepth) + " vs reflection "
-                     + std::to_string(echo.mpDepth));
+    // ★★★ THE FIELD RAISED THE BAR ON THIS ONE. It used to be enough that noise read LOWER than a
+    //     reflection; on air that was not enough at all — a 6 dB signal read 25.7% and was labelled
+    //     "severe", which was the noise (Stuart, 107.8 MHz). With the measured noise contribution
+    //     now subtracted in the power domain, noise alone must correct to very nearly NOTHING.
+    ok(noisy.mpDepth < 0.03f,
+       "★★★ NOISE CORRECTS TO ~ZERO MULTIPATH — not merely 'less than a reflection'",
+       "noise-only corrected to " + std::to_string(noisy.mpDepth));
+
+    // ★★ AND THE CORRECTION MUST NOT EAT A REAL REFLECTION THAT HAPPENS TO ARRIVE IN NOISE, which
+    //    is the failure mode a subtraction invites and the case a DXer most cares about: a distant
+    //    station is BOTH weak and reflected.
+    const Result both = measure(0.30, 0.5);
+    std::printf("   .. noise + echo:     multipath %.4f   noise-ratio %5.1f dB\n",
+                both.mpDepth, both.snrDb);
+    ok(both.mpDepth > noisy.mpDepth + 0.05f,
+       "★ a reflection is still seen THROUGH noise — the correction does not eat it",
+       "noise-only " + std::to_string(noisy.mpDepth) + " vs noise+echo "
+                     + std::to_string(both.mpDepth));
+
+    // ── CALIBRATION SWEEP: what does NOISE ALONE read, right down to the floor? ──────────────
+    // ★★★ THIS EXISTS BECAUSE THE FIELD BROKE MY ASSUMPTION. On air at 107.8 (S8) the panel showed
+    //     MPX S/N 6 dB and multipath 25.7% "severe" — a reading as high as a -2 dB reflection in
+    //     the lab. But the discrimination above was only ever demonstrated at MODERATE noise
+    //     (28 dB), and 6 dB is far outside it. Noise shakes the envelope too, so at the bottom of
+    //     the range the meter may simply be reporting the noise back as multipath — which would
+    //     send a DXer rotating an aerial to fix a reflection that is not there.
+    // ★★ So measure the noise-only curve instead of assuming it. Printed, not asserted: it is the
+    //    evidence the correction is built on, and it must stay visible when the filters change.
+    std::printf("\n   noise-only calibration (echo = 0) — what noise alone looks like:\n");
+    std::printf("   %-8s %-12s %s\n", "noise", "MPX S/N dB", "multipath");
+    for (double nz : { 0.0, 0.15, 0.30, 0.50, 0.80, 1.20, 2.00 }) {
+        const Result r = measure(nz, 0.0);
+        std::printf("   %-8.2f %-12.1f %.4f\n", nz, r.snrDb, r.mpDepth);
+    }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);
     return failures ? 1 : 0;

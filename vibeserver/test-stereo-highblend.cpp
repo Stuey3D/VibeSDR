@@ -119,7 +119,12 @@ int main() {
        "★ a CLEAN signal is left wide open — high-blend is not a tone control",
        "corner " + std::to_string((int)clean.cutHz) + " Hz, expected > 14000");
 
-    const Result noisy = measure(0.30);
+    // ★★★ NOISE LEVELS CHOSEN TO MATCH REAL SIGNALS, not round numbers. Four stations measured on
+    //     air read 6 dB (very noisy), 11 dB (weak and hissy) and 27-30 dB (weak but perfectly
+    //     listenable) — so 28 dB is a GOOD signal, not a bad one. The old 0.30 produced 28 dB and
+    //     was being called "noisy", which is why the thresholds ended up mis-scaled: the lab's idea
+    //     of noisy was the field's idea of fine (Stuart, 2026-08-14).
+    const Result noisy = measure(0.50);   // ~24 dB — a weak but usable station
     std::printf("   .. noisy:      corner %7.0f Hz   ratio %5.1f dB   stereo %s\n",
                 noisy.cutHz, noisy.snrDb, noisy.stereo ? "yes" : "NO");
     ok(noisy.cutHz < clean.cutHz - 1000.0f,
@@ -129,7 +134,7 @@ int main() {
     ok(noisy.snrDb < clean.snrDb,
        "and the meter agrees the signal got worse (it is not narrowing at random)");
 
-    const Result worse = measure(0.60);
+    const Result worse = measure(0.80);   // ~12 dB — hissy, like 107.4 on air
     std::printf("   .. worse:      corner %7.0f Hz   ratio %5.1f dB   stereo %s\n",
                 worse.cutHz, worse.snrDb, worse.stereo ? "yes" : "NO");
     ok(worse.cutHz <= noisy.cutHz,

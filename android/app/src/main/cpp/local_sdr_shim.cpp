@@ -8849,7 +8849,12 @@ struct LocalSdrShim::Impl {
                       //      this sound dull?" have an ANSWER rather than a suspicion — the same
                       //      rule as every other sticky control reporting its state.
                       + ",\"mpxSnr\":"    + std::to_string(P_ ? P_->blendSnrDb() : 0.0f)
+                      // ★ The CORRECTED figure — the noise contribution has been measured and
+                      //   subtracted — plus whether it means anything at this S/N. Sending the
+                      //   raw number would repeat the mistake that labelled a 6 dB signal's noise
+                      //   as "severe multipath".
                       + ",\"multipath\":" + std::to_string(P_ ? P_->multipathDepth() : 0.0f)
+                      + ",\"multipathOk\":" + std::string((P_ && P_->multipathValid()) ? "1" : "0")
                       + ",\"hiCutLmr\":"  + std::to_string(P_ ? P_->lmrHiCutHz() : 0.0f)
                       + ",\"hiCutAud\":"  + std::to_string(P_ ? P_->audioHiCutHz() : 0.0f)
                       + ",\"grp\":[";

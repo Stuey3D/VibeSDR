@@ -102,6 +102,10 @@ export interface RdsExt {
    *  transmitter at constant amplitude, so this is damage done by the channel — multipath, not
    *  weakness. The two want opposite treatments, which is why it is measured separately. */
   multipath: number;
+  /** Whether `multipath` means anything. Below ~12 dB MPX S/N the noise correction is subtracting
+   *  nearly everything it measured, so the residual is the difference of two large numbers — a
+   *  confident-looking figure about nothing. "Cannot tell" is an honest answer; a number is not. */
+  multipathOk: boolean;
   hiCutLmr: number;      // where high-blend has rolled the stereo difference off, Hz
   hiCutAud: number;      // where the audio high-cut is sitting, Hz
   xy: number[];          // interleaved x,y as signed bytes (x100)
@@ -523,6 +527,7 @@ export class SpectrumClient {
           rdsDev: Number(msg.rdsDev ?? 0),
           mpxSnr: Number(msg.mpxSnr ?? 0),
           multipath: Number(msg.multipath ?? 0),
+          multipathOk: Number(msg.multipathOk ?? 0) === 1,
           // ★ Default to 15000 (wide open), NOT 0. A server too old to send these would otherwise
           //   report a 0 Hz corner, which reads as "everything is being cut" — the alarming
           //   opposite of the truth.
