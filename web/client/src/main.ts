@@ -5029,6 +5029,19 @@ function renderRds() {
     mpEl.style.color = mp < 0.03 ? '#7dff9a' : mp < 0.10 ? '' : mp < 0.20 ? '#ffd479' : '#ff9a9a';
   } else { mpEl.textContent = dash; mpEl.style.color = ''; }
 
+  // ★★ THE IF-NARROWING BENEFIT. Reported as a gain in dB against the width it was measured at,
+  //    and deliberately blunt about a NEGATIVE result: if narrowing would not help, the honest
+  //    display says so rather than leaving an ambiguous number to be read hopefully.
+  const ifEl = $('rxIfGain');
+  const ifG = rdsExt?.ifGain ?? 0;
+  const ifC = rdsExt?.ifCand ?? 0;
+  if (rdsExt && ifC > 0 && (rdsExt.mpxSnr ?? 0) > 0.5) {
+    const kHz = Math.round(ifC / 1000);
+    const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
+    ifEl.textContent = `${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB at ${kHz}k · ${verdict}`;
+    ifEl.style.color = ifG > 1.5 ? '#7dff9a' : ifG < -1.5 ? '#ffd479' : '';
+  } else { ifEl.textContent = dash; ifEl.style.color = ''; }
+
   const pdev = rdsExt?.pilotDev ?? 0;
   const rdev = rdsExt?.rdsDev ?? 0;
   const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');

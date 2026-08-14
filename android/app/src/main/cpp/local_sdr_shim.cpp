@@ -8872,6 +8872,12 @@ struct LocalSdrShim::Impl {
                       + ",\"multipathOk\":" + std::string((P_ && P_->multipathValid()) ? "1" : "0")
                       + ",\"hiCutLmr\":"  + std::to_string(P_ ? P_->lmrHiCutHz() : 0.0f)
                       + ",\"hiCutAud\":"  + std::to_string(P_ ? P_->audioHiCutHz() : 0.0f)
+                      // ★ WOULD A NARROWER IF HELP THIS SIGNAL? Measured live on a shadow copy —
+                      //   see RxPipeline's shadow receiver. Shown BEFORE anything acts on it, so
+                      //   the policy that will eventually drive it can be judged rather than
+                      //   trusted (Stuart: "add the benefit measurement in to the advanced rds").
+                      + ",\"ifGain\":" + std::to_string(P_ ? P_->ifGainDb() : 0.0f)
+                      + ",\"ifCand\":" + std::to_string(P_ ? P_->ifCandidateHz() : 0.0)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";

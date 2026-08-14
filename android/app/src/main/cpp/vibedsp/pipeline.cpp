@@ -322,6 +322,12 @@ void RxPipeline::rebuildAudio() {
             mpxNoise_.configure(chFs_);
             multipath_.configure(chFs_);
             adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
+            shadowIf_.configure(chFs_); shadowIf_.setBandwidth(shadowBwHz_);
+            shadowFm_.reset();
+            shadowNoise_.configure(chFs_, 17000.0);
+            shadowPilot_.configure(chFs_, 19000.0);
+            widePilot_.configure(chFs_, 19000.0);
+            ifGainDb_ = 0.0f; shadowTick_ = 0;
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
             const int rch = (int)std::llround(audFs_);
@@ -484,6 +490,30 @@ void RxPipeline::feed(const cf32* iq, int n) {
             adaptIf_.process(chBuf_.data(), nc);
         }
         if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
+        // ★★★ THE SHADOW RECEIVER — one block in four, a narrower copy demodulated in parallel so
+        //     the BENEFIT of narrowing can be read off the panel instead of guessed at. Compared
+        //     like with like: the same pilot-to-guard-band ratio, measured the same way on both,
+        //     because the running PLL's lockAmp describes the WIDE signal and would flatter the
+        //     narrow one. Nothing here touches the audio — it is a measurement, not a path.
+        if (mode_ == Mode::WFM && ++shadowTick_ >= 4) {
+            shadowTick_ = 0;
+            shadowBuf_.assign(chBuf_.begin(), chBuf_.begin() + nc);
+            shadowIf_.process(shadowBuf_.data(), nc);
+            shadowMpx_.resize(nc);
+            shadowFm_.process(shadowBuf_.data(), shadowMpx_.data(), nc);
+            shadowNoise_.process(shadowMpx_.data(), nc);
+            shadowPilot_.process(shadowMpx_.data(), nc);
+            widePilot_.process(demodBuf_.data(), nc);
+            const float sn = shadowNoise_.level(), sp = shadowPilot_.level();
+            const float wn = mpxNoise_.level(),    wp = widePilot_.level();
+            if (sn > 1e-9f && wn > 1e-9f && sp > 1e-9f && wp > 1e-9f) {
+                const float narrowDb = 20.0f * std::log10(sp / sn);
+                const float wideDb   = 20.0f * std::log10(wp / wn);
+                const float g = narrowDb - wideDb;
+                if (std::isfinite(g)) ifGainDb_ += 0.05f * (g - ifGainDb_);
+            }
+            if (!std::isfinite(ifGainDb_)) ifGainDb_ = 0.0f;
+        }
         // ★★★ TAKE THE NOISE BACK OUT, OR THIS METER LIES WHERE IT MATTERS MOST. Noise shakes the
         //     envelope exactly as a reflection does, and the first version reported the sum. On
         //     air at 107.8 (S8, MPX S/N 6 dB) it showed 25.7% — "severe" — which would have sent

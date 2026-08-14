@@ -108,6 +108,10 @@ export interface RdsExt {
   multipathOk: boolean;
   hiCutLmr: number;      // where high-blend has rolled the stereo difference off, Hz
   hiCutAud: number;      // where the audio high-cut is sitting, Hz
+  /** dB the signal would GAIN by narrowing the IF to ifCand. Positive = narrowing helps. Measured
+   *  on a shadow copy of the live signal, so it is this aerial's answer, not a lab's. */
+  ifGain: number;
+  ifCand: number;        // the candidate IF width being evaluated, Hz
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -539,6 +543,8 @@ export class SpectrumClient {
           //   opposite of the truth.
           hiCutLmr: Number(msg.hiCutLmr ?? 15000),
           hiCutAud: Number(msg.hiCutAud ?? 15000),
+          ifGain: Number(msg.ifGain ?? 0),
+          ifCand: Number(msg.ifCand ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });

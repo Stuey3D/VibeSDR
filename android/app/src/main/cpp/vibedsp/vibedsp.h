@@ -464,35 +464,40 @@ private:
  */
 class AdaptiveIf {
 public:
-    void configure(double rate) { rate_ = rate; bypass_ = true; reset(); }
+    void configure(double rate) { rate_ = rate; fir_.reset(); bw_ = 0.0; }
     /** @param fullBwHz total width (both sides). <=0, or wide enough to be pointless, = bypass. */
     void setBandwidth(double fullBwHz) {
-        if (rate_ <= 0.0 || fullBwHz <= 0.0 || fullBwHz >= rate_ * 0.9) { bypass_ = true; return; }
-        const double fc = std::max(20000.0, fullBwHz * 0.5);      // never absurdly narrow for FM
-        const double dt = 1.0 / rate_, rc = 1.0 / (2.0 * M_PI * fc);
-        a_ = (float)(dt / (rc + dt));
-        bypass_ = false;
+        bw_ = fullBwHz;
+        if (rate_ <= 0.0 || fullBwHz <= 0.0 || fullBwHz >= rate_ * 0.8) { fir_.reset(); return; }
+        // ★★★ A PROPER FIR, NOT AN IIR CASCADE — and the difference is not academic. The first
+        //     version used four one-poles, which begin attenuating a decade below their corner and
+        //     smear the group delay of a signal that genuinely occupies +/-75 kHz. The shadow
+        //     measurement caught it immediately: a CLEAN station measured -31 dB "benefit",
+        //     because the filter's own distortion products landed squarely in the 15-19 kHz guard
+        //     band the meter reads. A filter that ruins the thing it is meant to clean up is worse
+        //     than no filter, and this is exactly what the benefit measurement was built to expose.
+        // ★★ Flat across the multiplex, steep outside it. The transition is a quarter of the
+        //    passband: wide enough to keep the tap count sane at this rate, narrow enough that the
+        //    skirt is doing real work by the time it reaches the neighbour.
+        const double cut = (fullBwHz * 0.5) / rate_;
+        fir_ = std::make_unique<FirDecimator>(designLowpass(cut, cut * 0.25, /*deepStop=*/false), 1);
     }
     void process(cf32* z, int n) {
-        if (bypass_ || n <= 0) return;
-        for (int i = 0; i < n; ++i) {
-            for (int s = 0; s < kPoles; ++s) {
-                yr_[s] += a_ * (z[i].real() - yr_[s]);
-                yi_[s] += a_ * (z[i].imag() - yi_[s]);
-                z[i] = cf32{ yr_[s], yi_[s] };
-            }
-        }
-        for (int s = 0; s < kPoles; ++s)
-            if (!std::isfinite(yr_[s]) || !std::isfinite(yi_[s])) { reset(); break; }
+        if (!fir_ || n <= 0) return;
+        scratch_.resize((size_t)fir_->maxOut(n));
+        const int m = fir_->process(z, n, scratch_.data());
+        // ★ The FIR is decim-1 so it returns n samples; copy back in place. A short return would
+        //   mean a design change, and silently shortening the block would desynchronise everything
+        //   downstream — so take the min rather than trusting the count.
+        const int k = std::min(n, m);
+        for (int i = 0; i < k; ++i) z[i] = scratch_[(size_t)i];
     }
-    bool bypassed() const { return bypass_; }
-    void reset() { for (int s = 0; s < kPoles; ++s) yr_[s] = yi_[s] = 0.0f; }
+    bool bypassed() const { return !fir_; }
+    void reset() { if (fir_) fir_->reset(); }
 private:
-    static constexpr int kPoles = 4;
-    double rate_ = 0.0;
-    bool bypass_ = true;
-    float a_ = 1.0f;
-    float yr_[kPoles] = {0}, yi_[kPoles] = {0};
+    double rate_ = 0.0, bw_ = 0.0;
+    std::unique_ptr<FirDecimator> fir_;
+    std::vector<cf32> scratch_;
 };
 
 // ── Multipath meter (the detector an "IMS" needs) ────────────────────────--
@@ -624,11 +629,14 @@ public:
      * ★ Q stays moderate per section. Very high Q would ring on impulses and read a click as
      *   noise; the selectivity is bought with ORDER instead, which does not ring the same way.
      */
-    void configure(double rate) {
+    /** @param centreHz what to measure. 17 kHz = the transmitted-silence gap (noise); 19 kHz =
+     *   the PILOT itself, which the shadow path needs as its own reference — the running PLL's
+     *   lockAmp belongs to the WIDE signal and would not describe a narrowed copy. */
+    void configure(double rate, double centreHz = 17000.0) {
         rate_ = rate;
         ready_ = (rate > 44000.0);         // needs room for 17 kHz well inside Nyquist
         if (!ready_) { reset(); return; }
-        const double f0 = 17000.0, q = 8.0;
+        const double f0 = centreHz, q = 8.0;
         const double w = 2.0 * M_PI * f0 / rate, a = std::sin(w) / (2.0 * q), c = std::cos(w);
         const double b0 = a, b1 = 0.0, b2 = -a, a0 = 1.0 + a, a1 = -2.0 * c, a2 = 1.0 - a;
         b0_ = (float)(b0 / a0); b1_ = (float)(b1 / a0); b2_ = (float)(b2 / a0);
@@ -1610,6 +1618,10 @@ public:
      *  narrowing actually BUYS anything before any policy is built on top of it. */
     void setIfBandwidth(double hz) { ifBwReq_.store(hz, std::memory_order_relaxed); }
     double ifBandwidth() const { return ifBwHz_; }
+    /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
+     *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
+    float  ifGainDb() const { return ifGainDb_; }
+    double ifCandidateHz() const { return shadowBwHz_; }
 
 private:
     void rebuildAudio();
@@ -1741,6 +1753,25 @@ private:
     MultipathMeter multipath_;               // envelope AM — distortion, not weakness
     AdaptiveIf     adaptIf_;                 // PACS-alike: a narrower IF without a rebuild
     double         ifBwHz_ = 0.0;            // 0 = wide open / bypassed
+    // ── The SHADOW receiver: would a narrower IF actually help THIS signal? ───────────────────
+    // ★★★ MEASURED ON AIR RATHER THAN ASSERTED IN A LAB. Whether narrowing helps depends on the
+    //     station, the neighbour and the noise, so the honest place to answer it is the listener's
+    //     own aerial (Stuart, 2026-08-14: "add the benefit measurement in to the advanced rds
+    //     box"). A second, narrower copy of the signal is demodulated alongside the real one and
+    //     the two are compared — which also means the answer is visible BEFORE anything acts on
+    //     it, so a policy can be judged rather than trusted.
+    // ★★ DUTY-CYCLED. This is a whole extra front end; run on every block it would be a real cost
+    //    on a Pi, where the RSP already runs the DSP near real time. One block in four is plenty
+    //    for a figure that is smoothed over seconds anyway.
+    AdaptiveIf     shadowIf_;
+    FmDemod        shadowFm_;
+    MpxNoiseMeter  shadowNoise_, shadowPilot_;   // 17 kHz gap, and the 19 kHz pilot
+    MpxNoiseMeter  widePilot_;                   // the same pilot measure on the UNnarrowed signal
+    std::vector<cf32> shadowBuf_;
+    std::vector<float> shadowMpx_;
+    int            shadowTick_ = 0;
+    float          ifGainDb_ = 0.0f;             // narrow minus wide, dB. >0 = narrowing helps
+    double         shadowBwHz_ = 110000.0;       // the candidate width being evaluated
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB

@@ -51,6 +51,12 @@ constexpr double kAudioHz = 1000.0;
 struct MpxGen {
     double phase = 0.0, tAcc = 0.0;
     double noise = 0.0;
+    // ★★★ THE NEIGHBOUR. A DXer narrows the IF to reject the station 200 kHz away, NOT to reject
+    //     noise — and the first version of this test had an empty band, so it could only ever
+    //     measure the COST of narrowing and never the benefit. A test that cannot show the
+    //     upside is not evidence that there is none.
+    double adjAmp = 0.0;                 // adjacent channel amplitude (0 = alone in the band)
+    double adjPhase = 0.0;
     std::mt19937 rng{12345};                       // fixed seed: a flaky test is worse than none
     std::normal_distribution<double> gauss{0.0, 1.0};
     void fill(std::vector<cf32>& out, int n) {
@@ -64,6 +70,14 @@ struct MpxGen {
             phase += 2.0 * M_PI * kDevHz * mpx / kFs;
             if (phase >  M_PI * 1e6) phase -= M_PI * 2e6;
             double re = std::cos(phase), im = std::sin(phase);
+            if (adjAmp > 0.0) {
+                // A second FM carrier 100 kHz up — the European spacing, and INSIDE our own channel
+                // filter, which is the only case where a narrower IF can possibly help.
+                adjPhase += 2.0 * M_PI * (100000.0 + kDevHz * 0.6 *
+                            std::sin(2.0 * M_PI * 700.0 * t)) / kFs;
+                re += adjAmp * std::cos(adjPhase);
+                im += adjAmp * std::sin(adjPhase);
+            }
             if (noise > 0.0) { re += noise * gauss(rng); im += noise * gauss(rng); }
             out[(size_t)i] = cf32{ (float)re, (float)im };
             tAcc += 1.0 / kFs;
@@ -91,17 +105,17 @@ void run(RxPipeline& rx, MpxGen& gen, double seconds) {
  *  ★ A FRESH pipeline each time, and long enough to settle: the corner moves on a ~1 second time
  *    constant on purpose (a corner that chases the signal turns fading into PUMPING, which is more
  *    objectionable than the hiss), so a short run would measure the glide, not the destination. */
-struct Result { float cutHz; float snrDb; bool stereo; };
-Result measure(double noise, double seconds = 6.0) {
+struct Result { float cutHz; float snrDb; bool stereo; float ifGain; };
+Result measure(double noise, double seconds = 6.0, double adj = 0.0) {
     Sink sink;
     RxPipeline::Callbacks cb{};
     cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
-    MpxGen gen; gen.noise = noise;
+    MpxGen gen; gen.noise = noise; gen.adjAmp = adj;
     RxPipeline rx;
     rx.start(kFs, 1024, 10.0, 48000, cb);
     rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
     run(rx, gen, seconds);
-    return { rx.lmrHiCutHz(), rx.blendSnrDb(), sink.sawStereo };
+    return { rx.lmrHiCutHz(), rx.blendSnrDb(), sink.sawStereo, rx.ifGainDb() };
 }
 
 }  // namespace
@@ -148,6 +162,20 @@ int main() {
     ok(worse.cutHz > 500.0f,
        "★ and it never collapses to mono — bass/mid separation is kept",
        "corner " + std::to_string((int)worse.cutHz) + " Hz");
+
+    // ── Would a narrower IF help? Printed, not asserted — it is a MEASUREMENT of the signal, and
+    //    the answer legitimately differs per signal. Sanity only: a clean wideband signal should
+    //    not show a large gain (there is little noise to exclude and real sidebands to lose),
+    //    while a noisy one should show more.
+    std::printf("   .. IF-narrowing benefit at 110 kHz, ALONE in the band:\n");
+    std::printf("      clean %+.1f dB   noisy %+.1f dB   hissy %+.1f dB\n",
+                clean.ifGain, noisy.ifGain, worse.ifGain);
+    // ★★ WITH A NEIGHBOUR 200 kHz AWAY — the case narrowing actually exists for.
+    const Result adjW = measure(0.20, 6.0, 0.7);
+    const Result adjS = measure(0.20, 6.0, 1.4);
+    std::printf("   .. with an ADJACENT station 100 kHz up:\n");
+    std::printf("      neighbour -3 dB %+.1f dB   neighbour +3 dB %+.1f dB\n",
+                adjW.ifGain, adjS.ifGain);
 
     // ★★★ A PILOT-LOCK FLICKER MUST NOT REOPEN THE FILTER. On a marginal signal the lock drops in
     //     and out constantly, and the not-eligible branch used to rush the L-R corner to 15 kHz at
