@@ -322,6 +322,8 @@ void RxPipeline::rebuildAudio() {
             mpxNoise_.configure(chFs_);
             multipath_.configure(chFs_);
             adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
+            ceq_.configure(9); ceqOut_.configure(chFs_);
+            ceqEngaged_ = false; ceqDwell_ = 0; ceqEffort_ = 0.0f;
             shadowIf_.configure(chFs_); shadowIf_.setBandwidth(shadowBwHz_);
             shadowFm_.reset();
             shadowNoise_.configure(chFs_, 17000.0);
@@ -496,7 +498,37 @@ void RxPipeline::feed(const cf32* iq, int n) {
             if (want != ifBwHz_) { ifBwHz_ = want; adaptIf_.setBandwidth(want); }
             adaptIf_.process(chBuf_.data(), nc);
         }
+        // ★ The RAW reading first — what arrived, before we touch it. It is both the trigger for
+        //   the equaliser and half of its scorecard, so it must never see the equaliser's output.
         if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
+
+        // ── CEQ ──────────────────────────────────────────────────────────────────────────────
+        // ★★★ GATED ON A GOOD SIGNAL WITH REAL MULTIPATH, because those are the only conditions in
+        //     which it can help. A CMA equaliser fed NOISE will happily contort itself trying to
+        //     correct randomness and end up amplifying it — the same trap as the adaptive IF, where
+        //     the right treatment applied to the wrong fault is a regression. multipathValid_ is
+        //     what makes this decidable: below ~12 dB we do not even claim to know whether the
+        //     trouble is a reflection.
+        if (mode_ == Mode::WFM) {
+            const bool want = ceqOn_.load(std::memory_order_relaxed)
+                           && multipathValid_ && multipathCorr_ > 0.06f && blendSnrDb_ > 18.0f;
+            if (want && !ceqEngaged_) {
+                if (++ceqDwell_ > 20) { ceqEngaged_ = true; ceqDwell_ = 0; ceq_.reset(); }
+            } else if (!want && ceqEngaged_) {
+                if (++ceqDwell_ > 20) { ceqEngaged_ = false; ceqDwell_ = 0; ceq_.reset(); }
+            } else ceqDwell_ = 0;
+
+            if (ceqEngaged_) {
+                // ★ A small step size. This runs at the channel rate, and a fast CMA on anything
+                //   less than a clean signal is exactly how the algorithm goes wrong.
+                ceq_.process(chBuf_.data(), nc, 2.0e-4f);
+                ceqEffort_ = ceq_.effort();
+                ceqOut_.process(chBuf_.data(), nc);   // ...and score ourselves on the result
+            } else {
+                ceqEffort_ = 0.0f;
+                ceqOut_.reset();
+            }
+        }
         // ★★★ THE SHADOW RECEIVER — one block in four, a narrower copy demodulated in parallel so
         //     the BENEFIT of narrowing can be read off the panel instead of guessed at. Compared
         //     like with like: the same pilot-to-guard-band ratio, measured the same way on both,

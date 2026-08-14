@@ -95,7 +95,7 @@ struct Sink {
     static void onAudio(void*, const float*, int, int, int) {}
 };
 
-struct Result { float mpDepth; float snrDb; };
+struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float effort; };
 
 Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0) {
     Sink sink;
@@ -111,7 +111,8 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
         gen.fill(buf, std::min(block, total - done));
         rx.feed(buf.data(), (int)buf.size());
     }
-    return { rx.multipathDepth(), rx.blendSnrDb() };
+    return { rx.multipathDepth(), rx.blendSnrDb(), rx.ceqEngaged(),
+             rx.multipathAfterCeq(), rx.ceqEffort() };
 }
 
 }  // namespace
@@ -182,6 +183,34 @@ int main() {
     for (double nz : { 0.0, 0.15, 0.30, 0.50, 0.80, 1.20, 2.00 }) {
         const Result r = measure(nz, 0.0);
         std::printf("   %-8.2f %-12.1f %.4f\n", nz, r.snrDb, r.mpDepth);
+    }
+
+    // ── CEQ: does the equaliser actually undo a reflection? ───────────────────────────────────
+    // ★★★ SCORED BEFORE AND AFTER ON THE SAME SIGNAL, because "it ran" is not evidence that it
+    //     helped. A CMA equaliser fed the wrong conditions contorts itself trying to correct
+    //     randomness and makes things worse, so the only honest test is whether the measured
+    //     multipath depth FALLS.
+    std::printf("\nCEQ — undoing the reflection\n");
+    {
+        const Result r = measure(0.05, 0.5, 3, 12.0);
+        std::printf("   .. -6 dB reflection, clean:  engaged %s  before %.4f  after %.4f  effort %.3f\n",
+                    r.ceqOn ? "yes" : "NO", r.mpDepth, r.ceqAfter, r.effort);
+        ok(r.ceqOn, "★ CEQ engages on a good signal with real multipath");
+        ok(r.ceqAfter < r.mpDepth * 0.8f,
+           "★★★ AND THE REFLECTION IS MEASURABLY REDUCED — not merely 'it ran'",
+           "before " + std::to_string(r.mpDepth) + " after " + std::to_string(r.ceqAfter));
+
+        // ★★ AND IT MUST STAY OUT OF THE WAY WHERE IT CANNOT HELP. Noise is not a reflection, and
+        //    an equaliser turned loose on it amplifies what it cannot fix.
+        const Result n = measure(1.20, 0.0, 3, 12.0);
+        std::printf("   .. noise, no reflection:     engaged %s\n", n.ceqOn ? "YES" : "no");
+        ok(!n.ceqOn,
+           "★★★ CEQ does NOT engage on a noisy signal with no reflection",
+           "it engaged, and CMA on noise makes things worse");
+
+        const Result c = measure(0.0, 0.0, 3, 12.0);
+        std::printf("   .. clean, no reflection:     engaged %s\n", c.ceqOn ? "YES" : "no");
+        ok(!c.ceqOn, "★ and not on a clean signal either — there is nothing to correct");
     }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);

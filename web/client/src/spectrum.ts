@@ -115,6 +115,10 @@ export interface RdsExt {
   /** The IF width in use now, Hz. 0 = wide open. `ifGain` is always "the OTHER option minus the
    *  current one", so this says which way round to read it. */
   ifBw: number;
+  /** CEQ engaged, and the multipath depth measured AFTER it — against `multipath`, which is what
+   *  arrived. Two numbers so the equaliser is judged on what it achieved, not on having run. */
+  ceqOn: boolean;
+  ceqAfter: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -186,6 +190,8 @@ export interface SpectrumCallbacks {
     wsp: boolean;
     /** IMS — the adaptive IF. Separate from wsp: noise and a neighbour want opposite actions. */
     ims: boolean;
+    /** CEQ — the blind channel equaliser. Separate again: it corrects a REFLECTION. */
+    ceq: boolean;
     nrStrength?: number;      // 0..1, absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
@@ -465,6 +471,7 @@ export class SpectrumClient {
             //   treatment on, so showing OFF would be a lie about the radio.
             wsp: msg.wsp !== false,
             ims: msg.ims !== false,
+            ceq: msg.ceq !== false,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
             nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
@@ -573,6 +580,8 @@ export class SpectrumClient {
           ifGain: Number(msg.ifGain ?? 0),
           ifCand: Number(msg.ifCand ?? 0),
           ifBw: Number(msg.ifBw ?? 0),
+          ceqOn: Number(msg.ceqOn ?? 0) === 1,
+          ceqAfter: Number(msg.ceqAfter ?? 0),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });
@@ -846,6 +855,9 @@ export class SpectrumClient {
   setWeakProc(on: boolean) { this._send({ type: 'wsp', on }); }
   /** IMS — adaptive IF against an adjacent channel. NOT the same control as the noise treatment. */
   setIms(on: boolean) { this._send({ type: 'ims', on }); }
+  /** CEQ — blind channel equaliser. Corrects a REFLECTION; cannot help noise and is gated so it
+   *  does not try. */
+  setCeq(on: boolean) { this._send({ type: 'ceq', on }); }
 
   // ── Coalesced view sender ──────────────────────────────────────────────────
 

@@ -871,6 +871,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       $('wspBtn').textContent = s.wsp ? 'NR ON' : 'NR OFF';
       setToggleTo('ims', s.ims, 'ims');
       $('imsBtn').textContent = s.ims ? 'IMS ON' : 'IMS OFF';
+      setToggleTo('ceq', s.ceq, 'ceq');
+      $('ceqBtn').textContent = s.ceq ? 'CEQ ON' : 'CEQ OFF';
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -5099,6 +5101,21 @@ function renderRds() {
     }
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
 
+  // ★★ CEQ, SHOWN AS BEFORE -> AFTER. "Engaged" on its own says nothing about whether it helped,
+  //    and a blind equaliser that is quietly making things worse is the failure mode that matters.
+  const ceqEl = $('rxCeq');
+  if (rdsExt && rdsExt.ceqOn) {
+    const before = (rdsExt.multipath ?? 0) * 100, after = (rdsExt.ceqAfter ?? 0) * 100;
+    const gained = before > 0.5 && after < before * 0.8;
+    ceqEl.textContent = `${before.toFixed(1)}% → ${after.toFixed(1)}%` + (gained ? '' : ' · little change');
+    ceqEl.style.color = gained ? '#7dff9a' : '';
+  } else if (rdsExt) {
+    // ★ "Standing by" is the honest word: it is switched on and watching, but there is nothing it
+    //   can usefully do to this signal. Not the same as being turned off.
+    ceqEl.textContent = 'standing by';
+    ceqEl.style.color = '';
+  } else { ceqEl.textContent = dash; ceqEl.style.color = ''; }
+
   const pdev = rdsExt?.pilotDev ?? 0;
   const rdev = rdsExt?.rdsDev ?? 0;
   const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');
@@ -6412,6 +6429,10 @@ function buildMenu() {
     $('imsBtn').textContent = on ? 'IMS ON' : 'IMS OFF';
     spec!.setIms(on);
   }, 'ims', true);
+  toggle('ceqBtn', (on) => {
+    $('ceqBtn').textContent = on ? 'CEQ ON' : 'CEQ OFF';
+    spec!.setCeq(on);
+  }, 'ceq', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -6558,6 +6579,7 @@ function pushSettingsToServer() {
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
   const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
   const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
+  const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
   const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
   const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
   const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);

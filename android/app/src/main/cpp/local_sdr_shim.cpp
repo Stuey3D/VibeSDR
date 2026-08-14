@@ -1393,6 +1393,7 @@ struct LocalSdrShim::Impl {
     //   signal that needs it, so a listener who never touches it should get the better sound.
     std::atomic<bool>  weakProcOn{true};
     std::atomic<bool>  imsOn{true};        // adaptive IF — a neighbour, not noise
+    std::atomic<bool>  ceqOn{true};        // blind channel equaliser — a reflection
     std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
     std::mutex         nrMtx;
     AudioNR*           nrEng = nullptr;
@@ -5434,6 +5435,11 @@ struct LocalSdrShim::Impl {
             LocalSdrShim::instance().setWeakProc(msg.find("\"on\":true") != std::string::npos);
             return;
         }
+        if (type == "ceq") {
+            if (!sharedGate("CEQ")) return;
+            LocalSdrShim::instance().setCeq(msg.find("\"on\":true") != std::string::npos);
+            return;
+        }
         if (type == "ims") {
             if (!sharedGate("IMS")) return;
             LocalSdrShim::instance().setIms(msg.find("\"on\":true") != std::string::npos);
@@ -5710,6 +5716,7 @@ struct LocalSdrShim::Impl {
         //    lesson from the July fix that did `nr` and `notch` and left four siblings behind.
         j += std::string(",\"wsp\":")   + (weakProcOn.load() ? "true" : "false");
         j += std::string(",\"ims\":")   + (imsOn.load()      ? "true" : "false");
+        j += std::string(",\"ceq\":")   + (ceqOn.load()      ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -8890,6 +8897,11 @@ struct LocalSdrShim::Impl {
                       //   while we are narrowed. The sign flips on engagement, and a reader with
                       //   no state would misread "-11 dB" as bad news when it means the opposite.
                       + ",\"ifBw\":" + std::to_string(P_ ? P_->ifBandwidth() : 0.0)
+                      // ★ CEQ, with its OWN SCORE. `ceqAfter` is the multipath depth measured on
+                      //   the equaliser's output, against `multipath` measured on what arrived —
+                      //   so the panel shows what it achieved rather than merely that it ran.
+                      + ",\"ceqOn\":" + std::string((P_ && P_->ceqEngaged()) ? "1" : "0")
+                      + ",\"ceqAfter\":" + std::to_string(P_ ? P_->multipathAfterCeq() : 0.0f)
                       + ",\"grp\":[";
         for (size_t i = 0; i < grp.size(); ++i) { if (i) j += ','; j += std::to_string(grp[i]); }
         j += "],\"eon\":[";
@@ -9478,6 +9490,7 @@ struct DesiredDsp {
     std::atomic<bool>   notchOn{false};     // Impl::notchOn
     std::atomic<bool>   weakProcOn{true};   // Impl::weakProcOn — replayed onto a fresh Impl
     std::atomic<bool>   imsOn{true};        // Impl::imsOn
+    std::atomic<bool>   ceqOn{true};        // Impl::ceqOn
     std::atomic<bool>   stereoOn{true};     // RxPipeline defaults to stereo enabled
     // ★★ THE RSP CONTROLS TOO — same bug, separately reported: "RF gain on RSP1B not
     // remembered between sessions" (Stuart, 2026-07-27). The web client was innocent; it
@@ -11416,6 +11429,15 @@ void LocalSdrShim::setWeakProc(bool on) {
     { std::lock_guard<std::mutex> lk(p->clientMtx);
       for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setWeakSignalProc(on); }
     LOGI("weak-signal processing: %d", on);
+}
+void LocalSdrShim::setCeq(bool on) {
+    g_dsp.ceqOn.store(on);
+    if (!p) return;
+    p->ceqOn.store(on);
+    p->rx.setCeq(on);
+    { std::lock_guard<std::mutex> lk(p->clientMtx);
+      for (auto& kv : p->clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setCeq(on); }
+    LOGI("CEQ (channel equaliser): %d", on);
 }
 void LocalSdrShim::setIms(bool on) {
     g_dsp.imsOn.store(on);

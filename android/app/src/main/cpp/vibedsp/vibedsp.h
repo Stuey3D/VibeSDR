@@ -500,6 +500,87 @@ private:
     std::vector<cf32> scratch_;
 };
 
+// ── CEQ: a blind channel equaliser for FM ────────────────────────────────--
+/**
+ * Undo a reflection, rather than merely hide it.
+ *
+ * ★★★ FM IS A CONSTANT-MODULUS SIGNAL, AND THAT IS THE WHOLE KEY. The transmitter sends a carrier
+ *     of constant amplitude; a reflection arriving late adds to it and destroys that constancy.
+ *     So the error signal is free: however far the envelope departs from constant is how wrong the
+ *     channel is, and no training sequence, pilot or prior knowledge of the programme is needed.
+ *     That is the Constant Modulus Algorithm, and FM broadcast is close to its ideal case.
+ *
+ * ★★ IT CANNOT HELP NOISE, AND WILL HAPPILY AMPLIFY IT. Noise also makes the envelope wander, so a
+ *    CMA equaliser fed a weak signal will contort itself trying to "correct" randomness and end up
+ *    with a high-gain filter that makes things worse. It must therefore be gated on a GOOD signal
+ *    with REAL multipath — which is exactly what the two meters already distinguish. This is the
+ *    same lesson as the adaptive IF: the right treatment applied to the wrong fault is a
+ *    regression, not a feature.
+ *
+ * ★ Centre-spike initialisation (one tap = 1, the rest 0) means it starts as a pass-through: at
+ *   worst it does nothing, and it can be switched in without a step in the audio.
+ */
+class CmaEqualiser {
+public:
+    void configure(int taps = 9) {
+        n_ = std::max(3, taps | 1);              // odd, so there is a true centre
+        w_.assign((size_t)n_, cf32{0.0f, 0.0f});
+        w_[(size_t)(n_ / 2)] = cf32{1.0f, 0.0f}; // pass-through until it learns otherwise
+        hist_.assign((size_t)n_, cf32{0.0f, 0.0f});
+        pos_ = 0;
+    }
+    void reset() { configure(n_); }
+    /** Adapt and filter in place. `mu` is the step size — small, because this runs at the channel
+     *  rate and a fast equaliser on a noisy signal is precisely how CMA goes wrong. */
+    void process(cf32* z, int n, float mu) {
+        if (w_.empty() || n <= 0) return;
+        for (int i = 0; i < n; ++i) {
+            hist_[(size_t)pos_] = z[i];
+            // y = w . history (most recent first)
+            cf32 y{0.0f, 0.0f};
+            for (int k = 0; k < n_; ++k) {
+                const cf32& u = hist_[(size_t)((pos_ - k + n_ * 2) % n_)];
+                y = cf32{ y.real() + w_[(size_t)k].real() * u.real() - w_[(size_t)k].imag() * u.imag(),
+                          y.imag() + w_[(size_t)k].real() * u.imag() + w_[(size_t)k].imag() * u.real() };
+            }
+            // ★ CMA error: drive |y|^2 toward 1. For a constant-envelope carrier the dispersion
+            //   constant IS the modulus, so there is nothing to estimate.
+            const float p = y.real() * y.real() + y.imag() * y.imag();
+            const float e = p - 1.0f;
+            const float g = mu * e;
+            for (int k = 0; k < n_; ++k) {
+                const cf32& u = hist_[(size_t)((pos_ - k + n_ * 2) % n_)];
+                // w -= mu * e * y * conj(u)
+                const cf32 yu{ y.real() * u.real() + y.imag() * u.imag(),
+                               y.imag() * u.real() - y.real() * u.imag() };
+                w_[(size_t)k] = cf32{ w_[(size_t)k].real() - g * yu.real(),
+                                      w_[(size_t)k].imag() - g * yu.imag() };
+            }
+            z[i] = y;
+            pos_ = (pos_ + 1) % n_;
+        }
+        // ★★★ RUNAWAY GUARD. CMA is an unconstrained gradient descent: on a signal it cannot fix
+        //     it will keep growing the taps, and a diverged equaliser is far worse than none —
+        //     loud, distorted, and self-sustaining because its own output feeds the next update.
+        float energy = 0.0f;
+        for (const auto& c : w_) energy += c.real() * c.real() + c.imag() * c.imag();
+        if (!std::isfinite(energy) || energy > 16.0f) reset();
+    }
+    /** How far from pass-through the equaliser has moved — 0 means it is doing nothing. */
+    float effort() const {
+        float e = 0.0f;
+        for (int k = 0; k < n_; ++k) {
+            const float re = w_[(size_t)k].real() - (k == n_ / 2 ? 1.0f : 0.0f);
+            const float im = w_[(size_t)k].imag();
+            e += re * re + im * im;
+        }
+        return std::sqrt(e);
+    }
+private:
+    int n_ = 9, pos_ = 0;
+    std::vector<cf32> w_, hist_;
+};
+
 // ── Multipath meter (the detector an "IMS" needs) ────────────────────────--
 /**
  * How much of what is wrong with this signal is MULTIPATH, as distinct from noise.
@@ -1608,6 +1689,14 @@ public:
      *  correction removes nearly everything and the residual is noise about noise. */
     float multipathDepth() const { return multipathCorr_; }
     bool  multipathValid() const { return multipathValid_; }
+    /** CEQ — the blind channel equaliser. Reports whether it is ENGAGED (it only engages on a good
+     *  signal with real multipath), how hard it is working, and what the multipath depth looks
+     *  like AFTER it. Engaged plus no improvement is a failure the panel can show. */
+    void  setCeq(bool on) { ceqOn_.store(on, std::memory_order_relaxed); }
+    bool  ceq() const { return ceqOn_.load(std::memory_order_relaxed); }
+    bool  ceqEngaged() const { return ceqEngaged_; }
+    float ceqEffort() const { return ceqEffort_; }
+    float multipathAfterCeq() const { return ceqOut_.depth(); }
     /** The audio high-cut corner now in use (Hz; 15000 = untouched). */
     float audioHiCutHz() const { return audioHiCutHz_; }
     /** Weak-signal processing (high-blend + audio high-cut). ON by default: it only ever acts on
@@ -1761,6 +1850,17 @@ private:
     //     stereo separation" — the frequency-selective form is how you get both).
     MpxNoiseMeter mpxNoise_;                 // measures the 15-19 kHz gap; see the class note
     MultipathMeter multipath_;               // envelope AM — distortion, not weakness
+    // ── CEQ ───────────────────────────────────────────────────────────────────────────────────
+    // ★★★ MEASURED BEFORE AND AFTER, ALWAYS. multipath_ reads the signal as it ARRIVES; ceqOut_
+    //     reads it as the equaliser leaves it. Two meters mean the feature scores itself on every
+    //     real signal instead of being trusted — and a CMA equaliser that is making things worse
+    //     is not a hypothetical: fed noise it will contort itself trying to correct randomness.
+    CmaEqualiser   ceq_;
+    MultipathMeter ceqOut_;
+    std::atomic<bool> ceqOn_{true};
+    bool           ceqEngaged_ = false;
+    int            ceqDwell_ = 0;
+    float          ceqEffort_ = 0.0f;
     AdaptiveIf     adaptIf_;                 // PACS-alike: a narrower IF without a rebuild
     double         ifBwHz_ = 0.0;            // 0 = wide open / bypassed
     // ── The SHADOW receiver: would a narrower IF actually help THIS signal? ───────────────────
