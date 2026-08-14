@@ -578,6 +578,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwStereo,      setHwStereo]      = useState(true);   // WFM stereo on / forced mono (local)
+  // ★★ THE BROADCAST-FM TREATMENTS. All four default ON, matching the server: each only acts on the
+  //    fault it can fix, so a listener who never opens the sheet gets the better sound. The RADIO is
+  //    the authority — these are re-rendered from hwinfo (onFmDsp), because they are sticky AND
+  //    shared, so what this phone last asked for is irrelevant.
+  // ★★★ ONLY SHOWN WHEN THE SERVER SAYS IT HAS THEM. Set the moment hwinfo reports any of the four
+  //     — an older VibeServer, a Kiwi, an OWRX or an FM-DX backend never sends them, so the row
+  //     does not draw at all. That is the AGENTS.md rule: a control that cannot work on this
+  //     receiver should not be there, rather than sitting inert and making the FEATURE look broken.
+  const [vibeFmDsp, setVibeFmDsp] = useState(false);
+  const [fmNr,  setFmNr]  = useState(true);
+  const [fmIms, setFmIms] = useState(true);
+  const [fmCeq, setFmCeq] = useState(true);
+  const [fmNb,  setFmNb]  = useState(true);
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
   const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
@@ -748,6 +761,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         setDeemph?: (tau: number) => void; setStereo?: (on: boolean) => void;
         setNrEnabled?: (on: boolean, strength?: number) => void;
         setSquelchDb?: (db: number) => void; setNotch?: (on: boolean) => void;
+        // ★ The broadcast-FM treatments — four faults, four switches. Listed so the compiler
+        //   checks them: this cast is the exact shape that made setAdminAuth a silent no-op for
+        //   weeks, and every method added here has to be a real one.
+        setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
+        setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
       } | null)
     : null), [isRemoteShim]);
 
@@ -821,6 +839,21 @@ export default function SDRScreen({ route, navigation }: Props) {
     const rc = hwClient();
     if (rc) rc.setStereo?.(on); else LocalHw?.setStereoEnabled?.(on);
   }, [LocalHw, hwClient]);
+  // ★ Server-side only, and typed on SDRBackend so a rename fails the build rather than becoming a
+  //   silent no-op — the `(c as any).setAdminAuth?.()` lesson. A backend without them simply has no
+  //   method, and AudioSheet then draws no row.
+  const onFmNr = useCallback((on: boolean) => {
+    setFmNr(on); hwClient()?.setWeakProc?.(on);
+  }, [hwClient]);
+  const onFmIms = useCallback((on: boolean) => {
+    setFmIms(on); hwClient()?.setIms?.(on);
+  }, [hwClient]);
+  const onFmCeq = useCallback((on: boolean) => {
+    setFmCeq(on); hwClient()?.setCeq?.(on);
+  }, [hwClient]);
+  const onFmNb = useCallback((on: boolean) => {
+    setFmNb(on); hwClient()?.setNoiseBlanker?.(on);
+  }, [hwClient]);
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
   // re-subscribing the whole audio callback every time the threshold moves.
   const hwSquelchRef = useRef(-100);
@@ -2975,6 +3008,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         } else { decoderImageRef.current?.imageDone(); }
       },
       onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
+      // ★★★ THE RADIO'S OWN WORD ON ITS FM TREATMENTS. Sticky AND shared, so this is the only
+      //     authority: another listener may have turned one off, and a control that misreports the
+      //     radio is worse than a missing one because nothing tells you to look. Receiving this at
+      //     all is also what reveals the controls — a server that never sends it does not have them.
+      onFmDsp: (st) => {
+        if (destroyed.current) return;
+        setVibeFmDsp(true);
+        setFmNr(st.wsp); setFmIms(st.ims); setFmCeq(st.ceq); setFmNb(st.nb);
+      },
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
         setRadioCaps(caps);
@@ -6909,6 +6951,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
         deemph={hwDeemph}   onDeemph={onHwDeemph}
         stereo={hwStereo}   onStereo={onHwStereo}
+        fmNr={fmNr}   onFmNr={vibeFmDsp ? onFmNr : undefined}
+        fmIms={fmIms} onFmIms={vibeFmDsp ? onFmIms : undefined}
+        fmCeq={fmCeq} onFmCeq={vibeFmDsp ? onFmCeq : undefined}
+        fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}

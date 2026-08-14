@@ -88,6 +88,12 @@ export class UberSDRAdapter implements SDRBackend {
   setNrEnabled(on: boolean, strength?: number) { this.client.setNrEnabled(on, strength); }
   setSquelchDb(db: number)              { this.client.setSquelchDb(db); }
   setNotch(on: boolean)                 { this.client.setNotch(on); }
+  // ★ Broadcast-FM treatments. Forwarded to the client rather than reimplemented — four faults,
+  //   four switches, and they are not interchangeable (see UberSDRClient).
+  setWeakProc(on: boolean)              { this.client.setWeakProc(on); }
+  setIms(on: boolean)                   { this.client.setIms(on); }
+  setCeq(on: boolean)                   { this.client.setCeq(on); }
+  setNoiseBlanker(on: boolean)          { this.client.setNoiseBlanker(on); }
   /** ★ Presence, forwarded — see UberSDRClient.noteActivity. Adapter half, as ever. */
   noteActivity()                        { this.client.noteActivity(); }
 

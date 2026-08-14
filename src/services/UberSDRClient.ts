@@ -108,6 +108,31 @@ export interface RdsExt {
   oda: { aid: string; grp: number }[];
   xy: number[];          // constellation, interleaved i/q, x100, clipped +/-127
   mpx: number[];         // MPX spectrum, dB, integers in [-128, 0]
+  // ── The weak-signal readings (VibeServer 3.1) ──────────────────────────────────────────────
+  /** Pilot against the transmitted-silence gap at 15-19 kHz, dB. NOT a calibrated SNR — the
+   *  measuring filter's own leakage caps it near 34 — but the figure that drives NR, and directly
+   *  comparable between stations on one receiver. */
+  mpxSnr: number;
+  /** Whether there is a usable pilot at all. Both mpxSnr and multipath are ratios against it, so
+   *  without one they are arithmetic rather than measurement. */
+  snrOk: boolean;
+  /** Envelope-AM depth with the measured noise contribution removed: what is left is a REFLECTION.
+   *  An FM carrier leaves the transmitter at constant amplitude, so this is damage done by the
+   *  path — and it is NOT the same fault as weakness. */
+  multipath: number;
+  multipathOk: boolean;  // false = too noisy to tell a reflection from the noise
+  hiCutLmr: number;      // where high-blend has rolled the stereo difference off, Hz
+  hiCutAud: number;      // where the audio high-cut is sitting, Hz
+  nbRate: number;        // fraction of samples the noise blanker is excising
+  ceqOn: boolean;        // the equaliser is engaged
+  ceqAfter: number;      // multipath depth AFTER it — against `multipath`, which is what arrived
+  ceqWhy: number;        // 0 running, 1 off, 2 signal too weak, 3 nothing to correct
+  ifGain: number;        // dB the OTHER IF option would gain; the sign flips once narrowed
+  ifCand: number;        // the candidate IF width being evaluated, Hz
+  ifBw: number;          // the IF width in use now, Hz (0 = wide open)
+  /** Every AF glimpsed as [kHz, confirmed]. On a noisy station the unconfirmed ones are usually
+   *  phantoms manufactured by block errors, and only the list shows WHICH they are. */
+  afAll: [number, number][];
 }
 
 /** ★ WHAT THE CONNECTED RADIO ACTUALLY HAS, straight from the server (hwinfo.radio).
@@ -157,6 +182,9 @@ export interface SDRCallbacks {
   onDbg?:       (msg: string) => void;
   /** VibeServer: the serving device's supported tuner gains (tenths of dB), so a
    *  remote client can populate its gain slider (it can't query the HW natively). */
+  /** The broadcast-FM treatments as the RADIO reports them — sticky and shared, so this is the
+   *  only authority on what they are actually set to. */
+  onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean }) => void;
   onHwGains?:   (gains: number[]) => void;
   /** VibeServer: the sample rates (spectrum spans) THIS server offers, so the
    *  client's rate picker aligns with the server rather than a generic list. */
@@ -643,6 +671,22 @@ export class UberSDRClient {
   /** db <= -100 means OFF — the server's convention, and the app's own. */
   setSquelchDb(db: number) { this._sendCtl({ type: 'squelch', db }); }
   setNotch(on: boolean)    { this._sendCtl({ type: 'notch', on }); }
+  // ── The broadcast-FM treatments (VibeServer 3.1) ────────────────────────────────────────────
+  // ★★★ FOUR FAULTS, FOUR SWITCHES, and they are NOT interchangeable: NR answers continuous NOISE,
+  //     IMS answers a strong NEIGHBOUR, CEQ answers a REFLECTION, NB answers IMPULSES. Measured on
+  //     the server, they want opposite actions — narrowing the IF costs up to 10 dB against noise
+  //     and gains 10 dB against a close neighbour — so one combined control would be actively
+  //     wrong as well as unhelpful.
+  // ★★ SHARED, like NR and the notch have always been: one DSP chain per radio, so these change
+  //    what every listener on that receiver hears. The server gates them accordingly.
+  /** Weak-signal noise treatment: stereo high-blend + audio high-cut. Works in mono too. */
+  setWeakProc(on: boolean) { this._sendCtl({ type: 'wsp', on }); }
+  /** IMS — adaptive IF against an adjacent channel. */
+  setIms(on: boolean)      { this._sendCtl({ type: 'ims', on }); }
+  /** CEQ — blind channel equaliser, for a reflection. */
+  setCeq(on: boolean)      { this._sendCtl({ type: 'ceq', on }); }
+  /** Noise blanker — impulse noise only. */
+  setNoiseBlanker(on: boolean) { this._sendCtl({ type: 'nb', on }); }
 
   /** ★★★ TELL THE SERVER SOMEONE IS ACTUALLY HERE — on BOTH sockets, on ACTIVITY.
    *
@@ -1729,6 +1773,23 @@ export class UberSDRClient {
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
         oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({
           aid: str(o?.aid), grp: num(o?.grp, 0) })) : [],
+        // ★ Defaults chosen so an OLDER SERVER reads as "nothing to report" rather than as alarming
+        //   news: no pilot problem, no multipath, filters wide open. A corner of 0 would say
+        //   "everything is being cut", which is the opposite of the truth on a server that simply
+        //   does not have the feature.
+        mpxSnr: num(msg.mpxSnr, 0),
+        snrOk: Number(msg.snrOk ?? 1) === 1,
+        multipath: num(msg.multipath, 0),
+        multipathOk: Number(msg.multipathOk ?? 0) === 1,
+        hiCutLmr: num(msg.hiCutLmr, 15000), hiCutAud: num(msg.hiCutAud, 15000),
+        nbRate: num(msg.nbRate, 0),
+        ceqOn: Number(msg.ceqOn ?? 0) === 1,
+        ceqAfter: num(msg.ceqAfter, 0), ceqWhy: num(msg.ceqWhy, 3),
+        ifGain: num(msg.ifGain, 0), ifCand: num(msg.ifCand, 0), ifBw: num(msg.ifBw, 0),
+        afAll: Array.isArray(msg.afAll)
+          ? msg.afAll.filter((e: any) => Array.isArray(e) && e.length >= 2)
+                     .map((e: any) => [Number(e[0]) || 0, Number(e[1]) ? 1 : 0] as [number, number])
+          : [],
       });
       return;
     }
@@ -1782,6 +1843,17 @@ export class UberSDRClient {
       // and a wire value has to be read the same way at both ends.
       if (typeof msg.sessionSecsLeft === 'number') {
         this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
+      }
+      // ★★★ THE SERVER'S WORD ON ITS OWN DSP. These are sticky AND shared, so what this phone last
+      //     asked for is irrelevant — only the radio knows, and a control that misreports it is
+      //     worse than a missing one because nothing tells you to look. Absent = an older server
+      //     that HAS the treatment but does not talk about it, so default ON rather than OFF.
+      if (typeof msg.wsp === 'boolean' || typeof msg.ims === 'boolean'
+          || typeof msg.ceq === 'boolean' || typeof msg.nb === 'boolean') {
+        this.callbacks.onFmDsp?.({
+          wsp: msg.wsp !== false, ims: msg.ims !== false,
+          ceq: msg.ceq !== false, nb: msg.nb !== false,
+        });
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);

@@ -295,6 +295,18 @@ export interface AudioSheetProps {
   onDeemph?: (tau: number) => void;
   stereo?: boolean;            // WFM stereo on, vs forced mono
   onStereo?: (on: boolean) => void;
+  // ── The broadcast-FM treatments (VibeServer 3.1) ────────────────────────────────────────────
+  // ★★★ FOUR FAULTS, FOUR SWITCHES. NR answers continuous NOISE, IMS a strong NEIGHBOUR, CEQ a
+  //     REFLECTION, NB IMPULSES — and measured on the server they want OPPOSITE actions, so one
+  //     combined control would be wrong as well as unhelpful. All four default ON and each declines
+  //     to act unless its own evidence says it will help, so the switches exist for A/B rather than
+  //     for daily use (asked for by Saber via the FM-DX community).
+  // ★ Absent handlers = a backend without them (Kiwi, OWRX, FM-DX): the rows simply do not draw,
+  //   rather than offering controls that cannot work.
+  fmNr?: boolean;   onFmNr?: (on: boolean) => void;
+  fmIms?: boolean;  onFmIms?: (on: boolean) => void;
+  fmCeq?: boolean;  onFmCeq?: (on: boolean) => void;
+  fmNb?: boolean;   onFmNb?: (on: boolean) => void;
 
   // OWRX server-side squelch (dB) + NR (threshold dB)
   onOwrxSquelch?: (db: number) => void;
@@ -323,6 +335,7 @@ export default function AudioSheet({
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
+  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb,
   rawAudio = false, onRawAudio,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -562,6 +575,41 @@ export default function AudioSheet({
                   {stereo ? 'ON' : 'OFF'}
                 </Text>
               </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ★★ THE BROADCAST-FM TREATMENTS, on one row because they are one subject: what the
+              receiver is doing about a difficult FM signal. Compact labels — the phone has no room
+              for four full-width rows, and a DXer reading them knows the initials.
+              ★ NR works in MONO too: the audio high-cut treats baseband hiss, which is there
+                whether you are in stereo or not; only the stereo half needs L-R. */}
+          {(onFmNr || onFmIms || onFmCeq || onFmNb) && (
+            <View style={st.bwRow}>
+              {/* ★★ "BROADCAST FM", not "FM DSP" — and the row label is load-bearing. This sheet
+                  ALREADY has NR and NB buttons a few rows up, and those are the app's OWN
+                  client-side audio DSP; these are the RADIO's, they act only on broadcast FM, and
+                  they are shared with every other listener on that receiver. Two controls sharing
+                  a name and meaning different things is a trap, so the row says which family these
+                  belong to. The names themselves match the web client deliberately: same product,
+                  same words. */}
+              <Text style={[st.bwLabel, { width: 78 }]}>BCAST FM</Text>
+              <View style={{ flex: 1 }} />
+              {([
+                { l: 'NR',  on: fmNr !== false,  cb: onFmNr },
+                { l: 'IMS', on: fmIms !== false, cb: onFmIms },
+                { l: 'CEQ', on: fmCeq !== false, cb: onFmCeq },
+                { l: 'NB',  on: fmNb !== false,  cb: onFmNb },
+              ] as const).filter((o) => !!o.cb).map((o) => (
+                <TouchableOpacity key={o.l} onPress={() => o.cb?.(!o.on)} hitSlop={6}
+                  style={{ paddingHorizontal: 9, paddingVertical: 4, borderRadius: 6, marginLeft: 6,
+                           backgroundColor: o.on ? C.gold : 'transparent',
+                           borderWidth: 1, borderColor: o.on ? C.gold : C.muted }}>
+                  <Text style={{ color: o.on ? '#000' : C.muted,
+                                 fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                    {o.l}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
           )}
 

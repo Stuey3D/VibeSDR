@@ -367,6 +367,69 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // ── Deviations, each said against its own spec band so the number explains itself ──
   const pdev = x?.pilotDev ?? 0;
   const rdev = x?.rdsDev ?? 0;
+  // ── The weak-signal readings (VibeServer 3.1) ─────────────────────────────────────────────
+  // ★★ Each says what it MEANS, not just a number. "22 dB" invites "is that good?"; "22 dB · blend
+  //    8.4k · cut 11.2k" answers the question the listener actually has, which is why the station
+  //    sounds the way it does.
+  const snrOk = x?.snrOk !== false;
+  const mpxSnr = x?.mpxSnr ?? 0;
+  let snrTxt = DASH, snrCol: string | undefined;
+  if (!snrOk) {
+    // ★★★ NO PILOT, NO FIGURE. Both this and multipath are ratios against the 19 kHz pilot, and
+    //     with the pilot collapsed the quotients explode — 70 dB beside 580% multipath, measured on
+    //     air. A confident number about an unmeasurable signal is worse than a blank.
+    snrTxt = 'no pilot to measure';
+  } else if (mpxSnr > 0.5) {
+    const lmr = x?.hiCutLmr ?? 15000, aud = x?.hiCutAud ?? 15000;
+    const acting = lmr < 14000 || aud < 14000;
+    snrTxt = `${mpxSnr.toFixed(0)} dB · ` + (!acting ? 'clean · no treatment'
+      : aud < 14000 ? `blend ${(lmr / 1000).toFixed(1)}k · cut ${(aud / 1000).toFixed(1)}k`
+                    : `blend ${(lmr / 1000).toFixed(1)}k`);
+    // ★ Amber is not a warning — it means the receiver is working for its living, which on a
+    //   difficult signal is the good outcome.
+    snrCol = acting ? C.warn : C.good;
+  }
+  const mp = x?.multipath ?? 0;
+  let mpTxt = DASH, mpCol: string | undefined;
+  if (!snrOk) mpTxt = 'no pilot to measure';
+  else if (x?.multipathOk) {
+    const pct = mp * 100;
+    // ★ "None detected" is a RESULT. Printing a dash for zero multipath on a signal we CAN measure
+    //   says "no data", which is the opposite meaning.
+    const label = pct < 0.5 ? 'none detected' : mp < 0.03 ? 'clean'
+                : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
+    mpTxt = pct < 0.5 ? label : `${pct.toFixed(1)}% · ${label}`;
+    mpCol = mp < 0.03 ? C.good : mp < 0.10 ? undefined : mp < 0.20 ? C.warn : C.bad;
+  } else if (x) mpTxt = 'too noisy to judge';
+  // ★ CEQ is shown as BEFORE → AFTER: "engaged" says nothing about whether it helped, and a blind
+  //   equaliser quietly making things worse is the failure mode that matters.
+  let ceqTxt = DASH;
+  if (x?.ceqOn) {
+    const before = mp * 100, after = (x?.ceqAfter ?? 0) * 100;
+    ceqTxt = `${before.toFixed(1)}% → ${after.toFixed(1)}%`
+           + (before > 0.5 && after < before * 0.8 ? '' : ' · little change');
+  } else if (x) {
+    const why = x?.ceqWhy ?? 3;
+    ceqTxt = why === 1 ? 'off' : why === 2 ? 'signal too weak to equalise'
+                                           : 'standing by · nothing to correct';
+  }
+  const nbPct = (x?.nbRate ?? 0) * 100;
+  const nbTxt = !x ? DASH
+    : nbPct < 0.005 ? 'nothing to blank'
+    : `${nbPct.toFixed(nbPct < 1 ? 2 : 1)}% blanked`;
+  // ★ The IF figure is "the OTHER option minus this one", so it MUST be read against the current
+  //   state — the sign flips the moment the filter engages, and a bare number is genuinely
+  //   ambiguous. Printed as a sentence.
+  const ifG = x?.ifGain ?? 0, ifC = x?.ifCand ?? 0, ifBw = x?.ifBw ?? 0;
+  let ifTxt = DASH;
+  if (x && ifC > 0 && mpxSnr > 0.5) {
+    ifTxt = ifBw > 0
+      ? `${Math.round(ifBw / 1000)}k narrow · wide would ` +
+        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`)
+      : `wide · ${Math.round(ifC / 1000)}k ` +
+        (ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain');
+  }
+
   let pilotTxt = DASH, pilotCol: string | undefined;
   if (pdev > 0.2) {
     const ok = pdev >= 6.0 && pdev <= 7.5;
@@ -645,6 +708,12 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               not reference material (Stuart, 2026-07-28). */}
           <Row raw={raw} label="Pilot dev"   value={pilotTxt} colour={pilotCol} />
           <Row raw={raw} label="RDS dev"     value={rdsDevTxt} colour={rdsDevCol} />
+          {/* ★★ THE WEAK-SIGNAL READINGS, beside the deviations because they are the same KIND of
+              thing: numbers a listener judges a marginal signal by while judging it by ear. MPX S/N
+              stays in SMALL with the deviations — it is the one you watch while tuning — and the
+              rest are reference material, so they sit in the tall panel below. */}
+          <Row raw={raw} label="MPX S/N"     value={snrTxt} colour={snrCol}
+               reserve="22 dB · blend 12.6k · cut 11.2k" />
           <Row raw={raw} label="RadioText"   value={p.rt || DASH} />
           <Row raw={raw} label="Rate"        value={rateTxt} />
 
@@ -656,6 +725,15 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               selector to get lost in a copy-paste. */}
           <Row raw={raw} label="RDS⇔pilot"   value={phaseTxt} colour={phaseCol}
                reserve="rotating 00°/s — encoder not locked to pilot" />
+          {/* ★ Multipath is a REFLECTION, not weakness — a strong station can show it, and unlike
+              noise it is not cured by narrowing. Worth knowing which fault you are hearing. */}
+          <Row raw={raw} label="Multipath"   value={mpTxt} colour={mpCol}
+               reserve="too noisy to judge" />
+          <Row raw={raw} label="CEQ"         value={ceqTxt}
+               reserve="standing by · nothing to correct" />
+          <Row raw={raw} label="Blanker"     value={nbTxt} reserve="nothing to blank" />
+          <Row raw={raw} label="IF narrow"   value={ifTxt}
+               reserve="110k narrow · wide would cost 11.0 dB" />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
           <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />
           <Row raw={raw} label="PTYN"        value={x?.ptyn || DASH} />

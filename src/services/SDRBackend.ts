@@ -223,6 +223,17 @@ export interface SDRBackend {
    */
   setAdminAuth?(q: string): void;
 
+  // ── Broadcast-FM treatments (VibeServer 3.1) ────────────────────────────────────────────────
+  // ★★★ DECLARED HERE, AND TYPED, so a rename fails the BUILD. The `(c as any).setAdminAuth?.()`
+  //     lesson: an `any` cast plus optional chaining makes a missing method indistinguishable from
+  //     a working one — not an error, not a warning, just nothing happening for ever.
+  // ★ Optional because only VibeServer has them: a Kiwi, an OWRX or an FM-DX backend has no such
+  //   DSP, and the UI hides the controls rather than offering ones that cannot work.
+  setWeakProc?(on: boolean): void;
+  setIms?(on: boolean): void;
+  setCeq?(on: boolean): void;
+  setNoiseBlanker?(on: boolean): void;
+
 }
 
 /** A DAB programme (audio service) within the tuned ensemble. */
