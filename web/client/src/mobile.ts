@@ -139,13 +139,65 @@ export function initMobileControls(deps: MobileDeps) {
   //    number pad, and the gradient behind them was an invisible third button.
   $('mFreqBox').onclick = () => deps.openFreqEntry();
   $('mMode').onclick    = () => openModePicker();
-  // ★ Tap the reading to change WHICH reading it is: SNR → S-units → dBFS.
-  $('mSnr').onclick = () => {
-    meterMode = METER_MODES[(METER_MODES.indexOf(meterMode) + 1) % METER_MODES.length];
-    try { localStorage.setItem(METER_PREF, meterMode); } catch { /* non-fatal */ }
-    refresh();
+  // ★★★ A MENU, NOT A CYCLER — the same ruling this file already applies to the STEP button, and
+  //     for the same reason, now confirmed on this control too: "I have to click multiple times
+  //     and it sometimes jumps past the digits I want, I want to view the SNR but keeps jumping
+  //     past it" (Stuart, 2026-08-14). A three-state cycler has no way back: overshoot the one you
+  //     want and the only route to it is all the way round again, and any click that double-fires
+  //     or is missed leaves you somewhere you did not choose. It also shows nothing of the ladder,
+  //     so there is no way to know what is coming next.
+  // ★★ AND THE TARGET WAS A BARE <span>, which is very likely the "multiple times" half: a near
+  //    miss landed on the pill behind it, which has no handler by design, so the click did nothing
+  //    at all. A menu makes every press either open it or dismiss it — never silently nothing.
+  const openMeterMenu = (anchor: HTMLElement) => {
+    document.getElementById('mMeterMenu')?.remove();
+    const r = anchor.getBoundingClientRect();
+    const m = document.createElement('div');
+    m.id = 'mMeterMenu';
+    m.style.cssText = 'position:fixed;z-index:9998;background:#0d0d0d;border:1px solid #ffa000;'
+      + 'border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;'
+      + 'font:12px/1.4 var(--mono,monospace);box-shadow:0 6px 24px rgba(0,0,0,.6)';
+    const label: Record<MeterMode, string> = {
+      snr: 'SNR', smeter: 'S-meter', dbfs: 'dBFS',
+    };
+    for (const v of METER_MODES) {
+      const b = document.createElement('button');
+      b.textContent = label[v];
+      // ★ The current one is marked, so the menu also ANSWERS "which am I looking at?" — the
+      //   question a cycler forces you to work out from the reading itself.
+      b.style.cssText = 'background:none;border:0;color:' + (v === meterMode ? '#ffe566' : '#ddd')
+        + ';padding:7px 14px;text-align:left;cursor:pointer;border-radius:5px;font:inherit';
+      b.onmouseenter = () => { b.style.background = 'rgba(255,160,0,.18)'; };
+      b.onmouseleave = () => { b.style.background = 'none'; };
+      b.onclick = () => {
+        meterMode = v;
+        try { localStorage.setItem(METER_PREF, meterMode); } catch { /* private mode */ }
+        close();
+        refresh();
+        paintSignal();      // the reading itself is painted here, not by refresh()
+      };
+      m.appendChild(b);
+    }
+    document.body.appendChild(m);
+    // Above when there is no room below — this pill lives at the bottom of the window.
+    const mh = m.offsetHeight;
+    const top = (r.top - mh - 6 > 0) ? r.top - mh - 6 : Math.min(r.bottom + 6, innerHeight - mh - 8);
+    m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+    m.style.top = `${Math.max(8, top)}px`;
+    const close = () => {
+      m.remove();
+      document.removeEventListener('mousedown', onDoc, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+    const onDoc = (e: MouseEvent) => { if (!m.contains(e.target as Node)) close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    setTimeout(() => {
+      document.addEventListener('mousedown', onDoc, true);
+      document.addEventListener('keydown', onKey, true);
+    }, 0);
   };
-  $('mSnr').title = 'Tap to switch: SNR / S-meter / dBFS';
+  $('mSnr').onclick = () => openMeterMenu($('mSnr'));
+  $('mSnr').title = 'Signal reading: SNR / S-meter / dBFS';
 
   // ── Controls the desktop bar owns, mirrored where they BELONG ───────────────
   // ★★★ CLICK THE ORIGINAL, DO NOT REIMPLEMENT IT. Every one of these drives the existing

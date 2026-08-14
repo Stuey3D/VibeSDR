@@ -7,6 +7,38 @@
 
 namespace vibedsp {
 
+/**
+ * Move a filter corner toward its target — slowly, and not at all for small changes.
+ *
+ * ★★★ THE MOVEMENT IS AUDIBLE, WHICH IS THE ONE THING THIS MUST NOT BE. Stuart, listening to a
+ *     weak station: "every now and again you hear the NR allowing slightly higher frequencies
+ *     through, I'm assuming as the noise drops a little". Exactly that — the corner was tracking
+ *     every dip and swell in the signal, and a treble control operating itself is more
+ *     objectionable than the hiss it removes, because the ear locks on to CHANGE where it will
+ *     happily ignore a steady state.
+ *
+ * ★★★ SO: A DEADBAND FIRST. Nothing moves for a difference smaller than kSlack. Most of what was
+ *     heard is ordinary flutter about a stable average, and the honest response to it is to do
+ *     nothing at all rather than to chase it more smoothly. A slower filter still moves; a
+ *     deadband genuinely stops.
+ *
+ * ★★ AND ASYMMETRIC WHEN IT DOES MOVE. Closing down is what removes hiss the listener can already
+ *    hear, so it may happen at a reasonable pace. OPENING UP is the audible direction — the top
+ *    coming back — and nobody is harmed by it arriving late, so it is four times slower. The same
+ *    reasoning as the noise meter's own attack and release, and the opposite way round from a
+ *    compressor, deliberately.
+ *
+ * ★ Per BLOCK, not per sample, so the rates are in blocks: at ~8 ms a block, 0.02 is roughly half
+ *   a second to close and 0.005 about two seconds to open.
+ */
+inline float glideCorner(float now, float want) {
+    constexpr float kSlack = 600.0f;    // Hz — below this, hold still
+    if (std::fabs(want - now) < kSlack) return now;
+    const float k = (want < now) ? 0.02f : 0.005f;
+    return now + k * (want - now);
+}
+
+
 void RxPipeline::start(double sampleRate, int fftSize, double fftRate,
                        int outRate, const Callbacks& cb) {
     sampleRate_ = sampleRate;
@@ -535,7 +567,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             float wantCut = kNarrow + t * (kWide - kNarrow);
             wantCut = std::max(wantCut, lmrHiCutHz_ * 1.25f);    // never below the L-R corner
             wantCut = std::min(wantCut, 15000.0f);
-            audioHiCutHz_ += 0.02f * (wantCut - audioHiCutHz_);  // ~1 s, as slow as the blend
+            audioHiCutHz_ = glideCorner(audioHiCutHz_, wantCut);
             if (!std::isfinite(audioHiCutHz_)) audioHiCutHz_ = 15000.0f;
         } else {
             audioHiCutHz_ = 15000.0f;
@@ -720,7 +752,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // ★★★ MOVE SLOWLY. A corner that chases the signal sample-by-sample turns fading
                 //     into PUMPING, which listeners notice far more readily than the hiss it is
                 //     removing — the same lesson as the audio jitter buffer. Roughly a second.
-                lmrHiCutHz_ += 0.02f * (want - lmrHiCutHz_);
+                lmrHiCutHz_ = glideCorner(lmrHiCutHz_, want);
                 if (!std::isfinite(lmrHiCutHz_)) lmrHiCutHz_ = kWide;
             } else {
                 // Not eligible (mono, unlocked, or the meter cannot run at this rate) — glide back
