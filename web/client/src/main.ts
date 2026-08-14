@@ -1741,6 +1741,37 @@ function piHex(pi: number): string {
  * null = looked up, nothing found — cached so we don't ask again on every render.
  */
 const bmLogos = new Map<string, string | null>();
+
+/**
+ * Station logos remembered BY FREQUENCY, so the bookmark list can show the broadcaster's own
+ * artwork instead of a name match.
+ *
+ * ★★★ A BOOKMARK HAS NO PI, AND IDENTITY NEEDS ONE. RadioDNS is keyed on PI + ECC + frequency —
+ *     the things a transmitter states — while a bookmark stores a name and a frequency, so the
+ *     list could only ever fall back to the crowd-sourced name search. Hence Stuart's report: the
+ *     panel showed the real BBC and Heart artwork while the bookmark rows beside it showed the old
+ *     favicons (2026-08-14).
+ * ★★ BUT WE LEARN THE ANSWER EVERY TIME SOMEBODY LISTENS. When identity resolves a logo we know
+ *    the frequency it belongs to, so recording it here turns "stations this receiver has actually
+ *    heard" into a lookup table the bookmark list can use — no schema change, no re-saving old
+ *    bookmarks, and it improves by itself as the band gets explored.
+ * ★ localStorage, keyed to 10 kHz: bookmarks persist across sessions, so their logos should too.
+ */
+const FREQ_LOGO_KEY = 'vsFreqLogos';
+function freqLogoKey(hz: number): string { return String(Math.round(hz / 10000)); }
+function loadFreqLogos(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(FREQ_LOGO_KEY) || '{}') || {}; } catch { return {}; }
+}
+function rememberFreqLogo(hz: number, url: string): void {
+  if (!(hz > 0) || !url) return;
+  try {
+    const all = loadFreqLogos();
+    const k = freqLogoKey(hz);
+    if (all[k] === url) return;
+    all[k] = url;
+    localStorage.setItem(FREQ_LOGO_KEY, JSON.stringify(all));
+  } catch { /* private mode — the name search still applies */ }
+}
 let logoQuery = '';     // guards against a stale async logo landing late
 /** ★ The PI/ECC/frequency already asked of the server's RadioDNS route — one request per station,
  *  not one per RDS update. Cleared wherever the logo is, so a new station is asked afresh. */
@@ -2184,6 +2215,9 @@ async function resolveRdsLogoBest(iso: string) {
           if (url && logoDnsKey === key) {
             rdsLogoUrl = url;
             logoFromIdentity = true;
+            // ★ Remember it against the FREQUENCY — this is what lets the bookmark list show the
+            //   broadcaster's own artwork for a station with no PI stored against it.
+            rememberFreqLogo(hz, url);
             // ★ Remember HOW we identified it. Derived (we sent "00") is provisional and will be
             //   re-asked when the transmitter finally states its country; transmitted is final.
             rdsLogoProvisional = (rdsEcc <= 0);
@@ -4271,7 +4305,7 @@ function renderBookmarks() {
     // "a local bookmark is whatever the user called it", but importing an UberSDR list
     // disproves that: it is full of real station names that match perfectly well, and
     // showing logos on one list and not the other just looks broken.
-    void attachBookmarkLogo(row, b.name);
+    void attachBookmarkLogo(row, b.name, undefined, b.frequency);
   }
 }
 
@@ -4298,7 +4332,21 @@ async function primeStationLogo(name: string) {
   bmLogos.set(key, url ?? null);
 }
 
-async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string) {
+async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, hz?: number) {
+  // ★★★ IDENTITY FIRST, EXACTLY AS THE LIVE PANEL DOES. If this receiver has ever heard the
+  //     station on this frequency and RadioDNS answered, that is the broadcaster's OWN file and it
+  //     outranks any name match — the same ranking the live path enforces, applied to the list.
+  if (hz && hz > 0) {
+    const known = loadFreqLogos()[freqLogoKey(hz)];
+    if (known && row.isConnected) {
+      const img0 = document.createElement('img');
+      img0.className = 'bmLogo';
+      img0.src = known;
+      img0.alt = '';
+      row.insertBefore(img0, row.firstChild);
+      return;
+    }
+  }
   const iso = itu ? ituToIso(itu) : '';
   const key = `${name}|${iso}`;
   let url = bmLogos.get(key);

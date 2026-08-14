@@ -956,6 +956,13 @@ private:
     int   sinceNorm_ = 0;
     int cycle_ = 0;            // pilot-cycle counter within a bit (0..15)
     float lockAmp_ = 0.0f;
+    /** ★★★ A RELEASE HOLD-OFF: how many samples the metric has been UNDER the release level.
+     *  Stereo only drops once it has stayed there — a brief dip on a fade is not a lost pilot, and
+     *  dropping on one is audible as a stutter between stereo and mono. It CANNOT cause
+     *  stereo-on-static, because engaging still needs the full threshold and the full averaging;
+     *  this only ever makes UNLOCKING slower, and something that never locked cannot be held. */
+    int   belowRelease_ = 0;
+    int   releaseHold_ = 0;      // samples ~= 1 s, set in configure()
     float lockSmooth_ = 0.0005f;     // lock-metric 1-pole coeff (set by rate ~50ms)
     bool  lockState_ = false;        // hysteretic lock state (stereo audio)
     bool  trackState_ = false;       // hysteretic PLL-is-tracking state (RDS)

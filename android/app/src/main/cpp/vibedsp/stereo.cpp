@@ -29,6 +29,16 @@ void StereoPLL::configure(double pilotHz, double rate) {
     // ★ The cost is acquisition time: 60 ms longer to declare stereo on a tune, which nobody can
     //   hear. The thing that WOULD be heard is a false lock, and that is what this protects.
     lockSmooth_ = (float)(1.0 / (0.11 * rate));
+    // ★★★ ONE SECOND OF PATIENCE BEFORE DROPPING STEREO. Raising the engage threshold's sensitivity
+    //     got H F M (4.7 kHz pilot) locking, but it still let go on brief dips: "spoke too soon,
+    //     had a few drops in a row" (Stuart, 2026-08-14). On a fading signal the metric dips below
+    //     the release level for a few hundred milliseconds at a time, and each dip is heard as a
+    //     stutter between stereo and mono — far more objectionable than the noise it is avoiding.
+    // ★★ SAFE BY CONSTRUCTION with respect to the static guarantee: this only makes UNLOCKING
+    //    slower. Engaging still requires the full threshold and the full 110 ms averaging, and a
+    //    signal that never locks cannot be held locked.
+    releaseHold_ = (int)(rate * 1.0);
+    belowRelease_ = 0;
 }
 
 // One PLL sample. Returns the oscillator's cos/sin via oscC_/oscS_ and keeps
@@ -78,15 +88,24 @@ void StereoPLL::advance(float mpx) {
     // re-acquires exactly as it does at start-up.
     if (!std::isfinite(oscC_) || !std::isfinite(oscS_) || !std::isfinite(lockAmp_)) {
         oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0;
-        lockAmp_ = 0.0f; lockState_ = false; trackState_ = false;
+        lockAmp_ = 0.0f; lockState_ = false; trackState_ = false; belowRelease_ = 0;
         return;
     }
 
     // Lock metric: slowly-smoothed in-phase pilot energy (mpx correlated with
     // cos), then a hysteretic state so static can't toggle stereo.
     lockAmp_ += lockSmooth_ * (mpx * c * 2.0f - lockAmp_);
-    if (!lockState_ && lockAmp_ > kLockEngage)       lockState_ = true;
-    else if (lockState_ && lockAmp_ < kLockRelease)  lockState_ = false;
+    if (!lockState_ && lockAmp_ > kLockEngage) {
+        lockState_ = true;
+        belowRelease_ = 0;
+    } else if (lockState_) {
+        // ★ Count TIME under the release level, and only then let go — see releaseHold_.
+        if (lockAmp_ < kLockRelease) {
+            if (++belowRelease_ >= releaseHold_) { lockState_ = false; belowRelease_ = 0; }
+        } else {
+            belowRelease_ = 0;
+        }
+    }
     if (!trackState_ && lockAmp_ > kTrackEngage)      trackState_ = true;
     else if (trackState_ && lockAmp_ < kTrackRelease) trackState_ = false;
 }
