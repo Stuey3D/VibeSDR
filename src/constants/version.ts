@@ -17,7 +17,13 @@
 // ★ Now matches app.json's expo.version exactly, as the note below has always asked.
 //   NOTE: USER_AGENT derives from this, so it moves 'VibeSDR/10.0' -> 'VibeSDR/10.0.0'. That is
 //   "only the version moves", which is what operators' filter rules are written to tolerate.
-export const APP_VERSION = '10.0.2';
+// ★★★ AND IT DRIFTED AGAIN. app.json went to 10.2 and this stayed at 10.0.2, so the About overlay,
+//     the menu footer, the picker header and the diagnostics dump all announced a version that has
+//     not shipped for two releases — and every third-party receiver (FM-DX, OWRX, Kiwi) was told
+//     "VibeSDR/10.0.2" by a 10.2 app. Seen in the owner's own connection log on 2026-08-14, which
+//     is exactly how the last one was caught. A version string that lies misroutes the next
+//     investigation: the dump names a SHIPPING build for a bug that is in the one under test.
+export const APP_VERSION = '10.2';
 
 /**
  * How we introduce ourselves to SOMEBODY ELSE'S receiver.
