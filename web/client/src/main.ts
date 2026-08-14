@@ -1016,8 +1016,19 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         rdsLogoUrl = '';
         logoQuery = '';
         logoDnsKey = '';
+        rdsLogoProvisional = false;
       }
-      if (!rdsLogoUrl) void resolveRdsLogoBest(rdsIso);
+      // ★★★ AND UPGRADE A DERIVED ANSWER THE MOMENT THE REAL ECC ARRIVES. A logo found from an
+      //     ECC we DERIVED rests on the assumption that the station is in the receiver's own
+      //     country — which is fine inland and wrong on a border, where two countries can carry
+      //     stations of the same name and even the same PI at different frequencies (Stuart,
+      //     2026-08-14: "just in case you live near a border"). The transmitted ECC settles it,
+      //     but it can arrive minutes later, long after we have a picture — and `!rdsLogoUrl`
+      //     alone would never look again, so the guess would simply LOCK, which is the failure
+      //     this whole identity path exists to prevent.
+      // ★ One upgrade only: once we have asked with a real ECC the answer is authoritative, and
+      //   rdsLogoProvisional stays false so a repeating ECC cannot start a request loop.
+      if (!rdsLogoUrl || (rdsLogoProvisional && rdsEcc > 0)) void resolveRdsLogoBest(rdsIso);
       rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
       if (rdsPanelOpen()) renderRds();
       updateVts();
@@ -1669,6 +1680,7 @@ let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
+  rdsLogoProvisional = false;
   rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
   grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
   rdsFreq = -1;
@@ -1694,6 +1706,9 @@ let logoQuery = '';     // guards against a stale async logo landing late
 /** ★ The PI/ECC/frequency already asked of the server's RadioDNS route — one request per station,
  *  not one per RDS update. Cleared wherever the logo is, so a new station is asked afresh. */
 let logoDnsKey = '';
+/** ★ True when the logo we are showing was found from a DERIVED ECC (the receiver's country), so
+ *  it is our inference and not the transmitter's word. A real ECC arriving later replaces it. */
+let rdsLogoProvisional = false;
 
 /** ★★★ BAND CROSSING, as the app announces it. The web VTS computed the band and then hid the
  *  whole bar whenever there was no station name — so on HF, where most of the dial has no
@@ -2095,7 +2110,14 @@ async function resolveRdsLogoBest(iso: string) {
   //     ★ Server-side ON PURPOSE: it needs DNS SRV and CNAME resolution, which a page cannot do.
   //       An older server has no such route, so a 404 here just falls through to the name ladder.
   const hz = spec ? spec.frequency : 0;
-  if (rdsPi > 0 && rdsEcc > 0 && hz > 0) {
+  // ★★★ NO LONGER GATED ON A TRANSMITTED ECC — that gate is why this almost never fired. The ECC
+  //     rides in group 1A and a great many stations never send it, so `rdsEcc` stays 0 for ever
+  //     and the lookup was skipped for exactly the stations that most needed it: BBC Radio 1 (1A
+  //     at 11% of groups) showed its real artwork while Heart, on the same receiver, showed a
+  //     generic favicon — the only difference being whether the transmitter names its country
+  //     (Stuart, 2026-08-14). The SERVER now derives it from the receiver's own country when we
+  //     send none, so "00" here means "you work it out", not "unknown, give up".
+  if (rdsPi > 0 && hz > 0) {
     const piHex  = rdsPi.toString(16).toUpperCase().padStart(4, '0');
     const eccHex = rdsEcc.toString(16).toUpperCase().padStart(2, '0');
     const key = `${piHex}|${eccHex}|${Math.round(hz)}`;
@@ -2112,6 +2134,9 @@ async function resolveRdsLogoBest(iso: string) {
           // we ASKED about, not to whatever is tuned now.
           if (url && logoDnsKey === key) {
             rdsLogoUrl = url;
+            // ★ Remember HOW we identified it. Derived (we sent "00") is provisional and will be
+            //   re-asked when the transmitter finally states its country; transmitted is final.
+            rdsLogoProvisional = (rdsEcc <= 0);
             updateVts();
             updateMediaSession();
             return;
@@ -6561,6 +6586,7 @@ function setMode(m: SDRMode, send: boolean) {
   if (m !== 'wfm') {
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
+  rdsLogoProvisional = false;
   }
   updateVts();
   syncBw();

@@ -1652,7 +1652,20 @@ int main(int argc, char** argv) {
     vsradiodns::setDir(vsDataDir());
     LocalSdrShim::setStationLogoHandler([](const std::string& pi, const std::string& ecc,
                                            double hz) -> std::string {
-        return vsradiodns::logoFor(pi, ecc, hz);
+        // ★★★ DERIVE THE ECC WHEN THE STATION DOES NOT SEND ONE, OR THIS FEATURE MOSTLY NEVER
+        //     RUNS. The ECC rides in RDS group 1A and many encoders never transmit it: on one
+        //     receiver, BBC Radio 1 (which does send 1A) got its real artwork while Heart on the
+        //     same aerial fell back to a generic favicon purely because its transmitter volunteers
+        //     no country. The app has derived it since 08-11; the browser never could, because the
+        //     country table lived only in the app's TypeScript — so this closes the gap for EVERY
+        //     client at once, which is the whole reason the lookup is server-side.
+        // ★★ From the RECEIVER's own country, and it is self-checking: eccForIso returns nothing
+        //    unless that country actually sits at this PI's country nibble, so a foreign station
+        //    is declined rather than mislabelled.
+        std::string e = ecc;
+        if (e.empty() || e == "00" || e == "0") e = vsradiodns::eccForIso(g_runtimeConfig.country, pi);
+        if (e.empty()) return {};
+        return vsradiodns::logoFor(pi, e, hz);
     });
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;

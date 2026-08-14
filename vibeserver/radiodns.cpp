@@ -1,6 +1,7 @@
 #include "radiodns.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 // ★★★ <cmath> FOR llround, AND ITS ABSENCE ONLY BROKE THE PI. libc++ (the Mac) pulls it in
 //     transitively through <string>, libstdc++ (bookworm/GCC) does not — so this file built
@@ -167,6 +168,55 @@ std::string logoFromSpi(const std::string& xml, const std::string& bearerId) {
 }
 
 }  // namespace
+
+std::string eccForIso(const std::string& iso, const std::string& piHex) {
+    if (iso.size() != 2 || piHex.empty()) return {};
+    // ★ The ECC country table, mirrored from src/services/rdsCountry.ts. Row = ECC, column = the
+    //   PI's country nibble 1..F. Kept in the SAME order and shape as the TypeScript so the two
+    //   can be diffed by eye; a divergence here shows up as a station whose logo works in the app
+    //   and not in the browser, which is a miserable thing to chase from either end alone.
+    static const std::map<std::string, std::array<const char*, 15>> kTable = {
+        {"A1", {{"",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "CA", "CA", "CA", "CA", "GL"}}},
+        {"A2", {{"AI", "AG", "",   "FK", "BB", "BZ", "KY", "CR", "CU", "AR", "BR", "",   "",   "GP", "BS"}}},
+        {"A3", {{"BO", "CO", "JM", "MQ", "",   "PY", "NI", "",   "PA", "DM", "DO", "CL", "GD", "TB", "GY"}}},
+        {"A4", {{"GT", "HN", "AW", "",   "MS", "TT", "PE", "SR", "UY", "KN", "LC", "SN", "HT", "VE", "VG"}}},
+        {"A5", {{"",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "MX", "VC", "MX", "MX", "MX"}}},
+        {"A6", {{"",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "PM"}}},
+        {"D0", {{"CM", "CF", "DJ", "MG", "ML", "AO", "GQ", "GA", "GN", "ZA", "BF", "CG", "TG", "BJ", "MW"}}},
+        {"D1", {{"NA", "LR", "GH", "MR", "ST", "CV", "SN", "GM", "BI", "SH", "BW", "KM", "TZ", "ET", "NG"}}},
+        {"D2", {{"SL", "ZW", "MZ", "UG", "SZ", "KE", "SO", "NE", "TD", "GW", "CD", "CI", "",   "ZM", "ER"}}},
+        {"D3", {{"",   "",   "EH", "",   "RW", "LS", "",   "SC", "",   "MU", "",   "SD", "",   "",   ""}}},
+        {"D4", {{"",   "",   "",   "",   "",   "",   "",   "",   "",   "SS", "",   "",   "",   "",   ""}}},
+        {"E0", {{"DE", "DZ", "AD", "IL", "IT", "BE", "RU", "PS", "AL", "AT", "HU", "MT", "DE", "",   "EG"}}},
+        {"E1", {{"GR", "CY", "SM", "CH", "JO", "FI", "LU", "BG", "DK", "GI", "IQ", "GB", "LY", "RO", "FR"}}},
+        {"E2", {{"MA", "CZ", "PL", "VA", "SK", "SY", "TN", "",   "LI", "IS", "MC", "LT", "RS", "ES", "NO"}}},
+        {"E3", {{"ME", "IE", "TR", "",   "TJ", "",   "",   "NL", "LV", "LB", "AZ", "HR", "KZ", "SE", "BY"}}},
+        {"E4", {{"MD", "EE", "MK", "",   "",   "UA", "XK", "PT", "SI", "AM", "UZ", "GE", "",   "TM", "BA"}}},
+        {"E5", {{"",   "",   "KG", "",   "",   "",   "",   "",   "",   "",   "",   "",   "",   "",   ""}}},
+        {"F0", {{"AU", "AU", "AU", "AU", "AU", "AU", "AU", "AU", "SA", "AF", "MM", "CN", "KP", "BH", "MY"}}},
+        {"F1", {{"KI", "BT", "BD", "PK", "FJ", "OM", "NR", "IR", "NZ", "SB", "BN", "LK", "TW", "KR", "HK"}}},
+        {"F2", {{"KW", "QA", "KH", "WS", "IN", "MO", "VN", "PH", "JP", "SG", "MV", "ID", "AE", "NP", "VU"}}},
+        {"F3", {{"LA", "TH", "TO", "",   "",   "",   "",   "CN", "PG", "",   "YE", "",   "",   "FM", "MN"}}},
+        {"F4", {{"",   "",   "",   "",   "",   "",   "",   "",   "CN", "",   "MH", "",   "",   "",   ""}}},
+    };
+
+    const char c = (char)std::toupper((unsigned char)piHex[0]);
+    int nibble = -1;
+    if (c >= '0' && c <= '9')      nibble = c - '0';
+    else if (c >= 'A' && c <= 'F') nibble = 10 + (c - 'A');
+    if (nibble < 1 || nibble > 15) return {};
+
+    std::string want = iso;
+    for (auto& ch : want) ch = (char)std::toupper((unsigned char)ch);
+
+    std::string found;
+    for (const auto& [ecc, row] : kTable) {
+        if (want != row[nibble - 1]) continue;
+        if (!found.empty()) return {};      // two rows claim it — say nothing rather than pick
+        found = ecc;
+    }
+    return found;
+}
 
 void setDir(const std::string& dir) {
     std::lock_guard<std::mutex> lk(g_mtx);

@@ -41,6 +41,7 @@ deps_for() {
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
     test-connlog)       echo "" ;;
     test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
+    test-radiodns-ecc)  echo "$SRC/radiodns.cpp" ;;
     test-geoip)         echo "$SRC/geoip.cpp" ;;
     test-asndb)         echo "$SRC/asndb.cpp" ;;
     test-admin-banlist) echo "" ;;
