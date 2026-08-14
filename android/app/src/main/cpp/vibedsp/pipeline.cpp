@@ -283,6 +283,12 @@ void RxPipeline::rebuildAudio() {
             lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
             pll_.configure(19000.0, chFs_); pll_.reset();
             stereoBlend_ = 0.0f;               // new tune starts mono, blends up
+            // ★ The noise meter reads the MPX at the CHANNEL rate (where 17 kHz still exists),
+            //   not the audio rate. Starting wide open matters: a new station must be given the
+            //   benefit of the doubt and narrowed if it earns it, not opened up from mono —
+            //   which would be audible as a swell on every retune.
+            mpxNoise_.configure(chFs_);
+            lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
             stereo_ = true; lastStereo_ = false;
@@ -558,6 +564,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
             trace_("pll_lmr", lmrBuf_.data(), nc);
+            // ★ Measured on the MPX BEFORE the 15 kHz filters — they are exactly what removes the
+            //   band this meter reads. Read-only; demodBuf_ is untouched.
+            mpxNoise_.process(demodBuf_.data(), nc);
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R
             const int n2 = lmrLpf_->process(lmrBuf_.data(),  nc, rightBuf_.data()); // L-R
             const int nm = std::min(n1, n2);
@@ -572,6 +581,63 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // so it won't chatter on an edge signal), else mono. The ramp does the
             // smoothing so the transition fades instead of screeching.
             const float target = (wantStereo && pll_.locked()) ? 1.0f : 0.0f;
+
+            // ★★★ HIGH-BLEND — roll the TOP off L-R in proportion to how noisy the signal is.
+            //     The measurement is the pilot (a fixed-injection reference the PLL recovers even
+            //     in noise) against the 15-19 kHz guard band (transmitted silence, so anything
+            //     there is noise). Their ratio is a real signal-to-noise figure; pilot amplitude
+            //     ALONE is not, which is why a hissy S8 station still reads a nominal pilot
+            //     deviation and why blending on that would have done nothing at all.
+            // ★★ Only the HIGHS go. Bass and mid separation survive, so the station still sounds
+            //    stereo instead of just narrow — see the note on lmrHiCutHz_.
+            if (mpxNoise_.ready() && wantStereo && pll_.locked()) {
+                const float noise = mpxNoise_.level();
+                const float pilot = std::fabs(pll_.lockAmp());
+                // ★ The floor keeps a silent/absent noise reading from dividing to infinity, and
+                //   keeps a dead-quiet lab signal from being called "impossibly good".
+                const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
+                const float db = 20.0f * std::log10(std::max(snr, 1e-6f));
+                blendSnrDb_ += 0.05f * (db - blendSnrDb_);          // slow: this is a mood, not an event
+                if (!std::isfinite(blendSnrDb_)) blendSnrDb_ = 99.0f;
+                // ★★ THE CURVE. Above kClean the signal is good and nothing is touched — a strong
+                //    station must be bit-for-bit what it was before this existed, or the feature
+                //    is a tone control that fires on everybody. Below kRough the image is held at
+                //    a floor rather than taken to zero: even 2 kHz of separation reads as "stereo,
+                //    quietly" and sounds better than a hard collapse to mono.
+                // ★★★ CALIBRATED AGAINST THE METER, NOT AGAINST THEORY. This ratio is NOT a
+                //     textbook SNR: it is pilot amplitude against what leaks into a 17 kHz window,
+                //     and the measuring filter's own leakage puts a CEILING on it — a perfect
+                //     synthetic signal reads about 34 dB and cannot read higher. So kClean sits
+                //     below that ceiling (or a flawless station would still be narrowed) and
+                //     kRough above the floor. Both figures come from test-stereo-highblend, which
+                //     prints them; change the filter and these must be re-read, not reasoned about.
+                constexpr float kClean = 30.0f, kRough = 14.0f;
+                constexpr float kWide  = 15000.0f, kNarrow = 2000.0f;
+                float t = (blendSnrDb_ - kRough) / (kClean - kRough);
+                t = std::min(1.0f, std::max(0.0f, t));
+                const float want = kNarrow + t * (kWide - kNarrow);
+                // ★★★ MOVE SLOWLY. A corner that chases the signal sample-by-sample turns fading
+                //     into PUMPING, which listeners notice far more readily than the hiss it is
+                //     removing — the same lesson as the audio jitter buffer. Roughly a second.
+                lmrHiCutHz_ += 0.02f * (want - lmrHiCutHz_);
+                if (!std::isfinite(lmrHiCutHz_)) lmrHiCutHz_ = kWide;
+            } else {
+                // Not eligible (mono, unlocked, or the meter cannot run at this rate) — glide back
+                // to wide open so the next lock does not start half-shut.
+                lmrHiCutHz_ += 0.02f * (15000.0f - lmrHiCutHz_);
+            }
+            // ★ Applied to the FILTERED L-R (rightBuf_), before the matrix turns L+R/L-R into L/R
+            //   — after that point the noise is in both channels and cannot be told from music.
+            if (lmrHiCutHz_ < 14000.0f && audFs_ > 0.0) {
+                const float dt = (float)(1.0 / audFs_);
+                const float rc = 1.0f / (2.0f * (float)M_PI * std::max(lmrHiCutHz_, 200.0f));
+                const float a  = dt / (rc + dt);
+                float y = lmrHiCutY_;
+                for (int i = 0; i < nm; ++i) { y += a * (rightBuf_[i] - y); rightBuf_[i] = y; }
+                lmrHiCutY_ = std::isfinite(y) ? y : 0.0f;
+            } else {
+                lmrHiCutY_ = 0.0f;
+            }
             const float ramp = (float)(1.0 / (audFs_ * 0.04));   // ~40 ms blend time constant
             stereoBlend_ = stereoMatrixBlend(leftBuf_.data(), rightBuf_.data(),
                                              lprBuf_.data(), lmrBuf_.data(),

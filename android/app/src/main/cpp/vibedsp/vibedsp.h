@@ -445,6 +445,100 @@ private:
     float r_ = 0.99998f, x1_ = 0.0f, y_ = 0.0f;
 };
 
+// ── MPX guard-band noise meter ───────────────────────────────────────────--
+/**
+ * How noisy is this signal, measured where nothing is transmitted.
+ *
+ * ★★★ THE PILOT CANNOT ANSWER THIS. The obvious candidate — pilot amplitude — measures the
+ *     SIGNAL, not the noise on it: a hissy S8 station reads "PILOT DEV 6.7 kHz · nominal", the
+ *     same as a clean one, because the pilot is transmitted at a fixed injection and the PLL
+ *     correlates it out of the noise perfectly well (Stuart, 2026-08-14, 107.4 MHz). Anything
+ *     blended on pilot level alone would therefore do nothing on exactly the stations that hiss.
+ *
+ * ★★★ SO MEASURE THE GAP. The MPX carries audio to 15 kHz and the pilot at 19 kHz, and BETWEEN
+ *     them nothing is transmitted at all. Whatever we find in that 1.5 kHz-wide slot is noise, by
+ *     construction — no program material, no subcarrier, no assumptions. Referring it to the pilot
+ *     gives a ratio that means the same thing on a loud station and a quiet one.
+ *
+ * ★★ AND FM NOISE IS TRIANGULAR — its power rises with the square of frequency — which is the
+ *    whole reason stereo hisses and mono does not: L-R is recovered from a subcarrier at 38 kHz,
+ *    up where the noise is worst, while L+R sits at baseband where it is least. A slot at 17 kHz
+ *    is close enough to the L-R band to track what is happening up there.
+ *
+ * ★ It only ever MEASURES. Nothing downstream is filtered by this — it reads a copy.
+ */
+class MpxNoiseMeter {
+public:
+    /** A band-pass at 17 kHz, in THREE cascaded sections.
+     *
+     * ★★★ ONE SECTION IS NOT REMOTELY ENOUGH, AND THE TEST IS WHAT PROVED IT. A single 2-pole
+     *     band-pass at Q=6 spans roughly 15.6-18.4 kHz, which puts the 19 kHz PILOT — a
+     *     fixed 10% -injection tone, one of the largest things in the MPX — barely outside the
+     *     skirt. Leakage from it then dominated the reading, so a PERFECT synthetic signal
+     *     measured 6.5 dB and the blend clamped every station to its narrowest setting. The
+     *     feature would have shipped as a permanent treble cut on the stereo image.
+     * ★★ Selectivity here is about FRACTIONAL offset, not absolute: the pilot is only 12% above
+     *    the centre, so no realistic single section will do. Three identical sections triple the
+     *    stop-band rejection in dB for three multiply-adds a sample, which is nothing beside the
+     *    filters either side of it.
+     * ★ Q stays moderate per section. Very high Q would ring on impulses and read a click as
+     *   noise; the selectivity is bought with ORDER instead, which does not ring the same way.
+     */
+    void configure(double rate) {
+        rate_ = rate;
+        ready_ = (rate > 44000.0);         // needs room for 17 kHz well inside Nyquist
+        if (!ready_) { reset(); return; }
+        const double f0 = 17000.0, q = 8.0;
+        const double w = 2.0 * M_PI * f0 / rate, a = std::sin(w) / (2.0 * q), c = std::cos(w);
+        const double b0 = a, b1 = 0.0, b2 = -a, a0 = 1.0 + a, a1 = -2.0 * c, a2 = 1.0 - a;
+        b0_ = (float)(b0 / a0); b1_ = (float)(b1 / a0); b2_ = (float)(b2 / a0);
+        a1_ = (float)(a1 / a0); a2_ = (float)(a2 / a0);
+        reset();
+    }
+    /** Feed one block of MPX. Read-only: `x` is not modified. */
+    void process(const float* x, int n) {
+        if (!ready_ || n <= 0) return;
+        double acc = 0.0;
+        for (int i = 0; i < n; ++i) {
+            float v = x[i];
+            for (int s = 0; s < kSections; ++s) {
+                const float in = v;
+                const float y = b0_ * in + b1_ * x1_[s] + b2_ * x2_[s] - a1_ * y1_[s] - a2_ * y2_[s];
+                x2_[s] = x1_[s]; x1_[s] = in; y2_[s] = y1_[s]; y1_[s] = y;
+                v = y;
+            }
+            acc += (double)v * v;
+        }
+        // ★★★ RECURSIVE STATE — the same trap as Deemphasis and DcBlocker. A single non-finite
+        //     sample would otherwise poison this filter for ever, and because the blend reads it,
+        //     a permanently NaN noise figure would collapse every station to mono with no way back
+        //     but a retune.
+        for (int s = 0; s < kSections; ++s)
+            if (!std::isfinite(y1_[s]) || !std::isfinite(y2_[s])) { reset(); break; }
+        const float rms = (float)std::sqrt(acc / (double)n);
+        if (!std::isfinite(rms)) return;
+        // ★ Slow, and deliberately ASYMMETRIC: rise quickly when noise appears (the hiss is
+        //   already audible, so act), fall slowly when it clears (so a momentary lull does not
+        //   snap the stereo image wide open and back again — that pumping is more objectionable
+        //   than the hiss itself).
+        const float k = (rms > level_) ? 0.25f : 0.02f;
+        level_ += k * (rms - level_);
+    }
+    float level() const { return level_; }
+    bool  ready() const { return ready_; }
+    void reset() {
+        for (int s = 0; s < kSections; ++s) x1_[s] = x2_[s] = y1_[s] = y2_[s] = 0.0f;
+        level_ = 0.0f;
+    }
+private:
+    static constexpr int kSections = 5;
+    double rate_ = 0.0;
+    bool ready_ = false;
+    float b0_ = 0, b1_ = 0, b2_ = 0, a1_ = 0, a2_ = 0;
+    float x1_[kSections] = {0}, x2_[kSections] = {0}, y1_[kSections] = {0}, y2_[kSections] = {0};
+    float level_ = 0.0f;
+};
+
 // ── De-emphasis (one-pole, real) ─────────────────────────────────────────--
 // FM de-emphasis: y[n] = y[n-1] + a*(x[n]-y[n-1]), a = dt/(tau+dt). 50 us (EU)
 // or 75 us (US). Reconstructs the audio's HF balance after FM and helps reject
@@ -1351,6 +1445,11 @@ public:
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     float stereoBlend()  const { return stereoBlend_; }
+    /** High-blend diagnostics: the L-R corner now in use (Hz, 15000 = untouched) and the
+     *  pilot-to-guard-band ratio driving it (dB). Reported so "why is this station not in full
+     *  stereo?" has an answer other than guessing — the same rule as every other sticky control. */
+    float lmrHiCutHz()   const { return lmrHiCutHz_; }
+    float blendSnrDb()   const { return blendSnrDb_; }
 
 private:
     void rebuildAudio();
@@ -1461,6 +1560,19 @@ private:
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     std::atomic<bool> rdsEnabled_{true};     // see setRdsEnabled — shared-receiver economy
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
+    // ── HIGH-BLEND: the stereo hiss cure ─────────────────────────────────────────────────────
+    // ★★★ A PLAIN BLEND WOULD THROW AWAY THE SEPARATION IT IS TRYING TO SAVE. Scaling L-R down
+    //     broadband does remove the hiss, but it also collapses the image at ALL frequencies —
+    //     mono by degrees. The hiss, though, is not spread evenly: FM noise power rises with the
+    //     square of frequency, so it is concentrated at the top. So roll the TOP of L-R away and
+    //     keep the bottom, which is where the ear places instruments anyway. That is the whole
+    //     trick, and it is why a weak station can still sound stereo rather than merely quiet
+    //     (Stuart, 2026-08-14: "blending the mono signal ... whilst hopefully preserving the
+    //     stereo separation" — the frequency-selective form is how you get both).
+    MpxNoiseMeter mpxNoise_;                 // measures the 15-19 kHz gap; see the class note
+    float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
+    float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
+    float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()
