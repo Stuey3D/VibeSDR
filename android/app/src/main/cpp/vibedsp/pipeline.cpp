@@ -321,6 +321,7 @@ void RxPipeline::rebuildAudio() {
             //   which would be audible as a swell on every retune.
             mpxNoise_.configure(chFs_);
             multipath_.configure(chFs_);
+            adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
             const int rch = (int)std::llround(audFs_);
@@ -474,6 +475,14 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //     exists. The FM demodulator throws amplitude away by design (that is what makes FM
         //     immune to AM noise), so after this line the envelope wobble that reveals multipath
         //     is simply gone. Read-only; chBuf_ is untouched.
+        // ★ The adaptive IF sits BEFORE the multipath meter and the demod, because it is part of
+        //   the receiver, not part of the measurement — everything downstream should see the
+        //   signal as filtered, exactly as it would with a narrower crystal filter.
+        if (mode_ == Mode::WFM) {
+            const double want = ifBwReq_.load(std::memory_order_relaxed);
+            if (want != ifBwHz_) { ifBwHz_ = want; adaptIf_.setBandwidth(want); }
+            adaptIf_.process(chBuf_.data(), nc);
+        }
         if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
         // ★★★ TAKE THE NOISE BACK OUT, OR THIS METER LIES WHERE IT MATTERS MOST. Noise shakes the
         //     envelope exactly as a reflection does, and the first version reported the sum. On
@@ -771,10 +780,23 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 //     removing — the same lesson as the audio jitter buffer. Roughly a second.
                 lmrHiCutHz_ = glideCorner(lmrHiCutHz_, want);
                 if (!std::isfinite(lmrHiCutHz_)) lmrHiCutHz_ = kWide;
+            } else if (!weakProcOn_.load(std::memory_order_relaxed)) {
+                // Switched off by the listener — glide open, because that IS the instruction.
+                lmrHiCutHz_ = glideCorner(lmrHiCutHz_, 15000.0f);
             } else {
-                // Not eligible (mono, unlocked, or the meter cannot run at this rate) — glide back
-                // to wide open so the next lock does not start half-shut.
-                lmrHiCutHz_ += 0.02f * (15000.0f - lmrHiCutHz_);
+                // ★★★ HOLD. DO NOT OPEN. This branch used to rush the corner to 15 kHz at full
+                //     speed whenever the pilot was not locked — and on a marginal signal the lock
+                //     FLICKERS. Every flicker threw the L-R filter wide open, so the moment lock
+                //     returned the listener got the entire unfiltered difference band back, hiss
+                //     and all: "a couple of times in quick succession I just got a load of treble
+                //     come back", at 4-7 dB MPX S/N (Stuart, 2026-08-14) — where the curve is
+                //     pinned at its floor and NOTHING should have been moving.
+                // ★★ Losing pilot lock is not evidence that the signal improved. It is usually
+                //    evidence of the opposite, so the honest response is to keep the treatment we
+                //    had and let the normal curve re-decide once there is something to measure.
+                //    Reopening on the way DOWN was exactly backwards.
+                // ★ The old reasoning — "so the next lock does not start half-shut" — had it the
+                //   wrong way round too: on a signal this weak, starting half-shut is right.
             }
             // ★ Applied to the FILTERED L-R (rightBuf_), before the matrix turns L+R/L-R into L/R
             //   — after that point the noise is in both channels and cannot be told from music.

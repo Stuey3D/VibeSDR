@@ -149,6 +149,36 @@ int main() {
        "★ and it never collapses to mono — bass/mid separation is kept",
        "corner " + std::to_string((int)worse.cutHz) + " Hz");
 
+    // ★★★ A PILOT-LOCK FLICKER MUST NOT REOPEN THE FILTER. On a marginal signal the lock drops in
+    //     and out constantly, and the not-eligible branch used to rush the L-R corner to 15 kHz at
+    //     full speed — so the instant lock returned, the listener got the whole unfiltered
+    //     difference band back: "a couple of times in quick succession I just got a load of treble
+    //     come back" at 4-7 dB (Stuart, on air), where the curve is pinned at its floor and nothing
+    //     should have moved at all.
+    // ★★ Losing lock is not evidence the signal improved — usually the reverse. So the corner must
+    //    HOLD. Modelled here by toggling stereo off and back on, which takes the identical branch.
+    {
+        Sink sink;
+        RxPipeline::Callbacks cb{};
+        cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
+        MpxGen gen; gen.noise = 0.80;                  // ~12 dB, hissy — corner should be well down
+        RxPipeline rx;
+        rx.start(kFs, 1024, 10.0, 48000, cb);
+        rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
+        run(rx, gen, 6.0);
+        const float settled = rx.lmrHiCutHz();
+        for (int i = 0; i < 4; ++i) {                  // four flickers in quick succession
+            rx.setStereoEnabled(false); run(rx, gen, 0.4);
+            rx.setStereoEnabled(true);  run(rx, gen, 0.4);
+        }
+        const float after = rx.lmrHiCutHz();
+        std::printf("   .. lock flicker: corner %7.0f Hz -> %7.0f Hz\n", settled, after);
+        ok(after < settled + 1500.0f,
+           "★ a pilot-lock FLICKER does not throw the L-R filter open again",
+           "settled " + std::to_string((int)settled) + " Hz, after flicker "
+                      + std::to_string((int)after) + " Hz");
+    }
+
     // ★★★ DOES FORCED MONO STILL GET THE AUDIO HIGH-CUT? Two on-air recordings of the same
     //     station a minute apart showed the stereo take rolling off at ~4 kHz and the MONO take at
     //     ~8 kHz. The innocent explanation is that the signal was simply better for the second one

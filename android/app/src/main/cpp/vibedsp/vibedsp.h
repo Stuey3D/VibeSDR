@@ -445,6 +445,56 @@ private:
     float r_ = 0.99998f, x1_ = 0.0f, y_ = 0.0f;
 };
 
+// ── Adaptive IF filter (what NXP calls PACS) ─────────────────────────────--
+/**
+ * A narrower IF, applied WITHOUT rebuilding the chain.
+ *
+ * ★★★ IT CANNOT WORK BY CHANGING bwHz_. That path calls rebuildAudio(), which clears every buffer,
+ *     redesigns the filters, resets the AGC and re-locks the pilot — an audible BREAK, plus an RDS
+ *     resync, every time the bandwidth moved. A control that adapts must not cost what a retune
+ *     costs, so this is an extra filter on the complex baseband that can change its corner
+ *     smoothly and be bypassed entirely when it is not wanted.
+ *
+ * ★★ WHY NARROWING HELPS AT ALL: it admits less noise and less of the neighbour. It is what a DXer
+ *    does by hand with a 110 or 84 kHz filter, and what the TEF automates. The cost is distortion
+ *    on high deviation peaks, which is why it must be earned rather than applied by default.
+ *
+ * ★ A cascade of one-poles on the complex signal — gentle, cheap, and phase-benign. The channel
+ *   filter ahead of it already provides the sharp selectivity; this only has to take the edges in.
+ */
+class AdaptiveIf {
+public:
+    void configure(double rate) { rate_ = rate; bypass_ = true; reset(); }
+    /** @param fullBwHz total width (both sides). <=0, or wide enough to be pointless, = bypass. */
+    void setBandwidth(double fullBwHz) {
+        if (rate_ <= 0.0 || fullBwHz <= 0.0 || fullBwHz >= rate_ * 0.9) { bypass_ = true; return; }
+        const double fc = std::max(20000.0, fullBwHz * 0.5);      // never absurdly narrow for FM
+        const double dt = 1.0 / rate_, rc = 1.0 / (2.0 * M_PI * fc);
+        a_ = (float)(dt / (rc + dt));
+        bypass_ = false;
+    }
+    void process(cf32* z, int n) {
+        if (bypass_ || n <= 0) return;
+        for (int i = 0; i < n; ++i) {
+            for (int s = 0; s < kPoles; ++s) {
+                yr_[s] += a_ * (z[i].real() - yr_[s]);
+                yi_[s] += a_ * (z[i].imag() - yi_[s]);
+                z[i] = cf32{ yr_[s], yi_[s] };
+            }
+        }
+        for (int s = 0; s < kPoles; ++s)
+            if (!std::isfinite(yr_[s]) || !std::isfinite(yi_[s])) { reset(); break; }
+    }
+    bool bypassed() const { return bypass_; }
+    void reset() { for (int s = 0; s < kPoles; ++s) yr_[s] = yi_[s] = 0.0f; }
+private:
+    static constexpr int kPoles = 4;
+    double rate_ = 0.0;
+    bool bypass_ = true;
+    float a_ = 1.0f;
+    float yr_[kPoles] = {0}, yi_[kPoles] = {0};
+};
+
 // ── Multipath meter (the detector an "IMS" needs) ────────────────────────--
 /**
  * How much of what is wrong with this signal is MULTIPATH, as distinct from noise.
@@ -1556,6 +1606,10 @@ public:
      *  a signal that needs it, and a listener who never touches it should get the better sound. */
     void setWeakSignalProc(bool on) { weakProcOn_.store(on, std::memory_order_relaxed); }
     bool weakSignalProc() const { return weakProcOn_.load(std::memory_order_relaxed); }
+    /** Adaptive IF width in Hz (0 = wide open). Settable directly so a test can measure whether
+     *  narrowing actually BUYS anything before any policy is built on top of it. */
+    void setIfBandwidth(double hz) { ifBwReq_.store(hz, std::memory_order_relaxed); }
+    double ifBandwidth() const { return ifBwHz_; }
 
 private:
     void rebuildAudio();
@@ -1671,6 +1725,7 @@ private:
     //     originally because a switch that does nothing on a strong signal is close to the control
     //     AGENTS.md forbids — but A/B is a real use, not a hypothetical one.
     std::atomic<bool> weakProcOn_{true};
+    std::atomic<double> ifBwReq_{0.0};       // requested adaptive IF width, 0 = wide
     std::atomic<bool> rdsEnabled_{true};     // see setRdsEnabled — shared-receiver economy
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     // ── HIGH-BLEND: the stereo hiss cure ─────────────────────────────────────────────────────
@@ -1684,6 +1739,8 @@ private:
     //     stereo separation" — the frequency-selective form is how you get both).
     MpxNoiseMeter mpxNoise_;                 // measures the 15-19 kHz gap; see the class note
     MultipathMeter multipath_;               // envelope AM — distortion, not weakness
+    AdaptiveIf     adaptIf_;                 // PACS-alike: a narrower IF without a rebuild
+    double         ifBwHz_ = 0.0;            // 0 = wide open / bypassed
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
