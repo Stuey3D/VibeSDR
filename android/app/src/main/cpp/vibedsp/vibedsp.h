@@ -1786,6 +1786,7 @@ public:
     bool  ceq() const { return ceqOn_.load(std::memory_order_relaxed); }
     bool  ceqEngaged() const { return ceqEngaged_; }
     float ceqEffort() const { return ceqEffort_; }
+    int   ceqWhy() const { return ceqWhy_; }
     float multipathAfterCeq() const { return ceqOut_.depth(); }
     /** The audio high-cut corner now in use (Hz; 15000 = untouched). */
     float audioHiCutHz() const { return audioHiCutHz_; }
@@ -1954,6 +1955,10 @@ private:
     bool           ceqEngaged_ = false;
     int            ceqDwell_ = 0;
     float          ceqEffort_ = 0.0f;
+    /** WHY the equaliser is not engaged: 0 running, 1 switched off, 2 signal too weak to equalise
+     *  blindly, 3 nothing to correct. "Standing by" on its own left the owner unable to tell
+     *  whether it had declined or failed (Stuart, 2026-08-14). */
+    int            ceqWhy_ = 3;
     AdaptiveIf     adaptIf_;                 // PACS-alike: a narrower IF without a rebuild
     double         ifBwHz_ = 0.0;            // 0 = wide open / bypassed
     // ── The SHADOW receiver: would a narrower IF actually help THIS signal? ───────────────────

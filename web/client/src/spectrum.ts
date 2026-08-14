@@ -125,6 +125,8 @@ export interface RdsExt {
   /** Fraction of samples the noise blanker is excising, 0..1. Says whether impulse noise is even
    *  a problem here — otherwise a guess. */
   nbRate: number;
+  /** Why CEQ is not running: 0 running, 1 off, 2 signal too weak, 3 nothing to correct. */
+  ceqWhy: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -593,6 +595,7 @@ export class SpectrumClient {
           ceqOn: Number(msg.ceqOn ?? 0) === 1,
           ceqAfter: Number(msg.ceqAfter ?? 0),
           nbRate: Number(msg.nbRate ?? 0),
+          ceqWhy: Number(msg.ceqWhy ?? 3),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });

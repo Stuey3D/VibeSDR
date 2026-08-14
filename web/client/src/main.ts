@@ -5143,9 +5143,15 @@ function renderRds() {
     ceqEl.textContent = `${before.toFixed(1)}% → ${after.toFixed(1)}%` + (gained ? '' : ' · little change');
     ceqEl.style.color = gained ? '#7dff9a' : '';
   } else if (rdsExt) {
-    // ★ "Standing by" is the honest word: it is switched on and watching, but there is nothing it
-    //   can usefully do to this signal. Not the same as being turned off.
-    ceqEl.textContent = 'standing by';
+    // ★★ AND WHY. "Standing by" alone left the owner unable to tell whether it had declined or
+    //    failed — especially on a station being FOUGHT OVER, which reads as severe multipath while
+    //    sitting well under the S/N the equaliser needs. Co-channel is not multipath: a reflection
+    //    is your own signal arriving twice and can be inverted; a second TRANSMITTER cannot be,
+    //    by anyone.
+    const why = rdsExt.ceqWhy ?? 3;
+    ceqEl.textContent = why === 1 ? 'off'
+                      : why === 2 ? 'signal too weak to equalise'
+                      : 'standing by · nothing to correct';
     ceqEl.style.color = '';
   } else { ceqEl.textContent = dash; ceqEl.style.color = ''; }
 

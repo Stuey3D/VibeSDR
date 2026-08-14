@@ -530,8 +530,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //     what makes this decidable: below ~12 dB we do not even claim to know whether the
         //     trouble is a reflection.
         if (mode_ == Mode::WFM) {
-            const bool want = ceqOn_.load(std::memory_order_relaxed)
-                           && multipathValid_ && multipathCorr_ > 0.06f && blendSnrDb_ > 18.0f;
+            const bool ceqAllowed = ceqOn_.load(std::memory_order_relaxed);
+            const bool strongEnough = blendSnrDb_ > 18.0f;
+            const bool worthIt = multipathValid_ && multipathCorr_ > 0.06f;
+            const bool want = ceqAllowed && worthIt && strongEnough;
+            // ★★ SAY WHICH CONDITION FAILED. "Standing by" is honest but useless on its own: the
+            //    owner cannot tell whether the equaliser has declined, is broken, or is waiting for
+            //    something. The S/N gate is the one that surprises people, because a signal being
+            //    FOUGHT OVER reads as severe multipath while sitting well under 18 dB.
+            ceqWhy_ = !ceqAllowed ? 1 : (!strongEnough ? 2 : (!worthIt ? 3 : 0));
             if (want && !ceqEngaged_) {
                 if (++ceqDwell_ > 20) { ceqEngaged_ = true; ceqDwell_ = 0; ceq_.reset(); }
             } else if (!want && ceqEngaged_) {

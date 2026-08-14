@@ -8912,6 +8912,7 @@ struct LocalSdrShim::Impl {
                       //   so the panel shows what it achieved rather than merely that it ran.
                       + ",\"ceqOn\":" + std::string((P_ && P_->ceqEngaged()) ? "1" : "0")
                       + ",\"ceqAfter\":" + std::to_string(P_ ? P_->multipathAfterCeq() : 0.0f)
+                      + ",\"ceqWhy\":" + std::to_string(P_ ? P_->ceqWhy() : 3)
                       // ★ The blanker's RATE is the diagnostic that matters: it tells an owner
                       //   whether they have an impulse-noise problem at all, which is otherwise
                       //   pure guesswork ("is that crackle me, or the station?").
