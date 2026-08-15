@@ -446,6 +446,8 @@ final class SpikeLink: ObservableObject {
   }
   /// The radios behind a multi-radio VibeServer's front door — empty unless there is a choice.
   @Published var radioChoices: [VibeRadio] = []
+  /// Which of them somebody is already listening to. Absent = not known yet, not free.
+  @Published var radioBusy: [String: Bool] = [:]
   @Published var radioChoiceName = ""
 
   /// Pass the listener's choice down to the client, which then connects.
@@ -599,6 +601,8 @@ final class SpikeLink: ObservableObject {
     //    handing one over. A prompt wired to one route sits invisible on the others.
     let offer = (client as? UberClient)?.radioChoices ?? []
     if radioChoices != offer { radioChoices = offer }
+    let busy = (client as? UberClient)?.radioBusy ?? [:]
+    if radioBusy != busy { radioBusy = busy }
     let offerName = (client as? UberClient)?.radioChoiceName ?? ""
     if radioChoiceName != offerName { radioChoiceName = offerName }
     if let u = client as? UberClient, vibeDiag != u.vibeDiag { vibeDiag = u.vibeDiag }

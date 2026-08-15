@@ -91,6 +91,18 @@ final class UberClient: ObservableObject {
   /// password: HMAC(secret, nonce), same VsAuth as the PIN, so it inherits the
   /// brute-force lockout too.
   private var adminSuffix = ""
+  /// ★★ THE CROSS-PROCESS CREDENTIAL. A nonce+HMAC is only meaningful to the process that issued
+  ///    the nonce, and every radio behind a front door is its own process. This is what travels.
+  private var adminTicket = ""
+  /// ★★★ IS THIS RADIO IN USE? Keyed by radio id, so the picker can say so BEFORE you open one.
+  ///     Without it the only way to find out was to take a seat on the radio and be told — which
+  ///     on a single-user receiver means displacing whoever is on it, or being refused, to answer
+  ///     a question the door could have answered (Stuart, 2026-08-15: "the radio selection screen
+  ///     should show if in use or not without having to go into it").
+  /// ★ Absent = not known yet, which is deliberately different from "free": each radio is its own
+  ///   process and one that is slow or down should not be drawn as available.
+  @Published var radioBusy: [String: Bool] = [:]
+  private var ticketRenewTask: Task<Void, Never>?
   /// ★ One string, so the log cannot show two different names for the same app. Mirrors the value
   ///   the /connection POST already sends.
   // ★ Jr names itself SEPARATELY from the phone — it is its own app with its own version, and an
@@ -397,9 +409,19 @@ final class UberClient: ObservableObject {
    *     receiver could only ever get in by being told IN USE first and answering the prompt: the
    *     way in existed, but only as a reaction to being turned away (Stuart, 2026-08-13, wanting
    *     it on the picker so an owner can simply go in).
-   * ★★ Proved at the DOOR — `radioPath` is still empty here — because the door owns the
-   *    machine-wide password and every radio behind it honours what the door issued. Proving at a
-   *    radio would bind the credential to that one process.
+   * ★★★ AND THE PROOF DOES NOT TRAVEL — THE TICKET DOES. This said the door "owns the
+   *     machine-wide password and every radio behind it honours what the door issued", and that
+   *     is exactly the belief the browser's adminticket.ts exists to correct: "every radio is a
+   *     separate process with its own nonce store, so a credential proved at the door is
+   *     meaningless at a radio". So Jr armed a nonce+HMAC at the door, carried it into a radio
+   *     that had never issued that nonce, and was let in as an ordinary listener — with the
+   *     thirty-minute limit still running (Stuart, 2026-08-15: "admin controls not doing anything
+   *     in Jr, when you connect to a radio it still comes up with 30 minute limit").
+   * ★★ The server mints a short-lived TICKET from ordinary proof, and every process accepts it.
+   *    That is the credential which crosses from the door into whichever radio is picked.
+   * ★ A single-radio server has no ticket route and needs none — the process that issues the
+   *   nonce is the one that checks it — so a mint failure keeps the nonce proof rather than
+   *   giving up.
    * ★ Sets no `serverBusy`/reconnect of its own: this only ARMS the credential. The connection is
    *   made by picking a radio, exactly as it was before.
    */
@@ -419,14 +441,87 @@ final class UberClient: ObservableObject {
       let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8),
                                                 using: SymmetricKey(data: Data(password.utf8)))
       let token = mac.map { String(format: "%02x", $0) }.joined()
+      let proof = "vs_admin_nonce=\(nonce)&vs_admin_auth=\(token)"
+      // ★ Mint the cross-process ticket with that proof. On a single-radio server this route does
+      //   not exist and the nonce proof is already sufficient, so a failure is not an error.
+      let minted = await self.mintAdminTicket(base: "\(httpScheme)://\(host)\(radioPath)",
+                                              proof: proof)
       await MainActor.run {
         // ★★ A WRONG PASSWORD CANNOT BE DETECTED HERE. The nonce is handed out to anyone; only the
         //    server can judge the HMAC, and it does that at the handshake. So this reports
         //    "armed", not "correct" — and a wrong one simply connects as an ordinary listener,
         //    which is the same outcome as not trying. Saying "unlocked" here would be a lie we
         //    could not stand behind.
-        self.adminSuffix = "&vs_admin_nonce=\(nonce)&vs_admin_auth=\(token)"
+        if let t = minted {
+          self.adminTicket = t.ticket
+          self.adminSuffix = "&vs_admin_ticket=\(t.ticket)"
+          self.startTicketRenewal(ttl: t.ttl, base: "\(httpScheme)://\(host)")
+        } else {
+          self.adminSuffix = "&\(proof)"
+        }
         self.adminProved = true
+      }
+    }
+  }
+
+  /// Ask each radio whether somebody is on it. One small JSON per radio, in parallel, and every
+  /// failure is simply left unknown rather than guessed at.
+  /// ★ `/vibeserver.json` is the same endpoint the phone's picker uses for exactly this — the
+  ///   answer already existed, Jr just never asked.
+  private func probeRadioOccupancy(_ radios: [VibeRadio]) {
+    let httpScheme = secure ? "https" : "http"
+    let h = host
+    for r in radios {
+      Task { [weak self] in
+        guard let self,
+              let url = URL(string: "\(httpScheme)://\(h)/r/\(r.id)/vibeserver.json"),
+              let (data, resp) = try? await self.httpSession.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        let busy = (j["busy"] as? Bool) ?? false
+        await MainActor.run { self.radioBusy[r.id] = busy }
+      }
+    }
+  }
+
+  /// Ask the server for a short-lived admin ticket, using any proof it will accept — a nonce+HMAC
+  /// or an existing ticket. Returns nil when the route is absent (a single-radio server) or the
+  /// proof is refused, which the caller treats as "carry on with the proof we have".
+  private func mintAdminTicket(base: String, proof: String) async -> (ticket: String, ttl: Double)? {
+    guard let url = URL(string: "\(base)/vibeserver/admin-ticket?\(proof)"),
+          let (data, resp) = try? await httpSession.data(from: url),
+          (resp as? HTTPURLResponse)?.statusCode == 200,
+          let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let t = j["ticket"] as? String, !t.isEmpty else { return nil }
+    let ttl = (j["ttl"] as? Double) ?? 600
+    return (t, ttl)
+  }
+
+  /// ★★★ A TICKET LAPSES, AND NOTHING RENEWED IT. Ten minutes is shorter than a listening session,
+  ///     so the owner would be admin, stay put, and silently become an ordinary listener with the
+  ///     countdown running again — the same fault the browser hit and fixed with
+  ///     startAdminTicketRenewal(). The ticket renews ITSELF: the route accepts one as proof.
+  /// ★ Renewed well before expiry, because a ticket that is valid when we send it can be expired
+  ///   by the time the server checks it, and that failure looks exactly like a wrong password.
+  private func startTicketRenewal(ttl: Double, base: String) {
+    ticketRenewTask?.cancel()
+    ticketRenewTask = Task { [weak self] in
+      var wait = ttl
+      while !Task.isCancelled {
+        let sleepFor = max(30.0, wait - 60.0)
+        try? await Task.sleep(nanoseconds: UInt64(sleepFor * 1_000_000_000))
+        if Task.isCancelled { return }
+        guard let self else { return }
+        let have = await MainActor.run { self.adminTicket }
+        if have.isEmpty { return }
+        guard let t = await self.mintAdminTicket(base: base,
+                                                 proof: "vs_admin_ticket=\(have)") else { return }
+        await MainActor.run {
+          self.adminTicket = t.ticket
+          self.adminSuffix = "&vs_admin_ticket=\(t.ticket)"
+        }
+        wait = t.ttl
       }
     }
   }
@@ -448,8 +543,17 @@ final class UberClient: ObservableObject {
       let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8),
                                                 using: SymmetricKey(data: Data(password.utf8)))
       let token = mac.map { String(format: "%02x", $0) }.joined()
+      let proof2 = "vs_admin_nonce=\(nonce)&vs_admin_auth=\(token)"
+      let minted2 = await self.mintAdminTicket(base: "\(httpScheme)://\(host)\(radioPath)",
+                                               proof: proof2)
       await MainActor.run {
-        self.adminSuffix = "&vs_admin_nonce=\(nonce)&vs_admin_auth=\(token)"
+        if let t = minted2 {
+          self.adminTicket = t.ticket
+          self.adminSuffix = "&vs_admin_ticket=\(t.ticket)"
+          self.startTicketRenewal(ttl: t.ttl, base: "\(httpScheme)://\(host)")
+        } else {
+          self.adminSuffix = "&\(proof2)"
+        }
         self.serverBusy = false
         self.status = "taking over"
         self.openVibeSockets()
@@ -890,6 +994,7 @@ final class UberClient: ObservableObject {
                 await MainActor.run {
                     radioChoiceName = door.name
                     radioChoices = door.radios
+                    probeRadioOccupancy(door.radios)
                     status = "choose a radio"
                 }
                 return          // ContentView offers the list; picking one calls chooseRadio()

@@ -729,6 +729,16 @@ link.setAutoContrast(wfAutoContrast)
                   Text(r.summary)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                  // ★★ IN USE OR NOT, WITHOUT OPENING IT. On a single-user radio that is the whole
+                  //    question — arriving means displacing somebody or being refused — and the
+                  //    only way to learn it used to be to try. Silent while unknown: a radio whose
+                  //    process is slow or down must not be drawn as free.
+                  if let busy = link.radioBusy[r.id] {
+                    Text(busy ? (r.users > 1 ? "in use \u{00b7} shared" : "in use")
+                              : "free")
+                      .font(.system(size: 10, weight: .semibold))
+                      .foregroundStyle(busy ? .orange : .green)
+                  }
                 }
               }
             }
