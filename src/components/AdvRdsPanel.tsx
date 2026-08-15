@@ -610,6 +610,28 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const odas = x?.oda ?? [];
   const eons = x?.eon ?? [];
   const afs  = x?.af ?? [];
+  // ★★★ THE LIST WITH A TICK EACH, as the browser draws it. The app showed only the CONFIRMED
+  //     frequencies as bare numbers, so the one genuinely useful distinction was invisible: on a
+  //     noisy station the unconfirmed entries are usually PHANTOMS manufactured by block errors,
+  //     and a list that hides which is which invites someone to go hunting for a transmitter that
+  //     was never announced. `afAll` has carried the flag since this morning; only the browser
+  //     read it (Stuart, 2026-08-15: "the AF doesn't have the ticks like the webclient does").
+  // ★★ De-duplicated with confirmation STICKY — the same AF is re-announced constantly and a
+  //    later damaged copy must not un-confirm one already believed. Exactly the browser's rule.
+  // ★ Falls back to the plain confirmed list when afAll is absent, which is what an older server
+  //   sends.
+  const afTxt = (() => {
+    const all = x?.afAll ?? [];
+    if (all.length) {
+      const seen = new Map<number, boolean>();
+      for (const [khz, ok] of all) seen.set(khz, !!seen.get(khz) || !!ok);
+      return [...seen.entries()].sort((a, b) => a[0] - b[0])
+        .map(([khz, ok]) => `${(khz / 1000).toFixed(1)}${ok ? ' \u2713' : ''}`).join('  ');
+    }
+    if (!afs.length) return DASH;
+    return [...new Set(afs)].sort((a, b) => a - b)
+      .map((khz) => (khz / 1000).toFixed(1)).join('  ');
+  })();
   const nowPlaying = [x?.rtpArtist, x?.rtpTitle].filter(Boolean).join(' — ');
 
   // ★★ A PERCENTAGE HEIGHT NEEDS A PARENT WITH A HEIGHT. This was maxHeight:'46%' on a child
@@ -782,8 +804,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               nothing ever fills them, so they show a permanent dash. The data is already on
               the wire (af[] and afseen), so they are populated properly here. */}
           <Row raw={raw} label="AF score"    value={afScoreTxt} />
-          <Row raw={raw} label="AF MHz"      value={afs.length
-            ? afs.map(a => (a / 1000).toFixed(1)).join('  ') : DASH} />
+          <Row raw={raw} label="AF MHz"      value={afTxt} />
           <Row raw={raw} label="Group share" value={groupShareTxt} />
 
           </>}
