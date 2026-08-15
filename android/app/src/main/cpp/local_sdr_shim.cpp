@@ -8933,7 +8933,7 @@ struct LocalSdrShim::Impl {
                       + ",\"rds2Ok\":" + std::string((P_ && P_->rds2Ready()) ? "1" : "0")
                       + ",\"rds2\":[" + std::to_string(P_ ? P_->rds2Db(0) : 0.0f) + ","
                                      + std::to_string(P_ ? P_->rds2Db(1) : 0.0f) + ","
-                                     + std::to_string(P_ ? P_->rds2Db(2) : 0.0f) + "]
+                                     + std::to_string(P_ ? P_->rds2Db(2) : 0.0f) + "]"
                       // ★★ THE AF LIST WITH A TICK EACH, as the FM-DX Webserver shows it: a bare
                       //    "3 of 7" says the link is damaging entries but not WHICH frequencies,
                       //    and on a noisy station the unconfirmed ones are usually phantoms
