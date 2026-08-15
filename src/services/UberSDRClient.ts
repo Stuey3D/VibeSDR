@@ -996,8 +996,17 @@ export class UberSDRClient {
     // AUDIO socket had claimed the occupant slot, its own preflight answered
     // "in-use" and the spectrum never opened. Audio playing while the app says
     // the server is busy is the signature. The body is kept for older servers.
+    // ★★★ THE ADMIN CREDENTIAL RIDES THE PREFLIGHT TOO. It was on both WebSocket URLs and not on
+    //     this one — and this one runs FIRST and can stop everything: an owner holding the password
+    //     was told "Connection check failed: in-use" and never opened a socket, so the ticket, the
+    //     eviction and the whole handshake path never got the chance to run. Three fixes at layers
+    //     below this one were all correct and all invisible, because the journey ended here
+    //     (Stuart, 2026-08-15).
+    // ★★ adminSuffix already carries its own leading '&' (setAdminAuth normalises it), so it is
+    //    appended raw — the same string, in the same shape, as the sockets use.
     const resp = await fetch(
-      `${this.baseUrl}/connection?user_session_id=${encodeURIComponent(this.uuid)}`, {
+      `${this.baseUrl}/connection?user_session_id=${encodeURIComponent(this.uuid)}`
+      + this.adminSuffix, {
       method: 'POST',
       headers: {
         'Content-Type':   'application/json',

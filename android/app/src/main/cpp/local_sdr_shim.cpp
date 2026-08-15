@@ -573,9 +573,27 @@ static std::string bmEsc(const std::string& n) {
     return e;
 }
 
+/** ★★★ SNAP A LEARNED FM STATION TO ITS CHANNEL. The shared key is 1 kHz — rightly, because
+ *  shortwave is a 5 kHz grid and medium wave a 9 kHz one, and a coarse key destroyed real imports
+ *  (CB10 at 27.075 and CB11 at 27.085 collapsing into one). But RDS LEARNING IS FM-ONLY, and there
+ *  the grid is 100 kHz, so a listener tuned a few kHz off centre filed a SECOND copy of a station
+ *  already on the list: 96.100 and 96.110 both FLEX FM, 96.600 / 96.601 / 96.628 all Heart, one of
+ *  them wearing a different logo (Stuart, 2026-08-15: "duplicate entries for RDS bookmarks just a
+ *  few kHz apart... they need to be at least 50-100 kHz apart to count").
+ *  ★★ Snapping fixes the FREQUENCY as well as the duplicate. 96.628 is not where Heart is; it is
+ *     where somebody's VFO was. A bookmark exists to be tuned, so it should carry the channel, not
+ *     the accident of how it was found.
+ *  ★ Only inside the FM broadcast band, and only on this path. Outside it — and for imports, which
+ *    keep the 1 kHz key — nothing changes. */
+static double bmSnapFm(double hz) {
+    if (hz < 87.0e6 || hz > 108.5e6) return hz;          // not FM broadcast: leave it exactly
+    return std::round(hz / 100000.0) * 100000.0;         // ITU-R1 is a 100 kHz raster
+}
+
 /** Called from the RDS PS callback. */
-static void bmLearn(double hz, int pi, const std::string& psRaw) {
+static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
     const std::string ps = bmTrim(psRaw);
+    const double hz = bmSnapFm(hzRaw);
     if (hz <= 0 || pi <= 0) return;          // no PI = not locked on to anything
     const long long key = bmKey(hz);
     const long long now = (long long)time(nullptr);
@@ -6360,6 +6378,21 @@ struct LocalSdrShim::Impl {
             // the occupant or about to become one. It was also masking the bug
             // above, which is why only NETWORK clients ever saw it.
             if (busy && isLoopback(sock->peerAddress())) busy = false;
+            // ★★★ AN ADMIN IS NEVER "IN USE" — THEY ARE THE ONE PERSON WHO CAN TAKE IT. This
+            //     preflight knew nothing about admin, so an owner holding the password was told
+            //     "Connection check failed: in-use" and STOPPED THERE, before a socket was ever
+            //     opened. Everything downstream — the ticket, the eviction, the whole handshake
+            //     path — was correct and never got the chance to run (Stuart, 2026-08-15, after
+            //     three client fixes at layers below this one: "entered the admin password at the
+            //     bottom which unlocked the radio, tried to use it, and this is what I am met
+            //     with").
+            // ★★ A GATE THAT DOES NOT KNOW THE EXCEPTION IS A GATE THAT ENFORCES THE OPPOSITE
+            //    RULE. The WS handshake has always understood that admin outranks occupancy; this
+            //    check was written to spare a client the trouble of opening sockets it could not
+            //    use, and by omitting the exception it refused the one client that could.
+            // ★ Same credential as everywhere else, checked with the same helper, so the lockout
+            //   and the empty-secret rule cannot drift apart from the handshake's copy.
+            if (busy && adminOkFor(reqLine, sock)) busy = false;
             // ★ The preflight exists so a client learns it cannot connect BEFORE opening
             //   sockets. A ban is the most certain "no" we have, so leaving it out would mean
             //   the one refusal that never changes is also the one the client has to discover
