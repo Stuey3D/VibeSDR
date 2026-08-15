@@ -2887,7 +2887,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         });
       },
       // ★★ The remaining three refusals, at last matching the web client and Jr word for word.
+      // ★★★ AN EXPLANATION MUST NOT BE REPLACED BY A GUESS. Being evicted closes the socket, and
+      //     whatever reconnects next is refused as BUSY — so the honest "TAKEN BACK" card was
+      //     immediately overwritten by the generic "IN USE" one, and the owner was told the radio
+      //     was merely occupied rather than that they had been displaced by an admin: "the message
+      //     pops up in the app although it should say that an admin has taken over, not the
+      //     generic in use message" (Stuart, 2026-08-15).
+      // ★ The eviction is the more specific fact and it happened FIRST, so it wins.
       onBusy: () => {
+        if (refusalRef.current?.title === 'TAKEN BACK') return;
         if (destroyed.current) return;
         const rejected = takeoverTried.current;
         takeoverTried.current = false;
@@ -5017,9 +5025,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     // effect above is what writes it down).
     if (isLocal) {
       const load = () => {
-        getLearnedBookmarksNow()
-          .then((b) => { if (!cancelled && b.length) setServerBookmarks(b); })
-          .catch(() => {});
+        // ★★★ A REMOTE VIBESERVER'S LEARNED LIST LIVES ON THE SERVER, NOT IN THIS PROCESS.
+        //     getLearnedBookmarksNow() reads the NATIVE shim — the one running inside this app for
+        //     a dongle plugged into the phone. Connecting to a VibeServer over the network is also
+        //     `isLocal` (it is the same shim, just somebody else's), so this asked our own empty
+        //     in-process list and showed nothing, while the browser served by that very server
+        //     listed thirty stations: "no bookmarks from the server are showing in the app"
+        //     (Stuart, 2026-08-15).
+        // ★★ THIS IS WHY THE EARLIER FIX DID NOTHING. fetchBookmarks() was taught to ask
+        //    /bookmarks as well as /api/bookmarks — correctly — but on a VibeServer the code never
+        //    reached it, because this branch was taken first. A fix on a path that does not run is
+        //    indistinguishable from no fix at all, and it cost a whole build to find out.
+        const p = isRemoteShim && connectBase
+          ? fetchBookmarks(connectBase)          // somebody else's shim, over HTTP
+          : getLearnedBookmarksNow();            // our own, in this process
+        p.then((b) => { if (!cancelled && b.length) setServerBookmarks(b); })
+         .catch(() => {});
       };
       load();
       const iv = setInterval(load, 30_000);
@@ -5048,7 +5069,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (st !== 'owrx') setServerBookmarks([]);
     loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [baseUrl]);
+    // ★ connectBase and isRemoteShim decide WHERE the learned list is asked for, so a stale
+    //   closure here would keep polling the wrong place after a radio is chosen behind a door.
+  }, [baseUrl, connectBase, isRemoteShim]);
 
   // ★ A bookmark arriving from Jr lands in storage while this screen is already
   // mounted, and the list above only ever loads at mount — so without this the
@@ -6895,7 +6918,30 @@ export default function SDRScreen({ route, navigation }: Props) {
                 />
                 <TouchableOpacity style={styles.noticeBtn} disabled={!takeoverPw}
                   onPress={async () => {
-                    const q = await resolveVibeAdminAuth(baseUrl, takeoverPw).catch(() => '');
+                    // ★★★ PROVED AT THE DOOR, USED AT A RADIO — the mistake this file already
+                    //     documents a few hundred lines up for the in-session unlock, repeated
+                    //     here at CONNECT time and never noticed because a single-radio server
+                    //     (where the door IS the radio) works perfectly. On a multi-radio one the
+                    //     radio has never seen this nonce, refuses the handshake, and the app
+                    //     falls back to the picker with nothing said: "when I enter the password
+                    //     it puts me back to the radio picker" (Stuart, 2026-08-15).
+                    // ★★ A TICKET is the credential that crosses processes; mint one and carry
+                    //    that instead. If the server is too old to mint, prove at the RADIO
+                    //    rather than the door — still right, just not reusable elsewhere.
+                    const doorQ = await resolveVibeAdminAuth(baseUrl, takeoverPw).catch(() => '');
+                    let q = '';
+                    if (doorQ) {
+                      try {
+                        const r = await fetch(
+                          `${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${doorQ}`,
+                          { cache: 'no-store' });
+                        if (r.ok) {
+                          const t = (await r.json())?.ticket;
+                          if (t) q = `&vs_admin_ticket=${encodeURIComponent(String(t))}`;
+                        }
+                      } catch { /* fall through to proving at the radio */ }
+                    }
+                    if (!q) q = await resolveVibeAdminAuth(connectBase, takeoverPw).catch(() => '');
                     if (!q) { setTakeoverErr('That password was not accepted.'); return; }
                     setTakeoverErr(null); setTakeoverPw(''); setRefusal(null);
                     takeoverTried.current = true;
