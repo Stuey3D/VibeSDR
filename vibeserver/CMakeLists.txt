@@ -175,10 +175,31 @@ set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
 if(APPLE)
   set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 endif()
+# ★★★ PREFER OUR OWN librtlsdr ON LINUX, when the build image has one. Debian's is 2.0.2 and does
+#     not know the RTL-SDR Blog V4L, so hardware support would otherwise arrive on the
+#     distribution's release cycle rather than ours — and the package would be at the mercy of
+#     whatever each user's distro happened to ship. Android vendors its .so and macOS links
+#     statically; this makes Linux the same, and everything except SDRplay (whose API is theirs and
+#     is dlopen'd) self-contained on all three.
+# ★ Falls back to the system library when the prefix is absent, so a plain `cmake` on a dev box
+#   still configures exactly as before.
+set(VIBE_RTLSDR_PREFIX "/opt/vibe-rtlsdr")
+if(UNIX AND NOT APPLE AND EXISTS "${VIBE_RTLSDR_PREFIX}/lib/librtlsdr.so")
+  set(VIBE_BUNDLED_RTLSDR ON)
+  message(STATUS "librtlsdr: BUNDLED from ${VIBE_RTLSDR_PREFIX}")
+endif()
+
 find_library(RTLSDR_LIB NAMES rtlsdr HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_library(USB_LIB    NAMES usb-1.0 HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 set(CMAKE_FIND_LIBRARY_SUFFIXES ${_saved_suffixes})
 find_path(RTLSDR_INC rtl-sdr.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+if(VIBE_BUNDLED_RTLSDR)
+  # ★ Ours wins over anything found above — headers AND library, so the two cannot disagree about
+  #   the ABI. A mismatched pair is the sort of fault that only shows on the one dongle you do not
+  #   own.
+  set(RTLSDR_LIB "${VIBE_RTLSDR_PREFIX}/lib/librtlsdr.so")
+  set(RTLSDR_INC "${VIBE_RTLSDR_PREFIX}/include")
+endif()
 if(NOT RTLSDR_LIB OR NOT USB_LIB OR NOT RTLSDR_INC)
   message(FATAL_ERROR "static librtlsdr/libusb not found. On macOS: brew install librtlsdr libusb")
 endif()
@@ -322,6 +343,21 @@ target_link_libraries(vibeserver_core PUBLIC Threads::Threads)
 if(UNIX AND NOT APPLE)
   include(GNUInstallDirs)
   install(TARGETS vibeserver RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  if(VIBE_BUNDLED_RTLSDR)
+    # ★★ SHIPPED BESIDE US, NOT OVER THE SYSTEM'S. /usr/lib/vibeserver is ours; Debian's
+    #    librtlsdr0 stays exactly where it is for everything else on the machine, and `apt purge`
+    #    takes only our copy.
+    # ★ Follow the symlink chain: the build installs librtlsdr.so -> .so.0 -> .so.0.x.y, and the
+    #   loader wants the SONAME (.so.0). Installing the real file plus that one link is enough.
+    file(GLOB _vibe_rtlsdr_files "${VIBE_RTLSDR_PREFIX}/lib/librtlsdr.so*")
+    install(FILES ${_vibe_rtlsdr_files} DESTINATION lib/vibeserver)
+    # ★★★ $ORIGIN, NOT AN ABSOLUTE PATH. The binary installs to /usr/bin, so ../lib/vibeserver
+    #     resolves to /usr/lib/vibeserver wherever the package is unpacked — and it is searched
+    #     BEFORE the default paths, so our copy wins over the distribution's without replacing it.
+    set_target_properties(vibeserver PROPERTIES
+      INSTALL_RPATH "$ORIGIN/../lib/vibeserver"
+      BUILD_WITH_INSTALL_RPATH FALSE)
+  endif()
   install(FILES linux/vibeserver.service DESTINATION lib/systemd/system)
 # ★ The per-radio template and the reconciler that starts the second and later radios.
 install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
@@ -366,6 +402,14 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #   gets the versions right for the distro doing the build. A hand-written list rots the first
   #   time a dependency is added and produces a package that installs and then will not start.
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  if(VIBE_BUNDLED_RTLSDR)
+    # ★★★ TELL shlibdeps WHERE OUR OWN LIBRARY LIVES, or it resolves the ELF's NEEDED entry for
+    #     librtlsdr.so.0 against the SYSTEM package and adds `librtlsdr0` as a dependency — which
+    #     would drag in the very 2.0.2 we are bundling around, and make the package refuse to
+    #     install anywhere that lacks it. With the private dir declared, dpkg-shlibdeps recognises
+    #     the library as one we ship and says nothing about it.
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${CMAKE_INSTALL_PREFIX}/lib/vibeserver")
+  endif()
   # ★★★ curl IS A REAL DEPENDENCY AND shlibdeps CANNOT SEE IT. The EiBi schedule is fetched by
   #   shelling out to curl (see vibeserver/eibi.cpp), and shlibdeps only reads the ELF — it knows
   #   nothing about programs we exec. On a Raspberry Pi OS Lite image with no curl, the package

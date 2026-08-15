@@ -46,4 +46,38 @@ RUN curl -fsSLO "https://www.sdrplay.com/software/${SDRPLAY_RUN}" \
     && rm -rf /tmp/sdrplay "${SDRPLAY_RUN}" \
     && ls /usr/local/include/sdrplay_api.h
 
+# ★★★ OUR OWN librtlsdr, BUILT HERE AND SHIPPED IN THE PACKAGE. Debian's is 2.0.2 and does not
+#     know the RTL-SDR Blog V4L ("V4 Lite", R828S) at all — it sees a plain R820T, which "works" on
+#     VHF and fails confusingly on HF. Waiting for a distribution to ship a driver means hardware
+#     support arrives on THEIR release cycle rather than ours, and the V4 would have been the same
+#     story.
+# ★★ THIS IS THE MODEL THE OTHER TWO PLATFORMS ALREADY USE. Android vendors the .so; macOS links it
+#     statically so one .app works with nothing installed. Linux was the odd one out, at the mercy
+#     of whatever the distro had. Everything except SDRplay — whose API is theirs and is dlopen'd —
+#     is now self-contained on all three (Stuart, 2026-08-15).
+# ★ SHARED, not static: forcing static on Linux fails on Debian's libusb-1.0.a, which needs udev
+#   symbols that are not pulled in (Raspberry Pi, 2026-07-31). Our .so links the system libusb
+#   dynamically, exactly as Debian's does.
+# ★ Installed to a PREFIX OF OUR OWN so it cannot be confused with, or overwrite, the system copy.
+#   The build picks it up from there and the package ships it to /usr/lib/vibeserver.
+ARG RTLSDR_TAG=797f814
+RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
+    && git -C /tmp/rtlsdr checkout --quiet "${RTLSDR_TAG}" \
+    && cmake -S /tmp/rtlsdr -B /tmp/rtlsdr/b -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_INSTALL_PREFIX=/opt/vibe-rtlsdr -DBUILD_SHARED_LIBS=ON \
+             -DDETACH_KERNEL_DRIVER=ON \
+    && cmake --build /tmp/rtlsdr/b --target rtlsdr -j"$(nproc)" \
+    # ★ COPIED, NOT `cmake --install`. The upstream install target also wants librtlsdr.a and the
+    #   rtl_* command-line tools, none of which we ship — building them to satisfy an install rule
+    #   is work and dependencies for nothing. Two things are needed: the shared library (with its
+    #   SONAME symlinks, which the loader follows) and the header the build compiles against.
+    && mkdir -p /opt/vibe-rtlsdr/lib /opt/vibe-rtlsdr/include \
+    && cp -a /tmp/rtlsdr/b/src/librtlsdr.so* /opt/vibe-rtlsdr/lib/ \
+    && cp /tmp/rtlsdr/include/rtl-sdr.h /tmp/rtlsdr/include/rtl-sdr_export.h /opt/vibe-rtlsdr/include/ \
+    && rm -rf /tmp/rtlsdr \
+    # ★ VERIFY, do not assume: a library without V4L support is the whole reason this step exists,
+    #   and a silent fallback to Debian's would look identical from the outside.
+    && strings /opt/vibe-rtlsdr/lib/librtlsdr.so | grep -q "Blog V4L" \
+    && echo "bundled librtlsdr has RTL-SDR Blog V4L support"
+
 WORKDIR /work
