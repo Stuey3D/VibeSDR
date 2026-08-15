@@ -198,6 +198,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var currentBase:  String = ""
   private var currentStep:  Int    = 1_000
   private var currentUuid:  String = ""
+  /// ★★★ THE OWNER'S ADMIN CREDENTIAL, FOR THIS SOCKET TOO. The audio WS is opened HERE, not by
+  /// the JS client, and it carried only the bypass PIN — so on a busy receiver it was refused
+  /// ("audio WS refused — server busy … no credential") while the spectrum socket, which does carry
+  /// one, evicted the occupant and took the slot. The owner ended up holding their own radio in
+  /// silence (Stuart, 2026-08-15, after a whole evening of client-side workarounds).
+  /// ★★ THE BROWSER AND JR BOTH PUT IT ON BOTH SOCKETS; the phone could not, because this engine's
+  ///    entire interface was (baseUrl, frequency, mode, uuid, password). That asymmetry — not the
+  ///    server, and not the takeover logic — is what made the phone the only client that could not
+  ///    take a receiver back.
+  /// ★ Arrives ready to append: "&vs_admin_ticket=…" or "&vs_admin_nonce=…&vs_admin_auth=…".
+  private var adminSuffix = ""
   // Bypass password (rate-limit/ban bypass) — appended to the audio WS URL
   private var bypassPassword: String = ""
   private var packetCount   = 0
@@ -241,6 +252,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var tuneTimer: Timer?
 
   // MARK: - Exported methods
+
+  /// Set (or clear) the admin credential carried on the audio socket. Takes effect on the NEXT
+  /// connection, so callers set it before starting the engine — or set it and reconnect.
+  @objc func setAdminAuth(_ q: String) {
+    adminSuffix = q.hasPrefix("&") || q.isEmpty ? q : "&" + q
+  }
 
   @objc func startAudioEngine(_ baseUrl: String, frequency: Int, mode: String, uuid: String, password: String) {
     NSLog("[VibePowerModule] startAudioEngine %@ %d %@", baseUrl, frequency, mode)
@@ -1706,6 +1723,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
        let pw = bypassPassword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
       path += "&password=\(pw)"
     }
+    // ★ Already percent-safe and already carrying its leading '&' — it is the same string the
+    //   spectrum socket appends, built once in JS so the two cannot disagree about the credential.
+    path += adminSuffix
     return URL(string: s + path)
   }
 

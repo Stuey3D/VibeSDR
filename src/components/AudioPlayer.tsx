@@ -8,6 +8,12 @@ import { v4 as uuidv4 } from 'uuid';
 export const VibePowerModule = NativeModules.VibePowerModule as
   | {
       startAudioEngine:  (baseUrl: string, frequency: number, mode: string, uuid: string, password: string) => void;
+      /** ★★★ THE OWNER'S ADMIN CREDENTIAL FOR THE AUDIO SOCKET. This engine opens its own socket,
+       *  so the credential the JS client puts on the spectrum URL never reached it — and on a busy
+       *  receiver it was refused for having none while the spectrum socket evicted the occupant
+       *  and took the slot. The owner held their own radio in silence. Set BEFORE starting: it is
+       *  read when the socket is built. */
+      setAdminAuth:      (q: string) => void;
       stopAudioEngine:   () => void;
       // v7 FM-DX Webserver spike: native MP3-over-WS audio. baseUrl = server root.
       startFmdxAudio?:   (baseUrl: string) => void;
@@ -49,6 +55,10 @@ export interface AudioPlayerProps {
   uuid?:         string;
   /** Bypass password — appended to the audio WS URL (rate-limit bypass). */
   password?:     string;
+  /** The owner's admin credential ("&vs_admin_ticket=…"), for taking a busy receiver back. It has
+   *  to be on BOTH sockets: the spectrum one evicts the occupant, and without it here the audio
+   *  socket is refused in the same breath. */
+  adminAuth?:    string;
   /** ★★★ BUMP TO REBUILD THE NATIVE AUDIO SOCKET WITHOUT CHANGING WHO WE ARE. The engine carries
    *  no admin credential — it cannot, the native side takes only a PIN — so on a BUSY receiver its
    *  socket is refused ("audio WS refused — server busy … no credential") while the spectrum
@@ -63,7 +73,7 @@ export interface AudioPlayerProps {
   restartKey?:   number;
 }
 
-export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, restartKey }: AudioPlayerProps) {
+export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, adminAuth, restartKey }: AudioPlayerProps) {
   const activeUrl  = useRef<string | null>(null);
   const activeFreq = useRef<number>(0);
   const activeMode = useRef<string>('');
@@ -88,6 +98,9 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
 
     if (baseUrl) {
       uuid.current = propUuid ?? uuidv4();
+      // ★ BEFORE the engine starts, never after: the credential is read when the socket URL is
+      //   built, and a busy receiver decides whether to refuse us at that handshake.
+      VibePowerModule?.setAdminAuth?.(adminAuth ?? '');
       VibePowerModule?.startAudioEngine(baseUrl, frequency, mode, uuid.current, password ?? '');
       VibePowerModule?.setInstanceName(instanceName ?? '');
       activeFreq.current = frequency;
@@ -98,7 +111,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
 
     return () => { VibePowerModule?.stopAudioEngine(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, propUuid, restartKey]);
+  }, [baseUrl, propUuid, restartKey, adminAuth]);
 
   // Sync tune when frequency or mode changes (native owns now-playing metadata)
   useEffect(() => {

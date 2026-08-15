@@ -3,6 +3,10 @@
 
 @interface RCT_EXTERN_MODULE(VibePowerModule, RCTEventEmitter)
 RCT_EXTERN_METHOD(startAudioEngine:(NSString *)baseUrl frequency:(NSInteger)frequency mode:(NSString *)mode uuid:(NSString *)uuid password:(NSString *)password)
+// ★ The owner's admin credential for the AUDIO socket — see VibePowerModule.swift. Without this
+//   the phone was the only client that could not take a busy receiver back: its spectrum socket
+//   evicted the occupant and its audio socket was refused for having no credential.
+RCT_EXTERN_METHOD(setAdminAuth:(NSString *)q)
 RCT_EXTERN_METHOD(stopAudioEngine)
 RCT_EXTERN_METHOD(startExternalAudio:(nonnull NSNumber *)sampleRate pauseMode:(NSString *)pauseMode)
 RCT_EXTERN_METHOD(pushExternalPcm:(NSString *)base64 sampleRate:(nonnull NSNumber *)sampleRate channels:(nonnull NSNumber *)channels)

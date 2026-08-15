@@ -114,6 +114,16 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val EXTRA_MODE = "mode"
         const val EXTRA_UUID = "uuid"
         const val EXTRA_PASSWORD = "password"
+        /** ★★★ THE OWNER'S ADMIN CREDENTIAL FOR THE AUDIO SOCKET — "&vs_admin_ticket=…" or the
+         *  nonce pair. STATIC because the JS side must be able to set it whether or not the
+         *  service is running: it is proved during a takeover, which is exactly when the engine is
+         *  being torn down and restarted, and an instance field would be lost in that gap.
+         *  ★★ It exists at all because this socket is opened HERE rather than by the JS client, so
+         *     it carried only the bypass PIN — and on a busy receiver was refused for having no
+         *     credential while the spectrum socket evicted the occupant and took the slot. The
+         *     owner held their own radio in silence. The browser and Jr put it on BOTH sockets;
+         *     the phone had nowhere to put it (2026-08-15). */
+        @Volatile @JvmStatic var adminSuffix: String = ""
 
         private const val TAG = "VibeStream"
         private const val HEADER_LEN = 21
@@ -1173,6 +1183,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (bypassPassword.isNotEmpty()) {
             url += "&password=" + java.net.URLEncoder.encode(bypassPassword, "UTF-8")
         }
+        // ★★★ AND THE OWNER'S ADMIN CREDENTIAL. This socket is opened HERE, not by the JS client,
+        //     and carried only the bypass PIN — so on a busy receiver it was refused ("audio WS
+        //     refused — server busy … no credential") while the spectrum socket, which does carry
+        //     one, evicted the occupant and took the slot. The owner held their own radio in
+        //     silence. The browser and Jr have always put it on BOTH sockets; the phone could not,
+        //     because this engine's interface had nowhere to put it.
+        // ★ Already percent-safe and already carrying its leading '&' — the same string the
+        //   spectrum socket appends, built once in JS so the two cannot disagree.
+        url += adminSuffix
         return url
     }
 

@@ -23,6 +23,14 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "VibePowerModule"
 
+    /** The owner's admin credential for the audio socket. Set before starting (or before a
+     *  reconnect) — see VibeStreamService.adminSuffix. Empty clears it. */
+    @ReactMethod
+    fun setAdminAuth(q: String) {
+        VibeStreamService.adminSuffix =
+            if (q.isEmpty() || q.startsWith("&")) q else "&$q"
+    }
+
     @ReactMethod
     fun startAudioEngine(baseUrl: String, frequency: Double, mode: String, uuid: String, password: String) {
         VibeStreamService.reactContext = reactContext

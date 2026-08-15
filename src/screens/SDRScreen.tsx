@@ -7385,6 +7385,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         step={step}
         instanceName={instanceName}
         uuid={sessionUuid}
+        adminAuth={adminAuthQ}
         restartKey={audioRestart}
       />
       {/* v4 local hardware: audio from the on-device shim's /ws/audio (PCM) */}
