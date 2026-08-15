@@ -8922,26 +8922,6 @@ struct LocalSdrShim::Impl {
                       //   whether they have an impulse-noise problem at all, which is otherwise
                       //   pure guesswork ("is that crackle me, or the station?").
                       + ",\"nbRate\":" + std::to_string(P_ ? P_->noiseBlankRate() : 0.0f)
-                      // ★★★ RDS2 — HOW MUCH IS ON THE THREE EXTRA SUBCARRIERS, in dB above an
-                      //     empty reference band. Sent as a MEASUREMENT, not as a verdict, because
-                      //     hardly anybody transmits RDS2 yet and the first honest question is
-                      //     whether any station within reach carries it at all. The client draws
-                      //     the threshold; the server reports what it saw.
-                      // ★ `rds2Ok` is false when the channel is too narrow to see 76 kHz, and the
-                      //   panel must then say "cannot tell" rather than "nothing there" — one is a
-                      //   fact about the station, the other about our own bandwidth.
-                      + ",\"rds2Ok\":" + std::string((P_ && P_->rds2Ready()) ? "1" : "0")
-                      + ",\"rds2\":[" + std::to_string(P_ ? P_->rds2Db(0) : 0.0f) + ","
-                                     + std::to_string(P_ ? P_->rds2Db(1) : 0.0f) + ","
-                                     + std::to_string(P_ ? P_->rds2Db(2) : 0.0f) + "]"
-                      // ★★★ AND WHETHER IT IS DATA OR A TONE. 76 kHz is exactly 4x the 19 kHz
-                      //     pilot, so our own demodulator puts a harmonic there on every station
-                      //     alive — it read 13 dB on Heart, which does not transmit RDS2. Near 0
-                      //     means a tone (all of it fits through a 400 Hz filter); several dB
-                      //     below means it is spread out like real data.
-                      + ",\"rds2t\":[" + std::to_string(P_ ? P_->rds2Tone(0) : 0.0f) + ","
-                                      + std::to_string(P_ ? P_->rds2Tone(1) : 0.0f) + ","
-                                      + std::to_string(P_ ? P_->rds2Tone(2) : 0.0f) + "]"
                       // ★★ THE AF LIST WITH A TICK EACH, as the FM-DX Webserver shows it: a bare
                       //    "3 of 7" says the link is damaging entries but not WHICH frequencies,
                       //    and on a noisy station the unconfirmed ones are usually phantoms

@@ -78,35 +78,6 @@ const C = {
 const FONT = 'Atkinson Hyperlegible';
 const DASH = '—';
 
-// ★ 8 dB: a real stream measured ~29 dB on the bench and an ordinary station ~2, so the gap is
-//   wide enough that the exact threshold barely matters — which is the sign it is in the right place.
-const RDS2_PRESENT_DB = 8;
-const RDS2_DATA_DB = -3;
-
-function rds2Text(db: number[] | undefined, tone: number[] | undefined,
-                  ok: boolean, present: boolean): string {
-  // ★★ "Cannot tell" and "nothing there" are DIFFERENT ANSWERS. A narrowed IF puts 76 kHz at or
-  //    above our own Nyquist, and reporting "none" then would be a fact about the receiver dressed
-  //    up as a fact about the station.
-  if (!present) return '';
-  if (!ok) return 'channel too narrow to look';
-  const d = db ?? [];
-  const t = tone ?? [];
-  // ★★ LOUD IS NOT ENOUGH — it has to be DATA. Measured, a real stream reads about -5.6 dB
-  //    narrow-over-wide and a pure tone about -0.5, so the line goes at -3.
-  const loud = [0, 1, 2].filter((i) => (d[i] ?? 0) >= RDS2_PRESENT_DB);
-  const on = loud.filter((i) => (t[i] ?? 0) < RDS2_DATA_DB);
-  if (on.length) {
-    const best = Math.max(...on.map((i) => d[i] ?? 0));
-    return `stream${on.length > 1 ? 's' : ''} ${on.map((i) => i + 1).join('+')} present · `
-         + `${best.toFixed(0)} dB`;
-  }
-  // ★ Name it rather than reporting nothing: something IS at 76 kHz, and "none" beside a peak the
-  //   owner can see on the MPX trace reads as a broken meter.
-  if (loud.includes(2)) return 'none · 76k is the pilot\u2019s 4th harmonic';
-  return 'none detected';
-}
-
 const PTY_EU = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
   'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening',
@@ -442,9 +413,6 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     ceqTxt = why === 1 ? 'off' : why === 2 ? 'signal too weak to equalise'
                                            : 'standing by · nothing to correct';
   }
-  // ★ 8 dB, with a real stream measuring ~29 and an ordinary station ~2 on the bench: the gap is
-  //   wide enough that the threshold barely matters, which is the sign it is in the right place.
-  const r2 = rds2Text(x?.rds2, x?.rds2t, !!x?.rds2Ok, !!x);
   const nbPct = (x?.nbRate ?? 0) * 100;
   const nbTxt = !x ? DASH
     : nbPct < 0.005 ? 'nothing to blank'
@@ -766,11 +734,6 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="Blanker"     value={nbTxt} reserve="nothing to blank" />
           <Row raw={raw} label="IF narrow"   value={ifTxt}
                reserve="110k narrow · wide would cost 11.0 dB" />
-          {/* ★★ RDS2: three more subcarriers, carrying the station's own logo where anyone
-              transmits them at all. Shown as a measurement because almost nobody does yet. */}
-          <Row raw={raw} label="RDS2"        value={r2 || DASH}
-               colour={r2.startsWith('stream') ? '#7dff9a' : undefined}
-               reserve="streams 1+2 present · 29 dB" />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
           <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />
           <Row raw={raw} label="PTYN"        value={x?.ptyn || DASH} />
