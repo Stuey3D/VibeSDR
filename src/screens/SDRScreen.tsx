@@ -5985,10 +5985,27 @@ export default function SDRScreen({ route, navigation }: Props) {
             contentContainerStyle={{ paddingBottom: 24 }}
             showsVerticalScrollIndicator
           >
-            {door.radios.map((r: VibeRadio) => (
+            {door.radios.map((r: VibeRadio) => {
+            // ★★★ A RADIO IN USE IS NOT A CHOICE UNLESS YOU HOLD THE PASSWORD. This row was always
+            //     tappable, so choosing an occupied radio meant being refused and then offered a
+            //     password box in a popup — which, if it worked, sent you back here anyway. Two
+            //     places to type the same password, one of them reachable only by failing first.
+            //     Stuart, 2026-08-15: "rather than being able to click an in-use radio then having
+            //     to enter the password in a popup box which then sends us back to the landing page
+            //     anyway" — the web's landing page has always done it this way.
+            // ★★ The password box at the bottom of THIS page is the one door. Hold the credential
+            //    and every radio opens, occupied or not; hold nothing and an occupied one is
+            //    plainly not available, which is the truth and needs no dialogue to discover.
+            // ★ UNKNOWN is not busy. A radio that has not answered yet stays tappable — refusing a
+            //   choice on the strength of a missing answer is the same error as claiming it is
+            //   free.
+            const busy = radioBusy[r.id]?.busy === true;
+            const blocked = busy && !adminAuthQ;
+            return (
               <Pressable
                 key={r.id}
-                style={styles.radioPickRow}
+                style={[styles.radioPickRow, blocked && { opacity: 0.45 }]}
+                disabled={blocked}
                 onPress={() => setRadioBase(radioBaseUrl(baseUrl, r.id))}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -6008,9 +6025,13 @@ export default function SDRScreen({ route, navigation }: Props) {
                   {radioBusy[r.id]?.busy && radioBusy[r.id]!.freeInSec > 0
                     ? ` · free in ${Math.ceil(radioBusy[r.id]!.freeInSec / 60)} min`
                     : ''}
+                  {/* ★ Say what would change it. "In use" alone leaves an owner staring at their
+                      own receiver with no idea the box below is the way in. */}
+                  {blocked ? ' · owner’s password below to take it' : ''}
+                  {busy && !!adminAuthQ ? ' · you can take this one' : ''}
                 </Text>
               </Pressable>
-            ))}
+            ); })}
           </ScrollView>
 
           {/* ── ADMIN, BENEATH THE RADIOS ────────────────────────────────────────────────
