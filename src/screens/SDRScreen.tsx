@@ -38,7 +38,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { newLocalSession } from '../services/localSession';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -6995,11 +6994,27 @@ export default function SDRScreen({ route, navigation }: Props) {
                     if (!q) { setTakeoverErr('That password was not accepted.'); return; }
                     setTakeoverErr(null); setTakeoverPw(''); setRefusal(null);
                     takeoverTried.current = true;
-                    navigation.replace('SDR', {
-                      ...route.params,
-                      authSuffix: (route.params.authSuffix ?? '') + q,
-                      localGen: newLocalSession(),
-                    });
+                    // ★★★ RECONNECT IN PLACE — DO NOT REMOUNT. This called navigation.replace,
+                    //     which builds a NEW screen: new mount, new useMemo, new session id. So the
+                    //     takeover arrived as a stranger while the previous instance still held the
+                    //     slot, and the server did exactly what it should — evicted the old
+                    //     occupant for the admin, then refused the leftovers as busy:
+                    //       admin override — evicting the current occupant
+                    //       admin session — controls unlocked, no session limit
+                    //       spectrum WS refused — server busy (occupant present)
+                    //     Making the session id stable per radio could not fix this, because a
+                    //     remount does not reuse the memo at all — the identity was stable and the
+                    //     COMPONENT was not (Stuart, 2026-08-15, three builds running at it).
+                    // ★★ So the credential is handed to the client we already have and the
+                    //    connection is rebuilt underneath it. Same screen, same session id, and the
+                    //    server sees a client RE-AFFIRMING its slot, which is what it is built for.
+                    // ★ setAdminAuth before the reconnect, never after: the credential has to be ON
+                    //   the handshake, which is where a busy receiver decides whether to refuse us.
+                    adminRetryDone.current = false;
+                    adminAuthQRef.current = q;
+                    setAdminAuthQ(q);
+                    client.current?.setAdminAuth?.(q);
+                    fullReconnect();
                   }}>
                   <Text style={[styles.noticeBtnTxt, !takeoverPw && { opacity: 0.4 }]}>
                     TAKE OVER
