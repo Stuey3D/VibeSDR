@@ -7538,7 +7538,15 @@ struct LocalSdrShim::Impl {
                 // Evicting only makes sense if somebody is actually in the way.
                 override_ = adminAuthed && occupied;
                 if (override_) {
-                    LOGI("admin override — %.8s evicting the current occupant %.8s",
+                    // ★★★ THE WHOLE ID, NOT THE FIRST EIGHT. Truncated, the line read "662b1dca
+                //     evicting the current occupant 662b1dca" — a session apparently evicting
+                //     ITSELF, which isFullLocked() makes impossible (it excludes occupantSession
+                //     == me). So the two ids differ somewhere past the eighth character, and the
+                //     abbreviation hid the one fact the line existed to establish.
+                // ★★ A diagnostic that shortens its evidence can turn a real difference into an
+                //    apparent contradiction, and send the reader looking for a bug that is not
+                //    there. Print it all; these lines are rare.
+                LOGI("admin override — [%s] evicting the current occupant [%s]",
                          me.c_str(), occupantSession.c_str());
                     static const char* kEvict = "{\"type\":\"evicted\"}";
                     // ★ closeAfterFlush, not close: the whole point of this frame is that the
@@ -7564,7 +7572,7 @@ struct LocalSdrShim::Impl {
                 //     identity, and those need opposite fixes. The occupant's id is printed beside
                 //     it: if they differ, the caller is somebody else; if they match, the occupancy
                 //     test itself is wrong.
-                LOGI("%s WS refused — server busy (occupant %.8s, caller %.8s%s)",
+                LOGI("%s WS refused — server busy (occupant [%s], caller [%s]%s)",
                      isAudio ? "audio" : "spectrum",
                      occupantSession.c_str(), me.c_str(),
                      adminAuthed ? ", caller HELD ADMIN" : ", no credential");
