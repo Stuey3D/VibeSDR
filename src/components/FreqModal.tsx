@@ -643,8 +643,19 @@ export default function FreqModal({
                 <BmBtn style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS SERVER</Text></BmBtn>
                 <BmBtn style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL SERVERS</Text></BmBtn>
               </View>
-              <BmBtn style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
-                <Text style={[st.bmBtnText, { color: t.freqColor }]}>★ SAVE BOOKMARK</Text>
+              {/* ★★★ A BUTTON THAT DOES NOTHING MUST LOOK LIKE IT. The press was guarded by
+                  `if (!bmName.trim()) return` and nothing else, so with the name box empty the
+                  button lit, took the tap and silently did nothing — and the field above it is the
+                  SEARCH box, which is where a name naturally gets typed first. The whole feature
+                  then reads as broken: "the app itself wasn't saving bookmarks either" (Stuart,
+                  2026-08-15, with "radio caroline" in the search box and the name box empty).
+                  ★ Dimmed and disabled, the same shape as the admin TAKE OVER button, so the
+                    reason is visible before the tap rather than inferred from nothing happening. */}
+              <BmBtn style={[st.bmBtn, { borderColor: bmName.trim() ? bdrBrt : bdrDim }]}
+                     disabled={!bmName.trim()}
+                     onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
+                <Text style={[st.bmBtnText, { color: t.freqColor },
+                              !bmName.trim() && { opacity: 0.4 }]}>★ SAVE BOOKMARK</Text>
               </BmBtn>
 
               <Text style={[st.bmSub, { color: dimText }]}>Saved ({userBookmarks.length})</Text>
