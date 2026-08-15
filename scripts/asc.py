@@ -81,8 +81,14 @@ def builds(app):
 def versions(app):
     for x in call("apps/%s/appStoreVersions?limit=10" % APPS[app])["data"]:
         a = x["attributes"]
-        print("  %-8s %-24s %s  %s" % (a["versionString"], a["appStoreState"],
-                                       a.get("releaseType"), x["id"]))
+        # ★★ PRINT THE PLATFORM. Without it this list is genuinely ambiguous: a tvOS version
+        #    sitting in PREPARE_FOR_SUBMISSION looks exactly like an iOS one, and the difference
+        #    decides whether you can create the next iOS version at all — App Store Connect allows
+        #    only ONE editable version per platform. On 2026-08-15 a stale 10.0.2 read as an iOS
+        #    release that had never shipped; it is the Apple TV experiment, and iOS's real live
+        #    version was 10.0.1 two rows down.
+        print("  %-8s %-7s %-24s %s  %s" % (a["versionString"], a.get("platform", "?"),
+                                            a["appStoreState"], a.get("releaseType"), x["id"]))
 
 def trigger(which):
     r = call("ciBuildRuns", "POST", {"data": {"type": "ciBuildRuns", "relationships": {
