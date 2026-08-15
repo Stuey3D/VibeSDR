@@ -227,6 +227,22 @@ final class UberClient: ObservableObject {
   @Published var ppm = 0
   @Published var sampleRate = 0                // current capture rate (= spectrum span)
   @Published var deemph = 50                   // FM de-emphasis µs (50 EU / 75 Americas / 0 off)
+  // ★★★ THE BROADCAST-FM TREATMENTS (VibeServer 3.1). FOUR FAULTS, FOUR SWITCHES, and they are not
+  //     interchangeable: NR answers continuous NOISE, IMS a strong NEIGHBOUR, CEQ a REFLECTION, NB
+  //     IMPULSES. Measured on the server they want OPPOSITE actions — narrowing the IF costs up to
+  //     10 dB against noise and gains 10 dB against a close neighbour — so one combined control
+  //     would be actively wrong.
+  // ★★ Default TRUE, matching the server: each only acts when its own measurements say it will
+  //    help, so a listener who never opens this sheet gets the better sound. And the RADIO is the
+  //    authority — these are re-rendered from hwinfo, because they are sticky AND shared with
+  //    every other listener on that receiver.
+  @Published var fmNr  = true
+  @Published var fmIms = true
+  @Published var fmCeq = true
+  @Published var fmNb  = true
+  /// True once the server has reported any of them — an older VibeServer never does, and Jr then
+  /// draws no controls rather than offering ones that cannot work.
+  @Published var hasFmDsp = false
   var hasHardwareControls: Bool { isVibe }
 
   private func onHwInfo(_ j: [String: Any]) {
@@ -237,6 +253,18 @@ final class UberClient: ObservableObject {
     // silent: no error, no warning, just a feature that never happens.
     if let n = (j["sessionLimitMin"] as? NSNumber)?.intValue { sessionLimitMin = n }
     if let n = (j["sessionSecsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = n }
+    // ★★ THE SERVER'S WORD ON ITS OWN DSP — sticky AND shared, so what this watch last asked for is
+    //    irrelevant. Receiving any of them is also what REVEALS the controls: an older VibeServer,
+    //    or a backend without them, never sends them and Jr draws nothing.
+    if j["wsp"] != nil || j["ims"] != nil || j["ceq"] != nil || j["nb"] != nil {
+      hasFmDsp = true
+      // ★ Absent means an older server that HAS the treatment but does not talk about it, so the
+      //   default is ON rather than OFF — the same rule the phone and the browser use.
+      fmNr  = (j["wsp"] as? Bool) ?? true
+      fmIms = (j["ims"] as? Bool) ?? true
+      fmCeq = (j["ceq"] as? Bool) ?? true
+      fmNb  = (j["nb"]  as? Bool) ?? true
+    }
     if let b = j["adminSet"] as? Bool { adminSet = b }
     if let b = j["adminOk"] as? Bool { adminOk = b }
     // ★★ WHICH RADIO IS THIS? Jr drew RTL-SDR controls whatever was plugged in, so an
@@ -510,6 +538,14 @@ final class UberClient: ObservableObject {
   func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
   /// Force mono — the ABR last resort (only meaningful on WFM).
   func setStereo(_ on: Bool) { guard isVibe else { return }; specSock.send(json: ["type": "stereo", "on": on]) }
+
+  // ── The broadcast-FM treatments ───────────────────────────────────────────
+  // ★ Optimistic locally so the button responds on the wrist immediately, then corrected by the
+  //   next hwinfo — which is authoritative, because another listener may have changed it.
+  func setFmNr(_ on: Bool)  { guard isVibe else { return }; fmNr = on;  specSock.send(json: ["type": "wsp", "on": on]) }
+  func setFmIms(_ on: Bool) { guard isVibe else { return }; fmIms = on; specSock.send(json: ["type": "ims", "on": on]) }
+  func setFmCeq(_ on: Bool) { guard isVibe else { return }; fmCeq = on; specSock.send(json: ["type": "ceq", "on": on]) }
+  func setFmNb(_ on: Bool)  { guard isVibe else { return }; fmNb = on;  specSock.send(json: ["type": "nb", "on": on]) }
 
   // ── Published state (the UI mirrors this and nothing else) ────────────────
   @Published var status = "starting"

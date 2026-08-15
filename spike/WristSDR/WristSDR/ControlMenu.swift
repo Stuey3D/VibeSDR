@@ -674,6 +674,18 @@ struct HardwareSheet: View {
     .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.14)))
   }
 
+  /// One broadcast-FM treatment. Lit ORANGE rather than green, deliberately: green on this sheet
+  /// means "a hardware control is engaged", and these are DSP the server is applying to everyone's
+  /// audio — a different kind of thing, and worth looking different.
+  private func fmCell(_ label: String, on: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Text(label).font(.system(size: 13, weight: .semibold))
+        .frame(maxWidth: .infinity).padding(.vertical, 7)
+        .background(on ? Color.orange : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .foregroundColor(on ? .black : .white)
+    }.buttonStyle(.plain)
+  }
+
   /// An on/off control drawn as an ILLUMINATED button — glass when off, lit green when on (clearer on a
   /// wrist than a switch). Tapping toggles.
   private func onOff(_ label: String, on: Bool, action: @escaping () -> Void) -> some View {
@@ -876,6 +888,35 @@ struct HardwareSheet: View {
             }
           }
         }.padding(.top, 3)
+
+        // ══ BROADCAST FM — the four weak-signal treatments ═══════════════════
+        // ★★★ FOUR FAULTS, FOUR SWITCHES, and they are NOT interchangeable: NR answers continuous
+        //     NOISE, IMS a strong NEIGHBOUR, CEQ a REFLECTION, NB IMPULSES. Measured on the server
+        //     they want OPPOSITE actions — narrowing the IF costs up to 10 dB against noise and
+        //     gains 10 dB against a close neighbour — so one combined control would be wrong as
+        //     well as unhelpful.
+        // ★★ ALL FOUR ARE ON BY DEFAULT AND EACH DECLINES TO ACT unless its own measurements say it
+        //    will help, so a strong station is untouched. The switches exist for A/B — which on a
+        //    wrist is exactly the right size of job: three taps to hear what the receiver is doing.
+        // ★ Shown only when the server says it HAS them (hasFmDsp). An older VibeServer never
+        //   reports them and this section does not draw, rather than offering dead controls — the
+        //   same rule as the gain slider that only suits one radio.
+        if radio.hasFmDsp {
+          VStack(spacing: 3) {
+            Text("BROADCAST FM").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+            // ★ Two rows of two, not one row of four: at 9-point type on a 41 mm watch, four cells
+            //   across leaves each label too narrow to read at a glance — and this sheet is read
+            //   at arm's length, often outdoors.
+            HStack(spacing: 6) {
+              fmCell("NR",  on: radio.fmNr)  { radio.setFmNr(!radio.fmNr) }
+              fmCell("IMS", on: radio.fmIms) { radio.setFmIms(!radio.fmIms) }
+            }
+            HStack(spacing: 6) {
+              fmCell("CEQ", on: radio.fmCeq) { radio.setFmCeq(!radio.fmCeq) }
+              fmCell("NB",  on: radio.fmNb)  { radio.setFmNb(!radio.fmNb) }
+            }
+          }.padding(.top, 3)
+        }
 
         if gainArmed, !radio.gainAuto {
           Text("Turn the crown to set gain").font(.system(size: 10)).foregroundColor(.cyan)
