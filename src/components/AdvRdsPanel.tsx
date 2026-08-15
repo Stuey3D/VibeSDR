@@ -113,6 +113,12 @@ export interface AdvRdsPanelProps {
   x: RdsExt | null;
   /** Basic RDS, which arrives on its own message and is shown by the VTS bar too. */
   ps?: string; rt?: string; pi?: string; ber?: number; countryIso?: string;
+  /** ★★★ THE LOGO THE REST OF THE APP IS ALREADY SHOWING, resolved once by SDRScreen with the PI
+   *  and the tuned FREQUENCY — which is what RadioDNS needs and what this panel does not have.
+   *  Resolving again from the NAME alone gave a different, weaker answer: the identity path could
+   *  never run here, so the panel fell back to a name search for a station whose own broadcaster
+   *  publishes the artwork. One lookup, one cache entry, one answer. */
+  logoUri?: string | null;
   /** ★ RAW is PER USER, PER SESSION. It changes only what this viewer is shown — the server
    *  always sends both, so it cannot affect anyone else on the same receiver. */
   raw: boolean;
@@ -802,7 +808,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 
           {!!p.ps && (
             <View style={s.logoWrap}>
-              <StationLogo name={p.ps} itu={p.countryIso} size={72} />
+              <StationLogo name={p.ps} itu={p.countryIso} size={72} uri={p.logoUri} />
             </View>
           )}
           </View>

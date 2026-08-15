@@ -6581,6 +6581,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           x={advRds}
           ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
           countryIso={liveStation.countryIso}
+          logoUri={liveLogo}
           raw={advRdsRaw} onRaw={setAdvRdsRaw}
           tall={advRdsTall} onTall={setAdvRdsTall}
           bottomOffset={pillBottom + 8 + noticeStackH}
