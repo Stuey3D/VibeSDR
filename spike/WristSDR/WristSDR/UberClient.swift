@@ -3,6 +3,24 @@ import Combine
 import Network
 import CryptoKit
 
+/// ★★★ ONE ANSWER TO "WHAT VERSION IS THIS?", AND IT IS THE BUNDLE'S. Jr carried THREE different
+///     versions at once on the morning 1.2 was prepared: the project said 1.2, the VibeServer
+///     User-Agent said 1.3, and the FM-DX one still said 1.0 — the version it shipped with in
+///     July. Every one of them is sent to somebody else's receiver, where operators write filter
+///     rules against the string and an operator who wants to refuse us BY NAME is entitled to a
+///     name that is true.
+/// ★★ Read from CFBundleShortVersionString rather than typed here, so it cannot drift from what
+///    actually shipped — a hardcoded constant is exactly what drifted three ways. The phone app
+///    learned this the hard way twice (see src/constants/version.ts, which carries the same
+///    warning and the same scars).
+/// ★ The fallback is only reachable if the Info.plist key is missing, which would be a broken
+///   build; it names a version rather than "unknown" so a log line is still greppable.
+enum JrVersion {
+  static let short: String =
+    (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.2"
+}
+
+
 /// A DIRECT UberSDR client, running on the WATCH. No phone anywhere in the chain.
 ///
 /// This is the whole question JR asks: today the phone holds these sockets, does the DSP,
@@ -14,6 +32,7 @@ import CryptoKit
 /// Hard-coded to one server on purpose. A spike that also has to be an app is a spike that
 /// never gets finished.
 @MainActor
+
 final class UberClient: ObservableObject {
 
   /// The UberSDR host to connect to. Selectable now (was a hardcoded `static let`) so the
@@ -78,7 +97,7 @@ final class UberClient: ObservableObject {
   //   operator reading a connection log wants to know which of the two arrived. Bumped with the
   //   phone release because they ship together; only the version ever moves, because operators
   //   write filter rules against this string.
-  private let jrUserAgent = "VibeSDR Jr/1.3 (watchOS)"
+  private let jrUserAgent = "VibeSDR Jr/\(JrVersion.short) (watchOS)"
   /// The server is serving somebody else. Terminal until the user retries or takes
   /// over — NOT a reconnect loop, which would just hammer a busy receiver.
   @Published var serverBusy = false

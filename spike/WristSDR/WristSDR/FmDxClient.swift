@@ -71,7 +71,10 @@ final class FmDxClient: SDRClient {
   /// operator on the FMDX.org Discord asked how to keep VibeSDR off his server —
   /// the honest answer was that he could not, because we never said who we were.
   /// ★ Keep STABLE: operators write filter rules against this string.
-  static let ua = "VibeSDR Jr/1.0 (+https://vibesdr.net)"
+  /// ★★ Only the VERSION moves, and it moves by itself now — see JrVersion. This said 1.0 while
+  ///    the app was 1.2, so every FM-DX and Kiwi operator's log named a version that had not been
+  ///    on anyone's wrist since July.
+  static let ua = "VibeSDR Jr/\(JrVersion.short) (+https://vibesdr.net)"
   // ── SDRClient surface ──
   @Published var frequency: Double = 0
   @Published var mode = "WFM"           // FM-DX is WFM broadcast only
