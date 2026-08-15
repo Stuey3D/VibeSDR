@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 
@@ -18,6 +19,30 @@ namespace net {
 
 // ── Socket ──────────────────────────────────────────────────────────────────
 Socket::~Socket() { close(); }
+
+void Socket::closeAfterFlush() {
+    if (!open_) return;
+    open_ = false;
+    if (fd_ < 0) return;
+    ::shutdown(fd_, SHUT_WR);            // flush what is queued, then FIN — not an abort
+    // Drain whatever the peer had already sent, so the close cannot become a reset. Bounded:
+    // 8 KB or ~20 ms, whichever comes first.
+    char sink[1024];
+    const auto start = std::chrono::steady_clock::now();
+    int drained = 0;
+    for (;;) {
+        struct pollfd pf { fd_, POLLIN, 0 };
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start).count();
+        if (ms >= 20 || drained >= 8192) break;
+        const int pr = ::poll(&pf, 1, (int)(20 - ms));
+        if (pr <= 0) break;
+        const ssize_t n = ::recv(fd_, sink, sizeof sink, MSG_DONTWAIT);
+        if (n <= 0) break;               // EOF or would-block: nothing left worth draining
+        drained += (int)n;
+    }
+    ::close(fd_); fd_ = -1;
+}
 
 void Socket::close() {
     if (!open_) return;

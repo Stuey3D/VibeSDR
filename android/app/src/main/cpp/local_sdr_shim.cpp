@@ -7465,10 +7465,12 @@ struct LocalSdrShim::Impl {
                 if (override_) {
                     LOGI("admin override — evicting the current occupant");
                     static const char* kEvict = "{\"type\":\"evicted\"}";
+                    // ★ closeAfterFlush, not close: the whole point of this frame is that the
+                    //   displaced listener learns WHY, and an aborting close threw it away.
                     if (specClient  && specClient->isOpen())
-                        { sendWs(specClient,  0x1, (const uint8_t*)kEvict, strlen(kEvict)); specClient->close(); }
+                        { sendWs(specClient,  0x1, (const uint8_t*)kEvict, strlen(kEvict)); specClient->closeAfterFlush(); }
                     if (audioClient && audioClient->isOpen())
-                        { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); audioClient->close(); }
+                        { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); audioClient->closeAfterFlush(); }
                     occupantSession.clear();
                     // ★ NOT put on cooldown. They were evicted by the owner, not caught
                     // overstaying — punishing them for someone else's decision would be wrong.
@@ -9203,7 +9205,7 @@ struct LocalSdrShim::Impl {
                             + std::to_string(kSessionCooldownSec) + "}";
         // ★ TELL THEM FIRST, THEN CLOSE. The message is what stops the client treating this as
         // a dropped link and retry-storming a server that is deliberately turning it away.
-        if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); spec->close(); }
+        if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); spec->closeAfterFlush(); }
         if (aud  && aud->isOpen())  { aud->close(); }
         LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
         { std::lock_guard<std::mutex> lk(clientMtx);

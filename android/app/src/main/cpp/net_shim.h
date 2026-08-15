@@ -29,6 +29,18 @@ public:
     Socket& operator=(const Socket&) = delete;
 
     void close();
+    /** ★★★ TELL THEM, THEN HANG UP — AND ACTUALLY TELL THEM. close() does shutdown(SHUT_RDWR) and
+     *  closes at once, which ABORTS the connection: the frame just handed to the kernel is
+     *  discarded, and any unread inbound data turns the close into an RST that destroys it for
+     *  certain. Every "explain why, then close" path was therefore explaining to nobody —
+     *  `evicted`, `busy` and `session_expired` alike — so a listener displaced by an admin saw the
+     *  generic "someone else is listening" card instead of being told they had been taken over
+     *  (Stuart, 2026-08-15, in both directions between the app and the browser).
+     *  ★★ Half-close the WRITE side first: that flushes what is queued and sends FIN after it.
+     *     Then drain briefly, because it is UNREAD INBOUND data that turns a close into a reset.
+     *  ★ Bounded hard (a few ms, a few KB). This runs on a server thread holding a lock; it is
+     *    long enough for a frame already in the buffer, not a wait for the peer to do anything. */
+    void closeAfterFlush();
     bool isOpen() { return open_; }
 
     /** ★★★ LET GO OF THE DESCRIPTOR WITHOUT KILLING THE CONNECTION.
