@@ -1000,6 +1000,9 @@ export class UberSDRClient {
   /** The tune we connected FOR, when it came from memory rather than from the server. Re-sent once
    *  the server has told us where it actually put us; cleared the moment it is honoured. */
   private wantTune: { frequency: number; mode: SDRMode } | null = null;
+  /** The VFO the SERVER last told us it has us on (config.vfo). The only honest way to ask whether
+   *  a tune took: our own status is set by tune() itself. */
+  private lastServerVfo = 0;
 
   private async _checkConnection() {
     this.dbg('POST /connection uuid=' + this.uuid.slice(0, 8));
@@ -1956,6 +1959,7 @@ export class UberSDRClient {
       //    So we adopt there, and only assert where the VFO is genuinely ours.
       // ★ Once. Cleared either way, so a server that lands us somewhere on purpose is argued with
       //   exactly once and never again.
+      if (Number.isFinite(Number(msg.vfo)) && Number(msg.vfo) > 0) this.lastServerVfo = Number(msg.vfo);
       if (this.wantTune) {
         const want = this.wantTune;
         this.wantTune = null;
@@ -1986,6 +1990,25 @@ export class UberSDRClient {
         } else if (Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
           this.dbg(`landing put us on ${serverVfo}; re-asserting remembered ${want.frequency}`);
           this.tune(want.frequency, want.mode, { recenter: true });
+          // ★★★ AND AGAIN A MOMENT LATER, BECAUSE THE AUDIO PATH IS NOT OURS TO SEE. tune() reaches
+          //     the radio through VibePowerModule's native audio socket, and on this server the
+          //     AUDIO socket arrives FIRST and is what triggers the landing — so at the instant the
+          //     spectrum config lands, the native side has just been retuned underneath us and may
+          //     not carry ours. The log showed exactly that: audio chain wfm, then the landing to
+          //     am/648, then nothing for twenty-three seconds. The listener saw FM on the dial and
+          //     heard Radio Caroline (Stuart, 2026-08-15).
+          // ★★ ONE repeat, not a loop. If the second one does not take either, something is wrong
+          //    that retrying cannot fix, and a client that keeps shoving a frequency at a server is
+          //    worse than one that gets it wrong once — it would fight a shared VFO for ever.
+          // ★ Judged on the SERVER's reported vfo, never on our own status — tune() sets that
+          //   itself, so asking it whether the tune took is asking the question of the answer.
+          setTimeout(() => {
+            if (this.destroyed) return;
+            if (Math.abs(this.lastServerVfo - want.frequency) > 500) {
+              this.dbg(`still on ${this.lastServerVfo}; asserting ${want.frequency} once more`);
+              this.tune(want.frequency, want.mode, { recenter: true });
+            }
+          }, 2500);
         }
       }
       // binBandwidth change ⇒ the session may have migrated shared↔private,
