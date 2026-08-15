@@ -57,6 +57,11 @@ struct MpxGen {
     double echoPhase = 1.1;      // radians
     // ★ Impulse noise: brief, enormous, wideband — ignition, a thermostat, an electric fence.
     //   Modelled as short bursts at a realistic repetition rate (100/s ~ mains-related buzz).
+    // ★ An RDS2 stream: a subcarrier at 66.5, 71.25 or 76 kHz. Modelled simply as a tone at that
+    //   frequency in the multiplex — the DETECTOR only asks "is there energy here", and modelling
+    //   the biphase data riding on it would be testing the generator, not the meter.
+    double rds2Amp = 0.0;
+    double rds2Hz  = 66500.0;
     double impAmp = 0.0;
     int    impEvery = 10000;     // samples between impulses (1 MHz / 10000 = 100 per second)
     int    impLen = 3;           // samples — microseconds
@@ -70,7 +75,9 @@ struct MpxGen {
         for (int i = 0; i < n; ++i) {
             const double t = tAcc;
             const double L = std::sin(2.0 * M_PI * kAudioHz * t), R = 0.0;
-            const double mpx = 0.45 * (L + R)
+            const double rds2 = rds2Amp > 0.0
+                ? rds2Amp * std::sin(2.0 * M_PI * rds2Hz * t) : 0.0;
+            const double mpx = rds2 + 0.45 * (L + R)
                              + 0.10 * std::sin(2.0 * M_PI * kPilotHz * t)
                              + 0.45 * (L - R) * std::sin(2.0 * M_PI * 2.0 * kPilotHz * t);
             phase += 2.0 * M_PI * kDevHz * mpx / kFs;
@@ -106,15 +113,16 @@ struct Sink {
 };
 
 struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float effort;
-                float nbRate; };
+                float nbRate; float r2[3]; bool r2Ready; };
 
 Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0,
-               double impAmp = 0.0, bool nbOn = true) {
+               double impAmp = 0.0, bool nbOn = true,
+               double rds2Amp = 0.0, double rds2Hz = 66500.0) {
     Sink sink;
     RxPipeline::Callbacks cb{};
     cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
     MpxGen gen; gen.noise = noise; gen.echoAmp = echoAmp; gen.echoDelay = echoDelay;
-    gen.impAmp = impAmp;
+    gen.impAmp = impAmp; gen.rds2Amp = rds2Amp; gen.rds2Hz = rds2Hz;
     RxPipeline rx;
     rx.start(kFs, 1024, 10.0, 48000, cb);
     rx.setNoiseBlanker(nbOn);
@@ -126,7 +134,8 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
         rx.feed(buf.data(), (int)buf.size());
     }
     return { rx.multipathDepth(), rx.blendSnrDb(), rx.ceqEngaged(),
-             rx.multipathAfterCeq(), rx.ceqEffort(), rx.noiseBlankRate() };
+             rx.multipathAfterCeq(), rx.ceqEffort(), rx.noiseBlankRate(),
+             { rx.rds2Db(0), rx.rds2Db(1), rx.rds2Db(2) }, rx.rds2Ready() };
 }
 
 }  // namespace
@@ -269,6 +278,38 @@ int main() {
         ok(imp.snrDb > impOff.snrDb + 0.5f,
            "★★★ AND THE SIGNAL MEASURES BETTER FOR IT — the only result that matters",
            "off " + std::to_string(impOff.snrDb) + " dB, on " + std::to_string(imp.snrDb) + " dB");
+    }
+
+    // ── RDS2 stream detection ─────────────────────────────────────────────────────────────────
+    // ★★★ THE ASSERTION THAT MATTERS IS THE NEGATIVE ONE. Almost no station transmits RDS2, so a
+    //     detector that cries wolf would report a world-first on every ordinary broadcast — and
+    //     since nobody can easily check, a false positive here is worse than a false negative.
+    std::printf("\nRDS2 — is anything on the extra subcarriers?\n");
+    {
+        const Result plain = measure(0.02, 0.0, 3, 6.0);
+        std::printf("   .. ordinary station:  %+.1f / %+.1f / %+.1f dB   (ready %s)\n",
+                    plain.r2[0], plain.r2[1], plain.r2[2], plain.r2Ready ? "yes" : "NO");
+        ok(plain.r2Ready, "the channel is wide enough to look at 76 kHz at all");
+        ok(plain.r2[0] < 6.0f && plain.r2[1] < 6.0f && plain.r2[2] < 6.0f,
+           "★★★ AN ORDINARY STATION SHOWS NO RDS2 — the detector does not cry wolf",
+           "read " + std::to_string(plain.r2[0]) + " / " + std::to_string(plain.r2[1]));
+
+        const Result s1 = measure(0.02, 0.0, 3, 6.0, 0.0, true, 0.05, 66500.0);
+        std::printf("   .. stream 1 present:  %+.1f / %+.1f / %+.1f dB\n", s1.r2[0], s1.r2[1], s1.r2[2]);
+        ok(s1.r2[0] > 12.0f, "★ a stream at 66.5 kHz IS detected",
+           "read " + std::to_string(s1.r2[0]) + " dB");
+        // ★★ AND ONLY THAT ONE. The three streams are 4.75 kHz apart, so a filter that is not
+        //    selective enough reports all three whenever any one is present — which would make the
+        //    reading useless for saying WHICH streams a station runs.
+        ok(s1.r2[1] < s1.r2[0] - 10.0f && s1.r2[2] < s1.r2[0] - 10.0f,
+           "★★★ ...and its NEIGHBOURS are not — 4.75 kHz apart needs real selectivity",
+           "1: " + std::to_string(s1.r2[0]) + "  2: " + std::to_string(s1.r2[1])
+                 + "  3: " + std::to_string(s1.r2[2]));
+
+        const Result s3 = measure(0.02, 0.0, 3, 6.0, 0.0, true, 0.05, 76000.0);
+        std::printf("   .. stream 3 present:  %+.1f / %+.1f / %+.1f dB\n", s3.r2[0], s3.r2[1], s3.r2[2]);
+        ok(s3.r2[2] > 12.0f && s3.r2[0] < s3.r2[2] - 10.0f,
+           "★ the highest stream (76 kHz) is found, and not confused with the lowest");
     }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);

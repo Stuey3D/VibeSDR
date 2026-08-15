@@ -131,6 +131,12 @@ export interface RdsExt {
   nbRate: number;
   /** Why CEQ is not running: 0 running, 1 off, 2 signal too weak, 3 nothing to correct. */
   ceqWhy: number;
+  /** ★ dB above an empty reference band on each RDS2 subcarrier (66.5 / 71.25 / 76 kHz). A
+   *  measurement, not a verdict — hardly any station transmits RDS2, so the panel draws the line. */
+  rds2: number[];
+  /** False when our own channel is too narrow to see 76 kHz: then the reading says nothing about
+   *  the station, and "none detected" would be a lie about the receiver. */
+  rds2Ok: boolean;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
 }
@@ -601,6 +607,8 @@ export class SpectrumClient {
           ceqAfter: Number(msg.ceqAfter ?? 0),
           nbRate: Number(msg.nbRate ?? 0),
           ceqWhy: Number(msg.ceqWhy ?? 3),
+          rds2: Array.isArray(msg.rds2) ? msg.rds2.slice(0, 3).map((v: any) => Number(v) || 0) : [],
+          rds2Ok: Number(msg.rds2Ok ?? 0) === 1,
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
         });

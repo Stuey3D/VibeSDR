@@ -133,6 +133,20 @@ export interface RdsExt {
   /** Every AF glimpsed as [kHz, confirmed]. On a noisy station the unconfirmed ones are usually
    *  phantoms manufactured by block errors, and only the list shows WHICH they are. */
   afAll: [number, number][];
+  /** ★★★ RDS2 IS THREE MORE DATA STREAMS, on subcarriers at 66.5, 71.25 and 76 kHz beside the
+   *      classic one at 57 kHz. What it is FOR is chiefly the broadcaster's own logo, sent as a real
+   *      image file rather than looked up from a database by name — which is exactly the problem
+   *      RadioDNS and radio-browser solve badly for us today.
+   *  ★★ SO THE FIRST QUESTION IS WHETHER ANYONE NEARBY TRANSMITS IT, and the honest answer is
+   *     usually no: deployment is a handful of trials in Switzerland, Poland, Czechia and Germany.
+   *     Reporting the measurement rather than building a decoder first means the decoder gets built
+   *     when there is something to point it at, and pointed at a signal we have actually seen.
+   *  ★ Each figure is dB ABOVE AN EMPTY REFERENCE BAND, so it does not move with signal strength.
+   *    Around zero is nothing; a real stream measured about 29 dB in the bench test. */
+  rds2: number[];
+  /** False when our own channel is too narrow to see 76 kHz — then the reading says nothing about
+   *  the station and the panel must say so. */
+  rds2Ok: boolean;
 }
 
 /** ★ WHAT THE CONNECTED RADIO ACTUALLY HAS, straight from the server (hwinfo.radio).
@@ -1786,6 +1800,8 @@ export class UberSDRClient {
         ceqOn: Number(msg.ceqOn ?? 0) === 1,
         ceqAfter: num(msg.ceqAfter, 0), ceqWhy: num(msg.ceqWhy, 3),
         ifGain: num(msg.ifGain, 0), ifCand: num(msg.ifCand, 0), ifBw: num(msg.ifBw, 0),
+        rds2: Array.isArray(msg.rds2) ? msg.rds2.slice(0, 3).map((v: any) => num(v, 0)) : [],
+        rds2Ok: Number(msg.rds2Ok ?? 0) === 1,
         afAll: Array.isArray(msg.afAll)
           ? msg.afAll.filter((e: any) => Array.isArray(e) && e.length >= 2)
                      .map((e: any) => [Number(e[0]) || 0, Number(e[1]) ? 1 : 0] as [number, number])

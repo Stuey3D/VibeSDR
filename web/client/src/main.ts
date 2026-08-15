@@ -5211,6 +5211,28 @@ function renderRds() {
     }
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
 
+  // ★★★ RDS2 — three more subcarriers at 66.5, 71.25 and 76 kHz, whose headline payload is the
+  //     station's own LOGO as an actual image file. Almost nobody transmits it, so this reports the
+  //     MEASUREMENT (dB above an empty reference band) rather than a decoder's verdict: the first
+  //     question worth answering is whether anything within reach carries it at all.
+  // ★★ "Cannot tell" is not "nothing there". A narrowed IF puts 76 kHz at or above our own Nyquist,
+  //    and reporting "none" then would be a fact about the RECEIVER dressed as one about the
+  //    station. 8 dB is the threshold: a real stream measures ~29 on the bench, an ordinary one ~2.
+  const r2El = $('rxRds2');
+  if (!rdsExt) { r2El.textContent = dash; r2El.style.color = ''; }
+  else if (!rdsExt.rds2Ok) { r2El.textContent = 'channel too narrow to look'; r2El.style.color = ''; }
+  else {
+    const d = rdsExt.rds2 ?? [];
+    const on = [0, 1, 2].filter((i) => (d[i] ?? 0) >= 8);
+    if (!on.length) { r2El.textContent = 'none detected'; r2El.style.color = ''; }
+    else {
+      const best = Math.max(...on.map((i) => d[i] ?? 0));
+      r2El.textContent = `stream${on.length > 1 ? 's' : ''} ${on.map((i) => i + 1).join('+')}`
+                       + ` present · ${best.toFixed(0)} dB`;
+      r2El.style.color = '#7dff9a';
+    }
+  }
+
   const pdev = rdsExt?.pilotDev ?? 0;
   const rdev = rdsExt?.rdsDev ?? 0;
   const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');

@@ -320,6 +320,15 @@ void RxPipeline::rebuildAudio() {
             //   benefit of the doubt and narrowed if it earns it, not opened up from mono —
             //   which would be audible as a swell on every retune.
             mpxNoise_.configure(chFs_);
+            // ★ Q=25: the streams are 4.75 kHz apart, so at Q=8 each would read its neighbours.
+            rds2A_.configure(chFs_, 66500.0, 25.0);
+            rds2B_.configure(chFs_, 71250.0, 25.0);
+            rds2C_.configure(chFs_, 76000.0, 25.0);
+            rds2Ref_.configure(chFs_, 81000.0, 25.0);
+            // ★★ ALL FOUR must fit, and the reference is the highest — so this single check covers
+            //    the lot. A channel narrowed below about 210 kHz cannot see 81 kHz honestly.
+            rds2Ready_ = rds2Ref_.ready();
+            rds2Db_[0] = rds2Db_[1] = rds2Db_[2] = 0.0f;
             multipath_.configure(chFs_);
             adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
             nb_.configure(chFs_); nbRate_ = 0.0f;
@@ -711,6 +720,23 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //   means nothing on AM or SSB.
         if (mode_ == Mode::WFM) {
             mpxNoise_.process(demodBuf_.data(), nc);
+            // ── RDS2: is anything transmitting on the extra subcarriers? ─────────────────────
+            // ★ Read-only, like every other meter here, and compared with a nearby EMPTY band so
+            //   the answer does not depend on how strong the station is.
+            if (rds2Ready_) {
+                rds2A_.process(demodBuf_.data(), nc);
+                rds2B_.process(demodBuf_.data(), nc);
+                rds2C_.process(demodBuf_.data(), nc);
+                rds2Ref_.process(demodBuf_.data(), nc);
+                const float ref = rds2Ref_.level();
+                if (ref > 1e-9f) {
+                    const float lv[3] = { rds2A_.level(), rds2B_.level(), rds2C_.level() };
+                    for (int i = 0; i < 3; ++i) {
+                        const float db = 20.0f * std::log10(std::max(lv[i], 1e-9f) / ref);
+                        if (std::isfinite(db)) rds2Db_[i] += 0.05f * (db - rds2Db_[i]);
+                    }
+                }
+            }
             if (mpxNoise_.ready()) {
                 const float noise = mpxNoise_.level();
                 const float pilot = std::fabs(pll_.lockAmp());

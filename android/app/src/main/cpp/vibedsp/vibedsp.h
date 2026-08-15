@@ -794,11 +794,16 @@ public:
     /** @param centreHz what to measure. 17 kHz = the transmitted-silence gap (noise); 19 kHz =
      *   the PILOT itself, which the shadow path needs as its own reference — the running PLL's
      *   lockAmp belongs to the WIDE signal and would not describe a narrowed copy. */
-    void configure(double rate, double centreHz = 17000.0) {
+    /** @param q selectivity. 8 suits the wide 15-19 kHz guard band; the RDS2 subcarriers at 66.5,
+     *  71.25 and 76 kHz are only 4.75 kHz APART, so a Q of 8 there spans ~9 kHz and each stream
+     *  would read its neighbours as if they were itself. They need ~25. */
+    void configure(double rate, double centreHz = 17000.0, double q = 8.0) {
         rate_ = rate;
-        ready_ = (rate > 44000.0);         // needs room for 17 kHz well inside Nyquist
+        // ★ Needs the centre comfortably inside Nyquist, not just under it: a filter centred at
+        //   0.48 of the sample rate is not measuring what its label says.
+        ready_ = (rate > centreHz * 2.6);
         if (!ready_) { reset(); return; }
-        const double f0 = centreHz, q = 8.0;
+        const double f0 = centreHz;
         const double w = 2.0 * M_PI * f0 / rate, a = std::sin(w) / (2.0 * q), c = std::cos(w);
         const double b0 = a, b1 = 0.0, b2 = -a, a0 = 1.0 + a, a1 = -2.0 * c, a2 = 1.0 - a;
         b0_ = (float)(b0 / a0); b1_ = (float)(b1 / a0); b2_ = (float)(b2 / a0);
@@ -1877,6 +1882,13 @@ public:
     /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
      *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
     float  ifGainDb() const { return ifGainDb_; }
+    /** How far each RDS2 stream (66.5, 71.25, 76 kHz) stands above an empty reference band, in dB.
+     *  Around 0 means nothing is there. Only meaningful when rds2Ready(). */
+    float  rds2Db(int i) const { return (i >= 0 && i < 3) ? rds2Db_[i] : 0.0f; }
+    /** False when the channel is too narrow to see 76 kHz at all — a narrowed bandwidth puts the
+     *  third stream at or above Nyquist, and reporting "nothing there" would be a lie about the
+     *  RECEIVER rather than a fact about the station. */
+    bool   rds2Ready() const { return rds2Ready_; }
     double ifCandidateHz() const { return shadowBwHz_; }
 
 private:
@@ -2012,6 +2024,21 @@ private:
     //     (Stuart, 2026-08-14: "blending the mono signal ... whilst hopefully preserving the
     //     stereo separation" — the frequency-selective form is how you get both).
     MpxNoiseMeter mpxNoise_;                 // measures the 15-19 kHz gap; see the class note
+    // ── RDS2 stream detection ────────────────────────────────────────────────────────────────
+    // ★★★ RDS2 ADDS THREE MORE DATA STREAMS, on subcarriers at 66.5, 71.25 and 76 kHz alongside
+    //     the classic one at 57 kHz. Their headline payload is the broadcaster's own LOGO as an
+    //     actual image file, sent in chunks. Almost nobody transmits it yet — trials in
+    //     Switzerland, Poland, Czechia and Germany — so the honest first step is to find out
+    //     whether anything on air here carries it at all, rather than build a decoder with nothing
+    //     to point it at (Stuart, 2026-08-15).
+    // ★★ MEASURED AGAINST A NEARBY REFERENCE BAND, not against an absolute level. FM noise is
+    //    triangular — its power rises with the square of frequency — so a fixed threshold would be
+    //    wrong at one end of the multiplex or the other. 81 kHz sits above the last RDS2 stream and
+    //    below the 92 kHz SCA slot, so it is empty on essentially every station, and comparing
+    //    like with like removes the signal's own strength from the answer.
+    MpxNoiseMeter rds2A_, rds2B_, rds2C_, rds2Ref_;
+    float rds2Db_[3] = {0.0f, 0.0f, 0.0f};   // each stream over the reference band, dB
+    bool  rds2Ready_ = false;                // false when the channel is too narrow to look
     MultipathMeter multipath_;               // envelope AM — distortion, not weakness
     // ── CEQ ───────────────────────────────────────────────────────────────────────────────────
     // ★★★ MEASURED BEFORE AND AFTER, ALWAYS. multipath_ reads the signal as it ARRIVES; ceqOut_
