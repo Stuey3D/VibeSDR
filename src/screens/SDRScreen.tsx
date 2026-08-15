@@ -546,6 +546,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
   /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
   const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
+  /** ★ The socket callbacks are created once, so they cannot read `refusal` state directly — a
+   *  stale closure would let the connection-lost card cover a terminal one. */
+  const refusalRef = useRef<{ title: string; body: string; note: string } | null>(null);
+  refusalRef.current = refusal;
   /** Admin takeover, offered on the IN USE refusal. See the modal for why it reconnects. */
   const [takeoverPw, setTakeoverPw] = useState('');
   const [takeoverErr, setTakeoverErr] = useState<string | null>(null);
@@ -2780,7 +2784,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
       onConnect:    () => { if (!destroyed.current) { kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
-      onDisconnect: () => { if (!destroyed.current) setConnected(false); },
+      // ★★★ A CLOSED SOCKET MUST RAISE THE CARD ITSELF. The connection-lost notice was armed ONLY
+      //     from link quality reaching zero — and link quality is reported WHEN FRAMES ARRIVE. So
+      //     when the link actually died, nothing reported anything, the timer was never armed, and
+      //     the app sat on a stale waterfall with no card and no way back: "it just freezes... and
+      //     to make matters worse the app has locked up, I cannot use the Servers chip to go back"
+      //     (Stuart, 2026-08-15, after being evicted by an admin takeover from the browser).
+      //     A freeze detector driven by the stream that stopped can only ever fire when it is not
+      //     needed.
+      // ★★ Debounced the same 3 s as the quality path, and cancelled by onConnect, so an ordinary
+      //    blip that reconnects immediately still shows nothing. What it cannot do any more is
+      //    show nothing FOR EVER.
+      // ★ Not raised over a terminal refusal — being evicted, timed out or refused has its own
+      //   card, which explains WHY, and this one would only cover it with something vaguer.
+      onDisconnect: () => {
+        if (destroyed.current) return;
+        setConnected(false);
+        if (refusalRef.current) return;              // a terminal card already owns the screen
+        if (!connLostTimer.current && !resumingRef.current) {
+          connLostTimer.current = setTimeout(() => {
+            connLostTimer.current = null;
+            if (!destroyed.current && !refusalRef.current) setConnLost(true);
+          }, 3000);
+        }
+      },
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
@@ -2873,6 +2900,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onEvicted: () => {
         if (destroyed.current) return;
+        // ★ Cancel any armed connection-lost card: the socket is about to close, and "TAKEN BACK"
+        //   is the honest explanation where "connection lost" would be a guess.
+        if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
+        setConnLost(false);
         setRefusal({
           title: 'TAKEN BACK',
           body: "This receiver's owner has taken it back with the admin password.",

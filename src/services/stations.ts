@@ -2,9 +2,11 @@
  * stations.ts — VTS station/bookmark engine + search (skin parity).
  *
  * Server sources:
- *   GET /api/bookmarks — static config bookmarks AUGMENTED with currently
+ *   GET /api/bookmarks — UberSDR: static config bookmarks AUGMENTED with currently
  *     active EiBi broadcast schedule entries (station names, group "EiBi").
  *     Refresh periodically — the EiBi active set changes through the day.
+ *   GET /bookmarks     — VIBESERVER: the stations its shim has learned from RDS as people tune.
+ *     A different server with a different path; fetchBookmarks asks for both.
  *   GET /api/bands     — amateur band list for the search ("Band Plan" rows).
  *   GET /api/noisefloor/latest — per-band ft8_snr for ham band conditions.
  *
@@ -38,14 +40,48 @@ export interface ServerBand {
   mode?:  string;
 }
 
+/**
+ * ★★★ TWO SERVERS, TWO PATHS, AND THE APP ONLY KNEW ONE. UberSDR serves `/api/bookmarks`;
+ *     VIBESERVER serves `/bookmarks` — the stations its shim has LEARNED FROM RDS as people tune,
+ *     which is the list the browser has always shown. Connecting the app to a VibeServer asked for
+ *     a path that server does not have, got a 404, and showed nothing: "the rds confirmed stations
+ *     saving is not working on the app, it is on the web client" (Stuart, 2026-08-15, with the
+ *     browser listing thirty stations beside an empty app).
+ * ★★ BOTH ARE TRIED, rather than detecting which server this is. Each path exists on exactly one
+ *    of them, so the other simply 404s — and asking is cheaper and more honest than keeping a
+ *    server-type flag in step with reality. A failure on either side is not an error as long as
+ *    one answered; only both failing is.
+ * ★ Merged and de-duplicated by frequency and name, because a server could one day serve both and
+ *   a list with everything twice is worse than either half.
+ */
 export async function fetchBookmarks(baseUrl: string): Promise<ServerBookmark[]> {
-  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/bookmarks`);
-  if (!res.ok) throw new Error(`bookmarks HTTP ${res.status}`);
-  const data = await res.json();
-  const list = Array.isArray(data) ? data : (data?.bookmarks ?? []);
-  return (list as ServerBookmark[]).filter(
-    (b) => b && typeof b.frequency === 'number' && b.frequency > 0 && !!b.name,
-  );
+  const base = baseUrl.replace(/\/+$/, '');
+  const one = async (path: string): Promise<ServerBookmark[]> => {
+    const res = await fetch(`${base}${path}`);
+    if (!res.ok) throw new Error(`bookmarks HTTP ${res.status}`);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data?.bookmarks ?? []);
+    return (list as ServerBookmark[]).filter(
+      (b) => b && typeof b.frequency === 'number' && b.frequency > 0 && !!b.name,
+    );
+  };
+  const results = await Promise.allSettled([one('/api/bookmarks'), one('/bookmarks')]);
+  const ok = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<ServerBookmark[]>[];
+  if (!ok.length) {
+    const first = results[0] as PromiseRejectedResult;
+    throw first.reason instanceof Error ? first.reason : new Error('bookmarks unavailable');
+  }
+  const seen = new Set<string>();
+  const merged: ServerBookmark[] = [];
+  for (const r of ok) {
+    for (const b of r.value) {
+      const k = `${Math.round(b.frequency)}|${b.name.trim().toLowerCase()}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(b);
+    }
+  }
+  return merged;
 }
 
 /** Server UI config — spectrum backdrop + station-ID overlay settings. */
