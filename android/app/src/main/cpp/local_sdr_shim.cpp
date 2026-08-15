@@ -7537,7 +7537,30 @@ struct LocalSdrShim::Impl {
             //    own paths (relock, and a new occupant taking the chair).
             // ★ Arriving with a proved credential is a login, so it supersedes any other admin
             //   for the same reason typing the password does.
-            if (adminAuthed) demoteOtherAdmins(sock);
+            // ★★★ INLINE, BECAUSE clientMtx IS ALREADY HELD HERE. Calling demoteOtherAdmins() —
+            //     which takes that same NON-RECURSIVE mutex — deadlocked the radio's accept thread
+            //     on the first admin handshake, with the lock still held, so every other thread
+            //     that needed it stopped too: the radio went silent while the front door and the
+            //     setup page, being a different process, carried on looking healthy. Shipped in
+            //     3.1.9 and it took Stuart's demo server down within the hour.
+            // ★★ THE LESSON IS NOT "BE CAREFUL". A helper that takes a lock must never be called
+            //    from code that already holds it, and this file's own convention says so in three
+            //    places — "Applied outside the lock: setRdsEnabled touches the pipeline, and
+            //    holding clientMtx across DSP calls is how this file has deadlocked itself
+            //    before." I added a locking helper and then called it from inside the one region
+            //    that already had the lock.
+            // ★ Flags only here. The courtesy message to the demoted client is sent by the
+            //   admin_unlock path, which is called with no lock held; a socket write under
+            //   clientMtx would be the same mistake in a different coat.
+            if (adminAuthed) {
+                for (auto& kv : clientDsp) {
+                    auto& c = kv.second;
+                    if (!c || !c->adminOk.load()) continue;
+                    if (c->spec == sock || c->audio == sock) continue;
+                    c->adminOk.store(false);
+                    LOGI("admin superseded — a newer login arrived holding the password");
+                }
+            }
             if (newOccupant || adminAuthed) adminOk.store(adminAuthed);
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
             if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
