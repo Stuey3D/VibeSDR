@@ -1718,6 +1718,11 @@ export class UberSDRClient {
         // stations without inventing one for a foreign catch: a sporadic-E Spaniard's
         // nibble does not match a British receiver, so it stays blank.
         countryIso: resolveStationIso(ecc, pi, receiverIso()) || undefined,
+        // ★★ THE RAW ECC TOO, not only the country derived from it. The SERVER's logo lookup takes
+        //    the ECC and, when we send none, tries the plausible candidates itself — which is the
+        //    only way a station that never transmits group 1A gets its broadcaster's artwork. The
+        //    app was throwing this away here and then doing a lookup that REQUIRED one.
+        ecc,
       });
       return;
     }

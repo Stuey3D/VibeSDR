@@ -1001,7 +1001,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -3092,7 +3092,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
+        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -5331,7 +5331,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     const name = liveStation.name?.trim();
     const iso = validIso(liveStation.countryIso) ? liveStation.countryIso!.toUpperCase() : '';
-    const key = `${name ?? ''}|${iso}`;
+    // ★★ THE KEY MUST NAME EVERYTHING THE ANSWER DEPENDS ON. It was name+country, but the
+    //    identity lookup is keyed on the PI, the ECC and the FREQUENCY — RadioDNS answers per
+    //    BEARER, so the same PI on a different transmitter is a different question. With those
+    //    absent from the key, an ECC arriving later (group 1A is rare and late) could not
+    //    re-ask, and the provisional answer stood for the session.
+    const key = `${name ?? ''}|${iso}|${liveStation.pi ?? ''}|${liveStation.ecc ?? 0}`
+              + `|${Math.round(status.frequency || 0)}`;
     if (key === lastLiveLogoKey.current) return;
     lastLiveLogoKey.current = key;
     if (!name) { setLiveLogo(null); return; }
@@ -5339,14 +5345,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ The FREQUENCY goes with the PI, because RadioDNS is keyed on the BEARER — one PI can be
     //   on several transmitters and the SPI lists each by frequency. Without it the identity
     //   lookup cannot run at all and we are back to matching on a name that may be wrong.
-    resolveStationLogo({
+    // ★★★ ASK THE SERVER FIRST, BECAUSE IT KNOWS MORE THAN WE DO. Its /vibeserver/stationlogo
+    //     derives the ECC when the transmitter sends none, TRYING EACH PLAUSIBLE CANDIDATE — and
+    //     most encoders never send group 1A, so without that the identity lookup simply does not
+    //     run. Horizon on 104.7 is the case: the browser showed the broadcaster's own artwork and
+    //     the app showed a generic favicon, on the same receiver, at the same moment (Stuart,
+    //     2026-08-15). The candidate logic exists once, on the server, deliberately — "this closes
+    //     the gap for EVERY client at once, which is the whole reason the lookup is server-side".
+    // ★★ ecc "00" means "you work it out", not "unknown, give up" — the same convention the
+    //    browser uses.
+    // ★ Any failure — no such route, an older server, offline — falls through to the in-app
+    //   ladder below, which is exactly what it was already doing.
+    const askServer = async (): Promise<string | null> => {
+      const hz = Math.round(status.frequency || 0);
+      const piHex = liveStation.pi;
+      if (!piHex || hz <= 0 || !connectBase) return null;
+      const eccHex = (liveStation.ecc && liveStation.ecc > 0 ? liveStation.ecc : 0)
+        .toString(16).toUpperCase().padStart(2, '0');
+      try {
+        const r = await fetch(`${connectBase}/vibeserver/stationlogo`
+                            + `?pi=${piHex}&ecc=${eccHex}&freq=${hz}`, { cache: 'no-store' });
+        if (!r.ok) return null;
+        const u = String((await r.json())?.logo ?? '');
+        return u.startsWith('https://') ? u : null;
+      } catch { return null; }
+    };
+    askServer().then((srv) => srv ?? resolveStationLogo({
       pi: liveStation.pi, name, iso: iso || undefined, freqHz: status.frequency || undefined,
-    }).then((url) => {
+    })).then((url) => {
       if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
     // ★ An UNHANDLED REJECTION here is a crash risk in RN, not a missing picture. The resolver
     //   catches internally today, so this guards the next edit to it rather than a live fault.
     }).catch(() => {});
-  }, [liveStation.name, liveStation.countryIso, liveStation.pi, status.frequency]);
+  }, [liveStation.name, liveStation.countryIso, liveStation.pi, liveStation.ecc, status.frequency, connectBase]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
