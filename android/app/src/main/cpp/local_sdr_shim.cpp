@@ -9166,7 +9166,6 @@ struct LocalSdrShim::Impl {
     void enforceSessionLimit() {
         const int limitMin = g_vsSessionLimitMin.load();
         if (limitMin <= 0) return;                       // unlimited: the default
-        if (adminOk.load()) return;                      // the owner is exempt
 
         std::shared_ptr<net::Socket> spec, aud;
         std::string addr; double since; int warned;
@@ -9175,6 +9174,13 @@ struct LocalSdrShim::Impl {
           spec = specClient; aud = audioClient;
           addr = occupantAddr; since = occupantSince; warned = occupantWarned; }
         if (addr.empty() || isLoopback(addr)) return;    // the host's own listening
+        // ★★★ THE EXEMPTION IS THE OCCUPANT'S OWN, and this read the radio-wide flag while
+        //     occupantSecsLeft() had just been made per-listener — so the countdown would say "no
+        //     limit" to an admin and this would disconnect them anyway. A display that disagrees
+        //     with the enforcement is worse than either being wrong on its own: it tells the owner
+        //     they are safe right up until they are cut off.
+        // ★ Outside the lock above: adminNow() takes clientMtx itself.
+        if (adminNow(spec)) return;                      // the owner is exempt
 
         const double elapsed = Impl::nowSecs() - since;
         const double left    = (double)limitMin * 60.0 - elapsed;
