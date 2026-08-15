@@ -125,5 +125,39 @@ if (!/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/.test(html)) {
   bad++;
 }
 
+// ★★★ NO INPUT BELOW 16px, ON EITHER PAGE THAT A PHONE OPENS. iOS Safari zooms the whole page in
+//     when a focused input's font-size is under 16px, and it never zooms back out — so one
+//     under-sized field leaves the radio permanently magnified for the rest of the session. The
+//     web client's host/PIN boxes were 15px, one pixel under, and the symptom ("the SDR page
+//     starts very slightly zoomed in") pointed at the scrolling landing page instead, because
+//     scrolling is what made a stuck viewport visible rather than what caused it.
+// ★ maximum-scale/user-scalable is NOT the alternative: it takes pinch-zoom from people who need
+//   it, and iOS has ignored it since iOS 10. Meeting the threshold is the only thing that works.
+for (const page of ['web/client/index.html', 'android/app/src/main/cpp/vibe_setup_page.h']) {
+  // ★★★ NARROW CATCH, AND IT IS THE POINT. This was `catch { continue }` around a call to a bare
+  //     `readFileSync` that this module never imported — so every run threw a ReferenceError, the
+  //     catch swallowed it, both files were skipped, and the check printed OK while testing
+  //     NOTHING. It was only found by deliberately breaking the thing it guards and watching it
+  //     pass anyway. A catch that cannot tell "file absent" from "code wrong" turns a test into a
+  //     decoration.
+  let pageSrc;
+  try {
+    pageSrc = fs.readFileSync(new URL(`../${page}`, import.meta.url), 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') continue;         // the only tolerable failure
+    throw e;
+  }
+  for (const m of pageSrc.matchAll(/([^{}\n][^{}]*)\{([^}]*)\}/g)) {
+    if (!/\binput\b|\btextarea\b/.test(m[1])) continue;
+    const size = m[2].match(/font-size:\s*([0-9.]+)px/);
+    if (size && parseFloat(size[1]) < 16) {
+      console.error(`✗ ${page}: "${m[1].trim().replace(/\s+/g, ' ').slice(-40)}" sets font-size `
+                  + `${size[1]}px — iOS zooms the page in on focus below 16px and never back out`);
+      bad++;
+    }
+  }
+}
+
 if (bad) process.exit(1);
 console.log(`ok   setup page: JS parses, tags balance, ${ids.size} ids all present`);
+console.log('ok   no input under the 16px iOS auto-zoom threshold on either phone-facing page');

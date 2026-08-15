@@ -186,6 +186,11 @@ export interface SDRCallbacks {
    *  only authority on what they are actually set to. */
   onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean }) => void;
   onHwGains?:   (gains: number[]) => void;
+  /** ★★★ WHERE THE GAIN ACTUALLY IS on the serving radio, in its own units; -1 = auto/AGC. The
+   *  slider FOLLOWS this. A client cannot query a remote dongle, so before the server sent it the
+   *  app showed its own idea of the gain and, on connecting, pushed it — overriding the owner's
+   *  resting gain and re-gaining a shared receiver under everyone already listening. */
+  onHwGainNow?: (tenthDb: number) => void;
   /** VibeServer: the sample rates (spectrum spans) THIS server offers, so the
    *  client's rate picker aligns with the server rather than a generic list. */
   onHwRates?:   (rates: number[]) => void;
@@ -1856,6 +1861,7 @@ export class UberSDRClient {
         });
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
+      if (typeof msg.gainNow === 'number') this.callbacks.onHwGainNow?.(msg.gainNow);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate
       // messages outright, so the client hides the picker rather than offer a

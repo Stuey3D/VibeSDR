@@ -2784,6 +2784,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
+      // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
+      //     no way to know it — so the slider showed a value of its own and the owner's resting
+      //     gain looked as though it had been ignored: "I set the RTL-SDR on the server to return
+      //     to 12.5db but when I opened it in the app it was at 29.7db" (Stuart, 2026-08-15).
+      // ★★ ADOPTED, NOT PUSHED BACK. Arriving at somebody's receiver is not a reason to change it,
+      //    and on a shared one it would re-gain the radio under everybody already on it.
+      onHwGainNow: (tenthDb: number) => {
+        if (destroyed.current) return;
+        if (tenthDb < 0) { setHwAutoGain(true); return; }
+        setHwAutoGain(false); setHwGain(tenthDb);
+      },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
       // Incoming spectrum data-rate + frame-rate → the connection meter's "NNk/s · NNfps" readout.
       onLinkRate: (rung: number, settling: boolean, fps: number, kbps: number) => {

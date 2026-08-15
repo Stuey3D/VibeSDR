@@ -5551,6 +5551,18 @@ struct LocalSdrShim::Impl {
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
                       + ",\"agcLocked\":" + (LocalSdrShim::agcLocked() ? "true" : "false")
+                      // ★★★ WHERE THE GAIN ACTUALLY IS. Without it a remote client cannot know,
+                      //     so both clients restored their OWN remembered gain on connect and
+                      //     pushed it to the radio — which silently overrode the owner's resting
+                      //     gain ("I set the RTL-SDR on the server to return to 12.5db but when I
+                      //     opened it in the app it was at 29.7db", Stuart 2026-08-15) and, on a
+                      //     SHARED receiver, re-gained it for everybody already listening.
+                      // ★★ The comment that justified the push — "otherwise the slider shows a
+                      //    value the radio isn't using" — was right about the problem and wrong
+                      //    about which end should move. The radio is the authority on its own
+                      //    gain; the slider follows it.
+                      + ",\"gainNow\":" + std::to_string(
+                            LocalSdrShim::instance().currentGainTenthDb())
                       + ",\"gains\":[";
         for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
         // Capture sample rates this server offers (= the spectrum spans the client
@@ -11239,10 +11251,18 @@ void LocalSdrShim::setGain(int gainTenthDb) {
         return;
     }
     if (!p->dev) return;
+    // ★★★ RECORD IT ON THIS PATH TOO. Every other radio's branch stores lastGainTenthDb and the
+    //     dongle's did not, so the value the shim believed was current was whatever some earlier
+    //     path had written. It is what gets re-applied after a stream restart (see the replug
+    //     handler), and it is now what the client is TOLD the gain is — a shim that cannot say
+    //     where its own gain is cannot correct a client that has guessed.
+    p->lastGainTenthDb = gainTenthDb;
     if (gainTenthDb < 0) { rtlsdr_set_tuner_gain_mode(p->dev, 0); LOGI("gain: auto"); }
     else { rtlsdr_set_tuner_gain_mode(p->dev, 1); rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
            LOGI("gain: %.1f dB", gainTenthDb / 10.0); }
 }
+/** The gain the radio is ACTUALLY set to, in its own units; -1 = auto/AGC. */
+int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -1; }
 /** ★★★ LET THE RADIO GO WITHOUT STOPPING THE SERVER.
  *
  *  For a machine where VibeServer shares one SDR with something else (OpenWebRX, a decoder), the

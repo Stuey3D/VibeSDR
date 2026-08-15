@@ -102,6 +102,10 @@ public:
      *  what the owner means by "when I tune into FM". */
     double listenFrequency() const;
     static bool agcLocked();
+    /** The gain the radio is ACTUALLY set to, in its own units (tenths of a dB on an RTL);
+     *  -1 = auto/AGC. Sent in hwinfo so a remote client can SHOW the truth instead of imposing
+     *  its own remembered value on a radio it does not own. */
+    int currentGainTenthDb() const;
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe, comma separated (addresses/CIDRs).
      *  EMPTY = trust nobody and read no headers, which is the default: the header is
      *  client-supplied, so believing it from any peer lets a stranger forge an address and walk

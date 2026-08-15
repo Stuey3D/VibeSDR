@@ -182,7 +182,13 @@ export interface SpectrumCallbacks {
               gainCap?: number,
               /** The owner has locked the AGC on: the switch must show as locked rather than
                *  appear to ignore the tap. */
-              agcLocked?: boolean) => void;
+              agcLocked?: boolean,
+              /** ★★★ WHERE THE GAIN ACTUALLY IS, in the radio's own units; -1 = auto/AGC. The
+               *  slider follows the RADIO, because the radio is the authority on its own gain and
+               *  we may not be the only listener. Restoring a remembered value and pushing it on
+               *  connect overrode the owner's resting gain and re-gained a shared receiver for
+               *  everyone already on it. */
+              gainNow?: number) => void;
   /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
@@ -472,7 +478,8 @@ export class SpectrumClient {
                            (msg.radio ?? null) as RadioCaps | null,
                            Number(msg.lockedCentre) || 0,
                            typeof msg.gainCap === 'number' ? msg.gainCap : -1,
-                           msg.agcLocked === true);
+                           msg.agcLocked === true,
+                           typeof msg.gainNow === 'number' ? msg.gainNow : undefined);
         // ★★ Demodulators the OWNER has switched off. The server also REFUSES them, so this is
         //    not the enforcement — it is what lets us leave them out of the menu entirely.
         //    Offering a mode that will be refused reads as "the feature is broken"; not offering

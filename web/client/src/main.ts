@@ -919,8 +919,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (first) setMode(first, true);
       }
     },
-    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked) => {
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked,
+               gainNow) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
       hwAgcLocked = agcLocked === true;
       // ★ Re-applied on EVERY hwinfo, because the server re-sends it when the ceiling changes —
@@ -1305,6 +1307,8 @@ let hwGains: number[] = [];
 /** ★★ The owner's gain ceiling in force right now, in the radio's units; -1 = none. Re-sent by
  *  the server whenever it changes, so it follows the listener across bands. */
 let hwGainCap = -1;
+/** ★ The radio's ACTUAL gain, from hwinfo. -1 = auto, or a server too old to send it. */
+let hwGainNow = -1;
 let hwAgcLocked = false;
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
@@ -6728,6 +6732,19 @@ function pushSettingsToServer() {
  *    rounds DOWN — the whole point is not to exceed it.
  * ★ -1 = no ceiling: restore the full range rather than leaving yesterday's limit in place.
  */
+/** The slider index whose step is closest to a gain the radio reports. The steps are the radio's
+ *  own, so an exact match is normal; nearest covers a server reporting a value from a different
+ *  table (a replugged dongle of another model). */
+function nearestGainIdx(tenths: number): number {
+  if (!hwGains.length) return -1;
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < hwGains.length; i++) {
+    const d = Math.abs(hwGains[i] - tenths);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
 function applyGainCap() {
   const g = document.getElementById('gain') as HTMLInputElement | null;
   if (!g || !hwGains.length) return;
@@ -6759,9 +6776,19 @@ function populateHw() {
     const g = $<HTMLInputElement>('gain');
     g.min = '0';
     g.max = String(hwGains.length - 1);
+    // ★★★ THE RADIO'S OWN GAIN WINS. This restored a REMEMBERED index and pushed it to the
+    //     server on connect, which silently overrode the owner's resting gain — "I set the
+    //     RTL-SDR on the server to return to 12.5db but when I opened it in the app it was at
+    //     29.7db" (Stuart, 2026-08-15) — and on a SHARED receiver re-gained it under everyone
+    //     already listening, from a preference they have never seen.
+    // ★★ The old comment ("otherwise the slider shows a value the radio isn't using") had the
+    //    right problem and the wrong end: the fix is for the server to SAY what the gain is and
+    //    the slider to follow, not for every arriving client to impose its own.
+    // ★ The stored preference is still the fallback for a server too old to tell us.
     const savedIdx = prefs().gainIdx;
-    g.value = String(typeof savedIdx === 'number'
-      ? Math.min(hwGains.length - 1, savedIdx)
+    const nowIdx = hwGainNow >= 0 ? nearestGainIdx(hwGainNow) : -1;
+    g.value = String(nowIdx >= 0 ? nowIdx
+      : typeof savedIdx === 'number' ? Math.min(hwGains.length - 1, savedIdx)
       : hwGains.length - 1);
     const show = () => {
       const tenths = hwGains[Number(g.value)] ?? 0;
@@ -6774,9 +6801,13 @@ function populateHw() {
     };
     applyGainCap();   // ★ the saved index may be above a ceiling set since it was stored
     show();
-    // Push the restored gain — otherwise the slider shows a value the radio
-    // isn't using.
-    if (typeof savedIdx === 'number') spec!.setHwGain(hwGains[Number(g.value)] ?? 0, false);
+    // ★★★ NOTHING IS PUSHED ON CONNECT. Arriving at a receiver is not a reason to change it.
+    //     The slider now shows what the radio is set to; the listener moves it if they want to,
+    //     and that is the only thing that writes a gain. The one exception is a server too old to
+    //     report gainNow, where the remembered value is still better than a slider that lies.
+    if (nowIdx < 0 && typeof savedIdx === 'number') {
+      spec!.setHwGain(hwGains[Number(g.value)] ?? 0, false);
+    }
   }
   // The server's capture-rate limit is an UP-TO CEILING, not a lock: keep the picker VISIBLE but
   // offer only rates AT OR BELOW the cap. A listener can still pick lower (narrower span); the shim

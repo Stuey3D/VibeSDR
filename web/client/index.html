@@ -181,10 +181,22 @@ input, textarea, [contenteditable],
 #hostRow, #pinRow { display: flex; flex-direction: column; gap: 6px; }
 #hostRow[hidden], #pinRow[hidden] { display: none; }
 #splash button[hidden] { display: none; }
+/* ★★★ 16px IS NOT A DESIGN CHOICE, IT IS THE iOS AUTO-ZOOM THRESHOLD. Safari zooms the whole page
+   in when you focus an input whose font-size is below 16px, and it does not zoom back out when the
+   field is blurred. This was 15px — one pixel under — so tapping the host or PIN box left the SDR
+   screen very slightly magnified for the rest of the session: "the SDR page itself seems to start
+   very slightly zoomed in, if I zoom out it locks into place" (Stuart, iPhone 17 Pro Max,
+   2026-08-15).
+   ★★ It appeared with the SCROLLING landing page and looked caused by it, but scrolling only made
+      it VISIBLE: before, nothing on the page could move, so a page zoomed a few percent had
+      nowhere to go and read as a slightly large layout rather than as a stuck viewport.
+   ★ The alternative — maximum-scale=1 / user-scalable=no in the viewport meta — is the wrong fix
+     twice over: it takes pinch-zoom away from people who need it, and iOS has ignored it since
+     iOS 10 anyway. Meeting the threshold is the only thing that actually works. */
 #splash input {
   background: var(--pill-bg); border: 1px solid var(--btn-border);
   color: var(--freq); padding: 10px 12px; border-radius: 6px;
-  font-family: inherit; font-size: 15px; letter-spacing: 1px;
+  font-family: inherit; font-size: 16px; letter-spacing: 1px;
 }
 #splash input:focus { outline: none; border-color: var(--btn-active-bdr); }
 #splash .row { display: flex; gap: 8px; }
