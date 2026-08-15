@@ -97,5 +97,12 @@ if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fai
 #   the deviation readout never populated at all, and neither half looked wrong on its own.
 if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
+#     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this
+#     project deliberately never runs — so the App Store shipped 10.2 while the app's own About
+#     overlay, its User-Agent and the Android build all said 10.3. Caught only because a build was
+#     inspected by hand before submitting.
+if node scripts/check-versions.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build\033[0m\n' "$pass" "$fail" "$broke"
 [ "$fail" -eq 0 ] && [ "$broke" -eq 0 ]
