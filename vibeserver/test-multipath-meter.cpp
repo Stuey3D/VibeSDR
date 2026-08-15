@@ -57,6 +57,15 @@ struct MpxGen {
     double echoPhase = 1.1;      // radians
     // ★ Impulse noise: brief, enormous, wideband — ignition, a thermostat, an electric fence.
     //   Modelled as short bursts at a realistic repetition rate (100/s ~ mains-related buzz).
+    // ★★★ AN ADJACENT STATION, which is the ONLY thing IMS is meant to act on. The harness had
+    //     never had one, so every IMS assertion here was a negative — "leave a lone station alone"
+    //     — and the +3 dB engage threshold had no test at all. A neighbour is its own FM signal
+    //     with its own programme, offset by `nbrOffsetHz`; the interference is what its skirts put
+    //     inside our channel, which is exactly what a narrower IF removes.
+    double nbrAmp = 0.0;
+    double nbrOffsetHz = 200000.0;
+    double nbrDevHz = 75000.0;      // a loud local runs heavy processing and deviates hard
+    double nbrPhase = 0.0;
     double impAmp = 0.0;
     int    impEvery = 10000;     // samples between impulses (1 MHz / 10000 = 100 per second)
     int    impLen = 3;           // samples — microseconds
@@ -78,6 +87,17 @@ struct MpxGen {
             cf32 direct{ (float)std::cos(phase), (float)std::sin(phase) };
 
             cf32 y = direct;
+            if (nbrAmp > 0.0) {
+                // A different programme tone, so it cannot correlate with ours.
+                const double nm = 0.45 * std::sin(2.0 * M_PI * 700.0 * t)
+                                + 0.10 * std::sin(2.0 * M_PI * kPilotHz * t);
+                nbrPhase += 2.0 * M_PI * nbrDevHz * nm / kFs;
+                if (nbrPhase >  M_PI * 1e6) nbrPhase -= M_PI * 2e6;
+                const double car = 2.0 * M_PI * nbrOffsetHz * t;
+                const double a = nbrPhase + car;
+                y = cf32{ (float)(y.real() + nbrAmp * std::cos(a)),
+                          (float)(y.imag() + nbrAmp * std::sin(a)) };
+            }
             // ── the reflection ────────────────────────────────────────────────────────────────
             hist.push_back(direct);
             if ((int)hist.size() > echoDelay + 1) hist.pop_front();
@@ -109,11 +129,14 @@ struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float ef
                 float nbRate; unsigned ifBuilds, shBuilds; float ifBw; float ifGain; };
 
 Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0,
-               double impAmp = 0.0, bool nbOn = true, bool imsOn = true) {
+               double impAmp = 0.0, bool nbOn = true, bool imsOn = true,
+               double nbrAmp = 0.0, double retuneAt = -1.0,
+               double nbrOffsetHz = 200000.0, double nbrDevHz = 75000.0) {
     Sink sink;
     RxPipeline::Callbacks cb{};
     cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
     MpxGen gen; gen.noise = noise; gen.echoAmp = echoAmp; gen.echoDelay = echoDelay;
+    gen.nbrAmp = nbrAmp; gen.nbrOffsetHz = nbrOffsetHz; gen.nbrDevHz = nbrDevHz;
     gen.impAmp = impAmp;
     RxPipeline rx;
     rx.start(kFs, 1024, 10.0, 48000, cb);
@@ -121,8 +144,17 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
     rx.setIms(imsOn);
     rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
     const int block = 8192, total = (int)(kFs * seconds);
+    const int retuneSample = retuneAt > 0.0 ? (int)(kFs * retuneAt) : -1;
+    bool retuned = false;
     std::vector<cf32> buf;
     for (int done = 0; done < total; done += block) {
+        // ★ A RETUNE PART-WAY THROUGH, with the neighbour switched off at the same moment: this is
+        //   "you were on a station that needed narrowing, now you are on one that does not".
+        if (retuneSample >= 0 && !retuned && done >= retuneSample) {
+            retuned = true;
+            gen.nbrAmp = 0.0;
+            rx.setTune(1.0, RxPipeline::Mode::WFM, 250000.0);
+        }
         gen.fill(buf, std::min(block, total - done));
         rx.feed(buf.data(), (int)buf.size());
     }
@@ -318,6 +350,41 @@ int main() {
         ok(r.ifBuilds <= 4,
            "★★ and the AUDIO path's filter is not rebuilt behind the listener's back",
            "designed " + std::to_string(r.ifBuilds) + " times in 8 s");
+    }
+
+    // ── IMS: the one case it exists for, and the one it must let go of ────────────────────────
+    std::printf("\nIMS — a NEIGHBOUR is the only thing narrowing helps against\n");
+    {
+        // ★★★ THE FIRST POSITIVE TEST THIS CONTROL HAS EVER HAD. Everything before it asserted the
+        //     negative — leave a lone station alone — so the +3 dB engage threshold was carried on
+        //     one on-air observation and nothing else.
+        // ★★ CHOSEN BY MEASUREMENT, NOT BY TASTE. A neighbour at the nominal 200 kHz spacing is
+        //    already rejected by the 250 kHz channel filter, and narrowing then only costs (-9.7 dB
+        //    measured) — so the harness would have been asserting that IMS does something it
+        //    should not. A STRONG one 150 kHz away genuinely intrudes, and that is the case built
+        //    here. Real transmitters have wider skirts than this clean synthetic, which is why the
+        //    on-air case engages at 200 kHz and this one needs 150.
+        const Result nbr = measure(0.02, 0.0, 3, 14.0, 0.0, true, true,
+                                   /*nbrAmp=*/1.4, /*retuneAt=*/-1.0, /*off=*/150000.0);
+        std::printf("   .. strong neighbour:  benefit %+.1f dB -> IF %.0fk\n",
+                    nbr.ifGain, nbr.ifBw / 1000.0f);
+        ok(nbr.ifBw > 0.0f,
+           "★★★ IMS ENGAGES against an adjacent station — what it is FOR",
+           "IF still " + std::to_string(nbr.ifBw / 1000.0f) + " kHz, benefit "
+                       + std::to_string(nbr.ifGain));
+
+        // ★★★ AND IT LETS GO ON A RETUNE. The engage rule needs 3 dB in EITHER direction so it
+        //     cannot chatter — which makes BOTH states stable, so a filter earned on one station
+        //     was carried into the next: "tune from 103.8 which needs the IMS up to 104.2, the
+        //     super strong Radio Northampton, and the IMS stays on; tune DOWN to 104.2 from above
+        //     and it doesn't activate" (Stuart, 2026-08-15). Two routes to one dial reading, two
+        //     different receivers — and narrowing is supposed to be EARNED per station.
+        const Result after = measure(0.02, 0.0, 3, 20.0, 0.0, true, true,
+                                     /*nbrAmp=*/1.4, /*retuneAt=*/10.0, /*off=*/150000.0);
+        std::printf("   .. then retuned away: IF %.0fk\n", after.ifBw / 1000.0f);
+        ok(after.ifBw <= 0.0f,
+           "★★★ AND LETS GO ON A RETUNE — the next station has not earned it",
+           "IF still " + std::to_string(after.ifBw / 1000.0f) + " kHz");
     }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);

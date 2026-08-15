@@ -330,6 +330,9 @@ void RxPipeline::rebuildAudio() {
             shadowNoise_.configure(chFs_, 17000.0);
             shadowPilot_.configure(chFs_, 19000.0);
             widePilot_.configure(chFs_, 19000.0);
+            // ★ Same rule on a rebuild: a rate or mode change is not a reason to keep a narrowing
+            //   the new configuration has not earned.
+            ifBwReq_.store(0.0, std::memory_order_relaxed);
             ifGainDb_ = 0.0f; shadowTick_ = 0; ifWarm_ = 0; ifDwell_ = 0;
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
@@ -422,6 +425,23 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // ★ Here rather than in the resync, because THIS is the event that means "different
         //   signal". A decoder being attached does not.
         if (chFs_ > 0.0) pll_.configure(19000.0, chFs_);
+        // ★★★ AND THE IF GOES BACK TO WIDE, BECAUSE NARROWING IS A DECISION ABOUT A STATION.
+        //     The engage rule needs 3 dB of benefit in EITHER direction — deliberately, so it
+        //     cannot chatter on the boundary — and the consequence is that BOTH states are stable.
+        //     So a filter earned on one station was carried into the next one: "tune from 103.8
+        //     which needs the IMS up to 104.2, the super strong Radio Northampton, and the IMS
+        //     stays on; tune DOWN to 104.2 from above and it doesn't activate, which is the
+        //     expected behaviour" (Stuart, 2026-08-15). Two routes to the same dial reading, two
+        //     different receivers.
+        // ★★ WIDE IS THE SAFE DEFAULT, and the design already says so: the cost of narrowing is
+        //    distortion on deviation peaks, "which is why it must be earned rather than applied by
+        //    default". Carrying it over is applying it by default to a station that never earned
+        //    it — and on a strong local one there is nothing to earn it with.
+        // ★ The warm-up is restarted too. The measurement now concerns a different signal, and
+        //   deciding from an average of the previous one is the same fault as deciding from an
+        //   unsettled one.
+        ifBwReq_.store(0.0, std::memory_order_relaxed);
+        ifGainDb_ = 0.0f; ifDwell_ = 0; ifWarm_ = 0;
     }
 
     // ── Spectrum ───────────────────────────────────────────────────────────
