@@ -103,6 +103,9 @@ private:
     int  fd_;
     bool open_ = true;
     std::string effAddr_;   // set only for connections arriving via a trusted proxy
+    /** The peer's address, asked for ONCE. getpeername() fails after the peer disconnects, so a
+     *  short-lived connection would otherwise be recorded with no address at all. */
+    std::string cachedAddr_;
 };
 
 class Listener {

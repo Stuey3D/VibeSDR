@@ -7538,7 +7538,8 @@ struct LocalSdrShim::Impl {
                 // Evicting only makes sense if somebody is actually in the way.
                 override_ = adminAuthed && occupied;
                 if (override_) {
-                    LOGI("admin override — evicting the current occupant");
+                    LOGI("admin override — %.8s evicting the current occupant %.8s",
+                         me.c_str(), occupantSession.c_str());
                     static const char* kEvict = "{\"type\":\"evicted\"}";
                     // ★ closeAfterFlush, not close: the whole point of this frame is that the
                     //   displaced listener learns WHY, and an aborting close threw it away.
@@ -7556,7 +7557,17 @@ struct LocalSdrShim::Impl {
                 // Tell them plainly, as a WS text frame (we have already upgraded), then close. The
                 // client shows "in use, try again later" and must NOT retry-storm — see the web
                 // client's handling of type:"busy".
-                LOGI("%s WS refused — server busy (occupant present)", isAudio ? "audio" : "spectrum");
+                // ★★★ SAY WHO, AND WHETHER THEY ASKED AS ADMIN. Six hours of this fault were spent
+                //     guessing which client a refusal belonged to, because the line named neither
+                //     the session nor the credential — so "spectrum WS refused" could equally be a
+                //     stranger, the evicted browser retrying, or the app arriving under a second
+                //     identity, and those need opposite fixes. The occupant's id is printed beside
+                //     it: if they differ, the caller is somebody else; if they match, the occupancy
+                //     test itself is wrong.
+                LOGI("%s WS refused — server busy (occupant %.8s, caller %.8s%s)",
+                     isAudio ? "audio" : "spectrum",
+                     occupantSession.c_str(), me.c_str(),
+                     adminAuthed ? ", caller HELD ADMIN" : ", no credential");
                 // ★★ HOLD THEM, DO NOT HANG UP. Releases clientMtx first: holdInQueue takes it
                 //    itself, once a second, for the life of the wait.
                 lk.unlock();

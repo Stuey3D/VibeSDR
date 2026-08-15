@@ -56,13 +56,41 @@ std::string Socket::peerAddress() {
 }
 
 std::string Socket::socketPeerAddress() {
+    // ★★★ ASKED ONCE AND REMEMBERED. This called getpeername() EVERY time, and getpeername fails
+    //     with ENOTCONN the moment the peer has gone — so a connection that closed quickly was
+    //     logged with NO ADDRESS AT ALL. The owner's connection history filled with rows reading
+    //     "—", 0s, no client: unattributable entries on a public receiver, where the whole point
+    //     of the log is being able to see who was here and block them by name (Stuart, 2026-08-15,
+    //     looking at his own admin page: "look at all these with no IP address").
+    // ★★ The address is a FACT ABOUT THE CONNECTION, fixed the moment it is accepted, so caching
+    //    it is not an optimisation — it is the difference between recording what happened and
+    //    recording what was still true when we got round to asking.
+    // ★ IPv6-aware: a v4-mapped address (::ffff:a.b.c.d) is unwrapped to its IPv4 form, which is
+    //   what the ban list, the geo lookup and the loopback test all expect. Reading a v6 peer
+    //   through a sockaddr_in used to yield a plausible-looking WRONG address.
+    if (!cachedAddr_.empty()) return cachedAddr_;
     if (fd_ < 0) return "";
-    struct sockaddr_in addr {};
-    socklen_t len = sizeof(addr);
-    if (::getpeername(fd_, (struct sockaddr*)&addr, &len) != 0) return "";
-    char buf[INET_ADDRSTRLEN] = {0};
-    if (!::inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf))) return "";
-    return std::string(buf);
+    struct sockaddr_storage ss {};
+    socklen_t len = sizeof(ss);
+    if (::getpeername(fd_, (struct sockaddr*)&ss, &len) != 0) return "";
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (ss.ss_family == AF_INET) {
+        const auto* a4 = reinterpret_cast<const sockaddr_in*>(&ss);
+        if (!::inet_ntop(AF_INET, &a4->sin_addr, buf, sizeof buf)) return "";
+    } else if (ss.ss_family == AF_INET6) {
+        const auto* a6 = reinterpret_cast<const sockaddr_in6*>(&ss);
+        if (IN6_IS_ADDR_V4MAPPED(&a6->sin6_addr)) {
+            struct in_addr v4 {};
+            std::memcpy(&v4, reinterpret_cast<const uint8_t*>(&a6->sin6_addr) + 12, 4);
+            if (!::inet_ntop(AF_INET, &v4, buf, sizeof buf)) return "";
+        } else if (!::inet_ntop(AF_INET6, &a6->sin6_addr, buf, sizeof buf)) {
+            return "";
+        }
+    } else {
+        return "";
+    }
+    cachedAddr_ = buf;
+    return cachedAddr_;
 }
 
 bool Socket::setSendBufferSize(int bytes) {
