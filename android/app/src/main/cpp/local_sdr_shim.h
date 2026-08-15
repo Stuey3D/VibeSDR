@@ -136,7 +136,12 @@ public:
     void saveSpectrogramIfDue();
     /** Seconds until the current listener's limit expires; -1 when there is no limit,
      *  nobody is listening, or the listener is exempt (loopback / admin). */
-    int  occupantSecsLeft() const;
+    /** Seconds left on the listening limit, or -1 for none.
+     *  @param adminOverride 1 = the ASKING listener is admin (exempt), 0 = it is not,
+     *         -1 = no particular listener, fall back to the radio-wide flag. The exemption belongs
+     *         to a listener, so on a shared receiver answering it radio-wide made one person's
+     *         countdown depend on whether somebody else was unlocked. */
+    int  occupantSecsLeft(int adminOverride = -1) const;
 
     // ── ★★★ THE ADMIN API — monitoring, listeners, bans, maintenance ─────────────────────────
     //

@@ -1979,6 +1979,15 @@ struct LocalSdrShim::Impl {
         //     working". Seeded from the server's configured values when the listener arrives, so
         //     the owner still sets the house default and only this listener can change it.
         std::atomic<bool> wspOn{true}, imsOn{true}, ceqOn{true}, nbOn{true};
+        // ★★★ ADMIN IS PER LISTENER TOO, and the radio-wide flag it replaces was already
+        //     DESCRIBED as "per connected client" while being one atomic for the whole process.
+        //     On a shared receiver that means two owners share one bit: whoever unlocks last
+        //     speaks for both, and — worse — a stranger arriving is a "new occupant", which
+        //     CLEARS it, so an admin listening quietly was demoted by somebody else walking in.
+        // ★ Seeded from the credential proved at the handshake, so an owner who arrives holding a
+        //   ticket lands unlocked without typing anything, exactly as before.
+        std::atomic<bool> adminOk{false};
+        std::atomic<double> lastAdminTouch{0};
         std::mutex        fxMtx;
         AudioNR*          nrEng = nullptr;
         AutoNotch*        notchEng = nullptr;
@@ -4945,7 +4954,7 @@ struct LocalSdrShim::Impl {
         //    ★ Deliberately not filtered to admin-only commands: tuning, zooming and changing
         //      mode are all evidence that somebody is there, and re-locking an admin who is
         //      plainly using the receiver would be a bug wearing a security feature's clothes.
-        if (adminOk.load()) lastAdminTouch.store(Impl::nowSecs());
+        touchAdmin(sock);
         // ★★★ PER-CLIENT CONTROL COMES FIRST, AND THE ORDER IS LOAD-BEARING. The shared handlers
         //     below (zoom, reset, tune…) return as soon as they match, so a per-client block
         //     placed after them is dead code for every message they claim. It was, for zoom: one
@@ -5085,7 +5094,7 @@ struct LocalSdrShim::Impl {
         auto adminGate = [this, &sock](const char* what) -> bool {
             bool needed;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx); needed = !g_vsAdminSecret.empty(); }
-            if (adminOk.load()) return true;
+            if (adminNow(sock)) return true;
             // ★★★ NO PASSWORD SET MEANS NOBODY IS AUTHORISED — NOT THAT EVERYONE IS.
             //
             // This used to be `if (!needed || adminOk)`, so a receiver with no admin password let
@@ -5128,10 +5137,10 @@ struct LocalSdrShim::Impl {
             } else {
                 g_vsAuthState.recordFail(ip);
             }
-            adminOk.store(ok);
+            setAdminNow(sock, ok);
             // ★ Start (or restart) the idle clock the moment admin is granted, so a session
             //   that is unlocked and then never touched still re-locks on schedule.
-            if (ok) lastAdminTouch.store(Impl::nowSecs());
+            // (setAdminNow stamps the idle clock for this listener.)
             LOGI("admin unlock %s", ok ? "granted" : "REFUSED");
             std::shared_ptr<net::Socket> sc;
             { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
@@ -5732,14 +5741,14 @@ struct LocalSdrShim::Impl {
         { bool aset;
           { std::lock_guard<std::mutex> al(g_vsAdminMtx); aset = !g_vsAdminSecret.empty(); }
           j += std::string(",\"adminSet\":") + (aset ? "true" : "false");
-          j += std::string(",\"adminOk\":")  + (adminOk.load() ? "true" : "false"); }
+          j += std::string(",\"adminOk\":")  + (adminNow(sock) ? "true" : "false"); }
         // ★★ THE COUNTDOWN NEEDS A DEADLINE AT CONNECT, not just the two warnings. The first
         // cut drove the client's timer ENTIRELY from session_warning at T-120 and T-30 — so on
         // a 30-minute limit the listener saw nothing at all for 28 minutes and concluded the
         // limit had not taken (Stuart, 2026-07-27, connected from his Mac). The warnings are
         // the nudge; this is the clock.
         // -1 = no limit, or this listener is exempt (loopback / admin).
-        { const int left = LocalSdrShim::instance().occupantSecsLeft();
+        { const int left = LocalSdrShim::instance().occupantSecsLeft(adminNow(sock) ? 1 : 0);
           j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
           j += ",\"sessionSecsLeft\":" + std::to_string(left); }
         // A pinned rate is advertised so the client can HIDE its rate picker and say
@@ -7698,6 +7707,12 @@ struct LocalSdrShim::Impl {
                 // ★ The owner's configured defaults are what a new listener starts from.
                 c->wspOn.store(weakProcOn.load()); c->imsOn.store(imsOn.load());
                 c->ceqOn.store(ceqOn.load());      c->nbOn.store(nbOn.load());
+                // ★ The credential proved at the handshake belongs to THIS listener. The accept
+                //   path settled it into the radio-wide flag a few lines earlier (it is still the
+                //   right answer for a receiver with no per-client DSP), so it is read from there
+                //   rather than threading the local through two scopes.
+                c->adminOk.store(adminOk.load());
+                if (c->adminOk.load()) c->lastAdminTouch.store(Impl::nowSecs());
                 c->spec = sock;
                 c->session = session;
                 c->agent = userAgent;
@@ -8363,6 +8378,28 @@ struct LocalSdrShim::Impl {
         if (it != clientDsp.end()) return it->second;
         for (auto& kv : clientDsp) if (kv.second->audio == sock) return kv.second;
         return nullptr;
+    }
+
+    /** This listener's admin state. ★ Falls back to the radio-wide flag when this receiver has no
+     *  per-client DSP — on such a radio there is only ever one listener, so it IS theirs. */
+    bool adminNow(const std::shared_ptr<net::Socket>& sock) {
+        if (auto d = dspFor(sock)) return d->adminOk.load();
+        return adminOk.load();
+    }
+    /** Grant or revoke it for THIS listener only. */
+    void setAdminNow(const std::shared_ptr<net::Socket>& sock, bool on) {
+        if (auto d = dspFor(sock)) {
+            d->adminOk.store(on);
+            if (on) d->lastAdminTouch.store(Impl::nowSecs());
+            return;
+        }
+        adminOk.store(on);
+        if (on) lastAdminTouch.store(Impl::nowSecs());
+    }
+    /** Stamp the idle clock for whoever sent a command. */
+    void touchAdmin(const std::shared_ptr<net::Socket>& sock) {
+        if (auto d = dspFor(sock)) { if (d->adminOk.load()) d->lastAdminTouch.store(Impl::nowSecs()); return; }
+        if (adminOk.load()) lastAdminTouch.store(Impl::nowSecs());
     }
 
     /** The listener whose audio drives the decoders. ★ Falls back to the FIRST listener when the
@@ -9092,7 +9129,22 @@ struct LocalSdrShim::Impl {
     void enforceAdminIdle() {
         const int idleMin = g_vsAdminIdleMin.load();
         if (idleMin <= 0) return;                        // owner switched it off
-        if (!adminOk.load()) return;                     // nothing to re-lock
+        // ★★ EVERY LISTENER WHO HOLDS IT, not one flag for the radio. Each one's idle clock runs
+        //    from ITS OWN last command, which is the only reading that means anything: one owner
+        //    working the controls must not keep another's unlock alive, and must not be re-locked
+        //    by somebody else's inactivity either.
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) {
+                auto& c = kv.second;
+                if (!c || !c->adminOk.load()) continue;
+                const double lt = c->lastAdminTouch.load();
+                if (lt <= 0 || Impl::nowSecs() - lt < (double)idleMin * 60.0) continue;
+                c->adminOk.store(false);
+                LOGI("admin re-locked after %d min idle for one listener", idleMin);
+            }
+        }
+        if (!adminOk.load()) return;                     // nothing radio-wide to re-lock
         const double last = lastAdminTouch.load();
         if (last <= 0) return;
         if (Impl::nowSecs() - last < (double)idleMin * 60.0) return;
@@ -10306,10 +10358,16 @@ static std::string vsCountry(const std::string& ip) {
     return fn(ip);
 }
 
-int LocalSdrShim::occupantSecsLeft() const {
+int LocalSdrShim::occupantSecsLeft(int adminOverride) const {
     const int limitMin = g_vsSessionLimitMin.load();
     if (!p || limitMin <= 0) return -1;
-    if (p->adminOk.load()) return -1;                    // owner: exempt, so no countdown
+    // ★★★ WHOSE ADMIN? The exemption is the ASKING listener's, not the radio's. With one flag for
+    //     the whole process this could only ever answer for everybody, so on a shared receiver an
+    //     admin's countdown depended on whether some other listener happened to be unlocked.
+    //     -1 = "no answer supplied, use the radio-wide flag", which is right for the callers that
+    //     have no particular listener in mind (the /vibeserver.json probe).
+    const bool exempt = adminOverride >= 0 ? adminOverride != 0 : p->adminOk.load();
+    if (exempt) return -1;                               // owner: exempt, so no countdown
     std::lock_guard<std::mutex> lk(p->clientMtx);
     if (p->occupantSession.empty() || p->occupantSince <= 0) return -1;
     if (p->occupantAddr.empty() || isLoopback(p->occupantAddr)) return -1;
