@@ -30,7 +30,15 @@ echo "==> Assembling the bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# ★★★ THE VERSION COMES FROM CMakeLists.txt, NOT FROM HERE. It was typed into this heredoc, so the
+#     Mac app carried its own copy of the number and could disagree with the server binary inside
+#     it — which is exactly how the iOS app came to ship 10.2 while everything else said 10.3
+#     (2026-08-15). One source, and it is the one that also stamps the Linux package.
+VIBE_VER=$(sed -n 's/^project(vibeserver VERSION \([0-9.]*\).*/\1/p' "$ROOT/vibeserver/CMakeLists.txt")
+[ -n "$VIBE_VER" ] || { echo "!! could not read the version from vibeserver/CMakeLists.txt"; exit 1; }
+echo "==> version $VIBE_VER (from CMakeLists.txt)"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -44,7 +52,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <!-- ★★ THE APP IS V3 AND SAID 2.0.0. It launches the V3 front door, drives Full mode and ships
        the V3 core; the number had simply not moved since the alpha, so the About box and the
        GitHub release disagreed with the product (2026-08-11). -->
-  <key>CFBundleShortVersionString</key><string>3.1.0</string>
+  <key>CFBundleShortVersionString</key><string>${VIBE_VER}</string>
   <key>CFBundleVersion</key>           <string>32</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
