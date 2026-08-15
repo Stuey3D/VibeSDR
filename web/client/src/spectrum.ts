@@ -134,6 +134,9 @@ export interface RdsExt {
   /** ★ dB above an empty reference band on each RDS2 subcarrier (66.5 / 71.25 / 76 kHz). A
    *  measurement, not a verdict — hardly any station transmits RDS2, so the panel draws the line. */
   rds2: number[];
+  /** ★ Narrow-over-wide, dB. Near 0 is a TONE — on 76 kHz, the pilot's 4th harmonic, which we make
+   *  ourselves. Several dB below is data. Without it the level alone reports RDS2 everywhere. */
+  rds2t: number[];
   /** False when our own channel is too narrow to see 76 kHz: then the reading says nothing about
    *  the station, and "none detected" would be a lie about the receiver. */
   rds2Ok: boolean;
@@ -608,6 +611,7 @@ export class SpectrumClient {
           nbRate: Number(msg.nbRate ?? 0),
           ceqWhy: Number(msg.ceqWhy ?? 3),
           rds2: Array.isArray(msg.rds2) ? msg.rds2.slice(0, 3).map((v: any) => Number(v) || 0) : [],
+          rds2t: Array.isArray(msg.rds2t) ? msg.rds2t.slice(0, 3).map((v: any) => Number(v) || 0) : [],
           rds2Ok: Number(msg.rds2Ok ?? 0) === 1,
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],

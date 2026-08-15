@@ -5222,15 +5222,22 @@ function renderRds() {
   if (!rdsExt) { r2El.textContent = dash; r2El.style.color = ''; }
   else if (!rdsExt.rds2Ok) { r2El.textContent = 'channel too narrow to look'; r2El.style.color = ''; }
   else {
-    const d = rdsExt.rds2 ?? [];
-    const on = [0, 1, 2].filter((i) => (d[i] ?? 0) >= 8);
-    if (!on.length) { r2El.textContent = 'none detected'; r2El.style.color = ''; }
-    else {
+    const d = rdsExt.rds2 ?? [], tn = rdsExt.rds2t ?? [];
+    // ★★ LOUD IS NOT ENOUGH — it has to be DATA. -3 dB is the line: measured, a real stream reads
+    //    about -5.6 and a tone about -0.5.
+    const loud = [0, 1, 2].filter((i) => (d[i] ?? 0) >= 8);
+    const on = loud.filter((i) => (tn[i] ?? 0) < -3);
+    if (on.length) {
       const best = Math.max(...on.map((i) => d[i] ?? 0));
       r2El.textContent = `stream${on.length > 1 ? 's' : ''} ${on.map((i) => i + 1).join('+')}`
                        + ` present · ${best.toFixed(0)} dB`;
       r2El.style.color = '#7dff9a';
-    }
+    } else if (loud.includes(2)) {
+      // ★ Name it, rather than reporting nothing. Something IS at 76 kHz and an owner looking at
+      //   the MPX trace can see it; saying "none" beside a visible peak reads as a broken meter.
+      r2El.textContent = 'none · 76k is the pilot\u2019s 4th harmonic';
+      r2El.style.color = '';
+    } else { r2El.textContent = 'none detected'; r2El.style.color = ''; }
   }
 
   const pdev = rdsExt?.pilotDev ?? 0;

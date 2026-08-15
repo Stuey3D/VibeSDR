@@ -1885,6 +1885,11 @@ public:
     /** How far each RDS2 stream (66.5, 71.25, 76 kHz) stands above an empty reference band, in dB.
      *  Around 0 means nothing is there. Only meaningful when rds2Ready(). */
     float  rds2Db(int i) const { return (i >= 0 && i < 3) ? rds2Db_[i] : 0.0f; }
+    /** How TONE-LIKE the energy on subcarrier `i` is: narrow-filter level over wide-filter level,
+     *  in dB. Near 0 means a pure tone — on 76 kHz that is the pilot's fourth harmonic, which our
+     *  own demodulator makes and no station transmits. Real data sits several dB below.
+     *  ★ Without this the detector reports a world-first on every ordinary station. */
+    float  rds2Tone(int i) const { return (i >= 0 && i < 3) ? rds2Tone_[i] : 0.0f; }
     /** False when the channel is too narrow to see 76 kHz at all — a narrowed bandwidth puts the
      *  third stream at or above Nyquist, and reporting "nothing there" would be a lie about the
      *  RECEIVER rather than a fact about the station. */
@@ -2037,7 +2042,33 @@ private:
     //    below the 92 kHz SCA slot, so it is empty on essentially every station, and comparing
     //    like with like removes the signal's own strength from the answer.
     MpxNoiseMeter rds2A_, rds2B_, rds2C_, rds2Ref_;
+    // ★★★ IS IT DATA, OR IS IT A TONE? 76 kHz — the third RDS2 subcarrier — is EXACTLY FOUR TIMES
+    //     the 19 kHz pilot, so every FM demodulator manufactures energy there through its own
+    //     non-linearity. Measured on air at Northampton it read 13 dB above the reference on a
+    //     station that certainly does not transmit RDS2 (Stuart, 2026-08-15: "it flickers on and
+    //     off"), and the flicker is the giveaway — it tracked the signal, as a harmonic must.
+    // ★★ THE DISCRIMINATOR IS BANDWIDTH, and it needs no new frequency to look at. A harmonic is a
+    //    pure TONE: all its power sits in a few Hz. An RDS2 stream is DATA, spread over about
+    //    4.75 kHz. So measure each subcarrier TWICE — once at Q=25 (~3 kHz wide) and once at
+    //    Q=200 (~0.4 kHz) — and compare. A tone reads almost the same through both, because both
+    //    contain all of it. Data reads far weaker through the narrow one, because most of it falls
+    //    outside. The ratio says which we have, and it does not care how strong the station is.
+    MpxNoiseMeter rds2NarA_, rds2NarB_, rds2NarC_;
     float rds2Db_[3] = {0.0f, 0.0f, 0.0f};   // each stream over the reference band, dB
+    /** Narrow-over-wide, dB. Near 0 = a tone (a harmonic, not RDS2); well below 0 = spread out
+     *  like real data. */
+    float rds2Tone_[3] = {0.0f, 0.0f, 0.0f};
+    // ★★★ AND IT MUST NOT COST THE AUDIO. Seven of these meters is 35 biquad sections per MPX
+    //     sample on the audio thread, and it produced audible dropouts within minutes of shipping
+    //     (Stuart, 2026-08-15: "the audio is suffering the odd dropout which it didnt before").
+    //     The RSP chain was already measured at 106% of real time, so there was no headroom to
+    //     spend and this spent it anyway.
+    // ★★ RDS2 IS A DIAGNOSTIC, NOT A DEMODULATOR. Its answer is a slow average over seconds, so
+    //    looking at one block in eight changes nothing about what it reports and costs an eighth
+    //    as much. The narrow TONE filters cost nothing at all on an ordinary station, because they
+    //    only run on a subcarrier that has already shown something worth explaining.
+    unsigned rds2Skip_ = 0;
+    static constexpr unsigned kRds2Duty = 8;
     bool  rds2Ready_ = false;                // false when the channel is too narrow to look
     MultipathMeter multipath_;               // envelope AM — distortion, not weakness
     // ── CEQ ───────────────────────────────────────────────────────────────────────────────────

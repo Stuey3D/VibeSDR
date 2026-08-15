@@ -8934,6 +8934,14 @@ struct LocalSdrShim::Impl {
                       + ",\"rds2\":[" + std::to_string(P_ ? P_->rds2Db(0) : 0.0f) + ","
                                      + std::to_string(P_ ? P_->rds2Db(1) : 0.0f) + ","
                                      + std::to_string(P_ ? P_->rds2Db(2) : 0.0f) + "]"
+                      // ★★★ AND WHETHER IT IS DATA OR A TONE. 76 kHz is exactly 4x the 19 kHz
+                      //     pilot, so our own demodulator puts a harmonic there on every station
+                      //     alive — it read 13 dB on Heart, which does not transmit RDS2. Near 0
+                      //     means a tone (all of it fits through a 400 Hz filter); several dB
+                      //     below means it is spread out like real data.
+                      + ",\"rds2t\":[" + std::to_string(P_ ? P_->rds2Tone(0) : 0.0f) + ","
+                                      + std::to_string(P_ ? P_->rds2Tone(1) : 0.0f) + ","
+                                      + std::to_string(P_ ? P_->rds2Tone(2) : 0.0f) + "]"
                       // ★★ THE AF LIST WITH A TICK EACH, as the FM-DX Webserver shows it: a bare
                       //    "3 of 7" says the link is damaging entries but not WHICH frequencies,
                       //    and on a noisy station the unconfirmed ones are usually phantoms

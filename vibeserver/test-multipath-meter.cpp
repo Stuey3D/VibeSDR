@@ -62,6 +62,14 @@ struct MpxGen {
     //   the biphase data riding on it would be testing the generator, not the meter.
     double rds2Amp = 0.0;
     double rds2Hz  = 66500.0;
+    // ★★★ A TONE IS NOT A STREAM, and the first version of this test only ever injected a tone —
+    //     which is exactly the thing the detector must now REFUSE. An RDS2 stream is 1187.5 bps
+    //     biphase data, spread over roughly 4.75 kHz; a harmonic of the pilot is a few Hz wide.
+    //     Testing with a tone proved the filter was tuned to the right frequency and nothing about
+    //     whether the reading MEANS anything.
+    bool   rds2Data = true;         // false = a bare tone, i.e. what a pilot harmonic looks like
+    double rds2Bit  = 0.0;          // current symbol, +1/-1
+    int    rds2Phase = 0;
     double impAmp = 0.0;
     int    impEvery = 10000;     // samples between impulses (1 MHz / 10000 = 100 per second)
     int    impLen = 3;           // samples — microseconds
@@ -75,8 +83,17 @@ struct MpxGen {
         for (int i = 0; i < n; ++i) {
             const double t = tAcc;
             const double L = std::sin(2.0 * M_PI * kAudioHz * t), R = 0.0;
-            const double rds2 = rds2Amp > 0.0
-                ? rds2Amp * std::sin(2.0 * M_PI * rds2Hz * t) : 0.0;
+            double rds2 = 0.0;
+            if (rds2Amp > 0.0) {
+                double sym = 1.0;
+                if (rds2Data) {
+                    // 1187.5 bps, the RDS symbol rate — the RDS2 streams use it too.
+                    const int per = (int)(kFs / 1187.5);
+                    if (per > 0 && rds2Phase++ % per == 0) rds2Bit = ((rng() & 1u) ? 1.0 : -1.0);
+                    sym = rds2Bit;
+                }
+                rds2 = rds2Amp * sym * std::sin(2.0 * M_PI * rds2Hz * t);
+            }
             const double mpx = rds2 + 0.45 * (L + R)
                              + 0.10 * std::sin(2.0 * M_PI * kPilotHz * t)
                              + 0.45 * (L - R) * std::sin(2.0 * M_PI * 2.0 * kPilotHz * t);
@@ -113,16 +130,16 @@ struct Sink {
 };
 
 struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float effort;
-                float nbRate; float r2[3]; bool r2Ready; };
+                float nbRate; float r2[3]; float r2t[3]; bool r2Ready; };
 
 Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0,
                double impAmp = 0.0, bool nbOn = true,
-               double rds2Amp = 0.0, double rds2Hz = 66500.0) {
+               double rds2Amp = 0.0, double rds2Hz = 66500.0, bool rds2Data = true) {
     Sink sink;
     RxPipeline::Callbacks cb{};
     cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
     MpxGen gen; gen.noise = noise; gen.echoAmp = echoAmp; gen.echoDelay = echoDelay;
-    gen.impAmp = impAmp; gen.rds2Amp = rds2Amp; gen.rds2Hz = rds2Hz;
+    gen.impAmp = impAmp; gen.rds2Amp = rds2Amp; gen.rds2Hz = rds2Hz; gen.rds2Data = rds2Data;
     RxPipeline rx;
     rx.start(kFs, 1024, 10.0, 48000, cb);
     rx.setNoiseBlanker(nbOn);
@@ -135,7 +152,8 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
     }
     return { rx.multipathDepth(), rx.blendSnrDb(), rx.ceqEngaged(),
              rx.multipathAfterCeq(), rx.ceqEffort(), rx.noiseBlankRate(),
-             { rx.rds2Db(0), rx.rds2Db(1), rx.rds2Db(2) }, rx.rds2Ready() };
+             { rx.rds2Db(0), rx.rds2Db(1), rx.rds2Db(2) },
+             { rx.rds2Tone(0), rx.rds2Tone(1), rx.rds2Tone(2) }, rx.rds2Ready() };
 }
 
 }  // namespace
@@ -310,6 +328,30 @@ int main() {
         std::printf("   .. stream 3 present:  %+.1f / %+.1f / %+.1f dB\n", s3.r2[0], s3.r2[1], s3.r2[2]);
         ok(s3.r2[2] > 12.0f && s3.r2[0] < s3.r2[2] - 10.0f,
            "★ the highest stream (76 kHz) is found, and not confused with the lowest");
+
+        // ★★★ THE ONE THAT MATTERS. 76 kHz is EXACTLY 4x the 19 kHz pilot, so our own demodulator
+        //     puts a harmonic there on every station alive. Seen on air at Northampton reading
+        //     13 dB above the reference on Heart, which does not transmit RDS2. A detector that
+        //     cannot tell a tone from data is not detecting RDS2, it is detecting the pilot.
+        std::printf("   .. tone-vs-data (narrow/wide, dB — near 0 is a tone):\n");
+        std::printf("      data at 66.5k: %+.1f     tone at 76k: ", s1.r2t[0]);
+        const Result harm = measure(0.02, 0.0, 3, 6.0, 0.0, true, 0.05, 76000.0, false);
+        std::printf("%+.1f\n", harm.r2t[2]);
+        ok(harm.r2[2] > 12.0f,
+           "a bare tone at 76 kHz is loud — which is why the level alone cannot be trusted");
+        ok(harm.r2t[2] > -3.0f,
+           "★ a TONE comes through the narrow filter intact",
+           "read " + std::to_string(harm.r2t[2]) + " dB");
+        // ★ MEASURED, not assumed: data reads about -5.7 dB and a tone about 0, so the line goes
+        //   at -3. My first guess of -6 sat ON TOP of the data figure and failed — the separation
+        //   is real but smaller than it looks, because the WIDE filter is 3 kHz and the stream is
+        //   4.75, so the wide one is already missing some of it.
+        ok(s1.r2t[0] < -3.0f,
+           "★ real DATA does not — most of it falls outside 400 Hz",
+           "read " + std::to_string(s1.r2t[0]) + " dB");
+        ok(harm.r2t[2] > s1.r2t[0] + 5.0f,
+           "★★★ SO THE PILOT'S 4th HARMONIC IS TOLD FROM AN ACTUAL RDS2 STREAM",
+           "tone " + std::to_string(harm.r2t[2]) + " vs data " + std::to_string(s1.r2t[0]));
     }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);

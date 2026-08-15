@@ -144,6 +144,9 @@ export interface RdsExt {
    *  ★ Each figure is dB ABOVE AN EMPTY REFERENCE BAND, so it does not move with signal strength.
    *    Around zero is nothing; a real stream measured about 29 dB in the bench test. */
   rds2: number[];
+  /** ★ Narrow-over-wide, dB. Near 0 is a TONE — at 76 kHz that is the pilot's 4th harmonic, made
+   *  by our own demodulator on every station. Several dB below means real, spread-out data. */
+  rds2t: number[];
   /** False when our own channel is too narrow to see 76 kHz — then the reading says nothing about
    *  the station and the panel must say so. */
   rds2Ok: boolean;
@@ -1801,6 +1804,7 @@ export class UberSDRClient {
         ceqAfter: num(msg.ceqAfter, 0), ceqWhy: num(msg.ceqWhy, 3),
         ifGain: num(msg.ifGain, 0), ifCand: num(msg.ifCand, 0), ifBw: num(msg.ifBw, 0),
         rds2: Array.isArray(msg.rds2) ? msg.rds2.slice(0, 3).map((v: any) => num(v, 0)) : [],
+        rds2t: Array.isArray(msg.rds2t) ? msg.rds2t.slice(0, 3).map((v: any) => num(v, 0)) : [],
         rds2Ok: Number(msg.rds2Ok ?? 0) === 1,
         afAll: Array.isArray(msg.afAll)
           ? msg.afAll.filter((e: any) => Array.isArray(e) && e.length >= 2)
