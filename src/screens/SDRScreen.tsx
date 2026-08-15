@@ -937,7 +937,27 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     }, 12000);
   }, []);
-  const sessionUuid = useMemo(() => uuidv4(), [baseUrl, connEpoch]);
+  /**
+   * ★★★ ONE IDENTITY PER RADIO, KEPT ACROSS RECONNECTS. This was re-minted on every connEpoch —
+   *     so a full reconnect came back as a STRANGER, and on a one-listener radio the slot it was
+   *     trying to return to was still held by its own previous session. The server refused it:
+   *       admin session — controls unlocked, no session limit
+   *       spectrum WS refused — server busy (occupant present)
+   *     The app locked itself out, and it looked exactly like a takeover being rejected (Stuart,
+   *     2026-08-15, on both the RTL and the Airspy).
+   * ★★★ THE SERVER IS BUILT FOR THE OPPOSITE. occupantSession is "claim (or RE-AFFIRM) the slot
+   *     for this client", and the comment beside it says a client "opens two sockets and reconnects
+   *     across blips with the same id — restarting the timer on each would make the limit
+   *     unenforceable". A stable id is what that design expects; a fresh one on every reconnect is
+   *     what it defends against.
+   * ★★ connEpoch still does its job: it re-runs the whole connect path — spectrum client, audio
+   *    engine, decoders — which is what recovers a broken half-state after a data-saver drop. What
+   *    it no longer does is change WHO WE ARE. Rebuilding the sockets and changing identity are
+   *    two different things, and only the first was ever wanted.
+   * ★ Keyed on connectBase, so moving to another radio behind the same door is a new session,
+   *   which it genuinely is.
+   */
+  const sessionUuid = useMemo(() => uuidv4(), [connectBase]);
 
   // ── SDR state ─────────────────────────────────────────────────────────────
 
