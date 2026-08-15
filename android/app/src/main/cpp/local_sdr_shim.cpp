@@ -1971,6 +1971,14 @@ struct LocalSdrShim::Impl {
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
         std::atomic<bool> stereoOn{true};
+        // ★★★ THE FOUR BROADCAST-FM TREATMENTS, PER LISTENER. Held HERE and not only on the
+        //     pipeline, because a mode or width change BUILDS A NEW RxPipeline with fresh
+        //     defaults — the exact trap the re-apply block below already warns about for
+        //     de-emphasis and stereo: "the control still ON in their UI and no longer doing
+        //     anything, which is the WORST version of this bug because it looks like it is
+        //     working". Seeded from the server's configured values when the listener arrives, so
+        //     the owner still sets the house default and only this listener can change it.
+        std::atomic<bool> wspOn{true}, imsOn{true}, ceqOn{true}, nbOn{true};
         std::mutex        fxMtx;
         AudioNR*          nrEng = nullptr;
         AutoNotch*        notchEng = nullptr;
@@ -2528,6 +2536,12 @@ struct LocalSdrShim::Impl {
             //     re-applied after the AGC kick: whatever rebuilds must restore.
             if (c->deempTau >= 0) c->rx->setDeemphasis(c->deempTau);
             c->rx->setStereoEnabled(c->stereoOn.load());
+            // ★ And the four FM treatments, for exactly the reason above. Adding a per-listener
+            //   control without adding it here is how it comes to look like it is working.
+            c->rx->setWeakSignalProc(c->wspOn.load());
+            c->rx->setIms(c->imsOn.load());
+            c->rx->setCeq(c->ceqOn.load());
+            c->rx->setNoiseBlanker(c->nbOn.load());
             LOGI("client channel: %.3f kHz wide (%d bins) for %s",
                  c->chanRate / 1e3, want, c->mode.c_str());
         }
@@ -5453,27 +5467,56 @@ struct LocalSdrShim::Impl {
                 LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.0, v)));
             return;
         }
+        // ★★★ THE FOUR BROADCAST-FM TREATMENTS ARE PER LISTENER, and the premise that made them
+        //     shared was simply wrong: "it is one DSP chain per radio" has not been true since
+        //     every client got its own RxPipeline. The old code proved it — it had to LOOP over
+        //     `clientDsp` forcing each listener's pipeline into step, which is work you only do
+        //     when the state is genuinely separate.
+        // ★★★ NOTHING SHARED IS AT STAKE. NR, IMS, CEQ and the blanker touch nobody's front end;
+        //     they process this listener's audio and nothing else. Gain, the attenuator and the
+        //     bias-T are different in kind — one aerial, one tuner — and stay behind the gate.
+        //     Stuart, 2026-08-15: "yes make it per user."
+        // ★★ THE PRECEDENT IS THE ADVANCED RDS RAW SWITCH, a few hundred lines up: "RAW is PER
+        //    USER, PER SESSION. It changes only what this viewer is shown — so it cannot affect
+        //    anyone else on the same receiver." Same argument, same conclusion.
+        // ★ The server-wide values stay as the DEFAULT a new listener inherits, so the owner still
+        //   sets the house behaviour in the config; a listener's toggle no longer writes it.
+        //   A client with no pipeline of its own (nothing listening yet) is left alone rather than
+        //   falling back to the global setter — silently changing everyone was the bug.
+        // ★★★ AND IT MUST FALL BACK TO THE ONE PIPELINE. perClientDsp() is only true on a
+        //     receiver with a LOCKED CENTRE and room for more than one listener — the shared RSP
+        //     case. On an ordinary RTL or Airspy there is no per-client DSP at all, so looking one
+        //     up and doing nothing when it is absent would have silently killed all four switches
+        //     on the common setup while working perfectly on the one being tested.
+        // ★★ On a single-user radio the shared pipeline IS this listener's, so the Impl's own
+        //    atomics are updated with it and the state report below stays truthful.
+        auto perListener = [&](void (vibedsp::RxPipeline::*setter)(bool),
+                               std::atomic<bool> ClientDsp::*slot,
+                               std::atomic<bool>* shared, bool on) {
+            if (auto dsp = dspFor(sock)) {
+                // ★ The value is REMEMBERED on the listener, not only pushed at the pipeline it
+                //   happens to own right now — the next mode change replaces that pipeline.
+                ((*dsp).*slot).store(on);
+                if (dsp->rx) ((*dsp->rx).*setter)(on);
+                return;
+            }
+            (rx.*setter)(on);
+            if (shared) shared->store(on);
+        };
         if (type == "wsp") {
-            // ★ SHARED, like NR and the notch: it is one DSP chain per radio, so this changes what
-            //   everyone listening hears. The gate says so rather than letting one listener
-            //   silently re-tune another's audio.
-            if (!sharedGate("weak-signal processing")) return;
-            LocalSdrShim::instance().setWeakProc(msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setWeakSignalProc, &ClientDsp::wspOn, &weakProcOn, msg.find("\"on\":true") != std::string::npos);
             return;
         }
         if (type == "nb") {
-            if (!sharedGate("the noise blanker")) return;
-            LocalSdrShim::instance().setNoiseBlanker(msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setNoiseBlanker, &ClientDsp::nbOn, &nbOn, msg.find("\"on\":true") != std::string::npos);
             return;
         }
         if (type == "ceq") {
-            if (!sharedGate("CEQ")) return;
-            LocalSdrShim::instance().setCeq(msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setCeq, &ClientDsp::ceqOn, &ceqOn, msg.find("\"on\":true") != std::string::npos);
             return;
         }
         if (type == "ims") {
-            if (!sharedGate("IMS")) return;
-            LocalSdrShim::instance().setIms(msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setIms, &ClientDsp::imsOn, &imsOn, msg.find("\"on\":true") != std::string::npos);
             return;
         }
         if (type == "notch") {
@@ -5757,10 +5800,19 @@ struct LocalSdrShim::Impl {
         // ★★ REPORTED, NOT JUST ACCEPTED. A sticky control that does not say its state cannot be
         //    restored by a client that reconnects, and the button then lies about the radio — the
         //    lesson from the July fix that did `nr` and `notch` and left four siblings behind.
-        j += std::string(",\"wsp\":")   + (weakProcOn.load() ? "true" : "false");
-        j += std::string(",\"ims\":")   + (imsOn.load()      ? "true" : "false");
-        j += std::string(",\"ceq\":")   + (ceqOn.load()      ? "true" : "false");
-        j += std::string(",\"nb\":")    + (nbOn.load()       ? "true" : "false");
+        // ★★★ THIS LISTENER'S OWN FOUR, NOT THE SERVER'S. They are per-listener now, so reporting
+        //     the shared defaults here would draw somebody else's switches on this person's
+        //     screen — and on a shared RSP, where several people really do listen at once, that is
+        //     precisely the confusion the change was made to end. Falls back to the shared values
+        //     when this receiver has no per-client DSP, where they ARE this listener's.
+        const auto myDsp = dspFor(sock);
+        const auto mine = [&](std::atomic<bool> ClientDsp::*slot, std::atomic<bool>& shared) {
+            return myDsp ? ((*myDsp).*slot).load() : shared.load();
+        };
+        j += std::string(",\"wsp\":") + (mine(&ClientDsp::wspOn, weakProcOn) ? "true" : "false");
+        j += std::string(",\"ims\":") + (mine(&ClientDsp::imsOn, imsOn)      ? "true" : "false");
+        j += std::string(",\"ceq\":") + (mine(&ClientDsp::ceqOn, ceqOn)      ? "true" : "false");
+        j += std::string(",\"nb\":")  + (mine(&ClientDsp::nbOn,  nbOn)       ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -7643,6 +7695,9 @@ struct LocalSdrShim::Impl {
             if (perClientDsp()) {
                 auto c = std::make_shared<ClientDsp>();
                 c->owner = this;
+                // ★ The owner's configured defaults are what a new listener starts from.
+                c->wspOn.store(weakProcOn.load()); c->imsOn.store(imsOn.load());
+                c->ceqOn.store(ceqOn.load());      c->nbOn.store(nbOn.load());
                 c->spec = sock;
                 c->session = session;
                 c->agent = userAgent;
