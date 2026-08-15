@@ -1960,8 +1960,30 @@ export class UberSDRClient {
         const want = this.wantTune;
         this.wantTune = null;
         const serverVfo = Number(msg.vfo);
-        const shared = msg.locked === true;
-        if (!shared && Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
+        // ★★★ CAN THE MEMORY EVEN BE HONOURED? A receiver with a LOCKED WINDOW still allows free
+        //     tuning INSIDE it, so a remembered frequency in range is perfectly reachable and
+        //     should be restored. One outside the window is not, and insisting on it would leave
+        //     the dial showing a frequency the radio can never reach — which is the very fault
+        //     this code exists to end, in a new costume.
+        // ★★ SO: IN RANGE, ASSERT. OUT OF RANGE, TAKE THE LANDING FREQUENCY AND MODE, which is the
+        //    owner's answer for "a listener who cannot go where they wanted". Stuart's case,
+        //    exactly: "if I change the unlocked single-user radio to a fixed range with multiple
+        //    users, and I connect and cannot tune to the last used memory, then I should default
+        //    to the landing frequency and mode of the radio" (2026-08-15).
+        // ★ Unlocked receivers have no window to be outside of, so memory always wins there —
+        //   which is the two single-user radios, and the common case.
+        const span = Number(this.status.bwHz) || 0;
+        const centre = Number(this.status.centerHz) || 0;
+        const windowed = msg.locked === true && span > 0 && centre > 0;
+        const reachable = !windowed
+          || Math.abs(want.frequency - centre) <= span / 2;
+        if (!reachable) {
+          // Adopt what the server actually did, so the readout stops claiming otherwise.
+          this.dbg(`remembered ${want.frequency} is outside the locked window — keeping the landing`);
+          if (Number.isFinite(serverVfo) && serverVfo > 0) this.status.frequency = serverVfo;
+          if (typeof msg.mode === 'string' && msg.mode) this.status.mode = msg.mode as SDRMode;
+          this.callbacks.onStatus({ ...this.status });
+        } else if (Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
           this.dbg(`landing put us on ${serverVfo}; re-asserting remembered ${want.frequency}`);
           this.tune(want.frequency, want.mode, { recenter: true });
         }
