@@ -549,6 +549,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ The socket callbacks are created once, so they cannot read `refusal` state directly — a
    *  stale closure would let the connection-lost card cover a terminal one. */
   const refusalRef = useRef<{ title: string; body: string; note: string } | null>(null);
+  /** ★ Did THIS connection attempt ever get in? The admin one-shot retry hangs off it: a
+   *  credential that was accepted must not be discarded because of a later, unrelated error. */
+  const connectedOnceRef = useRef(false);
   refusalRef.current = refusal;
   /** Admin takeover, offered on the IN USE refusal. See the modal for why it reconnects. */
   const [takeoverPw, setTakeoverPw] = useState('');
@@ -2781,6 +2784,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     //     itself is a guaranteed 1006 that looks exactly like a dead server.
     if (doorPending || awaitingRadio) return;
     destroyed.current = false;
+    // ★ A fresh attempt has not got in yet — so an expired credential on a LATER connection can
+    //   still take the one-shot retry above.
+    connectedOnceRef.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
       // ★★★ A CONNECTION THAT SUCCEEDED TAKES THE REFUSAL CARD DOWN WITH IT. Every other notice
@@ -2793,7 +2799,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    us a spectrum, is not a stale detail — it is the whole screen, and it is wrong. There
       //    is no case where both can be true: a genuinely refused session has no connection to
       //    announce, and `refused` stops the client retrying into one.
-      onConnect:    () => { if (!destroyed.current) { kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
+      onConnect:    () => { if (!destroyed.current) { connectedOnceRef.current = true; kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       // ★★★ A CLOSED SOCKET MUST RAISE THE CARD ITSELF. The connection-lost notice was armed ONLY
       //     from link quality reaching zero — and link quality is reported WHEN FRAMES ARRIVE. So
       //     when the link actually died, nothing reported anything, the timer was never armed, and
@@ -3331,7 +3337,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    wrong, so the admin buttons disappear with it and the owner can unlock again.
         // ★ One shot, guarded — a server refusing for any OTHER reason must still report it rather
         //   than loop.
-        if (adminAuthQRef.current && !adminRetryDone.current) {
+        // ★★★ ONLY IF THE CREDENTIAL WAS NEVER ACCEPTED. This fired on ANY error while holding
+        //     one, which turned a SUCCESSFUL takeover into a lockout: the server evicted the
+        //     occupant and granted us admin, then the next error made us throw the credential away
+        //     and reconnect with a NEW session id — as an ordinary listener, to a radio now
+        //     occupied BY OUR OWN PREVIOUS SESSION. The server's log says it plainly:
+        //       admin override — evicting the current occupant
+        //       admin session — controls unlocked, no session limit
+        //       spectrum WS refused — server busy (occupant present)
+        //     We took the radio and then locked ourselves out of it (Stuart, 2026-08-15: "if I use
+        //     the popup password entry to take over I end up in a loop back to the radio picker").
+        // ★★ The guard is whether we ever got IN with it. An expired ticket — the case this was
+        //    written for — fails at the handshake, so onConnect never fires and the retry still
+        //    works exactly as intended. An error AFTER a successful connect says nothing about the
+        //    credential, and answering it by discarding one is a guess dressed as a recovery.
+        if (adminAuthQRef.current && !adminRetryDone.current && !connectedOnceRef.current) {
           adminRetryDone.current = true;
           adminAuthQRef.current = '';
           setAdminAuthQ('');
