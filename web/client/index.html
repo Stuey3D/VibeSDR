@@ -2575,6 +2575,29 @@ select.btn { padding: 6px 8px; }
        ladder. Choose &quot;until I clear it&quot; for a fault you have not fixed yet.</p>
     </div>
 
+    <!-- ★★★ WHAT THIS RECEIVER HAS LEARNED, AND HOW TO MAKE IT FORGET. Everything here is a
+         GUESS the server made on its own: stations learned from RDS, and artwork fetched from
+         somebody else's directory. A guess that turns out wrong is remembered exactly as
+         confidently as a right one — a mis-decoded PS, a logo that attached itself to the wrong
+         station — and until now the only cure was waiting out a 30-day expiry.
+         ★★ THREE BUTTONS, NOT ONE. What they empty differs in kind: the learned list decays and is
+         disposable, the manual list is what somebody TYPED and is usually correct, and the logo
+         cache is a third party's answer. One button for all three would make an owner destroy two
+         things they trust in order to fix the one they do not (Stuart, 2026-08-15). -->
+    <div id="secLearned" hidden>
+    <h2>WHAT THIS RECEIVER HAS LEARNED</h2>
+    <div class="aActions">
+      <button class="btn" id="actClearLearned">CLEAR LEARNED RDS STATIONS</button>
+      <button class="btn" id="actClearLogos">CLEAR STATION LOGO CACHE</button>
+      <button class="btn" id="actClearManual">CLEAR MANUAL BOOKMARKS</button>
+    </div>
+    <p class="dim">Stations are learned from RDS as people listen, and artwork is looked up once
+       and remembered — a day for a hit, an hour for a miss. Clearing the logos makes the next
+       listener's lookup fresh, which is the cure for a station showing somebody else's badge.
+       Manual bookmarks are the ones you typed or imported; they never expire, and they are kept
+       separate here because they are usually the part that is right.</p>
+    </div>
+
     <div id="secMaintenance" hidden>
     <h2>MAINTENANCE</h2>
     <div class="aActions">

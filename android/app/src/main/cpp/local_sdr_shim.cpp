@@ -707,6 +707,29 @@ static void bmClear() {
     bmSaveLocked();
 }
 
+/** ★★★ CLEAR ONE KIND, NOT BOTH. The learned list is a GUESS that decays — a wrong PS decode, a
+ *  logo that attached itself to the wrong station, a frequency filed off-channel — and an owner
+ *  needs to be able to throw it away without losing the entries they typed or imported by hand,
+ *  which are neither guesses nor expiring (Stuart, 2026-08-15: "a clear manually added bookmarks
+ *  to server too, but as a SEPARATE button, as usually these will be correct anyway").
+ *  ★ The pending (unconfirmed) sightings go with the learned ones: they are the same guess, one
+ *    step earlier, and leaving them would let the list refill itself with what was just cleared. */
+static void bmClearLearned() {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    for (auto it = g_bookmarks.begin(); it != g_bookmarks.end(); )
+        it = it->second.manual ? std::next(it) : g_bookmarks.erase(it);
+    g_bmPending.clear();
+    bmSaveLocked();
+}
+
+/** The typed and imported ones only. Leaves everything RDS has learned in place. */
+static void bmClearManual() {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    for (auto it = g_bookmarks.begin(); it != g_bookmarks.end(); )
+        it = it->second.manual ? g_bookmarks.erase(it) : std::next(it);
+    bmSaveLocked();
+}
+
 static void bmRemove(double hz) {
     std::lock_guard<std::mutex> lk(g_bmMtx);
     g_bookmarks.erase(bmKey(hz));
@@ -936,6 +959,7 @@ static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
 /** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
  *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
 static LocalSdrShim::StationLogoFn g_vsStationLogoFn;
+static LocalSdrShim::LogoCacheClearFn g_vsLogoClearFn;
 static LocalSdrShim::AsnFn         g_vsAsnFn;
 /** Forward-declared: used on the connection path, defined with the other handler plumbing. */
 static std::string vsCountry(const std::string& ip);
@@ -6803,6 +6827,21 @@ struct LocalSdrShim::Impl {
                       ok ? "{\"ok\":true}" : "{\"error\":\"no such ban\"}");
                 return;
             }
+            // ★★★ THREE SEPARATE CLEARS, DELIBERATELY. What they empty differs in kind: the
+            //     learned list is a decaying GUESS, the manual list is what somebody typed, and the
+            //     logo cache is somebody else's answer we chose to remember. One button for all
+            //     three would make an owner destroy two things they trust to fix the one they do
+            //     not.
+            if (isPost && what == "clear") {
+                const std::string kind = queryParam(reqLine, "what");
+                if (kind == "learned")      { bmClearLearned(); }
+                else if (kind == "manual")  { bmClearManual(); }
+                else if (kind == "logos")   { LocalSdrShim::clearLogoCache(); }
+                else { reply(400, "Bad Request", "{\"error\":\"what must be learned|manual|logos\"}"); return; }
+                LOGI("admin cleared: %s", kind.c_str());
+                reply(200, "OK", "{\"ok\":true}");
+                return;
+            }
             if (isPost && what == "kick") {
                 const std::string session = jsonStr(body, "session");
                 const std::string addr    = jsonStr(body, "ip");
@@ -10605,6 +10644,15 @@ void LocalSdrShim::setRadiosHandler(RadiosFn fn) {
 void LocalSdrShim::setSolarHandler(SolarFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsSolarFn = std::move(fn);
+}
+void LocalSdrShim::setLogoCacheClearHandler(LogoCacheClearFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsLogoClearFn = std::move(fn);
+}
+void LocalSdrShim::clearLogoCache() {
+    LogoCacheClearFn fn;
+    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsLogoClearFn; }
+    if (fn) fn();
 }
 void LocalSdrShim::setStationLogoHandler(StationLogoFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

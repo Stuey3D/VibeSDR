@@ -1667,6 +1667,8 @@ int main(int argc, char** argv) {
         //   silently do nothing on a server with no country configured.
         return vsradiodns::logoForAuto(pi, ecc, hz, g_runtimeConfig.country);
     });
+    // ★ The admin page's "clear station logo cache" — see setLogoCacheClearHandler.
+    LocalSdrShim::setLogoCacheClearHandler([] { vsradiodns::clearCache(); });
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;
         if (!refresh || n == 0) { const int c = vseibi::loadFromCache(); if (c > n) n = c; }

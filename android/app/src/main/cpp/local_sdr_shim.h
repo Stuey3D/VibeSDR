@@ -356,6 +356,14 @@ public:
     using StationLogoFn = std::function<std::string(const std::string& piHex,
                                                     const std::string& ecc, double freqHz)>;
     static void setStationLogoHandler(StationLogoFn fn);
+    /** ★★ EMPTY THE SERVER'S STATION-LOGO CACHE. A logo is looked up once and remembered — hits
+     *  for a day, misses for an hour — so a WRONG one is remembered exactly as confidently as a
+     *  right one, and the owner has no way to say "that is not the station" (Stuart, 2026-08-15:
+     *  "a station that previously had a correct logo flashes up an incorrect one then never shows
+     *  a logo again"). Injected like the lookup itself so this file stays free of RadioDNS. */
+    using LogoCacheClearFn = std::function<void()>;
+    static void setLogoCacheClearHandler(LogoCacheClearFn fn);
+    static void clearLogoCache();
 
     /** ★★★ REWRITE AN RTL DONGLE'S SERIAL. The daemon owns this because it owns the filesystem
      *  (the mandatory backup) and the device; the shim only exposes it, exactly like the config

@@ -485,6 +485,17 @@ export class UberSDRClient {
     }
     this.status.frequency = frequency;
     this.status.mode = mode;
+    // ★★★ WHAT WE ASKED FOR, SO IT CAN BE RE-ASSERTED. The server LANDS a new session on the
+    //     owner's chosen frequency — deliberately — and does it during the handshake, i.e. AFTER
+    //     this. So a client restoring its remembered tune ended up showing one frequency while the
+    //     radio sat on another: the readout said 106.8 MHz WFM and the spectrum was the AM
+    //     broadcast band, playing Radio Caroline on 648 kHz. One manual tune fixed it, which is
+    //     exactly the shape of a client that never told the server where it wanted to be
+    //     (Stuart, 2026-08-15, on both the app and the browser, every multi-radio server).
+    // ★★ Only when the caller has a tune to restore. With allowServerDefault the server's landing
+    //    IS the answer and must not be argued with — that is a new listener with no memory, which
+    //    is the case the landing frequency exists for.
+    this.wantTune = opts?.allowServerDefault ? null : { frequency, mode };
     // Mirror the server's per-mode bandwidth defaults for the CONNECT mode
     // too (setMode already does) — without this, connecting in a restored
     // non-USB mode kept the constructor's USB edges and the first emission
@@ -986,6 +997,9 @@ export class UberSDRClient {
   /** True once a radio has announced itself on this client — so a LATER hwinfo means we came
    *  back, rather than arrived. */
   private hadSession = false;
+  /** The tune we connected FOR, when it came from memory rather than from the server. Re-sent once
+   *  the server has told us where it actually put us; cleared the moment it is honoured. */
+  private wantTune: { frequency: number; mode: SDRMode } | null = null;
 
   private async _checkConnection() {
     this.dbg('POST /connection uuid=' + this.uuid.slice(0, 8));
@@ -1931,6 +1945,27 @@ export class UberSDRClient {
         : this.status.binBandwidth * this.status.binCount;
       this.dbg(`config: ${this.status.binCount} bins @ ${this.status.binBandwidth} Hz ` +
                `centre ${this.status.centerHz} bw ${this.status.bwHz}`);
+      // ★★★ THE SERVER HAS JUST TOLD US WHERE IT ACTUALLY PUT US. If we connected to restore a
+      //     remembered tune, this is the moment to find out whether it took — and on a new session
+      //     it will NOT have, because the server lands newcomers on the owner's chosen frequency
+      //     during the handshake. Without this the app showed 106.8 MHz WFM while the radio sat in
+      //     the AM broadcast band playing Radio Caroline, and one manual tune "fixed" it.
+      // ★★ NOT ON A LOCKED RECEIVER. The comment on the server's own config says it: on a shared
+      //    radio there is one VFO and "a joiner must adopt it rather than impose one — otherwise
+      //    the last person to connect silently retunes the radio for everybody already listening".
+      //    So we adopt there, and only assert where the VFO is genuinely ours.
+      // ★ Once. Cleared either way, so a server that lands us somewhere on purpose is argued with
+      //   exactly once and never again.
+      if (this.wantTune) {
+        const want = this.wantTune;
+        this.wantTune = null;
+        const serverVfo = Number(msg.vfo);
+        const shared = msg.locked === true;
+        if (!shared && Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
+          this.dbg(`landing put us on ${serverVfo}; re-asserting remembered ${want.frequency}`);
+          this.tune(want.frequency, want.mode, { recenter: true });
+        }
+      }
       // binBandwidth change ⇒ the session may have migrated shared↔private,
       // which resets the server-side poll divisor — re-assert ours.
       if (this.status.binBandwidth !== this.lastRateBinBw) {

@@ -73,6 +73,11 @@ std::vector<std::string> eccCandidates(const std::string& piHex, const std::stri
 std::string logoForAuto(const std::string& piHex, const std::string& ecc, double freqHz,
                         const std::string& preferIso);
 
+/** ★★ Empty the lookup cache. Answers are remembered — hits for a day, misses for an hour — so a
+ *  WRONG logo is remembered exactly as confidently as a right one, and there is otherwise no way
+ *  for the owner to say "that is not the station". Exposed for the admin page's Clear button. */
+void clearCache();
+
 /** Where the cache lives, for the same reason the other data directories are settable. */
 void setDir(const std::string& dir);
 

@@ -339,4 +339,9 @@ std::string logoForAuto(const std::string& piHex, const std::string& ecc, double
     return {};
 }
 
+
+void clearCache() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_cache.clear();
+}
 }  // namespace vsradiodns

@@ -794,6 +794,10 @@ async function refresh() {
     //     be inert, they would STRAND the receiver (Stuart, 2026-08-07).
     //     ★ Per-BUTTON, not just per-section, so a platform can offer "restart" without "reboot".
     {
+      // ★ The learned/cached data belongs to the RADIO, not to the platform's maintenance tools,
+      //   so it is shown wherever the admin page is — every server has an RDS list and a logo
+      //   cache, whatever it can or cannot do about its own packages.
+      { const ls = document.getElementById('secLearned'); if (ls) ls.hidden = false; }
       const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
       const sec = document.getElementById('secMaintenance');
       if (sec) sec.hidden = offered.length === 0;
@@ -1143,6 +1147,27 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     if (el) el.value = '';
     void postNotice('', 0);
   });
+
+  // ── The learned/cached data, and how to make the receiver forget it ────────────────────────
+  const clear = async (kind: 'learned' | 'manual' | 'logos', confirmText: string) => {
+    if (!window.confirm(confirmText)) return;
+    try {
+      await post(`clear?what=${kind}`, {});
+      msg('actMsg', kind === 'logos' ? 'Logo cache cleared — the next lookup starts fresh.'
+                  : kind === 'manual' ? 'Manual bookmarks cleared.'
+                  : 'Learned RDS stations cleared.');
+    } catch (e) { msg('actMsg', (e as Error).message); }
+  };
+  $('actClearLearned')?.addEventListener('click', () => void clear('learned',
+    'Clear every station this receiver has learned from RDS?\n\n'
+    + 'Bookmarks you typed or imported are kept.'));
+  $('actClearLogos')?.addEventListener('click', () => void clear('logos',
+    'Clear the station logo cache?\n\n'
+    + 'The next listener on each station looks its artwork up again. Use this when a station is '
+    + 'showing the wrong badge.'));
+  $('actClearManual')?.addEventListener('click', () => void clear('manual',
+    'Clear the bookmarks you typed or imported?\n\n'
+    + 'Stations learned from RDS are kept. This cannot be undone.'));
 
   $('actUpdateCheck')?.addEventListener('click', () => act('update-check'));
   $('actUpdate')?.addEventListener('click', () => act('update', 'Update VibeServer to the latest version?'));
