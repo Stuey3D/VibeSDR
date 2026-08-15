@@ -2058,6 +2058,9 @@ struct LocalSdrShim::Impl {
         vibedsp::Channelizer::ExtractCtx ectx, vectx;
     };
     std::map<net::Socket*, std::shared_ptr<ClientDsp>> clientDsp;
+    /** The session we have already landed on the owner's chosen frequency. Guards against landing
+     *  the same listener again every time one of their sockets arrives to an empty room. */
+    std::string landedSession;
     /** Audio sockets that arrived before their spectrum socket, by session id. */
     std::map<std::string, std::shared_ptr<net::Socket>> pendingAudio;
     std::unique_ptr<vibedsp::Channelizer> chan_;
@@ -7783,7 +7786,21 @@ struct LocalSdrShim::Impl {
             // ── ★★★ LAND A NEW SESSION WHERE THE OWNER SAID ────────────────────────────
             // Before sendConfig, so the client is told the frequency it is actually on rather
             // than being told one thing and then moved.
-            if (firstOfSession) {
+            // ★★★ ONCE PER SESSION, NOT ONCE PER SOCKET THAT FINDS THE ROOM EMPTY.
+            //     `firstOfSession` is "no spectrum listener right now", and a client opens THREE
+            //     sockets (spectrum, audio, decoder) and reopens them across blips — so the
+            //     landing fired again and again, and each time it threw away the tune the listener
+            //     had just restored. The log said it plainly: mode=wfm, then "landing on 648.000
+            //     kHz am", then mode=wfm, then landing again, four times in ninety seconds. The
+            //     listener saw 107.4 FM on the dial and heard Radio Caroline on 648 (Stuart,
+            //     2026-08-15) — and tuning by hand "fixed" it only until the next socket landed
+            //     them back.
+            // ★★ THE LANDING IS FOR A NEW SESSION, which is what its own comment says, so the test
+            //    is the SESSION and not the socket count. Remembered by id: the same listener
+            //    returning is not a new arrival, and a genuinely new one still gets the owner's
+            //    chosen frequency exactly once.
+            if (firstOfSession && landedSession != session) {
+                landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
                 //   127.0.0.1, and loopback is exempt from the session limit.
                 if (sock) {
