@@ -7535,6 +7535,9 @@ struct LocalSdrShim::Impl {
             //    answering the question; a socket that presents a BAD one is not granted anything
             //    either, it simply does not revoke what another socket proved. Revocation has its
             //    own paths (relock, and a new occupant taking the chair).
+            // ★ Arriving with a proved credential is a login, so it supersedes any other admin
+            //   for the same reason typing the password does.
+            if (adminAuthed) demoteOtherAdmins(sock);
             if (newOccupant || adminAuthed) adminOk.store(adminAuthed);
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
             if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
@@ -8388,15 +8391,60 @@ struct LocalSdrShim::Impl {
         if (auto d = dspFor(sock)) return d->adminOk.load();
         return adminOk.load();
     }
-    /** Grant or revoke it for THIS listener only. */
+    /** Grant or revoke it for this listener.
+     *
+     *  ★★★ ADMIN IS EXCLUSIVE, AND THE MOST RECENT LOGIN WINS. Stuart, 2026-08-15: "if only one
+     *      person can be admin, which should be the case, it should be the one who has logged in
+     *      most recently. Just in case I leave the house and forget I've left it open on the Mac,
+     *      I can then use the app on my iPhone to be the admin."
+     *  ★★★ THAT IS A REAL SCENARIO AND IT DECIDES THE DESIGN. An owner cannot always reach the
+     *      machine that holds the unlock, so an admin session left open somewhere else must not be
+     *      able to lock the owner out of their own receiver. Whoever proves the password last has
+     *      demonstrated they hold it; the earlier session has demonstrated nothing since.
+     *  ★★ DEMOTED, NOT DISCONNECTED. The previous admin keeps listening and simply becomes an
+     *     ordinary listener — controls locked, and the session limit applies to them again. Being
+     *     out-ranked is not a reason to take somebody's audio away; that is what eviction is for,
+     *     and it is a separate, deliberate act.
+     *  ★ This replaces the per-listener-admin model of an hour earlier, which let two owners hold
+     *    it at once. Per-listener STATE is still right — each listener's unlock, idle clock and
+     *    countdown exemption are their own — but the POLICY on top of it is exclusive.
+     */
     void setAdminNow(const std::shared_ptr<net::Socket>& sock, bool on) {
+        if (on) demoteOtherAdmins(sock);
         if (auto d = dspFor(sock)) {
             d->adminOk.store(on);
             if (on) d->lastAdminTouch.store(Impl::nowSecs());
+            // ★ The radio-wide flag follows the current admin, because the paths with no
+            //   particular listener in mind (the /vibeserver.json probe) still read it.
+            adminOk.store(on);
+            if (on) lastAdminTouch.store(Impl::nowSecs());
             return;
         }
         adminOk.store(on);
         if (on) lastAdminTouch.store(Impl::nowSecs());
+    }
+
+    /** Take admin away from every listener except `keep`, and tell each of them why. */
+    void demoteOtherAdmins(const std::shared_ptr<net::Socket>& keep) {
+        std::vector<std::shared_ptr<net::Socket>> told;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) {
+                auto& c = kv.second;
+                if (!c || !c->adminOk.load()) continue;
+                if (keep && (c->spec == keep || c->audio == keep)) continue;
+                c->adminOk.store(false);
+                if (c->spec) told.push_back(c->spec);
+            }
+        }
+        // ★★ SAY SO. A control that silently stops working reads as a bug — the same reasoning as
+        //    the idle re-lock, which learnt this the hard way. `ok:false` greys the controls
+        //    through the path the client already has; `superseded` is what lets it explain.
+        for (auto& sc : told) {
+            if (sc && sc->isOpen())
+                sendText(sc, "{\"type\":\"admin\",\"ok\":false,\"superseded\":true}");
+            LOGI("admin superseded — an owner unlocked more recently elsewhere");
+        }
     }
     /** Stamp the idle clock for whoever sent a command. */
     void touchAdmin(const std::shared_ptr<net::Socket>& sock) {

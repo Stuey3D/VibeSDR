@@ -254,6 +254,9 @@ export interface SpectrumCallbacks {
   onRetuneJump?: () => void;
   /** ★ Admin controls were re-locked after an idle period. NOT a disconnection: the session,
    *  the audio and any decoder are all still running. `idleMin` is how long it waited. */
+  /** Another session proved the owner's password more recently; this one is now an ordinary
+   *  listener. Still connected, still listening — only the controls are gone. */
+  onAdminSuperseded?: () => void;
   onAdminRelocked?: (idleMin: number) => void;
   onRtt?:    (ms: number) => void;
   /** Bytes received on the spectrum socket — the BIGGER half of the link. */
@@ -559,6 +562,16 @@ export class SpectrumClient {
         if (msg.relocked === true) {
           this.cb.onAdminRelocked?.(Number(msg.idleMin) || 0);
           this.cb.onAdmin?.(false, true);   // grey the controls, without the alert
+          break;
+        }
+        // ★★ SUPERSEDED: somebody proved the owner's password more recently, somewhere else.
+        //    Admin is exclusive and the latest login wins — an owner who has left a session open
+        //    on another machine must still be able to take control from the one in their hand.
+        //    ★ Not a refusal and not a wrong password, so it takes the relock path's quiet
+        //      treatment rather than the alert: the controls grey, and it says why.
+        if (msg.superseded === true) {
+          this.cb.onAdminSuperseded?.();
+          this.cb.onAdmin?.(false, true);
           break;
         }
         this.cb.onAdmin?.(msg.ok === true, msg.refused === true);

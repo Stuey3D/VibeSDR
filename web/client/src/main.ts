@@ -809,6 +809,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   new one's position. Both buffers flush together or the two displays disagree.
     onRetuneJump: () => { audio?.flush(); if (!NO_WF) wf?.flushHeld(); },
     onAdminRelocked: (idleMin) => showAdminRelocked(idleMin),
+    onAdminSuperseded: () => showPill(
+      'Admin taken by a more recent login elsewhere — you are still listening'),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
