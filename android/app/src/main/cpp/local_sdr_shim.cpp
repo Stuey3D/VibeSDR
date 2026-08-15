@@ -1255,6 +1255,9 @@ struct LocalSdrShim::Impl {
     // it straight to the waterfall saturated everything above the floor and made
     // the level jump at the zoom handover. Align the two on the floor they share.
     std::atomic<float> iqFloorDb{-100.0f};
+    /** Scratch for the band-edge floor percentile. A member so the per-frame measurement does not
+     *  allocate; only ever touched on the DSP thread. */
+    std::vector<float> edgeBins_;
     std::atomic<float> spyDbOffset{0.0f};   // smoothed correction, engine dB - server dB
     bool spyOffsetPrimed = false;
 
@@ -3573,18 +3576,36 @@ struct LocalSdrShim::Impl {
             //   Start the window just inside that, and clamp so a narrow capture cannot invert it.
             const int deadBins = std::min(bins / 4,
                                           (int)std::lround(edgeCutoffHz() / binHz));
-            double eSum = 0; int eN = 0;
+            // ★★★ A MEDIAN, NOT A MEAN — BECAUSE ONE EDGE IS OFTEN A TRANSMITTER. This averaged
+            //     both band edges, so a strong station sitting near the edge of the span WAS the
+            //     noise floor: the figure rose to meet the signal and the meter read SNR 0 dB on a
+            //     station plainly out of the noise (Stuart, 2026-08-15, 103.8 with a blowtorch at
+            //     104.15 filling the top of the span).
+            // ★★ It is the same mistake the client's own comment warns about at the other end —
+            //    "not the mean: a strong carrier drags a mean upward and the SNR reads low exactly
+            //    when the signal is strongest" — and the mean was kept here while being rejected
+            //    there. A percentile does not care that a quarter of the window is occupied.
+            // ★ 25th percentile of the edge bins, via nth_element: O(n), no sort, and the vector is
+            //   reused so this allocates nothing per frame.
+            edgeBins_.clear();
             for (int i = 0; i <= half / 2; i++) {
                 const int lo = -(bins/2) + deadBins + i;
                 const int hi = (bins/2 - 1) - deadBins - i;
                 if (lo >= hi) break;
-                eSum += dbAt(lo); eSum += dbAt(hi); eN += 2;
+                edgeBins_.push_back((float)dbAt(lo));
+                edgeBins_.push_back((float)dbAt(hi));
             }
-            spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
+            double floorDbNow = 0.0; const int eN = (int)edgeBins_.size();
+            if (eN) {
+                const size_t k = edgeBins_.size() / 4;
+                std::nth_element(edgeBins_.begin(), edgeBins_.begin() + k, edgeBins_.end());
+                floorDbNow = edgeBins_[k];
+            }
+            spectrumSnr.store((cN && eN) ? (float)(cSum/cN - floorDbNow) : 0.0f);
             // Band-edge average = our own noise floor, in the engine's dBFS. emitServerFft()
             // aligns the server's differently-scaled dB onto this, so the two waterfall sources
             // agree and the colour map is fed the values it was designed for.
-            if (eN) iqFloorDb.store((float)(eSum / eN));
+            if (eN) iqFloorDb.store((float)floorDbNow);
         }
 
         // ══ FM META SERVICE ══════════════════════════════════════════════════════════════
