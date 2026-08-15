@@ -719,6 +719,14 @@ link.setAutoContrast(wfAutoContrast)
         List {
           Section(link.radioChoiceName.isEmpty ? "Choose a receiver" : link.radioChoiceName) {
             ForEach(link.radioChoices) { r in
+              // ★★★ IN USE IS NOT A CHOICE UNLESS YOU HOLD THE PASSWORD — the same rule as the
+              //     phone's picker and the browser's landing page. Jr showed the badge from this
+              //     afternoon but still let you tap through to be refused, which is the very
+              //     journey the phone was just changed to stop offering. The unlock box lives at
+              //     the bottom of this sheet; hold the credential and every radio opens.
+              // ★ Unknown stays tappable. A radio that has not answered is not a radio in use.
+              let busy = link.radioBusy[r.id] == true
+              let blocked = busy && !link.adminArmed
               Button {
                 link.chooseRadio(r)
               } label: {
@@ -733,14 +741,18 @@ link.setAutoContrast(wfAutoContrast)
                   //    question — arriving means displacing somebody or being refused — and the
                   //    only way to learn it used to be to try. Silent while unknown: a radio whose
                   //    process is slow or down must not be drawn as free.
-                  if let busy = link.radioBusy[r.id] {
-                    Text(busy ? (r.users > 1 ? "in use \u{00b7} shared" : "in use")
-                              : "free")
+                  if let known = link.radioBusy[r.id] {
+                    Text(known ? (blocked ? "in use \u{00b7} unlock below"
+                                          : (r.users > 1 ? "in use \u{00b7} shared"
+                                                         : "in use \u{00b7} you can take it"))
+                               : "free")
                       .font(.system(size: 10, weight: .semibold))
-                      .foregroundStyle(busy ? .orange : .green)
+                      .foregroundStyle(known ? .orange : .green)
                   }
                 }
               }
+              .disabled(blocked)
+              .opacity(blocked ? 0.45 : 1)
             }
           }
           // ★ Its own View: inlined, this sheet grew past what the SwiftUI type-checker will
