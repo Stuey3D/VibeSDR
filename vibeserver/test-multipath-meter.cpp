@@ -106,10 +106,10 @@ struct Sink {
 };
 
 struct Result { float mpDepth; float snrDb; bool ceqOn; float ceqAfter; float effort;
-                float nbRate; };
+                float nbRate; unsigned ifBuilds, shBuilds; float ifBw; float ifGain; };
 
 Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds = 4.0,
-               double impAmp = 0.0, bool nbOn = true) {
+               double impAmp = 0.0, bool nbOn = true, bool imsOn = true) {
     Sink sink;
     RxPipeline::Callbacks cb{};
     cb.ctx = &sink; cb.stereo = &Sink::onStereo; cb.audio = &Sink::onAudio;
@@ -118,6 +118,7 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
     RxPipeline rx;
     rx.start(kFs, 1024, 10.0, 48000, cb);
     rx.setNoiseBlanker(nbOn);
+    rx.setIms(imsOn);
     rx.setTune(0.0, RxPipeline::Mode::WFM, 250000.0);
     const int block = 8192, total = (int)(kFs * seconds);
     std::vector<cf32> buf;
@@ -126,7 +127,8 @@ Result measure(double noise, double echoAmp, int echoDelay = 3, double seconds =
         rx.feed(buf.data(), (int)buf.size());
     }
     return { rx.multipathDepth(), rx.blendSnrDb(), rx.ceqEngaged(),
-             rx.multipathAfterCeq(), rx.ceqEffort(), rx.noiseBlankRate() };
+             rx.multipathAfterCeq(), rx.ceqEffort(), rx.noiseBlankRate(),
+             rx.ifRebuilds(), rx.shadowRebuilds(), (float)rx.ifBandwidth(), rx.ifGainDb() };
 }
 
 }  // namespace
@@ -269,6 +271,53 @@ int main() {
         ok(imp.snrDb > impOff.snrDb + 0.5f,
            "★★★ AND THE SIGNAL MEASURES BETTER FOR IT — the only result that matters",
            "off " + std::to_string(impOff.snrDb) + " dB, on " + std::to_string(imp.snrDb) + " dB");
+    }
+
+    // ── The IF filters must not be REBUILT while nothing is changing ──────────────────────────
+    // ★★★ THE SHADOW IS TOLD ITS BANDWIDTH ON EVERY EVALUATION — about fifteen times a second,
+    //     with the same value each time. Each call used to design a fresh windowed-sinc and
+    //     heap-allocate a new FirDecimator on the DSP thread, and, worse, THROW AWAY THE FILTER'S
+    //     HISTORY: every shadow measurement was taken on a filter that had just been reset, so it
+    //     measured its own startup transient. That reading steers the narrowing decision, and a
+    //     decision that chatters rebuilds the REAL filter in the audio path, which is audible.
+    //     Reported as "audio dropouts on HFM, which is a weaker signal" (Stuart, 2026-08-15).
+    std::printf("\nThe IF filters must not be rebuilt while nothing changes\n");
+    {
+        const Result r = measure(0.05, 0.0, 3, 8.0);
+        // ★★★ AND THE DECISION MUST SURVIVE THE FIX. With the shadow filter finally keeping its
+        //     history, the measurement changed — and it changed to AGREE with the figure measured
+        //     on air: held wide, a clean station settles at about -9.5 dB, against the -9.8 dB in
+        //     the policy note. The calibration was right all along.
+        // ★★ What was wrong is that the decision acted before the averages meant anything. A dwell
+        //    counts AGREEMENT and cannot tell agreement from a shared start-up transient, so the
+        //    receiver narrowed a clean signal — and narrowing a clean signal measurably RUINS it:
+        //    multipath went 0.0003 -> 0.052, a hundredfold, because the cost of narrowing is
+        //    distortion on deviation peaks and the guard-band meter cannot see that.
+        for (double nz : {0.0, 0.05}) {
+            const Result wide = measure(nz, 0.0, 3, 8.0, 0.0, true, /*imsOn=*/false);
+            const Result auto_ = measure(nz, 0.0, 3, 8.0, 0.0, true, /*imsOn=*/true);
+            std::printf("   .. noise %.2f: settled benefit %+.1f dB   IMS left it %s\n",
+                        nz, wide.ifGain, auto_.ifBw > 0.0f ? "NARROWED" : "wide");
+            ok(wide.ifGain < -5.0f,
+               "★ narrowing a station with no neighbour is measured as a LOSS, as on air",
+               "read " + std::to_string(wide.ifGain) + " dB");
+            ok(auto_.ifBw <= 0.0f,
+               "★★★ SO IMS LEAVES IT ALONE — it does not act on an unsettled measurement",
+               "narrowed to " + std::to_string(auto_.ifBw / 1000.0f) + " kHz");
+            ok(auto_.mpDepth < 0.03f,
+               "★★ and the signal is not damaged by a filter it never needed",
+               "multipath " + std::to_string(auto_.mpDepth));
+        }
+        std::printf("   .. over 8 s: audio-path designs %u, shadow designs %u  (IF now %.0f kHz)\n",
+                    r.ifBuilds, r.shBuilds, r.ifBw / 1000.0f);
+        // A handful covers configure() plus any genuine decision; the broken version reached
+        // hundreds, one per evaluation.
+        ok(r.shBuilds <= 4,
+           "★★★ THE SHADOW FILTER IS DESIGNED ONCE, not once per evaluation",
+           "designed " + std::to_string(r.shBuilds) + " times in 8 s");
+        ok(r.ifBuilds <= 4,
+           "★★ and the AUDIO path's filter is not rebuilt behind the listener's back",
+           "designed " + std::to_string(r.ifBuilds) + " times in 8 s");
     }
 
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);

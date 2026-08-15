@@ -330,7 +330,7 @@ void RxPipeline::rebuildAudio() {
             shadowNoise_.configure(chFs_, 17000.0);
             shadowPilot_.configure(chFs_, 19000.0);
             widePilot_.configure(chFs_, 19000.0);
-            ifGainDb_ = 0.0f; shadowTick_ = 0;
+            ifGainDb_ = 0.0f; shadowTick_ = 0; ifWarm_ = 0; ifDwell_ = 0;
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
             const int rch = (int)std::llround(audFs_);
@@ -626,7 +626,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    late one. Three dB of margin and several seconds of agreement before it moves,
             //    and the SAME margin in both directions so it cannot sit on the boundary
             //    chattering between two states.
-            if (imsOn_.load(std::memory_order_relaxed)) {
+            // ★★★ NOTHING IS DECIDED UNTIL THE MEASUREMENT HAS SETTLED. ~5 s at one evaluation
+            //     per 4 blocks; the averages behind it use a 0.05 coefficient, so they need
+            //     roughly that long to mean anything at all.
+            if (ifWarm_ < 64) ++ifWarm_;
+            if (imsOn_.load(std::memory_order_relaxed) && ifWarm_ >= 64) {
                 if (ifGainDb_ > 3.0f) {
                     if (++ifDwell_ > 40) {            // ~3 s at one evaluation per 4 blocks
                         ifDwell_ = 0;

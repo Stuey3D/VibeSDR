@@ -464,10 +464,26 @@ private:
  */
 class AdaptiveIf {
 public:
-    void configure(double rate) { rate_ = rate; fir_.reset(); bw_ = 0.0; }
+    void configure(double rate) { rate_ = rate; fir_.reset(); bw_ = -1.0; rebuilds_ = 0; }
     /** @param fullBwHz total width (both sides). <=0, or wide enough to be pointless, = bypass. */
     void setBandwidth(double fullBwHz) {
+        // ★★★ NOTHING TO DO IF NOTHING CHANGED, and this is not a micro-optimisation. The SHADOW
+        //     filter is set from the audio path's current state on EVERY evaluation — about
+        //     fifteen times a second, forever, with the same value each time — and without this
+        //     guard each call designed a fresh windowed-sinc and heap-allocated a new FirDecimator
+        //     ON THE DSP THREAD.
+        // ★★★ THE ALLOCATION IS THE LESSER HALF. Replacing fir_ DESTROYS ITS HISTORY, so the
+        //     shadow measurement was taken, every single time, on a filter that had just been
+        //     reset — measuring its own startup transient as if it were the signal. That is what
+        //     steers the narrowing decision, so a noisy measurement makes the decision chatter,
+        //     and every chatter rebuilds the REAL filter in the audio path and is audible.
+        // ★★ The same shape as the zoom-FFT stall (see setZoomBins): a setter that does expensive
+        //    work when nothing changed is a glitch generator, and it is invisible in a profile
+        //    because no single call is slow.
+        // ★ bw_ starts at -1, not 0, so an explicit request for 0 (bypass) is still honoured once.
+        if (fullBwHz == bw_) return;
         bw_ = fullBwHz;
+        ++rebuilds_;
         if (rate_ <= 0.0 || fullBwHz <= 0.0 || fullBwHz >= rate_ * 0.8) { fir_.reset(); return; }
         // ★★★ A PROPER FIR, NOT AN IIR CASCADE — and the difference is not academic. The first
         //     version used four one-poles, which begin attenuating a decade below their corner and
@@ -494,8 +510,12 @@ public:
     }
     bool bypassed() const { return !fir_; }
     void reset() { if (fir_) fir_->reset(); }
+    /** How many times the filter has actually been designed. The test asserts this stays at one
+     *  while the shadow asks for the same bandwidth over and over. */
+    unsigned rebuilds() const { return rebuilds_; }
 private:
-    double rate_ = 0.0, bw_ = 0.0;
+    double rate_ = 0.0, bw_ = -1.0;
+    unsigned rebuilds_ = 0;
     std::unique_ptr<FirDecimator> fir_;
     std::vector<cf32> scratch_;
 };
@@ -1877,6 +1897,12 @@ public:
     /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
      *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
     float  ifGainDb() const { return ifGainDb_; }
+    /** ★ Diagnostics for the test: how many times each IF filter has actually been DESIGNED. The
+     *  shadow is told its bandwidth on every evaluation, so without an early-out these climb
+     *  forever — an allocation and a discarded filter history, on the DSP thread, about fifteen
+     *  times a second. */
+    unsigned ifRebuilds() const { return adaptIf_.rebuilds(); }
+    unsigned shadowRebuilds() const { return shadowIf_.rebuilds(); }
     double ifCandidateHz() const { return shadowBwHz_; }
 
 private:
@@ -2051,6 +2077,16 @@ private:
     std::vector<float> shadowMpx_;
     int            shadowTick_ = 0;
     int            ifDwell_ = 0;                 // evaluations agreeing before the IF may switch
+    /** ★★★ EVALUATIONS SINCE THE MEASUREMENT STARTED. ifGainDb_ is an exponential average seeded
+     *  at zero, and both sides of the comparison — the running wide meters and the freshly
+     *  configured shadow — are still settling for the first few seconds after a retune. Acting on
+     *  that decides from an average of almost nothing: held wide, a clean signal settles to
+     *  -9.5 dB (matching the -9.8 measured on air), but during the settle it can read positive for
+     *  long enough to satisfy the dwell, and the receiver narrows a signal it should have left
+     *  alone — which measurably worsens it, multipath going 0.0003 -> 0.052 in the bench test.
+     *  ★★ A dwell counts AGREEMENT; it cannot tell agreement from a shared transient. This is the
+     *     separate question of whether there is yet anything to agree about. */
+    int            ifWarm_ = 0;
     float          ifGainDb_ = 0.0f;             // narrow minus wide, dB. >0 = narrowing helps
     double         shadowBwHz_ = 110000.0;       // the candidate width being evaluated
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
