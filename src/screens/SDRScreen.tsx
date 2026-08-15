@@ -921,6 +921,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   // to recover from a data-saver disconnect, where reopening the old session's
   // sockets lands in a broken half-state (frozen waterfall/zoom, no audio).
   const [connEpoch, setConnEpoch] = useState(0);
+  /** ★★★ REBUILD THE NATIVE AUDIO SOCKET AFTER A TAKEOVER. The engine carries no admin credential
+   *  — the native side takes only a PIN — so on a busy receiver its socket is refused ("audio WS
+   *  refused — server busy … no credential") while the spectrum socket, which does carry one,
+   *  evicts the occupant. The listener then owns the radio and hears nothing, because the refused
+   *  audio socket never tries again. Reconnecting afterwards needs no credential: by then we ARE
+   *  the occupant. Bumped only when we connected holding one, so an ordinary session is untouched. */
+  const [audioRestart, setAudioRestart] = useState(0);
   const lastReconnectAt = useRef(0);
   const fullReconnect = useCallback(() => {
     const now = Date.now();
@@ -2818,7 +2825,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    us a spectrum, is not a stale detail — it is the whole screen, and it is wrong. There
       //    is no case where both can be true: a genuinely refused session has no connection to
       //    announce, and `refused` stops the client retrying into one.
-      onConnect:    () => { if (!destroyed.current) { connectedOnceRef.current = true; kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
+      onConnect:    () => { if (!destroyed.current) { connectedOnceRef.current = true;
+        if (adminAuthQRef.current) setAudioRestart((n) => n + 1); kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       // ★★★ A CLOSED SOCKET MUST RAISE THE CARD ITSELF. The connection-lost notice was armed ONLY
       //     from link quality reaching zero — and link quality is reported WHEN FRAMES ARRIVE. So
       //     when the link actually died, nothing reported anything, the timer was never armed, and
@@ -7377,6 +7385,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         step={step}
         instanceName={instanceName}
         uuid={sessionUuid}
+        restartKey={audioRestart}
       />
       {/* v4 local hardware: audio from the on-device shim's /ws/audio (PCM) */}
       {route.params.isLocal && route.params.localPort != null ? (

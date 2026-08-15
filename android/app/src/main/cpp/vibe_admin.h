@@ -25,6 +25,7 @@
 #include <ctime>
 #include <sys/stat.h>
 #include <deque>
+#include <set>
 #include <mutex>
 #include <string>
 #include <functional>
@@ -526,6 +527,17 @@ public:
     /** Mark the still-open record for this session as an ADMIN session.
      *  ★ Called at the moment the credential is verified, not at close: a session evicted or
      *    banned mid-flight must still be recorded as having held admin. */
+    /** ★★★ REMEMBER IT EVEN IF THE ROW IS NOT HERE YET. Admin is proved during the HANDSHAKE, and
+     *  the connection is not recorded until the spectrum socket is accepted several hundred lines
+     *  later — so for a NEW session this marked nothing at all, and the owner's own app appeared in
+     *  the history with no ADMIN badge while the server log showed it evicting the occupant
+     *  (Stuart, 2026-08-15: "oddly no admin badge though"). A browser only ever got its badge
+     *  because a LATER socket re-marked a row that by then existed.
+     *  ★★ Fixed HERE rather than by reordering the caller: any future code that proves a
+     *     credential before opening a row would hit the same silence, and the log is the thing
+     *     that has to be right. open() consults the pending set.
+     *  ★ Bounded, because it is fed by unauthenticated traffic: a session that never opens a row
+     *     would otherwise leave an entry for ever. */
     void markAdmin(const std::string& ip, const std::string& session) {
         std::lock_guard<std::mutex> lk(mtx_);
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
@@ -534,6 +546,10 @@ public:
             if (!hit) continue;
             it->admin = true;
             return;
+        }
+        if (!session.empty()) {
+            if (pendingAdmin_.size() > 64) pendingAdmin_.erase(pendingAdmin_.begin());
+            pendingAdmin_.insert(session);
         }
     }
 
@@ -729,6 +745,8 @@ private:
     std::mutex           mtx_;
     std::string          path_;
     std::deque<ConnRec>  recs_;
+    /** Sessions that proved admin BEFORE their row was opened — see markAdmin. Consumed by open(). */
+    std::set<std::string> pendingAdmin_;
     std::vector<ConnRec> pending_;      // closed since the last flush
     bool                 dirty_ = false;
     size_t               written_ = 0;

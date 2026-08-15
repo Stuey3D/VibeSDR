@@ -49,9 +49,21 @@ export interface AudioPlayerProps {
   uuid?:         string;
   /** Bypass password — appended to the audio WS URL (rate-limit bypass). */
   password?:     string;
+  /** ★★★ BUMP TO REBUILD THE NATIVE AUDIO SOCKET WITHOUT CHANGING WHO WE ARE. The engine carries
+   *  no admin credential — it cannot, the native side takes only a PIN — so on a BUSY receiver its
+   *  socket is refused ("audio WS refused — server busy … no credential") while the spectrum
+   *  socket, which does carry one, evicts the occupant and takes the slot. The listener then owns
+   *  the radio and hears nothing, because the refused audio socket never tries again.
+   *  ★★ Reconnecting AFTER the takeover needs no credential at all: by then we ARE the occupant,
+   *     and the server admits our own session freely. The credential was only ever needed to
+   *     evict, and the spectrum socket has already done that.
+   *  ★ Deliberately NOT the uuid. Changing that changes our identity, which is what made the app
+   *    collide with its own session earlier tonight — the engine must come back as the SAME
+   *    listener. */
+  restartKey?:   number;
 }
 
-export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password }: AudioPlayerProps) {
+export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, restartKey }: AudioPlayerProps) {
   const activeUrl  = useRef<string | null>(null);
   const activeFreq = useRef<number>(0);
   const activeMode = useRef<string>('');
@@ -60,8 +72,14 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   // Start/stop when baseUrl OR the session uuid changes. A new uuid means a
   // full from-scratch reconnect (e.g. the data saver resuming): the old engine
   // is torn down and a fresh native session is opened.
+  const lastRestart = useRef<number | undefined>(restartKey);
   useEffect(() => {
-    if (baseUrl === activeUrl.current && propUuid === uuid.current) return;
+    const forced = restartKey !== lastRestart.current;
+    lastRestart.current = restartKey;
+    if (!forced && baseUrl === activeUrl.current && propUuid === uuid.current) return;
+    // ★ A forced restart tears the engine down first: startAudioEngine on a live engine is not a
+    //   reconnect, and the socket we are trying to replace is the one that was refused.
+    if (forced && baseUrl) VibePowerModule?.stopAudioEngine();
     activeUrl.current = baseUrl;
 
     if (!VibePowerModule) {
@@ -80,7 +98,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
 
     return () => { VibePowerModule?.stopAudioEngine(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, propUuid]);
+  }, [baseUrl, propUuid, restartKey]);
 
   // Sync tune when frequency or mode changes (native owns now-playing metadata)
   useEffect(() => {
