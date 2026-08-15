@@ -2783,7 +2783,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
+      // ★★★ A CONNECTION THAT SUCCEEDED TAKES THE REFUSAL CARD DOWN WITH IT. Every other notice
+      //     was cleared here and this one was not, so after a successful admin takeover the
+      //     listener had audio — the previous station, then the server's landing frequency — with
+      //     the "IN USE, enter the password or go back" card still across the screen, no waterfall
+      //     and no controls (Stuart, 2026-08-15). The card was true when it was raised and false
+      //     within a second, and nothing was watching for that.
+      // ★★ FRAMES ARE THE PROOF. A card that says we were turned away, while the server is sending
+      //    us a spectrum, is not a stale detail — it is the whole screen, and it is wrong. There
+      //    is no case where both can be true: a genuinely refused session has no connection to
+      //    announce, and `refused` stops the client retrying into one.
+      onConnect:    () => { if (!destroyed.current) { kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       // ★★★ A CLOSED SOCKET MUST RAISE THE CARD ITSELF. The connection-lost notice was armed ONLY
       //     from link quality reaching zero — and link quality is reported WHEN FRAMES ARRIVE. So
       //     when the link actually died, nothing reported anything, the timer was never armed, and
