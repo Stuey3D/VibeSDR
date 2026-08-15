@@ -410,8 +410,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // ★ CEQ is shown as BEFORE → AFTER: "engaged" says nothing about whether it helped, and a blind
   //   equaliser quietly making things worse is the failure mode that matters.
   let ceqTxt = DASH;
+  // ★★ GREEN MEANS IT IS DOING SOMETHING FOR YOU, and it is the same rule as the browser's — the
+  //    two clients read the same fields and must not draw different conclusions from them. Green
+  //    on "engaged" alone would reward the equaliser for running rather than for helping.
+  let ceqCol: string | undefined;
   if (x?.ceqOn) {
     const before = mp * 100, after = (x?.ceqAfter ?? 0) * 100;
+    ceqCol = (before > 0.5 && after < before * 0.8) ? C.good : undefined;
     ceqTxt = `${before.toFixed(1)}% → ${after.toFixed(1)}%`
            + (before > 0.5 && after < before * 0.8 ? '' : ' · little change');
   } else if (x) {
@@ -428,7 +433,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   //   ambiguous. Printed as a sentence.
   const ifG = x?.ifGain ?? 0, ifC = x?.ifCand ?? 0, ifBw = x?.ifBw ?? 0;
   let ifTxt = DASH;
+  // ★★★ GREEN WHILE NARROWED, because that is the one state the reading cannot make obvious on its
+  //     own: the shadow always evaluates THE OTHER OPTION, so once IMS engages the number turns
+  //     NEGATIVE ("wide would cost 3.9 dB") and an unhighlighted negative reads like bad news when
+  //     it means the opposite. The browser has always coloured it; the app did not, so the same
+  //     server produced two different-looking answers (Stuart, 2026-08-15).
+  let ifCol: string | undefined;
   if (x && ifC > 0 && mpxSnr > 0.5) {
+    ifCol = (ifBw > 0 || ifG > 1.5) ? C.good : undefined;
     ifTxt = ifBw > 0
       ? `${Math.round(ifBw / 1000)}k narrow · wide would ` +
         (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`)
@@ -735,10 +747,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               noise it is not cured by narrowing. Worth knowing which fault you are hearing. */}
           <Row raw={raw} label="Multipath"   value={mpTxt} colour={mpCol}
                reserve="too noisy to judge" />
-          <Row raw={raw} label="CEQ"         value={ceqTxt}
+          <Row raw={raw} label="CEQ"         value={ceqTxt} colour={ceqCol}
                reserve="standing by · nothing to correct" />
           <Row raw={raw} label="Blanker"     value={nbTxt} reserve="nothing to blank" />
-          <Row raw={raw} label="IF narrow"   value={ifTxt}
+          <Row raw={raw} label="IF narrow"   value={ifTxt} colour={ifCol}
                reserve="110k narrow · wide would cost 11.0 dB" />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
           <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />
