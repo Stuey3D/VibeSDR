@@ -496,6 +496,50 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminPickBusy, setAdminPickBusy] = useState(false);
   const [adminPickBad, setAdminPickBad] = useState(false);
   /**
+   * Unlock at the picker — ONE implementation, reached by the button and by the Return key.
+   *
+   * ★★★ RETURN HAD NO HANDLER AT ALL, and an unhandled Return does not stay in the text field: it
+   *     went to the window, where the global shortcut layer read it as "open the frequency box" on
+   *     the live screen BEHIND the picker. So the natural thing to do — type the password, press
+   *     Enter — did not unlock, and a second press opened a tuning box whose dismissal left a
+   *     connection error (Stuart, 2026-08-16, on the Mac; the same on any iPad or iPhone with a
+   *     keyboard). Only reaching for the mouse worked.
+   * ★★ The keyboard layer's own comment assumed "a focused text field consumes it first, so there
+   *    is no need to suppress shortcuts while typing". That is true only of keys the field
+   *    actually handles — Return is not one of them unless it is given something to do. The
+   *    assumption was half right, which is why it held for every other key.
+   */
+  const doPickerUnlock = useCallback(async () => {
+    if (!adminPickPw || adminPickBusy) return;
+    setAdminPickBusy(true); setAdminPickBad(false);
+    const q = await resolveVibeAdminAuth(baseUrl, adminPickPw).catch(() => '');
+    // ★★★ MINT A TICKET, AND USE IT FOR EVERYTHING. The challenge-response pair proves admin to
+    //     the SOCKET, but the setup page reads ONLY `vs_admin_ticket` from its own URL — hand it
+    //     the nonce/auth form and it loads, looks right, and then refuses every value on it. The
+    //     ticket is also what the server designed for exactly this: prove it once at the door,
+    //     walk into any radio as admin.
+    // ★ Falls back to the challenge pair if the server is too old to mint one — that still
+    //   unlocks the sockets, which is the half that matters most.
+    let cred = q;
+    if (q) {
+      try {
+        const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${q}`,
+                              { cache: 'no-store' });
+        if (r.ok) {
+          const t = (await r.json())?.ticket;
+          if (t) cred = `vs_admin_ticket=${encodeURIComponent(String(t))}`;
+        }
+      } catch { /* keep the challenge pair */ }
+    }
+    setAdminPickBusy(false);
+    // ★★ A wrong password cannot be told from an unreachable server by the challenge alone —
+    //    resolveVibeAdminAuth returns '' for both. Say the honest thing: it did not work, rather
+    //    than inventing which.
+    if (!q) { setAdminPickBad(true); return; }
+    setAdminAuthQ(cred);
+    setAdminPickPw('');
+  }, [adminPickPw, adminPickBusy, baseUrl]);
+  /**
    * ★★★ WHICH OF THESE RADIOS IS ACTUALLY IN USE. The door's radio list is a DIRECTORY, not a
    *     status board — it says what the owner configured and cannot see inside the other radios'
    *     processes — so the picker could only offer capacity ("one listener at a time") and never
@@ -990,6 +1034,73 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     }, 12000);
   }, []);
+  /**
+   * TAKE OVER from the refusal card — one implementation, reached by the button and by Return.
+   * ★★ See doPickerUnlock: an unhandled Return does not stay in the text field, it reaches the
+   *    window's shortcut layer and opens the frequency box on the screen behind.
+   */
+  const doTakeover = useCallback(async () => {
+    if (!takeoverPw) return;
+    // ★★★ PROVED AT THE DOOR, USED AT A RADIO — the mistake this file already
+    //     documents a few hundred lines up for the in-session unlock, repeated
+    //     here at CONNECT time and never noticed because a single-radio server
+    //     (where the door IS the radio) works perfectly. On a multi-radio one the
+    //     radio has never seen this nonce, refuses the handshake, and the app
+    //     falls back to the picker with nothing said: "when I enter the password
+    //     it puts me back to the radio picker" (Stuart, 2026-08-15).
+    // ★★ A TICKET is the credential that crosses processes; mint one and carry
+    //    that instead. If the server is too old to mint, prove at the RADIO
+    //    rather than the door — still right, just not reusable elsewhere.
+    const doorQ = await resolveVibeAdminAuth(baseUrl, takeoverPw).catch(() => '');
+    let q = '';
+    if (doorQ) {
+      try {
+        const r = await fetch(
+          `${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${doorQ}`,
+          { cache: 'no-store' });
+        if (r.ok) {
+          const t = (await r.json())?.ticket;
+          if (t) q = `&vs_admin_ticket=${encodeURIComponent(String(t))}`;
+        }
+      } catch { /* fall through to proving at the radio */ }
+    }
+    if (!q) q = await resolveVibeAdminAuth(connectBase, takeoverPw).catch(() => '');
+    if (!q) { setTakeoverErr('That password was not accepted.'); return; }
+    setTakeoverErr(null); setTakeoverPw(''); setRefusal(null);
+    takeoverTried.current = true;
+    // ★★★ RECONNECT IN PLACE — DO NOT REMOUNT. This called navigation.replace,
+    //     which builds a NEW screen: new mount, new useMemo, new session id. So the
+    //     takeover arrived as a stranger while the previous instance still held the
+    //     slot, and the server did exactly what it should — evicted the old
+    //     occupant for the admin, then refused the leftovers as busy:
+    //       admin override — evicting the current occupant
+    //       admin session — controls unlocked, no session limit
+    //       spectrum WS refused — server busy (occupant present)
+    //     Making the session id stable per radio could not fix this, because a
+    //     remount does not reuse the memo at all — the identity was stable and the
+    //     COMPONENT was not (Stuart, 2026-08-15, three builds running at it).
+    // ★★ So the credential is handed to the client we already have and the
+    //    connection is rebuilt underneath it. Same screen, same session id, and the
+    //    server sees a client RE-AFFIRMING its slot, which is what it is built for.
+    // ★ setAdminAuth before the reconnect, never after: the credential has to be ON
+    //   the handshake, which is where a busy receiver decides whether to refuse us.
+    adminRetryDone.current = false;
+    // ★ The user has acted, so the refusal is no longer terminal — without this
+    //   the reconnect below would be refused by our own guard and TAKE OVER would
+    //   do nothing at all.
+    terminalRefusal.current = false;
+    adminAuthQRef.current = q;
+    setAdminAuthQ(q);
+    // ★★ THIS is the deliberate act — a finger on TAKE OVER — so this connection,
+    //    and only this one, is allowed to displace the occupant. Cleared again as
+    //    soon as we are through; see takeoverIntent.
+    setTakeoverIntent(true);
+    const wire = `${q}&vs_takeover=1`;
+    adminAuthWireRef.current = wire;
+    client.current?.setAdminAuth?.(wire);
+    fullReconnect();
+  }, [takeoverPw, baseUrl, connectBase, fullReconnect]);
+
   /**
    * ★★★ ONE IDENTITY PER RADIO, KEPT ACROSS RECONNECTS. This was re-minted on every connEpoch —
    *     so a full reconnect came back as a STRANGER, and on a one-listener radio the slot it was
@@ -5777,10 +5888,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // OPENED THE SERVERS MENU ON TOP. A surface the keyboard can reach must be one the keyboard
   // can leave; that has now been the failure mode three times over (hidden controls, the FM-DX
   // notice, the maps), so this lists them all rather than the ones we happened to think of.
+  // ★★★ AND THE RADIO PICKER. It is drawn OVER a live SDR screen rather than as its own route,
+  //     so every shortcut underneath stayed armed while it was up: Enter in the admin password
+  //     box opened the FREQUENCY BOX on the screen behind it, and dismissing that left a
+  //     connection error (Stuart, 2026-08-16, on the Mac). The comment above says a surface the
+  //     keyboard can reach must be one the keyboard can leave — this one could not even be typed
+  //     into safely, which is the same rule one step earlier.
   const anyPanelOpen = menuOpen || stepOpen || chatOpen ||
                        freqModalOpen || modeSelOpen || audioSheetOpen || serversOpen ||
                        hwOpen || aboutOpen || ratioOverlayOpen || recordingsOpen ||
-                       cityPickerOpen || keyHelpOpen;
+                       cityPickerOpen || keyHelpOpen || (awaitingRadio && !!door) ||
+                       // ★ And the refusal card, which also carries a password box over a live
+                       //   screen. Same overlay, same leak.
+                       !!refusal;
   const panelOpenRef = useRef(anyPanelOpen);
   useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
 
@@ -6177,39 +6297,15 @@ export default function SDRScreen({ route, navigation }: Props) {
               secureTextEntry
               autoCapitalize="none"
               autoCorrect={false}
+              // ★★★ RETURN UNLOCKS. Without this the key was not consumed by the field and fell
+              //     through to the window's shortcut layer — see doPickerUnlock.
+              returnKeyType="go"
+              onSubmitEditing={() => { void doPickerUnlock(); }}
             />
             <TouchableOpacity
               style={styles.radioPickAdminBtn}
               disabled={!adminPickPw || adminPickBusy}
-              onPress={async () => {
-                setAdminPickBusy(true); setAdminPickBad(false);
-                const q = await resolveVibeAdminAuth(baseUrl, adminPickPw).catch(() => '');
-                // ★★★ MINT A TICKET, AND USE IT FOR EVERYTHING. The challenge-response pair proves
-                //     admin to the SOCKET, but the setup page reads ONLY `vs_admin_ticket` from
-                //     its own URL — hand it the nonce/auth form and it loads, looks right, and
-                //     then refuses every value on it. The ticket is also what the server designed
-                //     for exactly this: prove it once at the door, walk into any radio as admin.
-                // ★ Falls back to the challenge pair if the server is too old to mint one — that
-                //   still unlocks the sockets, which is the half that matters most.
-                let cred = q;
-                if (q) {
-                  try {
-                    const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${q}`,
-                                          { cache: 'no-store' });
-                    if (r.ok) {
-                      const t = (await r.json())?.ticket;
-                      if (t) cred = `vs_admin_ticket=${encodeURIComponent(String(t))}`;
-                    }
-                  } catch { /* keep the challenge pair */ }
-                }
-                setAdminPickBusy(false);
-                // ★★ A wrong password cannot be told from an unreachable server by the challenge
-                //    alone — resolveVibeAdminAuth returns '' for both. Say the honest thing: it
-                //    did not work, rather than inventing which.
-                if (!q) { setAdminPickBad(true); return; }
-                setAdminAuthQ(cred);
-                setAdminPickPw('');
-              }}
+              onPress={() => { void doPickerUnlock(); }}
             >
               <Text style={styles.radioPickAdminBtnText}>
                 {adminAuthQ ? 'ADMIN ✓' : adminPickBusy ? '…' : 'UNLOCK'}
@@ -7121,68 +7217,13 @@ export default function SDRScreen({ route, navigation }: Props) {
                   placeholder="Admin password" placeholderTextColor="rgba(255,160,0,0.35)"
                   secureTextEntry autoCapitalize="none" autoCorrect={false}
                   style={styles.noticeInput}
+                  // ★★ RETURN TAKES OVER — the same fix as the picker's box, for the same reason:
+                  //    an unhandled Return leaves the field and reaches the global shortcut layer.
+                  returnKeyType="go"
+                  onSubmitEditing={() => { void doTakeover(); }}
                 />
                 <TouchableOpacity style={styles.noticeBtn} disabled={!takeoverPw}
-                  onPress={async () => {
-                    // ★★★ PROVED AT THE DOOR, USED AT A RADIO — the mistake this file already
-                    //     documents a few hundred lines up for the in-session unlock, repeated
-                    //     here at CONNECT time and never noticed because a single-radio server
-                    //     (where the door IS the radio) works perfectly. On a multi-radio one the
-                    //     radio has never seen this nonce, refuses the handshake, and the app
-                    //     falls back to the picker with nothing said: "when I enter the password
-                    //     it puts me back to the radio picker" (Stuart, 2026-08-15).
-                    // ★★ A TICKET is the credential that crosses processes; mint one and carry
-                    //    that instead. If the server is too old to mint, prove at the RADIO
-                    //    rather than the door — still right, just not reusable elsewhere.
-                    const doorQ = await resolveVibeAdminAuth(baseUrl, takeoverPw).catch(() => '');
-                    let q = '';
-                    if (doorQ) {
-                      try {
-                        const r = await fetch(
-                          `${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${doorQ}`,
-                          { cache: 'no-store' });
-                        if (r.ok) {
-                          const t = (await r.json())?.ticket;
-                          if (t) q = `&vs_admin_ticket=${encodeURIComponent(String(t))}`;
-                        }
-                      } catch { /* fall through to proving at the radio */ }
-                    }
-                    if (!q) q = await resolveVibeAdminAuth(connectBase, takeoverPw).catch(() => '');
-                    if (!q) { setTakeoverErr('That password was not accepted.'); return; }
-                    setTakeoverErr(null); setTakeoverPw(''); setRefusal(null);
-                    takeoverTried.current = true;
-                    // ★★★ RECONNECT IN PLACE — DO NOT REMOUNT. This called navigation.replace,
-                    //     which builds a NEW screen: new mount, new useMemo, new session id. So the
-                    //     takeover arrived as a stranger while the previous instance still held the
-                    //     slot, and the server did exactly what it should — evicted the old
-                    //     occupant for the admin, then refused the leftovers as busy:
-                    //       admin override — evicting the current occupant
-                    //       admin session — controls unlocked, no session limit
-                    //       spectrum WS refused — server busy (occupant present)
-                    //     Making the session id stable per radio could not fix this, because a
-                    //     remount does not reuse the memo at all — the identity was stable and the
-                    //     COMPONENT was not (Stuart, 2026-08-15, three builds running at it).
-                    // ★★ So the credential is handed to the client we already have and the
-                    //    connection is rebuilt underneath it. Same screen, same session id, and the
-                    //    server sees a client RE-AFFIRMING its slot, which is what it is built for.
-                    // ★ setAdminAuth before the reconnect, never after: the credential has to be ON
-                    //   the handshake, which is where a busy receiver decides whether to refuse us.
-                    adminRetryDone.current = false;
-                    // ★ The user has acted, so the refusal is no longer terminal — without this
-                    //   the reconnect below would be refused by our own guard and TAKE OVER would
-                    //   do nothing at all.
-                    terminalRefusal.current = false;
-                    adminAuthQRef.current = q;
-                    setAdminAuthQ(q);
-                    // ★★ THIS is the deliberate act — a finger on TAKE OVER — so this connection,
-                    //    and only this one, is allowed to displace the occupant. Cleared again as
-                    //    soon as we are through; see takeoverIntent.
-                    setTakeoverIntent(true);
-                    const wire = `${q}&vs_takeover=1`;
-                    adminAuthWireRef.current = wire;
-                    client.current?.setAdminAuth?.(wire);
-                    fullReconnect();
-                  }}>
+                  onPress={() => { void doTakeover(); }}>
                   <Text style={[styles.noticeBtnTxt, !takeoverPw && { opacity: 0.4 }]}>
                     TAKE OVER
                   </Text>
