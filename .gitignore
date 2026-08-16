@@ -86,3 +86,9 @@ tvos/.xcode.env.local
 
 # App Store submission helper — lives in ~/.appstoreconnect/tools/, carries private contact details
 scripts/asc-submit.py
+
+# Wrangler local cache — contained a Cloudflare account id and personal email
+.wrangler/
+
+# Scratch probe scripts left at the root
+fr2.mjs
