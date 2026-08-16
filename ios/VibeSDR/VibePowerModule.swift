@@ -1501,6 +1501,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var laGen  = 0
   private var laTune: String = ""
   private var laBytes = 0            // since the last report
+  /// ★ An engine start has been asked for on main and has not landed yet. Without it every frame
+  ///   arriving in that window queues another start — see onLocalAudioFrame.
+  private var laEngineStarting = false
   private var laBytesAt = Date.distantPast
   private static let adpcmStep: [Int] = [
     7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
@@ -1635,8 +1638,32 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // ★ First audio starts the engine, at the rate the STREAM is actually using rather than an
     //   assumed 48k. feedExternalPcm/Opus both refuse while externalAudio is false, so this must
     //   happen before the feed below, not after it.
+    // ★★★ ON MAIN, NEVER ON THIS QUEUE — THIS CRASHED THE APP (Stuart, 2026-08-16, build 134).
+    //     `startExternalAudio` begins with `stopEngine()`, which sends `stop()` to the player node
+    //     and the engine. This runs on the WS queue, while every other engine lifecycle call in
+    //     this file hops to main — the mute path, the route-change observer, the config-change
+    //     restart. So two threads tore at one AVAudioEngine, and AVFAudio aborted inside its own
+    //     attach/engine lock:
+    //         std::__1::recursive_mutex::lock()  →  __throw_system_error  →  abort
+    //         AVAudioNodeImplBase::GetAttachAndEngineLock()  ←  -[AVAudioPlayerNode stop]
+    //     ★★ AND IT IS UNCATCHABLE. That is a C++ exception thrown through Objective-C frames, so
+    //        it terminates rather than surfacing anywhere Swift could `try`. Exactly the property
+    //        that makes the sibling `play()`-on-a-stopped-engine crash unfixable after the fact:
+    //        the ONLY defence is never to make the call from two threads.
+    // ★ The frame that discovers the engine is missing is dropped rather than fed into one that
+    //   does not exist yet. It is a few milliseconds at the very start of a stream, and inaudible;
+    //   `laEngineStarting` stops the next thousand frames each asking for their own engine while
+    //   the first request is still in flight.
     if !externalAudio {
-      startExternalAudio(NSNumber(value: rate), pauseMode: "resume")
+      if !laEngineStarting {
+        laEngineStarting = true
+        let r = rate
+        DispatchQueue.main.async {
+          self.startExternalAudio(NSNumber(value: r), pauseMode: "resume")
+          self.laEngineStarting = false
+        }
+      }
+      return
     }
 
     switch format {
@@ -1807,7 +1834,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   // MARK: - Engine
 
+  /// ★★★ ENGINE LIFECYCLE IS MAIN-THREAD ONLY, and this is the net rather than the rule. A
+  ///     background caller reaching `stop()` while main is rebuilding the engine made AVFAudio
+  ///     abort inside its own attach lock — a C++ exception through ObjC frames, so nothing could
+  ///     catch it and the app simply died (build 134). One stray call site was enough.
+  /// ★★ Rerouted rather than asserted: an assertion would trade a crash for a crash. Every real
+  ///    caller is already on main, so this costs nothing and closes the door on the next one.
   private func stopEngine() {
+    if !Thread.isMainThread { DispatchQueue.main.async { self.stopEngine() }; return }
     isRunning = false
     // Reset external mode so switching OWRX→UberSDR doesn't leave us in external
     // mode (which made UberSDR pause take the external release path).
@@ -1902,6 +1936,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   private func startEngine() {
+    // ★ Same rule as stopEngine — attaching a node touches the same lock that stopping one does.
+    if !Thread.isMainThread { DispatchQueue.main.async { self.startEngine() }; return }
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
     engine.attach(player)
