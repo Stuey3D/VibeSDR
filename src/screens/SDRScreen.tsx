@@ -445,6 +445,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   const adminAuthQRef = useRef('');
   /** ★ One retry without the admin credential, per session — see onError. */
   const adminRetryDone = useRef(false);
+  /**
+   * ★★★ A TERMINAL REFUSAL MUST SURVIVE THE RECONNECT THAT FOLLOWS IT.
+   *
+   *     Being evicted raised the card and set `refused` on the client — but the client is REBUILT
+   *     whenever the connect effect re-runs (returning to the foreground does it), and a fresh
+   *     client has never heard of the refusal. It connected, `onConnect` cleared the card, the
+   *     audio gate reopened, and the app was back on a radio somebody else had just taken. From
+   *     the outside that is the app refusing to accept it lost: "the app appears to still be
+   *     trying to assert dominance and there is no message on screen saying admin has taken over"
+   *     (Stuart, 2026-08-16) — the message HAD been shown, and the app's own retry wiped it.
+   *
+   * ★★ So the fact lives in a ref, not in the client and not in state that a reconnect clears.
+   *    Only a deliberate act clears it — TRY AGAIN, TAKE OVER, or leaving for the picker — which
+   *    is the same rule the web client follows: `refused` is terminal until the user acts.
+   */
+  const terminalRefusal = useRef(false);
   useEffect(() => { adminAuthQRef.current = adminAuthQ; }, [adminAuthQ]);
   /**
    * ★★★ DID THE USER ASK TO TAKE THE RADIO, OR ARE WE JUST RECONNECTING?
@@ -2851,6 +2867,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★★ HOLD until we know whether this is a front door, and which radio. Opening to the door
     //     itself is a guaranteed 1006 that looks exactly like a dead server.
     if (doorPending || awaitingRadio) return;
+    // ★★★ AND NEVER RE-OPEN ONE AFTER A TERMINAL REFUSAL. Setting `refused` on the client is not
+    //     enough, because THIS builds a new client that has never heard of it — so returning from
+    //     the background quietly put us back on a radio we had been evicted from, and every retry
+    //     disturbed the person who now had it (Stuart, 2026-08-16: switching to the app made the
+    //     browser's audio "stop and start"). The refusal card stays up and the user decides:
+    //     TRY AGAIN, TAKE OVER, or back to the picker — all of which clear this.
+    if (terminalRefusal.current) return;
     destroyed.current = false;
     // ★ A fresh attempt has not got in yet — so an expired credential on a LATER connection can
     //   still take the one-shot retry above.
@@ -2872,7 +2895,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    network or the app lifecycle, and none of them asked to displace anybody. Clearing it
         //    here rather than on a timer means it lasts exactly as long as the act that set it.
         setTakeoverIntent(false);
-        if (adminAuthQRef.current) setAudioRestart((n) => n + 1); kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
+        if (adminAuthQRef.current) setAudioRestart((n) => n + 1); kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false);
+        // ★★★ BUT NOT A TERMINAL ONE. Clearing the card here is right for the case it was written
+        //     for — a stale "IN USE" while frames are arriving — and wrong for an eviction, where
+        //     the connection this fires on is the app's own retry AFTER being displaced. See
+        //     terminalRefusal.
+        if (!terminalRefusal.current) { setRefusal(null); setTakeoverErr(null); } if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       // ★★★ A CLOSED SOCKET MUST RAISE THE CARD ITSELF. The connection-lost notice was armed ONLY
       //     from link quality reaching zero — and link quality is reported WHEN FRAMES ARRIVE. So
       //     when the link actually died, nothing reported anything, the timer was never armed, and
@@ -2960,6 +2988,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onSessionEnded: (cooldownSec: number) => {
         if (destroyed.current) return;
         const m = Math.max(1, Math.round(cooldownSec / 60));
+        terminalRefusal.current = true;
         setRefusal({
           title: 'TIME UP',
           body: 'Your session on this shared receiver has ended, so someone else can have a turn.',
@@ -2969,6 +2998,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onCooldown: (secs: number) => {
         if (destroyed.current) return;
         const m = Math.max(1, Math.round(secs / 60));
+        terminalRefusal.current = true;
         setRefusal({
           title: 'PLEASE WAIT',
           body: 'You have just had a turn on this shared receiver.',
@@ -3015,6 +3045,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         adminAuthQRef.current = '';
         setAdminAuthQ('');
         setAdminOk(false);
+        terminalRefusal.current = true;
         setRefusal({
           title: 'TAKEN BACK',
           body: "This receiver's owner has taken it back with the admin password.",
@@ -7128,6 +7159,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                     // ★ setAdminAuth before the reconnect, never after: the credential has to be ON
                     //   the handshake, which is where a busy receiver decides whether to refuse us.
                     adminRetryDone.current = false;
+                    // ★ The user has acted, so the refusal is no longer terminal — without this
+                    //   the reconnect below would be refused by our own guard and TAKE OVER would
+                    //   do nothing at all.
+                    terminalRefusal.current = false;
                     adminAuthQRef.current = q;
                     setAdminAuthQ(q);
                     // ★★ THIS is the deliberate act — a finger on TAKE OVER — so this connection,
@@ -7147,7 +7182,14 @@ export default function SDRScreen({ route, navigation }: Props) {
               </>
             )}
             <TouchableOpacity style={styles.noticeBtn}
-              onPress={() => { setRefusal(null); navigation.replace('SDR', route.params); }}>
+              onPress={() => {
+                // ★ TRY AGAIN is the user acting, so the refusal stops being terminal. The replace
+                //   remounts and would reset the ref anyway — clearing it here as well means this
+                //   button does not depend on that remaining true.
+                terminalRefusal.current = false;
+                setRefusal(null);
+                navigation.replace('SDR', route.params);
+              }}>
               <Text style={styles.noticeBtnTxt}>TRY AGAIN</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.noticeBtn}
