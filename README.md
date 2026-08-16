@@ -2,9 +2,14 @@
 
 ## A live SDR waterfall on your Apple Watch — the radio spectrum on your wrist, tuned with the Digital Crown.
 
-### 📡 **[→ Get VibeSDR 10.0.1 on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** · £2.99
+### 📡 **[→ Get VibeSDR on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** · £2.99
 
-*Live on the App Store · the Apple Watch app is included · needs an iPhone + Apple Watch*
+*Live on the App Store · the Apple Watch remote is included · needs an iPhone + Apple Watch*
+
+### ⌚ **[→ Get VibeSDR Jr on the App Store](https://apps.apple.com/gb/app/vibesdr-jr/id6795507029)**
+
+*The standalone Apple Watch receiver — its own connection, its own audio, no phone involved. A
+separate app from the remote that ships inside VibeSDR.*
 
 ### 📻 **[→ Try it right now on our radios](https://demo.vibesdr.net)** · no install, nothing to plug in
 
@@ -153,7 +158,9 @@ And if it turns out a vibe-coded app can give you a waterfall on your wrist and 
 |---|---|---|
 | **iPhone / iPad** | **[App Store — v10.0.1](https://apps.apple.com/gb/app/vibesdr/id6786344049)** — £2.99 | The newest build, with the **Apple Watch app included**. Installs like a normal app — no re-signing. |
 | **iPhone / iPad** | **[`.ipa` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version, but you must **re-sign it yourself** — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode). |
+| **Apple Watch** | **[App Store — VibeSDR Jr](https://apps.apple.com/gb/app/vibesdr-jr/id6795507029)** | The *standalone* watch receiver. Not the same thing as the wrist remote, which is included with VibeSDR above. |
 | **Android** | **[`.apk` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version. Just install it. |
+| **Android** | **Play Store — closed test** | Awaiting Google's approval. [Join the tester group](https://groups.google.com/g/vibesdr-play-store-test) first, then the [opt-in link](https://play.google.com/apps/testing/com.vibesdr.app) will let you in. **In that order** — the opt-in link only works once you are on the tester list. |
 | **Anyone** | **Build it from this repository** — free, forever | See [Building](#building). |
 
 **Why does the App Store version cost £2.99 when the source is free?** It goes towards Apple's fees — the Developer Programme costs $99 a year, and Apple takes its cut of every sale on top. The £2.99 covers the cost of *being on the App Store at all*; it isn't what VibeSDR is worth, because VibeSDR is GPLv3 free software and always will be.
