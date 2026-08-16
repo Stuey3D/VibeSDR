@@ -83,3 +83,6 @@ VibeServer-*.zip
 /tvos/Pods/
 /tvos/build/
 tvos/.xcode.env.local
+
+# App Store submission helper — lives in ~/.appstoreconnect/tools/, carries private contact details
+scripts/asc-submit.py
