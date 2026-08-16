@@ -7403,6 +7403,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     why the audio was going to the front door while the spectrum went to the radio.
           wsBase={connectBase.replace(/^http/, 'ws').replace(/\/+$/, '')}
           authSuffix={route.params.authSuffix}
+          adminAuth={adminAuthQ}
           sessionId={sessionUuid}
           onBytes={(n: number) => { audioBytes.current += n; }}
           raw={rawAudio && rawAudioPolicy === 'choice'}

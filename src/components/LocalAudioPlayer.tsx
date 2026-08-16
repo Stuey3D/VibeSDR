@@ -101,6 +101,17 @@ export interface LocalAudioPlayerProps {
   // audio socket is filed as an anonymous "anon:IP" occupant and collides with the
   // spectrum socket's real id → the second socket is refused as "in use" (2026-07-24).
   sessionId?:    string;
+  /** ★★★ THE OWNER'S ADMIN CREDENTIAL — "&vs_admin_ticket=…" or the nonce pair. It has to be on
+   *  THIS socket as well as the spectrum one: the spectrum socket evicts the occupant, and without
+   *  it here the audio socket is refused in the same breath ("audio WS refused — server busy … no
+   *  credential"). The owner then holds their own radio in silence — and because TUNING AND EVERY
+   *  CONTROL travel over this socket too, the VFO moves on screen while the radio ignores it
+   *  (Stuart, 2026-08-16).
+   *  ★★ This is the path a VibeServer actually uses. `route.params.isLocal` is TRUE for a remote
+   *     VibeServer — it is the same shim, just somebody else's — so AudioPlayer is not mounted at
+   *     all and the native engine's credential support, added the same night, was never reached.
+   *     The same branch hid the server-bookmark fix a few hours earlier. */
+  adminAuth?:    string;
   /** Every inbound audio byte, so the connection readout can show the TRUE total.
    *  ★★ Without this the meter reported SPECTRUM ONLY — it showed 12 KB/s while
    *  the link was actually carrying 198, because uncompressed audio was 186 of
@@ -121,7 +132,7 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
     host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false,
-    wsBase = '' }: LocalAudioPlayerProps,
+    wsBase = '', adminAuth = '' }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -156,8 +167,11 @@ export default function LocalAudioPlayer(
     // the same format byte in Android's native pump. Nothing had to be built to receive it; the
     // request was simply hardcoded (Hans identified Opus by ear on first listen, 2026-07-27, and
     // this is the setting that was built for him everywhere except the phone).
+    // ★ adminAuth already carries its leading '&' (setAdminAuth normalises it in the client), and
+    //   it is the SAME string the spectrum socket appends — built once in JS so the two sockets
+    //   cannot disagree about who is asking.
     const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
-      + (raw ? '' : '&codec=opus') + authSuffix;
+      + (raw ? '' : '&codec=opus') + authSuffix + adminAuth;
 
     if (USE_NATIVE_PUMP) {
       Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix, wsBase ?? '');
@@ -236,7 +250,10 @@ export default function LocalAudioPlayer(
       started.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, raw]);
+  // ★ adminAuth is a dependency: it arrives AFTER the connection, because the password is typed on
+  //   a receiver you are already looking at. Without it here the socket keeps the empty credential
+  //   it opened with, which is the whole fault.
+  }, [port, raw, adminAuth]);
 
   // Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
   // JS branch remains for the fallback reader.
