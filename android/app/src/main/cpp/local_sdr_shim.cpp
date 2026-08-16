@@ -1948,6 +1948,16 @@ struct LocalSdrShim::Impl {
         unsigned long long lastDspNanos = 0, lastSentBytes = 0;
         double             lastSampleAt = 0;
         double vfoHz = 0;                       // ABSOLUTE, like audioFreq
+        /** ★★★ THE CAPTURE CENTRE THIS LISTENER'S CHANNEL WAS CUT AGAINST. The extract offset is
+         *  `vfoHz - rtlCenter`, computed once in clientRetune — so when the hardware MOVES, every
+         *  per-listener channel is silently cutting the wrong part of the spectrum until something
+         *  happens to re-tune it. The deferred dongle move makes that routine: the request is
+         *  remembered and applied a moment later by the DSP loop, long after clientRetune ran.
+         *  ★★ A PULL, not a push. The alternative — having the mover walk `clientDsp` — means
+         *     taking clientMtx from the DSP thread while it holds modeMtx, which is the lock order
+         *     that deadlocked this server once already. Comparing a double costs nothing and
+         *     cannot deadlock. */
+        double tunedAtCentre = 0;
         std::string mode = "am";
         double bwHz = 0;
         int    chanBins = 0;                    // power of two dividing fftSize
@@ -2615,6 +2625,9 @@ struct LocalSdrShim::Impl {
         //   its VFO, so the view offset is the gap between where it is listening and where it is
         //   looking — they are not the same thing once you can pan away from the signal.
         clientRetuneView(c);
+        // ★ Stamp what this cut was made against, so a later hardware move is detectable — see
+        //   ClientDsp::tunedAtCentre.
+        c->tunedAtCentre = rtlCenter.load();
     }
 
     /** This listener's VIEW channel — a second, independent extract sized for what it is LOOKING
@@ -5050,7 +5063,30 @@ struct LocalSdrShim::Impl {
                     //   the owner locked, and silently accepting it would demodulate noise.
                     const double half = displaySpan() * 0.5;
                     const double lo2 = rtlCenter.load() - half, hi2 = rtlCenter.load() + half;
-                    me->vfoHz = v < lo2 ? lo2 : (v > hi2 ? hi2 : v);
+                    // ★★★ BUT ON A RADIO THAT MAY MOVE, CLAMPING IS THE BUG. This path was written
+                    //     for the SHARED case, where the capture is fixed and everyone tunes inside
+                    //     it — and it was then used for every radio. So a lone listener restoring
+                    //     99.7 MHz on a receiver parked at 648 kHz had their VFO pinned to the edge
+                    //     of the old window: the app showed 99.7, the spectrum drew a black band,
+                    //     and the audio was still Caroline on 648 (Stuart, 2026-08-16). One click
+                    //     of the dial "fixed" it — because by then something else had moved the
+                    //     radio, so the same request now fell inside the window.
+                    // ★★ The shared `retune()` already knows how to do this properly: it moves the
+                    //    capture, re-checks the OWNER'S PERMITTED BANDS, and brings the gain down
+                    //    if the new band is capped. Reimplementing any of that here would be a
+                    //    second set of rules to keep in step, so ask it instead.
+                    // ★★ Only when the centre is not locked AND we are the only listener. Moving
+                    //    the capture under other people mid-sentence is exactly what the clamp
+                    //    exists to prevent, and that reasoning is still right for a shared radio.
+                    // ★ No lock is held here — dspFor() released clientMtx before returning — so
+                    //   taking modeMtx inside retune() is the same order the zoom handler uses.
+                    if ((v < lo2 || v > hi2)
+                        && g_vsLockedCentre.load() <= 0.0 && specListenerCount() <= 1) {
+                        retune(v);
+                        me->vfoHz = audioFreq.load();   // whatever retune() actually settled on
+                    } else {
+                        me->vfoHz = v < lo2 ? lo2 : (v > hi2 ? hi2 : v);
+                    }
                     changed = true;
                 }
                 if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) { me->bwHz = hi - lo; changed = true; }
@@ -8726,6 +8762,20 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx);
           cs.reserve(clientDsp.size());
           for (auto& kv : clientDsp) cs.push_back(kv.second); }
+        // ★★★ DID THE RADIO MOVE UNDER US? A listener's channel is cut at `vfoHz - rtlCenter`,
+        //     worked out once when they tuned — so any later move of the capture leaves every
+        //     channel slicing the wrong part of the spectrum, with nothing to correct it until
+        //     that listener happens to touch the dial. The deferred dongle move makes this
+        //     ordinary rather than exotic: the request is remembered and applied here on the DSP
+        //     thread, milliseconds AFTER clientRetune ran against the old centre.
+        // ★★ Outside the lock, and a pull rather than a push. Having the mover walk `clientDsp`
+        //    would mean taking clientMtx while holding modeMtx, which is the lock order that
+        //    deadlocked this server once already. A double comparison per block cannot.
+        {
+            const double centre = rtlCenter.load();
+            for (auto& c : cs)
+                if (c && c->rx && c->tunedAtCentre != centre) clientRetune(c.get());
+        }
         // ★★★ THE WIDE SPECTRUM MUST RUN WITH NOBODY LISTENING. This used to `return` on an empty
         //     listener list, which is obviously right for the per-listener fan-out and quietly
         //     disastrous for everything the SHARED row feeds: the landing-page spectrogram and the
