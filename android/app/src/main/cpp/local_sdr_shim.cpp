@@ -2073,6 +2073,16 @@ struct LocalSdrShim::Impl {
     std::string landedSession;
     /** Audio sockets that arrived before their spectrum socket, by session id. */
     std::map<std::string, std::shared_ptr<net::Socket>> pendingAudio;
+    /** ★★★ A SESSION THAT HAS ALREADY TUNED IS NOT A FRESH ARRIVAL. The app's AUDIO socket opens
+     *  first and carries the tune, so a listener restoring 90.1 MHz had it applied — and then the
+     *  SPECTRUM socket arrived a moment later, the landing gate called it a new session and put
+     *  the radio back on the owner's landing frequency. The listener saw 90.1 on the dial, a blank
+     *  spectrum, and heard 648 kHz; one touch of the dial "fixed" it (Stuart, 2026-08-16).
+     *  ★★ The landing exists so a NEW visitor gets the owner's choice rather than wherever the
+     *     last person left the radio. Someone who has just said where they want to be is not that
+     *     person, and overruling them is the opposite of what the feature is for.
+     *  ★ Guarded by clientMtx, like pendingAudio beside it. */
+    std::string preTunedSession;
     std::unique_ptr<vibedsp::Channelizer> chan_;
 
     // ── ★★★ THE BAND SPECTROGRAM — a 24-hour record, kept by the SERVER ──────────────────────
@@ -5433,6 +5443,15 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "tune") {
+            // ★ Reaching the SHARED handler means dspFor() found no channel for this socket — on a
+            //   per-client radio that is the audio socket arriving ahead of its spectrum socket.
+            //   Remember that this session has placed itself, so the landing gate does not later
+            //   overrule it and its channel is built where it asked to be. See preTunedSession.
+            if (perClientDsp()) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                for (auto& kv : pendingAudio)
+                    if (kv.second == sock) { preTunedSession = kv.first; break; }
+            }
             std::string m = jsonStr(msg, "mode");
             bool rebuilt = false;
             if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
@@ -7942,7 +7961,17 @@ struct LocalSdrShim::Impl {
             //    before it was clear the server should simply not start it.
             // ★ adminOk was settled for this client a few lines above (the accept path stores it
             //   from the handshake credential), and it is in scope here where `adminAuthed` is not.
-            if (firstOfSession && landedSession != session && !adminOk.load()) {
+            // ★★★ AND NOT IF THIS SESSION HAS ALREADY TUNED. The audio socket opens first and
+            //     carries the tune, so by the time the spectrum socket gets here the listener may
+            //     have said exactly where they want to be — see preTunedSession. The landing is
+            //     for someone who has NOT.
+            bool preTuned;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              preTuned = !session.empty() && preTunedSession == session; }
+            if (preTuned)
+                LOGI("session [%s] already tuned to %.3f kHz %s — landing skipped",
+                     session.c_str(), audioFreq.load() / 1e3, mode.c_str());
+            if (firstOfSession && landedSession != session && !adminOk.load() && !preTuned) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
                 //   127.0.0.1, and loopback is exempt from the session limit.
@@ -7976,9 +8005,20 @@ struct LocalSdrShim::Impl {
                 c->spec = sock;
                 c->session = session;
                 c->agent = userAgent;
-                c->vfoHz = g_vsLandingHz.load() > 0 ? g_vsLandingHz.load() : audioFreq.load();
-                { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
-                  c->mode = g_vsLandingMode.empty() ? mode : g_vsLandingMode; }
+                // ★★★ BUILD THE CHANNEL WHERE THE LISTENER ASKED TO BE, not at the landing.
+                //     This was the SECOND half of the same fault: even with the landing gate
+                //     skipped, a channel created from `g_vsLandingHz` cuts the spectrum at 648 kHz
+                //     for someone who tuned to 90.1 a moment ago on their audio socket. The tune
+                //     they sent is already in `audioFreq`/`mode` — the shared handler applied it —
+                //     so adopt that rather than the owner's default.
+                if (preTuned) {
+                    c->vfoHz = audioFreq.load();
+                    c->mode  = mode;
+                } else {
+                    c->vfoHz = g_vsLandingHz.load() > 0 ? g_vsLandingHz.load() : audioFreq.load();
+                    { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
+                      c->mode = g_vsLandingMode.empty() ? mode : g_vsLandingMode; }
+                }
                 c->bwHz = paramsFor(c->mode).bandwidth;
                 { std::lock_guard<std::mutex> lk(clientMtx); clientDsp[sock.get()] = c; }
                 clientRetune(c.get());
