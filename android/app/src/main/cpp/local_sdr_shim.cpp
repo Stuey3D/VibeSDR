@@ -2083,6 +2083,12 @@ struct LocalSdrShim::Impl {
      *     person, and overruling them is the opposite of what the feature is for.
      *  ★ Guarded by clientMtx, like pendingAudio beside it. */
     std::string preTunedSession;
+    /** ★★★ SESSION BY SOCKET, ON EVERY RADIO. `pendingAudio` records the same thing but ONLY when
+     *  perClientDsp() is true — which needs a LOCKED CENTRE and maxUsers > 1. A single-listener
+     *  receiver has neither, so every per-client structure is dead code there, and two fixes for
+     *  the landing bug were written against paths that never ran on the radio reporting it
+     *  (2026-08-16). This one is populated at the handshake, for all of them. */
+    std::map<net::Socket*, std::string> sockSession;
     std::unique_ptr<vibedsp::Channelizer> chan_;
 
     // ── ★★★ THE BAND SPECTROGRAM — a 24-hour record, kept by the SERVER ──────────────────────
@@ -5443,14 +5449,14 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "tune") {
-            // ★ Reaching the SHARED handler means dspFor() found no channel for this socket — on a
-            //   per-client radio that is the audio socket arriving ahead of its spectrum socket.
-            //   Remember that this session has placed itself, so the landing gate does not later
-            //   overrule it and its channel is built where it asked to be. See preTunedSession.
-            if (perClientDsp()) {
+            // ★★★ REMEMBER THAT THIS SESSION HAS PLACED ITSELF, so the landing gate does not
+            //     later overrule it — see preTunedSession. Keyed off sockSession, NOT pendingAudio:
+            //     the latter exists only on a per-client radio, and the receiver that reported this
+            //     bug is single-listener, where perClientDsp() is false and none of that code runs.
+            {
                 std::lock_guard<std::mutex> lk(clientMtx);
-                for (auto& kv : pendingAudio)
-                    if (kv.second == sock) { preTunedSession = kv.first; break; }
+                auto it = sockSession.find(sock.get());
+                if (it != sockSession.end() && !it->second.empty()) preTunedSession = it->second;
             }
             std::string m = jsonStr(msg, "mode");
             bool rebuilt = false;
@@ -7430,6 +7436,9 @@ struct LocalSdrShim::Impl {
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
+        // ★ Who this socket belongs to, before anything can ask. See sockSession.
+        if (!session.empty())
+            { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session; }
 
         // ★★★ FROM HERE ON, ONE THREAD AND ONLY ONE THREAD WRITES TO THIS SOCKET.
         // Registered immediately after the handshake, because the moment this client is published
@@ -8146,6 +8155,7 @@ struct LocalSdrShim::Impl {
           //   holding clientMtx would deadlock against anything that thread wants.
           { auto it = clientDsp.find(sock.get());
             if (it != clientDsp.end()) { goneDsp = it->second; clientDsp.erase(it); } }
+          sockSession.erase(sock.get());
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
@@ -11572,7 +11582,7 @@ void LocalSdrShim::stopLocked() {
         std::vector<std::shared_ptr<Impl::ClientDsp>> gone;
         { std::lock_guard<std::mutex> lk(impl->clientMtx);
           for (auto& kv : impl->clientDsp) gone.push_back(kv.second);
-          impl->clientDsp.clear(); impl->pendingAudio.clear(); }
+          impl->clientDsp.clear(); impl->pendingAudio.clear(); impl->sockSession.clear(); }
         for (auto& c : gone) impl->stopClientThread(c);   // outside the lock — they take it too
         // ★ A departing listener may have been the RDS decoder for its frequency; hand it to
         //   whoever is still there. Cheap, and only when somebody actually left.
