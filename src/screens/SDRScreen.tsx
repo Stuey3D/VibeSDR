@@ -119,6 +119,7 @@ import RecordingsOverlay from '../components/RecordingsOverlay';
 import { IS_TV } from '../utils/tv';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { noteAudioPath } from '../services/audioPathLog';
 import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
@@ -7388,6 +7389,22 @@ export default function SDRScreen({ route, navigation }: Props) {
         adminAuth={adminAuthQ}
         restartKey={audioRestart}
       />
+      {/* ★ Record which audio component is mounted and WHY, for the diagnostics report. Both of
+          these are gated, and a gate that closes produces no socket at all — which the server
+          cannot see and therefore cannot report. See audioPathLog.ts. */}
+      {(() => {
+        const localMounted = !!route.params.isLocal && route.params.localPort != null;
+        noteAudioPath(localMounted ? 'LocalAudioPlayer'
+                    : (!route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr'
+                        ? 'AudioPlayer' : 'none'),
+                    { isLocal: !!route.params.isLocal,
+                      localPort: route.params.localPort ?? null,
+                      refusal: refusal ? refusal.title : null,
+                      tuneLoaded,
+                      adminAuth: adminAuthQ ? 'held' : 'none',
+                      session: sessionUuid.slice(0, 8) });
+        return null;
+      })()}
       {/* v4 local hardware: audio from the on-device shim's /ws/audio (PCM) */}
       {route.params.isLocal && route.params.localPort != null ? (
         <LocalAudioPlayer

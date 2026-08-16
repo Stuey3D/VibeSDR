@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
+import { noteAudioEvent } from '../services/audioPathLog';
 
 // VibeSDR V4 — local-hardware / RTL-TCP audio.
 //
@@ -143,7 +144,10 @@ export default function LocalAudioPlayer(
   tune.current = { frequency, mode, bandwidthLow, bandwidthHigh };
 
   useEffect(() => {
-    if (port == null) return;
+    // ★ THE MOST IMPORTANT LINE IN THE REPORT. A null port means the socket was never opened at
+    //   all — the gate closed — and the server has nothing to log because nothing arrived. That
+    //   silence is what four separate diagnoses were built on top of.
+    if (port == null) { noteAudioEvent('NOT STARTED — port gate closed (refusal or tune not loaded)'); return; }
     const { frequency: f, mode: m, bandwidthLow: bl, bandwidthHigh: bh } = tune.current;
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');
 
@@ -174,6 +178,8 @@ export default function LocalAudioPlayer(
       + (raw ? '' : '&codec=opus') + authSuffix + adminAuth;
 
     if (USE_NATIVE_PUMP) {
+      noteAudioEvent(`native pump start → ${(wsBase || `ws://${host}:${port}`)}/ws/audio`
+                     + (adminAuth ? ' [admin]' : ' [no admin]'));
       Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix, wsBase ?? '');
       started.current = true;
       // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
@@ -206,11 +212,13 @@ export default function LocalAudioPlayer(
     // ★ Same rule as the native pump: the supplied base already carries scheme, host, port
     //   and any /r/<id> prefix. Only fall back to host:port when there is none.
     const wsRoot = (wsBase || `ws://${host}:${port}`).replace(/\/+$/, '');
+    noteAudioEvent(`js socket opening → ${wsRoot}/ws/audio`
+                   + (adminAuth ? ' [admin]' : ' [no admin]'));
     const sock = new WebSocket(`${wsRoot}/ws/audio${authQ}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
     started.current = true;
-    sock.onopen = () => { if (!closed) sock.send(tuneJson(f, m, bl, bh)); };
+    sock.onopen = () => { noteAudioEvent('js socket OPEN'); if (!closed) sock.send(tuneJson(f, m, bl, bh)); };
     sock.onmessage = (e) => {
       if (closed || !(e.data instanceof ArrayBuffer)) return;
       const buf = e.data as ArrayBuffer;

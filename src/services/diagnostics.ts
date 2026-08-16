@@ -21,6 +21,7 @@
 import { Platform, NativeModules } from 'react-native';
 import { APP_VERSION } from '../constants/version';
 import { getLastCrash } from './crashGuard';
+import { audioPathDump } from './audioPathLog';
 import { unhandledLog } from './protocolLog';
 
 const Vibe = (NativeModules as {
@@ -48,6 +49,14 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
   } catch {}
 
   if (extra) for (const [k, v] of Object.entries(extra)) lines.push(`${k.padEnd(10)}: ${String(v)}`);
+
+  // ── The audio path ───────────────────────────────────────────────────────
+  // ★★ In this app the audio socket carries the TUNE and every control message — the spectrum
+  //    socket is display-only — so one refused audio connection takes sound, tuning and the
+  //    hardware panel with it, and reads as "the radio is ignoring me". This section names which
+  //    component owns audio, what its gates evaluated to, and what the socket did.
+  lines.push('', '--- audio path ---');
+  for (const l of audioPathDump()) lines.push(l);
 
   // ── Server messages we did not handle ────────────────────────────────────
   // ★★ The single most useful thing in this report when a receiver misbehaves: a server says
