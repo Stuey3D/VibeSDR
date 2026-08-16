@@ -59,7 +59,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             // ★ The local audio pump's byte tally. The link meter has to include AUDIO or it is
             //   worse than useless — it once read 12 KB/s while the link carried 198, and hid the
             //   real problem for months. Now the socket is native, only native can count it.
-            "VibeLocalAudioBytes"]
+            "VibeLocalAudioBytes",
+            // ★ What the local-audio socket is DOING. It reported bytes once flowing and nothing
+            //   at all before that, so a socket that never connected was indistinguishable from
+            //   one that was never started — and the server cannot see either. A whole night of
+            //   diagnosis was built on that silence (2026-08-16).
+            "VibeLocalAudioState"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -1548,10 +1553,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       switch state {
       case .ready:
         NSLog("[VibePowerModule] local audio WS ready: %@", url.absoluteString)
+        self.sendEvent(withName: "VibeLocalAudioState", body: ["state": "ready"])
         if !self.laTune.isEmpty { self.sendLocalTune(self.laTune) }
         self.laReceive(conn, gen: gen)
       case .failed(let err):
         NSLog("[VibePowerModule] local audio WS failed: %@", "\(err)")
+        self.sendEvent(withName: "VibeLocalAudioState", body: ["state": "failed: \(err)"])
+      // ★★ WAITING IS THE ONE THAT WAS INVISIBLE. NWConnection sits in .waiting on a refused or
+      //    unreachable endpoint and RETRIES QUIETLY — no failure, no bytes, nothing in the server's
+      //    log because nothing ever completed a handshake. It presents to the user as "no audio"
+      //    with everything else working, which is exactly the report.
+      case .waiting(let err):
+        NSLog("[VibePowerModule] local audio WS waiting: %@", "\(err)")
+        self.sendEvent(withName: "VibeLocalAudioState", body: ["state": "waiting: \(err)"])
+      case .cancelled:
+        self.sendEvent(withName: "VibeLocalAudioState", body: ["state": "cancelled"])
       default:
         break
       }

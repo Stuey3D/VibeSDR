@@ -191,14 +191,22 @@ export default function LocalAudioPlayer(
       //      counting was always the iOS path — so its meter had been spectrum-only since the pump
       //      was written. Moving iOS native exposed that, and Android caught up the same day.
       let sub: { remove: () => void } | null = null;
+      let stateSub: { remove: () => void } | null = null;
       try {
         const em = new NativeEventEmitter(NativeModules.VibePowerModule);
         sub = em.addListener('VibeLocalAudioBytes', (e: { bytes?: number }) => {
           if (typeof e?.bytes === 'number') onBytes?.(e.bytes);
         });
+        // ★ What the native socket is actually doing. Without this, "started" was the last thing
+        //   anyone knew about it — and a socket stuck in .waiting looks identical to one that was
+        //   never opened, from both ends.
+        stateSub = em.addListener('VibeLocalAudioState', (e: { state?: string }) => {
+          if (e?.state) noteAudioEvent(`native socket ${e.state}`);
+        });
       } catch { sub = null; }
       return () => {
         try { sub?.remove(); } catch {}
+        try { stateSub?.remove(); } catch {}
         if (started.current) { Vibe?.stopLocalAudio?.(); started.current = false; }
       };
     }
