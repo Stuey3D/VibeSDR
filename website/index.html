@@ -476,7 +476,12 @@
       </p>
       <div class="cta-row">
         <a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">Get it on the App&nbsp;Store <span class="price">£2.99</span></a>
-        <span class="btn btn-soon" aria-disabled="true">Play&nbsp;Store <span class="price">Coming&nbsp;soon</span></span>
+        <!-- ★★★ ANDROID IS IN CLOSED TESTING, BY INVITATION — Stuart has no open-testing access yet
+             (2026-08-16). The opt-in URL play.google.com/apps/testing/com.vibesdr.app exists, but a
+             visitor who is NOT on the tester list gets a Google error page, not the app. So it is
+             NOT linked here: a dead invite is worse than none, which is the same rule written above
+             about the retired TestFlight link. Swap this for the real link the day the track opens. -->
+        <span class="btn btn-soon" aria-disabled="true">Play&nbsp;Store <span class="price">Closed&nbsp;test</span></span>
         <!-- ★ The TestFlight beta was RETIRED when 10.0.1 went live (2026-08-01). Do not re-add a
              beta button unless a new public link actually exists — a dead invite is worse than none. -->
         <a class="btn btn-ghost" href="https://github.com/Stuey3D/VibeSDR">View source</a>
@@ -701,7 +706,7 @@ setInterval(loadDemo, 30000);
            testflight.apple.com/join/AnKTNhuZ — the VIBESDR beta — so anyone here for Jr was being
            sent the WRONG WATCH APP. See
            memory/watch_split_jr_buddy.md: Jr = spike/WristSDR, Buddy = ios/VibeSDRWatch. -->
-      <p class="eyebrow">VibeSDR&nbsp;Jr <span class="badge-free">App&nbsp;Store soon</span></p>
+      <p class="eyebrow">VibeSDR&nbsp;Jr <span class="badge-free">On the App&nbsp;Store</span></p>
       <h2>A complete receiver <span class="glow">on the Apple&nbsp;Watch.</span></h2>
       <p class="sub big">Its own connection, its own audio, no phone involved. Turn the Digital&nbsp;Crown to tune, press and hold for the menu, and leave the handset at home.</p>
       <p class="sub">Not a remote control for the phone in your pocket — a receiver, on your wrist, that connects to the radio by itself.</p>
@@ -715,9 +720,10 @@ setInterval(loadDemo, 30000);
           <span>Jr running live on the wrist, unedited &mdash; crashes and all.</span>
         </span>
       </a>
-      <!-- ★ Flip this to a real App Store link the moment Jr 1.0 is approved. Until then it must NOT
-           claim to be downloadable, and it must NOT point at the VibeSDR TestFlight. -->
-      <p style="margin-top:18px"><span class="btn btn-soon" aria-disabled="true">Coming to the App&nbsp;Store</span></p>
+      <!-- ★ Jr IS live — do not put it back to "coming soon". It shipped as 1.0, and this button sat
+           on "Coming to the App Store" for weeks after approval because nothing here was told.
+           Its own listing, NOT VibeSDR's: id6795507029 is Jr, id6786344049 is the phone app. -->
+      <p style="margin-top:18px"><a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr-jr/id6795507029">Get VibeSDR&nbsp;Jr on the App&nbsp;Store&nbsp;→</a></p>
       <p class="sub" style="margin-top:14px">
         Looking for the <b>wrist remote</b> instead? That's <b>VibeSDR&nbsp;Buddy</b> — it drives the phone
         app from your Watch, and it ships inside VibeSDR&nbsp;10 — no separate download.
@@ -880,22 +886,30 @@ setInterval(loadDemo, 30000);
       <img src="assets/web-client.jpg" loading="lazy" alt="VibeServer's built-in web client running in a desktop browser — full spectrum, waterfall and controls, with no software installed" />
       <figcaption>No app required at the other end — VibeServer serves this itself.</figcaption>
     </figure>
-    <!-- ★ Keep the version, the tag and the copy in step: this link is the only route to the
-         macOS build, and it went stale once already when the site was rewritten. Three things move
-         together — the "v1.0" label, the release tag in the href, and the button text. -->
+    <!-- ★★★ FOUR things move together and they went stale as a set: the version label, the release
+         tag in the href, the button text, and THE COPY. This block still said "v1.0" and "one
+         receiver at a time" when the shipping build was 3.1.18 and hosts several radios behind one
+         address — the description of the product was wrong, not just the number (2026-08-16).
+         ★ The Linux line is the SAME server from the same source tree; keep its version in step too. -->
     <div class="mac-alpha">
-      <p class="soon-k">New · macOS · v1.0</p>
-      <h3>No spare Android? Use the Mac.</h3>
+      <p class="soon-k">New · macOS &amp; Linux · v3.1.18</p>
+      <h3>No spare Android? Use the Mac — or a Pi.</h3>
       <p>
         The same server, native on Apple&nbsp;Silicon — a menu&#8209;bar app around the same DSP core.
         Plug in an RTL&#8209;SDR, an Airspy&nbsp;HF+ or an SDRplay&nbsp;RSP, click <b>Open in Browser</b>,
         and tune. Notarised by Apple, so it opens cleanly.
       </p>
       <p>
-        One receiver at a time. Safe to put on a public site — but if you do open it to the
-        internet, <b>set a PIN</b>, or a listener can change the receiver's hardware settings.
+        Several receivers, one address. Listeners pick which radio they want from a front page that
+        shows what is free and what is in use — and you can take one back from any device with the
+        admin password. Safe to put on a public site, but if you open it to the internet,
+        <b>set a PIN</b>, or a listener can change the receiver's hardware settings.
       </p>
-      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v1.0.0">Download VibeServer 1.0 for macOS →</a>
+      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v3.1.18">Download VibeServer 3.1.18 for macOS →</a>
+      <p class="sub" style="margin-top:14px">
+        On a Raspberry&nbsp;Pi or any Debian box, install it from our apt repository and it updates
+        itself with the rest of the system — <a href="https://apt.vibesdr.net/">apt.vibesdr.net</a>.
+      </p>
     </div>
   </div>
 </section>
@@ -915,7 +929,7 @@ setInterval(loadDemo, 30000);
       </figure>
       <figure class="fam">
         <img src="assets/family-jr.png" alt="VibeSDR Jr app icon" />
-        <figcaption><b>VibeSDR&nbsp;Jr</b><span>A complete receiver on the Apple&nbsp;Watch. Its own connection, its own audio, no phone involved.</span></figcaption>
+        <figcaption><b><a href="https://apps.apple.com/gb/app/vibesdr-jr/id6795507029">VibeSDR&nbsp;Jr</a></b><span>A complete receiver on the Apple&nbsp;Watch. Its own connection, its own audio, no phone involved.</span></figcaption>
       </figure>
       <figure class="fam">
         <img src="assets/family-buddy.png" alt="VibeSDR Buddy app icon" />
