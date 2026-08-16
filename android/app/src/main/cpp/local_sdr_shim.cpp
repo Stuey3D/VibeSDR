@@ -7818,7 +7818,20 @@ struct LocalSdrShim::Impl {
             //    is the SESSION and not the socket count. Remembered by id: the same listener
             //    returning is not a new arrival, and a genuinely new one still gets the owner's
             //    chosen frequency exactly once.
-            if (firstOfSession && landedSession != session) {
+            // ★★★ AND NEVER LAND AN OWNER TAKING THEIR RECEIVER BACK. The landing frequency is for
+            //     a NEW LISTENER who has not said where they want to be — it is the owner's answer
+            //     to "where should a stranger start". An admin arriving with the password is the
+            //     opposite of that: they had a session, they are resuming it, and they have just
+            //     proved who they are. Landing them dropped the owner onto their own default —
+            //     "Caroline starts playing although I'm tuned to FM" — with the dial showing one
+            //     frequency and the audio on another (Stuart, 2026-08-15).
+            // ★★ It is also the case where landing does the most damage: a takeover is the one
+            //    arrival that ALREADY has a tune worth keeping, and the client then has to fight
+            //    the server to get it back. Four client-side workarounds went into that fight
+            //    before it was clear the server should simply not start it.
+            // ★ adminOk was settled for this client a few lines above (the accept path stores it
+            //   from the handshake credential), and it is in scope here where `adminAuthed` is not.
+            if (firstOfSession && landedSession != session && !adminOk.load()) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
                 //   127.0.0.1, and loopback is exempt from the session limit.
