@@ -446,6 +446,36 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ One retry without the admin credential, per session — see onError. */
   const adminRetryDone = useRef(false);
   useEffect(() => { adminAuthQRef.current = adminAuthQ; }, [adminAuthQ]);
+  /**
+   * ★★★ DID THE USER ASK TO TAKE THE RADIO, OR ARE WE JUST RECONNECTING?
+   *
+   *     The server evicts the current occupant whenever a connection arrives holding a valid admin
+   *     credential. That is right for a deliberate takeover and wrong for everything else, because
+   *     a client REPLAYS its stored credential on every automatic reconnect — so coming back to the
+   *     foreground, or a dropped socket retrying, silently threw somebody off. With a browser open
+   *     at the same radio the two ends took it off each other indefinitely (Stuart, 2026-08-16:
+   *     "it appears as if the app retains the admin status as when I switch back to it it fights to
+   *     take the radio back").
+   *
+   * ★★ So intent travels WITH the credential, as `vs_takeover`, and it is one-shot: set by the
+   *    TAKE OVER button and by choosing an in-use radio at the picker, cleared as soon as a
+   *    connection is established. Everything else says 0 — admin status still granted, nobody
+   *    displaced. An admin arriving at a busy radio then waits like anyone else, which is the
+   *    correct answer to "I did not ask to interrupt this person".
+   *
+   * ★ ABSENT means "may evict", so servers and clients that predate the flag behave exactly as
+   *   before; only a client that knows to say 0 gets the new restraint.
+   */
+  const [takeoverIntent, setTakeoverIntent] = useState(false);
+  /** The credential AS IT GOES ON THE WIRE — bare `adminAuthQ` everywhere else, because the ticket
+   *  renewal and the admin-page URLs must not carry a takeover flag.
+   *  ★★ BOTH SOCKETS GET THE SAME STRING. Whichever arrives first is the one that would evict, so
+   *     if they disagreed the outcome would depend on which won the race. */
+  const adminAuthWire = adminAuthQ
+    ? `${adminAuthQ}&vs_takeover=${takeoverIntent ? '1' : '0'}`
+    : '';
+  const adminAuthWireRef = useRef('');
+  useEffect(() => { adminAuthWireRef.current = adminAuthWire; }, [adminAuthWire]);
   const [adminPickPw, setAdminPickPw] = useState('');
   const [adminPickBusy, setAdminPickBusy] = useState(false);
   const [adminPickBad, setAdminPickBad] = useState(false);
@@ -2189,6 +2219,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminSet, setAdminSet] = useState(false);
   const [adminOk,  setAdminOk]  = useState(false);
   const [adminRefused, setAdminRefused] = useState(false);
+  /** ★★ A transient line for something that happened TO the admin session, as opposed to something
+   *  the user did. Losing admin to a more recent login is not a fault and not a refusal, so it
+   *  gets neither the refusal card (which is terminal and offers a retry) nor silence (which is
+   *  what made every earlier demotion read as the server ignoring the password). Clears itself —
+   *  there is nothing here to acknowledge. */
+  const [adminNote, setAdminNote] = useState('');
+  useEffect(() => {
+    if (!adminNote) return;
+    const t = setTimeout(() => setAdminNote(''), 9000);
+    return () => clearTimeout(t);
+  }, [adminNote]);
   // Airspy HF+ live state. Mirrors what we last SENT — the shim has no read-back message, and
   // it is single-occupant, so our own last write is the truth.
   // ★★ SDRplay RSP live state + control. The panel had no RSP branch at all, so an RSP was
@@ -2827,6 +2868,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    is no case where both can be true: a genuinely refused session has no connection to
       //    announce, and `refused` stops the client retrying into one.
       onConnect:    () => { if (!destroyed.current) { connectedOnceRef.current = true;
+        // ★★ THE TAKEOVER IS SPENT. We are in; every reconnect from here is an accident of the
+        //    network or the app lifecycle, and none of them asked to displace anybody. Clearing it
+        //    here rather than on a timer means it lasts exactly as long as the act that set it.
+        setTakeoverIntent(false);
         if (adminAuthQRef.current) setAudioRestart((n) => n + 1); kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); setRefusal(null); setTakeoverErr(null); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       // ★★★ A CLOSED SOCKET MUST RAISE THE CARD ITSELF. The connection-lost notice was armed ONLY
       //     from link quality reaching zero — and link quality is reported WHEN FRAMES ARRIVE. So
@@ -2956,6 +3001,20 @@ export default function SDRScreen({ route, navigation }: Props) {
         //   is the honest explanation where "connection lost" would be a guess.
         if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
         setConnLost(false);
+        // ★★★ AND LET GO OF THE CREDENTIAL. Being evicted means somebody proved the SAME password
+        //     more recently, and by the rule the server enforces the newest login wins. Keeping
+        //     our ticket makes the next automatic reconnect a TAKEOVER: the app comes back to the
+        //     foreground, reconnects with a credential that is still valid for another few
+        //     minutes, and throws the browser off again — each side evicting the other for as
+        //     long as both are open (Stuart, 2026-08-16: "it fights to take the radio back").
+        // ★★ A takeover is meant to be a DELIBERATE act — the server's own comment says so. A
+        //    stored credential replayed by reconnect logic is not deliberate, so the credential
+        //    must not outlive the moment it lost. Unlocking again is one tap, and that tap is
+        //    exactly the deliberate act the design asks for.
+        // ★ Cleared on BOTH the ref and the state: the ref is what the socket callbacks read.
+        adminAuthQRef.current = '';
+        setAdminAuthQ('');
+        setAdminOk(false);
         setRefusal({
           title: 'TAKEN BACK',
           body: "This receiver's owner has taken it back with the admin password.",
@@ -3168,6 +3227,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (st.ok) { setSessionEndsAt(null); setSessionLeftMs(null); }
         if (st.refused) setAdminRefused(true);
         if (st.ok) setAdminRefused(false);
+        // ★★★ SUPERSEDED — an owner unlocked more recently somewhere else. Let the credential go,
+        //     for the same reason as onEvicted: a ticket we keep is one the next reconnect
+        //     replays, and replaying it takes the radio back off the person who just claimed it.
+        //     Not a refusal — nothing was mistyped — so `adminRefused` stays clear and the UNLOCK
+        //     control is offered normally.
+        if (st.superseded) {
+          adminAuthQRef.current = '';
+          setAdminAuthQ('');
+          setAdminOk(false);
+          setAdminNote('Admin moved to a more recent login — unlock again to take it back.');
+        }
       },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
@@ -3492,7 +3562,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   where a busy or cooling-down receiver decides whether to refuse us.
       // ★ Typed, NOT `(c as any).setAdminAuth?.()`. That form is why this went unnoticed: with the
       //   method missing, optional chaining made it a silent no-op rather than an error.
-      if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthQRef.current);
+      if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthWireRef.current);
       c.connect(f, m, { allowServerDefault: !restored }).catch(() => {});
     }).catch(() => {
       if (cancelled || destroyed.current) return;
@@ -3502,7 +3572,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // better answer than our hardcoded one.
       // ★ Typed, NOT `(c as any).setAdminAuth?.()`. That form is why this went unnoticed: with the
       //   method missing, optional chaining made it a silent no-op rather than an error.
-      if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthQRef.current);
+      if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthWireRef.current);
       c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
     });
     // ★★★ GIVE crashGuard A WAY TO KILL THIS SESSION. A render crash resets navigation, but this
@@ -6015,7 +6085,14 @@ export default function SDRScreen({ route, navigation }: Props) {
                 key={r.id}
                 style={[styles.radioPickRow, blocked && { opacity: 0.45 }]}
                 disabled={blocked}
-                onPress={() => setRadioBase(radioBaseUrl(baseUrl, r.id))}
+                onPress={() => {
+                  // ★★ Choosing a radio the picker has just labelled IN USE, with the password
+                  //    already entered, is a deliberate takeover — the row says so before it is
+                  //    tapped. A FREE radio needs no such permission, so do not ask for it: the
+                  //    flag is only ever set where somebody is actually about to be displaced.
+                  if (busy) setTakeoverIntent(true);
+                  setRadioBase(radioBaseUrl(baseUrl, r.id));
+                }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <Text style={[styles.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
@@ -6721,6 +6798,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
+      {!!adminNote && (
+        <View pointerEvents="none" style={[styles.adminNote, {
+          top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
+          left: Math.max(12, insets.left + 8),
+          right: Math.max(12, insets.right + 8),
+        }]}>
+          <Text style={styles.adminNoteTxt}>{adminNote}</Text>
+        </View>
+      )}
+
       {!controlsHidden && (
         <ServersChip
           anchorRef={tourRef('serversChip')}
@@ -7043,7 +7130,13 @@ export default function SDRScreen({ route, navigation }: Props) {
                     adminRetryDone.current = false;
                     adminAuthQRef.current = q;
                     setAdminAuthQ(q);
-                    client.current?.setAdminAuth?.(q);
+                    // ★★ THIS is the deliberate act — a finger on TAKE OVER — so this connection,
+                    //    and only this one, is allowed to displace the occupant. Cleared again as
+                    //    soon as we are through; see takeoverIntent.
+                    setTakeoverIntent(true);
+                    const wire = `${q}&vs_takeover=1`;
+                    adminAuthWireRef.current = wire;
+                    client.current?.setAdminAuth?.(wire);
                     fullReconnect();
                   }}>
                   <Text style={[styles.noticeBtnTxt, !takeoverPw && { opacity: 0.4 }]}>
@@ -7386,7 +7479,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         step={step}
         instanceName={instanceName}
         uuid={sessionUuid}
-        adminAuth={adminAuthQ}
+        adminAuth={adminAuthWire}
         restartKey={audioRestart}
       />
       {/* ★ Record which audio component is mounted and WHY, for the diagnostics report. Both of
@@ -7420,7 +7513,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     why the audio was going to the front door while the spectrum went to the radio.
           wsBase={connectBase.replace(/^http/, 'ws').replace(/\/+$/, '')}
           authSuffix={route.params.authSuffix}
-          adminAuth={adminAuthQ}
+          adminAuth={adminAuthWire}
           sessionId={sessionUuid}
           onBytes={(n: number) => { audioBytes.current += n; }}
           raw={rawAudio && rawAudioPolicy === 'choice'}
@@ -7440,6 +7533,12 @@ const styles = StyleSheet.create({
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
   rxClockCap:  { fontFamily: 'Nixie One', fontSize: 9, letterSpacing: 1.5 },
   rxClockNum:  { fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26 },
+  adminNote: {
+    position: 'absolute', zIndex: 40, alignItems: 'center',
+    paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,
+    backgroundColor: 'rgba(20,14,0,0.92)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.45)',
+  },
+  adminNoteTxt: { color: '#ffb833', fontSize: 12, textAlign: 'center' },
   // ── The multi-radio landing page ────────────────────────────────────────────────────────
   radioPickBackdrop: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50,

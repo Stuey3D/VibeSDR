@@ -6372,7 +6372,11 @@ struct LocalSdrShim::Impl {
                      // ★★ Trusted no further than a User-Agent already is: both are the client's
                      //    own word about itself, neither grants anything, and the log says who
                      //    CLAIMED to be there — which is all a User-Agent has ever meant.
-                     userAgent.empty() ? queryParam(reqLine, "client") : userAgent);
+                     userAgent.empty() ? queryParam(reqLine, "client") : userAgent,
+                     // ★ Whether this arrival is ALLOWED to displace the current listener — see
+                     //   the override decision in acceptWs. Absent means yes, so nothing that
+                     //   predates the flag changes behaviour.
+                     queryParam(reqLine, "vs_takeover") != "0");
         // ★★ MATCHED ON A PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE. This was
         //    `reqLine.find("/connection") != npos`, which quietly claimed every later route whose
         //    path merely CONTAINS that word — /vibeserver/admin/connections was answered by the
@@ -7361,7 +7365,12 @@ struct LocalSdrShim::Impl {
                   // ★ Carried purely for the connection log. It is the one field that separates
                   //   "a person opened the web client" from "something is scraping us" without
                   //   guessing, and the owner reading the log is the only consumer.
-                  const std::string& userAgent = "") {
+                  const std::string& userAgent = "",
+                  // ★★ May this connection evict the current occupant? Holding a valid admin
+                  //    credential is NOT the same as asking to interrupt somebody — see where it
+                  //    is used. Defaults to true so callers and clients that predate it are
+                  //    unaffected.
+                  bool mayEvict = true) {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -7536,7 +7545,26 @@ struct LocalSdrShim::Impl {
                 // endpoint without one is an open guessing gallery, and unlike the PIN this one
                 // displaces a listener on success.
                 // Evicting only makes sense if somebody is actually in the way.
-                override_ = adminAuthed && occupied;
+                // ★★★ AND ONLY IF THEY MEANT TO. Holding the password is not the same as asking to
+                //     interrupt somebody: a client replays its stored credential on EVERY automatic
+                //     reconnect, so returning from the background, or a dropped socket retrying,
+                //     silently threw the current listener off. With two of the owner's own clients
+                //     open on one radio they took it off each other indefinitely, each reconnect
+                //     evicting the other (Stuart, 2026-08-16: "when I switch back to it it fights
+                //     to take the radio back"). The comment above already says a takeover must be
+                //     "a deliberate, rare act by the owner" — this is what finally makes it one.
+                // ★★ ABSENT means yes, so every client written before the flag behaves exactly as
+                //    it did; only a client that explicitly says 0 gets the new restraint. That is
+                //    the safe default here because the alternative — absent means no — would
+                //    silently disable takeover for Jr and the web client until both were updated,
+                //    and a takeover that quietly stops working is the fault we have just spent
+                //    three days on.
+                // ★ An admin who is refused here is still an ADMIN once a slot frees: this decides
+                //   only whether somebody is displaced, never what the arriving session is granted.
+                override_ = adminAuthed && occupied && mayEvict;
+                if (adminAuthed && occupied && !mayEvict)
+                    LOGI("admin arrived without takeover intent — occupant [%s] left alone",
+                         occupantSession.c_str());
                 if (override_) {
                     // ★★★ THE WHOLE ID, NOT THE FIRST EIGHT. Truncated, the line read "662b1dca
                 //     evicting the current occupant 662b1dca" — a session apparently evicting
@@ -7662,6 +7690,24 @@ struct LocalSdrShim::Impl {
                     if (!c || !c->adminOk.load()) continue;
                     if (c->spec == sock || c->audio == sock) continue;
                     c->adminOk.store(false);
+                    // ★★★ AND TELL THEM. This demoted silently, so a client went on believing it
+                    //     was admin — badge lit, controls unlocked, no countdown — while the
+                    //     server had already taken the status away. Every control it offered was
+                    //     a no-op, which reads as the SERVER being broken rather than as a
+                    //     demotion that nobody mentioned.
+                    // ★★ It also keeps the fight going. A client that never learns it lost still
+                    //    holds a valid ticket and replays it on the next reconnect, evicting the
+                    //    person who displaced it — the two ends taking the radio off each other
+                    //    indefinitely. The frame is what lets a client drop the credential, so
+                    //    losing admin STAYS lost until somebody deliberately unlocks again.
+                    // ★ Same shape as the admin_unlock refusal (`superseded`), so a client needs
+                    //   one handler for both, and an older client ignores an unknown field.
+                    static const char* kSup =
+                        "{\"type\":\"admin\",\"ok\":false,\"superseded\":true}";
+                    if (c->spec  && c->spec->isOpen())
+                        sendWs(c->spec,  0x1, (const uint8_t*)kSup, strlen(kSup));
+                    if (c->audio && c->audio->isOpen())
+                        sendWs(c->audio, 0x1, (const uint8_t*)kSup, strlen(kSup));
                     LOGI("admin superseded — a newer login arrived holding the password");
                 }
             }

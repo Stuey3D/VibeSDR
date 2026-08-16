@@ -208,7 +208,7 @@ export interface SDRCallbacks {
                     overload: boolean; settling: boolean }) => void;
   /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
    *  `refused` fires when a protected control was rejected — the honest moment to say why. */
-  onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean }) => void;
+  onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean; superseded?: boolean }) => void;
   /** ★★ THE SERVER DELIBERATELY TURNING US AWAY. Each of these is TERMINAL: the
    *  reconnect that serves a dropped link would here hammer a receiver that is
    *  busy saying "not you, not now", while showing our own user nothing but
@@ -1783,8 +1783,12 @@ export class UberSDRClient {
       return;
     }
     if (msg.type === 'admin') {
+      // ★★ `superseded` = an owner proved the same password more recently, so this session is no
+      //    longer admin. Distinct from `refused` (the password was wrong): nothing was mistyped
+      //    here, and the honest response is to let the credential go rather than to re-assert it.
       this.callbacks.onAdminState?.({
-        set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true });
+        set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true,
+        superseded: msg.superseded === true });
       return;
     }
     if (msg.type === 'rdsx') {

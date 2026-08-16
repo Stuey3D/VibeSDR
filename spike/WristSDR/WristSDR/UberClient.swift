@@ -91,6 +91,20 @@ final class UberClient: ObservableObject {
   /// password: HMAC(secret, nonce), same VsAuth as the PIN, so it inherits the
   /// brute-force lockout too.
   private var adminSuffix = ""
+  /// ★★★ DID SOMEBODY ASK TO INTERRUPT, OR ARE WE JUST RECONNECTING? The server evicts the current
+  ///     listener whenever a connection arrives holding admin — right for a takeover, wrong for
+  ///     everything else, because `adminSuffix` above is replayed on EVERY reconnect. Two of the
+  ///     owner's clients on one radio then took it off each other for as long as both were open.
+  /// ★★ One-shot: set by `takeOverWithAdmin`, cleared the moment we are connected. Everything else
+  ///    sends 0 — still admin, still unlocked, but nobody is displaced.
+  /// ★ Absent means "may evict", so this changes nothing against an older server.
+  private var takeoverIntent = false
+  /// The credential as it goes on the wire. Both sockets must use THIS, not `adminSuffix`:
+  /// whichever arrives first is the one that would evict, so a disagreement would make the
+  /// outcome depend on which won the race.
+  private var adminWire: String {
+    adminSuffix.isEmpty ? "" : "\(adminSuffix)&vs_takeover=\(takeoverIntent ? "1" : "0")"
+  }
   /// ★★ THE CROSS-PROCESS CREDENTIAL. A nonce+HMAC is only meaningful to the process that issued
   ///    the nonce, and every radio behind a front door is its own process. This is what travels.
   private var adminTicket = ""
@@ -556,6 +570,10 @@ final class UberClient: ObservableObject {
         }
         self.serverBusy = false
         self.status = "taking over"
+        // ★ THIS is the deliberate act — the owner typed the password to take the radio — so this
+        //   connection, and only this one, may displace the current listener. Cleared as soon as
+        //   we are in; see takeoverIntent.
+        self.takeoverIntent = true
         self.openVibeSockets()
       }
     }
@@ -969,6 +987,10 @@ final class UberClient: ObservableObject {
   ///   the sockets open would let a second tap choose a different radio mid-connect.
   func chooseRadio(_ r: VibeRadio) {
     radioPath = "/r/\(r.id)"
+    // ★★ Choosing a radio the picker has just labelled "in use · you can take it", holding the
+    //    password, is the deliberate act — the row said so before it was tapped. A free radio
+    //    displaces nobody, so it does not ask for the permission.
+    if radioBusy[r.id] == true, !adminSuffix.isEmpty { takeoverIntent = true }
     radioChoices = []
     Task { await connect() }
   }
@@ -1185,7 +1207,7 @@ final class UberClient: ObservableObject {
     // ★★ NAMED IN THE QUERY TOO. The header is set as well, but a platform may own User-Agent on a
     //    WebSocket upgrade — and when it does, the owner's connection log shows "—" for us. The
     //    server prefers a real header and falls back to this.
-    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminSuffix)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")")!
+    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminWire)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -1647,6 +1669,10 @@ final class UberClient: ObservableObject {
     }
     if type == "evicted" {
       evicted = true
+      // ★★ AND LET THE CREDENTIAL GO. Somebody proved the same password more recently, and the
+      //    newest login wins. Keeping the ticket would make the next reconnect a takeover and put
+      //    the two clients into a fight over the radio.
+      adminSuffix = ""; adminTicket = ""; adminProved = false
       // ★ goIdle(), not just the latch: the latch stops REOPENING, but the audio
       // socket already open keeps playing. The web client had exactly this —
       // audio came back under a "TIME UP" screen once the cooldown lapsed. A
@@ -1666,6 +1692,14 @@ final class UberClient: ObservableObject {
     if type == "admin" {
       adminOk = (j["ok"] as? Bool) ?? false
       if (j["refused"] as? Bool) == true { status = "admin password refused" }
+      // ★★ SUPERSEDED — an owner proved the same password more recently elsewhere, and admin is
+      //    exclusive with the newest login winning. Let the credential GO: holding it would leave
+      //    this watch believing it is still admin, and re-presenting it on the next reconnect.
+      //    Not a refusal — nothing was mistyped — so it does not take the refused wording.
+      if (j["superseded"] as? Bool) == true {
+        adminSuffix = ""; adminTicket = ""; adminProved = false
+        status = "admin moved to a newer login"
+      }
       return
     }
     if type == "session_warning" {
@@ -1811,7 +1845,7 @@ final class UberClient: ObservableObject {
       // the server sees two different clients and REFUSES the second as "busy" — which killed the
       // spectrum entirely (audio claimed the slot anonymously, spectrum was turned away). 2026-07-23.
       var extra = authSuffix.isEmpty ? "" : "&" + authSuffix.dropFirst()
-      if !adminSuffix.isEmpty { extra += adminSuffix }
+      if !adminSuffix.isEmpty { extra += adminWire }
       // ★ On a MONO output route (the watch speaker) ask for a fullband mono stream — the server folds
       // stereo before encoding so all 64k lands in one channel. On AirPods (stereo) omit it and keep
       // the stereo image. Re-requested on a route change via audio.onRouteChange (openVibeSockets).
@@ -1966,6 +2000,10 @@ final class UberClient: ObservableObject {
     }
     openAudio()
     openSpectrum()
+    // ★★ THE TAKEOVER IS SPENT. Both URLs have been built by now, so both carried the intent if
+    //    there was one; every reconnect from here rebuilds them with 0 and displaces nobody.
+    //    Cleared here rather than on a timer so it lasts exactly as long as the act that set it.
+    takeoverIntent = false
     audio.start { [weak self] ok, info in
       Task { @MainActor in self?.audioLive = ok; self?.audioRoute = ok ? info : "FAILED: \(info)" }
     }

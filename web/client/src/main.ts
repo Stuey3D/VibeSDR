@@ -316,6 +316,10 @@ function initSplash() {
         return;
       }
       sessionStorage.setItem('vsAdminOverride', q);
+      // ★ The second press of CONNECT, after being told plainly that it disconnects the current
+      //   listener, is the deliberate act — so this connection may displace them. A first press on
+      //   a FREE receiver never gets here with adminConfirmed set, and displaces nobody.
+      if (adminConfirmed) sessionStorage.setItem('vsTakeover', '1');
       // ★ Keep the password for the admin PAGE, which has to sign its own requests. Without
       //   this an owner who connected as admin from the splash arrived fully unlocked and
       //   then could not open the admin page without retyping it.
@@ -649,6 +653,21 @@ async function connect(host: string, pin: string) {
     // ★ NOT consumed: an admin session has to survive moving between radios and reloading.
     const tq = adminTicketQuery();
     if (tq) auth = { ...auth, query: auth.query ? `${auth.query}&${tq}` : tq };
+
+    // ★★★ AND WHETHER WE ASKED TO INTERRUPT ANYBODY. The server evicts the occupant whenever a
+    //     connection arrives holding admin — which is right for a takeover and wrong for a
+    //     reconnect, because the credential above is REPLAYED every time. Two of the owner's own
+    //     clients on one radio then took it off each other for as long as both were open.
+    // ★★ One-shot and CONSUMED: set by the IN USE take-over box and by confirming a takeover at
+    //    the splash, both of which are a finger on a button. Everything else — a reload, a
+    //    reconnect, moving between radios — says 0 and displaces nobody, while still arriving as
+    //    admin.
+    // ★ It has to survive a reload, because taking over IS a reload (see doAdminOverride), which
+    //   is why it lives in sessionStorage rather than in a variable.
+    const wantTakeover = sessionStorage.getItem('vsTakeover') === '1';
+    sessionStorage.removeItem('vsTakeover');
+    const tk = `vs_takeover=${wantTakeover ? '1' : '0'}`;
+    auth = { ...auth, query: auth.query ? `${auth.query}&${tk}` : tk };
   }
 
   // ★ ONE session id, on BOTH sockets. The server treats a session as a single occupant, and a
@@ -809,8 +828,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   new one's position. Both buffers flush together or the two displays disagree.
     onRetuneJump: () => { audio?.flush(); if (!NO_WF) wf?.flushHeld(); },
     onAdminRelocked: (idleMin) => showAdminRelocked(idleMin),
-    onAdminSuperseded: () => showPill(
-      'Admin taken by a more recent login elsewhere — you are still listening'),
+    onAdminSuperseded: () => {
+      // ★★ AND LET THE TICKET GO. Keeping it left this tab believing it was still admin the next
+      //    time it reconnected — it would re-present a credential the server had already moved to
+      //    somebody else, and the badge would come back on for a session that has no admin rights.
+      //    Losing admin has to STAY lost until an owner deliberately unlocks again.
+      clearAdminTicket();
+      showPill('Admin taken by a more recent login elsewhere — you are still listening');
+    },
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
@@ -2900,6 +2925,10 @@ async function showSplashRadios(): Promise<void> {
         if (!confirm(`${who} using ${radios[i].label}.${left}\n\n`
                    + `Taking over will disconnect ${max > 1 ? 'one of them' : 'them'}. Continue?`))
           ev.preventDefault();
+        // ★ Answering that confirm is the deliberate act — see the takeover flag in connect().
+        //   Without it the navigation that follows arrives as an ordinary admin reconnect and
+        //   would queue behind the very listener the owner just chose to displace.
+        else sessionStorage.setItem('vsTakeover', '1');
       });
     });
   }
@@ -3852,6 +3881,9 @@ async function doAdminOverride(password: string, status: HTMLElement) {
   // Stash for the reload to pick up. sessionStorage, not localStorage: an override is for THIS
   // visit, and a credential that outlives the tab is a credential left lying around.
   sessionStorage.setItem('vsAdminOverride', q);
+  // ★ This IS the deliberate act — see the takeover flag in connect(). Set before the reload,
+  //   because the reload is how the takeover actually happens.
+  sessionStorage.setItem('vsTakeover', '1');
   // The ticket, for the multi-radio case. A server too old to mint one just 404s, and the nonce
   // above carries it — so this failing is not an error worth showing.
   try {
@@ -3869,6 +3901,7 @@ async function doAdminOverride(password: string, status: HTMLElement) {
       //   which is the loop that made this look like "the browser cannot take it back".
       status.textContent = 'wrong password — or too many attempts; wait a moment';
       sessionStorage.removeItem('vsAdminOverride');
+      sessionStorage.removeItem('vsTakeover');
       return;
     }
   } catch { /* no ticket endpoint, or offline — the nonce still rides the reload */ }
