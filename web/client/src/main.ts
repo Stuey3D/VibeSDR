@@ -4978,6 +4978,9 @@ function showDecBox(what: string) {
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
   $('rdsPanel').classList.toggle('show', isRds);
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
+  // ★ Which decoders BIG should widen: the ones whose content is drawn at the box's width (SSTV,
+  //   WEFAX) or written in long lines (the spot list). Text decoders get height instead.
+  $('decBox').classList.toggle('wide', image || isSpots);
   // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
   //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
   //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
@@ -5025,6 +5028,9 @@ function applyRdsSize() {
   //     does. The class does the work in CSS so the container query keeps governing the layout
   //     inside at whichever width results.
   $('decBox').classList.toggle('big', rdsTall && !rdsPanelOpen());
+  // ★★ …AND FOR A TEXT DECODER IT MEANS TALLER, NOT WIDER. `.wide` is set in showDecBox for the
+  //    decoders that actually draw at the box's width; RTTY, NAVTEX and the time signals get the
+  //    height instead. See the CSS — a wider box for short lines is just more black.
   btn.classList.toggle('tall', rdsTall);
   btn.title = rdsTall ? 'Smaller panel' : 'Bigger panel';
   if (!rdsPanelOpen()) { panel.style.height = ''; panel.style.maxHeight = ''; return; }

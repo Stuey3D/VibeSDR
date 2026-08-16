@@ -1380,7 +1380,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★★ BIG = WIDER for the picture decoders. SSTV and WEFAX draw at the box's width, so the only
    thing that makes them bigger is the box; the container queries then re-layout whatever is
    inside at the new width, with no second set of breakpoints to keep in step. */
-#decBox.big { width: min(94vw, 900px); }
+/* ★★★ BUT ONLY FOR THE ONES WIDTH HELPS. Scoped to `.wide` — the picture decoders and the spot
+   list — because for RTTY a wider box is not merely useless, it is the whole complaint: the lines
+   are short, so doubling the width doubles the EMPTY area beside them (Stuart, 2026-08-12 and
+   again 2026-08-16: "the big button expands the width but not the height of the box resulting in
+   a lot of dead space"). A size control that makes a panel emptier is working against its label. */
+#decBox.big.wide { width: min(94vw, 900px); }
 /* ★★★ AND BIG MUST MEAN **TALLER** FOR A TEXT DECODER. The rule above is width-only because it was
    written for the picture decoders, which draw AT the box's width — but a wider box does nothing
    for RTTY, whose lines are short: a weather bulletin is about 40 characters, so BIG spread nine
@@ -1388,7 +1393,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    button makes it wider but not taller, and wider is not really useful for the weather RTTY").
    ★★ What a text decoder wants from "bigger" is MORE LINES AT ONCE, which is height. The picture
       decoders keep their own sizing — #decImage is capped separately, so it does not stretch. */
-#decBox.big #decText { max-height: clamp(300px, 62vh, 700px); }
+/* ★★★ AND A CEILING IS NOT A HEIGHT. This raised only `max-height`, which PERMITS growth and
+   causes none — RTTY arrives a character at a time, so with a few lines decoded the box stayed
+   exactly as short as before while the width doubled around it. That is why the fix of 2026-08-12
+   read as no fix at all: pressing BIG visibly did nothing but add empty space.
+   ★★ `min-height` is what makes the box taller the moment the button is pressed, which is the
+      only honest response to a size control — the room is reserved, and the text fills it as it
+      decodes rather than the panel growing line by line under the reader's eyes. */
+#decBox.big #decText {
+  min-height: clamp(240px, 50vh, 560px);
+  max-height: clamp(300px, 62vh, 700px);
+}
 #rdsSize { display: none; padding: 2px 5px; line-height: 0; }
 #rdsSize.show { display: inline-block; }
 #rdsSize svg { width: 11px; height: 13px; }
