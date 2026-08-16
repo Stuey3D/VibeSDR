@@ -7689,6 +7689,25 @@ struct LocalSdrShim::Impl {
                     auto& c = kv.second;
                     if (!c || !c->adminOk.load()) continue;
                     if (c->spec == sock || c->audio == sock) continue;
+                    // ★★★ AND NEVER DEMOTE YOURSELF. `clientDsp` is keyed by SOCKET, and a browser
+                    //     opens TWO — the audio socket first, the spectrum socket about a second
+                    //     later (the JS client delays it deliberately). The socket test above only
+                    //     skips the entry holding THIS socket, so when the second one arrived it
+                    //     found the FIRST — the same person, the same visit — decided it was
+                    //     "another admin", demoted it and sent it a `superseded` frame. The owner
+                    //     taking over heard audio for about a second, watched the connection meter
+                    //     go red, and then had it recover (Stuart, 2026-08-16).
+                    // ★★★ It got worse the moment clients started ACTING on `superseded`: the
+                    //     browser now drops its credential when it hears one, so a takeover could
+                    //     hand the admin session away to nobody — the tab demoting itself. A
+                    //     latent bug became a real one because the frame it depended on was
+                    //     finally being listened to.
+                    // ★★ Session, not socket, is the unit of a listener. This is the same mistake
+                    //    as [two sockets, one session]: anything that decides "is this someone
+                    //    else" by socket identity gets it wrong for every client that opens two.
+                    // ★ Guarded on `me` being non-empty, so two genuinely anonymous clients are not
+                    //   both treated as one person by an empty-string match.
+                    if (!me.empty() && c->session == me) continue;
                     c->adminOk.store(false);
                     // ★★★ AND TELL THEM. This demoted silently, so a client went on believing it
                     //     was admin — badge lit, controls unlocked, no countdown — while the

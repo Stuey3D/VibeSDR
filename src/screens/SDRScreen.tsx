@@ -3016,6 +3016,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       onBusy: () => {
         if (refusalRef.current?.title === 'TAKEN BACK') return;
         if (destroyed.current) return;
+        // ★★★ A QUEUE POSITION FOR A SESSION THAT IS ALREADY LISTENING IS STALE BY DEFINITION.
+        //     Taking over left the app "2nd of 2 waiting" while it was playing perfectly (Stuart,
+        //     2026-08-16): the connection made BEFORE the takeover was refused and HELD in the
+        //     queue — the server keeps that socket open and re-sends the position every second —
+        //     and those frames went on painting a card over a session that had since got in.
+        // ★★ The server is not wrong; that socket really is queued. It is no longer US, though:
+        //    we arrived again and won. So the test is whether THIS attempt has connected, not
+        //    what some earlier socket is still being told.
+        if (connectedOnceRef.current) return;
         const rejected = takeoverTried.current;
         takeoverTried.current = false;
         setTakeoverErr(rejected ? 'That admin password was not accepted.' : null);
