@@ -3828,15 +3828,50 @@ function showBusy(q?: { queuePos?: number; queueLen?: number; freeIn?: number; q
 
 /** ★★ TAKE THE RADIO BACK. The owner's escape hatch: their own receiver is busy and they need
  *  it. Sends a nonce + HMAC on the connect URL, never the password — see resolveAdminOverride.
+ *
+ *  ★★★ AND A TICKET, BECAUSE THE NONCE ALONE CANNOT WORK ON A MULTI-RADIO SERVER. The challenge
+ *      is answered by whichever process serves the page — on a V3 server that is the FRONT DOOR,
+ *      which owns no radio, and the nonce store is per-PROCESS. So the radio we are trying to
+ *      take over has never heard of the nonce we just proved, and refuses it: the password looks
+ *      wrong however many times it is typed. `adminSignIn` learned this on the splash screen and
+ *      this function was left behind, still doing what was right when every server was one
+ *      process. Mint the ticket the same way it does — every radio on the machine accepts it,
+ *      and `connect()` already folds it onto BOTH sockets.
+ *
+ *  ★ The nonce is still stashed as well, and deliberately: on a SINGLE-process server (a phone,
+ *    a Mac, an older build) there is no /vibeserver/admin-ticket to mint from, and there the
+ *    nonce is exactly right. Belt and braces, because the two cases are indistinguishable from
+ *    here without another round trip.
+ *
  *  ★ A reload is the honest retry: it re-runs the preflight and re-opens both sockets cleanly,
  *  carrying the override credentials this time. */
 async function doAdminOverride(password: string, status: HTMLElement) {
   status.textContent = 'checking…';
-  const q = await resolveAdminOverride(location.origin, password);
+  const q = await resolveAdminOverride(httpBase(location.host), password);
   if (!q) { status.textContent = 'this server cannot be overridden'; return; }
   // Stash for the reload to pick up. sessionStorage, not localStorage: an override is for THIS
   // visit, and a credential that outlives the tab is a credential left lying around.
   sessionStorage.setItem('vsAdminOverride', q);
+  // The ticket, for the multi-radio case. A server too old to mint one just 404s, and the nonce
+  // above carries it — so this failing is not an error worth showing.
+  try {
+    const r = await fetch(`${httpBase(location.host)}/vibeserver/admin-ticket?${q}`, { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      saveAdminTicket(String(j.ticket || ''), Number(j.ttl) || 600);
+      // ★ Keep the password for the admin PAGE, which signs its own requests — otherwise an owner
+      //   who took over from this screen arrives unlocked and cannot open the admin page.
+      adminPassword = password;
+      setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(location.host), adminPassword));
+    } else if (r.status === 401) {
+      // ★ The one failure worth reporting. 401 means the password was wrong (or this address is
+      //   in the brute-force lockout) — reloading would just show IN USE again with no clue why,
+      //   which is the loop that made this look like "the browser cannot take it back".
+      status.textContent = 'wrong password — or too many attempts; wait a moment';
+      sessionStorage.removeItem('vsAdminOverride');
+      return;
+    }
+  } catch { /* no ticket endpoint, or offline — the nonce still rides the reload */ }
   location.reload();
 }
 
