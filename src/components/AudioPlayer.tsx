@@ -83,9 +83,22 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   // full from-scratch reconnect (e.g. the data saver resuming): the old engine
   // is torn down and a fresh native session is opened.
   const lastRestart = useRef<number | undefined>(restartKey);
+  const lastAdmin   = useRef<string | undefined>(adminAuth);
   useEffect(() => {
-    const forced = restartKey !== lastRestart.current;
+    // ★★★ A CREDENTIAL THAT ARRIVES LATER IS STILL A REASON TO REBUILD. adminAuth was in the
+    //     dependency list — so this effect re-ran when the owner typed the password — and then
+    //     returned early, because baseUrl and uuid had not changed. setAdminAuth() was never
+    //     called, so the native engine kept the EMPTY credential it started with, and its socket
+    //     was refused on a busy receiver while the spectrum socket evicted the occupant.
+    // ★★★ THE ORDER IS ALWAYS THIS WAY ROUND. You connect first and prove yourself second: the
+    //     password is typed on a receiver you are already looking at. So the interesting case is
+    //     precisely the one this guard excluded — the credential changing while everything else
+    //     stays put. Giving the native side the ABILITY to carry it and never handing it over is
+    //     the same fault as the ability not existing (Stuart, 2026-08-16: "I thought you wrote the
+    //     native code to do that?" — I did, and then did not use it).
+    const forced = restartKey !== lastRestart.current || adminAuth !== lastAdmin.current;
     lastRestart.current = restartKey;
+    lastAdmin.current   = adminAuth;
     if (!forced && baseUrl === activeUrl.current && propUuid === uuid.current) return;
     // ★ A forced restart tears the engine down first: startAudioEngine on a live engine is not a
     //   reconnect, and the socket we are trying to replace is the one that was refused.
