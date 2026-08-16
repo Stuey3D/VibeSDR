@@ -148,7 +148,7 @@ case "$1" in
       if [ -z "${2:-}" ]; then
         echo "VibeServer: installed. Log out and back in, then run 'vibeserver' to set it up."
       elif [ -f /etc/vibeserver/vibeserver.conf ]; then
-        echo "VibeServer: upgraded to $(dpkg-query -W -f='\${Version}' vibeserver 2>/dev/null). Your settings are unchanged."
+        echo "VibeServer: upgraded to $(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null). Your settings are unchanged."
       else
         echo "VibeServer: upgraded. Run 'vibeserver' to set it up."
       fi
