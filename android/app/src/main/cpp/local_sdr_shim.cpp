@@ -7646,7 +7646,17 @@ struct LocalSdrShim::Impl {
             // ★ Flags only here. The courtesy message to the demoted client is sent by the
             //   admin_unlock path, which is called with no lock held; a socket write under
             //   clientMtx would be the same mistake in a different coat.
-            if (adminAuthed) {
+            // ★★★ A RECONNECT IS NOT A LOGIN. "Most recent login wins" was written for a person
+            //     typing the password on a second device — but a client that reconnects replays
+            //     its STORED credential every time, so a churning session re-demoted everyone
+            //     else every few seconds and held admin permanently. The owner at the browser
+            //     unlocked, was demoted before they could touch anything, and concluded the most
+            //     recent password was being ignored (Stuart, 2026-08-16) — which it was, by a
+            //     rule meant to protect exactly that person.
+            // ★★ So superseding requires an ARRIVAL that changed something: a NEW session, or an
+            //    eviction actually taking place. A session merely re-affirming itself proves
+            //    nothing new and displaces nobody.
+            if (adminAuthed && (newOccupant || override_)) {
                 for (auto& kv : clientDsp) {
                     auto& c = kv.second;
                     if (!c || !c->adminOk.load()) continue;
